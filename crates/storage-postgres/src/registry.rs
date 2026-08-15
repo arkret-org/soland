@@ -19,6 +19,7 @@ pub struct PgPersistenceStore {
     sessions: PgSessionStore,
     account_data: PgAccountDataStore,
     contacts: PgContactStore,
+    contact_verified_mirrors: PgContactVerifiedMirrorStore,
     invite_receive_policies: PgInviteReceivePolicyStore,
     invite_locators: PgInviteLocatorStore,
     join_applications: PgJoinApplicationStore,
@@ -90,6 +91,7 @@ impl PgPersistenceStore {
             sessions: PgSessionStore { pool: pool.clone() },
             account_data: PgAccountDataStore { pool: pool.clone() },
             contacts: PgContactStore { pool: pool.clone() },
+            contact_verified_mirrors: PgContactVerifiedMirrorStore { pool: pool.clone() },
             invite_receive_policies: PgInviteReceivePolicyStore { pool: pool.clone() },
             invite_locators: PgInviteLocatorStore { pool: pool.clone() },
             join_applications: PgJoinApplicationStore { pool: pool.clone() },
@@ -194,6 +196,10 @@ impl IdentityStoreRegistry for PgPersistenceStore {
 
     fn contacts(&self) -> &dyn ContactStore {
         &self.contacts
+    }
+
+    fn contact_verified_mirrors(&self) -> &dyn ContactVerifiedMirrorStore {
+        &self.contact_verified_mirrors
     }
 
     fn invite_receive_policies(&self) -> &dyn InviteReceivePolicyStore {

@@ -5,14 +5,15 @@ use soland_storage::ControlProposalAuthorityAckStore;
 use super::{
     AccountDataStore, AccountLifecycleStore, AccountLocalpartStore, AccountRecord, AccountStore,
     AgentParticipationStore, AgentStore, AppletStore, Arc, AuditStore, BTreeMap, BlobStore,
-    CircleProjectionStore, ConsentCellStore, ContactStore, DeviceInventoryStore, DeviceKeyStore,
-    DeviceMessageStore, DevicePairingAuthorizationCommit, DevicePairingCommitUnitOfWork,
-    DevicePairingStore, EventStore, FederationFrontierExchangeStore, FederationOperationsStore,
-    FederationOutboxStore, HandleReleaseStore, IdempotencyStore, InviteLocatorStore,
-    InviteReceivePolicyStore, KeyBackupStore, MemoryAccountDataStore, MemoryAccountLifecycleStore,
-    MemoryAccountLocalpartStore, MemoryAccountStore, MemoryAgentMembershipCascadeStore,
-    MemoryAgentParticipationStore, MemoryAgentStore, MemoryAppletStore, MemoryAuditStore,
-    MemoryBlobStore, MemoryCircleProjectionStore, MemoryConsentCellStore, MemoryContactStore,
+    CircleProjectionStore, ConsentCellStore, ContactStore, ContactVerifiedMirrorStore,
+    DeviceInventoryStore, DeviceKeyStore, DeviceMessageStore, DevicePairingAuthorizationCommit,
+    DevicePairingCommitUnitOfWork, DevicePairingStore, EventStore, FederationFrontierExchangeStore,
+    FederationOperationsStore, FederationOutboxStore, HandleReleaseStore, IdempotencyStore,
+    InviteLocatorStore, InviteReceivePolicyStore, KeyBackupStore, MemoryAccountDataStore,
+    MemoryAccountLifecycleStore, MemoryAccountLocalpartStore, MemoryAccountStore,
+    MemoryAgentMembershipCascadeStore, MemoryAgentParticipationStore, MemoryAgentStore,
+    MemoryAppletStore, MemoryAuditStore, MemoryBlobStore, MemoryCircleProjectionStore,
+    MemoryConsentCellStore, MemoryContactStore, MemoryContactVerifiedMirrorStore,
     MemoryDeviceInventoryStore, MemoryDeviceKeyStore, MemoryDeviceMessageStore,
     MemoryDevicePairingStore, MemoryDeviceRevocationStore, MemoryEventStore,
     MemoryFederationFrontierExchangeStore, MemoryFederationOperationsStore,
@@ -57,6 +58,7 @@ pub struct SolandMemoryPersistenceStore {
     sessions: MemorySessionStore,
     account_data: MemoryAccountDataStore,
     pub(crate) contacts: MemoryContactStore,
+    contact_verified_mirrors: MemoryContactVerifiedMirrorStore,
     pub(crate) invite_receive_policies: MemoryInviteReceivePolicyStore,
     invite_locators: MemoryInviteLocatorStore,
     consent_cells: MemoryConsentCellStore,
@@ -154,6 +156,7 @@ impl SolandMemoryPersistenceStore {
             sessions: MemorySessionStore::new(),
             account_data: MemoryAccountDataStore::new(),
             contacts: MemoryContactStore::new(),
+            contact_verified_mirrors: MemoryContactVerifiedMirrorStore::new(),
             invite_receive_policies: MemoryInviteReceivePolicyStore::new(),
             invite_locators: MemoryInviteLocatorStore::new(),
             consent_cells: MemoryConsentCellStore::new(),
@@ -336,6 +339,10 @@ impl soland_storage::IdentityStoreRegistry for SolandMemoryPersistenceStore {
 
     fn contacts(&self) -> &dyn ContactStore {
         &self.contacts
+    }
+
+    fn contact_verified_mirrors(&self) -> &dyn ContactVerifiedMirrorStore {
+        &self.contact_verified_mirrors
     }
 
     fn invite_receive_policies(&self) -> &dyn InviteReceivePolicyStore {

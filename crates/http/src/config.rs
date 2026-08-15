@@ -243,6 +243,13 @@ pub struct AppConfig {
     /// (one pair per LiveKit cluster, keyed by focus `issuer_kid`) is a
     /// follow-up.
     pub livekit: LiveKitConfig,
+    /// Media token issuance configuration for this deployment.
+    ///
+    /// It is deliberately configuration and not Realm state: the signed
+    /// `ak.realm.media_service` cell describes which foci exist and where their
+    /// token endpoints are, while the signing key and TTL belong to the service
+    /// those endpoints name (`media-service-binding.md` §2).
+    pub media: MediaIssuerConfig,
     pub cors_allow_origin: Option<String>,
     /// Public Account Authority base URL advertised to browser clients in
     /// `/_arkret/describe.auth_metadata.account_authority`. Registration,
@@ -729,6 +736,47 @@ pub struct LiveKitConfig {
     pub api_secret: Option<String>,
 }
 
+/// Media token issuer configuration.
+///
+/// `media-service-binding.md` §3 anchors an issued token by requiring the bare
+/// controller of `participant_binding.issuer_kid` to equal a current-epoch
+/// `ak.realm.media_service.service_id`. The key itself is this deployment's,
+/// so it is configured here: putting it in the Realm cell would make an issuer
+/// key rotation require a capability-holding Realm Event and would publish
+/// issuer internals to every member.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediaIssuerConfig {
+    /// DID URL (with verification-method fragment) this service signs media
+    /// participant bindings with. Its bare controller MUST be a current-epoch
+    /// `service_id`, which the token issuer re-checks before signing.
+    pub issuer_kid: String,
+    /// Issued token lifetime. `media-service-binding.md` §3 caps it at 600s and
+    /// recommends 300s; the issuer clamps to the hard ceiling regardless.
+    pub token_ttl_seconds: u64,
+}
+
+impl MediaIssuerConfig {
+    fn test_default() -> Self {
+        Self {
+            issuer_kid: String::new(),
+            token_ttl_seconds: arkret_wire::MEDIA_TOKEN_TTL_SHOULD_SECS,
+        }
+    }
+}
+
+/// Load the media issuer configuration. `issuer_kid` defaults to
+/// `<service DID>#media-1` at request time when unset, so a single-key
+/// deployment needs no extra environment variable.
+fn load_media_issuer_config(values: &BTreeMap<String, String>) -> MediaIssuerConfig {
+    MediaIssuerConfig {
+        issuer_kid: env_non_empty(values, "SOLAND_MEDIA_ISSUER_KID").unwrap_or_default(),
+        token_ttl_seconds: env_non_empty(values, "SOLAND_MEDIA_TOKEN_TTL_SECONDS")
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|ttl| *ttl > 0)
+            .unwrap_or(arkret_wire::MEDIA_TOKEN_TTL_SHOULD_SECS),
+    }
+}
+
 /// Load LiveKit API credentials. The secret accepts the `_FILE` indirection
 /// so operators can mount it via Kubernetes / Docker / systemd secrets.
 fn load_livekit_config(values: &BTreeMap<String, String>) -> LiveKitConfig {
@@ -827,6 +875,7 @@ impl AppConfig {
             ),
             ice: IceServersConfig::default(),
             livekit: LiveKitConfig::default(),
+            media: MediaIssuerConfig::test_default(),
             cors_allow_origin: None,
             account_authority_url: None,
             account_authority_service_id: None,
@@ -926,6 +975,7 @@ impl AppConfig {
         let object_storage = load_object_storage_config(values)?;
         let ice = load_ice_servers_config(values);
         let livekit = load_livekit_config(values);
+        let media = load_media_issuer_config(values);
         let account_authority_url = env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_URL");
         let account_authority_service_id =
             env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID");
@@ -1205,6 +1255,7 @@ impl AppConfig {
             object_storage,
             ice,
             livekit,
+            media,
             cors_allow_origin,
             account_authority_url,
             account_authority_service_id,

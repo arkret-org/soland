@@ -7,7 +7,7 @@ pub use arkret_models_collaboration::session_grant_bodies::{
     SessionGrantIntrospectStatus, SessionGrantIntrospectionProof, SessionLoginOutcome,
 };
 pub use arkret_models_collaboration::sync_frames::account_sync::{
-    DeviceMessageEnvelope, DeviceMessageTarget, DeviceMessagesAckOutcome,
+    DeviceMessageEnvelope, DeviceMessageSender, DeviceMessageTarget, DeviceMessagesAckOutcome,
     DeviceMessagesAckRequestBody, DeviceMessagesGetOutcome, DeviceMessagesSendOutcome,
     DeviceMessagesSendRequestBody,
 };

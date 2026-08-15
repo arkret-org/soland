@@ -288,7 +288,9 @@ pub(super) fn mimi_provider_directory_value(
             room_policy_draft: "draft-ietf-mimi-room-policy-03".to_owned(),
             identifier_draft: "draft-kohbrok-mimi-identifiers-01".to_owned(),
             base_url: mimi_base_url(state),
-            provider_id: mimi_provider_id(state),
+            provider_id: MimiUri::new(mimi_provider_id(state)).map_err(|error| {
+                AppError::internal(format!("derived MIMI provider id is invalid: {error}"))
+            })?,
             endpoints: [
                 ("consent", "/consent/request"),
                 ("group_info", "/strands/{strand_id}/group-info"),
@@ -383,9 +385,17 @@ pub(super) fn mimi_provider_id(state: &AppState) -> String {
     service_id_mimi_provider_id(state.service_full_id().as_str())
 }
 
+/// A `did:web` / `did:webvh` service id projected onto the MIMI provider id.
+///
+/// The DID form escapes an authority port as `%3A`, and a DID may be written
+/// with a mixed-case host. Both are decoded/folded here so the derived value
+/// meets the canonical `mimi://` authority rules of
+/// `zh/extensions/mimi-interop.md` §4; every room URI built on top of it is the
+/// `ak.component.mimi.room_binding.v1` cell subject, where two spellings would
+/// address two cells.
 pub(super) fn service_id_mimi_provider_id(service_id: &str) -> String {
     if let Some(domain) = service_id.strip_prefix("did:web:") {
-        return format!("mimi://{}", domain.replace(':', "/"));
+        return format!("mimi://{}", canonical_mimi_authority(domain));
     }
     if let Some(rest) = service_id.strip_prefix("did:webvh:") {
         let mut parts = rest.splitn(2, ':');
@@ -393,14 +403,37 @@ pub(super) fn service_id_mimi_provider_id(service_id: &str) -> String {
             && let Some(authority_and_path) = parts.next()
             && !authority_and_path.is_empty()
         {
-            return format!("mimi://{}", authority_and_path.replace(':', "/"));
+            return format!("mimi://{}", canonical_mimi_authority(authority_and_path));
         }
     }
-    format!("mimi://{}", service_id.replace(':', "."))
+    format!("mimi://{}", service_id.replace(':', ".").to_lowercase())
 }
 
-pub(super) fn mimi_room_uri(state: &AppState, room_id: &str) -> String {
-    format!("{}/rooms/{room_id}", mimi_provider_id(state))
+/// DID authority (`host%3Aport:path:segments`) -> canonical `host[:port]/path`.
+///
+/// The two separators are decoded in this order on purpose: `:` is the DID path
+/// separator and becomes `/`, while the escaped `%3A` is the authority port
+/// separator and becomes `:`. Decoding the escape first would turn a port into
+/// a path segment.
+fn canonical_mimi_authority(authority: &str) -> String {
+    authority
+        .replace(':', "/")
+        .replace("%3A", ":")
+        .replace("%3a", ":")
+        .to_lowercase()
+}
+
+/// Canonical room URI for a locally hosted MIMI room.
+///
+/// Validated through the SDK type rather than string-formatted, because a
+/// non-canonical value would either be rejected downstream by the payload
+/// schema or, worse, address a second cell for the same room.
+pub(super) fn mimi_room_uri(state: &AppState, room_id: &str) -> Result<MimiRoomUri, AppError> {
+    MimiRoomUri::new(format!("{}/rooms/{room_id}", mimi_provider_id(state))).map_err(|error| {
+        AppError::param_invalid(format!(
+            "room_id does not form a canonical MIMI room URI: {error}"
+        ))
+    })
 }
 
 pub(super) fn mimi_receipt(

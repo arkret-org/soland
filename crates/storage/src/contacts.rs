@@ -1,6 +1,40 @@
 use soland_domain::identity::{ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord};
 
 use super::{BTreeMap, PersistenceResult, Utc, Value, async_trait};
+
+/// Principal-private, non-canonical mirror of one fully verified inbound
+/// `ak.contact.requested` carrier. It never participates in Realm reduction,
+/// Seal construction, CBA frontiers, or state roots.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContactVerifiedMirrorRecord {
+    pub target_holder_id: String,
+    pub request_event_id: String,
+    pub request_digest: String,
+    pub canonical_event_bytes: Vec<u8>,
+    pub source_receipt: Value,
+    pub issuer_service_id: String,
+    pub verified_at: chrono::DateTime<Utc>,
+}
+
+#[async_trait]
+pub trait ContactVerifiedMirrorStore: Send + Sync {
+    async fn get(
+        &self,
+        target_holder_id: &str,
+        request_event_id: &str,
+    ) -> PersistenceResult<Option<ContactVerifiedMirrorRecord>>;
+    async fn get_by_digest(
+        &self,
+        target_holder_id: &str,
+        request_digest: &str,
+    ) -> PersistenceResult<Option<ContactVerifiedMirrorRecord>>;
+
+    /// CAS-insert one verified mirror. An exact replay is success; the same
+    /// holder/Event key with different bytes, digest, receipt, or issuer is a
+    /// conflict and MUST NOT overwrite the original evidence.
+    async fn put_verified(&self, record: &ContactVerifiedMirrorRecord) -> PersistenceResult<()>;
+}
+
 /// Trait for contact storage operations.
 #[async_trait]
 pub trait ContactStore: Send + Sync {

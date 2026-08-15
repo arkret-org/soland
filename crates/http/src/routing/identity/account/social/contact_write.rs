@@ -1,8 +1,8 @@
 use arkret_models_collaboration::contact_operations::{
-    ContactAcceptedOutcome, ContactCommitRequestBody, ContactCurrentProof, ContactFailedOutcome,
-    ContactLineage, ContactOperationRejectReason, ContactPreparedEventDraft,
-    ContactPreparedOutcome, ContactResultKind, ContactRound, ContactRoundEvidenceBundle,
-    ContactScope, ContactScopeUpdatePayload, ContactScopeUpdateSchema,
+    ContactAcceptedOutcome, ContactCommitRequestBody, ContactContinuityEvidence,
+    ContactCurrentProof, ContactFailedOutcome, ContactLineage, ContactOperationRejectReason,
+    ContactPreparedEventDraft, ContactPreparedOutcome, ContactResultKind, ContactRound,
+    ContactRoundEvidenceBundle, ContactScope, ContactScopeUpdatePayload, ContactScopeUpdateSchema,
     NormalResponseAcceptanceReceipt, PeerContactSubmitRequestBody, RejectAcceptanceReceipt,
     RequestAcceptanceReceipt, RequestAcceptanceReceiptCore,
 };
@@ -33,6 +33,7 @@ enum ContactReservationBranch {
         peer: ContactPeer,
         granted_to_peer_scopes: Vec<ContactScope>,
         previous_terminal_contact_round_id: Option<Hash>,
+        continuity_evidence: Option<ContactContinuityEvidence>,
         introduction_evidence: ContactIntroductionEvidence,
     },
     Response {
@@ -1153,6 +1154,7 @@ async fn plan_contact_commit(
         ContactReservationBranch::Request {
             granted_to_peer_scopes,
             previous_terminal_contact_round_id,
+            continuity_evidence,
             introduction_evidence,
             ..
         } => {
@@ -1173,11 +1175,24 @@ async fn plan_contact_commit(
                 None if previous_terminal_contact_round_id.is_none() => {
                     (Vec::new(), None, event.created_at)
                 }
-                None => {
-                    return Err(AppError::conflict(
-                        "Contact request names an unavailable terminal predecessor",
-                    ));
-                }
+                None => match continuity_evidence {
+                    Some(evidence) => (
+                        imported_contact_continuity_history(
+                            state,
+                            evidence,
+                            previous_terminal_contact_round_id.as_ref(),
+                        )?,
+                        None,
+                        event.created_at,
+                    ),
+                    None => {
+                        return Err(AppError::new(
+                            ErrorCode::ContinuityEvidenceUnavailable,
+                            "Contact continuity evidence is unavailable",
+                        )
+                        .with_status(StatusCode::CONFLICT));
+                    }
+                },
                 Some(existing) if existing.status == "tombstoned" => {
                     let terminal = existing.contact_round_evidence.clone().ok_or_else(|| {
                         AppError::new(
@@ -1202,9 +1217,10 @@ async fn plan_contact_commit(
                     )
                     .map_err(|error| {
                         AppError::new(
-                            ErrorCode::FailedPrecondition,
+                            ErrorCode::ContinuityInvalid,
                             format!("terminal Contact continuity is invalid: {error}"),
                         )
+                        .with_status(StatusCode::CONFLICT)
                     })?;
                     let mut history = Vec::with_capacity(
                         existing
@@ -1215,10 +1231,23 @@ async fn plan_contact_commit(
                     history.push(terminal);
                     history.extend(existing.contact_round_evidence_history.iter().cloned());
                     if history.len() > 64 {
-                        return Err(AppError::new(
-                            ErrorCode::FailedPrecondition,
-                            "Contact round continuity exceeds 64 predecessors",
-                        ));
+                        history = continuity_evidence
+                            .as_ref()
+                            .map(|evidence| {
+                                imported_contact_continuity_history(
+                                    state,
+                                    evidence,
+                                    previous_terminal_contact_round_id.as_ref(),
+                                )
+                            })
+                            .transpose()?
+                            .ok_or_else(|| {
+                                AppError::new(
+                                    ErrorCode::ContinuityEvidenceUnavailable,
+                                    "Contact continuity checkpoint is required",
+                                )
+                                .with_status(StatusCode::CONFLICT)
+                            })?;
                     }
                     (history, Some(existing.updated_at), existing.created_at)
                 }
@@ -1361,6 +1390,8 @@ async fn plan_contact_commit(
             let requester_current_proof =
                 local_requester_current_proof(state, contact_round_id, request_receipt).await?;
             record.status = "accepted".to_owned();
+            record.request_receipts.clear();
+            record.request_mirror_receipts.clear();
             record.contact_round_id = Some(contact_round_id.to_string());
             record.version = Some(1);
             record.granted_to_requester_scopes = contact_scope_strings(granted_to_peer_scopes);
@@ -1384,6 +1415,10 @@ async fn plan_contact_commit(
                     .into_iter()
                     .chain(std::iter::once(current_proof.clone()))
                     .collect(),
+                continuity_checkpoint: record
+                    .contact_round_evidence_history
+                    .iter()
+                    .find_map(|bundle| bundle.continuity_checkpoint.clone()),
             });
             record.updated_at = contact_revision_after(expected_updated_at, event.created_at);
             projection = Some(soland_services::events::CommitContactProjection {
@@ -1436,6 +1471,8 @@ async fn plan_contact_commit(
             }
             let expected_updated_at = record.updated_at;
             record.status = "rejected".to_owned();
+            record.request_receipts.clear();
+            record.request_mirror_receipts.clear();
             record.response_event_ref = Some(event.event_id.to_string());
             record.updated_at = contact_revision_after(expected_updated_at, event.created_at);
             projection = Some(soland_services::events::CommitContactProjection {
@@ -1560,6 +1597,8 @@ async fn plan_contact_commit(
             let expected_updated_at = record.updated_at;
             record.version = Some(*version);
             record.status = "tombstoned".to_owned();
+            record.request_receipts.clear();
+            record.request_mirror_receipts.clear();
             record.tombstone_event_ref = Some(event.event_id.to_string());
             record.updated_at = contact_revision_after(expected_updated_at, event.created_at);
             let current_proof = signed_current_proof(state, contact_round_id.clone(), event)?;
@@ -1602,6 +1641,71 @@ async fn plan_contact_commit(
         }
     };
     Ok((outcome, projection))
+}
+
+fn imported_contact_continuity_history(
+    state: &AppState,
+    evidence: &ContactContinuityEvidence,
+    previous_terminal_contact_round_id: Option<&Hash>,
+) -> Result<Vec<ContactRoundEvidenceBundle>, AppError> {
+    if evidence.uncompressed_tail.is_empty() || evidence.uncompressed_tail.len() > 64 {
+        return Err(AppError::new(
+            ErrorCode::ContinuityEvidenceUnavailable,
+            "portable Contact continuity tail is unavailable",
+        )
+        .with_status(StatusCode::CONFLICT));
+    }
+    evidence.checkpoint.validate_contact_shape().map_err(|_| {
+        AppError::new(
+            ErrorCode::ContinuityInvalid,
+            "portable Contact continuity is invalid",
+        )
+        .with_status(StatusCode::CONFLICT)
+    })?;
+    let signing_bytes = evidence.checkpoint.signing_bytes().map_err(|_| {
+        AppError::new(
+            ErrorCode::ContinuityInvalid,
+            "portable Contact continuity is invalid",
+        )
+        .with_status(StatusCode::CONFLICT)
+    })?;
+    for checkpoint_signature in &evidence.checkpoint.signatures {
+        verify_contact_service_signature_bytes(
+            state,
+            checkpoint_signature.signer.principal_server_id.as_str(),
+            &checkpoint_signature.signature,
+            &signing_bytes,
+            "continuity_evidence.checkpoint",
+        )
+        .map_err(|_| {
+            AppError::new(
+                ErrorCode::ContinuityInvalid,
+                "portable Contact continuity is invalid",
+            )
+            .with_status(StatusCode::CONFLICT)
+        })?;
+    }
+    let mut tail = evidence.uncompressed_tail.clone();
+    if previous_terminal_contact_round_id != Some(&tail[0].contact_round_id) {
+        return Err(AppError::new(
+            ErrorCode::ContinuityInvalid,
+            "portable Contact continuity is invalid",
+        )
+        .with_status(StatusCode::CONFLICT));
+    }
+    tail[0].continuity_checkpoint = Some(evidence.checkpoint.clone());
+    arkret_models_collaboration::contact_operations::validate_recontact_continuity(
+        &tail[0],
+        &tail[1..],
+    )
+    .map_err(|_| {
+        AppError::new(
+            ErrorCode::ContinuityInvalid,
+            "portable Contact continuity is invalid",
+        )
+        .with_status(StatusCode::CONFLICT)
+    })?;
+    Ok(tail)
 }
 
 async fn prepare_contact_federation_delivery(
@@ -1937,6 +2041,7 @@ pub(super) async fn request(
                     peer: body.peer,
                     granted_to_peer_scopes: body.granted_to_peer_scopes,
                     previous_terminal_contact_round_id: body.previous_terminal_contact_round_id,
+                    continuity_evidence: body.continuity_evidence,
                     introduction_evidence: body.introduction_evidence,
                 },
                 payload,

@@ -286,7 +286,7 @@ async fn validate_direct_conversation_rejoin_authority(
         .contacts()
         .settled_direct_binding_for_realm(operation.realm_id.as_str())
     else {
-        // The exact three-Event founding unit has no durable binding yet and is
+        // The exact four-Event founding unit has no durable binding yet and is
         // governed by its bootstrap admission branch, not repair authority.
         return if repair_presented {
             Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_PARTICIPANT_AUTHORITY_DENIED)
@@ -900,7 +900,7 @@ pub(super) fn direct_conversation_member_state_guard(
         return None;
     }
     // A DM Realm with no settled binding yet is the founding window: §6.1's
-    // three-Event atomic unit carries the peer `ak.member.state{join}` before
+    // four-Event atomic unit carries both explicit `ak.member.state{join}` Events before
     // any `ak.direct_conversation.bound` exists, and §6.2 already pins the
     // membership shape for that unit. The bootstrap join is admitted on that
     // reason alone; anything else that adds a member without a binding is not.

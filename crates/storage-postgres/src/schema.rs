@@ -369,6 +369,18 @@ diesel::table! {
 }
 
 diesel::table! {
+    contact_verified_mirrors (target_holder_id, request_event_id) {
+        target_holder_id -> Text,
+        request_event_id -> Text,
+        request_digest -> Text,
+        canonical_event_bytes -> Bytea,
+        source_receipt -> Jsonb,
+        issuer_service_id -> Text,
+        verified_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     device_message_ack_tokens (ack_token) {
         ack_token -> Text,
         recipient -> Text,
@@ -1507,6 +1519,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     consent_cells,
     mimi_consent_correlations,
     contacts,
+    contact_verified_mirrors,
     device_message_ack_tokens,
     device_message_idempotency,
     device_message_lost_watermarks,

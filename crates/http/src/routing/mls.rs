@@ -1461,6 +1461,7 @@ fn peer_claim_duplicate_conflict() -> AppError {
 
 fn peer_claim_failed() -> AppError {
     AppError::new(ErrorCode::FailedPrecondition, "KeyPackage claim failed")
+        .with_status(StatusCode::BAD_REQUEST)
         .with_wire_code("claim_failed")
 }
 
@@ -1497,7 +1498,11 @@ pub(crate) async fn claim_keypackages_for_request(
     body: &KeyPackagesClaimRequestBody,
     session_device_id: &arkret_identifiers::DeviceId,
 ) -> Result<KeyPackagesClaimOutcome, AppError> {
-    claim_keypackages_for_request_inner(state, body, session_device_id).await
+    let outcome = claim_keypackages_for_request_inner(state, body, session_device_id).await?;
+    if outcome.claims.is_empty() {
+        return Err(peer_claim_failed());
+    }
+    Ok(outcome)
 }
 
 async fn claim_keypackages_for_request_inner(
@@ -1581,17 +1586,6 @@ async fn claim_keypackages_for_request_inner(
         .key_packages()
         .await
         .map_err(|error| AppError::internal(format!("KeyPackage authority snapshot: {error}")))?;
-    let available_before = available_keypackage_count_from_records(
-        &durable_keypackages,
-        &target_principal_id,
-        if target_device_ids.len() == 1 {
-            target_device_ids.iter().next().map(String::as_str)
-        } else {
-            None
-        },
-        Some(&trust_selector),
-        Some(&intended_realm_id),
-    );
     let now_secs = now().timestamp();
     // The public claim operation is strictly single-use.
     let mls_group_ref = body
@@ -1627,22 +1621,10 @@ async fn claim_keypackages_for_request_inner(
             .collect::<Vec<_>>()
     };
     if candidate_keypackages.is_empty() {
-        let reason_code = if available_before > 0 {
-            "claim_failed"
-        } else {
-            soland_services::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND
-        };
         let claims = Vec::new();
         let outcome = KeyPackagesClaimOutcome {
             claim_receipt: self_keypackage_claim_receipt(state, &body, &claims, now())?,
             claims,
-            failures: vec![KeypackageFailure {
-                keypackage_ref: None,
-                device_id: target_device_ids.iter().next().cloned(),
-                reason_code: arkret_wire::ReasonCode::from_wire(reason_code),
-                retry_after_ms: None,
-            }],
-            available_count: Some(available_before),
         };
         return record_local_claim_terminal(
             state,
@@ -1674,10 +1656,6 @@ async fn claim_keypackages_for_request_inner(
         let outcome = KeyPackagesClaimOutcome {
             claim_receipt: self_keypackage_claim_receipt(state, &body, &claims, now())?,
             claims,
-            failures: Vec::new(),
-            // The immutable terminal response must retain the count observed
-            // at the successful transition; replay must not recompute it.
-            available_count: Some(available_before.saturating_sub(1)),
         };
         let ledger = local_claim_ledger_record(
             state,
@@ -1737,15 +1715,6 @@ async fn claim_keypackages_for_request_inner(
     let outcome = KeyPackagesClaimOutcome {
         claim_receipt: self_keypackage_claim_receipt(state, &body, &claims, now())?,
         claims,
-        failures: vec![KeypackageFailure {
-            keypackage_ref: None,
-            device_id: target_device_ids.iter().next().cloned(),
-            reason_code: arkret_wire::ReasonCode::from_wire(
-                soland_services::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND,
-            ),
-            retry_after_ms: None,
-        }],
-        available_count: Some(available_before),
     };
     record_local_claim_terminal(
         state,
@@ -3613,9 +3582,7 @@ mod trust_binding_tests {
                     "signature_algorithm": "Ed25519",
                     "sig": "c2ln"
                 }
-            },
-            "failures": [],
-            "available_count": 7
+            }
         });
         let response: KeyPackagesClaimOutcome =
             serde_json::from_value(response_value).expect("fixture response");

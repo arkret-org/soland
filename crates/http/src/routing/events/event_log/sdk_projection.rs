@@ -748,9 +748,6 @@ pub(crate) async fn event_visible_to_session(
     {
         return true;
     }
-    if contact_request_mirror_visible_to_session(state, record, session).await {
-        return true;
-    }
     match canonical_realm_id_for_record(record) {
         Some(realm_id) => {
             realm_event_visible_to_session(
@@ -765,43 +762,6 @@ pub(crate) async fn event_visible_to_session(
         }
         None => false,
     }
-}
-
-async fn contact_request_mirror_visible_to_session(
-    state: &AppState,
-    record: &CanonicalEventRecord,
-    session: &SessionRecord,
-) -> bool {
-    if record.envelope.get("kind").and_then(Value::as_str)
-        != Some(arkret_wire::EventKind::ContactRequested.as_str())
-    {
-        return false;
-    }
-    let Some(payload) = record.envelope.get("payload").cloned() else {
-        return false;
-    };
-    let Ok(payload) = serde_json::from_value::<ContactRequestedPayload>(payload) else {
-        return false;
-    };
-    if payload.peer.contact_actor_id().as_str() != session.actor {
-        return false;
-    }
-    let Ok(Some(contact)) = state
-        .contacts()
-        .contact_any(&record.actor_id, &session.actor)
-        .await
-    else {
-        return false;
-    };
-    if contact.requester != record.actor_id || contact.target != session.actor {
-        return false;
-    }
-    contact.request_receipts.iter().any(|receipt| {
-        receipt.core.holder.contact_actor_id().as_str() == record.actor_id
-            && receipt.core.peer.contact_actor_id().as_str() == session.actor
-            && receipt.core.request_event_ref.as_str() == record.event_id
-            && receipt.core.request_digest.as_str() == record.canonical_digest
-    })
 }
 
 fn circle_event_visible_to_session(

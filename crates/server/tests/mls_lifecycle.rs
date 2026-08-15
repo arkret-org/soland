@@ -588,17 +588,14 @@ async fn mls_lifecycle_end_to_end() {
         .body(arkret_canonical::canonical_json_bytes(&same_group_claim).unwrap())
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(same_group_claim_resp.status_code, Some(StatusCode::OK));
+    assert_eq!(
+        same_group_claim_resp.status_code,
+        Some(StatusCode::BAD_REQUEST)
+    );
     let mut same_group_claim_resp = same_group_claim_resp;
     let same_group_claim_json: Value = same_group_claim_resp.take_json().await.unwrap();
-    assert!(
-        same_group_claim_json["claims"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
     assert_eq!(
-        same_group_claim_json["failures"][0]["reason_code"],
+        same_group_claim_json["error"]["code"],
         json!("claim_failed")
     );
 
@@ -621,13 +618,16 @@ async fn mls_lifecycle_end_to_end() {
         .body(arkret_canonical::canonical_json_bytes(&rejected_claim).unwrap())
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(rejected_claim_resp.status_code, Some(StatusCode::OK));
+    assert_eq!(
+        rejected_claim_resp.status_code,
+        Some(StatusCode::BAD_REQUEST)
+    );
     let mut rejected_claim_resp = rejected_claim_resp;
     let rejected_claim_json: Value = rejected_claim_resp.take_json().await.unwrap();
-    assert!(rejected_claim_json["claims"].as_array().unwrap().is_empty());
+    assert_eq!(rejected_claim_json["error"]["code"], json!("claim_failed"));
     assert_eq!(
-        rejected_claim_json["failures"][0]["reason_code"],
-        json!("claim_failed")
+        rejected_claim_json["error"], same_group_claim_json["error"],
+        "distinct target-private claim failures must use the same outward error shape"
     );
 
     let bob_did = "did:web:bob.example";

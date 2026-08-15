@@ -501,17 +501,16 @@ impl ProjectionState {
         self.restore_accepted_membership(operation, operation.created_at)
     }
 
-    /// Project the peer-membership slot of an already-validated Direct
+    /// Project either explicit membership slot of an already-validated Direct
     /// Conversation founding unit.
     ///
-    /// Unlike an ordinary Realm bootstrap's creator self-join, this Event is
-    /// authored by the founder while `payload.actor_id` names the other
-    /// participant. The closed three-Event validator has already established
-    /// that actor relationship and the exact pair. Keep this reducer-side
-    /// bypass scoped to that caller context, and independently require the
-    /// Direct Conversation Realm role, the registered bootstrap reason, an
-    /// absent prior membership, and the receiver-derived FSM write.
-    pub fn apply_validated_direct_conversation_founding_membership(
+    /// Both Events are authored by the founder: one names the peer and the
+    /// final genesis `head_eq null` slot names the founder. The closed
+    /// four-Event validator has already established those relationships and
+    /// the exact pair. Keep this reducer-side bootstrap bypass scoped to that
+    /// caller context and independently require the Direct Conversation Realm
+    /// role, registered reason, absent prior membership and derived FSM write.
+    pub fn apply_validated_direct_conversation_bootstrap_membership(
         &mut self,
         operation: &Operation,
         cell_writes: &[ProjectedCellWrite],
@@ -1608,34 +1607,6 @@ impl ProjectionState {
                 self.cascade_realm_destroy(&realm_id);
             }
             _ => {}
-        }
-
-        // `contact-and-direct-conversation.md` section 6.1 fixes the founder
-        // membership as a reducer projection of the Direct Conversation
-        // genesis Event. The peer remains the unit's sole explicit membership
-        // Event. Ordinary Realm creates intentionally do not take this branch:
-        // their creator membership is an explicit final bootstrap slot.
-        if kind == arkret_wire::EventKind::RealmCreate
-            && payload_object
-                .and_then(|object| object.get("purpose"))
-                .and_then(Value::as_str)
-                == Some("direct_conversation")
-            && let Some(founder) = creator
-        {
-            let founder_payload = serde_json::json!({
-                "actor_id": founder,
-                "membership": "join",
-                "role": "member",
-                "reason": "direct_conversation_bootstrap"
-            });
-            let _ = self.project_accepted_membership(
-                operation,
-                &founder_payload,
-                now,
-                "join".to_owned(),
-                founder.to_string(),
-                realm_id.clone(),
-            );
         }
 
         ProjectionEffect::RealmLifecycle {

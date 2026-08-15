@@ -295,14 +295,14 @@ pub(super) async fn admit_mimi_room_binding_event(
             .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
         })?;
     validate_mimi_room_binding_payload(binding)?;
-    let expected_room_uri = mimi_room_uri(state, room_id);
+    let expected_room_uri = mimi_room_uri(state, room_id)?;
     let event = &submission.event;
     let sender_actor_id = update_body
         .get("sender_actor_id")
         .and_then(Value::as_str)
         .ok_or_else(|| {
             AppError::param_invalid("room binding update requires sender_actor_id")
-                .with_wire_code("mimi_room_binding_event_mismatch")
+                .with_wire_code("mimi_room_binding_event_invalid")
         })?;
     let binding_group_id = binding.get("mls_group_id").and_then(Value::as_str);
     let update_group_id = update_body.get("mls_group_id").and_then(Value::as_str);
@@ -317,7 +317,7 @@ pub(super) async fn admit_mimi_room_binding_event(
         return Err(AppError::param_invalid(
             "room_binding_event does not match the authenticated MIMI room update",
         )
-        .with_wire_code("mimi_room_binding_event_mismatch"));
+        .with_wire_code("mimi_room_binding_event_invalid"));
     }
     let device_id = event
         .proofs
@@ -356,11 +356,15 @@ pub(super) async fn admit_mimi_room_binding_event(
     Ok(event_id)
 }
 
-pub(super) fn mimi_room_projection(state: &AppState, room_id: &str, realm_id: &str) -> Value {
-    json!({
+pub(super) fn mimi_room_projection(
+    state: &AppState,
+    room_id: &str,
+    realm_id: &str,
+) -> Result<Value, AppError> {
+    Ok(json!({
         "kind": "ak.mimi.room_binding",
         "profile": "ak.profile.mimi_interop.v1",
-        "mimi_room_uri": mimi_room_uri(state, room_id),
+        "mimi_room_uri": mimi_room_uri(state, room_id)?,
         "binding_scope": {
             "realm_id": realm_id,
             "channel_id": Value::Null
@@ -370,7 +374,7 @@ pub(super) fn mimi_room_projection(state: &AppState, room_id: &str, realm_id: &s
         "mls_group_id": format!("mls:{}", room_id),
         "status": "accepted",
         "canonical_truth": "arkret_signed_event_reducer"
-    })
+    }))
 }
 
 pub(super) fn unsupported_mimi_draft(body: &Value) -> Option<&'static str> {

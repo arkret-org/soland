@@ -77,8 +77,8 @@ pub(super) async fn mimi_room_update(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi room update")?;
-    let room_uri = mimi_room_uri(state, &room_id);
-    verify_mimi_write_service_proof(state, req, Some(&room_uri)).await?;
+    let room_uri = mimi_room_uri(state, &room_id)?;
+    verify_mimi_write_service_proof(state, req, Some(room_uri.as_str())).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -92,17 +92,40 @@ pub(super) async fn mimi_room_update(
     // omits both `binding_scope.realm_id` and a top-level `realm_id`
     // is rejected; we never implicitly route to a default Realm.
     let update_payload = decode_mimi_update_payload(&body)?;
-    let binding_event_id = match update_payload
+    let declared_update_kind = body
+        .pointer("/update/kind")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AppError::param_invalid("MIMI room update requires update.kind")
+                .with_wire_code("mimi_room_binding_event_invalid")
+        })?;
+    let decoded_update_kind = update_payload
         .as_ref()
-        .and_then(mimi_room_binding_payload)
-        .filter(|binding| binding.is_object())
-    {
-        Some(binding) => {
+        .and_then(|payload| payload.get("kind"))
+        .and_then(Value::as_str);
+    if decoded_update_kind.is_some_and(|kind| kind != declared_update_kind) {
+        return Err(AppError::param_invalid(
+            "declared MIMI update kind does not match the decoded payload",
+        )
+        .with_wire_code("mimi_room_binding_event_invalid"));
+    }
+    let binding_event_id = match declared_update_kind {
+        "ak.mimi.room_binding" => {
+            let binding = update_payload
+                .as_ref()
+                .and_then(mimi_room_binding_payload)
+                .filter(|binding| binding.is_object())
+                .ok_or_else(|| {
+                    AppError::param_invalid(
+                        "room binding branch requires a decoded room binding payload",
+                    )
+                    .with_wire_code("mimi_room_binding_event_invalid")
+                })?;
             let submission = body.get("room_binding_event").cloned().ok_or_else(|| {
                 AppError::param_invalid(
                     "room_binding update requires a caller-authored room_binding_event",
                 )
-                .with_wire_code("mimi_room_binding_event_missing")
+                .with_wire_code("mimi_room_binding_event_invalid")
             })?;
             Some(admit_mimi_room_binding_event(state, &room_id, &body, binding, submission).await?)
         }
@@ -111,7 +134,7 @@ pub(super) async fn mimi_room_update(
                 return Err(AppError::param_invalid(
                     "room_binding_event is only valid for a room binding update",
                 )
-                .with_wire_code("mimi_room_binding_event_unexpected"));
+                .with_wire_code("mimi_room_binding_event_invalid"));
             }
             None
         }
@@ -127,7 +150,7 @@ pub(super) async fn mimi_room_update(
         "ak.open.mimi.command.update_room",
         &body,
         json!({
-            "mimi_room_uri": mimi_room_uri(state, &room_id),
+            "mimi_room_uri": mimi_room_uri(state, &room_id)?,
             "truth_source": "arkret_signed_event_reducer",
             "status": "projected",
             "binding_emitted": binding_event_id.is_some(),
@@ -155,8 +178,8 @@ pub(super) async fn mimi_notify(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi notify")?;
-    let room_uri = mimi_room_uri(state, &room_id);
-    verify_mimi_write_service_proof(state, req, Some(&room_uri)).await?;
+    let room_uri = mimi_room_uri(state, &room_id)?;
+    verify_mimi_write_service_proof(state, req, Some(room_uri.as_str())).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -175,7 +198,7 @@ pub(super) async fn mimi_notify(
         &body,
         json!({
             "delivery": "queued",
-            "mimi_room_uri": mimi_room_uri(state, &room_id),
+            "mimi_room_uri": mimi_room_uri(state, &room_id)?,
             "broadcast_emitted": false,
         }),
     );
@@ -200,8 +223,8 @@ pub(super) async fn mimi_room_message(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi submit message")?;
-    let room_uri = mimi_room_uri(state, &room_id);
-    verify_mimi_write_service_proof(state, req, Some(&room_uri)).await?;
+    let room_uri = mimi_room_uri(state, &room_id)?;
+    verify_mimi_write_service_proof(state, req, Some(room_uri.as_str())).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -273,7 +296,7 @@ pub(super) async fn mimi_room_message(
     let mimi_provenance = json!({
         "facade": "soland.mimi.v1",
         "mimi_provider_id": mimi_provider_id(state),
-        "mimi_room_uri": mimi_room_uri(state, &room_id),
+        "mimi_room_uri": mimi_room_uri(state, &room_id)?,
         "mimi_room_id": room_id,
         "mimi_room_binding_ref": room_binding.event_id.clone(),
         "mimi_message_id": mimi_message_id,
@@ -302,7 +325,7 @@ pub(super) async fn mimi_room_message(
         json!({
             "kind": "ak.mimi.mapping_receipt",
             "profile": "ak.profile.mimi_interop.v1",
-            "mimi_room_uri": mimi_room_uri(state, &room_id),
+            "mimi_room_uri": mimi_room_uri(state, &room_id)?,
             "source_format": source_format,
             "target_format": "ak.message.create",
             "original_envelope_hash": original_hash,
@@ -364,7 +387,7 @@ pub(super) async fn mimi_group_info(
         AppError::not_found("MIMI room is not bound to any Arkret Realm")
             .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
     })?;
-    let projection = mimi_room_projection(state, &room_id, &realm_id);
+    let projection = mimi_room_projection(state, &room_id, &realm_id)?;
     let projection_bytes = serde_json::to_vec(&projection)
         .map_err(|error| AppError::internal(format!("MIMI group info serialize: {error}")))?;
     let projection = MimiGroupInfo {

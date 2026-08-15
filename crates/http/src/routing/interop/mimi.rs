@@ -37,7 +37,7 @@ use arkret_signatures::http_signature::{
     Component, HttpMessageVerificationError, SignatureError, SignatureInput, SignaturePolicyError,
     SignatureVerificationPolicy,
 };
-use arkret_wire::{Audience, Base64UrlString, MlsGroupId};
+use arkret_wire::{Audience, Base64UrlString, MimiRoomUri, MimiUri, MlsGroupId};
 use chrono::Duration;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};

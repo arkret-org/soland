@@ -506,8 +506,8 @@ pub(super) async fn direct_conversation_founding_fanout_records(
     founding_authority_evidence: &arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence,
     pending_control_proposal_acks: &[arkret_wire::ControlProposalAck],
 ) -> Result<Vec<soland_services::federation::FederationDeliveryRecord>, String> {
-    if parsed_events.len() != 3 || envelopes.len() != 3 {
-        return Err("Direct Conversation founding fanout requires exactly three Events".to_owned());
+    if parsed_events.len() != 4 || envelopes.len() != 4 {
+        return Err("Direct Conversation founding fanout requires exactly four Events".to_owned());
     }
     let mut peers = Vec::new();
     for (parsed, envelope) in parsed_events.iter().zip(envelopes) {
@@ -559,7 +559,7 @@ pub(super) async fn direct_conversation_founding_fanout_records(
         None,
     )
     .await?;
-    let submissions: [arkret_wire::EventFederationSubmission; 3] = submissions
+    let submissions: [arkret_wire::EventFederationSubmission; 4] = submissions
         .try_into()
         .map_err(|_| "founding federation submission cardinality changed".to_owned())?;
     let now = chrono::Utc::now().timestamp();

@@ -674,6 +674,25 @@ ALTER TABLE ONLY public.contacts
 
 CREATE INDEX contacts_target_idx ON public.contacts USING btree (target_id);
 
+-- Principal-private verified carrier mirrors are deliberately isolated from
+-- canonical_events: they drive no reducer, Seal, frontier, or state root.
+CREATE TABLE public.contact_verified_mirrors (
+    target_holder_id text NOT NULL,
+    request_event_id text NOT NULL,
+    request_digest text NOT NULL,
+    canonical_event_bytes bytea NOT NULL,
+    source_receipt jsonb NOT NULL,
+    issuer_service_id text NOT NULL,
+    verified_at timestamp with time zone NOT NULL,
+    PRIMARY KEY (target_holder_id, request_event_id)
+);
+
+CREATE UNIQUE INDEX contact_verified_mirrors_holder_digest_key
+    ON public.contact_verified_mirrors USING btree (target_holder_id, request_digest);
+
+CREATE INDEX contact_verified_mirrors_verified_at_idx
+    ON public.contact_verified_mirrors USING btree (verified_at);
+
 CREATE TABLE public.devices (
     id uuid PRIMARY KEY,
     actor_id text NOT NULL,

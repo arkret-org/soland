@@ -35,6 +35,41 @@ pub struct PersistenceHandle {
 }
 
 impl PersistenceHandle {
+    pub async fn contact_verified_mirror(
+        &self,
+        target_holder_id: &str,
+        request_event_id: &str,
+    ) -> crate::ServiceResult<Option<soland_storage::ContactVerifiedMirrorRecord>> {
+        Ok(self
+            .persistence
+            .contact_verified_mirrors()
+            .get(target_holder_id, request_event_id)
+            .await?)
+    }
+
+    pub async fn contact_verified_mirror_by_digest(
+        &self,
+        target_holder_id: &str,
+        request_digest: &str,
+    ) -> crate::ServiceResult<Option<soland_storage::ContactVerifiedMirrorRecord>> {
+        Ok(self
+            .persistence
+            .contact_verified_mirrors()
+            .get_by_digest(target_holder_id, request_digest)
+            .await?)
+    }
+
+    pub async fn put_contact_verified_mirror(
+        &self,
+        record: &soland_storage::ContactVerifiedMirrorRecord,
+    ) -> crate::ServiceResult<()> {
+        Ok(self
+            .persistence
+            .contact_verified_mirrors()
+            .put_verified(record)
+            .await?)
+    }
+
     pub async fn agent_cleanup_intent(
         &self,
         cleanup_intent_digest: &arkret_wire::Hash,

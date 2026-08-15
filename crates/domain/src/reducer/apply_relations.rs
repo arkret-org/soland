@@ -23,7 +23,7 @@ fn default_relation_profile(relation_kind: &str) -> RelationProfile {
         max_from_per_to: None,
         multi_edge: false,
         rank_field: None,
-        on_conflict: RelationConflictPolicy::DeterministicWinner,
+        on_conflict: RelationConflictPolicy::RequireReview,
     }
 }
 
@@ -356,7 +356,7 @@ impl ProjectionState {
     ) -> Vec<String> {
         self.relations
             .values()
-            .filter(|other| other.is_active())
+            .filter(|other| other.state != "tombstoned")
             .filter(|other| other.realm_id == relation.realm_id)
             .filter(|other| other.relation_kind == relation.relation_kind)
             .filter(|other| other.scope_circle_id == relation.scope_circle_id)
@@ -370,24 +370,53 @@ impl ProjectionState {
         relation: &SolandRelationState,
         profile: &RelationProfile,
     ) -> bool {
-        if profile.on_conflict != RelationConflictPolicy::DeterministicWinner
+        if profile.on_conflict != RelationConflictPolicy::RequireReview
             || profile.multi_edge
             || !relation.is_active()
         {
             return false;
         }
-        let mut candidate_ids = self
+        let candidates = self
             .relations
             .values()
             .filter(|other| other.realm_id == relation.realm_id)
             .filter(|other| other.relation_kind == relation.relation_kind)
             .filter(|other| other.scope_circle_id == relation.scope_circle_id)
-            .filter(|other| other.from_ref == relation.from_ref)
-            .filter(|other| other.to_ref == relation.to_ref)
-            .map(|other| other.relation_id.clone())
-            .collect::<BTreeSet<_>>();
-        candidate_ids.insert(relation.relation_id.clone());
-        candidate_ids.len() > RELATION_CONFLICT_FANOUT_LIMIT
+            .filter(|other| other.state != "tombstoned")
+            .collect::<Vec<_>>();
+        let count_with_candidate = |matches: &dyn Fn(&SolandRelationState) -> bool| {
+            let mut ids = candidates
+                .iter()
+                .copied()
+                .filter(|other| matches(other))
+                .map(|other| other.relation_id.clone())
+                .collect::<BTreeSet<_>>();
+            ids.insert(relation.relation_id.clone());
+            ids.len()
+        };
+        if count_with_candidate(&|other| {
+            other.from_ref == relation.from_ref && other.to_ref == relation.to_ref
+        }) > RELATION_CONFLICT_FANOUT_LIMIT
+        {
+            return true;
+        }
+        let constrains_from = matches!(
+            profile.cardinality,
+            RelationCardinality::OneToOne | RelationCardinality::ManyToOne
+        ) || profile.max_to_per_from.is_some();
+        if constrains_from
+            && count_with_candidate(&|other| other.from_ref == relation.from_ref)
+                > RELATION_CONFLICT_FANOUT_LIMIT
+        {
+            return true;
+        }
+        let constrains_to = matches!(
+            profile.cardinality,
+            RelationCardinality::OneToOne | RelationCardinality::OneToMany
+        ) || profile.max_from_per_to.is_some();
+        constrains_to
+            && count_with_candidate(&|other| other.to_ref == relation.to_ref)
+                > RELATION_CONFLICT_FANOUT_LIMIT
     }
 
     fn enforce_relation_cardinality_for(
@@ -411,44 +440,28 @@ impl ProjectionState {
             return;
         }
 
-        let mut losers = BTreeSet::new();
+        let mut inactive = BTreeSet::new();
         match profile.on_conflict {
-            RelationConflictPolicy::DeterministicWinner => {
-                for (mut ids, max) in constraint_sets {
-                    ids.sort_by(|left, right| {
-                        self.relation_winner_sort_key(left)
-                            .cmp(&self.relation_winner_sort_key(right))
-                    });
-                    let loser_count = ids.len().saturating_sub(max);
-                    losers.extend(ids.into_iter().take(loser_count));
+            RelationConflictPolicy::RequireReview => {
+                for (ids, _) in constraint_sets {
+                    inactive.extend(ids);
                 }
             }
-            RelationConflictPolicy::Reject
-            | RelationConflictPolicy::ClosePrevious
-            | RelationConflictPolicy::RequireReview => {
-                losers.insert(relation_id.to_owned());
+            RelationConflictPolicy::Reject | RelationConflictPolicy::ClosePrevious => {
+                inactive.insert(relation_id.to_owned());
             }
         }
 
-        for loser_id in losers {
-            if let Some(loser) = self.relations.get_mut(&loser_id) {
-                loser.state = "tombstoned".to_owned();
-                loser.updated_at = now;
+        for inactive_id in inactive {
+            if let Some(relation) = self.relations.get_mut(&inactive_id) {
+                relation.state = if profile.on_conflict == RelationConflictPolicy::RequireReview {
+                    "review_required".to_owned()
+                } else {
+                    "tombstoned".to_owned()
+                };
+                relation.updated_at = now;
             }
         }
-    }
-
-    fn relation_winner_sort_key(&self, relation_id: &str) -> (String, String) {
-        let Some(relation) = self.relations.get(relation_id) else {
-            return (String::new(), relation_id.to_owned());
-        };
-        (
-            relation
-                .source_event_digest
-                .clone()
-                .unwrap_or_else(|| format!("relation-id:{}", relation.relation_id)),
-            relation.relation_id.clone(),
-        )
     }
 
     /// Resolve the home Realm of a structural-relation endpoint from the local
@@ -1167,7 +1180,7 @@ mod cross_realm_relation_tests {
     }
 
     #[test]
-    fn duplicate_relation_uses_largest_event_digest_winner() {
+    fn duplicate_relation_requires_review_without_digest_winner() {
         let mut proj = proj();
         let now = chrono::Utc::now();
         let high = relation_op_with_id_digest(
@@ -1190,9 +1203,12 @@ mod cross_realm_relation_tests {
         proj.apply_relation_create(&high, now);
         proj.apply_relation_create(&low, now);
 
-        assert!(proj.relations[high.payload["relation_id"].as_str().unwrap()].is_active());
+        assert_eq!(
+            proj.relations[high.payload["relation_id"].as_str().unwrap()].state,
+            "review_required"
+        );
         let low_state = &proj.relations[low.payload["relation_id"].as_str().unwrap()];
-        assert_eq!(low_state.state, "tombstoned");
+        assert_eq!(low_state.state, "review_required");
         assert_eq!(
             low_state.source_event_digest.as_deref(),
             Some("sha256:0000000000000000000000000000000000000000000000000000000000000001")
@@ -1312,7 +1328,7 @@ mod cross_realm_relation_tests {
     }
 
     #[test]
-    fn belongs_to_many_to_one_uses_event_digest_winner() {
+    fn belongs_to_many_to_one_requires_review_for_both_heads() {
         let mut proj = proj();
         let now = chrono::Utc::now();
         let losing_parent = relation_op_with_id_digest(
@@ -1337,10 +1353,11 @@ mod cross_realm_relation_tests {
 
         assert_eq!(
             proj.relations[losing_parent.payload["relation_id"].as_str().unwrap()].state,
-            "tombstoned"
+            "review_required"
         );
-        assert!(
-            proj.relations[winning_parent.payload["relation_id"].as_str().unwrap()].is_active()
+        assert_eq!(
+            proj.relations[winning_parent.payload["relation_id"].as_str().unwrap()].state,
+            "review_required"
         );
     }
 
@@ -1379,10 +1396,13 @@ mod cross_realm_relation_tests {
 
         assert_eq!(
             proj.relations[alice_old.payload["relation_id"].as_str().unwrap()].state,
-            "tombstoned"
+            "review_required"
         );
         assert!(proj.relations[bob.payload["relation_id"].as_str().unwrap()].is_active());
-        assert!(proj.relations[alice_new.payload["relation_id"].as_str().unwrap()].is_active());
+        assert_eq!(
+            proj.relations[alice_new.payload["relation_id"].as_str().unwrap()].state,
+            "review_required"
+        );
     }
 
     #[test]

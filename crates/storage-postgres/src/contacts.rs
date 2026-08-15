@@ -2,10 +2,11 @@ use diesel::sql_types::{BigInt, Binary};
 
 use super::{
     Array, BTreeSet, ConsentCellKey, ConsentCellRecord, ConsentCellStore, ContactRecord,
-    ContactStore, InviteReceivePolicyStore, Jsonb, MimiConsentCorrelationRecord,
-    MimiConsentCorrelationStore, Nullable, OptionalExtension, PersistenceError, PersistenceResult,
-    PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz, Value, async_trait, decode_grant_dots,
-    encode_grant_dots, ids, pg_conn, sql_query,
+    ContactStore, ContactVerifiedMirrorRecord, ContactVerifiedMirrorStore,
+    InviteReceivePolicyStore, Jsonb, MimiConsentCorrelationRecord, MimiConsentCorrelationStore,
+    Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName,
+    RunQueryDsl, Text, Timestamptz, Value, async_trait, decode_grant_dots, encode_grant_dots, ids,
+    pg_conn, sql_query,
 };
 /// Encode a contact's Event reference for storage.
 ///
@@ -32,6 +33,119 @@ fn format_contact_event_ref(token: &[u8]) -> String {
 // matches `state::ContactRecord`.
 pub struct PgContactStore {
     pub pool: PgPool,
+}
+
+pub struct PgContactVerifiedMirrorStore {
+    pub pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct ContactVerifiedMirrorRow {
+    #[diesel(sql_type = Text)]
+    target_holder_id: String,
+    #[diesel(sql_type = Text)]
+    request_event_id: String,
+    #[diesel(sql_type = Text)]
+    request_digest: String,
+    #[diesel(sql_type = Binary)]
+    canonical_event_bytes: Vec<u8>,
+    #[diesel(sql_type = Jsonb)]
+    source_receipt: Value,
+    #[diesel(sql_type = Text)]
+    issuer_service_id: String,
+    #[diesel(sql_type = Timestamptz)]
+    verified_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<ContactVerifiedMirrorRow> for ContactVerifiedMirrorRecord {
+    fn from(row: ContactVerifiedMirrorRow) -> Self {
+        Self {
+            target_holder_id: row.target_holder_id,
+            request_event_id: row.request_event_id,
+            request_digest: row.request_digest,
+            canonical_event_bytes: row.canonical_event_bytes,
+            source_receipt: row.source_receipt,
+            issuer_service_id: row.issuer_service_id,
+            verified_at: row.verified_at,
+        }
+    }
+}
+
+const CONTACT_VERIFIED_MIRROR_COLUMNS: &str = "target_holder_id, request_event_id, request_digest, canonical_event_bytes, source_receipt, issuer_service_id, verified_at";
+
+#[async_trait]
+impl ContactVerifiedMirrorStore for PgContactVerifiedMirrorStore {
+    async fn get(
+        &self,
+        target_holder_id: &str,
+        request_event_id: &str,
+    ) -> PersistenceResult<Option<ContactVerifiedMirrorRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(format!(
+            "SELECT {CONTACT_VERIFIED_MIRROR_COLUMNS} FROM contact_verified_mirrors WHERE target_holder_id = $1 AND request_event_id = $2"
+        ))
+        .bind::<Text, _>(target_holder_id)
+        .bind::<Text, _>(request_event_id)
+        .get_result::<ContactVerifiedMirrorRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(Into::into))
+        .map_err(PersistenceError::database)
+    }
+
+    async fn get_by_digest(
+        &self,
+        target_holder_id: &str,
+        request_digest: &str,
+    ) -> PersistenceResult<Option<ContactVerifiedMirrorRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(format!(
+            "SELECT {CONTACT_VERIFIED_MIRROR_COLUMNS} FROM contact_verified_mirrors WHERE target_holder_id = $1 AND request_digest = $2 LIMIT 1"
+        ))
+        .bind::<Text, _>(target_holder_id)
+        .bind::<Text, _>(request_digest)
+        .get_result::<ContactVerifiedMirrorRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(Into::into))
+        .map_err(PersistenceError::database)
+    }
+
+    async fn put_verified(&self, record: &ContactVerifiedMirrorRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let row = sql_query(format!(
+            "INSERT INTO contact_verified_mirrors ({CONTACT_VERIFIED_MIRROR_COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (target_holder_id, request_event_id) DO UPDATE SET verified_at = contact_verified_mirrors.verified_at \
+             WHERE contact_verified_mirrors.request_digest = EXCLUDED.request_digest \
+               AND contact_verified_mirrors.canonical_event_bytes = EXCLUDED.canonical_event_bytes \
+               AND contact_verified_mirrors.source_receipt = EXCLUDED.source_receipt \
+               AND contact_verified_mirrors.issuer_service_id = EXCLUDED.issuer_service_id \
+             RETURNING {CONTACT_VERIFIED_MIRROR_COLUMNS}"
+        ))
+        .bind::<Text, _>(&record.target_holder_id)
+        .bind::<Text, _>(&record.request_event_id)
+        .bind::<Text, _>(&record.request_digest)
+        .bind::<Binary, _>(&record.canonical_event_bytes)
+        .bind::<Jsonb, _>(&record.source_receipt)
+        .bind::<Text, _>(&record.issuer_service_id)
+        .bind::<Timestamptz, _>(record.verified_at)
+        .get_result::<ContactVerifiedMirrorRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        if row.is_none() {
+            return Err(PersistenceError::Internal(
+                "cas_conflict: Contact verified mirror binding mismatch".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 #[derive(QueryableByName)]
 struct ContactRow {

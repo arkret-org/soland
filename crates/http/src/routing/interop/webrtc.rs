@@ -12,8 +12,6 @@
 //! URLs, credential TTLs, and the optional TURN shared secret are
 //! operator-configurable via `AppConfig::ice`.
 
-use std::collections::BTreeSet;
-
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{CallId, CellRef, DeviceId, DidCoreId, Hash, RealmId};
 use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
@@ -39,7 +37,6 @@ use soland_services::events::CanonicalEventRecord;
 use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use super::{now, realm_has_member, sha256_hex, validate_device_id};
-use crate::ids;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -368,22 +365,26 @@ fn sign_ice_config_outcome(
 //   - `service_signature.kid` / `participant_binding.issuer_kid` resolves to the current
 //     `ak.realm.media_service.service_id` epoch → `token_issuer_unauthorised` (MEDIA-1).
 
+/// The `foci[].focus_kind` values this deployment can actually issue a token for.
+///
+/// `media-service-binding.md` §4 gives v1 a normative binding for `livekit` and
+/// `arkret_native` only; `mediasoup`, `janus` and `moq_relay` are reserved
+/// placeholders, and an unsupported type MUST fail closed with
+/// `unknown_focus_type` rather than be handed to an invented envelope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MediaProviderKind {
     ArkretNative,
     LiveKit,
-    Mediasoup,
 }
 
 impl MediaProviderKind {
     fn parse(value: &str) -> Result<Self, AppError> {
-        match value.trim().to_ascii_lowercase().as_str() {
+        match value.trim() {
             "arkret_native" => Ok(Self::ArkretNative),
             "livekit" => Ok(Self::LiveKit),
-            "mediasoup" => Ok(Self::Mediasoup),
             _ => Err(AppError::new(
                 ErrorCode::ParamInvalid,
-                format!("unknown media focus provider `{value}`"),
+                format!("media focus provider `{value}` has no normative v1 binding"),
             )
             .with_wire_code(arkret_wire::ReasonCode::UNKNOWN_FOCUS_TYPE)),
         }
@@ -393,15 +394,6 @@ impl MediaProviderKind {
         match self {
             Self::ArkretNative => "arkret_native",
             Self::LiveKit => "livekit",
-            Self::Mediasoup => "mediasoup",
-        }
-    }
-
-    fn token_prefix(self) -> &'static str {
-        match self {
-            Self::ArkretNative => "arkret_native",
-            Self::LiveKit => "livekit",
-            Self::Mediasoup => "mediasoup",
         }
     }
 }
@@ -410,38 +402,33 @@ impl MediaProviderKind {
 struct MediaProviderConfig {
     provider: MediaProviderKind,
     focus_id: String,
-    issuer_kid: String,
-    audience: String,
-    ttl_seconds: u64,
-    connect_url: Option<String>,
+    token_endpoint: String,
+    connect_url: String,
 }
 
 #[derive(Clone, Debug)]
 struct MediaServiceEpoch {
     service_id: String,
-    issuer_kids: BTreeSet<String>,
     foci: Vec<MediaProviderConfig>,
 }
 
 /// Typed view of the projected `ak.component.realm.media_service.v1` value.
 ///
-/// The projection store is intentionally JSON-typed because it contains many
-/// unrelated cell families.  Once this particular cell crosses into the media
-/// token issuer, however, its protocol-defined fields must be decoded exactly
-/// once and the rest of the issuer should operate on Rust types.
+/// The projection store is intentionally JSON-typed because it holds many
+/// unrelated cell families. Once this particular cell crosses into the media
+/// token issuer its protocol-defined fields are decoded exactly once, and the
+/// field set is exactly the one `event-payload.schema.json`
+/// `$defs/realm_media_service_payload` declares.
 ///
-/// Unknown descriptor fields remain forward-compatible: provider bindings may
-/// add fields that the token issuer does not consume.
+/// Issuance configuration is deliberately **not** read from here. Signing key
+/// ids, token audiences and TTLs are this deployment's own configuration, not
+/// Realm policy: carrying them in a signed policy cell would make an issuer key
+/// rotation require a capability-holding Realm Event and would expose issuer
+/// internals to every member (`media-service-binding.md` §2).
 #[derive(Debug, Deserialize)]
 struct MediaServiceDescriptor {
     #[serde(default)]
     service_id: Option<String>,
-    #[serde(default)]
-    issuer_kid: Option<String>,
-    #[serde(default)]
-    audience: Option<String>,
-    #[serde(default)]
-    ttl_seconds: Option<u64>,
     foci: Vec<MediaFocusDescriptor>,
 }
 
@@ -449,16 +436,10 @@ struct MediaServiceDescriptor {
 #[derive(Debug, Deserialize)]
 struct MediaFocusDescriptor {
     focus_id: String,
-    #[serde(rename = "type")]
+    #[serde(rename = "focus_kind")]
     provider: String,
-    #[serde(default)]
-    issuer_kid: Option<String>,
-    #[serde(default)]
-    audience: Option<String>,
-    #[serde(default)]
-    ttl_seconds: Option<u64>,
-    #[serde(default)]
-    connect_url: Option<String>,
+    token_endpoint: String,
+    connect_url: String,
 }
 
 impl MediaServiceEpoch {
@@ -476,10 +457,18 @@ impl MediaServiceEpoch {
 
 struct MediaTokenIssueRequestBody<'a> {
     focus: &'a MediaProviderConfig,
+    /// Deployment-configured signing key DID URL of this media service. It is
+    /// not a cell field: `media-service-binding.md` §3 anchors it by requiring
+    /// its bare controller to equal a current-epoch `service_id`, which is
+    /// checked before issuance.
+    issuer_kid: &'a str,
     realm_id: &'a str,
     call_id: &'a str,
-    actor_id: &'a str,
-    device_id: &'a str,
+    // The backend token deliberately carries no long-term actor identity:
+    // `media-service-binding.md` §3 keeps the SFU's view to
+    // `participant_identity`, a per-exchange pseudonym. The `(actor, device)`
+    // pair is bound by the signed `participant_binding` the Arkret side
+    // verifies, not by anything the backend receives.
     participant_identity: &'a str,
     /// Publish intent derived from the request `desired_media` (LiveKit
     /// `video.canPublishSources`). `(audio, video, screen)`.
@@ -493,7 +482,7 @@ struct MediaTokenIssueRequestBody<'a> {
 
 struct IssuedMediaToken {
     backend_token: String,
-    connect_url: Option<String>,
+    connect_url: String,
 }
 
 /// Per-provider signing material handed to a [`MediaTokenIssuer`]. The
@@ -515,7 +504,6 @@ trait MediaTokenIssuer {
 
 struct ArkretNativeMediaIssuer;
 struct LiveKitMediaIssuer;
-struct MediasoupMediaIssuer;
 
 impl MediaTokenIssuer for ArkretNativeMediaIssuer {
     fn issue(
@@ -523,11 +511,7 @@ impl MediaTokenIssuer for ArkretNativeMediaIssuer {
         request: &MediaTokenIssueRequestBody<'_>,
         ctx: &MediaTokenSigningContext<'_>,
     ) -> Result<IssuedMediaToken, AppError> {
-        Ok(issue_signed_backend_token(
-            MediaProviderKind::ArkretNative,
-            request,
-            ctx.notary_signing_key,
-        ))
+        issue_arkret_native_backend_token(request, ctx.notary_signing_key)
     }
 }
 
@@ -538,20 +522,6 @@ impl MediaTokenIssuer for LiveKitMediaIssuer {
         ctx: &MediaTokenSigningContext<'_>,
     ) -> Result<IssuedMediaToken, AppError> {
         issue_livekit_backend_token(request, ctx.livekit)
-    }
-}
-
-impl MediaTokenIssuer for MediasoupMediaIssuer {
-    fn issue(
-        &self,
-        request: &MediaTokenIssueRequestBody<'_>,
-        ctx: &MediaTokenSigningContext<'_>,
-    ) -> Result<IssuedMediaToken, AppError> {
-        Ok(issue_signed_backend_token(
-            MediaProviderKind::Mediasoup,
-            request,
-            ctx.notary_signing_key,
-        ))
     }
 }
 
@@ -664,18 +634,29 @@ async fn handle_rtc_token(
     let focus = media_epoch.focus(&session_focus).ok_or_else(|| {
         focus_unavailable_error("selected focus is not present in media_service epoch")
     })?;
-    if !media_epoch.issuer_kids.contains(&focus.issuer_kid)
-        || !issuer_kid_belongs_to_service(&focus.issuer_kid, &media_epoch.service_id)
-    {
+    // `media-service-binding.md` §3 — this deployment may only mint a token for
+    // a focus whose declared `token_endpoint` is this service. The endpoint is
+    // the §2.1 trust root a client anchors on, so issuing for a focus that
+    // names somebody else would hand out a binding no client should accept.
+    let issuer_kid = configured_media_issuer_kid(state);
+    if !issuer_kid_belongs_to_service(&issuer_kid, &media_epoch.service_id) {
         return Err(token_issuer_unauthorised(format!(
-            "issuer_kid `{}` is not sealed to media_service service_id `{}`",
-            focus.issuer_kid, media_epoch.service_id
+            "configured media issuer_kid `{issuer_kid}` is not a key of media_service service_id `{}`",
+            media_epoch.service_id
         )));
     }
-    // MEDIA-1 — token TTL defaults to 300s and is capped at the spec ceiling
-    // even if the realm focus advertises a larger backend TTL.
-    let ttl_secs = focus
-        .ttl_seconds
+    if !token_endpoint_is_local(&focus.token_endpoint, state) {
+        return Err(token_issuer_unauthorised(format!(
+            "focus `{}` declares token_endpoint `{}`, which is not this service",
+            focus.focus_id, focus.token_endpoint
+        )));
+    }
+    // MEDIA-1 — token TTL comes from deployment configuration, defaults to
+    // 300s and is capped at the spec ceiling.
+    let ttl_secs = state
+        .config()
+        .media
+        .token_ttl_seconds
         .clamp(1, arkret_wire::MEDIA_TOKEN_TTL_MAX_SECS);
     let issued_at = now();
     let expires_at = issued_at + Duration::seconds(ttl_secs as i64);
@@ -725,10 +706,9 @@ async fn handle_rtc_token(
     .await;
     let issue_request = MediaTokenIssueRequestBody {
         focus,
+        issuer_kid: &issuer_kid,
         realm_id: body.realm_id.as_str(),
         call_id: body.call_id.as_str(),
-        actor_id: body.actor_id.as_str(),
-        device_id: body.device_id.as_str(),
         participant_identity: &participant_identity,
         desired_media,
         allow_screen_share,
@@ -742,9 +722,9 @@ async fn handle_rtc_token(
     let issued_token =
         media_token_issuer_for(focus.provider).issue(&issue_request, &signing_ctx)?;
 
-    let issuer_kid = DidUrl::new(focus.issuer_kid.clone()).map_err(|error| {
+    let issuer_kid = DidUrl::new(issuer_kid).map_err(|error| {
         token_issuer_unauthorised(format!(
-            "media focus issuer_kid is not a verification-method DID URL: {error}"
+            "configured media issuer_kid is not a verification-method DID URL: {error}"
         ))
     })?;
     let mut participant_binding = CallMediaParticipantBinding {
@@ -777,12 +757,7 @@ async fn handle_rtc_token(
         sig: URL_SAFE_NO_PAD.encode(service_sig.to_bytes()),
     };
 
-    // Spec `CallMediaTokenExchangeOutcome` requires `connect_url`; a focus
-    // that does not declare one cannot be exchanged into a usable media
-    // session, so fail closed instead of returning a partial outcome.
-    let connect_url = issued_token
-        .connect_url
-        .ok_or_else(|| focus_unavailable_error("selected focus does not declare a connect_url"))?;
+    let connect_url = issued_token.connect_url;
 
     json_ok(CallMediaTokenExchangeOutcome {
         focus_id: body.focus_id,
@@ -1055,7 +1030,7 @@ fn media_service_epoch_for_realm(
         ))
     })?;
     let descriptor = decode_media_service_descriptor(value)?;
-    media_service_epoch_from_descriptor(realm_id, descriptor)
+    media_service_epoch_from_descriptor(descriptor)
 }
 
 fn decode_media_service_descriptor(value: Value) -> Result<MediaServiceDescriptor, AppError> {
@@ -1068,14 +1043,10 @@ fn decode_media_service_descriptor(value: Value) -> Result<MediaServiceDescripto
 }
 
 fn media_service_epoch_from_descriptor(
-    realm_id: &str,
     descriptor: MediaServiceDescriptor,
 ) -> Result<MediaServiceEpoch, AppError> {
     let MediaServiceDescriptor {
         service_id,
-        issuer_kid,
-        audience,
-        ttl_seconds,
         foci: focus_descriptors,
     } = descriptor;
     if focus_descriptors.is_empty() {
@@ -1084,59 +1055,64 @@ fn media_service_epoch_from_descriptor(
         ));
     }
 
-    let service_id = trimmed_non_empty(service_id);
-    let default_issuer_kid = trimmed_non_empty(issuer_kid);
-    let default_audience = trimmed_non_empty(audience);
     let mut foci = Vec::with_capacity(focus_descriptors.len());
     for focus in focus_descriptors {
         let focus_id = focus.focus_id.trim().to_owned();
         if focus_id.is_empty() {
             return Err(AppError::param_invalid("focus_id is required"));
         }
-        let provider = focus.provider.trim();
-        if provider.is_empty() {
-            return Err(AppError::param_invalid("media focus type is required"));
-        }
-        let provider = MediaProviderKind::parse(provider)?;
-        let issuer_kid = trimmed_non_empty(focus.issuer_kid)
-            .or_else(|| default_issuer_kid.clone())
-            .ok_or_else(|| {
-                token_issuer_unauthorised("media focus issuer_kid is required".to_owned())
-            })?;
-        let audience = trimmed_non_empty(focus.audience)
-            .or_else(|| default_audience.clone())
-            .unwrap_or_else(|| format!("arkret:media:{realm_id}:{focus_id}"));
-        let ttl_seconds = focus
-            .ttl_seconds
-            .or(ttl_seconds)
-            .unwrap_or(arkret_wire::MEDIA_TOKEN_TTL_SHOULD_SECS);
-        let connect_url = trimmed_non_empty(focus.connect_url);
+        let provider = MediaProviderKind::parse(focus.provider.trim())?;
+        let token_endpoint = trimmed_non_empty(Some(focus.token_endpoint))
+            .ok_or_else(|| AppError::param_invalid("media focus token_endpoint is required"))?;
+        let connect_url = trimmed_non_empty(Some(focus.connect_url))
+            .ok_or_else(|| AppError::param_invalid("media focus connect_url is required"))?;
         foci.push(MediaProviderConfig {
             provider,
             focus_id,
-            issuer_kid,
-            audience,
-            ttl_seconds,
+            token_endpoint,
             connect_url,
         });
     }
-    let service_id = service_id
-        .or_else(|| {
-            foci.first()
-                .and_then(|focus| service_id_from_issuer_kid(&focus.issuer_kid))
-        })
-        .ok_or_else(|| {
-            token_issuer_unauthorised("media_service service_id is required".to_owned())
-        })?;
-    let issuer_kids = foci
-        .iter()
-        .map(|focus| focus.issuer_kid.clone())
-        .collect::<BTreeSet<_>>();
-    Ok(MediaServiceEpoch {
-        service_id,
-        issuer_kids,
-        foci,
-    })
+    // `service_id` is required by the payload schema. It is the anchor every
+    // issued `participant_binding.issuer_kid` is checked against, so it is
+    // never derived from a focus field: a descriptor without it is unusable.
+    let service_id = trimmed_non_empty(service_id).ok_or_else(|| {
+        token_issuer_unauthorised("media_service service_id is required".to_owned())
+    })?;
+    Ok(MediaServiceEpoch { service_id, foci })
+}
+
+/// Whether a focus `token_endpoint` addresses this deployment.
+///
+/// Compared on origin, not on the full path: the path is fixed by the spec
+/// binding while the origin is what identifies the issuing service.
+/// This deployment's media signing key DID URL.
+///
+/// Falls back to `<service DID>#media-1` so a single-key deployment needs no
+/// extra environment variable; the anchoring check against the current-epoch
+/// `service_id` runs either way, so a misconfigured value fails closed rather
+/// than minting a token nobody will accept.
+fn configured_media_issuer_kid(state: &AppState) -> String {
+    let configured = state.config().media.issuer_kid.trim();
+    if !configured.is_empty() {
+        return configured.to_owned();
+    }
+    format!("{}#media-1", state.service_full_id())
+}
+
+fn token_endpoint_is_local(token_endpoint: &str, state: &AppState) -> bool {
+    fn origin(url: &str) -> Option<String> {
+        let (scheme, rest) = url.split_once("://")?;
+        let authority = rest.split(['/', '?', '#']).next()?;
+        (!authority.is_empty()).then(|| format!("{}://{authority}", scheme.to_ascii_lowercase()))
+    }
+    match (
+        origin(token_endpoint),
+        origin(state.config().public_base_url.as_str()),
+    ) {
+        (Some(left), Some(right)) => left.eq_ignore_ascii_case(&right),
+        _ => false,
+    }
 }
 
 fn trimmed_non_empty(value: Option<String>) -> Option<String> {
@@ -1149,54 +1125,52 @@ fn media_token_issuer_for(provider: MediaProviderKind) -> Box<dyn MediaTokenIssu
     match provider {
         MediaProviderKind::ArkretNative => Box::new(ArkretNativeMediaIssuer),
         MediaProviderKind::LiveKit => Box::new(LiveKitMediaIssuer),
-        MediaProviderKind::Mediasoup => Box::new(MediasoupMediaIssuer),
     }
 }
 
-fn issue_signed_backend_token(
-    provider: MediaProviderKind,
+/// Arkret-native `backend_token` (`bindings/arkret-native.md` §2).
+///
+/// The wire form is the binding's own object — `{kid, payload, sig,
+/// signature_algorithm}` with the payload carrying exactly `call_id`,
+/// `focus_id`, `participant_identity`, `issued_at`, `expires_at` and `media`.
+/// It is not a private envelope: an arkret-native SFU validates this token
+/// before each SDP negotiation, so a locally invented shape would only be
+/// readable by this deployment's own SFU.
+fn issue_arkret_native_backend_token(
     request: &MediaTokenIssueRequestBody<'_>,
     signing_key: &ed25519_dalek::SigningKey,
-) -> IssuedMediaToken {
-    let nonce = ids::generate("media_token");
+) -> Result<IssuedMediaToken, AppError> {
     let (audio, video, screen) = token_media_permissions(request);
-    let token_payload = json!({
-        "iss": request.focus.issuer_kid,
-        "aud": request.focus.audience,
-        "provider": provider.as_wire(),
-        "realm_id": request.realm_id,
+    let payload = json!({
         "call_id": request.call_id,
         "focus_id": request.focus.focus_id,
-        "actor_id": request.actor_id,
-        "device_id": request.device_id,
         "participant_identity": request.participant_identity,
-        "iat": request.issued_at,
-        "exp": request.expires_at,
+        "issued_at": arkret_canonical::format_timestamp_canonical(request.issued_at),
+        "expires_at": arkret_canonical::format_timestamp_canonical(request.expires_at),
         "media": {
             "audio": audio,
             "video": video,
             "screen": screen,
         },
-        "nonce": nonce,
     });
-    let token_bytes = arkret_canonical::canonical_json_bytes(&token_payload)
-        .unwrap_or_else(|_| token_payload.to_string().into_bytes());
-    let payload_b64 = URL_SAFE_NO_PAD.encode(&token_bytes);
-    let signing_input = format!(
-        "soland-media-backend-token-v1\0{}\0{}",
-        provider.as_wire(),
-        payload_b64
-    );
-    let sig = signing_key.sign(signing_input.as_bytes());
-    IssuedMediaToken {
-        backend_token: format!(
-            "{}.{}.{}",
-            provider.token_prefix(),
-            payload_b64,
-            URL_SAFE_NO_PAD.encode(sig.to_bytes())
-        ),
+    let payload_bytes = arkret_canonical::canonical_json_bytes(&payload).map_err(|error| {
+        AppError::internal(format!(
+            "arkret-native backend token canonicalization: {error}"
+        ))
+    })?;
+    let signature = signing_key.sign(&payload_bytes);
+    let token = json!({
+        "kid": request.issuer_kid,
+        "payload": payload,
+        "sig": URL_SAFE_NO_PAD.encode(signature.to_bytes()),
+        "signature_algorithm": "Ed25519",
+    });
+    Ok(IssuedMediaToken {
+        backend_token: serde_json::to_string(&token).map_err(|error| {
+            AppError::internal(format!("arkret-native backend token encode: {error}"))
+        })?,
         connect_url: request.focus.connect_url.clone(),
-    }
+    })
 }
 
 fn token_media_permissions(request: &MediaTokenIssueRequestBody<'_>) -> (bool, bool, bool) {
@@ -1211,10 +1185,10 @@ fn token_media_permissions(request: &MediaTokenIssueRequestBody<'_>) -> (bool, b
 /// deployment validates it.
 ///
 /// The deployment LiveKit API Key/Secret come from
-/// [`crate::config::LiveKitConfig`]; the focus-declared `issuer_kid` is the
-/// LiveKit API Key (§2 `iss` mapping) and MUST equal the configured key, or
-/// issuance fails closed. v1 carries a single API Key/Secret pair; mapping
-/// multiple LiveKit deployments by `issuer_kid` is follow-up work.
+/// [`crate::config::LiveKitConfig`]. The API Key is the JWT `iss` (§2 mapping)
+/// and is deployment configuration, never a Realm cell field: the media
+/// descriptor is signed Realm policy, and a backend API credential has no
+/// business living there. v1 carries a single API Key/Secret pair.
 fn issue_livekit_backend_token(
     request: &MediaTokenIssueRequestBody<'_>,
     livekit: &crate::config::LiveKitConfig,
@@ -1229,16 +1203,6 @@ fn issue_livekit_backend_token(
             "livekit focus selected but SOLAND_LIVEKIT_API_KEY / SOLAND_LIVEKIT_API_SECRET are not configured",
         ));
     };
-    // §2 `iss` = LiveKit API Key; the focus issuer_kid MUST name the same
-    // deployment. Mismatch fails closed rather than signing with a key the
-    // LiveKit cluster will reject.
-    if request.focus.issuer_kid != api_key {
-        return Err(token_issuer_unauthorised(format!(
-            "livekit focus issuer_kid `{}` does not match configured LiveKit API Key",
-            request.focus.issuer_kid
-        )));
-    }
-
     let (audio, video, screen) = token_media_permissions(request);
     let mut can_publish_sources = Vec::new();
     if audio {
@@ -1311,18 +1275,23 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
     mac.finalize().into_bytes().into()
 }
 
-fn service_id_from_issuer_kid(issuer_kid: &str) -> Option<String> {
-    issuer_kid
-        .split_once('#')
-        .map(|(service_id, _)| service_id)
-        .filter(|service_id| !service_id.trim().is_empty())
-        .map(ToOwned::to_owned)
-}
-
+/// Whether `issuer_kid` names a key of `service_id`.
+///
+/// `media-service-binding.md` §3: strip the verification-method fragment, then
+/// project the bare DID through the registered adapter and require the result to
+/// equal the current-epoch `service_id`. The cell carries a `did_core_id` while
+/// the kid is a DID URL, so a textual prefix comparison would never match — and
+/// a comparison that silently never matches is a gate that never fires.
 fn issuer_kid_belongs_to_service(issuer_kid: &str, service_id: &str) -> bool {
-    issuer_kid
-        .strip_prefix(service_id)
-        .is_some_and(|rest| rest.starts_with('#'))
+    let Some((bare, fragment)) = issuer_kid.split_once('#') else {
+        return false;
+    };
+    if fragment.is_empty() {
+        return false;
+    }
+    arkret_wire::DidFullId::new(bare.to_owned())
+        .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+        .is_ok_and(|core| core.as_str() == service_id)
 }
 
 fn token_issuer_unauthorised(message: impl Into<String>) -> AppError {
@@ -1418,18 +1387,15 @@ mod tests {
         let focus = MediaProviderConfig {
             provider: MediaProviderKind::ArkretNative,
             focus_id: "ak:focus:arkret_native:test".to_owned(),
-            issuer_kid: "did:web:media.example#key-1".to_owned(),
-            audience: "media".to_owned(),
-            ttl_seconds: 300,
-            connect_url: Some("https://media.example".to_owned()),
+            token_endpoint: "https://media.example/_arkret/self/rtc/token".to_owned(),
+            connect_url: "https://media.example".to_owned(),
         };
         let issued_at = Utc::now();
         let request = MediaTokenIssueRequestBody {
             focus: &focus,
+            issuer_kid: "did:webvh:z6mkfixture:media.example#media-1",
             realm_id: "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt",
             call_id: "ak:call:AXN8h1ovgRUvcxrjsoB4ffwwej16MPpikhZbvZ6pt_Hj",
-            actor_id: "did:web:alice.example",
-            device_id: "ak:device:01904100-0000-7000-8000-000000000001",
             participant_identity: "ak:rtc_participant:01904100-0000-7000-8000-000000000009",
             desired_media: (false, true, true),
             allow_screen_share: false,
@@ -1474,20 +1440,17 @@ mod tests {
     #[test]
     fn media_epoch_accepts_spec_focus_id_without_private_prefix() {
         let descriptor = decode_media_service_descriptor(json!({
-            "service_id": "did:web:media.example",
+            "service_id": "ak:did_core:webvh:z6mkfixturemedia",
             "foci": [{
                 "focus_id": "fra-1",
-                "type": "livekit",
-                "issuer_kid": "did:web:media.example#key-1",
+                "focus_kind": "livekit",
+                "token_endpoint": "https://media.example/_arkret/self/rtc/token",
                 "connect_url": "wss://media.example"
             }]
         }))
         .expect("valid projected media descriptor");
-        let epoch = media_service_epoch_from_descriptor(
-            "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt",
-            descriptor,
-        )
-        .expect("spec focus ids are not required to use a private prefix");
+        let epoch = media_service_epoch_from_descriptor(descriptor)
+            .expect("spec focus ids are not required to use a private prefix");
 
         assert_eq!(epoch.foci[0].focus_id, "fra-1");
     }
@@ -1496,23 +1459,69 @@ mod tests {
     fn projected_media_epoch_unwraps_registered_state_payload_value() {
         let descriptor = decode_media_service_descriptor(json!({
             "value": {
-                "service_id": "did:web:media.example",
+                "service_id": "ak:did_core:webvh:z6mkfixturemedia",
                 "foci": [{
                     "focus_id": "fra-1",
-                    "type": "livekit",
-                    "issuer_kid": "did:web:media.example#key-1",
+                    "focus_kind": "livekit",
+                    "token_endpoint": "https://media.example/_arkret/self/rtc/token",
                     "connect_url": "wss://media.example"
                 }]
             }
         }))
         .expect("registered state payload wrapper");
-        let epoch = media_service_epoch_from_descriptor(
-            "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt",
-            descriptor,
-        )
-        .expect("wrapped projected media descriptor");
+        let epoch = media_service_epoch_from_descriptor(descriptor)
+            .expect("wrapped projected media descriptor");
 
         assert_eq!(epoch.foci[0].focus_id, "fra-1");
+    }
+
+    /// `media-service-binding.md` §2: `token_endpoint` and `connect_url` are
+    /// normative required fields. A descriptor carrying provider issuance
+    /// configuration instead is not a usable focus and must fail decode rather
+    /// than be silently read as an empty one.
+    #[test]
+    fn a_focus_without_the_normative_endpoints_fails_closed() {
+        let descriptor = decode_media_service_descriptor(json!({
+            "service_id": "ak:did_core:webvh:z6mkfixturemedia",
+            "foci": [{
+                "focus_id": "fra-1",
+                "focus_kind": "livekit",
+                "issuer_kid": "did:webvh:z6mkfixture:media.example#key-1",
+                "audience": "livekit-demo",
+                "ttl_seconds": 300
+            }]
+        }));
+        assert!(descriptor.is_err());
+    }
+
+    /// v1 has a normative backend binding for `livekit` and `arkret_native`
+    /// only; the reserved placeholders must fail closed with
+    /// `unknown_focus_type` instead of receiving an invented token envelope.
+    #[test]
+    fn reserved_focus_types_have_no_v1_binding() {
+        assert!(MediaProviderKind::parse("livekit").is_ok());
+        for reserved in ["mediasoup", "janus", "moq_relay"] {
+            assert!(MediaProviderKind::parse(reserved).is_err(), "{reserved}");
+        }
+    }
+
+    /// The kid is a DID URL and the cell carries a `did_core_id`, so the
+    /// anchoring check must project rather than compare prefixes — a prefix
+    /// comparison here would simply never fire.
+    #[test]
+    fn issuer_kid_is_anchored_by_projection_not_by_prefix() {
+        assert!(issuer_kid_belongs_to_service(
+            "did:webvh:z6mkfixturemedia:media.example#media-1",
+            "ak:did_core:webvh:z6mkfixturemedia"
+        ));
+        assert!(!issuer_kid_belongs_to_service(
+            "did:webvh:z6mkattacker:attacker.example#media-1",
+            "ak:did_core:webvh:z6mkfixturemedia"
+        ));
+        assert!(!issuer_kid_belongs_to_service(
+            "did:webvh:z6mkfixturemedia:media.example",
+            "ak:did_core:webvh:z6mkfixturemedia"
+        ));
     }
 }
 

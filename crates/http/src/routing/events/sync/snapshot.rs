@@ -117,7 +117,7 @@ pub(crate) async fn build_sync_snapshot(
             .get(&realm_id)
             .copied()
             .unwrap_or_default();
-        let (timeline_events, timeline_conflicts, timeline_position) = timeline_events_for_realm(
+        let (timeline_events, timeline_siblings, timeline_position) = timeline_events_for_realm(
             state,
             &projection,
             &realm_id,
@@ -145,7 +145,7 @@ pub(crate) async fn build_sync_snapshot(
         let full_sync = !is_incremental;
         let durable_projection_changed = full_sync
             || !timeline_events.is_empty()
-            || !timeline_conflicts.is_empty()
+            || !timeline_siblings.is_empty()
             || !state_events.is_empty()
             || account_projection_changed;
         // A Realm entry is a collection of independent stream deltas.
@@ -183,7 +183,7 @@ pub(crate) async fn build_sync_snapshot(
                     limited: false,
                     prev_cursor: None,
                     preview_only: None,
-                    ordered_log_conflicts: timeline_conflicts,
+                    ordered_log_siblings: timeline_siblings,
                     extra: BTreeMap::new(),
                 },
             );
@@ -718,7 +718,7 @@ async fn timeline_events_for_realm(
     session: Option<&SessionRecord>,
 ) -> (
     Vec<arkret_wire::Event>,
-    Vec<arkret_models_collaboration::sync_frames::account_sync::OrderedLogConflictDiagnostic>,
+    Vec<arkret_models_collaboration::sync_frames::account_sync::OrderedLogSiblingDiagnostic>,
     i64,
 ) {
     let mut seen = BTreeSet::new();
@@ -905,27 +905,24 @@ async fn timeline_events_for_realm(
         timeline_entries.push((position, event));
     }
 
-    let (mut timeline_entries, conflicts) =
-        collapse_message_ordered_log_equivocations(timeline_entries);
+    let (mut timeline_entries, siblings) = annotate_message_ordered_log_siblings(timeline_entries);
     timeline_entries.sort_by_key(|left| left.0);
     (
         timeline_entries
             .into_iter()
             .map(|(_, event)| event)
             .collect(),
-        conflicts,
+        siblings,
         newest_position,
     )
 }
 
-pub(crate) fn collapse_message_ordered_log_equivocations(
+pub(crate) fn annotate_message_ordered_log_siblings(
     entries: Vec<(i64, arkret_wire::Event)>,
 ) -> (
     Vec<(i64, arkret_wire::Event)>,
-    Vec<arkret_models_collaboration::sync_frames::account_sync::OrderedLogConflictDiagnostic>,
+    Vec<arkret_models_collaboration::sync_frames::account_sync::OrderedLogSiblingDiagnostic>,
 ) {
-    use std::cmp::Ordering;
-
     let mut slots = BTreeMap::<(String, String, u64), Vec<usize>>::new();
     for (index, (_, event)) in entries.iter().enumerate() {
         if event.kind != arkret_wire::EventKind::MessageCreate {
@@ -944,100 +941,38 @@ pub(crate) fn collapse_message_ordered_log_equivocations(
             .push(index);
     }
 
-    let mut keep = vec![true; entries.len()];
-    let mut conflicts = Vec::new();
-    for ((strand_id, _, issuer_seq), candidates) in slots {
+    let mut siblings = Vec::new();
+    for ((strand_id, issuer, issuer_seq), candidates) in slots {
         if candidates.len() < 2 {
             continue;
         }
         let mut resolved = Vec::with_capacity(candidates.len());
-        let mut unresolvable = false;
         for index in candidates {
             let event = &entries[index].1;
-            match event.event_digest() {
-                Ok(digest) => resolved.push((index, digest)),
-                Err(_) => {
-                    keep[index] = false;
-                    unresolvable = true;
-                }
+            if let Ok(digest) = event.event_digest() {
+                resolved.push((event.event_id.clone(), digest));
             }
         }
-        if unresolvable || resolved.is_empty() {
+        if resolved.len() < 2 {
             continue;
         }
-        let mut winner = resolved[0].clone();
-        for candidate in resolved.iter().skip(1) {
-            match arkret_state::lattice::ordered_log::compare_canonical_digests(
-                &candidate.1,
-                &winner.1,
-            ) {
-                Some(Ordering::Greater) => winner = candidate.clone(),
-                Some(_) => {}
-                None => {
-                    for (index, _) in &resolved {
-                        keep[*index] = false;
-                    }
-                    unresolvable = true;
-                    break;
-                }
-            }
-        }
-        if unresolvable {
-            continue;
-        }
-
-        let winner_event = &entries[winner.0].1;
-        let is_equivocation = resolved
-            .iter()
-            .any(|(index, _)| entries[*index].1.payload != winner_event.payload);
-        let mut loser_event_ids = Vec::new();
-        let mut loser_event_digests = Vec::new();
-        for (index, digest) in resolved {
-            if index == winner.0 {
-                continue;
-            }
-            keep[index] = false;
-            loser_event_ids.push(entries[index].1.event_id.clone());
-            loser_event_digests.push(digest);
-        }
-        if is_equivocation {
-            let Some(issuer) = winner_event.proofs.iter().find_map(|proof| {
-                let proof = proof.as_producer()?;
-                let (controller, _) = proof.verification_method.rsplit_once('#')?;
-                let full_id = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
-                (arkret_wire::project_full_id_to_core_id(&full_id)
-                    .map(arkret_wire::DidCoreId::from)
-                    .ok()
-                    == Some(winner_event.actor_id.clone()))
-                .then_some(winner_event.actor_id.clone())
-            }) else {
-                continue;
-            };
-            conflicts.push(
-                arkret_models_collaboration::sync_frames::account_sync::OrderedLogConflictDiagnostic {
-                    cell: format!(
-                        "ak:cell:ak.component.strand.discussion.timeline.v1:{strand_id}"
-                    ),
-                    issuer,
-                    issuer_seq,
-                    reason: "issuer_equivocation".to_owned(),
-                    winner_event_id: winner_event.event_id.clone(),
-                    winner_event_digest: winner.1,
-                    loser_event_ids,
-                    loser_event_digests,
-                },
-            );
-        }
+        resolved.sort_by(|left, right| {
+            arkret_state::lattice::ordered_log::compare_canonical_digests(&left.1, &right.1)
+                .unwrap_or_else(|| left.1.cmp(&right.1))
+        });
+        siblings.push(
+            arkret_models_collaboration::sync_frames::account_sync::OrderedLogSiblingDiagnostic {
+                cell: format!("ak:cell:ak.component.strand.discussion.timeline.v1:{strand_id}"),
+                issuer: arkret_wire::DidCoreId::new(issuer)
+                    .expect("accepted Event actor_id is a valid core DID"),
+                issuer_seq,
+                reason: "actor_seq_siblings".to_owned(),
+                event_ids: resolved.iter().map(|entry| entry.0.clone()).collect(),
+                event_digests: resolved.into_iter().map(|entry| entry.1).collect(),
+            },
+        );
     }
-
-    (
-        entries
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, entry)| keep[index].then_some(entry))
-            .collect(),
-        conflicts,
-    )
+    (entries, siblings)
 }
 
 fn mark_event_as_projection_only(event: &mut arkret_wire::Event) {

@@ -499,7 +499,7 @@ impl EventStore for MemoryEventStore {
                 DirectConversationFoundingCommitOutcome::SlotConflict(existing.clone())
             });
         }
-        if records.len() != 3
+        if records.len() != 4
             || slot.event_ids
                 != records
                     .iter()

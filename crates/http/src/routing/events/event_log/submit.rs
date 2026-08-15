@@ -303,7 +303,7 @@ pub(in crate::routing) struct RealmBootstrapBatchContext {
     /// same public SDK DTO from the accepted PCR resolution projection.
     pub(in crate::routing) identity_anchor_resolution:
         Option<arkret_models_identity::ResolutionCommitment>,
-    /// This batch already passed the closed three-Event Direct Conversation
+    /// This batch already passed the closed four-Event Direct Conversation
     /// founding-plan validator, so its member/Strand follow-ups may be
     /// admitted before the new Realm has a durable membership projection.
     pub(in crate::routing) direct_conversation_founding: bool,
@@ -977,9 +977,9 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         .iter()
         .map(|submission| &submission.event)
         .collect::<Vec<_>>();
-    let exact: [&arkret_wire::Event; 3] = typed_events
+    let exact: [&arkret_wire::Event; 4] = typed_events
         .try_into()
-        .expect("typed founding carrier has exactly three Events");
+        .expect("typed founding carrier has exactly four Events");
     let plan = DirectConversationFoundingPlan::from_events(exact).map_err(|error| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,
@@ -2983,9 +2983,9 @@ async fn submit_direct_conversation_federation(
         .iter()
         .map(|item| &item.event)
         .collect::<Vec<_>>();
-    let exact: [&arkret_wire::Event; 3] = events
+    let exact: [&arkret_wire::Event; 4] = events
         .try_into()
-        .expect("typed founding federation carrier has exactly three Events");
+        .expect("typed founding federation carrier has exactly four Events");
     let plan = match DirectConversationFoundingPlan::from_events(exact) {
         Ok(plan) => plan,
         Err(error) => {

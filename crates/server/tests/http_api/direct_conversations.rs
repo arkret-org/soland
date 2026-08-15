@@ -120,6 +120,7 @@ fn normal_contact_evidence(
             current_proof(requester, "did:web:alice.example", request_event_ref),
             current_proof(target, "did:web:bob.example", response_event_ref),
         ],
+        continuity_checkpoint: None,
     }
 }
 

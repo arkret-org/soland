@@ -861,6 +861,65 @@ fn canonical_digest_of(record: &CanonicalEventRecord) -> Result<Hash, AppError> 
     })
 }
 
+async fn verified_contact_mirror_event(
+    state: &AppState,
+    session: &SessionRecord,
+    mirror: soland_storage::ContactVerifiedMirrorRecord,
+) -> Result<Option<(Event, Hash)>, AppError> {
+    let event: Event = serde_json::from_slice(&mirror.canonical_event_bytes)
+        .map_err(|error| AppError::internal(format!("Contact mirror Event decode: {error}")))?;
+    if canonical::canonical_json_bytes(&event).map_err(|error| {
+        AppError::internal(format!("Contact mirror Event canonicalize: {error}"))
+    })? != mirror.canonical_event_bytes
+        || event.kind != arkret_wire::EventKind::ContactRequested
+        || event.event_id.as_str() != mirror.request_event_id
+        || event
+            .event_digest()
+            .map_err(|error| AppError::internal(format!("Contact mirror Event digest: {error}")))?
+            != mirror.request_digest
+        || mirror.target_holder_id != session.actor
+    {
+        return Ok(None);
+    }
+    let payload = serde_json::from_value::<ContactRequestedPayload>(
+        serde_json::to_value(&event.payload).map_err(|error| {
+            AppError::internal(format!("Contact mirror payload encode: {error}"))
+        })?,
+    )
+    .map_err(|error| AppError::internal(format!("Contact mirror payload decode: {error}")))?;
+    if payload.peer.contact_actor_id().as_str() != session.actor {
+        return Ok(None);
+    }
+    let Ok(Some(contact)) = state
+        .contacts()
+        .contact_any(event.actor_id.as_str(), &session.actor)
+        .await
+    else {
+        return Ok(None);
+    };
+    if contact.status != "pending"
+        || contact.requester != event.actor_id.as_str()
+        || contact.target != session.actor
+        || contact.request_event_ref.as_deref() != Some(event.event_id.as_str())
+        || contact.peer_service_id.as_deref() != Some(mirror.issuer_service_id.as_str())
+    {
+        return Ok(None);
+    }
+    let receipt_matches = contact.request_receipts.iter().any(|receipt| {
+        receipt.core.holder.contact_actor_id().as_str() == event.actor_id.as_str()
+            && receipt.core.peer.contact_actor_id().as_str() == session.actor
+            && receipt.core.request_event_ref == event.event_id
+            && receipt.core.request_digest.as_str() == mirror.request_digest
+            && serde_json::to_value(receipt).ok().as_ref() == Some(&mirror.source_receipt)
+    });
+    if !receipt_matches {
+        return Ok(None);
+    }
+    let digest = Hash::new(mirror.request_digest)
+        .map_err(|error| AppError::internal(format!("Contact mirror digest invalid: {error}")))?;
+    Ok(Some((event, digest)))
+}
+
 #[salvo::oapi::endpoint(operation_id = "ak.self.events.read.resolve", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.read.resolve"))]
 async fn resolve_events(
@@ -890,9 +949,25 @@ async fn resolve_events(
     // Canonical digest per returned Event, kept from the record we already
     // read so the derived `seals[]` pass below never re-canonicalizes.
     let mut event_digests: BTreeMap<String, Hash> = BTreeMap::new();
+    let mut contact_mirror_event_ids = std::collections::BTreeSet::new();
     let include_payload = body.include_payload.unwrap_or(true);
     for event_id in &body.event_ids {
         let event_id_string = event_id.to_string();
+        if let Some(mirror) = state
+            .persistence()
+            .contact_verified_mirror(&session.actor, &event_id_string)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("events resolve Contact mirror: {error}"))
+            })?
+            && let Some((event, digest)) =
+                verified_contact_mirror_event(state, &session, mirror).await?
+        {
+            contact_mirror_event_ids.insert(event.event_id.as_str().to_owned());
+            event_digests.insert(event.event_id.as_str().to_owned(), digest);
+            found.push(event);
+            continue;
+        }
         match service
             .canonical_event(&event_id_string)
             .await
@@ -917,6 +992,26 @@ async fn resolve_events(
             .await
             .map_err(|error| AppError::internal(format!("events resolve: {error}")))?;
         for digest in &body.event_digests {
+            if let Some(mirror) = state
+                .persistence()
+                .contact_verified_mirror_by_digest(&session.actor, digest.as_str())
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("events resolve Contact mirror: {error}"))
+                })?
+                && let Some((event, canonical_digest)) =
+                    verified_contact_mirror_event(state, &session, mirror).await?
+            {
+                if !found
+                    .iter()
+                    .any(|found_event| found_event.event_id == event.event_id)
+                {
+                    contact_mirror_event_ids.insert(event.event_id.as_str().to_owned());
+                    event_digests.insert(event.event_id.as_str().to_owned(), canonical_digest);
+                    found.push(event);
+                }
+                continue;
+            }
             let Some(record) = records
                 .iter()
                 .find(|record| record.canonical_digest == digest.as_str())
@@ -964,6 +1059,9 @@ async fn resolve_events(
     // accepted but not yet sealed contributes nothing. A DataEvent never
     // appears in a `delta[]`, so it simply yields no entry.
     for event in &found {
+        if contact_mirror_event_ids.contains(event.event_id.as_str()) {
+            continue;
+        }
         let digest = event_digests
             .get(event.event_id.as_str())
             .cloned()

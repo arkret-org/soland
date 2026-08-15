@@ -230,14 +230,14 @@ fn validated_direct_conversation_peer_join_has_a_distinct_narrow_bootstrap_path(
         CellState::Value(serde_json::json!({ "purpose": "direct_conversation" })),
     );
     assert!(matches!(
-        direct.apply_validated_direct_conversation_founding_membership(&operation, &writes),
+        direct.apply_validated_direct_conversation_bootstrap_membership(&operation, &writes),
         ProjectionEffect::MembershipChanged { ref member, ref action, .. }
             if member == peer && action == "join"
     ));
 
     assert!(matches!(
         ProjectionState::new()
-            .apply_validated_direct_conversation_founding_membership(&operation, &writes),
+            .apply_validated_direct_conversation_bootstrap_membership(&operation, &writes),
         ProjectionEffect::Rejected { reason } if reason == "out_of_order_bootstrap"
     ));
 
@@ -252,7 +252,7 @@ fn validated_direct_conversation_peer_join_has_a_distinct_narrow_bootstrap_path(
         CellState::Value(serde_json::json!({ "purpose": "direct_conversation" })),
     );
     assert!(matches!(
-        direct.apply_validated_direct_conversation_founding_membership(&wrong_reason, &writes),
+        direct.apply_validated_direct_conversation_bootstrap_membership(&wrong_reason, &writes),
         ProjectionEffect::Rejected { reason } if reason == "out_of_order_bootstrap"
     ));
 }

@@ -766,8 +766,11 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
     );
     assert_eq!(entry["device_status"], "active");
 
-    // Revoke member A's device, then re-query: the entry remains as revoked
-    // status telemetry, but carries no signing key.
+    // Revoke member A's device, then re-query: the whole entry disappears.
+    // `device-lifecycle.md` §8.2 — a returned row is complete and attested, so a
+    // revoked device is omitted rather than degraded into a partial row; that is
+    // also the anti-enumeration shape, since the omission is indistinguishable
+    // from "no relationship" and from "no such device".
     let mut revoked = state
         .test_persistence()
         .devices()
@@ -793,12 +796,11 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
         .take_json()
         .await
         .unwrap();
-    let revoked_entry = &post_revoke["device_keys"][alice_core.as_str()][alice_device];
-    assert_eq!(revoked_entry["device_status"], "revoked");
-    assert!(revoked_entry["device_signing_key"].is_null());
     assert!(
-        revoked_entry["algorithms"].as_object().unwrap().is_empty(),
-        "revoked device must not surface usable key material: {post_revoke}"
+        post_revoke["device_keys"][alice_core.as_str()]
+            .get(alice_device)
+            .is_none(),
+        "a revoked device must be omitted entirely, not reported: {post_revoke}"
     );
 }
 
@@ -998,32 +1000,11 @@ async fn keys_query_exposes_accepted_device_anchor() {
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000004";
     let device_key = SigningKey::from_bytes(&[203u8; 32]);
     let multibase = test_ed25519_multibase_public(&device_key);
-    let control_realm = soland_test_support::fixture_principal_control_realm(alice);
-    let operation_id = new_prefixed_uuid7("ak:operation:");
-    let operation = accepted_device_authorize_operation(
-        OperationId::new(operation_id).unwrap(),
-        RealmId::new(control_realm).unwrap(),
-        alice_core.clone(),
-        serde_json::json!({
-            // An accepted ak.device.authorize carries device_public_key,
-            // hpke_key, and canonical algorithms
-            // (receiver rejects missing hpke_key/algorithms), plus the §5.2
-            // authorized_by + not_before payload fields required by the typed
-            // DeviceAuthorizePayload the projection parses.
-            "principal_id": alice_core,
-            "device_id": alice_device,
-            "device_public_key": multibase,
-            "hpke_key": "z6LSTestServiceAttestedHpkeKey",
-            "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-            "authorized_by": alice_core,
-            "not_before": "2026-05-08T10:00:00.000Z",
-            "authorization_binding_kind": "registration_anchor",
-            "device_signature": "c2ln"
-        }),
-    );
-    let expected_authorize_event_id = operation.context.event_id.to_string();
-    soland_test_support::project_accepted_operations(&state, alice_core.as_str(), &[operation])
-        .await;
+    // Seed through the full PCR bootstrap path, not a bare projected operation:
+    // §8.2 returns a row only for a device that is actually usable, and a
+    // device with no identity-root generation never passes the generation gate.
+    let expected_authorize_event_id =
+        project_test_authorized_device(&state, alice, alice_device, &device_key).await;
 
     let token = dev_token_for_device(
         state.clone(),
@@ -1049,6 +1030,24 @@ async fn keys_query_exposes_accepted_device_anchor() {
         entry["device_authorize_event_id"],
         expected_authorize_event_id
     );
+    // The row is complete and attested, and the attestation covers this exact
+    // projection — that signature is the whole verification closure of this
+    // cross-principal surface (§8.2).
+    let attestation = &entry["device_projection_attestation"];
+    assert_eq!(
+        attestation["attestation"]["device_authorize_event_id"],
+        expected_authorize_event_id
+    );
+    assert_eq!(
+        attestation["attestation"]["device_signing_key"],
+        entry["device_signing_key"]
+    );
+    assert_eq!(
+        attestation["proof"]["created_at"],
+        attestation["attestation"]["attested_at"]
+    );
+    serde_json::from_value::<arkret_models_crypto::QueryDeviceRecord>(entry.clone())
+        .expect("keys/query row decodes as a complete attested record");
 }
 
 #[tokio::test]
@@ -1183,10 +1182,15 @@ async fn keys_query_hides_revoked_device() {
         .take_json()
         .await
         .unwrap();
-    let revoked_phone = &post_revoke_query["device_keys"][alice_core.as_str()]["ak:device:01904100-0000-7000-8000-9b04e0000007"];
-    assert_eq!(revoked_phone["device_status"], "revoked");
-    assert!(revoked_phone["device_signing_key"].is_null());
-    assert!(revoked_phone["algorithms"].as_object().unwrap().is_empty());
+    // §8.2 — the revoked device is omitted, not reported with a revoked status:
+    // a status field on this cross-principal surface would itself be an
+    // enumerable signal about somebody else's device set.
+    assert!(
+        post_revoke_query["device_keys"][alice_core.as_str()]
+            .get("ak:device:01904100-0000-7000-8000-9b04e0000007")
+            .is_none(),
+        "a revoked device must be omitted entirely: {post_revoke_query}"
+    );
     assert_eq!(
         post_revoke_query["device_keys"][alice_core.as_str()]["ak:device:01904100-0000-7000-8000-a11ce0000001"]
             ["algorithms"]["signed_curve25519:desktop"]["key"],

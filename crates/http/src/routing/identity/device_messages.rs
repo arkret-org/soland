@@ -32,8 +32,9 @@ use super::{SyncCursorError, now, parse_and_validate_sync_cursor, sync_token_for
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
-    DeviceMessageEnvelope, DeviceMessagesAckOutcome, DeviceMessagesAckRequestBody,
-    DeviceMessagesGetOutcome, DeviceMessagesSendOutcome, DeviceMessagesSendRequestBody,
+    DeviceMessageEnvelope, DeviceMessageSender, DeviceMessagesAckOutcome,
+    DeviceMessagesAckRequestBody, DeviceMessagesGetOutcome, DeviceMessagesSendOutcome,
+    DeviceMessagesSendRequestBody,
 };
 
 pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 1000;
@@ -238,6 +239,8 @@ async fn send_device_messages(
                 let mut content = serde_json::to_value(&prepared.target)
                     .map_err(|error| AppError::internal(error.to_string()))?;
                 if let Some(object) = content.as_object_mut() {
+                    // The send surface is device-authenticated, so the queued
+                    // body records the `device` branch of the §8.2.1 sender XOR.
                     object.insert("sender_device_id".to_owned(), json!(session.device_id));
                 }
                 Some(DeviceMessageState {
@@ -706,6 +709,11 @@ fn device_message_envelope_from_record(
         Some(_) => return None,
         None => None,
     };
+    // `contact-and-direct-conversation.md` §8.2.1 — the queued body carries the
+    // closed sender endpoint XOR verbatim. A body that does not resolve to
+    // exactly one complete branch is dropped rather than repaired: repairing it
+    // would mean choosing a sender identity the producer never wrote down.
+    let sender = <DeviceMessageSender as serde::Deserialize>::deserialize(&message.content).ok()?;
     Some(DeviceMessageEnvelope {
         message_id: arkret_identifiers::DeviceMessageId::new(
             message.content.get("message_id")?.as_str()?.to_owned(),
@@ -713,14 +721,7 @@ fn device_message_envelope_from_record(
         .ok()?,
         kind,
         sender_principal_id: arkret_identifiers::DidCoreId::new(message.sender.clone()).ok()?,
-        sender_device_id: arkret_identifiers::DeviceId::new(
-            message
-                .content
-                .get("sender_device_id")
-                .and_then(Value::as_str)?
-                .to_owned(),
-        )
-        .ok()?,
+        sender,
         recipient_principal_id: arkret_identifiers::DidCoreId::new(message.recipient.clone())
             .ok()?,
         recipient_device_id: arkret_identifiers::DeviceId::new(message.device_id.clone()).ok()?,

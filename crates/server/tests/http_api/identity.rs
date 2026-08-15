@@ -8,6 +8,227 @@ fn canonical_request_body<T: serde::Serialize>(value: &T) -> Vec<u8> {
     arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
 }
 
+async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &str) {
+    use arkret_models_collaboration::events_payloads::device_identity::{
+        DeviceAuthorizationBindingKind, DeviceAuthorizePayload, DeviceOrPrincipalRef,
+    };
+    use arkret_models_collaboration::events_payloads::{RealmCreatePayload, SignatureMaterial};
+
+    let principal_full = DidFullId::new(principal_full_id.to_owned()).unwrap();
+    let principal_id = arkret_wire::project_full_id_to_core_id(&principal_full).unwrap();
+    let principal_server_id = DidCoreId::new(state.service_id().clone()).unwrap();
+    let pcr_realm_id = RealmId::new(soland_test_support::fixture_principal_control_realm(
+        principal_full_id,
+    ))
+    .unwrap();
+    let basis_seal_id = soland_test_support::cba_basis::seed_realm_basis(
+        state,
+        pcr_realm_id.as_str(),
+        principal_full_id,
+        soland_test_support::cba_basis::FixtureBasis::shared(&[]),
+    )
+    .await;
+    let basis_seal = state
+        .test_seal(&basis_seal_id)
+        .unwrap()
+        .expect("fixture PCR basis Seal");
+    let genesis_record = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(pcr_realm_id.as_str())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
+        .expect("PCR genesis Event");
+    let mut genesis: arkret_wire::Event = serde_json::from_value(genesis_record.envelope).unwrap();
+    let create_payload: RealmCreatePayload =
+        serde_json::from_value(serde_json::to_value(&genesis.payload).unwrap()).unwrap();
+    let descriptor = create_payload
+        .object
+        .founding_device_descriptor
+        .expect("fixture PCR founding device descriptor");
+    let authorize_payload = DeviceAuthorizePayload {
+        principal_id: principal_id.clone(),
+        device_id: descriptor.device_id.clone(),
+        device_public_key: descriptor.device_public_key.clone(),
+        hpke_key: descriptor.hpke_key.clone(),
+        algorithms: descriptor.algorithms.clone(),
+        device_key_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
+        authorized_by: DeviceOrPrincipalRef::Principal(principal_id.clone()),
+        scopes: None,
+        not_before: genesis.created_at,
+        expires_at: None,
+        authorization_binding_kind: DeviceAuthorizationBindingKind::RegistrationAnchor,
+        device_signature: SignatureMaterial::NonEmptyString(
+            arkret_wire::NonEmptyString::new("fixture-signature").unwrap(),
+        ),
+        recovery_session_id: None,
+    };
+    let mut authorize = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::DeviceAuthorize.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: pcr_realm_id.clone(),
+        },
+        principal_id.clone(),
+        principal_server_id.clone(),
+        1,
+        arkret_identifiers::Hlc::new("019041000000-0000-00000001").unwrap(),
+        serde_json::to_value(authorize_payload).unwrap(),
+        genesis.created_at,
+    )
+    .unwrap();
+    authorize.prev_refs = vec![genesis.event_id.clone()];
+    authorize.refresh_content_bound_identity().unwrap();
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{principal_full_id}#{}", descriptor.device_id)).unwrap();
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
+        SigningKey::from_bytes(&[21_u8; 32]),
+        principal_full.clone(),
+        verification_method.clone(),
+    );
+    for event in [&mut genesis, &mut authorize] {
+        let created_at = event.created_at;
+        arkret_signatures::sign_event(
+            event,
+            &signer,
+            &verification_method,
+            arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+        )
+        .unwrap();
+    }
+    state
+        .test_persistence()
+        .events()
+        .put(soland_test_support::signed_event::canonical_event_record(
+            &authorize,
+            Some(pcr_realm_id.as_str()),
+            chrono::Utc::now(),
+        ))
+        .await
+        .unwrap();
+
+    let authority =
+        arkret_wire::PrincipalAuthorityKey::new(principal_id.clone(), principal_server_id.clone());
+    state
+        .test_persistence()
+        .principal_resolutions()
+        .compare_and_set(
+            None,
+            soland_storage::PrincipalResolutionRecord {
+                authority_key: authority,
+                pcr_realm_id: pcr_realm_id.clone(),
+                genesis_event: genesis.clone(),
+                current_event: genesis.clone(),
+                projection: arkret_models_identity::PrincipalResolutionProjection {
+                    full_id: principal_full.clone(),
+                    method_history_head: format!("sha256:{}", "1".repeat(64)),
+                    version_id: "1-fixture".to_owned(),
+                    resolution_event_ref: genesis.event_id.to_string(),
+                    updated_at: genesis.created_at,
+                },
+            },
+        )
+        .await
+        .unwrap();
+
+    state
+        .test_projections()
+        .test_mark_control_event_sealed(&genesis, &basis_seal)
+        .unwrap();
+
+    let create_digest = arkret_wire::Hash::new(genesis.event_digest().unwrap()).unwrap();
+    let authorize_digest = arkret_wire::Hash::new(authorize.event_digest().unwrap()).unwrap();
+    let fixture_hash =
+        |byte: &str| arkret_wire::Hash::new(format!("sha256:{}", byte.repeat(64))).unwrap();
+    let mut receipt = arkret_wire::EventBatchReceipt {
+        schema: arkret_wire::EventBatchReceipt::SCHEMA.to_owned(),
+        receipt_id: arkret_identifiers::ReceiptId::new(
+            "ak:receipt:0196419b-0000-7000-8000-000000000004",
+        )
+        .unwrap(),
+        issuer: principal_server_id.clone(),
+        scope: arkret_wire::EventBatchReceiptScope::PcrGenesis(
+            arkret_wire::event_receipt::PcrGenesisReceiptScope {
+                kind: arkret_wire::event_receipt::PcrGenesisReceiptScopeKind::PcrGenesisUnit,
+                principal_id,
+                realm_id: pcr_realm_id,
+                did_version_id: "1-fixture".to_owned(),
+                log_head_digest: fixture_hash("1"),
+                control_key_digest: fixture_hash("2"),
+                registration_evidence_digest: fixture_hash("3"),
+                create_digest: create_digest.clone(),
+                founding_authorize_digest: authorize_digest.clone(),
+                accepted_device_id: descriptor.device_id,
+                device_key_digest: descriptor.device_key_digest,
+                hpke_key_digest: descriptor.hpke_key_digest,
+                accepted_at: genesis.created_at,
+                audience: principal_server_id,
+            },
+        ),
+        frontier: arkret_wire::EventBatchReceiptFrontier {
+            actor_seq: Some(authorize.actor_seq),
+            event_id: Some(authorize.event_id.clone()),
+            event_digest: Some(authorize_digest.clone()),
+            hlc: None,
+        },
+        events: vec![
+            arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
+                event_id: genesis.event_id,
+                event_digest: create_digest,
+                kind: arkret_wire::NonEmptyString::new(
+                    arkret_wire::EventKind::RealmCreate.as_str(),
+                )
+                .unwrap(),
+            }),
+            arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
+                event_id: authorize.event_id,
+                event_digest: authorize_digest,
+                kind: arkret_wire::NonEmptyString::new(
+                    arkret_wire::EventKind::DeviceAuthorize.as_str(),
+                )
+                .unwrap(),
+            }),
+        ],
+        created_at: genesis.created_at,
+        proofs: Vec::new(),
+    };
+    receipt.canonicalize_events().unwrap();
+    let unsigned = arkret_wire::UnsignedPayloadProof {
+        kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+        proof_purpose: None,
+        verification_method: state.service_verification_method("notary-key").unwrap(),
+        payload_digest: receipt.payload_digest().unwrap(),
+        created_at: receipt.created_at,
+        domain: None,
+        audience: None,
+    };
+    let signing_bytes = receipt.proof_signing_bytes(&unsigned).unwrap();
+    let jws = arkret_signatures::jws::sign_jws_ed25519(
+        &signing_bytes,
+        state.notary_signing_key().as_ref(),
+    )
+    .unwrap();
+    receipt.proofs.push(unsigned.finalize(jws).unwrap());
+    receipt.validate().unwrap();
+    state
+        .test_persistence()
+        .events()
+        .put_identity_anchor_batch_atomic(
+            Vec::new(),
+            Vec::new(),
+            Some(receipt),
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn open_principal_resolution_is_public_bounded_and_blinds_unknown_principals() {
     let state = soland_test_support::app_state(test_config());
@@ -28,6 +249,87 @@ async fn open_principal_resolution_is_public_bounded_and_blinds_unknown_principa
         .send(&service)
         .await;
     assert_eq!(with_stale_selector.status_code, Some(StatusCode::NOT_FOUND));
+}
+
+#[tokio::test]
+async fn actor_profile_resolve_uses_one_failure_for_unknown_or_unavailable_actor() {
+    let state = soland_test_support::app_state(test_config());
+    let token = dev_token(state.clone()).await;
+    let body: Value = TestClient::post("http://server/_arkret/self/actor-profiles/query")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "realm_id": DEMO_REALM_ID,
+            "actor_ids": [fixture_actor_core_id("did:web:unknown.example")]
+        }))
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(body["profiles"], serde_json::json!([]));
+    assert_eq!(body["failures"][0]["reason"], "profile_unavailable");
+    assert_eq!(
+        body["failures"][0]["actor_id"],
+        fixture_actor_core_id("did:web:unknown.example").as_str()
+    );
+}
+
+#[tokio::test]
+async fn resolution_audit_blinds_a_wrong_principal_authority_pair() {
+    let state = soland_test_support::app_state(test_config());
+    let token = dev_token(state.clone()).await;
+    let response = TestClient::post("http://server/_arkret/self/identity/resolution-audit/query")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "principal_authority": {
+                "principal_id": fixture_actor_core_id("did:web:alice.example"),
+                "principal_server_id": fixture_actor_core_id("did:web:wrong-server.example")
+            },
+            "history_depth": 0
+        }))
+        .send(&app_from_state(state))
+        .await;
+    assert_eq!(response.status_code, Some(StatusCode::NOT_FOUND));
+}
+
+#[tokio::test]
+async fn resolution_audit_returns_unified_event_receipt_and_seal_evidence() {
+    let state = soland_test_support::app_state(test_config());
+    let service_id = state.service_id().clone();
+    let token = dev_token_for_device(
+        state.clone(),
+        "did:web:alice.example",
+        "ak:device:01904100-0000-7000-8000-000000000001",
+        "Alice Desktop",
+    )
+    .await;
+    seed_closed_pcr_audit_evidence(&state, "did:web:alice.example").await;
+    let mut response =
+        TestClient::post("http://server/_arkret/self/identity/resolution-audit/query")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&serde_json::json!({
+                "principal_authority": {
+                    "principal_id": fixture_actor_core_id("did:web:alice.example"),
+                    "principal_server_id": service_id
+                },
+                "history_depth": 0
+            }))
+            .send(&app_from_state(state))
+            .await;
+    assert_eq!(response.status_code, Some(StatusCode::OK));
+    assert_eq!(
+        response
+            .headers
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store, no-transform")
+    );
+    let body: Value = response.take_json().await.unwrap();
+    assert!(body.get("principal_genesis_event").is_some());
+    assert!(body.get("principal_genesis_receipt").is_some());
+    assert!(body.get("current_resolution_event").is_some());
+    assert!(body.get("accepted_seal").is_some());
+    assert!(body.get("resolution_cell_proof").is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]

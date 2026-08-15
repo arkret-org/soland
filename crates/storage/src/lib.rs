@@ -331,6 +331,7 @@ pub trait IdentityStoreRegistry: Send + Sync {
     fn sessions(&self) -> &dyn SessionStore;
     fn account_data(&self) -> &dyn AccountDataStore;
     fn contacts(&self) -> &dyn ContactStore;
+    fn contact_verified_mirrors(&self) -> &dyn ContactVerifiedMirrorStore;
     fn invite_receive_policies(&self) -> &dyn InviteReceivePolicyStore;
     fn invite_locators(&self) -> &dyn InviteLocatorStore;
     fn consent_cells(&self) -> &dyn ConsentCellStore;

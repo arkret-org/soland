@@ -51,7 +51,14 @@ use arkret_models_identity::account::{
     AccountUpdateProfileOutcome,
 };
 use arkret_models_identity::actor_profile::{AccountMaterializedProfile, ActorProfile};
-use arkret_models_identity::{DeviceSummaryStatus, DeviceSummaryVerificationState};
+use arkret_models_identity::actor_profile_operations::{
+    ActorProfileResolveFailure, ActorProfileResolveFailureReason, ActorProfileResolveOutcome,
+    ActorProfileResolveRequest, ResolvedActorProfile,
+};
+use arkret_models_identity::{
+    DeviceSummaryStatus, DeviceSummaryVerificationState, PrincipalResolutionAuditEvidence,
+    PrincipalResolutionAuditRequest,
+};
 use arkret_state::lattice::CellState;
 use arkret_wire::ErrorCode;
 use base64::Engine;
@@ -230,6 +237,11 @@ pub(super) fn protocol_router() -> Router {
         )
         .push(contact_routes())
         .push(direct_conversation_routes())
+        .push(Router::with_path("actor-profiles/query").post(resolve_actor_profiles))
+        .push(
+            Router::with_path("identity/resolution-audit/query")
+                .post(read_principal_resolution_audit),
+        )
         .push(
             Router::with_path("invite-receive-policy")
                 .get(get_invite_receive_policy)
@@ -1509,6 +1521,240 @@ async fn accepted_account_profile_in_realm(
         },
         profile,
     }))
+}
+
+async fn resolved_actor_profile_evidence(
+    state: &AppState,
+    actor_id: &DidCoreId,
+) -> Result<Option<ResolvedActorProfile>, AppError> {
+    let mut candidates = state
+        .event_queries()
+        .canonical_events_for_actor(actor_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("load Actor Profile Events: {error}")))?
+        .into_iter()
+        .filter(|record| {
+            matches!(
+                record.kind.as_str(),
+                "ak.profile.create" | "ak.profile.update"
+            )
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        right
+            .actor_seq
+            .cmp(&left.actor_seq)
+            .then_with(|| right.event_id.cmp(&left.event_id))
+    });
+    for candidate in candidates {
+        let event: arkret_wire::Event = match serde_json::from_value(candidate.envelope) {
+            Ok(event) => event,
+            Err(error) => {
+                tracing::warn!(%error, event_id = %candidate.event_id, "stored Actor Profile Event envelope is invalid");
+                continue;
+            }
+        };
+        let Some(accepted) =
+            accepted_account_profile_in_realm(state, actor_id, &event.realm_id).await?
+        else {
+            continue;
+        };
+        let event_digest = Hash::new(event.event_digest().map_err(|error| {
+            AppError::internal(format!("Actor Profile Event digest failed: {error}"))
+        })?)
+        .map_err(|error| AppError::internal(format!("Actor Profile digest invalid: {error}")))?;
+        let Some(accepted_seal) = state
+            .projections()
+            .seal_covering_event(&event_digest)
+            .map_err(|error| {
+                AppError::internal(format!("Actor Profile Seal lookup failed: {error}"))
+            })?
+        else {
+            continue;
+        };
+        return Ok(Some(ResolvedActorProfile {
+            actor_id: actor_id.clone(),
+            actor_profile: accepted.profile.into_inner(),
+            profile_event: event,
+            accepted_seal,
+        }));
+    }
+    Ok(None)
+}
+
+#[salvo::oapi::endpoint(operation_id = "ak.self.actor_profile.read.resolve", tags("identity"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.actor_profile.read.resolve"))]
+async fn resolve_actor_profiles(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    body: JsonBody<ActorProfileResolveRequest>,
+) -> JsonResult<ActorProfileResolveOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let body = body.into_inner();
+    body.validate()
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+
+    // Authorization is evaluated before any target profile read. A PCR is
+    // never a legal relationship selector even if its owner happens to be a
+    // member there through device projections.
+    let selector_is_pcr = state
+        .persistence()
+        .principal_resolution_for_realm(&body.realm_id)
+        .await
+        .map_err(|error| AppError::internal(format!("classify Actor Profile selector: {error}")))?
+        .is_some();
+    let caller_joined = !selector_is_pcr
+        && crate::routing::realm_has_member(state, body.realm_id.as_str(), &session.actor).await;
+
+    let mut profiles = Vec::new();
+    let mut failures = Vec::new();
+    for actor_id in &body.actor_ids {
+        let target_joined = caller_joined
+            && crate::routing::realm_has_member(state, body.realm_id.as_str(), actor_id.as_str())
+                .await;
+        let resolved = if target_joined {
+            resolved_actor_profile_evidence(state, actor_id).await?
+        } else {
+            None
+        };
+        match resolved {
+            Some(profile) => profiles.push(profile),
+            None => failures.push(ActorProfileResolveFailure {
+                actor_id: actor_id.clone(),
+                reason: ActorProfileResolveFailureReason::ProfileUnavailable,
+            }),
+        }
+    }
+    let outcome = ActorProfileResolveOutcome {
+        profiles,
+        failures: (!failures.is_empty()).then_some(failures),
+    };
+    outcome
+        .validate_covers(&body.actor_ids)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    json_ok(outcome)
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.identity.read.resolution_audit",
+    tags("identity")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.self.identity.read.resolution_audit"))]
+async fn read_principal_resolution_audit(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+    body: JsonBody<PrincipalResolutionAuditRequest>,
+) -> JsonResult<PrincipalResolutionAuditEvidence> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let body = body.into_inner();
+    body.validate()
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    if body.principal_authority.principal_id.as_str() != session.actor
+        || body.principal_authority.principal_server_id.as_str() != state.service_id()
+    {
+        return Err(AppError::not_found(
+            "principal resolution audit unavailable",
+        ));
+    }
+    let record = state
+        .persistence()
+        .principal_resolution_by_authority_key(&body.principal_authority)
+        .await
+        .map_err(|error| AppError::internal(format!("load principal resolution audit: {error}")))?
+        .ok_or_else(|| AppError::not_found("principal resolution audit unavailable"))?;
+
+    let full_history = state
+        .persistence()
+        .principal_resolution_history(&body.principal_authority, None, 258)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("load principal resolution history: {error}"))
+        })?;
+    let cursor_position = if let Some(cursor) = body.after_resolution_event_ref.as_ref() {
+        let position = full_history
+            .iter()
+            .position(|event| event.event_id == *cursor)
+            .filter(|position| *position > 0)
+            .ok_or_else(|| {
+                AppError::param_invalid("resolution history ancestor is unknown")
+                    .with_wire_code("resolution_history_ancestor_unknown")
+            })?;
+        Some(position)
+    } else {
+        None
+    };
+    let available_predecessors = full_history
+        .iter()
+        .skip(1)
+        .take_while(|event| event.event_id != record.genesis_event.event_id)
+        .take(
+            cursor_position
+                .map(|position| position.saturating_sub(1))
+                .unwrap_or(usize::MAX),
+        )
+        .cloned()
+        .collect::<Vec<_>>();
+    let requested_depth = usize::from(body.history_depth.unwrap_or(0));
+    let predecessor_resolution_events = available_predecessors
+        .iter()
+        .take(requested_depth)
+        .cloned()
+        .collect::<Vec<_>>();
+    // `history_depth = 0` means "return only the current Event", not "claim
+    // there is no omitted history". Completeness is true only when the
+    // bounded segment reaches genesis (which is carried separately) or the
+    // caller's exclusive ancestor cursor.
+    let history_complete = predecessor_resolution_events.len() == available_predecessors.len();
+    let next_audit_cursor = (!history_complete).then(|| {
+        available_predecessors[predecessor_resolution_events.len()]
+            .event_id
+            .clone()
+    });
+
+    let principal_genesis_receipt = state
+        .event_queries()
+        .canonical_batch_receipts_for_event(record.genesis_event.event_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("load PCR genesis receipt: {error}")))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| AppError::not_found("principal resolution audit unavailable"))?;
+    let current_digest = Hash::new(record.current_event.event_digest().map_err(|error| {
+        AppError::internal(format!("current resolution Event digest failed: {error}"))
+    })?)
+    .map_err(|error| AppError::internal(format!("current resolution digest invalid: {error}")))?;
+    let accepted_seal = state
+        .projections()
+        .seal_covering_event(&current_digest)
+        .map_err(|error| AppError::internal(format!("resolution Seal lookup failed: {error}")))?
+        .ok_or_else(|| AppError::not_found("principal resolution audit unavailable"))?;
+
+    res.headers_mut().insert(
+        salvo::http::header::CACHE_CONTROL,
+        salvo::http::HeaderValue::from_static("no-store, no-transform"),
+    );
+    let evidence = PrincipalResolutionAuditEvidence {
+        principal_id: record.authority_key.principal_id,
+        principal_server_id: record.authority_key.principal_server_id,
+        principal_control_realm_id: record.pcr_realm_id,
+        principal_genesis_receipt,
+        principal_genesis_event: record.genesis_event,
+        current_resolution_event: record.current_event,
+        predecessor_resolution_events,
+        history_complete,
+        accepted_seal,
+        next_audit_cursor,
+        method_history_evidence: None,
+    };
+    evidence
+        .validate_history_continuation()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    json_ok(evidence)
 }
 
 #[salvo::oapi::endpoint(

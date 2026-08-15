@@ -109,6 +109,7 @@ async fn create_contact_request(
         introduction_evidence:
             arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence::SamePrincipalServer,
         previous_terminal_contact_round_id: None,
+        continuity_evidence: None,
         message: None,
     });
     let (status, prepared) =

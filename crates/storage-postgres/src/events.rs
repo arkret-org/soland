@@ -886,7 +886,7 @@ impl EventStore for PgEventStore {
         slot: DirectConversationFoundingSlotRecord,
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<DirectConversationFoundingCommitOutcome> {
-        if records.len() != 3
+        if records.len() != 4
             || slot.event_ids
                 != records
                     .iter()

@@ -617,7 +617,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
             "call_id": session_id,
             "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "ak:focus:mediasoup:blue"
+            "focus_id": "ak:focus:arkret_native:blue"
         })))
         .send(&app_from_state(state.clone()))
         .await
@@ -627,17 +627,19 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
 
     assert_eq!(
         token_response["connect_url"],
-        "wss://media.example/mediasoup"
+        "wss://media.example/arkret-native"
     );
     // Spec `CallMediaTokenExchangeOutcome` required fields: focus_id + backend_kind
     // identify the chosen focus and its backend protocol; `todos` is not a
     // schema field and must not appear.
-    assert_eq!(token_response["focus_id"], "ak:focus:mediasoup:blue");
-    assert_eq!(token_response["backend_kind"], "mediasoup");
+    assert_eq!(token_response["focus_id"], "ak:focus:arkret_native:blue");
+    assert_eq!(token_response["backend_kind"], "arkret_native");
     assert!(token_response.get("todos").is_none());
+    // §3 — the signing key is this deployment's configuration, not a cell
+    // field; the cell only anchors it through `service_id`.
     assert_eq!(
         token_response["participant_binding"]["issuer_kid"],
-        "did:web:media.example#mediasoup-2026-05"
+        test_media_issuer_kid()
     );
     assert_eq!(
         token_response["participant_binding"]["realm_id"],
@@ -650,13 +652,13 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     );
     assert_eq!(
         token_response["participant_binding"]["focus_id"],
-        "ak:focus:mediasoup:blue"
+        "ak:focus:arkret_native:blue"
     );
     // `media-service-binding.md` §3 — service_signature is a typed {kid, sig}
     // object, not a packed `<kid>:<alg>:<sig>` string.
     assert_eq!(
         token_response["service_signature"]["kid"],
-        "did:web:media.example#mediasoup-2026-05"
+        test_media_issuer_kid()
     );
     assert!(
         token_response["service_signature"]["sig"]
@@ -715,25 +717,32 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         "realm TTL must be capped at the 600s media-token ceiling"
     );
 
-    let backend_token = token_response["backend_token"].as_str().unwrap();
-    assert!(backend_token.starts_with("mediasoup."));
-    let backend_payload = decode_backend_token_payload(backend_token);
-    assert_eq!(
-        backend_payload["iss"],
-        "did:web:media.example#mediasoup-2026-05"
+    // `bindings/arkret-native.md` §2 — the backend token is that binding's own
+    // object, and its payload carries no long-term actor identity: the SFU sees
+    // only the per-exchange `participant_identity` pseudonym.
+    let backend_token: Value =
+        serde_json::from_str(token_response["backend_token"].as_str().unwrap())
+            .expect("arkret-native backend_token is a JSON object");
+    assert_eq!(backend_token["kid"], test_media_issuer_kid());
+    assert_eq!(backend_token["signature_algorithm"], "Ed25519");
+    assert!(
+        backend_token["sig"]
+            .as_str()
+            .is_some_and(|sig| !sig.is_empty())
     );
-    assert_eq!(backend_payload["aud"], "mediasoup-demo");
-    assert_eq!(backend_payload["provider"], "mediasoup");
-    assert_eq!(backend_payload["realm_id"], DEMO_REALM_ID);
+    let backend_payload = &backend_token["payload"];
     assert_eq!(backend_payload["call_id"], session_id);
+    assert_eq!(backend_payload["focus_id"], "ak:focus:arkret_native:blue");
     assert_eq!(
-        backend_payload["actor_id"],
-        fixture_actor_core_id("did:web:alice.example").as_str()
+        backend_payload["participant_identity"],
+        participant_identity
     );
-    assert_eq!(
-        backend_payload["device_id"],
-        "ak:device:01904100-0000-7000-8000-a11ce0000001"
-    );
+    for forbidden in ["actor_id", "device_id", "realm_id", "aud", "provider"] {
+        assert!(
+            backend_payload.get(forbidden).is_none(),
+            "backend token must not carry {forbidden}"
+        );
+    }
 
     let second_token_response: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -743,7 +752,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
             "call_id": session_id,
             "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "ak:focus:mediasoup:blue"
+            "focus_id": "ak:focus:arkret_native:blue"
         })))
         .send(&app_from_state(state))
         .await
@@ -851,10 +860,15 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
         arkret_wire::CapabilityActionId::CallJoin.as_str(),
     );
 
-    // Commit `session_focus = mediasoup:blue` into the durable focus cell
+    // Commit `session_focus = arkret_native:blue` into the durable focus cell
     // (§4.1 write-once). A token request naming a different focus MUST be
     // rejected with `focus_mismatch`.
-    seed_call_state(&state, &session_id, Some("ak:focus:mediasoup:blue"), vec![]);
+    seed_call_state(
+        &state,
+        &session_id,
+        Some("ak:focus:arkret_native:blue"),
+        vec![],
+    );
 
     let mut focus_mismatch = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -871,16 +885,17 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     let focus_mismatch_body: Value = focus_mismatch.take_json().await.unwrap();
     assert_eq!(focus_mismatch_body["error"]["code"], "focus_mismatch");
 
+    // A cell sealed to somebody else's media service: this deployment's signing
+    // key does not project onto that `service_id`, so it must refuse to mint.
     install_media_service_epoch(
         &state,
         serde_json::json!({
-            "service_id": "did:web:media.example",
+            "service_id": "ak:did_core:webvh:z6mkrogueexampleservice",
             "foci": [{
-                "focus_id": "ak:focus:mediasoup:blue",
-                "type": "mediasoup",
-                "connect_url": "wss://media.example/mediasoup",
-                "issuer_kid": "did:web:rogue.example#kid-1",
-                "audience": "mediasoup-demo"
+                "focus_id": "ak:focus:arkret_native:blue",
+                "focus_kind": "arkret_native",
+                "token_endpoint": "http://server/_arkret/self/rtc/token",
+                "connect_url": "wss://media.example/arkret-native"
             }]
         }),
     );
@@ -892,7 +907,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
             "call_id": session_id,
             "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "ak:focus:mediasoup:blue"
+            "focus_id": "ak:focus:arkret_native:blue"
         })))
         .send(&app_from_state(state))
         .await;
@@ -997,10 +1012,10 @@ async fn rtc_media_token_requires_call_join_capability() {
     );
 }
 
-/// LiveKit API Key used in tests. `bindings/livekit.md` §2 maps the focus
-/// `issuer_kid` to the LiveKit API Key, so the configured key MUST equal the
-/// `livekit:green` focus `issuer_kid` in [`good_media_service_epoch`].
-const TEST_LIVEKIT_API_KEY: &str = "did:web:media.example#livekit-2026-05";
+/// LiveKit API Key used in tests. `bindings/livekit.md` §2 maps it to the JWT
+/// `iss`. It is deployment configuration and never a Realm cell field: a
+/// backend API credential has no business inside signed Realm policy.
+const TEST_LIVEKIT_API_KEY: &str = "livekit-test-api-key";
 const TEST_LIVEKIT_API_SECRET: &str = "test-livekit-api-secret-0123456789";
 
 /// `test_config()` with the LiveKit API Key/Secret populated so the
@@ -1147,13 +1162,21 @@ async fn admin_realm_media_service_renders_projected_cell() {
     .await
     .unwrap();
     assert_eq!(media_service["realm_id"], DEMO_REALM_ID);
-    assert_eq!(media_service["service_id"], "did:web:media.example");
+    assert_eq!(media_service["service_id"], TEST_MEDIA_SERVICE_ID);
     let foci = media_service["foci"].as_array().unwrap();
     assert_eq!(foci.len(), 2);
-    assert!(
-        foci.iter()
-            .any(|focus| focus["focus_id"] == "ak:focus:livekit:green")
+    let livekit = foci
+        .iter()
+        .find(|focus| focus["focus_id"] == "ak:focus:livekit:green")
+        .expect("livekit focus renders");
+    // `token_endpoint` / `connect_url` are normative required fields, so the
+    // operator view shows them verbatim rather than falling back to a dash.
+    assert_eq!(livekit["focus_kind"], "livekit");
+    assert_eq!(
+        livekit["token_endpoint"],
+        "http://server/_arkret/self/rtc/token"
     );
+    assert_eq!(livekit["connect_url"], "wss://media.example/livekit");
 
     // A Realm with no committed epoch renders an empty (but well-typed) view.
     let other_realm = "ak:realm:ASdf4eIWF6PRMc-8Gd-gIixaHGjUJGN1G-tVBdF9xOQy";
@@ -1327,25 +1350,40 @@ fn install_media_service_epoch(state: &AppState, media_service: Value) {
         );
 }
 
+/// This deployment's own service DID, and the media `service_id` every issued
+/// `issuer_kid` is anchored against (`media-service-binding.md` §3).
+const TEST_SERVICE_FULL_ID: &str =
+    "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
+const TEST_MEDIA_SERVICE_ID: &str =
+    "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x";
+
+/// Default media signing key: `<service DID>#media-1`
+/// (`SOLAND_MEDIA_ISSUER_KID` overrides it).
+fn test_media_issuer_kid() -> String {
+    format!("{TEST_SERVICE_FULL_ID}#media-1")
+}
+
+/// A spec-shaped `ak.realm.media_service` cell
+/// (`event-payload.schema.json#/$defs/realm_media_service_payload`).
+///
+/// `token_endpoint` names this deployment, because a focus whose token endpoint
+/// is somebody else's service is one this server must refuse to mint for. The
+/// two backends are the only ones v1 gives a normative binding.
 fn good_media_service_epoch() -> Value {
     serde_json::json!({
-        "service_id": "did:web:media.example",
+        "service_id": TEST_MEDIA_SERVICE_ID,
         "foci": [
             {
                 "focus_id": "ak:focus:livekit:green",
-                "type": "livekit",
-                "connect_url": "wss://media.example/livekit",
-                "issuer_kid": "did:web:media.example#livekit-2026-05",
-                "audience": "livekit-demo",
-                "ttl_seconds": 300
+                "focus_kind": "livekit",
+                "token_endpoint": "http://server/_arkret/self/rtc/token",
+                "connect_url": "wss://media.example/livekit"
             },
             {
-                "focus_id": "ak:focus:mediasoup:blue",
-                "type": "mediasoup",
-                "connect_url": "wss://media.example/mediasoup",
-                "issuer_kid": "did:web:media.example#mediasoup-2026-05",
-                "audience": "mediasoup-demo",
-                "ttl_seconds": 900
+                "focus_id": "ak:focus:arkret_native:blue",
+                "focus_kind": "arkret_native",
+                "token_endpoint": "http://server/_arkret/self/rtc/token",
+                "connect_url": "wss://media.example/arkret-native"
             }
         ]
     })
@@ -1750,17 +1788,4 @@ async fn call_signal_resubscribe_does_not_redeliver() {
             .is_empty(),
         "the sending device must not see its own self-echoed call signal"
     );
-}
-
-fn decode_backend_token_payload(token: &str) -> Value {
-    let parts = token.split('.').collect::<Vec<_>>();
-    assert_eq!(
-        parts.len(),
-        3,
-        "backend token should be provider.payload.sig"
-    );
-    let bytes = URL_SAFE_NO_PAD
-        .decode(parts[1])
-        .expect("backend token payload base64url");
-    serde_json::from_slice(&bytes).expect("backend token payload json")
 }

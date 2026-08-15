@@ -487,6 +487,33 @@ async fn peer_contacts_submit(
         PeerContactSubmitRequestBody::ProofRefresh { .. }
         | PeerContactSubmitRequestBody::GlareFinalize { .. } => unreachable!(),
     };
+    if let Some(request_receipt) = request_receipt {
+        let canonical_event_bytes =
+            canonical::canonical_json_bytes(&signed_event).map_err(|error| {
+                AppError::internal(format!("Contact mirror canonical Event: {error}"))
+            })?;
+        let request_digest = signed_event
+            .event_digest()
+            .map_err(|error| AppError::internal(format!("Contact mirror Event digest: {error}")))?;
+        let source_receipt = serde_json::to_value(request_receipt).map_err(|error| {
+            AppError::internal(format!("Contact mirror receipt encode: {error}"))
+        })?;
+        state
+            .persistence()
+            .put_contact_verified_mirror(&soland_storage::ContactVerifiedMirrorRecord {
+                target_holder_id: subject_id.clone(),
+                request_event_id: signed_event.event_id.to_string(),
+                request_digest,
+                canonical_event_bytes,
+                source_receipt,
+                issuer_service_id: source_service_id.clone(),
+                verified_at: now(),
+            })
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("persist Contact verified mirror: {error}"))
+            })?;
+    }
     let outcome = project_delivered_contact_fact(
         state,
         fact_kind,
@@ -961,6 +988,8 @@ async fn finalize_contact_proof_refresh(
         });
     if pair_has_both_current_proofs {
         record.status = "accepted".to_owned();
+        record.request_receipts.clear();
+        record.request_mirror_receipts.clear();
         record.version = Some(1);
     }
     let expected_updated_at = record.updated_at;
@@ -1370,6 +1399,7 @@ async fn finalize_glare_contact_round(
         // then this durable bundle remains tentative and cannot authorize a
         // Direct Conversation founding unit.
         current_proofs: vec![local_current_proof.clone()],
+        continuity_checkpoint: None,
     };
     let expected_updated_at = record.updated_at;
     record.contact_round_id = Some(contact_round_id.to_string());
@@ -2046,6 +2076,7 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                     normal_response_receipt: None,
                     glare_concurrency_attestations: Some(attestations),
                     current_proofs: vec![local_proof],
+                    continuity_checkpoint: None,
                 }
             };
             let local_proof = bundle
@@ -2079,6 +2110,8 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                 record.contact_round_id = Some(contact_round_id.to_string());
                 record.version = Some(1);
                 record.status = "accepted".to_owned();
+                record.request_receipts.clear();
+                record.request_mirror_receipts.clear();
                 record.contact_round_evidence = Some(bundle);
                 if !outcome_stored {
                     record.control_outcomes.push(outcome.clone());
@@ -2612,38 +2645,6 @@ async fn append_stubbed_contact_message_audit(
     .await;
 }
 
-async fn append_delivered_contact_fact_projection_event(
-    state: &AppState,
-    fact_kind: &str,
-    issuer: &str,
-    payload: &Value,
-    contact_event_id: &str,
-) {
-    let Some(event_kind) = arkret_wire::EventKind::try_new(fact_kind) else {
-        tracing::warn!(
-            fact_kind,
-            "contact fact has no registered EventKind; projection skipped"
-        );
-        return;
-    };
-    let mut payload = payload.clone();
-    if let Value::Object(object) = &mut payload {
-        object
-            .entry("event_id".to_owned())
-            .or_insert_with(|| Value::String(contact_event_id.to_owned()));
-        object.insert(
-            "original_issuer".to_owned(),
-            Value::String(issuer.to_owned()),
-        );
-    }
-    let _ = (state, event_kind, payload);
-    tracing::warn!(
-        issuer,
-        contact_event_id,
-        "delivered contact fact omitted: transport does not select an exact issuer principal authority pair"
-    );
-}
-
 /// Project a delivered contact fact into the local `subject_id`'s contact
 /// projection. Returns the receive status (`accepted` / `duplicate`).
 async fn project_delivered_contact_fact(
@@ -2775,14 +2776,6 @@ async fn project_delivered_contact_fact(
                         updated_at: now(),
                     };
                     save_contact_cas(contacts, expected_updated_at, replacement).await?;
-                    append_delivered_contact_fact_projection_event(
-                        state,
-                        fact_kind,
-                        issuer,
-                        payload,
-                        contact_event_id,
-                    )
-                    .await;
                     return Ok("accepted");
                 }
                 if existing.status == "rejected" {
@@ -2821,14 +2814,6 @@ async fn project_delivered_contact_fact(
                         updated_at: now(),
                     };
                     save_contact_cas(contacts, expected_updated_at, replacement).await?;
-                    append_delivered_contact_fact_projection_event(
-                        state,
-                        fact_kind,
-                        issuer,
-                        payload,
-                        contact_event_id,
-                    )
-                    .await;
                     return Ok("accepted");
                 }
                 if existing.status == "pending"
@@ -2923,14 +2908,6 @@ async fn project_delivered_contact_fact(
                 )
                 .await;
             }
-            append_delivered_contact_fact_projection_event(
-                state,
-                fact_kind,
-                issuer,
-                payload,
-                contact_event_id,
-            )
-            .await;
             Ok("accepted")
         }
         "ak.contact.accepted" => {
@@ -3009,6 +2986,8 @@ async fn project_delivered_contact_fact(
             contact.contact_round_id = Some(accepted.contact_round_id.to_string());
             contact.version = Some(accepted.version);
             contact.status = "accepted".to_owned();
+            contact.request_receipts.clear();
+            contact.request_mirror_receipts.clear();
             contact.response_event_ref = Some(contact_event_id.to_owned());
             advance_contact_revision(&mut contact, expected_updated_at);
             // Peer end is the remote accepter (`issuer`), hosted on the
@@ -3050,17 +3029,13 @@ async fn project_delivered_contact_fact(
                     normal_response_receipt: Some(response_receipt.clone()),
                     glare_concurrency_attestations: None,
                     current_proofs,
+                    continuity_checkpoint: contact
+                        .contact_round_evidence_history
+                        .iter()
+                        .find_map(|bundle| bundle.continuity_checkpoint.clone()),
                 });
             }
             save_contact_cas(contacts, expected_updated_at, contact).await?;
-            append_delivered_contact_fact_projection_event(
-                state,
-                fact_kind,
-                issuer,
-                payload,
-                contact_event_id,
-            )
-            .await;
             Ok("accepted")
         }
         "ak.contact.rejected" => {
@@ -3130,17 +3105,11 @@ async fn project_delivered_contact_fact(
             }
             let expected_updated_at = contact.updated_at;
             contact.status = "rejected".to_owned();
+            contact.request_receipts.clear();
+            contact.request_mirror_receipts.clear();
             contact.response_event_ref = Some(contact_event_id.to_owned());
             advance_contact_revision(&mut contact, expected_updated_at);
             save_contact_cas(contacts, expected_updated_at, contact).await?;
-            append_delivered_contact_fact_projection_event(
-                state,
-                fact_kind,
-                issuer,
-                payload,
-                contact_event_id,
-            )
-            .await;
             Ok("accepted")
         }
         "ak.contact.scope.update" => {
@@ -3271,6 +3240,8 @@ async fn project_delivered_contact_fact(
             let expected_updated_at = row.updated_at;
             row.version = Some(tombstone.version);
             row.status = "tombstoned".to_owned();
+            row.request_receipts.clear();
+            row.request_mirror_receipts.clear();
             row.tombstone_event_ref = Some(contact_event_id.to_owned());
             let remote_proof = carrier_current_proof.ok_or_else(|| {
                 super::super::events::peer::schema_violation(
@@ -3309,14 +3280,6 @@ async fn project_delivered_contact_fact(
             row.contact_round_evidence = Some(bundle);
             advance_contact_revision(&mut row, expected_updated_at);
             save_contact_cas(contacts, expected_updated_at, row).await?;
-            append_delivered_contact_fact_projection_event(
-                state,
-                fact_kind,
-                issuer,
-                payload,
-                contact_event_id,
-            )
-            .await;
             Ok("accepted")
         }
         other => Err(super::super::events::peer::schema_violation(format!(
@@ -3615,6 +3578,7 @@ mod tests {
             normal_response_receipt: None,
             glare_concurrency_attestations: None,
             current_proofs: Vec::new(),
+            continuity_checkpoint: None,
         };
         let now = chrono::Utc::now();
         state

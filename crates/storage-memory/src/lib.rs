@@ -17,7 +17,8 @@ pub(crate) use soland_storage::{
     AppletTransactionReplayRecord, AuditStore, BackupSeriesEraseProgressRecord, BlobRecord,
     BlobStore, CanonicalEventRecord, CircleMemberProjectionRecord, CircleProjectionRecord,
     CircleProjectionStore, ConfirmAgentProvisioningAbandonment, ConsentCellKey, ConsentCellRecord,
-    ConsentCellStore, ContactKey, ContactRecord, ContactStore, ControlProposalAuthorityAckRecord,
+    ConsentCellStore, ContactKey, ContactRecord, ContactStore, ContactVerifiedMirrorRecord,
+    ContactVerifiedMirrorStore, ControlProposalAuthorityAckRecord,
     ControlProposalAuthorityAckStore, CursorRevocation, DeviceInventoryRecord,
     DeviceInventoryStore, DeviceKeyStore, DeviceMessageAckTokenRecord,
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchRecord,
@@ -126,8 +127,8 @@ pub(crate) use applets::MemoryAppletStore;
 pub(crate) use audit::MemoryAuditStore;
 pub(crate) use blobs::MemoryBlobStore;
 pub(crate) use contacts::{
-    MemoryConsentCellStore, MemoryContactStore, MemoryInviteReceivePolicyStore,
-    MemoryMimiConsentCorrelationStore,
+    MemoryConsentCellStore, MemoryContactStore, MemoryContactVerifiedMirrorStore,
+    MemoryInviteReceivePolicyStore, MemoryMimiConsentCorrelationStore,
 };
 pub(crate) use control_proposal_acks::MemoryControlProposalAuthorityAckStore;
 pub(crate) use device_pairings::MemoryDevicePairingStore;

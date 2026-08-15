@@ -1308,6 +1308,19 @@ impl ProjectionService {
         self.conformance_append_sealed_effects(realm_id, seal_id, new_ops)
     }
 
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn test_mark_control_event_sealed(&self, event: &Event, seal: &Seal) -> StoreResult<()> {
+        let digest = Hash::new(
+            event
+                .event_digest()
+                .map_err(|error| StoreError::Conflict(error.to_string()))?,
+        )
+        .map_err(|error| StoreError::Conflict(error.to_string()))?;
+        self.control_event_store().put_pending(event)?;
+        self.control_event_store().mark_sealed(&digest, seal)
+    }
+
     #[must_use]
     pub fn clock(&self) -> &ServiceClock {
         &self.clock
@@ -1479,7 +1492,7 @@ impl ProjectionService {
                     staged.apply_validated_realm_bootstrap_facet(operation, &projected.cell_writes)
                 } else if operation.event_kind == arkret_wire::EventKind::MemberState {
                     if direct_conversation_founding {
-                        staged.apply_validated_direct_conversation_founding_membership(
+                        staged.apply_validated_direct_conversation_bootstrap_membership(
                             operation,
                             &projected.cell_writes,
                         )

@@ -210,6 +210,108 @@ async fn keys_upload(
     })
 }
 
+/// Freshness window of a device projection attestation.
+///
+/// Short by design: `device-lifecycle.md` §8.3 lets a consumer cache the
+/// verified projection under `(principal_id, principal_server_id, device_id,
+/// authorized_generation_ref, attested_at)`, and this bound is what stops that
+/// cache from outliving a device revocation the caller has not re-fetched.
+const DEVICE_PROJECTION_ATTESTATION_TTL_SECONDS: i64 = 300;
+
+/// Build one complete, origin-Principal-Server-attested `keys/query` row.
+///
+/// Returns `None` when the device is not currently usable. §8.2 makes that the
+/// only two outcomes: the surface returns a fully attested row, or it returns
+/// nothing for that `(principal_id, device_id)` — which is also the
+/// anti-enumeration shape, since an omission is indistinguishable from "no
+/// relationship" and from "no such device".
+async fn attested_device_record(
+    state: &AppState,
+    principal_id: &arkret_wire::DidCoreId,
+    device_id: &arkret_wire::DeviceId,
+    facet: crate::routing::identity::device_signing::DeviceSigningDirectoryFacet,
+    algorithms: arkret_models_crypto::AlgorithmKeyRecords,
+) -> Result<Option<QueryDeviceRecord>, AppError> {
+    if !matches!(facet.status, DeviceStatus::Active) {
+        return Ok(None);
+    }
+    let (
+        Some(signing_key_did),
+        Some(hpke_key),
+        Some(trust_algorithms),
+        Some(device_authorize_event_id),
+        Some(authorized_generation_ref),
+    ) = (
+        facet.signing_key_did,
+        facet.hpke_key,
+        facet.trust_algorithms,
+        facet.device_authorize_event_id,
+        facet.authorized_generation_ref,
+    )
+    else {
+        return Ok(None);
+    };
+    let device_signing_key = arkret_wire::DidKey::new(signing_key_did).map_err(|error| {
+        AppError::internal(format!("stored device signing key is invalid: {error}"))
+    })?;
+    let hpke_key = arkret_wire::NonEmptyString::new(hpke_key)
+        .map_err(|error| AppError::internal(format!("stored HPKE key is invalid: {error}")))?;
+    let trust_algorithms = trust_algorithms
+        .into_iter()
+        .map(arkret_wire::NonEmptyString::new)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            AppError::internal(format!("stored trust algorithm is invalid: {error}"))
+        })?;
+
+    let attested_at = now();
+    let (_, verification_method) = state
+        .current_service_receipt_binding()
+        .await
+        .map_err(AppError::internal)?;
+    let attestation = arkret_signatures::device_projection::sign_device_projection_attestation(
+        arkret_models_crypto::DeviceProjectionAttestationCore {
+            principal_id: principal_id.clone(),
+            principal_server_id: arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(
+                |error| AppError::internal(format!("service id is not a did_core_id: {error}")),
+            )?,
+            device_id: device_id.clone(),
+            device_signing_key: device_signing_key.clone(),
+            hpke_key: hpke_key.clone(),
+            device_authorize_event_id: device_authorize_event_id.clone(),
+            authorized_generation_ref,
+            device_status: DeviceStatus::Active,
+            attested_at,
+            expires_at: attested_at
+                + chrono::Duration::seconds(DEVICE_PROJECTION_ATTESTATION_TTL_SECONDS),
+        },
+        verification_method,
+        state.notary_signing_key().as_ref(),
+    )
+    .map_err(|error| {
+        AppError::internal(format!("device projection attestation failed: {error}"))
+    })?;
+
+    let record = QueryDeviceRecord {
+        algorithms,
+        device_signing_key,
+        hpke_key,
+        trust_algorithms,
+        device_status: DeviceStatus::Active,
+        device_authorize_event_id,
+        authorized_generation_ref,
+        device_projection_attestation: attestation,
+    };
+    record
+        .validate_attestation_binding(principal_id, device_id)
+        .map_err(|error| {
+            AppError::internal(format!(
+                "device projection attestation does not bind its own row: {error}"
+            ))
+        })?;
+    Ok(Some(record))
+}
+
 #[salvo::oapi::endpoint(operation_id = "ak.self.keys.read.lookup", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.read.lookup"))]
 async fn keys_query(
@@ -264,14 +366,11 @@ async fn keys_query(
             if device_record.is_none() {
                 continue;
             }
-            // Revocation filter (device-lifecycle.md §8.2): a revoked device is
-            // omitted entirely, so its prekey bundle is never surfaced and no
-            // signing key leaks.
             // Carry the opaque uploaded prekey blob under `algorithms`. The demo
             // upload stores one payload object per device, so it is surfaced as a
             // single `algorithms` map (key→value) rather than per-algorithm
             // key_records; the directory facet below is the real signing-key data.
-            let mut algorithms = match state
+            let algorithms = match state
                 .key_material()
                 .bundle(actor_core.as_str(), device_id.as_str())
                 .await
@@ -294,48 +393,18 @@ async fn keys_query(
                     device_id.as_str(),
                 )
                 .await;
-            if !matches!(facet.status, DeviceStatus::Active) {
-                algorithms.clear();
-            }
-            actor_keys.insert(
-                device_id,
-                QueryDeviceRecord {
-                    algorithms,
-                    device_signing_key: facet
-                        .signing_key_did
-                        .map(arkret_wire::DidKey::new)
-                        .transpose()
-                        .map_err(|error| {
-                            AppError::internal(format!(
-                                "stored device signing key is invalid: {error}"
-                            ))
-                        })?,
-                    hpke_key: facet
-                        .hpke_key
-                        .map(arkret_wire::NonEmptyString::new)
-                        .transpose()
-                        .map_err(|error| {
-                            AppError::internal(format!("stored HPKE key is invalid: {error}"))
-                        })?,
-                    trust_algorithms: facet
-                        .trust_algorithms
-                        .map(|algorithms| {
-                            algorithms
-                                .into_iter()
-                                .map(arkret_wire::NonEmptyString::new)
-                                .collect::<Result<Vec<_>, _>>()
-                        })
-                        .transpose()
-                        .map_err(|error| {
-                            AppError::internal(format!(
-                                "stored trust algorithm is invalid: {error}"
-                            ))
-                        })?,
-                    device_status: Some(facet.status),
-                    device_authorize_event_id: facet.device_authorize_event_id,
-                    authorized_generation_ref: facet.authorized_generation_ref,
-                },
-            );
+            // `device-lifecycle.md` §8.2: a row is complete and attested or it
+            // is not returned. A revoked, unverified, fenced or conflicted
+            // device is omitted entirely rather than degraded into a partial
+            // row, so its prekey bundle is never surfaced, no signing key
+            // leaks, and a caller can never mistake an incomplete row for a
+            // usable one.
+            let Some(record) =
+                attested_device_record(state, &actor_core, &device_id, facet, algorithms).await?
+            else {
+                continue;
+            };
+            actor_keys.insert(device_id, record);
         }
         result.insert(actor_core, actor_keys);
     }

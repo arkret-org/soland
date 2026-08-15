@@ -6,6 +6,7 @@ use arkret_models_collaboration::direct_conversation_repair::{
     DirectConversationRepairEnqueueStatus, DirectConversationRepairRecipientTarget,
     DirectConversationRepairRelayRequest,
 };
+use arkret_models_collaboration::sync_frames::account_sync::DeviceMessageSender;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use soland_services::delivery::{
@@ -511,15 +512,7 @@ pub(in crate::routing) async fn accept_peer_relay(
         | DirectConversationRepairAuthorization::NativeAgent { signed_at, .. } => *signed_at,
     };
     let expires_at = signed_at + chrono::Duration::days(30);
-    // `device-message.schema.json` types `sender_device_id` as a device id, so a
-    // Native Agent requester — which has no human device identity — contributes
-    // no sender device rather than a principal id in that slot.
-    let sender_device_id = match &request.content.requester {
-        MemberRepairRequester::Device {
-            requester_device_id,
-        } => Some(requester_device_id.clone()),
-        MemberRepairRequester::NativeAgent { .. } => None,
-    };
+    let sender = repair_request_sender(&request.content.requester);
     let accepted_at_text = arkret_canonical::format_timestamp_canonical(accepted_at);
     let mut items = Vec::with_capacity(devices.len());
     for device in &devices {
@@ -538,12 +531,8 @@ pub(in crate::routing) async fn accept_peer_relay(
                 .map_err(|error| AppError::internal(error.to_string()))?,
         )
         .map_err(|error| AppError::internal(error.to_string()))?;
-        let content = queued_repair_request_body(
-            &message_id,
-            sender_device_id.clone(),
-            expires_at,
-            &request.content,
-        )?;
+        let content =
+            queued_repair_request_body(&message_id, sender.clone(), expires_at, &request.content)?;
         let intent_digest = canonical_digest(&content, "repair target message")?;
         items.push(DeviceMessageBatchItemRecord {
             message_key,
@@ -755,9 +744,15 @@ async fn accept_agent_relay(
         request.request_id.as_str(),
         agent.id.as_str(),
     );
-    // The Agent runtime endpoint is addressed by the accepted runtime binding,
-    // not by a human device, so the queued body carries no sender device.
-    let content = queued_repair_request_body(&message_id, None, expires_at, &request.content)?;
+    // The recipient is an Agent runtime endpoint, but the *sender* is still the
+    // requester, so the discriminator comes from the request content exactly as
+    // it does on the human-recipient branch.
+    let content = queued_repair_request_body(
+        &message_id,
+        repair_request_sender(&request.content.requester),
+        expires_at,
+        &request.content,
+    )?;
     let outcome = state
         .agent_pairings()
         .enqueue_runtime_message_if_current(&soland_storage::EnqueueAgentRuntimeMessage {
@@ -899,6 +894,31 @@ fn stable_message_id(source_service_id: &str, request_id: &str, device_id: &str)
     format!("ak:device_message:{}", uuid::Uuid::from_bytes(bytes))
 }
 
+/// Requester endpoint of one relayed repair request.
+///
+/// `contact-and-direct-conversation.md` §8.2.1 — a Native Agent has no human
+/// device identity and MUST NOT be spelled as an `ak:device`, so it takes the
+/// Agent branch rather than borrowing the device slot. Shared by both recipient
+/// branches: the recipient's kind never changes who the sender is.
+fn repair_request_sender(requester: &MemberRepairRequester) -> DeviceMessageSender {
+    match requester {
+        MemberRepairRequester::Device {
+            requester_device_id,
+        } => DeviceMessageSender::Device {
+            sender_device_id: requester_device_id.clone(),
+        },
+        MemberRepairRequester::NativeAgent {
+            requester_agent_id,
+            requester_agent_verification_method,
+            agent_key_authorize_event_id,
+        } => DeviceMessageSender::NativeAgent {
+            sender_agent_id: requester_agent_id.clone(),
+            sender_agent_verification_method: requester_agent_verification_method.clone(),
+            sender_agent_key_authorize_event_id: agent_key_authorize_event_id.clone(),
+        },
+    }
+}
+
 /// Build the queued `ak.member.repair.request` to-device body.
 ///
 /// The kind is derived from the SDK device-message marker and the content is
@@ -906,7 +926,7 @@ fn stable_message_id(source_service_id: &str, request_id: &str, device_id: &str)
 /// pair the repair kind with a foreign content shape.
 fn queued_repair_request_body(
     message_id: &str,
-    sender_device_id: Option<arkret_wire::DeviceId>,
+    sender: DeviceMessageSender,
     expires_at: DateTime<Utc>,
     content: &arkret_models_collaboration::events_payloads::MemberRepairRequestPayload,
 ) -> Result<Value, AppError> {
@@ -916,7 +936,7 @@ fn queued_repair_request_body(
         arkret_event_draft::device_message_spec::MemberRepairRequest,
     >::new(message_id, expires_at, content.clone())
     .map_err(|error| AppError::internal(format!("repair to-device content is invalid: {error}")))?
-    .queued_body(sender_device_id)
+    .queued_body(sender)
     .map_err(|error| AppError::internal(format!("repair to-device body is invalid: {error}")))?;
     serde_json::to_value(&body).map_err(|error| {
         AppError::internal(format!("repair to-device body encode failed: {error}"))

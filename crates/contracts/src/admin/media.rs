@@ -58,32 +58,26 @@ pub struct AdminMediaByActorList {
 /// single SFU backend the Realm advertises to clients
 /// (`media-service-binding.md` §2).
 ///
-/// Only `focus_id` and `type` are required here. The spec marks
-/// `token_endpoint` and `connect_url` normative, but the reducer accepts —
-/// and soland's own media token issuer reads — descriptors that carry
-/// provider-specific issuance fields instead
-/// (`crates/http/src/routing/interop/webrtc.rs::MediaFocusDescriptor`).
-/// This is a read-only operator view: a Realm whose descriptors diverge from
-/// the spec must still be *visible* in the console, otherwise the one screen
-/// that would reveal the misconfiguration is the screen that fails. Unknown
-/// keys are likewise tolerated because provider bindings may add fields the
-/// console does not render.
+/// The field set is exactly the one `event-payload.schema.json`
+/// `$defs/media_service_focus` declares, and `token_endpoint` / `connect_url`
+/// are required because the spec makes them normative. This mirror used to
+/// relax both to `Option` and stay open to unknown keys, because soland stored
+/// provider issuance fields here instead; that divergence is closed — issuance
+/// configuration is deployment configuration, not Realm state — so the mirror
+/// no longer needs to tolerate it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
+#[serde(deny_unknown_fields)]
 pub struct AdminMediaServiceFocus {
     pub focus_id: String,
     /// SFU backend kind, e.g. `livekit` / `mediasoup` / `janus` /
     /// `arkret_native` / `moq_relay`.
-    #[serde(rename = "type")]
-    pub focus_type: String,
+    pub focus_kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
-    /// Token exchange endpoint (`media-service-binding.md` §3). `None` marks
-    /// a descriptor the console must render as incomplete.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_endpoint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub connect_url: Option<String>,
+    /// Token exchange endpoint (`media-service-binding.md` §3).
+    pub token_endpoint: String,
+    pub connect_url: String,
     #[serde(default)]
     pub capabilities: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -115,10 +109,10 @@ mod tests {
 
     #[test]
     fn focus_requires_its_identity_fields() {
-        for missing in ["focus_id", "type"] {
+        for missing in ["focus_id", "focus_kind", "token_endpoint", "connect_url"] {
             let mut value = serde_json::json!({
                 "focus_id": "fra-1",
-                "type": "livekit",
+                "focus_kind": "livekit",
                 "token_endpoint": "https://media.example/_arkret/self/rtc/token",
                 "connect_url": "wss://media.example"
             });
@@ -137,7 +131,7 @@ mod tests {
     fn optional_focus_metadata_may_be_absent() {
         let focus: AdminMediaServiceFocus = serde_json::from_value(serde_json::json!({
             "focus_id": "fra-1",
-            "type": "livekit",
+            "focus_kind": "livekit",
             "token_endpoint": "https://media.example/_arkret/self/rtc/token",
             "connect_url": "wss://media.example"
         }))
@@ -146,21 +140,23 @@ mod tests {
         assert!(focus.region.is_none());
     }
 
-    /// The descriptors soland actually stores today carry provider issuance
-    /// fields and omit `token_endpoint`. The operator view must render them.
+    /// Provider issuance configuration is deployment configuration, not a
+    /// Realm cell field. A descriptor carrying it is malformed rather than a
+    /// variant the console has to render.
     #[test]
-    fn provider_specific_descriptor_still_renders() {
-        let focus: AdminMediaServiceFocus = serde_json::from_value(serde_json::json!({
-            "focus_id": "ak:focus:livekit:green",
-            "type": "livekit",
-            "connect_url": "wss://media.example/livekit",
-            "issuer_kid": "did:web:media.example#livekit-2026-05",
-            "audience": "livekit-demo",
-            "ttl_seconds": 300
-        }))
-        .expect("provider descriptors must stay visible to the operator");
-        assert_eq!(focus.focus_id, "ak:focus:livekit:green");
-        assert!(focus.token_endpoint.is_none());
+    fn provider_issuance_fields_are_rejected() {
+        assert!(
+            serde_json::from_value::<AdminMediaServiceFocus>(serde_json::json!({
+                "focus_id": "ak:focus:livekit:green",
+                "focus_kind": "livekit",
+                "token_endpoint": "https://media.example/_arkret/self/rtc/token",
+                "connect_url": "wss://media.example/livekit",
+                "issuer_kid": "did:webvh:z6mkfixture:media.example#livekit-2026-05",
+                "audience": "livekit-demo",
+                "ttl_seconds": 300
+            }))
+            .is_err()
+        );
     }
 
     #[test]

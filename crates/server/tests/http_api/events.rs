@@ -2235,33 +2235,6 @@ async fn account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnost
     )
     .await;
 
-    let records = state
-        .test_persistence()
-        .events()
-        .snapshot_all()
-        .await
-        .unwrap();
-    let left_record = records
-        .iter()
-        .find(|record| record.event_id == left.event_id)
-        .unwrap();
-    let right_record = records
-        .iter()
-        .find(|record| record.event_id == right.event_id)
-        .unwrap();
-    let right_wins = matches!(
-        arkret_state::lattice::ordered_log::compare_canonical_digests(
-            &right_record.canonical_digest,
-            &left_record.canonical_digest,
-        ),
-        Some(std::cmp::Ordering::Greater)
-    );
-    let (winner, loser) = if right_wins {
-        (&right.event_id, &left.event_id)
-    } else {
-        (&left.event_id, &right.event_id)
-    };
-
     let frame = account_subscribe_frame(state, Some(&alice), "catchup=true").await;
     let timeline = &frame["realms"][DEMO_REALM_ID]["timeline"];
     let event_ids = timeline["events"]
@@ -2270,16 +2243,17 @@ async fn account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnost
         .iter()
         .filter_map(|event| event["event_id"].as_str())
         .collect::<Vec<_>>();
-    assert!(event_ids.contains(&winner.as_str()), "{frame}");
-    assert!(!event_ids.contains(&loser.as_str()), "{frame}");
+    assert!(event_ids.contains(&left.event_id.as_str()), "{frame}");
+    assert!(event_ids.contains(&right.event_id.as_str()), "{frame}");
     assert!(event_ids.contains(&normal.event_id.as_str()), "{frame}");
 
-    let conflicts = timeline["ordered_log_conflicts"].as_array().unwrap();
-    let diagnostic = conflicts
+    let siblings = timeline["ordered_log_siblings"].as_array().unwrap();
+    let diagnostic = siblings
         .iter()
         .find(|diagnostic| diagnostic["issuer_seq"] == actor_seq)
-        .unwrap_or_else(|| panic!("equivocation diagnostic missing: {frame}"));
-    assert_eq!(diagnostic["winner_event_id"], winner.as_str());
-    assert_eq!(diagnostic["loser_event_ids"], serde_json::json!([loser]));
-    assert_eq!(diagnostic["reason"], "issuer_equivocation");
+        .unwrap_or_else(|| panic!("sibling diagnostic missing: {frame}"));
+    let sibling_ids = diagnostic["event_ids"].as_array().unwrap();
+    assert!(sibling_ids.contains(&serde_json::json!(left.event_id)));
+    assert!(sibling_ids.contains(&serde_json::json!(right.event_id)));
+    assert_eq!(diagnostic["reason"], "actor_seq_siblings");
 }
