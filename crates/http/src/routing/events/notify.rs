@@ -144,6 +144,12 @@ fn realm_joined_members(state: &AppState, realm_id: &str) -> BTreeSet<String> {
                 .into_iter()
                 .map(|member| member.member.clone()),
         );
+        members.retain(|member| {
+            projection
+                .agent_membership_binding(realm_id, member)
+                .is_none()
+                || projection.effective_agent_membership_base(realm_id, member)
+        });
     }
     members
 }

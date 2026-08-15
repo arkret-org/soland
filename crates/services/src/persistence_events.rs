@@ -84,15 +84,29 @@ fn persistence_projected_event(
 fn persistence_outbox_row(
     delivery: crate::events::FederationDelivery,
 ) -> soland_storage::FederationOutboxRecord {
-    soland_storage::FederationOutboxRecord::pending(
-        delivery.id,
-        delivery.peer_did,
-        delivery.peer_url,
-        delivery.endpoint,
-        delivery.idempotency_key,
-        delivery.payload_json,
-        delivery.created_at,
-    )
+    match delivery.realm_fanout {
+        Some(binding) => soland_storage::FederationOutboxRecord::realm_fanout(
+            delivery.id,
+            delivery.peer_did,
+            delivery.peer_url,
+            delivery.endpoint,
+            delivery.idempotency_key,
+            delivery.payload_json,
+            binding,
+            delivery.created_at,
+        ),
+        None => soland_storage::FederationOutboxRecord::pending(
+            delivery.id,
+            delivery.peer_did,
+            delivery
+                .peer_url
+                .expect("generic federation delivery requires a route"),
+            delivery.endpoint,
+            delivery.idempotency_key,
+            delivery.payload_json,
+            delivery.created_at,
+        ),
+    }
 }
 
 fn persistence_event_commit_request(
@@ -1631,6 +1645,7 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
                         ghost: mutation.ghost,
                     }
                 }),
+                agent_membership_cascade: command.agent_membership_cascade,
             })
             .await?;
         Ok(crate::events::CommitAcceptedEventResult {

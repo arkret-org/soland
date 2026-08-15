@@ -723,6 +723,47 @@ impl ProjectionState {
             ]
         });
 
+        if new_state == "join" {
+            let authority = payload
+                .get("principal_authority")
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok())
+                .or_else(|| {
+                    (member == operation.context.sender.as_str()).then(|| {
+                        arkret_wire::PrincipalAuthorityKey {
+                            principal_id: operation.context.sender.clone(),
+                            principal_server_id: operation.context.principal_server_id.clone(),
+                        }
+                    })
+                });
+            match authority {
+                Some(authority) => {
+                    self.membership_authorities.insert(key.clone(), authority);
+                }
+                None => {
+                    self.membership_authorities.remove(&key);
+                }
+            }
+            let binding = payload
+                .get("agent_controller_binding")
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok());
+            match binding {
+                Some(binding) => {
+                    self.agent_membership_bindings.insert(key.clone(), binding);
+                }
+                None => {
+                    self.agent_membership_bindings.remove(&key);
+                }
+            }
+        } else if let Some(binding) = payload
+            .get("agent_controller_binding")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+        {
+            self.agent_membership_bindings.insert(key.clone(), binding);
+        }
+
         // Update the structured cache with side-band + FSM state mirror.
         self.members.insert(
             key.clone(),
@@ -893,75 +934,6 @@ impl ProjectionState {
                 },
             );
         }
-    }
-
-    pub fn cascade_controller_agent_memberships(
-        &mut self,
-        realm_id: &str,
-        controller_id: &str,
-        agent_ids: &[String],
-        updated_by: &str,
-        membership_frontier: Vec<String>,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> Vec<String> {
-        let mut removed = Vec::new();
-        for agent_id in agent_ids {
-            let key = (realm_id.to_owned(), agent_id.clone());
-            let Some(previous) = self.members.get(&key).cloned() else {
-                continue;
-            };
-            if previous.state != "join" {
-                continue;
-            }
-            self.members.insert(
-                key,
-                SolandMembershipState {
-                    state: "leave".to_owned(),
-                    delivery_status: None,
-                    recipient_service_id: None,
-                    recipient_service_resolution: None,
-                    delivery_binding_frontier: None,
-                    membership_event_ref: membership_frontier.first().cloned(),
-                    updated_at: now,
-                    reason: Some(
-                        arkret_wire::error_codes::ReasonCode::CONTROLLER_MEMBERSHIP_ENDED
-                            .to_owned(),
-                    ),
-                    ..previous
-                },
-            );
-            if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-                "ak:cell:ak.component.member.state.v1:{agent_id}"
-            )) {
-                self.cells
-                    .insert(cell_id, CellState::Value(Value::String("leave".to_owned())));
-            }
-            self.enqueue_realm_mls_member_removal(
-                realm_id,
-                agent_id,
-                "leave",
-                membership_frontier.clone(),
-                now,
-            );
-            self.cascade_realm_member_removal_to_circles(
-                realm_id,
-                agent_id,
-                "leave",
-                updated_by,
-                membership_frontier.clone(),
-                now,
-            );
-            removed.push(agent_id.clone());
-        }
-        if !removed.is_empty() {
-            tracing::info!(
-                realm_id,
-                controller_id,
-                removed_agents = removed.len(),
-                "cascaded controller membership removal to native personal agents"
-            );
-        }
-        removed
     }
 
     /// COT-06-004 — apply `ak.realm.set_default_strand`. Points the Realm's

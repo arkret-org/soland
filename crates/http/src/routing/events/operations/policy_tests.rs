@@ -14,6 +14,8 @@ use super::*;
 const ALICE_FULL_ID: &str = "did:webvh:z6mkalice:alice.example";
 const ALICE_CORE_ID: &str = "ak:did_core:webvh:z6mkalice";
 const AGENT_CORE_ID: &str = "ak:did_core:webvh:z6mkfixtureagent";
+const AGENT_CONTROLLER_MEMBERSHIP_EVENT_ID: &str =
+    "ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim";
 
 fn test_config() -> crate::config::AppConfig {
     crate::config::AppConfig {
@@ -1010,7 +1012,12 @@ async fn register_native_agent_membership_context(
         )
         .await
         .expect("realm meta");
-    state.test_projection().lock().members.insert(
+    let controller_authority = arkret_wire::PrincipalAuthorityKey {
+        principal_id: arkret_identifiers::DidCoreId::new(controller.to_owned()).unwrap(),
+        principal_server_id: crate::test_event::principal_server_id(),
+    };
+    let mut projection = state.test_projection().lock();
+    projection.members.insert(
         (realm_id.to_string(), controller.to_owned()),
         soland_domain::reducer::SolandMembershipState {
             member: controller.to_owned(),
@@ -1020,7 +1027,7 @@ async fn register_native_agent_membership_context(
             delivery_status: Some("unroutable".to_owned()),
             recipient_service_id: None,
             recipient_service_resolution: None,
-            membership_event_ref: None,
+            membership_event_ref: Some(AGENT_CONTROLLER_MEMBERSHIP_EVENT_ID.to_owned()),
             delivery_binding_frontier: None,
             invited_at: None,
             joined_at: now,
@@ -1028,6 +1035,11 @@ async fn register_native_agent_membership_context(
             reason: None,
         },
     );
+    projection.membership_authorities.insert(
+        (realm_id.to_string(), controller.to_owned()),
+        controller_authority,
+    );
+    drop(projection);
 
     if !with_claimable_keypackage {
         return;
@@ -1120,6 +1132,23 @@ async fn register_native_agent_membership_context(
     );
 }
 
+fn native_agent_controller_binding() -> serde_json::Value {
+    serde_json::to_value(
+        arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding {
+            controller_authority: arkret_wire::PrincipalAuthorityKey {
+                principal_id: arkret_identifiers::DidCoreId::new(ALICE_CORE_ID.to_owned()).unwrap(),
+                principal_server_id: crate::test_event::principal_server_id(),
+            },
+            controller_membership_generation_ref: arkret_identifiers::EventId::new(
+                AGENT_CONTROLLER_MEMBERSHIP_EVENT_ID.to_owned(),
+            )
+            .unwrap(),
+            controller_terminal_event_ref: None,
+        },
+    )
+    .unwrap()
+}
+
 #[tokio::test]
 async fn encrypted_realm_native_agent_join_requires_claimable_keypackage() {
     let state = test_state();
@@ -1136,7 +1165,8 @@ async fn encrypted_realm_native_agent_join_requires_claimable_keypackage() {
             "actor_id": AGENT_CORE_ID,
             "membership": "join",
             "reason": "controller_add_agent",
-            "delivery_status": "unroutable"
+            "delivery_status": "unroutable",
+            "agent_controller_binding": native_agent_controller_binding()
         }),
     );
 
@@ -1164,7 +1194,8 @@ async fn encrypted_realm_native_agent_join_accepts_standard_claimable_keypackage
             "actor_id": AGENT_CORE_ID,
             "membership": "join",
             "reason": "controller_add_agent",
-            "delivery_status": "unroutable"
+            "delivery_status": "unroutable",
+            "agent_controller_binding": native_agent_controller_binding()
         }),
     );
 
@@ -1189,7 +1220,8 @@ async fn plaintext_realm_native_agent_join_does_not_require_keypackage() {
             "actor_id": AGENT_CORE_ID,
             "membership": "join",
             "reason": "controller_add_agent",
-            "delivery_status": "unroutable"
+            "delivery_status": "unroutable",
+            "agent_controller_binding": native_agent_controller_binding()
         }),
     );
 

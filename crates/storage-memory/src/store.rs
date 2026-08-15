@@ -10,9 +10,9 @@ use super::{
     DevicePairingStore, EventStore, FederationFrontierExchangeStore, FederationOperationsStore,
     FederationOutboxStore, HandleReleaseStore, IdempotencyStore, InviteLocatorStore,
     InviteReceivePolicyStore, KeyBackupStore, MemoryAccountDataStore, MemoryAccountLifecycleStore,
-    MemoryAccountLocalpartStore, MemoryAccountStore, MemoryAgentParticipationStore,
-    MemoryAgentStore, MemoryAppletStore, MemoryAuditStore, MemoryBlobStore,
-    MemoryCircleProjectionStore, MemoryConsentCellStore, MemoryContactStore,
+    MemoryAccountLocalpartStore, MemoryAccountStore, MemoryAgentMembershipCascadeStore,
+    MemoryAgentParticipationStore, MemoryAgentStore, MemoryAppletStore, MemoryAuditStore,
+    MemoryBlobStore, MemoryCircleProjectionStore, MemoryConsentCellStore, MemoryContactStore,
     MemoryDeviceInventoryStore, MemoryDeviceKeyStore, MemoryDeviceMessageStore,
     MemoryDevicePairingStore, MemoryDeviceRevocationStore, MemoryEventStore,
     MemoryFederationFrontierExchangeStore, MemoryFederationOperationsStore,
@@ -113,6 +113,7 @@ pub struct SolandMemoryPersistenceStore {
     mls_commits: MemoryMlsCommitStore,
     agent_participation: MemoryAgentParticipationStore,
     agents: MemoryAgentStore,
+    pub(crate) agent_membership_cascades: MemoryAgentMembershipCascadeStore,
     sidecars: MemorySidecarStore,
     notifications: MemoryNotificationStore,
     sync_cursors: MemorySyncCursorStore,
@@ -237,6 +238,7 @@ impl SolandMemoryPersistenceStore {
                     MemoryAgentStore::with_events(canonical_events.clone())
                 }
             },
+            agent_membership_cascades: MemoryAgentMembershipCascadeStore::new(),
             sidecars: MemorySidecarStore::new(),
             notifications: MemoryNotificationStore::new(),
             sync_cursors: MemorySyncCursorStore::new(),
@@ -587,6 +589,10 @@ impl soland_storage::MlsAgentStoreRegistry for SolandMemoryPersistenceStore {
 
     fn agents(&self) -> &dyn AgentStore {
         &self.agents
+    }
+
+    fn agent_membership_cascades(&self) -> &dyn soland_storage::AgentMembershipCascadeStore {
+        &self.agent_membership_cascades
     }
 
     fn sidecars(&self) -> &dyn SidecarStore {

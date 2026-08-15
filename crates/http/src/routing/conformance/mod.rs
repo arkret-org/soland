@@ -48,6 +48,7 @@ use salvo::prelude::*;
 
 pub(crate) mod direct_repair;
 pub(crate) mod handlers;
+pub(crate) mod realm_fixture;
 pub(crate) mod util;
 
 use soland_http::error::{AppError, ErrorCode};
@@ -77,6 +78,7 @@ pub fn router() -> Router {
         .push(Router::with_path("device-signing-key").post(handlers::device_signing_key))
         .push(Router::with_path("direct-repair/install").post(direct_repair::install))
         .push(Router::with_path("direct-repair/messages").post(direct_repair::messages))
+        .push(Router::with_path("realm-fixture/install").post(realm_fixture::install))
         .push(Router::with_path("chaos/operation").get(handlers::chaos_operation))
 }
 

@@ -12,6 +12,7 @@ use crate::*;
 /// direct-conversation binding accessors are wired to Pg stores.
 pub struct PgPersistenceStore {
     event_commits: PgEventCommitUnitOfWork,
+    agent_membership_cascades: PgAgentMembershipCascadeStore,
     accounts: PgAccountStore,
     account_localparts: PgAccountLocalpartStore,
     account_lifecycle: PgAccountLifecycleStore,
@@ -82,6 +83,7 @@ impl PgPersistenceStore {
     pub fn new(pool: PgPool, fallback: Arc<dyn PersistenceStore>) -> Self {
         Self {
             event_commits: PgEventCommitUnitOfWork::new(pool.clone()),
+            agent_membership_cascades: PgAgentMembershipCascadeStore { pool: pool.clone() },
             accounts: PgAccountStore { pool: pool.clone() },
             account_localparts: PgAccountLocalpartStore { pool: pool.clone() },
             account_lifecycle: PgAccountLifecycleStore { pool: pool.clone() },
@@ -453,6 +455,10 @@ impl MlsAgentStoreRegistry for PgPersistenceStore {
 
     fn agents(&self) -> &dyn AgentStore {
         &self.agents
+    }
+
+    fn agent_membership_cascades(&self) -> &dyn AgentMembershipCascadeStore {
+        &self.agent_membership_cascades
     }
 
     fn sidecars(&self) -> &dyn SidecarStore {

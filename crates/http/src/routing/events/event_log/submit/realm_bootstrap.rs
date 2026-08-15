@@ -283,6 +283,19 @@ pub(super) async fn submit_realm_bootstrap_batch(
                 .0,
         );
     }
+    let accepted_typed_events = accepted_envelopes
+        .iter()
+        .cloned()
+        .map(|envelope| {
+            serde_json::from_value::<arkret_wire::Event>(envelope).map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("accepted Realm bootstrap Event cannot be decoded: {error}"),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let records = validated
         .iter()
         .zip(accepted_envelopes.iter().cloned())
@@ -322,6 +335,12 @@ pub(super) async fn submit_realm_bootstrap_batch(
                 )
             })?
     };
+    let pending_delivery_count = deliveries
+        .iter()
+        .filter(|delivery| delivery.realm_fanout.is_some())
+        .map(|delivery| delivery.peer_did.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len() as u32;
     let direct_commit_outcome = if let Some(context) = direct_conversation_founding {
         state
             .event_queries()
@@ -367,14 +386,23 @@ pub(super) async fn submit_realm_bootstrap_batch(
     match commit_outcome {
         soland_storage::DirectConversationFoundingCommitOutcome::Committed => {}
         soland_storage::DirectConversationFoundingCommitOutcome::ExactRetry(existing) => {
-            return Ok(events_submit_outcome(
+            let pending_delivery_count =
+                durable_pending_delivery_count(state, &existing.event_ids).await?;
+            let mut outcome = events_submit_outcome(
                 EventsSubmitStatus::Duplicate,
                 Vec::new(),
                 existing.event_ids,
                 Vec::new(),
                 Vec::new(),
                 None,
-            ));
+            );
+            outcome.pending_delivery_count = pending_delivery_count;
+            outcome.delivery_state = if pending_delivery_count == 0 {
+                arkret_models_collaboration::http_bodies::EventDeliveryState::Complete
+            } else {
+                arkret_models_collaboration::http_bodies::EventDeliveryState::Pending
+            };
+            return Ok(outcome);
         }
         soland_storage::DirectConversationFoundingCommitOutcome::IdempotencyConflict => {
             return Err(SubmitOneError::new(
@@ -391,7 +419,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
             ));
         }
     }
-    for (event, ack) in typed_events.iter().zip(&control_proposal_acks) {
+    for (event, ack) in accepted_typed_events.iter().zip(&control_proposal_acks) {
         state
             .projections()
             .put_pending_control_event_with_ack(event, ack)
@@ -470,6 +498,12 @@ pub(super) async fn submit_realm_bootstrap_batch(
     );
     outcome.ingress_receipts = ingress_receipts;
     outcome.control_proposal_acks = control_proposal_acks;
+    outcome.pending_delivery_count = pending_delivery_count;
+    outcome.delivery_state = if pending_delivery_count == 0 {
+        arkret_models_collaboration::http_bodies::EventDeliveryState::Complete
+    } else {
+        arkret_models_collaboration::http_bodies::EventDeliveryState::Pending
+    };
     Ok(outcome)
 }
 

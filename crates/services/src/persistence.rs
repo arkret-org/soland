@@ -35,6 +35,52 @@ pub struct PersistenceHandle {
 }
 
 impl PersistenceHandle {
+    pub async fn agent_cleanup_intent(
+        &self,
+        cleanup_intent_digest: &arkret_wire::Hash,
+    ) -> crate::ServiceResult<
+        Option<
+            arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupPendingRecord,
+        >,
+    >{
+        Ok(self
+            .persistence
+            .agent_membership_cascades()
+            .agent_cleanup_intent(cleanup_intent_digest)
+            .await?)
+    }
+
+    pub async fn agent_cleanup_intent_for_terminal_event(
+        &self,
+        controller_terminal_event_id: &arkret_wire::EventId,
+    ) -> crate::ServiceResult<
+        Option<
+            arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupPendingRecord,
+        >,
+    >{
+        Ok(self
+            .persistence
+            .agent_membership_cascades()
+            .agent_cleanup_intent_for_terminal_event(controller_terminal_event_id)
+            .await?)
+    }
+
+    pub async fn incomplete_agent_cleanup_intents(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        limit: usize,
+    ) -> crate::ServiceResult<
+        Vec<
+            arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupPendingRecord,
+        >,
+    >{
+        Ok(self
+            .persistence
+            .agent_membership_cascades()
+            .incomplete_agent_cleanup_intents(now, limit)
+            .await?)
+    }
+
     #[must_use]
     pub fn device_revocation_store(&self) -> Arc<dyn soland_storage::DeviceRevocationStore> {
         Arc::new(self.clone())

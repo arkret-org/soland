@@ -27,8 +27,14 @@ pub enum FederationOutboxOutcome {
     /// Keep the same transport identity (same canonical body, same
     /// `Idempotency-Key`) and try again at `next_attempt_at`.
     Retry { next_attempt_at: i64 },
+    /// No verified route currently exists for the frozen target service.
+    /// Realm fanout keeps the exact intent durable and retries indefinitely.
+    RouteUnavailable { next_attempt_at: i64 },
     /// Peer accepted or confirmed the batch as a duplicate.
     Delivered,
+    /// Every frozen authority witness ceased to be current before send.
+    /// This is terminal and the old intent is never revived by later joins.
+    CancelledAuthorityLost,
     /// Local egress policy denied the target before any socket was opened.
     /// Not a network failure and not a delivery — it stays recoverable
     /// through revalidation when the policy version changes.
@@ -103,7 +109,8 @@ pub trait FederationOutboxStore: Send + Sync {
     /// exists (callers MUST treat that as "already enqueued" rather
     /// than an error — see trait-doc idempotency note).
     async fn enqueue(&self, record: &FederationOutboxRecord) -> PersistenceResult<bool>;
-    /// Atomically claim up to `limit` rows in `pending` state whose
+    /// Atomically claim up to `limit` rows in `pending` or `pending_route`
+    /// state whose
     /// `next_attempt_at <= now`, plus rows whose `leased` state has an expired
     /// lease, ordered by `next_attempt_at` ascending. Implementations MUST
     /// stamp `lease_owner` / `lease_token` / `lease_expires_at` and move the

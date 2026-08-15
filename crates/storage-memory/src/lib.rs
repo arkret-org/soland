@@ -74,6 +74,7 @@ pub(crate) use soland_storage::{
 pub(crate) use uuid::Uuid;
 
 mod accounts;
+mod agent_membership_cascades;
 mod agents;
 mod applets;
 mod audit;
@@ -119,6 +120,7 @@ pub(crate) use accounts::{
     MemoryAccountDataStore, MemoryAccountLifecycleStore, MemoryAccountLocalpartStore,
     MemoryAccountStore,
 };
+pub(crate) use agent_membership_cascades::MemoryAgentMembershipCascadeStore;
 pub(crate) use agents::{MemoryAgentParticipationStore, MemoryAgentStore};
 pub(crate) use applets::MemoryAppletStore;
 pub(crate) use audit::MemoryAuditStore;

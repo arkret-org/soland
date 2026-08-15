@@ -89,6 +89,7 @@ pub use db::{Db, PgPool, PoolTuning};
 pub(crate) use query_rows::{ClaimSeqRow, CountRow, ExistsRow, JsonPayloadRow, MaxSeqRow};
 
 mod accounts;
+mod agent_membership_cascades;
 mod agent_principal_row;
 mod agents;
 mod applets;
@@ -135,6 +136,7 @@ mod websocket_auth;
 mod webvh;
 
 pub use accounts::*;
+pub use agent_membership_cascades::*;
 pub(crate) use agent_principal_row::AgentPrincipalRow;
 pub use agents::*;
 pub use applets::*;

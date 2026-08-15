@@ -438,6 +438,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
                 },
             ],
             applet_ghosts: None,
+            agent_membership_cascade: None,
         })
         .await
         .unwrap_err();

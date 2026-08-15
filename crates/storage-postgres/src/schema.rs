@@ -44,6 +44,21 @@ diesel::table! {
 }
 
 diesel::table! {
+    agent_membership_cleanup_intents (cleanup_intent_digest) {
+        cleanup_intent_digest -> Text,
+        realm_id -> Text,
+        controller_terminal_event_id -> Text,
+        status -> Text,
+        record_json -> Jsonb,
+        accepted_at -> Timestamptz,
+        cleanup_due_at -> Timestamptz,
+        completed_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     agent_participation (id) {
         id -> Uuid,
         agent_id -> Text,
@@ -549,13 +564,14 @@ diesel::table! {
 diesel::table! {
     federation_outbox (id) {
         id -> Text,
-        event_pk -> Nullable<Int8>,
         peer_id -> Text,
-        peer_url -> Text,
+        peer_url -> Nullable<Text>,
         endpoint -> Text,
         idempotency_key -> Text,
         payload_json -> Text,
         state -> Text,
+        leased_from_state -> Nullable<Text>,
+        realm_fanout -> Nullable<Jsonb>,
         attempts -> Int4,
         semantic_attempts -> Int4,
         next_attempt_at -> Int8,
@@ -1476,6 +1492,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     account_lifecycle,
     account_localparts,
     accounts,
+    agent_membership_cleanup_intents,
     agent_participation,
     agent_participation_ceiling,
     agent_principals,

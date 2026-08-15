@@ -20,7 +20,7 @@ pub(crate) async fn validate_member_state_policy_for_test(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    governance::validate_member_state_policy(state, operation).await
+    governance::validate_member_state_policy(state, operation, false).await
 }
 pub(crate) use message_rules::validate_content_encryption_floor;
 #[cfg(test)]
@@ -179,7 +179,7 @@ pub async fn validate_operation_policy(
     state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
-    validate_operation_policy_with_plaintext_service_binding(state, operations, false).await
+    validate_operation_policy_common(state, operations, false, false).await
 }
 
 pub async fn validate_operation_policy_with_plaintext_service_binding(
@@ -187,8 +187,32 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
     operations: &[Operation],
     has_plaintext_service_binding: bool,
 ) -> Result<(), &'static str> {
+    validate_operation_policy_common(state, operations, has_plaintext_service_binding, false).await
+}
+
+pub(crate) async fn validate_operation_policy_for_agent_membership_cascade(
+    state: &AppState,
+    operations: &[Operation],
+    has_plaintext_service_binding: bool,
+) -> Result<(), &'static str> {
+    validate_operation_policy_common(state, operations, has_plaintext_service_binding, true).await
+}
+
+async fn validate_operation_policy_common(
+    state: &AppState,
+    operations: &[Operation],
+    has_plaintext_service_binding: bool,
+    agent_membership_cascade: bool,
+) -> Result<(), &'static str> {
     for operation in operations {
         validate_realm_lifecycle_write_gate(state, operation)?;
+        let cleanup_transition = agent_membership_cascade_cleanup_transition(operation);
+        if cleanup_transition && !agent_membership_cascade {
+            return Err("agent_membership_cascade_required");
+        }
+        if !(agent_membership_cascade && cleanup_transition) {
+            validate_agent_operation_membership(state, operation).await?;
+        }
         if kinds::canonical_kind_for_operation(operation)
             == Some(arkret_wire::EventKind::SidecarCreate)
         {
@@ -239,7 +263,7 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
             .await?;
         validate_circle_create_policy(state, operation).await?;
         validate_circle_management_policy(state, operation).await?;
-        validate_member_state_policy(state, operation).await?;
+        validate_member_state_policy(state, operation, agent_membership_cascade).await?;
         validate_circle_scope_membership(state, operation)?;
         validate_pin_scope_safety(state, operation)?;
         validate_applet_registration_authz(state, operation).await?;
@@ -262,6 +286,65 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
         validate_aad_visibility_policy(state, operation).await?;
     }
     Ok(())
+}
+
+fn agent_membership_cascade_cleanup_transition(operation: &Operation) -> bool {
+    kinds::canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::MemberState)
+        && operation.payload.get("membership").and_then(Value::as_str) == Some("leave")
+        && operation
+            .payload
+            .get("membership_cause")
+            .and_then(Value::as_str)
+            == Some("controller_membership_ended")
+        && operation
+            .payload
+            .pointer("/agent_controller_binding/controller_terminal_event_ref")
+            .and_then(Value::as_str)
+            .is_some()
+}
+
+async fn validate_agent_operation_membership(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let actor_id = operation.context.sender.as_str();
+    let record = state
+        .agent_pairings()
+        .agent(actor_id)
+        .await
+        .map_err(|_| "agent_membership_lookup_failed")?;
+    let Some(record) = record else {
+        return Ok(());
+    };
+    // The managed Agent's own PCR genesis is a lifecycle bootstrap, not a
+    // Realm-participation write. Its controller delegation, provision Event,
+    // accountability grant and PCR binding have already been checked by the
+    // closed envelope gate. Requiring an effective Realm membership here
+    // would create a cycle: the Agent PCR must exist before its first
+    // controller-generation membership binding can be projected.
+    if operation.realm_id.as_str() == record.principal_control_realm_id
+        && kinds::canonical_kind_for_operation(operation)
+            == Some(arkret_wire::EventKind::RealmCreate)
+    {
+        return Ok(());
+    }
+    let result = if operation.realm_id.as_str() == record.principal_control_realm_id {
+        crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+            state,
+            &record,
+            operation.created_at,
+        )
+        .await
+    } else {
+        crate::routing::identity::managed_agent_pcr::validate_effective_agent_realm_membership(
+            state,
+            &record,
+            operation.realm_id.as_str(),
+            operation.created_at,
+        )
+        .await
+    };
+    result.map_err(|_| "agent_membership_inactive")
 }
 
 #[cfg(test)]
@@ -354,9 +437,10 @@ async fn validate_managed_agent_grant_ceiling(
     let Some(record) = record else {
         return Ok(());
     };
-    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+    crate::routing::identity::managed_agent_pcr::validate_effective_agent_realm_membership(
         state,
         &record,
+        operation.realm_id.as_str(),
         chrono::Utc::now(),
     )
     .await

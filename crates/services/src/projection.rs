@@ -1118,7 +1118,7 @@ impl ProjectionService {
     where
         F: Fn(&Event) -> Result<(), String>,
     {
-        arkret_state::verify_control_move_in_context(
+        arkret_state::verify_accepted_control_move_in_context(
             event,
             realm_id,
             pre_state,
@@ -1194,7 +1194,7 @@ impl ProjectionService {
     where
         F: Fn(&Event) -> Result<(), String> + Copy,
     {
-        arkret_state::apply_seal_in_context(
+        arkret_state::apply_accepted_seal_in_context(
             seal,
             self.control_event_store(),
             self.seal_store(),
@@ -1845,6 +1845,14 @@ impl ProjectionService {
     }
 
     pub fn apply_sidecar_ensure_atomic(
+        &self,
+        operations: &[(&Operation, &[ProjectedCellWrite])],
+        hlc: &ServerHlc,
+    ) -> Result<(), String> {
+        self.apply_operations_atomic(operations, hlc)
+    }
+
+    pub fn apply_operations_atomic(
         &self,
         operations: &[(&Operation, &[ProjectedCellWrite])],
         hlc: &ServerHlc,

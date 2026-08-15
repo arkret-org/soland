@@ -107,6 +107,7 @@ pub(in crate::routing::events) fn router() -> Router {
                 .post(control_proposal_decisions::read_control_proposal_decision),
         )
         .push(Router::with_path("events/describe").query(events_describe))
+        .push(Router::with_path("events/delivery-status").query(event_delivery_status))
         .push(Router::with_path("events/subscribe").get(super::super::sync::events_subscribe))
         .push(
             Router::with_path("events")
@@ -447,6 +448,12 @@ fn submit_event_authenticated<'a>(
 
         match submit {
             SolandEventsSubmitRequestBody::Federation(_) => unreachable!("handled before auth"),
+            SolandEventsSubmitRequestBody::AgentMembershipCascade(submission) => {
+                match submit_agent_membership_cascade(state, session, submission).await {
+                    Ok(outcome) => res.render(Json(outcome)),
+                    Err(error) => render_submit_one_error(res, error),
+                }
+            }
             SolandEventsSubmitRequestBody::DirectConversationFounding(submission) => {
                 match submit_direct_conversation_founding_unit(state, session, submission).await {
                     Ok(outcome) => res.render(Json(outcome)),
@@ -498,6 +505,12 @@ async fn submit_event_dispatch(
 ) -> (StatusCode, Value) {
     match submit {
         SolandEventsSubmitRequestBody::Federation(_) => unreachable!("handled before auth"),
+        SolandEventsSubmitRequestBody::AgentMembershipCascade(submission) => {
+            match submit_agent_membership_cascade(state, session, submission).await {
+                Ok(outcome) => (StatusCode::OK, submit_outcome_value(&outcome)),
+                Err(error) => submit_one_error_value(error),
+            }
+        }
         SolandEventsSubmitRequestBody::DirectConversationFounding(submission) => {
             match submit_direct_conversation_founding_unit(state, session, submission).await {
                 Ok(outcome) => (
@@ -659,6 +672,177 @@ async fn get_event(
         return Err(AppError::not_found("event not found"));
     }
     event_view_for_state(state, &record).await
+}
+
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.delivery_status", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.delivery_status"))]
+async fn event_delivery_status(
+    aa: AuthArgs,
+    body: JsonBody<EventDeliveryStatusRequestBody>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<EventDeliveryStatusOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    super::super::require_agent_session_scope(&session, "ak.self.events.read.delivery_status")?;
+    let body = body.into_inner();
+    let event_id = body.event_id.as_str();
+    let record = state
+        .event_queries()
+        .canonical_event(event_id)
+        .await
+        .ok()
+        .flatten()
+        .ok_or_else(|| AppError::not_found("event not found"))?;
+    if !event_visible_to_session(state, &record, &session).await {
+        return Err(AppError::not_found("event not found"));
+    }
+    let deliveries = state
+        .federation()
+        .deliveries_for_event(event_id)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("Event delivery status unavailable: {error}"))
+        })?;
+    let mut targets = BTreeMap::new();
+    for delivery in deliveries {
+        let Some(binding) = delivery.delivery.realm_fanout.as_ref() else {
+            continue;
+        };
+        if !binding
+            .source_event_ids
+            .iter()
+            .any(|source| source == event_id)
+        {
+            continue;
+        }
+        let status = match delivery.state {
+            soland_services::federation::FederationDeliveryState::PendingRoute => {
+                EventDeliveryTargetState::PendingRoute
+            }
+            soland_services::federation::FederationDeliveryState::Pending => {
+                EventDeliveryTargetState::PendingDelivery
+            }
+            soland_services::federation::FederationDeliveryState::Leased => {
+                if delivery.leased_from_state
+                    == Some(soland_services::federation::FederationDeliveryState::PendingRoute)
+                {
+                    EventDeliveryTargetState::PendingRoute
+                } else {
+                    EventDeliveryTargetState::PendingDelivery
+                }
+            }
+            soland_services::federation::FederationDeliveryState::Delivered => {
+                EventDeliveryTargetState::Delivered
+            }
+            soland_services::federation::FederationDeliveryState::CancelledAuthorityLost => {
+                EventDeliveryTargetState::CancelledAuthorityLost
+            }
+            soland_services::federation::FederationDeliveryState::PolicySuppressed
+            | soland_services::federation::FederationDeliveryState::DeadLettered
+            | soland_services::federation::FederationDeliveryState::Superseded => {
+                return Err(AppError::internal(
+                    "Realm fanout row entered a state forbidden by the delivery-status contract",
+                ));
+            }
+        };
+        let target_id = delivery.delivery.id.clone();
+        let can_read_service_id = caller_can_read_delivery_target_service(
+            state,
+            &session,
+            binding,
+            &delivery.delivery.peer_did,
+        )
+        .await;
+        let service_id = can_read_service_id
+            .then(|| DidCoreId::new(delivery.delivery.peer_did.clone()))
+            .transpose()
+            .map_err(|error| {
+                AppError::internal(format!("stored delivery service id is invalid: {error}"))
+            })?;
+        let target = EventDeliveryTargetStatus {
+            target_id: target_id.clone(),
+            status,
+            service_id,
+        };
+        if targets.insert(target_id, target).is_some() {
+            return Err(AppError::internal(
+                "duplicate durable Realm fanout target for one Event",
+            ));
+        }
+    }
+    let targets = targets.into_values().collect::<Vec<_>>();
+    let pending_delivery_count = targets
+        .iter()
+        .filter(|target| target.status.is_pending())
+        .count() as u32;
+    let outcome = EventDeliveryStatusOutcome {
+        event_id: body.event_id,
+        delivery_state: if pending_delivery_count == 0 {
+            EventDeliveryState::Complete
+        } else {
+            EventDeliveryState::Pending
+        },
+        pending_delivery_count,
+        targets,
+    };
+    outcome
+        .validate()
+        .map_err(|error| AppError::internal(format!("invalid Event delivery status: {error}")))?;
+    json_ok(outcome)
+}
+
+async fn caller_can_read_delivery_target_service(
+    state: &AppState,
+    session: &SessionRecord,
+    binding: &soland_services::federation::RealmFanoutBinding,
+    recipient_service_id: &str,
+) -> bool {
+    for witness in &binding.authority_witnesses {
+        let witness_is_current = state
+            .projections()
+            .snapshot()
+            .member(&binding.realm_id, &witness.member_id)
+            .is_some_and(|member| {
+                member.state == "join"
+                    && member.delivery_status.as_deref() == Some("routable")
+                    && member.recipient_service_id.as_deref() == Some(recipient_service_id)
+                    && member.membership_event_ref.as_deref()
+                        == Some(witness.membership_event_ref.as_str())
+                    && member.delivery_binding_frontier.as_deref()
+                        == Some(witness.delivery_binding_frontier.as_str())
+            });
+        if !witness_is_current {
+            continue;
+        }
+        let Ok(Some(membership_event)) = state
+            .event_queries()
+            .canonical_event(&witness.membership_event_ref)
+            .await
+        else {
+            continue;
+        };
+        if !event_visible_to_session(state, &membership_event, session).await {
+            continue;
+        }
+        let delivery_binding_event =
+            if witness.delivery_binding_frontier == witness.membership_event_ref {
+                membership_event
+            } else {
+                let Ok(Some(delivery_binding_event)) = state
+                    .event_queries()
+                    .canonical_event(&witness.delivery_binding_frontier)
+                    .await
+                else {
+                    continue;
+                };
+                delivery_binding_event
+            };
+        if event_visible_to_session(state, &delivery_binding_event, session).await {
+            return true;
+        }
+    }
+    false
 }
 
 /// The stored canonical digest of an accepted Event, typed.

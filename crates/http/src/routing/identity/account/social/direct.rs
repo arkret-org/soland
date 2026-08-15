@@ -370,6 +370,7 @@ pub(crate) async fn validate_direct_mls_generation_operation(
         crate::routing::mls::current_authorized_claimed_group_actors(
             state,
             proposed.mls_group_id.as_str(),
+            operation.realm_id.as_str(),
         )
         .await
         .map_err(|_| "direct_conversation_activation_authority_unavailable")?;

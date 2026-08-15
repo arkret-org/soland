@@ -811,6 +811,7 @@ pub struct CommitAppletGhosts {
 pub struct CommitAcceptedEventBatchCommand {
     pub events: Vec<CommitAcceptedEventCommand>,
     pub applet_ghosts: Option<CommitAppletGhosts>,
+    pub agent_membership_cascade: Option<soland_storage::AgentMembershipCascadeCommit>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2358,10 +2359,11 @@ mod tests {
                 deliveries: vec![FederationDelivery {
                     id: "delivery:test".to_owned(),
                     peer_did: "did:web:peer.example".to_owned(),
-                    peer_url: "https://peer.example".to_owned(),
+                    peer_url: Some("https://peer.example".to_owned()),
                     endpoint: "/_arkret/peer/events".to_owned(),
                     idempotency_key: "event:test".to_owned(),
                     payload_json: "{}".to_owned(),
+                    realm_fanout: None,
                     created_at: now.timestamp(),
                 }],
             })

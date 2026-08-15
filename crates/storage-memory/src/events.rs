@@ -150,14 +150,21 @@ pub(crate) fn quarantine_memory_event(
             if let Some(delivery) = outbox.get_mut(id)
                 && matches!(
                     delivery.state,
-                    FederationOutboxState::Pending | FederationOutboxState::Leased
+                    FederationOutboxState::Pending
+                        | FederationOutboxState::PendingRoute
+                        | FederationOutboxState::Leased
                 )
             {
-                delivery.state = FederationOutboxState::PolicySuppressed;
+                delivery.state = if delivery.realm_fanout.is_some() {
+                    FederationOutboxState::CancelledAuthorityLost
+                } else {
+                    FederationOutboxState::PolicySuppressed
+                };
                 delivery.last_error_code = Some("witness_disagreement".to_owned());
                 delivery.lease_owner = None;
                 delivery.lease_token = None;
                 delivery.lease_expires_at = None;
+                delivery.leased_from_state = None;
                 delivery.completed_at = Some(delivery.created_at);
             }
         }
@@ -233,21 +240,30 @@ fn preflight_memory_events(
 fn stage_federation_outbox(
     staged: &mut BTreeMap<String, FederationOutboxRecord>,
     outbox: Vec<FederationOutboxRecord>,
-) -> PersistenceResult<()> {
+) -> PersistenceResult<Vec<String>> {
+    let mut resolved_ids = Vec::with_capacity(outbox.len());
     for record in outbox {
-        let already_enqueued = staged.values().any(|existing| {
-            existing.peer_did == record.peer_did
-                && existing.idempotency_key == record.idempotency_key
+        record
+            .validate_shape()
+            .map_err(|error| PersistenceError::Conflict(format!("schema_violation: {error}")))?;
+        let existing_id = staged.values().find_map(|existing| {
+            (existing.peer_did == record.peer_did
+                && existing.idempotency_key == record.idempotency_key)
+                .then(|| existing.id.clone())
         });
-        if already_enqueued {
+        if let Some(existing_id) = existing_id {
+            resolved_ids.push(existing_id);
             continue;
         }
         if staged.contains_key(&record.id) {
             return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
         }
+        resolved_ids.push(record.id.clone());
         staged.insert(record.id.clone(), record);
     }
-    Ok(())
+    resolved_ids.sort_unstable();
+    resolved_ids.dedup();
+    Ok(resolved_ids)
 }
 
 fn stage_control_proposal_acks(
@@ -390,6 +406,26 @@ impl EventStore for MemoryEventStore {
             .unwrap_or_default())
     }
 
+    async fn federation_outbox_for_event(
+        &self,
+        event_id: &str,
+    ) -> PersistenceResult<Vec<FederationOutboxRecord>> {
+        ids::parse_event_id(event_id).ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!("malformed canonical Event id: {event_id:?}"))
+        })?;
+        let ids = self
+            .event_outbox_ids
+            .lock()
+            .get(event_id)
+            .cloned()
+            .unwrap_or_default();
+        let outbox = self.federation_outbox.lock();
+        Ok(ids
+            .into_iter()
+            .filter_map(|id| outbox.get(&id).cloned())
+            .collect())
+    }
+
     async fn put_realm_bootstrap_batch_atomic(
         &self,
         records: Vec<CanonicalEventRecord>,
@@ -416,10 +452,6 @@ impl EventStore for MemoryEventStore {
             .iter()
             .map(|record| record.event_id.clone())
             .collect::<Vec<_>>();
-        let outbox_ids = outbox
-            .iter()
-            .map(|record| record.id.clone())
-            .collect::<Vec<_>>();
         let mut staged = data.clone();
         let mut staged_control_proposal_acks = stored_control_proposal_acks.clone();
         let mut staged_outbox = federation_outbox.clone();
@@ -430,7 +462,7 @@ impl EventStore for MemoryEventStore {
             true,
         )?;
         stage_identity_anchor_events(&mut staged, records)?;
-        stage_federation_outbox(&mut staged_outbox, outbox)?;
+        let outbox_ids = stage_federation_outbox(&mut staged_outbox, outbox)?;
         *data = staged;
         *stored_control_proposal_acks = staged_control_proposal_acks;
         *federation_outbox = staged_outbox;
@@ -495,16 +527,12 @@ impl EventStore for MemoryEventStore {
             &mut federation_outbox,
         )?;
         let event_ids = slot.event_ids.clone();
-        let outbox_ids = outbox
-            .iter()
-            .map(|record| record.id.clone())
-            .collect::<Vec<_>>();
         let mut staged = data.clone();
         let mut staged_acks = stored_control_proposal_acks.clone();
         let mut staged_outbox = federation_outbox.clone();
         stage_control_proposal_acks(&mut staged_acks, &records, control_proposal_acks, true)?;
         stage_identity_anchor_events(&mut staged, records)?;
-        stage_federation_outbox(&mut staged_outbox, outbox)?;
+        let outbox_ids = stage_federation_outbox(&mut staged_outbox, outbox)?;
         slots.insert(key, slot);
         *data = staged;
         *stored_control_proposal_acks = staged_acks;
@@ -571,10 +599,6 @@ impl EventStore for MemoryEventStore {
             .iter()
             .map(|record| record.event_id.clone())
             .collect::<Vec<_>>();
-        let outbox_ids = outbox
-            .iter()
-            .map(|record| record.id.clone())
-            .collect::<Vec<_>>();
         let mut staged_events = data.clone();
         let mut staged_control_proposal_acks = stored_control_proposal_acks.clone();
         let mut staged_devices = devices.clone();
@@ -622,7 +646,7 @@ impl EventStore for MemoryEventStore {
         if !reanchor_conflict && let Some(receipt) = receipt {
             staged_receipts.insert(receipt.receipt_id.as_str().to_owned(), receipt);
         }
-        if !reanchor_conflict {
+        let outbox_ids = if !reanchor_conflict {
             for record in publication_evidence {
                 staged_evidence
                     .entry(record.event_digest.clone())
@@ -630,8 +654,10 @@ impl EventStore for MemoryEventStore {
             }
             // A quarantined re-anchor conflict is not accepted locally, so it
             // owes no peer anything.
-            stage_federation_outbox(&mut staged_outbox, outbox)?;
-        }
+            stage_federation_outbox(&mut staged_outbox, outbox)?
+        } else {
+            Vec::new()
+        };
         *data = staged_events;
         *stored_control_proposal_acks = staged_control_proposal_acks;
         *devices = staged_devices;

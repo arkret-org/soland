@@ -798,6 +798,28 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
     {
         return true;
     }
+    {
+        let projection = state.projections().snapshot();
+        if projection
+            .agent_membership_binding(realm_id, actor)
+            .is_some()
+            && !projection.effective_agent_membership_base(realm_id, actor)
+        {
+            return false;
+        }
+    }
+    if let Ok(Some(agent)) = state.agent_pairings().agent(actor).await
+        && crate::routing::identity::managed_agent_pcr::validate_effective_agent_realm_membership(
+            state,
+            &agent,
+            realm_id,
+            chrono::Utc::now(),
+        )
+        .await
+        .is_err()
+    {
+        return false;
+    }
     let realms = state.realm_directory().snapshot();
     match realms.get(&realm_id_typed) {
         None => {

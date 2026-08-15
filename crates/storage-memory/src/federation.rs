@@ -31,6 +31,9 @@ impl MemoryFederationOutboxStore {
 #[async_trait]
 impl FederationOutboxStore for MemoryFederationOutboxStore {
     async fn enqueue(&self, record: &FederationOutboxRecord) -> PersistenceResult<bool> {
+        record
+            .validate_shape()
+            .map_err(|error| PersistenceError::Conflict(format!("schema_violation: {error}")))?;
         let mut data = self.data.lock();
         // Match the Pg `(peer_did, idempotency_key)` UNIQUE INDEX —
         // duplicate enqueue returns Ok(false) so re-broadcast on
@@ -51,20 +54,21 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
         claim: &FederationOutboxClaim,
     ) -> PersistenceResult<Vec<FederationOutboxRecord>> {
         let mut data = self.data.lock();
-        let mut claimable = data
-            .values()
-            .filter(|row| {
-                row.next_attempt_at <= claim.now_unix_secs
-                    && match row.state {
-                        FederationOutboxState::Pending => true,
-                        FederationOutboxState::Leased => {
-                            row.lease_expires_at.unwrap_or(0) <= claim.now_unix_secs
+        let mut claimable =
+            data.values()
+                .filter(|row| {
+                    row.next_attempt_at <= claim.now_unix_secs
+                        && match row.state {
+                            FederationOutboxState::Pending
+                            | FederationOutboxState::PendingRoute => true,
+                            FederationOutboxState::Leased => {
+                                row.lease_expires_at.unwrap_or(0) <= claim.now_unix_secs
+                            }
+                            _ => false,
                         }
-                        _ => false,
-                    }
-            })
-            .map(|row| (row.next_attempt_at, row.id.clone()))
-            .collect::<Vec<_>>();
+                })
+                .map(|row| (row.next_attempt_at, row.id.clone()))
+                .collect::<Vec<_>>();
         claimable.sort();
         claimable.truncate(claim.limit);
         let mut claimed = Vec::with_capacity(claimable.len());
@@ -72,6 +76,9 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
             let Some(row) = data.get_mut(&id) else {
                 continue;
             };
+            if row.state != FederationOutboxState::Leased {
+                row.leased_from_state = Some(row.state);
+            }
             row.state = FederationOutboxState::Leased;
             row.lease_owner = Some(claim.lease_owner.clone());
             row.lease_token = Some(claim.lease_token.clone());
@@ -91,6 +98,26 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
         if row.lease_token.as_deref() != Some(transition.lease_token.as_str()) {
             return Ok(false);
         }
+        let realm_fanout = row.realm_fanout.is_some();
+        if (realm_fanout
+            && matches!(
+                &transition.outcome,
+                FederationOutboxOutcome::PolicySuppressed { .. }
+                    | FederationOutboxOutcome::DeadLettered(_)
+                    | FederationOutboxOutcome::Superseded(_)
+            ))
+            || (!realm_fanout
+                && matches!(
+                    &transition.outcome,
+                    FederationOutboxOutcome::RouteUnavailable { .. }
+                        | FederationOutboxOutcome::CancelledAuthorityLost
+                ))
+        {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: federation transition does not match the row lifecycle"
+                    .to_owned(),
+            ));
+        }
         row.attempts = transition.attempts;
         row.semantic_attempts = transition.semantic_attempts;
         row.last_http_status = transition.last_http_status;
@@ -99,6 +126,7 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
         row.lease_owner = None;
         row.lease_token = None;
         row.lease_expires_at = None;
+        row.leased_from_state = None;
         row.policy_version = None;
         let mut dead_letter = None;
         let mut successor = None;
@@ -108,8 +136,18 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
                 row.next_attempt_at = *next_attempt_at;
                 row.completed_at = None;
             }
+            FederationOutboxOutcome::RouteUnavailable { next_attempt_at } => {
+                row.state = FederationOutboxState::PendingRoute;
+                row.next_attempt_at = *next_attempt_at;
+                row.completed_at = None;
+            }
             FederationOutboxOutcome::Delivered => {
                 row.state = FederationOutboxState::Delivered;
+                row.next_attempt_at = transition.observed_at;
+                row.completed_at = Some(transition.observed_at);
+            }
+            FederationOutboxOutcome::CancelledAuthorityLost => {
+                row.state = FederationOutboxState::CancelledAuthorityLost;
                 row.next_attempt_at = transition.observed_at;
                 row.completed_at = Some(transition.observed_at);
             }

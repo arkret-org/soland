@@ -136,10 +136,11 @@ pub async fn enqueue_outbound(
                 delivery: soland_services::federation::FederationDeliveryRecord {
                     id: Uuid::new_v4().to_string(),
                     peer_did: peer_did.to_owned(),
-                    peer_url: peer_url.trim_end_matches('/').to_owned(),
+                    peer_url: Some(peer_url.trim_end_matches('/').to_owned()),
                     endpoint: endpoint.to_owned(),
                     idempotency_key: idempotency_key.to_owned(),
                     payload_json: payload_json.to_owned(),
+                    realm_fanout: None,
                     created_at: now,
                 },
             },
@@ -742,6 +743,23 @@ impl FederationDispatcher {
             );
             return;
         };
+        if row.delivery.realm_fanout.is_some()
+            && !realm_fanout_authority_is_current(&self.state, &row)
+        {
+            self.commit(RecordFederationAttemptCommand {
+                id: row.delivery.id.clone(),
+                lease_token,
+                attempts: row.attempts,
+                semantic_attempts: row.semantic_attempts,
+                last_http_status: None,
+                last_error_code: Some("fanout_authority_lost".to_owned()),
+                last_response_excerpt: None,
+                observed_at: now_unix_secs(),
+                outcome: FederationDeliveryOutcome::CancelledAuthorityLost,
+            })
+            .await;
+            return;
+        }
         let peer_target = super::federation::resolved_peer_target(
             &self.state,
             &row.delivery.peer_did,
@@ -754,7 +772,31 @@ impl FederationDispatcher {
             Err(error) => {
                 let attempts = row.attempts.saturating_add(1);
                 let now = now_unix_secs();
-                let command = if error.contains("quarantined") || error.contains("fork") {
+                let command = if row.delivery.realm_fanout.is_some() {
+                    if attempts >= MAX_ATTEMPTS && attempts % MAX_ATTEMPTS == 0 {
+                        tracing::warn!(
+                            target = "federation_outbox",
+                            worker = "federation_outbox",
+                            outbox_id = %row.delivery.id,
+                            peer_did = %row.delivery.peer_did,
+                            endpoint = %row.delivery.endpoint,
+                            attempts,
+                            "Realm fanout route remains unavailable past the operator alert threshold"
+                        );
+                    }
+                    let next_attempt_at = transport_backoff_unix_secs(attempts, now);
+                    RecordFederationAttemptCommand {
+                        id: row.delivery.id.clone(),
+                        lease_token,
+                        attempts,
+                        semantic_attempts: row.semantic_attempts,
+                        last_http_status: None,
+                        last_error_code: Some("service_route_unavailable".to_owned()),
+                        last_response_excerpt: Some(excerpt(&error)),
+                        observed_at: now,
+                        outcome: FederationDeliveryOutcome::RouteUnavailable { next_attempt_at },
+                    }
+                } else if error.contains("quarantined") || error.contains("fork") {
                     self.dead_letter(
                         &row,
                         &lease_token,
@@ -803,22 +845,36 @@ impl FederationDispatcher {
             crate::metrics::record_federation_retry_state("policy_suppressed");
             // Same discipline as the egress denial below: no socket was
             // opened, so this MUST NOT consume the transport retry budget.
-            self.commit(RecordFederationAttemptCommand {
-                id: row.delivery.id.clone(),
-                lease_token,
-                attempts: row.attempts,
-                semantic_attempts: row.semantic_attempts,
-                last_http_status: None,
-                last_error_code: Some(error_code::EGRESS_POLICY_DENIED.to_owned()),
-                last_response_excerpt: Some(excerpt(&reason)),
-                observed_at: now_unix_secs(),
-                outcome: FederationDeliveryOutcome::PolicySuppressed {
-                    policy_version: crate::security::egress_policy_version(
-                        self.state.config().development_mode,
-                    ),
-                },
-            })
-            .await;
+            let now = now_unix_secs();
+            let command = if row.delivery.realm_fanout.is_some() {
+                self.transport_retry(
+                    &row,
+                    &lease_token,
+                    row.attempts.saturating_add(1),
+                    None,
+                    error_code::EGRESS_POLICY_DENIED,
+                    excerpt(&reason),
+                    None,
+                    now,
+                )
+            } else {
+                RecordFederationAttemptCommand {
+                    id: row.delivery.id.clone(),
+                    lease_token,
+                    attempts: row.attempts,
+                    semantic_attempts: row.semantic_attempts,
+                    last_http_status: None,
+                    last_error_code: Some(error_code::EGRESS_POLICY_DENIED.to_owned()),
+                    last_response_excerpt: Some(excerpt(&reason)),
+                    observed_at: now,
+                    outcome: FederationDeliveryOutcome::PolicySuppressed {
+                        policy_version: crate::security::egress_policy_version(
+                            self.state.config().development_mode,
+                        ),
+                    },
+                }
+            };
+            self.commit(command).await;
             return;
         }
         let body_bytes = row.delivery.payload_json.as_bytes().to_vec();
@@ -847,24 +903,37 @@ impl FederationDispatcher {
                     crate::metrics::record_federation_retry_state("policy_suppressed");
                     // A policy denial never opened a socket, so it MUST NOT
                     // consume the transport retry budget.
-                    self.commit(RecordFederationAttemptCommand {
-                        id: row.delivery.id.clone(),
-                        lease_token,
-                        attempts: row.attempts,
-                        semantic_attempts: row.semantic_attempts,
-                        last_http_status: None,
-                        last_error_code: Some(error_code::EGRESS_POLICY_DENIED.to_owned()),
-                        last_response_excerpt: Some(excerpt(&format!(
-                            "egress_policy_denied: {error}"
-                        ))),
-                        observed_at: now_unix_secs(),
-                        outcome: FederationDeliveryOutcome::PolicySuppressed {
-                            policy_version: crate::security::egress_policy_version(
-                                self.state.config().development_mode,
-                            ),
-                        },
-                    })
-                    .await;
+                    let now = now_unix_secs();
+                    let response_excerpt = excerpt(&format!("egress_policy_denied: {error}"));
+                    let command = if row.delivery.realm_fanout.is_some() {
+                        self.transport_retry(
+                            &row,
+                            &lease_token,
+                            row.attempts.saturating_add(1),
+                            None,
+                            error_code::EGRESS_POLICY_DENIED,
+                            response_excerpt,
+                            None,
+                            now,
+                        )
+                    } else {
+                        RecordFederationAttemptCommand {
+                            id: row.delivery.id.clone(),
+                            lease_token,
+                            attempts: row.attempts,
+                            semantic_attempts: row.semantic_attempts,
+                            last_http_status: None,
+                            last_error_code: Some(error_code::EGRESS_POLICY_DENIED.to_owned()),
+                            last_response_excerpt: Some(response_excerpt),
+                            observed_at: now,
+                            outcome: FederationDeliveryOutcome::PolicySuppressed {
+                                policy_version: crate::security::egress_policy_version(
+                                    self.state.config().development_mode,
+                                ),
+                            },
+                        }
+                    };
+                    self.commit(command).await;
                     return;
                 }
             };
@@ -1116,6 +1185,19 @@ impl FederationDispatcher {
             };
         }
 
+        if row.delivery.realm_fanout.is_some() {
+            return self.transport_retry(
+                row,
+                lease_token,
+                attempts,
+                Some(status),
+                application_failure.unwrap_or(error_code::RETRYABLE_HTTP_STATUS),
+                response_excerpt,
+                peer_requested_retry_at(headers, body_text, now),
+                now,
+            );
+        }
+
         // A response was received. Anything that needs re-evaluation is a
         // semantic resubmission with a brand-new key, never a replay of this
         // transport identity (`federation.md` §8.5).
@@ -1186,6 +1268,7 @@ impl FederationDispatcher {
                         endpoint: row.delivery.endpoint.clone(),
                         idempotency_key: resubmission.idempotency_key,
                         payload_json: resubmission.payload_json,
+                        realm_fanout: row.delivery.realm_fanout.clone(),
                         created_at: now,
                     }),
                     next_attempt_at,
@@ -1255,7 +1338,7 @@ impl FederationDispatcher {
         peer_retry_at: Option<i64>,
         now: i64,
     ) -> RecordFederationAttemptCommand {
-        if attempts >= MAX_ATTEMPTS {
+        if row.delivery.realm_fanout.is_none() && attempts >= MAX_ATTEMPTS {
             return self.dead_letter(
                 row,
                 lease_token,
@@ -1264,6 +1347,20 @@ impl FederationDispatcher {
                 error_code::RETRY_BUDGET_EXHAUSTED,
                 response_excerpt,
                 now,
+            );
+        }
+        if row.delivery.realm_fanout.is_some()
+            && attempts >= MAX_ATTEMPTS
+            && attempts % MAX_ATTEMPTS == 0
+        {
+            tracing::warn!(
+                target = "federation_outbox",
+                worker = "federation_outbox",
+                outbox_id = %row.delivery.id,
+                peer_did = %row.delivery.peer_did,
+                endpoint = %row.delivery.endpoint,
+                attempts,
+                "Realm fanout remains pending past the operator alert threshold"
             );
         }
         let next_attempt_at =
@@ -1368,6 +1465,27 @@ impl FederationDispatcher {
             ),
         }
     }
+}
+
+fn realm_fanout_authority_is_current(state: &AppState, row: &PendingFederationDelivery) -> bool {
+    let Some(binding) = row.delivery.realm_fanout.as_ref() else {
+        return true;
+    };
+    let projection = state.projections().snapshot();
+    binding.authority_witnesses.iter().any(|witness| {
+        projection
+            .member(&binding.realm_id, &witness.member_id)
+            .is_some_and(|member| {
+                member.state == "join"
+                    && member.delivery_status.as_deref() == Some("routable")
+                    && member.recipient_service_id.as_deref()
+                        == Some(row.delivery.peer_did.as_str())
+                    && member.membership_event_ref.as_deref()
+                        == Some(witness.membership_event_ref.as_str())
+                    && member.delivery_binding_frontier.as_deref()
+                        == Some(witness.delivery_binding_frontier.as_str())
+            })
+    })
 }
 
 /// Spawn the dispatcher if `config.federation_outbound_enabled` is true.
@@ -1794,10 +1912,15 @@ mod tests {
         let pending_event_id = request.events[1].event.event_id.as_str().to_owned();
         let original_receipt =
             serde_json::to_value(&request.events[1].ingress_receipts[0]).unwrap();
+        request
+            .validate_federation_transport()
+            .expect("fixture must remain a valid federation transport request");
         let response = format!(
             r#"{{
             "status":"partial",
             "accepted":["{}"],
+            "delivery_state":"complete",
+            "pending_delivery_count":0,
             "rejected":[{{
                 "id":"{pending_event_id}",
                 "reason_code":"dependency_missing",

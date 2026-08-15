@@ -109,7 +109,7 @@ fn accepted_circle_member_reducer_operation(operation: &Operation) -> Operation 
 
 /// Keep receiver time as reducer context without contaminating the closed
 /// producer payload consumed by the typed membership gate.
-fn accepted_member_state_reducer_operation(operation: &Operation) -> Operation {
+pub(crate) fn accepted_member_state_reducer_operation(operation: &Operation) -> Operation {
     let mut contextual = operation.clone();
     let received_at = contextual
         .payload
@@ -379,6 +379,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub async fn project_accepted_operations(state: &AppState, origin: &str, operations: &[Operation]) {
     project_accepted_operations_inner(state, origin, "", operations, None).await;
 }

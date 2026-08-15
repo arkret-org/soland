@@ -86,7 +86,7 @@ impl From<PendingFederationDelivery> for OutboxSummary {
 pub struct OutboxDetail {
     #[serde(flatten)]
     pub summary: OutboxSummary,
-    pub peer_url: String,
+    pub peer_url: Option<String>,
     pub payload_digest: String,
     pub payload_bytes: usize,
     pub last_response_excerpt: Option<String>,
@@ -309,10 +309,11 @@ pub async fn requeue_dead_letter(
             delivery: FederationDeliveryRecord {
                 id: requeued_outbox_id.clone(),
                 peer_did: original.delivery.peer_did.clone(),
-                peer_url,
+                peer_url: Some(peer_url),
                 endpoint: original.delivery.endpoint.clone(),
                 idempotency_key: idempotency_key.clone(),
                 payload_json: original.delivery.payload_json.clone(),
+                realm_fanout: None,
                 created_at: requeued_at,
             },
             supersedes_outbox_id: original.delivery.id.clone(),

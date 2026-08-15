@@ -12,10 +12,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{CellRef, RealmId};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+use arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding;
 use arkret_state::lattice::CellState;
 use arkret_state::state::{CellRegistry, CellStore, StoreError};
-use arkret_wire::ProfileId;
 use arkret_wire::cba::ProjectedCellWrite;
+use arkret_wire::{PrincipalAuthorityKey, ProfileId};
 use serde_json::Value;
 
 use super::*;
@@ -60,6 +61,14 @@ pub struct ProjectionState {
     /// Banned and knocking members are derived via `members_in_state`
     /// against the FSM state field, not stored as separate collections.
     pub members: BTreeMap<(String, String), SolandMembershipState>,
+    /// Accepted membership authority for the current member-cell generation,
+    /// keyed by `(realm_id, actor_id)`. This is side-band data reconstructed
+    /// from accepted Events; it never replaces the canonical member FSM cell.
+    pub membership_authorities: BTreeMap<(String, String), PrincipalAuthorityKey>,
+    /// Exact controller authority and controller join generation carried by a
+    /// Native Personal Agent membership Event. Effective Agent membership is
+    /// derived by joining this binding with the current controller member cell.
+    pub agent_membership_bindings: BTreeMap<(String, String), AgentControllerMembershipBinding>,
     /// Server-side invite projection keyed by `invite_id`.
     /// `ak.invite.third_party` creates pending third-party invites and
     /// `ak.invite.claim` converts them into DID-targeted claimed invites.

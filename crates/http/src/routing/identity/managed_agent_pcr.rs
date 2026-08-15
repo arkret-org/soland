@@ -648,6 +648,40 @@ pub(crate) async fn validate_agent_controller_binding(
     validate_active_agent_accountability(state, agent_record, accepted_at).await
 }
 
+pub(crate) async fn validate_effective_agent_realm_membership(
+    state: &AppState,
+    agent_record: &AgentPrincipalRecord,
+    realm_id: &str,
+    accepted_at: DateTime<Utc>,
+) -> Result<(), AppError> {
+    if agent_record.state != AgentLifecycleState::Active {
+        return Err(failed_precondition(
+            "managed Agent lifecycle is not active",
+            "agent_membership_inactive",
+        ));
+    }
+    let controller_id = managed_controller_core_id(&agent_record.controller_id)?;
+    let projection = state.projections().snapshot();
+    let binding = projection
+        .agent_membership_binding(realm_id, &agent_record.id)
+        .ok_or_else(|| {
+            failed_precondition(
+                "managed Agent membership has no controller-generation binding",
+                "agent_membership_inactive",
+            )
+        })?;
+    if binding.controller_authority.principal_id != controller_id
+        || !projection.effective_agent_membership_base(realm_id, &agent_record.id)
+    {
+        return Err(failed_precondition(
+            "managed Agent membership controller authority or generation is no longer current",
+            "agent_membership_inactive",
+        ));
+    }
+    drop(projection);
+    validate_agent_controller_binding(state, agent_record, accepted_at).await
+}
+
 pub(crate) fn managed_agent_initial_resolution_for_record(
     agent_record: &AgentPrincipalRecord,
 ) -> Result<arkret_models_identity::ResolutionCommitment, AppError> {

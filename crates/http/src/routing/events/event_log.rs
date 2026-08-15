@@ -32,8 +32,9 @@ use arkret_models_collaboration::event_sync::{
 };
 use arkret_models_collaboration::events_payloads::contact::ContactRequestedPayload;
 use arkret_models_collaboration::http_bodies::{
-    EventSealSubmitOutcome, EventView, EventsResolveOutcome, EventsResolveRequestBody,
-    EventsSubmitOutcome, EventsSubmitStatus,
+    EventDeliveryState, EventDeliveryStatusOutcome, EventDeliveryStatusRequestBody,
+    EventDeliveryTargetState, EventDeliveryTargetStatus, EventSealSubmitOutcome, EventView,
+    EventsResolveOutcome, EventsResolveRequestBody, EventsSubmitOutcome, EventsSubmitStatus,
 };
 use arkret_wire::{
     Audience, Event, EventRef, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS,
@@ -106,9 +107,10 @@ pub(crate) use endpoints::load_realm_actor_frontier;
 pub(super) use submit::submit_federation_events;
 pub(in crate::routing) use submit::{
     EventCommitIdempotency, ValidatedEventEnvelope, service_event_authoring_lock,
-    submit_account_data_event_value, submit_direct_conversation_founding_unit, submit_event_value,
-    submit_ghost_provision_batch, submit_initial_event_batch_outcome,
-    submit_initial_event_submission, submit_initial_event_submission_with_contact_projection,
+    submit_account_data_event_value, submit_agent_membership_cascade,
+    submit_direct_conversation_founding_unit, submit_event_value, submit_ghost_provision_batch,
+    submit_initial_event_batch_outcome, submit_initial_event_submission,
+    submit_initial_event_submission_with_contact_projection,
     submit_initial_event_submission_with_device_pairing, submit_initial_identity_anchor_batch,
     submit_mimi_event_value, submit_mimi_moderation_report_event_value,
     submit_one_error_to_app_error, submit_peer_pcr_genesis, submit_sidecar_ensure_batch,

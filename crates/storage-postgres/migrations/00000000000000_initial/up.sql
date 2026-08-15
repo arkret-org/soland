@@ -262,6 +262,27 @@ CREATE TABLE public.agent_sidecar_contexts (
     PRIMARY KEY (sidecar_pk, normalized_context_ref_digest, version)
 );
 
+CREATE TABLE public.agent_membership_cleanup_intents (
+    cleanup_intent_digest text PRIMARY KEY,
+    realm_id text NOT NULL,
+    controller_terminal_event_id text NOT NULL UNIQUE,
+    status text NOT NULL CHECK (status IN ('agent_cleanup_pending', 'agent_cleanup_completed', 'agent_cleanup_overdue')),
+    record_json jsonb NOT NULL,
+    accepted_at timestamp with time zone NOT NULL,
+    cleanup_due_at timestamp with time zone NOT NULL,
+    completed_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    updated_at timestamp with time zone NOT NULL DEFAULT now(),
+    CHECK (
+        (status = 'agent_cleanup_completed' AND completed_at IS NOT NULL)
+        OR (status <> 'agent_cleanup_completed' AND completed_at IS NULL)
+    )
+);
+
+CREATE INDEX agent_membership_cleanup_pending_idx
+    ON public.agent_membership_cleanup_intents (cleanup_due_at, cleanup_intent_digest)
+    WHERE status IN ('agent_cleanup_pending', 'agent_cleanup_overdue');
+
 CREATE TABLE public.applet_registrations (
     id text PRIMARY KEY,
     namespace text NOT NULL,
@@ -829,13 +850,14 @@ CREATE INDEX federation_operations_space_idx ON public.federation_operations USI
 
 CREATE TABLE public.federation_outbox (
     id text PRIMARY KEY,
-    event_pk bigint REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
     peer_id text NOT NULL,
-    peer_url text NOT NULL,
+    peer_url text,
     endpoint text NOT NULL,
     idempotency_key text NOT NULL,
     payload_json text NOT NULL,
     state text DEFAULT 'pending' NOT NULL,
+    leased_from_state text,
+    realm_fanout jsonb,
     attempts integer DEFAULT 0 NOT NULL,
     semantic_attempts integer DEFAULT 0 NOT NULL,
     next_attempt_at bigint NOT NULL,
@@ -849,12 +871,26 @@ CREATE TABLE public.federation_outbox (
     supersedes_outbox_id text,
     completed_at bigint,
     created_at bigint NOT NULL,
-    CONSTRAINT federation_outbox_state_check CHECK (state IN ('pending', 'leased', 'delivered', 'policy_suppressed', 'dead_lettered', 'superseded'))
+    CONSTRAINT federation_outbox_state_check CHECK (state IN ('pending', 'pending_route', 'leased', 'delivered', 'cancelled_authority_lost', 'policy_suppressed', 'dead_lettered', 'superseded')),
+    CONSTRAINT federation_outbox_leased_from_state_check CHECK (
+        leased_from_state IS NULL OR leased_from_state IN ('pending', 'pending_route')
+    ),
+    CONSTRAINT federation_outbox_lease_shape_check CHECK (
+        (state = 'leased') = (leased_from_state IS NOT NULL)
+    ),
+    CONSTRAINT federation_outbox_realm_lifecycle_check CHECK (
+        (realm_fanout IS NULL AND state NOT IN ('pending_route', 'cancelled_authority_lost'))
+        OR
+        (realm_fanout IS NOT NULL AND state IN ('pending', 'pending_route', 'leased', 'delivered', 'cancelled_authority_lost'))
+    ),
+    CONSTRAINT federation_outbox_route_shape_check CHECK (
+        realm_fanout IS NOT NULL OR peer_url IS NOT NULL
+    )
 );
 
 CREATE UNIQUE INDEX federation_outbox_peer_idem ON public.federation_outbox USING btree (peer_id, idempotency_key);
 
--- Claim scan: `state IN ('pending','leased') AND next_attempt_at <= now`,
+-- Claim scan: `state IN ('pending','pending_route','leased') AND next_attempt_at <= now`,
 -- ordered by next_attempt_at. `lease_expires_at` is in the index so an expired
 -- lease can be taken over without touching the heap.
 CREATE INDEX federation_outbox_claim ON public.federation_outbox USING btree (state, next_attempt_at, lease_expires_at);
@@ -863,11 +899,6 @@ CREATE INDEX federation_outbox_claim ON public.federation_outbox USING btree (st
 CREATE INDEX federation_outbox_policy_suppressed ON public.federation_outbox USING btree (policy_version) WHERE (state = 'policy_suppressed'::text);
 
 CREATE INDEX federation_outbox_state_peer ON public.federation_outbox USING btree (state, peer_id, created_at);
-
--- `events.rs` suppresses pending deliveries for a quarantined Event by
--- `WHERE event_pk = $1`; without this the collision path sequential-scans the
--- whole outbox.
-CREATE INDEX federation_outbox_event_pk_idx ON public.federation_outbox USING btree (event_pk);
 
 CREATE TABLE public.federation_outbox_dead_letter (
     id text PRIMARY KEY,

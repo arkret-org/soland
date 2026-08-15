@@ -635,6 +635,7 @@ async fn peer_claim_keypackage(
         state,
         &body.target_principal_id,
         &target_device_ids,
+        Some(body.intended_realm_id.as_str()),
     )
     .await
     .map_err(|_| peer_claim_failed())?;
@@ -1562,9 +1563,13 @@ async fn claim_keypackages_for_request_inner(
         .map(ToString::to_string)
         .collect::<BTreeSet<_>>();
     let intended_realm_id = body.intended_realm_id.to_string();
-    let trust_selector =
-        current_keypackage_claim_trust_selector(state, &target_principal_did, &target_device_ids)
-            .await?;
+    let trust_selector = current_keypackage_claim_trust_selector(
+        state,
+        &target_principal_did,
+        &target_device_ids,
+        Some(&intended_realm_id),
+    )
+    .await?;
     // The durable KeyPackage store is the single CAS authority.  Projection
     // hydration can lag a previously committed claim (notably after a process
     // restart), so selecting from projection state may choose an already
@@ -3139,8 +3144,37 @@ async fn current_keypackage_claim_trust_selector(
     state: &AppState,
     principal: &arkret_wire::DidCoreId,
     target_device_ids: &BTreeSet<String>,
+    intended_realm_id: Option<&str>,
 ) -> Result<KeyPackageTrustSelector, AppError> {
     if let Some(binding) = current_agent_keypackage_trust_binding(state, principal).await? {
+        if let Some(realm_id) = intended_realm_id {
+            let agent = state
+                .agent_pairings()
+                .agent(principal.as_str())
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+                .ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::FailedPrecondition,
+                        "Native Agent membership is unavailable",
+                    )
+                    .with_wire_code("claim_generation_mismatch")
+                })?;
+            crate::routing::identity::managed_agent_pcr::validate_effective_agent_realm_membership(
+                state,
+                &agent,
+                realm_id,
+                now(),
+            )
+            .await
+            .map_err(|_| {
+                AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    "Native Agent is not an effective Realm member",
+                )
+                .with_wire_code("claim_generation_mismatch")
+            })?;
+        }
         return Ok(KeyPackageTrustSelector::Principal(binding));
     }
     let mut bindings = BTreeMap::new();
@@ -3309,8 +3343,15 @@ pub(crate) async fn has_claimable_realm_membership_keypackage(
         return false;
     };
     let target_device_ids = BTreeSet::new();
+    // This is the admission preflight for the membership transition which
+    // establishes the Agent's effective Realm membership. Requiring that
+    // membership inside the trust selector would make the first join
+    // impossible. The accepted Agent-key authorization is still checked
+    // here, and the KeyPackage's Realm binding is checked below; actual claim
+    // paths continue to pass `Some(intended_realm_id)` and recheck effective
+    // membership at commit time.
     let Ok(trust_selector) =
-        current_keypackage_claim_trust_selector(state, &principal, &target_device_ids).await
+        current_keypackage_claim_trust_selector(state, &principal, &target_device_ids, None).await
     else {
         return false;
     };
@@ -3343,6 +3384,7 @@ pub(crate) async fn has_claimable_realm_membership_keypackage(
 pub(crate) async fn current_authorized_claimed_group_actors(
     state: &AppState,
     mls_group_id: &str,
+    intended_realm_id: &str,
 ) -> Result<(BTreeSet<String>, BTreeSet<String>), String> {
     let rows = state
         .mls_key_packages()
@@ -3358,9 +3400,14 @@ pub(crate) async fn current_authorized_claimed_group_actors(
     for row in &rows {
         let principal = arkret_wire::DidCoreId::new(row.actor_id.clone())
             .map_err(|error| format!("claimed KeyPackage actor invalid: {error}"))?;
-        let selector = current_keypackage_claim_trust_selector(state, &principal, &BTreeSet::new())
-            .await
-            .map_err(|error| format!("claimed KeyPackage trust unavailable: {error}"))?;
+        let selector = current_keypackage_claim_trust_selector(
+            state,
+            &principal,
+            &BTreeSet::new(),
+            Some(intended_realm_id),
+        )
+        .await
+        .map_err(|error| format!("claimed KeyPackage trust unavailable: {error}"))?;
         if !selector.matches_keypackage(row) || row.lifetime_not_after <= now_secs {
             return Err("selected MLS group contains a non-current authorized leaf".to_owned());
         }

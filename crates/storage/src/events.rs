@@ -37,6 +37,12 @@ pub trait EventStore: Send + Sync {
         &self,
         event_id: &str,
     ) -> PersistenceResult<Vec<CanonicalEventRecord>>;
+    /// Durable fanout intents atomically associated with one accepted Event.
+    /// The join is authoritative for batch rows that cover multiple Events.
+    async fn federation_outbox_for_event(
+        &self,
+        event_id: &str,
+    ) -> PersistenceResult<Vec<FederationOutboxRecord>>;
     /// Commit one validated ordinary-Realm bootstrap unit. Implementations
     /// MUST insert every canonical Event **and every federation outbox row** in
     /// one transaction or insert none: an accepted Event whose delivery intent

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use diesel::sql_types::SmallInt;
 
@@ -13,7 +13,7 @@ use super::{
     SqlUuid, Text, Timestamptz, Uuid, Value, async_trait, identity_anchor_slot_conflicts, ids,
     pg_conn, sql_query,
 };
-use crate::federation::insert_federation_outbox_row;
+use crate::federation::{FederationOutboxRow, OUTBOX_COLUMNS, insert_federation_outbox_row};
 pub struct PgEventStore {
     pub pool: PgPool,
 }
@@ -338,12 +338,14 @@ pub(crate) async fn insert_canonical_event(
         .await
         .map_err(PersistenceError::database)?;
         sql_query(
-            "UPDATE federation_outbox SET state = 'policy_suppressed', \
+            "UPDATE federation_outbox SET \
+             state = CASE WHEN realm_fanout IS NULL THEN 'policy_suppressed' \
+                          ELSE 'cancelled_authority_lost' END, \
              last_error_code = 'witness_disagreement', lease_owner = NULL, lease_token = NULL, \
-             lease_expires_at = NULL, completed_at = COALESCE(completed_at, created_at) \
-             WHERE (event_pk = $1 OR id IN ( \
-               SELECT outbox_id FROM event_federation_outbox WHERE event_pk = $1 \
-             )) AND state IN ('pending', 'leased')",
+             lease_expires_at = NULL, leased_from_state = NULL, \
+             completed_at = COALESCE(completed_at, created_at) \
+             WHERE id IN (SELECT outbox_id FROM event_federation_outbox WHERE event_pk = $1) \
+               AND state IN ('pending', 'pending_route', 'leased')",
         )
         .bind::<BigInt, _>(stored.pk)
         .execute(&mut *conn)
@@ -444,7 +446,7 @@ async fn preflight_canonical_events(
     Ok(false)
 }
 
-async fn bind_event_outbox_rows(
+pub(crate) async fn bind_event_outbox_rows(
     conn: &mut AsyncPgConnection,
     event_pks: &[i64],
     delivery: &FederationOutboxRecord,
@@ -457,12 +459,45 @@ async fn bind_event_outbox_rows(
             .await
             .map_err(PersistenceError::database)?
             .id;
-    for event_pk in event_pks {
+    let mut bound_event_pks = event_pks.iter().copied().collect::<BTreeSet<_>>();
+    if let Some(binding) = delivery.realm_fanout.as_ref() {
+        if binding.source_event_ids.is_empty() || binding.authority_witnesses.is_empty() {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: Realm fanout binding is incomplete".to_owned(),
+            ));
+        }
+        for source_event_id in &binding.source_event_ids {
+            let source_event_id = ids::parse_event_id(source_event_id).ok_or_else(|| {
+                PersistenceError::SchemaViolation(format!(
+                    "malformed Realm fanout source Event id: {source_event_id:?}"
+                ))
+            })?;
+            let event_pk = sql_query(
+                "SELECT pk FROM canonical_events \
+                 WHERE id = $1 AND realm_id = $2 AND state = 'accepted'",
+            )
+            .bind::<Binary, _>(source_event_id.to_vec())
+            .bind::<Text, _>(&binding.realm_id)
+            .get_result::<PkRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+            .ok_or_else(|| {
+                PersistenceError::Conflict(
+                    "schema_violation: Realm fanout source Event is not durably accepted"
+                        .to_owned(),
+                )
+            })?
+            .pk;
+            bound_event_pks.insert(event_pk);
+        }
+    }
+    for event_pk in bound_event_pks {
         sql_query(
             "INSERT INTO event_federation_outbox (event_pk, outbox_id) VALUES ($1, $2) \
              ON CONFLICT DO NOTHING",
         )
-        .bind::<BigInt, _>(*event_pk)
+        .bind::<BigInt, _>(event_pk)
         .bind::<Text, _>(&outbox_id)
         .execute(&mut *conn)
         .await
@@ -751,6 +786,29 @@ impl EventStore for PgEventStore {
         .await
         .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
         .map_err(PersistenceError::database)
+    }
+
+    async fn federation_outbox_for_event(
+        &self,
+        event_id: &str,
+    ) -> PersistenceResult<Vec<FederationOutboxRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let event_id = ids::parse_event_id(event_id).ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!("malformed canonical Event id: {event_id:?}"))
+        })?;
+        let rows = sql_query(format!(
+            "SELECT {OUTBOX_COLUMNS} FROM federation_outbox outbox \
+             JOIN event_federation_outbox link ON link.outbox_id = outbox.id \
+             JOIN canonical_events event ON event.pk = link.event_pk \
+             WHERE event.id = $1 ORDER BY outbox.created_at ASC, outbox.id ASC"
+        ))
+        .bind::<Binary, _>(event_id.to_vec())
+        .load::<FederationOutboxRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        rows.into_iter()
+            .map(FederationOutboxRecord::try_from)
+            .collect()
     }
 
     async fn put_realm_bootstrap_batch_atomic(
