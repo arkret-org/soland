@@ -538,23 +538,15 @@ async fn validate_account_status_authority_evidence(
             AppError::internal(format!("account-status PCR binding unavailable: {error}"))
         })?
         .ok_or_else(|| AppError::capability_denied("account-status PCR binding is not accepted"))?;
-    let account = state
-        .identities()
-        .account(evidence.principal_id.as_str())
-        .await
-        .map_err(|error| {
-            AppError::internal(format!(
-                "account-status account binding unavailable: {error}"
-            ))
-        })?
-        .ok_or_else(|| {
-            AppError::capability_denied("account-status account binding is not accepted")
-        })?;
-    if resolution.pcr_realm_id != evidence.principal_control_realm_id
-        || account.id != evidence.account_id.as_str()
-    {
+    // `account_id` is the Account Authority's own deployment-local service
+    // account id (account-lifecycle.md §3.1); a Principal Server never mints or
+    // stores it, so it can only be bound to the Event payload and to the
+    // monotonic authority floor below. The local `AccountRecord.id` is an
+    // unrelated soland-local identifier and comparing the two rejects every
+    // lawful publication.
+    if resolution.pcr_realm_id != evidence.principal_control_realm_id {
         return Err(AppError::capability_denied(
-            "account-status account/principal/PCR binding mismatch",
+            "account-status principal/PCR binding mismatch",
         ));
     }
     let floor = soland_storage::AccountStatusAuthorityBindingFloor {
