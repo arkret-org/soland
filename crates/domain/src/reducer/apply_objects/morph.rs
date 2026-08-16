@@ -50,7 +50,11 @@ impl ProjectionState {
             .map(ToOwned::to_owned);
         let fields = object_map_to_fields(object.get("fields"));
         let schema_refs = string_array_field(object, "schema_refs");
-        let facets = string_array_field(object, "facets");
+        let facets = object
+            .get("facets")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default();
         let realm_id = projection_object_realm_id(object, operation);
         let created_by = object
             .get("created_by")

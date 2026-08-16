@@ -35,6 +35,17 @@ pub struct PersistenceHandle {
 }
 
 impl PersistenceHandle {
+    pub async fn advance_account_status_authority_binding(
+        &self,
+        candidate: soland_storage::AccountStatusAuthorityBindingFloor,
+    ) -> crate::ServiceResult<soland_storage::AccountStatusAuthorityBindingAdvance> {
+        Ok(self
+            .persistence
+            .account_status_authority_bindings()
+            .advance(candidate)
+            .await?)
+    }
+
     pub async fn contact_verified_mirror(
         &self,
         target_holder_id: &str,

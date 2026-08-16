@@ -419,7 +419,11 @@ async fn receive_private_invite_delivery(
                 &validated,
             )
             .await?;
-            (validated.event_id, validated.canonical_digest, duplicate)
+            (
+                validated.event_id.to_string(),
+                validated.canonical_digest,
+                duplicate,
+            )
         }
         InvitePrivateProjection::AlreadyAcceptedLocally { record } => (
             record.event_id.clone(),
@@ -718,8 +722,8 @@ async fn persist_private_invite_projection(
         .map(ToOwned::to_owned);
     let record = RealmInviteRecord {
         invite_id: invite_id.clone(),
-        realm_id: validated.realm_id.clone(),
-        inviter: validated.actor_id.clone(),
+        realm_id: validated.realm_id.to_string(),
+        inviter: validated.actor_id.to_string(),
         invitee: Some(subject.to_owned()),
         invite_delivery_target,
         introduction_evidence_digest,
@@ -727,7 +731,7 @@ async fn persist_private_invite_projection(
         join_rule_snapshot: payload.get("join_rule_snapshot").cloned(),
         invite_token: crate::routing::generate_invite_token(
             &invite_id,
-            &validated.realm_id,
+            validated.realm_id.as_str(),
             subject,
         ),
         status: "pending".to_owned(),
@@ -1001,7 +1005,7 @@ async fn persist_invite_quarantine_entry(
     }
 
     let payload = json!({
-        "schema": "ak.account.invite_quarantine.v1",
+        "schema": arkret_wire::AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
         "status": "pending_review",
         "entries": entries,
         "updated_at": received_at,
@@ -1998,11 +2002,17 @@ mod invite_locator_security_tests {
             }
         });
         let validated = crate::routing::events::event_log::ValidatedEventEnvelope {
-            event_id: "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E2".to_owned(),
-            actor_id: "did:web:alice.example".to_owned(),
-            device_id: "ak:device:01904100-0000-7000-8000-000000000404".to_owned(),
+            event_id: arkret_identifiers::EventId::new(
+                "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E2".to_owned(),
+            )
+            .unwrap(),
+            actor_id: DidCoreId::new("did:web:alice.example".to_owned()).unwrap(),
+            device_id: arkret_wire::DeviceId::new(
+                "ak:device:01904100-0000-7000-8000-000000000404".to_owned(),
+            )
+            .unwrap(),
             actor_seq: 7,
-            realm_id: realm_id.to_owned(),
+            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
             kind: arkret_wire::EventKind::InviteCreate.as_str().to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
             prev_refs: Vec::new(),

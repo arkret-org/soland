@@ -444,7 +444,7 @@ fn capability_grant_from_authz_grant(
     Ok(CapabilityGrant {
         id: GrantId::new(grant.grant_id.clone())
             .map_err(|error| AppError::internal(error.to_string()))?,
-        schema: "ak.schema.capability.v1".to_owned(),
+        schema: arkret_wire::SchemaId::CAPABILITY_V1.to_owned(),
         realm_id: Some(realm_id),
         issuer,
         issuer_principal_server_id: arkret_wire::DidCoreId::new(
@@ -746,7 +746,7 @@ fn invite_record_to_sdk(
         .expires_at
         .unwrap_or_else(|| invite.created_at + chrono::Duration::days(7));
     Ok(Invite {
-        schema: "ak.schema.invite.v1".to_owned(),
+        schema: arkret_wire::SchemaId::INVITE_V1.to_owned(),
         id: InviteId::new(invite.invite_id.clone())
             .map_err(|error| AppError::internal(error.to_string()))?,
         realm_id: RealmId::new(invite.realm_id.clone())

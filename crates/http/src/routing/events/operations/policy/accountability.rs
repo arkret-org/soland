@@ -20,7 +20,7 @@ pub(super) async fn validate_accountability_profile_policy(
 ) -> Result<(), &'static str> {
     if !matches!(
         kinds::canonical_kind(operation).as_str(),
-        "ak.profile.create" | "ak.profile.update"
+        arkret_wire::event_kind_str::PROFILE_CREATE | arkret_wire::event_kind_str::PROFILE_UPDATE
     ) {
         return Ok(());
     }
@@ -385,7 +385,7 @@ fn encrypted_envelope_of(operation: &Operation) -> Option<&Value> {
     // Treating both domains as the same envelope makes every valid encrypted
     // Account Data value fail the Realm disclosure ceiling.
     if envelope.get("schema").and_then(Value::as_str)
-        == Some("ak.schema.account_data_encrypted_value.v1")
+        == Some(arkret_wire::SchemaId::ACCOUNT_DATA_ENCRYPTED_VALUE_V1)
     {
         return None;
     }

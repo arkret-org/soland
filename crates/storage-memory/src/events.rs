@@ -377,10 +377,11 @@ impl EventStore for MemoryEventStore {
                 ))
             };
         }
-        if record.kind == "ak.realm.create"
+        if record.kind == arkret_wire::event_kind_str::REALM_CREATE
             && record.realm_id.is_some()
             && data.values().any(|existing| {
-                existing.kind == "ak.realm.create" && existing.realm_id == record.realm_id
+                existing.kind == arkret_wire::event_kind_str::REALM_CREATE
+                    && existing.realm_id == record.realm_id
             })
         {
             return Err(PersistenceError::Conflict(

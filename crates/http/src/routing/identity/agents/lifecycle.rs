@@ -4,7 +4,7 @@ use salvo::oapi::endpoint;
 use super::*;
 
 const AGENT_PROVISION_ALLOCATION_TTL_HOURS: i64 = 24;
-const AGENT_PROVISION_ALLOCATION_DOMAIN: &str = "ak.agent-provision-allocation-v1";
+const AGENT_PROVISION_ALLOCATION_DOMAIN: &str = "org.arkret.soland.agent_provision_allocation.v1";
 const AGENT_PROVISIONING_ABANDONMENT_TTL_SECONDS: i64 = 300;
 
 fn agent_pairing_is_abandoned(record: &soland_services::identity::AgentPairingState) -> bool {
@@ -809,7 +809,7 @@ pub(super) async fn provision_agent(
             append_audit_log(
                 state,
                 Some(&session.actor),
-                "ak.self.agent.command.provision",
+                arkret_wire::ServiceOperationId::SELF_AGENT_COMMAND_PROVISION,
                 json!({
                     "agent_id": agent_id,
                     "controller_id": controller_id,
@@ -1091,7 +1091,7 @@ pub(super) async fn abandon_provisioning(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ak.self.agent.command.abandon_provisioning",
+        arkret_wire::ServiceOperationId::SELF_AGENT_COMMAND_ABANDON_PROVISIONING,
         json!({
             "agent_id": &outcome.agent_id,
             "principal_control_realm_id": &outcome.principal_control_realm_id,
@@ -1235,7 +1235,7 @@ pub(super) async fn renew_agent_pairing(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ak.self.agent.command.renew_pairing",
+        arkret_wire::ServiceOperationId::SELF_AGENT_COMMAND_RENEW_PAIRING,
         json!({
             "agent_id": agent_id,
             "controller_id": session.actor,
@@ -1470,7 +1470,7 @@ pub(super) async fn lifecycle_transition(
     // `Request` through here would verify the same proof twice and reject the
     // lifecycle command as a replay.
     let record = require_agent_controller(state, session, &agent_id).await?;
-    let terminal_notification = (event_kind == "ak.self.agent.deactivate")
+    let terminal_notification = (event_kind == arkret_wire::event_kind_str::SELF_AGENT_DEACTIVATE)
         .then(|| account_notification_context(&record))
         .flatten();
     // Never synthesize an Agent-authored control Event from a session request.
@@ -1525,7 +1525,7 @@ pub(super) async fn lifecycle_transition(
     // Pause is a pure lifecycle-intent write and MUST NOT touch an open pairing
     // handle (key-management.md §3.6.1): pausing mid-replacement leaves the
     // handle live so the controller can still complete or let it expire.
-    if event_kind == "ak.self.agent.deactivate" {
+    if event_kind == arkret_wire::event_kind_str::SELF_AGENT_DEACTIVATE {
         updated_record.approval_request_id = None;
         updated_record.runtime_key_request = None;
         updated_record.approval_requested_at = None;
@@ -1577,7 +1577,7 @@ pub(super) async fn pause_agent(
             &session,
             agent_id.into_inner(),
             AgentLifecycleState::Paused,
-            "ak.self.agent.pause",
+            arkret_wire::event_kind_str::SELF_AGENT_PAUSE,
             body.reason.map(arkret_wire::NonEmptyString::into_string),
             Some(body.lifecycle_event),
         )
@@ -1607,7 +1607,7 @@ pub(super) async fn resume_agent(
             &session,
             agent_id.into_inner(),
             AgentLifecycleState::Active,
-            "ak.self.agent.resume",
+            arkret_wire::event_kind_str::SELF_AGENT_RESUME,
             None,
             Some(body.lifecycle_event),
         )
@@ -1640,7 +1640,7 @@ pub(super) async fn deactivate_agent(
         &record.principal_control_realm_id,
         &agent_id,
         &record.controller_authorization_ref,
-        "ak.self.agent.deactivate",
+        arkret_wire::event_kind_str::SELF_AGENT_DEACTIVATE,
         record.state.as_wire_str(),
         reason,
         &body.lifecycle_event.event,
@@ -1656,7 +1656,7 @@ pub(super) async fn deactivate_agent(
             &session,
             agent_id,
             AgentLifecycleState::Deactivated,
-            "ak.self.agent.deactivate",
+            arkret_wire::event_kind_str::SELF_AGENT_DEACTIVATE,
             body.reason.map(arkret_wire::NonEmptyString::into_string),
             Some(body.lifecycle_event),
         )
@@ -1713,7 +1713,7 @@ pub(super) async fn attach_agent_grant(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ak.self.agent.grant.command.attach",
+        arkret_wire::ServiceOperationId::SELF_AGENT_GRANT_COMMAND_ATTACH,
         json!({
             "agent_id": agent_id,
             "grant_id": grant_id,
@@ -1795,7 +1795,7 @@ pub(super) async fn detach_agent_grant(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ak.self.agent.grant.resource.delete",
+        arkret_wire::ServiceOperationId::SELF_AGENT_GRANT_RESOURCE_DELETE,
         json!({
             "agent_id": agent_id,
             "grant_id": typed_grant_id,

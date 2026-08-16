@@ -157,10 +157,10 @@ async fn generation_view_from_records(
     };
     let mut status = DeviceGenerationStatus::Active;
     let mut slots = BTreeMap::<u64, Vec<&CanonicalEventRecord>>::new();
-    for record in records
-        .iter()
-        .filter(|record| record.actor_id == principal_id && record.kind == "ak.device.reanchor")
-    {
+    for record in records.iter().filter(|record| {
+        record.actor_id == principal_id
+            && record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
+    }) {
         let Some(new_generation) = record
             .envelope
             .pointer("/payload/new_device_generation")
@@ -275,7 +275,8 @@ pub async fn authorized_generation_for_event(
         .and_then(|refs| (refs.len() == 1).then(|| refs[0].as_str()).flatten());
     if let Some(predecessor) = predecessor
         && let Some(reanchor) = records.iter().find(|candidate| {
-            candidate.event_id == predecessor && candidate.kind == "ak.device.reanchor"
+            candidate.event_id == predecessor
+                && candidate.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
         })
     {
         return Ok(reanchor
@@ -331,10 +332,10 @@ fn quarantined_generation_event_digests_from_records(
     records: &[CanonicalEventRecord],
 ) -> BTreeSet<String> {
     let mut slots = BTreeMap::<u64, Vec<&CanonicalEventRecord>>::new();
-    for record in records
-        .iter()
-        .filter(|record| record.actor_id == principal_id && record.kind == "ak.device.reanchor")
-    {
+    for record in records.iter().filter(|record| {
+        record.actor_id == principal_id
+            && record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
+    }) {
         let Some(new_generation) = record
             .envelope
             .pointer("/payload/new_device_generation")

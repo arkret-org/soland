@@ -512,29 +512,30 @@ const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
 ];
 
 const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
-    "ak.gate.account.command.pair_device",
-    "ak.gate.account.command.logout",
-    "ak.gate.account.command.revoke_session",
-    "ak.find.directory.read.describe",
-    "ak.find.directory.read.search_realms",
-    "ak.find.directory.read.resolve_realm",
-    "ak.find.directory.read.resolve_target",
-    "ak.find.directory.read.resolve_agent_selector",
-    "ak.find.directory.read.list_handles_for_subject",
-    "ak.self.blob.upload.create",
-    "ak.self.blob.resource.head",
-    "ak.self.blob.resource.get",
-    "ak.self.keys.backups.resource.replace",
-    "ak.self.keys.backups.read.list",
-    "ak.self.keys.backups.command.unlock",
-    "ak.self.keys.backups.resource.delete",
-    "ak.peer.invites.command.submit",
-    "ak.open.invite_locator.read.resolve",
+    arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_DEVICE,
+    arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_LOGOUT,
+    arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_REVOKE_SESSION,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_DESCRIBE,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_SEARCH_REALMS,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_REALM,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_TARGET,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_AGENT_SELECTOR,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_LIST_HANDLES_FOR_SUBJECT,
+    arkret_wire::ServiceOperationId::SELF_BLOB_UPLOAD_CREATE,
+    arkret_wire::ServiceOperationId::SELF_BLOB_RESOURCE_HEAD,
+    arkret_wire::ServiceOperationId::SELF_BLOB_RESOURCE_GET,
+    arkret_wire::ServiceOperationId::SELF_KEYS_BACKUPS_RESOURCE_REPLACE,
+    arkret_wire::ServiceOperationId::SELF_KEYS_BACKUPS_READ_LIST,
+    arkret_wire::ServiceOperationId::SELF_KEYS_BACKUPS_COMMAND_UNLOCK,
+    arkret_wire::ServiceOperationId::SELF_KEYS_BACKUPS_RESOURCE_DELETE,
+    arkret_wire::ServiceOperationId::PEER_INVITES_COMMAND_SUBMIT,
+    arkret_wire::ServiceOperationId::OPEN_INVITE_LOCATOR_READ_RESOLVE,
 ];
 
 /// Spec operations soland deliberately does NOT declare even though their
 /// surface group is otherwise supported.
-const UNDECLARED_OPERATION_IDS: &[&str] = &["ak.find.directory.command.takedown_appeal"];
+const UNDECLARED_OPERATION_IDS: &[&str] =
+    &[arkret_wire::ServiceOperationId::FIND_DIRECTORY_COMMAND_TAKEDOWN_APPEAL];
 
 fn canonical_supported_operations() -> Vec<String> {
     let missing_surfaces =
@@ -654,7 +655,7 @@ fn profile_limitations() -> Vec<Value> {
         json!({
             "area": "account_auth.device_pair",
             "status": "standard_gate_supported",
-            "spec_operation": "ak.gate.account.command.pair_device",
+            "spec_operation": arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_DEVICE,
             "canonical_path": "/_arkret/gate/account/device-pair",
             "reason": "ak.gate.account.command.pair_device is served on the spec path for existing-device-authorized sibling registration. The old soland-local device pairing scaffold and approval family are removed; v1 core does not define a self/devices pairing-requests approval surface (service-http-binding.md §85, key-management.md §384, device-lifecycle.md §499). ak.gate.account.exchange.complete_oidc is delegated to the bridges deployment and not served here."
         }),
@@ -692,7 +693,7 @@ fn profile_limitations() -> Vec<Value> {
 
 fn full_principal_server_gap_summary() -> Vec<Value> {
     vec![json!({
-        "profile": "ak.profile.principal_server.v1",
+        "profile": arkret_wire::ProfileId::PRINCIPAL_SERVER_V1,
         "status": "not_claimed",
         "first_batch_landed": [
             "artifact-derived supported operation advertisement",
@@ -808,15 +809,15 @@ pub fn describe(
     // API stable-catalog profiles in addition to whatever interop
     // staging extensions it implements (MIMI here).
     let claimed_profiles = vec![
-        ClaimedProfileEntry::self_claimed("ak.profile.core_event_store.v1"),
-        ClaimedProfileEntry::self_claimed("ak.profile.principal_server.v1"),
-        ClaimedProfileEntry::self_claimed("ak.profile.principal_server_events_api.v1"),
+        ClaimedProfileEntry::self_claimed(arkret_wire::ProfileId::CORE_EVENT_STORE_V1),
+        ClaimedProfileEntry::self_claimed(arkret_wire::ProfileId::PRINCIPAL_SERVER_V1),
+        ClaimedProfileEntry::self_claimed(arkret_wire::ProfileId::PRINCIPAL_SERVER_EVENTS_API_V1),
         ClaimedProfileEntry {
             notes: Some(
                 "MIMI provider facade first round (not a full v1 core conformance claim)"
                     .to_owned(),
             ),
-            ..ClaimedProfileEntry::self_claimed("ak.profile.mimi_interop.v1")
+            ..ClaimedProfileEntry::self_claimed(arkret_wire::ProfileId::MIMI_INTEROP_V1)
         },
     ];
     let verified_profiles = Vec::new();
@@ -825,6 +826,7 @@ pub fn describe(
         "federation.outbound_push.signed_intent".to_owned(),
         "admin.bottom.manual_repair".to_owned(),
         "index.query.local_projection".to_owned(),
+        "org.arkret.soland.profile.limited_server.v1".to_owned(),
     ];
     let compat_surfaces = Vec::new();
     let service_id = arkret_wire::DidCoreId::from(
@@ -843,9 +845,9 @@ pub fn describe(
         ],
         max_visibility: Some(arkret_models_discovery::service_description::PlaintextMaxVisibility::PrivatePlaintext),
         event_kinds: vec![
-            "ak.message.create".to_owned(),
-            "ak.realm.policy_bundle".to_owned(),
-            "ak.realm.plaintext_visible_services".to_owned(),
+            arkret_wire::event_kind_str::MESSAGE_CREATE.to_owned(),
+            arkret_wire::event_kind_str::REALM_POLICY_BUNDLE.to_owned(),
+            arkret_wire::event_kind_str::REALM_PLAINTEXT_VISIBLE_SERVICES.to_owned(),
         ],
         payload_paths: vec![
             "payload.content".to_owned(),
@@ -882,12 +884,12 @@ pub fn describe(
         protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
         supported_profiles: {
             let mut profiles = vec![
-                "ak.profile.core_event_store.v1".to_owned(),
-                "ak.profile.principal_server.v1".to_owned(),
-                "ak.profile.principal_server_events_api.v1".to_owned(),
-                "ak.profile.mimi_interop.v1".to_owned(),
-                "ak.profile.file_transfer.v1".to_owned(),
-                "ak.profile.webrtc_media.v1".to_owned(),
+                arkret_wire::ProfileId::CORE_EVENT_STORE_V1.to_owned(),
+                arkret_wire::ProfileId::PRINCIPAL_SERVER_V1.to_owned(),
+                arkret_wire::ProfileId::PRINCIPAL_SERVER_EVENTS_API_V1.to_owned(),
+                arkret_wire::ProfileId::MIMI_INTEROP_V1.to_owned(),
+                arkret_wire::ProfileId::FILE_TRANSFER_V1.to_owned(),
+                arkret_wire::ProfileId::WEBRTC_MEDIA_V1.to_owned(),
                 ProfileId::DIRECT_CONVERSATION_REALM_V1.to_owned(),
             ];
             // PROF-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) —
@@ -895,7 +897,7 @@ pub fn describe(
             // server exposes the `ak.self.call.media.exchange.issue_token`
             // handler. soland mounts the handler unconditionally, and also
             // claims the required `ak.profile.webrtc_media.v1` dependency above.
-            profiles.push("ak.profile.media_service_binding.v1".to_owned());
+            profiles.push(arkret_wire::ProfileId::MEDIA_SERVICE_BINDING_V1.to_owned());
             profiles
         },
         profile_bindings: Default::default(),
@@ -949,7 +951,18 @@ pub fn describe(
             "org.arkret.soland.feature.sync.bound_cursor".to_owned(),
             "org.arkret.soland.feature.sync.incremental_since".to_owned(),
             "org.arkret.soland.feature.sync.typing".to_owned(),
-            "ak.feature.agent_runtime_approval_notifications.v1".to_owned(),
+            arkret_wire::requirements_for(
+                arkret_wire::ProfileId::PERSONAL_AGENT_PROVISIONING_V1,
+            )
+            .and_then(|requirements| {
+                requirements
+                    .required_features
+                    .iter()
+                    .copied()
+                    .find(|feature| feature.starts_with("ak.feature."))
+            })
+            .expect("personal-agent provisioning profile must declare its protocol feature")
+            .to_owned(),
             "org.arkret.soland.feature.personal_productivity.scheduled_send_wake_only".to_owned(),
             "org.arkret.soland.feature.personal_productivity.reminder_snooze_private_wake"
                 .to_owned(),
@@ -1023,7 +1036,7 @@ pub fn describe(
                 ))
                 .with_extra(
                     "operations",
-                    serde_json::json!(["ak.self.blob.upload.create"]),
+                    serde_json::json!([arkret_wire::ServiceOperationId::SELF_BLOB_UPLOAD_CREATE]),
                 )
                 .with_extra("extension_profile_required", serde_json::Value::Null)
                 .with_extra(
@@ -1039,7 +1052,7 @@ pub fn describe(
             .iter()
             .map(|profile| (*profile).to_owned())
             .collect(),
-        supported_schema_profiles: vec!["ak.schema.core.v1".to_owned()],
+        supported_schema_profiles: Vec::new(),
         auth_metadata,
         privacy_derivation: Some(crate::routing::push_target_privacy_derivation_claim(now())),
         receive_policy_constraints: None,
@@ -1076,13 +1089,13 @@ pub fn describe(
                 "error_mapping_source": "arkret-spec/spec/v1/artifacts/registry/operations-error-mapping.json",
                 "universal_error_codes_inherited": true,
                 "supported_operations": [
-                    "ak.self.authz.read.check",
-                    "ak.self.authz.grants.read.effective",
-                    "ak.self.authz.invites.read.list",
-                    "ak.self.policy.read.check"
+                    arkret_wire::ServiceOperationId::SELF_AUTHZ_READ_CHECK,
+                    arkret_wire::ServiceOperationId::SELF_AUTHZ_GRANTS_READ_EFFECTIVE,
+                    arkret_wire::ServiceOperationId::SELF_AUTHZ_INVITES_READ_LIST,
+                    arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK
                 ],
                 "authz_check": {
-                    "operation_id": "ak.self.authz.read.check",
+                    "operation_id": arkret_wire::ServiceOperationId::SELF_AUTHZ_READ_CHECK,
                     "method": "POST",
                     "path": "/_arkret/self/authz/check",
                     "request_shape": "AuthzCheckRequestBody",
@@ -1103,12 +1116,12 @@ pub fn describe(
                         "dynamic_claim_or_approval": false,
                         "usable_as_policy_obligation_proof": false,
                         "cross_service_signed_authorization_fact": false,
-                        "dynamic_or_auditable_decision_operation": "ak.self.policy.read.check",
+                        "dynamic_or_auditable_decision_operation": arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK,
                         "dynamic_or_auditable_decision_path": "/_arkret/self/policy/check"
                     }
                 },
                 "effective_grants": {
-                    "operation_id": "ak.self.authz.grants.read.effective",
+                    "operation_id": arkret_wire::ServiceOperationId::SELF_AUTHZ_GRANTS_READ_EFFECTIVE,
                     "method": "GET",
                     "path": "/_arkret/self/authz/effective-grants",
                     "query": ["realm_id", "subject", "subject_principal_server_id", "at"],
@@ -1117,7 +1130,7 @@ pub fn describe(
                     "operation_specific_error_codes": []
                 },
                 "invites": {
-                    "operation_id": "ak.self.authz.invites.read.list",
+                    "operation_id": arkret_wire::ServiceOperationId::SELF_AUTHZ_INVITES_READ_LIST,
                     "method": "GET",
                     "path": "/_arkret/self/authz/invites",
                     "query": ["realm_id", "subject", "cursor"],
@@ -1126,7 +1139,7 @@ pub fn describe(
                     "operation_specific_error_codes": []
                 },
                 "policy_check": {
-                    "operation_id": "ak.self.policy.read.check",
+                    "operation_id": arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK,
                     "method": "POST",
                     "path": "/_arkret/self/policy/check",
                     "operation_specific_error_codes": ["policy_unavailable", "policy_stale"],
@@ -1146,8 +1159,8 @@ pub fn describe(
                     "returns_snippets": false
                 },
                 "client_index": {
-                    "profile": "ak.profile.search.client_index.v1",
-                    "manifest_account_data_key": "ak.search.index_manifest.v1",
+                    "profile": arkret_wire::ProfileId::SEARCH_CLIENT_INDEX_V1,
+                    "manifest_account_data_key": arkret_wire::AccountDataKey::SEARCH_INDEX_MANIFEST_V1,
                     "manifest_storage": "encrypted_private_account_data",
                     "shard_blob_purpose": "search_index_shard",
                     "shard_storage": "encrypted_blob_bytes",
@@ -1163,8 +1176,8 @@ pub fn describe(
             },
             "personal_productivity": {
                 "reminders": {
-                    "profile": "ak.profile.personal_productivity.v1",
-                    "account_data_key": "ak.reminders.v1",
+                    "profile": arkret_wire::ProfileId::PERSONAL_PRODUCTIVITY_V1,
+                    "account_data_key": arkret_wire::AccountDataKey::REMINDERS_V1,
                     "storage": "encrypted_private_account_data",
                     "plaintext_payload_accepted": false,
                     "server_action": "local_or_push_wake_only",
@@ -1173,8 +1186,8 @@ pub fn describe(
                     "note_visible_in_shared_event": false
                 },
                 "scheduled_send": {
-                    "profile": "ak.profile.personal_productivity.v1",
-                    "account_data_key": "ak.scheduled_send.v1",
+                    "profile": arkret_wire::ProfileId::PERSONAL_PRODUCTIVITY_V1,
+                    "account_data_key": arkret_wire::AccountDataKey::SCHEDULED_SEND_V1,
                     "storage": "encrypted_private_account_data",
                     "plaintext_payload_accepted": false,
                     "server_dispatches_message_create": false,
@@ -1184,8 +1197,8 @@ pub fn describe(
                     "shared_history_materialization": "client_submitted_ak.message.create_only"
                 },
                 "snooze": {
-                    "profile": "ak.profile.personal_productivity.v1",
-                    "account_data_key": "ak.snooze.v1",
+                    "profile": arkret_wire::ProfileId::PERSONAL_PRODUCTIVITY_V1,
+                    "account_data_key": arkret_wire::AccountDataKey::SNOOZE_V1,
                     "storage": "encrypted_private_account_data",
                     "plaintext_payload_accepted": false,
                     "target_key": "holder_derived_unlinkable",
@@ -1215,16 +1228,16 @@ pub fn describe(
                 "conformance": "limited_reference",
                 "unsupported_profiles": [
                     {
-                        "profile": "ak.profile.soland_limited_server.v1",
+                        "profile": "org.arkret.soland.profile.limited_server.v1",
                         "status": "unsupported",
                         "reason": "limited profile is a limitation descriptor, not a conformance claim"
                     }
                 ],
                 "full_profiles_not_claimed": [
-                    "ak.profile.principal_server.v1",
-                    "ak.profile.directory_service.v1",
-                    "ak.profile.identity_registry.v1",
-                    "ak.profile.blob_node.v1"
+                    arkret_wire::ProfileId::PRINCIPAL_SERVER_V1,
+                    arkret_wire::ProfileId::DIRECTORY_SERVICE_V1,
+                    arkret_wire::ProfileId::IDENTITY_REGISTRY_V1,
+                    arkret_wire::ProfileId::BLOB_NODE_V1
                 ],
                 "principal_server_full_profile_gaps": full_principal_server_gap_summary(),
                 "supported_operation_catalog": {

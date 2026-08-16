@@ -1129,7 +1129,7 @@ async fn invalidate_quarantined_invites_for_revoke(
     let mut object = existing.payload.as_object().cloned().unwrap_or_default();
     object.insert(
         "schema".to_owned(),
-        Value::String("ak.account.invite_quarantine.v1".to_owned()),
+        Value::String(arkret_wire::AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned()),
     );
     object.insert("entries".to_owned(), Value::Array(retained));
     object.insert("updated_at".to_owned(), json!(revoked_at));

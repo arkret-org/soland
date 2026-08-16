@@ -836,38 +836,9 @@ pub async fn hydrate_projections_from_persistence(
                     scope_circle_id: record.scope_circle_id,
                     morph_kind: record.morph_kind,
                     title: record.title,
-                    fields: record
-                        .fields
-                        .as_object()
-                        .map(|fields| {
-                            fields
-                                .iter()
-                                .map(|(key, value)| (key.clone(), value.clone()))
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                    schema_refs: record
-                        .schema_refs
-                        .as_array()
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(serde_json::Value::as_str)
-                                .map(ToOwned::to_owned)
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                    facets: record
-                        .facets
-                        .as_array()
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(serde_json::Value::as_str)
-                                .map(ToOwned::to_owned)
-                                .collect()
-                        })
-                        .unwrap_or_default(),
+                    fields: serde_json::from_value(record.fields).unwrap_or_default(),
+                    schema_refs: serde_json::from_value(record.schema_refs).unwrap_or_default(),
+                    facets: serde_json::from_value(record.facets).unwrap_or_default(),
                     versions: serde_json::from_value(record.versions).unwrap_or_default(),
                     state,
                     state_changed_at: record.state_changed_at,

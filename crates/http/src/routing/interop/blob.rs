@@ -94,7 +94,7 @@ pub(super) fn blob_upload_outcome(
 }
 
 #[handler]
-#[tracing::instrument(skip_all, fields(op = "blob_upload"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.blob.upload"))]
 async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res).await else {
@@ -359,7 +359,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
 }
 
 #[handler]
-#[tracing::instrument(skip_all, fields(op = "blob_get"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.blob.get"))]
 async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let Some(blob_ref) = query_param(req, "blob_ref") else {
@@ -1151,13 +1151,13 @@ pub(super) fn encrypted_blob_encryption_metadata_for_purpose(
 ) -> Option<Value> {
     match purpose {
         Some(BLOB_PURPOSE_FILE_TRANSFER) => Some(json!({
-            "scheme": "ak.file_transfer.encrypted_blob.v1",
+            "scheme": BLOB_SCHEME_WHOLE_FILE_AEAD_V1,
             "purpose": BLOB_PURPOSE_FILE_TRANSFER,
         })),
         Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD) => Some(json!({
-            "scheme": "ak.search.encrypted_index_shard.v1",
+            "scheme": BLOB_SCHEME_WHOLE_FILE_AEAD_V1,
             "purpose": BLOB_PURPOSE_SEARCH_INDEX_SHARD,
-            "profile_id": "ak.profile.search.client_index.v1",
+            "profile_id": arkret_wire::ProfileId::SEARCH_CLIENT_INDEX_V1,
             "data_class": "encrypted_index",
         })),
         _ => None,
@@ -1794,7 +1794,7 @@ mod tests {
         assert_eq!(
             metadata,
             json!({
-                "scheme": "ak.search.encrypted_index_shard.v1",
+                "scheme": BLOB_SCHEME_WHOLE_FILE_AEAD_V1,
                 "purpose": "search_index_shard",
                 "profile_id": "ak.profile.search.client_index.v1",
                 "data_class": "encrypted_index",

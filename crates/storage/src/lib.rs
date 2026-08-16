@@ -28,6 +28,7 @@ pub use agent_principal::{
 };
 pub use records::*;
 
+mod account_status;
 mod accounts;
 mod agents;
 mod applets;
@@ -71,6 +72,7 @@ mod unit_of_work;
 mod websocket_auth;
 mod webvh;
 mod webvh_freshness;
+pub use account_status::*;
 pub use accounts::*;
 pub use agents::*;
 pub use applets::*;
@@ -193,6 +195,14 @@ pub enum ConflictCode {
     ForkQuarantine,
     /// A Realm with this id already exists.
     RealmAlreadyExists,
+    /// A recovery-policy write violates a non-specific policy invariant.
+    RecoveryPolicyConflict,
+    /// A recovery-policy version does not advance the active version.
+    RecoveryPolicyVersionNotMonotonic,
+    /// A recovery policy does not supersede the active policy exactly.
+    RecoveryPolicySupersedesInvalid,
+    /// A recovery session with the requested id already exists.
+    RecoverySessionAlreadyExists,
     /// The organization registration challenge does not match.
     OrganizationRegistrationChallengeInvalid,
     /// The organization registration was revoked.
@@ -203,11 +213,13 @@ pub enum ConflictCode {
     SchemaViolation,
     /// A key-backup series sequence went backwards.
     SeriesSeqNotMonotonic,
+    /// A time-bounded workflow was acted on after its deadline.
+    TtlExpired,
 }
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 22] = [
         Self::AppletRevoked,
         Self::CasConflict,
         Self::DevicePairingNotFound,
@@ -220,11 +232,16 @@ impl ConflictCode {
         Self::FailedPrecondition,
         Self::ForkQuarantine,
         Self::RealmAlreadyExists,
+        Self::RecoveryPolicyConflict,
+        Self::RecoveryPolicyVersionNotMonotonic,
+        Self::RecoveryPolicySupersedesInvalid,
+        Self::RecoverySessionAlreadyExists,
         Self::OrganizationRegistrationChallengeInvalid,
         Self::OrganizationRegistrationRevoked,
         Self::OrganizationRegistrationStale,
         Self::SchemaViolation,
         Self::SeriesSeqNotMonotonic,
+        Self::TtlExpired,
     ];
 
     #[must_use]
@@ -242,6 +259,10 @@ impl ConflictCode {
             Self::FailedPrecondition => "failed_precondition",
             Self::ForkQuarantine => "fork_quarantine",
             Self::RealmAlreadyExists => "realm_already_exists",
+            Self::RecoveryPolicyConflict => "recovery_policy_conflict",
+            Self::RecoveryPolicyVersionNotMonotonic => "recovery_policy_version_not_monotonic",
+            Self::RecoveryPolicySupersedesInvalid => "recovery_policy_supersedes_invalid",
+            Self::RecoverySessionAlreadyExists => "recovery_session_already_exists",
             Self::OrganizationRegistrationChallengeInvalid => {
                 "organization_registration_challenge_invalid"
             }
@@ -249,6 +270,7 @@ impl ConflictCode {
             Self::OrganizationRegistrationStale => "organization_registration_stale",
             Self::SchemaViolation => "schema_violation",
             Self::SeriesSeqNotMonotonic => "series_seq_not_monotonic",
+            Self::TtlExpired => "ttl_expired",
         }
     }
 
@@ -420,6 +442,7 @@ pub trait SyncStoreRegistry: Send + Sync {
     fn control_proposal_authority_acks(&self) -> &dyn ControlProposalAuthorityAckStore;
     /// `ak.profile.binding.websocket.v1` challenge + replay ledger.
     fn websocket_auth(&self) -> &dyn WebsocketAuthStore;
+    fn account_status_authority_bindings(&self) -> &dyn AccountStatusAuthorityBindingStore;
 }
 
 /// Owner-published identity resolution and remote-route safety persistence.

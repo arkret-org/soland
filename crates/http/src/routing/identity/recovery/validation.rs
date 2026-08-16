@@ -26,7 +26,7 @@ pub(super) fn validate_recovery_policy(
         ))
         .with_wire_code("schema_violation")
     })?;
-    require_const_string(payload, "schema", "ak.schema.recovery_policy.v1")?;
+    require_const_string(payload, "schema", arkret_wire::SchemaId::RECOVERY_POLICY_V1)?;
     let policy_id = require_string(payload, "policy_id")?;
     require_policy_id_pattern(&policy_id)?;
     let principal_id = typed.principal_id.to_string();

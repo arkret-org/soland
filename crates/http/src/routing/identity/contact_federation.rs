@@ -263,7 +263,11 @@ async fn peer_contacts_submit(
                 })?,
                 introduction_evidence,
             )?;
-            ("ak.contact.requested", signed_event, contact_address)
+            (
+                arkret_wire::event_kind_str::CONTACT_REQUESTED,
+                signed_event,
+                contact_address,
+            )
         }
         PeerContactSubmitRequestBody::Response {
             signed_event,
@@ -310,7 +314,11 @@ async fn peer_contacts_submit(
                     })?,
                 "response_receipt",
             )?;
-            ("ak.contact.accepted", signed_event, contact_address)
+            (
+                arkret_wire::event_kind_str::CONTACT_ACCEPTED,
+                signed_event,
+                contact_address,
+            )
         }
         PeerContactSubmitRequestBody::Reject {
             signed_event,
@@ -355,7 +363,11 @@ async fn peer_contacts_submit(
                 })?,
                 "reject_receipt",
             )?;
-            ("ak.contact.rejected", signed_event, contact_address)
+            (
+                arkret_wire::event_kind_str::CONTACT_REJECTED,
+                signed_event,
+                contact_address,
+            )
         }
         PeerContactSubmitRequestBody::ScopeUpdate {
             signed_event,
@@ -372,7 +384,11 @@ async fn peer_contacts_submit(
                 current_proof,
                 false,
             )?;
-            ("ak.contact.scope.update", signed_event, contact_address)
+            (
+                arkret_wire::event_kind_str::CONTACT_SCOPE_UPDATE,
+                signed_event,
+                contact_address,
+            )
         }
         PeerContactSubmitRequestBody::Tombstone {
             signed_event,
@@ -389,7 +405,11 @@ async fn peer_contacts_submit(
                 current_proof,
                 true,
             )?;
-            ("ak.contact.tombstone", signed_event, contact_address)
+            (
+                arkret_wire::event_kind_str::CONTACT_TOMBSTONE,
+                signed_event,
+                contact_address,
+            )
         }
         PeerContactSubmitRequestBody::ProofRefresh { .. }
         | PeerContactSubmitRequestBody::GlareFinalize { .. } => {
@@ -495,9 +515,6 @@ async fn peer_contacts_submit(
         let request_digest = signed_event
             .event_digest()
             .map_err(|error| AppError::internal(format!("Contact mirror Event digest: {error}")))?;
-        let source_receipt = serde_json::to_value(request_receipt).map_err(|error| {
-            AppError::internal(format!("Contact mirror receipt encode: {error}"))
-        })?;
         state
             .persistence()
             .put_contact_verified_mirror(&soland_storage::ContactVerifiedMirrorRecord {
@@ -505,7 +522,7 @@ async fn peer_contacts_submit(
                 request_event_id: signed_event.event_id.to_string(),
                 request_digest,
                 canonical_event_bytes,
-                source_receipt,
+                source_receipt: request_receipt.clone(),
                 issuer_service_id: source_service_id.clone(),
                 verified_at: now(),
             })
@@ -1316,7 +1333,7 @@ async fn finalize_glare_contact_round(
         .map_err(|_| AppError::internal("glare receipt digest cardinality invalid"))?;
     let complete_through = local_request.core.slot_version;
     let checkpoint = super::account::canonical_contact_digest(&json!({
-        "domain": "ak.contact.glare-unconsumed-slot.v1",
+        "domain": arkret_wire::DomainSeparationId::CONTACT_GLARE_UNCONSUMED_SLOT_V1,
         "holder": local_holder,
         "peer": remote_holder,
         "contact_round_id": contact_round_id,
@@ -1813,7 +1830,7 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
     let complete_through = local_request.core.slot_version;
     let observed_at = record.updated_at;
     let checkpoint = super::account::canonical_contact_digest(&json!({
-        "domain": "ak.contact.glare-unconsumed-slot.v1",
+        "domain": arkret_wire::DomainSeparationId::CONTACT_GLARE_UNCONSUMED_SLOT_V1,
         "holder": holder,
         "peer": peer,
         "contact_round_id": contact_round_id,
@@ -2667,7 +2684,7 @@ async fn project_delivered_contact_fact(
         .unwrap_or_else(|| "direct_message".to_owned());
     let contacts = state.contacts();
     match fact_kind {
-        "ak.contact.requested" => {
+        arkret_wire::event_kind_str::CONTACT_REQUESTED => {
             let request_receipt = request_receipt.ok_or_else(|| {
                 super::super::events::peer::schema_violation(
                     "Contact request carrier is missing its acceptance receipt",
@@ -2910,7 +2927,7 @@ async fn project_delivered_contact_fact(
             }
             Ok("accepted")
         }
-        "ak.contact.accepted" => {
+        arkret_wire::event_kind_str::CONTACT_ACCEPTED => {
             let accepted = serde_json::from_value::<ContactAcceptedPayload>(payload.clone())
                 .map_err(|_| {
                     super::super::events::peer::schema_violation(
@@ -3038,7 +3055,7 @@ async fn project_delivered_contact_fact(
             save_contact_cas(contacts, expected_updated_at, contact).await?;
             Ok("accepted")
         }
-        "ak.contact.rejected" => {
+        arkret_wire::event_kind_str::CONTACT_REJECTED => {
             let rejected = serde_json::from_value::<ContactRejectedPayload>(payload.clone())
                 .map_err(|_| {
                     super::super::events::peer::schema_violation(
@@ -3112,7 +3129,7 @@ async fn project_delivered_contact_fact(
             save_contact_cas(contacts, expected_updated_at, contact).await?;
             Ok("accepted")
         }
-        "ak.contact.scope.update" => {
+        arkret_wire::event_kind_str::CONTACT_SCOPE_UPDATE => {
             let update = serde_json::from_value::<ContactScopeUpdatePayload>(payload.clone())
                 .map_err(|_| {
                     super::super::events::peer::schema_violation(
@@ -3195,7 +3212,7 @@ async fn project_delivered_contact_fact(
             save_contact_cas(contacts, expected_updated_at, contact).await?;
             Ok("accepted")
         }
-        "ak.contact.tombstone" => {
+        arkret_wire::event_kind_str::CONTACT_TOMBSTONE => {
             let tombstone = serde_json::from_value::<ContactTombstonedPayload>(payload.clone())
                 .map_err(|_| {
                     super::super::events::peer::schema_violation(

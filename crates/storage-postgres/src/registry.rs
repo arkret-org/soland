@@ -16,6 +16,7 @@ pub struct PgPersistenceStore {
     accounts: PgAccountStore,
     account_localparts: PgAccountLocalpartStore,
     account_lifecycle: PgAccountLifecycleStore,
+    account_status_authority_bindings: PgAccountStatusAuthorityBindingStore,
     sessions: PgSessionStore,
     account_data: PgAccountDataStore,
     contacts: PgContactStore,
@@ -88,6 +89,9 @@ impl PgPersistenceStore {
             accounts: PgAccountStore { pool: pool.clone() },
             account_localparts: PgAccountLocalpartStore { pool: pool.clone() },
             account_lifecycle: PgAccountLifecycleStore { pool: pool.clone() },
+            account_status_authority_bindings: PgAccountStatusAuthorityBindingStore {
+                pool: pool.clone(),
+            },
             sessions: PgSessionStore { pool: pool.clone() },
             account_data: PgAccountDataStore { pool: pool.clone() },
             contacts: PgContactStore { pool: pool.clone() },
@@ -491,6 +495,10 @@ impl SyncStoreRegistry for PgPersistenceStore {
 
     fn control_proposal_authority_acks(&self) -> &dyn ControlProposalAuthorityAckStore {
         &self.control_proposal_authority_acks
+    }
+
+    fn account_status_authority_bindings(&self) -> &dyn AccountStatusAuthorityBindingStore {
+        &self.account_status_authority_bindings
     }
 }
 

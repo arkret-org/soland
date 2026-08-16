@@ -460,6 +460,12 @@ pub(crate) fn is_grant_dpop_presentation(req: &Request) -> bool {
 fn session_binding_from_introspection(
     grant: &SessionGrantIntrospectGrant,
 ) -> Result<(String, Option<AgentSessionRecord>), AuthError> {
+    let authority = grant.principal_authority_key();
+    if authority.principal_id != grant.subject || authority.principal_server_id != grant.audience {
+        return Err(unauthenticated(
+            "session grant authority context does not match its subject/audience",
+        ));
+    }
     if let SessionGrantHolderBinding::AgentRuntime {
         agent_id,
         device_id,
@@ -487,19 +493,21 @@ fn session_binding_from_introspection(
         ));
     }
 
+    let binding = grant.human_device_authorization_selector().map_err(|_| {
+        unauthenticated("human session grant omitted its device authority selector")
+    })?;
     let SessionGrantHolderBinding::HumanDevice { device_binding } = &grant.holder_binding else {
         return Err(unauthenticated("unsupported session grant holder binding"));
     };
-    let device_id = DeviceId::new(device_binding.clone())
+    let holder_device_id = DeviceId::new(device_binding.clone())
         .map_err(|_| unauthenticated("session grant holder binding has an invalid device id"))?;
-    if let Some(bound) = grant.device_id.as_ref()
-        && bound != &device_id
+    if binding.device_id != holder_device_id || grant.device_id.as_ref() != Some(&binding.device_id)
     {
         return Err(unauthenticated(
-            "session grant device metadata does not match its holder binding",
+            "session grant device selector does not match its holder binding",
         ));
     }
-    Ok((device_id.into_string(), None))
+    Ok((binding.device_id.to_string(), None))
 }
 
 pub(crate) fn session_record_from_introspected_grant_for_logout(

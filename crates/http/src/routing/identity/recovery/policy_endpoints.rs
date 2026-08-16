@@ -376,7 +376,7 @@ pub(super) async fn recovery_policy_put(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ak.root.identity.recovery_policy.command.publish",
+        arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_COMMAND_PUBLISH,
         json!({
             "policy_id": record.policy_id.clone(),
             "principal_id": record.principal_id.clone(),

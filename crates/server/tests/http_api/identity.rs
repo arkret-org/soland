@@ -388,6 +388,24 @@ async fn identity_surface_works() {
         .unwrap();
     assert_eq!(resolved["did_document"]["id"], "did:web:alice.example");
 
+    let mut missing_requested_evidence =
+        TestClient::post("http://server/_arkret/root/identity/resolve")
+            .json(&serde_json::json!({
+                "did": "did:web:alice.example",
+                "requested_evidence_kinds": ["did_webvh"]
+            }))
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_ne!(
+        missing_requested_evidence.status_code.unwrap(),
+        StatusCode::OK
+    );
+    let missing_requested_evidence: Value = missing_requested_evidence.take_json().await.unwrap();
+    assert_eq!(
+        missing_requested_evidence["error"]["code"],
+        "current_did_authority_unavailable"
+    );
+
     let document: Value =
         TestClient::get("http://server/_arkret/root/identity/document?did=did:web:alice.example")
             .send(&app_from_state(state.clone()))
@@ -458,12 +476,9 @@ async fn identity_describe_exposes_external_webvh_provider() {
         describe["did_webvh"]["providers"][0]["freshness_probe"],
         "/_arkret/describe"
     );
-    assert!(
-        describe["profiles"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|profile| profile.as_str() == Some("ak.identity.webvh.provider.v1"))
+    assert_eq!(
+        describe["did_webvh"]["providers"][0]["adapter_version"],
+        arkret_models_identity::DID_WEBVH_V1_METHOD
     );
 }
 
@@ -494,12 +509,9 @@ async fn identity_describe_keeps_external_webvh_provider_when_probe_fails() {
         describe["did_webvh"]["providers"][0]["base_url"],
         "http://webvh.unreachable.local"
     );
-    assert!(
-        describe["profiles"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|profile| profile.as_str() == Some("ak.identity.webvh.provider.v1"))
+    assert_eq!(
+        describe["did_webvh"]["providers"][0]["adapter_version"],
+        arkret_models_identity::DID_WEBVH_V1_METHOD
     );
     assert_eq!(
         describe["did_webvh"]["providers"][0]["health"]["active"],
@@ -815,7 +827,10 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
     assert!(log_body.contains("\"DataIntegrityProof\""));
 
     let resolved: Value = TestClient::post("http://server/_arkret/root/identity/resolve")
-        .json(&serde_json::json!({"did": registered["did"]}))
+        .json(&serde_json::json!({
+            "did": registered["did"],
+            "requested_evidence_kinds": ["did_webvh"]
+        }))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -826,6 +841,22 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         "resolve response: {resolved}"
     );
     assert_eq!(resolved["key_log_head"], registered["key_log_head"]);
+    assert_eq!(resolved["method_evidence"]["kind"], "did_webvh");
+    assert_eq!(
+        resolved["method_evidence"]["version_id"],
+        registered["version_id"]
+    );
+    assert_eq!(
+        resolved["method_evidence"]["log_head_digest"],
+        registered["key_log_head"]
+    );
+    assert_eq!(
+        resolved["method_evidence"]["control_key_digest"],
+        format!(
+            "sha256:{}",
+            arkret_canonical::sha256_hex(update_signing.verifying_key().as_bytes())
+        )
+    );
 }
 
 /// The standard operation endpoint admits only a complete, client-signed

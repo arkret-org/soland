@@ -79,8 +79,9 @@ pub(super) async fn mimi_bound_realm_id(
 
 pub(super) fn enforce_mimi_submit_binding(
     room_binding: &MimiRoomBindingProjection,
-    body: &Value,
+    body: &MimiSubmitMessageRequestBody,
     message: &Value,
+    associated_data: Option<&Value>,
 ) -> Result<(), AppError> {
     validate_mimi_room_binding_payload(&room_binding.binding)?;
     let binding_payload = mimi_room_binding_security_payload(&room_binding.binding);
@@ -119,7 +120,7 @@ pub(super) fn enforce_mimi_submit_binding(
     else {
         return Ok(());
     };
-    let submit_group_id = mimi_submit_mls_group_id(body, message).ok_or_else(|| {
+    let submit_group_id = mimi_submit_mls_group_id(body).ok_or_else(|| {
         AppError::param_invalid("MIMI submit_message is missing mls_group_id")
             .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
     })?;
@@ -129,15 +130,17 @@ pub(super) fn enforce_mimi_submit_binding(
         )
         .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH));
     }
-    let epoch = mimi_submit_epoch(body, message).ok_or_else(|| {
+    let epoch = mimi_submit_epoch(body).ok_or_else(|| {
         AppError::param_invalid("MIMI submit_message is missing MLS epoch")
             .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
     })?;
-    let governance_binding = mimi_governance_binding_candidate(binding_payload, body, message)
-        .ok_or_else(|| {
-            AppError::param_invalid("MIMI submit_message lacks governance_binding")
-                .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
-        })?;
+    let governance_binding =
+        mimi_governance_binding_candidate(binding_payload, message, associated_data).ok_or_else(
+            || {
+                AppError::param_invalid("MIMI submit_message lacks governance_binding")
+                    .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
+            },
+        )?;
     validate_mimi_submit_governance_binding(
         governance_binding,
         &room_binding.realm_id,
@@ -184,40 +187,24 @@ pub(super) fn mimi_room_binding_security_payload(binding: &Value) -> &Value {
         .unwrap_or(binding)
 }
 
-pub(super) fn mimi_submit_mls_group_id<'a>(body: &'a Value, message: &'a Value) -> Option<&'a str> {
-    body.get("mls_group_id")
-        .or_else(|| {
-            body.get("ciphertext")
-                .and_then(|ciphertext| ciphertext.get("mls_group_id"))
-        })
-        .or_else(|| message.get("mls_group_id"))
-        .or_else(|| message.get("group_id"))
-        .and_then(Value::as_str)
+pub(super) fn mimi_submit_mls_group_id(body: &MimiSubmitMessageRequestBody) -> Option<&str> {
+    body.mls_group_id
+        .as_ref()
+        .map(MlsGroupId::as_str)
         .filter(|value| !value.trim().is_empty())
 }
 
-pub(super) fn mimi_submit_epoch(body: &Value, message: &Value) -> Option<u64> {
-    body.get("epoch")
-        .or_else(|| {
-            body.get("ciphertext")
-                .and_then(|ciphertext| ciphertext.get("epoch"))
-        })
-        .or_else(|| message.get("epoch"))
-        .and_then(Value::as_u64)
+pub(super) fn mimi_submit_epoch(body: &MimiSubmitMessageRequestBody) -> Option<u64> {
+    body.epoch
 }
 
 pub(super) fn mimi_governance_binding_candidate<'a>(
     binding_payload: &'a Value,
-    body: &'a Value,
     message: &'a Value,
+    associated_data: Option<&'a Value>,
 ) -> Option<&'a Value> {
     governance_binding_field(message)
-        .or_else(|| {
-            body.get("associated_data")
-                .and_then(governance_binding_field)
-        })
-        .or_else(|| body.get("ciphertext").and_then(governance_binding_field))
-        .or_else(|| governance_binding_field(body))
+        .or_else(|| associated_data.and_then(governance_binding_field))
         .or_else(|| governance_binding_field(binding_payload))
 }
 
@@ -360,21 +347,38 @@ pub(super) fn mimi_room_projection(
     state: &AppState,
     room_id: &str,
     realm_id: &str,
-) -> Result<Value, AppError> {
-    Ok(json!({
-        "kind": "ak.mimi.room_binding",
-        "profile": "ak.profile.mimi_interop.v1",
-        "mimi_room_uri": mimi_room_uri(state, room_id)?,
-        "binding_scope": {
-            "realm_id": realm_id,
-            "channel_id": Value::Null
+) -> Result<arkret_models_collaboration::events_payloads::MimiRoomBindingPayload, AppError> {
+    use arkret_models_collaboration::events_payloads::{
+        MimiLocalProviderRole, MimiRoomBindingPayload, MimiRoomBindingPayloadBindingScope,
+        MimiRoomBindingStatus,
+    };
+    let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned())
+        .map_err(|error| AppError::internal(format!("MIMI bound realm id invalid: {error}")))?;
+    let strand_id = crate::routing::events::strand::strand_id_from_realm_id(realm_id.as_str())
+        .ok_or_else(|| AppError::internal("MIMI bound realm has no canonical Strand id"))?;
+    Ok(MimiRoomBindingPayload {
+        profile: arkret_wire::MimiInteropProfileId::new(arkret_wire::ProfileId::MIMI_INTEROP_V1)
+            .map_err(|error| AppError::internal(format!("MIMI profile id invalid: {error}")))?,
+        mimi_room_uri: mimi_room_uri(state, room_id)?,
+        binding_scope: MimiRoomBindingPayloadBindingScope {
+            realm_id,
+            strand_id: arkret_identifiers::StrandId::new(strand_id).map_err(|error| {
+                AppError::internal(format!("MIMI bound Strand id invalid: {error}"))
+            })?,
         },
-        "hub_provider": state.service_id().clone(),
-        "local_provider_role": "hub",
-        "mls_group_id": format!("mls:{}", room_id),
-        "status": "accepted",
-        "canonical_truth": "arkret_signed_event_reducer"
-    }))
+        hub_provider: arkret_wire::DidCoreId::new(state.service_id().clone())
+            .map_err(|error| AppError::internal(format!("MIMI hub id invalid: {error}")))?,
+        local_provider_role: MimiLocalProviderRole::Hub,
+        follower_providers: None,
+        mls_group_id: Some(
+            MlsGroupId::new(format!("mls:{room_id}"))
+                .map_err(|error| AppError::internal(format!("MIMI group id invalid: {error}")))?,
+        ),
+        content_profile: None,
+        policy_root: None,
+        status: MimiRoomBindingStatus::Accepted,
+        created_at: None,
+    })
 }
 
 pub(super) fn unsupported_mimi_draft(body: &Value) -> Option<&'static str> {

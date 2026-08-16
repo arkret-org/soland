@@ -21,24 +21,20 @@ pub(super) fn stored_prev_frontier_digest(
         .flatten()
         .filter_map(Value::as_str)
         .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    prev_frontier_digest(&prev_refs)
-}
-
-pub(super) fn prev_frontier_digest(prev_refs: &[String]) -> Result<String, SubmitOneError> {
-    let prev_refs = prev_refs
-        .iter()
-        .cloned()
         .map(EventId::new)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| {
             SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                format!("prev_refs contains an invalid EventId: {error}"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("stored prev_refs contains an invalid EventId: {error}"),
             )
         })?;
-    arkret_wire::event_envelope::prev_frontier_digest(&prev_refs).map_err(|error| {
+    prev_frontier_digest(&prev_refs)
+}
+
+pub(super) fn prev_frontier_digest(prev_refs: &[EventId]) -> Result<String, SubmitOneError> {
+    arkret_wire::event_envelope::prev_frontier_digest(prev_refs).map_err(|error| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -143,7 +139,7 @@ async fn validate_active_series_authority_before_commit(
                 format!("active-series payload is invalid: {error}"),
             )
         })?;
-    if record.actor_id.as_str() != parsed.actor_id {
+    if record.actor_id.as_str() != parsed.actor_id.as_str() {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -370,6 +366,7 @@ async fn submit_initial_event_submission_with_commit_extensions(
         arkret_wire::EventSubmitContext::Standard
     };
     validate_initial_submission_in_context(&submission, submit_context)?;
+    validate_initial_publication_session_context(session, &submission)?;
     if let Some(lease) = &submission.authorization_lease {
         validate_authorization_lease_for_event(state, Some(session), &submission.event, lease)
             .await?;
@@ -439,6 +436,7 @@ pub(super) async fn prepare_agent_membership_initial_event(
     submission: arkret_wire::EventInitialSubmission,
 ) -> Result<PreparedAgentMembershipEvent, SubmitOneError> {
     validate_initial_submission_in_context(&submission, arkret_wire::EventSubmitContext::Standard)?;
+    validate_initial_publication_session_context(session, &submission)?;
     if submission.membership_compensation_evidence.is_some() {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
@@ -1398,13 +1396,13 @@ pub(super) async fn submit_event_value_with_context(
             .to_owned()
     } else if realm_bootstrap_contexts
         .iter()
-        .any(|context| context.realm_id == parsed.realm_id)
+        .any(|context| context.realm_id == parsed.realm_id.as_str())
     {
         arkret_wire::CORE_REDUCER_PROFILE.to_owned()
     } else {
         state
             .projections()
-            .realm_reducer_profile(&parsed.realm_id)
+            .realm_reducer_profile(parsed.realm_id.as_str())
             .ok_or_else(|| {
                 SubmitOneError::new(
                     StatusCode::CONFLICT,
@@ -1430,14 +1428,14 @@ pub(super) async fn submit_event_value_with_context(
         && !preparing_agent_membership
     {
         Some(
-            agent_membership_cascade_lock(&parsed.realm_id)
+            agent_membership_cascade_lock(parsed.realm_id.as_str())
                 .lock_owned()
                 .await,
         )
     } else {
         None
     };
-    let actor_lock = actor_submit_lock(&parsed.realm_id, &parsed.actor_id);
+    let actor_lock = actor_submit_lock(parsed.realm_id.as_str(), parsed.actor_id.as_str());
     let _actor_submit_guard = actor_lock.lock().await;
     let _account_data_submit_guard =
         if parsed.kind == arkret_wire::EventKind::AccountDataSet.as_str() {
@@ -1459,7 +1457,7 @@ pub(super) async fn submit_event_value_with_context(
         None => None,
     };
     let _invite_lifecycle_submit_guard =
-        match invite_lifecycle_submit_lock(&parsed.realm_id, &envelope) {
+        match invite_lifecycle_submit_lock(parsed.realm_id.as_str(), &envelope) {
             Some(lock) => Some(lock.lock_owned().await),
             None => None,
         };
@@ -1510,7 +1508,7 @@ pub(super) async fn submit_event_value_with_context(
     // stable id before asking whether the Realm already exists. A storage
     // failure must not be silently reclassified as a brand-new create.
     let existing = service
-        .canonical_event(&parsed.event_id)
+        .canonical_event(parsed.event_id.as_str())
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -1525,20 +1523,8 @@ pub(super) async fn submit_event_value_with_context(
         {
             let frontier = super::super::endpoints::load_realm_actor_frontier(
                 state,
-                RealmId::new(parsed.realm_id.clone()).map_err(|_| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        "validated realm_id is invalid",
-                    )
-                })?,
-                arkret_wire::DidCoreId::new(parsed.actor_id.clone()).map_err(|_| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        "validated actor_id is invalid",
-                    )
-                })?,
+                parsed.realm_id.clone(),
+                parsed.actor_id.clone(),
             )
             .await
             .map_err(|error| {
@@ -1653,20 +1639,8 @@ pub(super) async fn submit_event_value_with_context(
         frontier_event_ids.dedup();
         let current_frontier = super::super::endpoints::build_realm_actor_frontier(
             state,
-            RealmId::new(parsed.realm_id.clone()).map_err(|_| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    "validated realm_id is invalid",
-                )
-            })?,
-            arkret_wire::DidCoreId::new(parsed.actor_id.clone()).map_err(|_| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    "validated actor_id is invalid",
-                )
-            })?,
+            parsed.realm_id.clone(),
+            parsed.actor_id.clone(),
             next_actor_seq,
             frontier_event_ids,
         )
@@ -1691,13 +1665,16 @@ pub(super) async fn submit_event_value_with_context(
     }
     let mut max_actor_predecessor_seq = None;
     for prev_ref in &parsed.prev_refs {
-        let predecessor = service.canonical_event(prev_ref).await.map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("events store unavailable: {error}"),
-            )
-        })?;
+        let predecessor = service
+            .canonical_event(prev_ref.as_str())
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("events store unavailable: {error}"),
+                )
+            })?;
         if predecessor.is_none() {
             return Err(SubmitOneError::new(
                 StatusCode::CONFLICT,
@@ -1713,7 +1690,7 @@ pub(super) async fn submit_event_value_with_context(
                 "prev_refs must not reference an Event in another Realm",
             ));
         }
-        if predecessor.actor_id == parsed.actor_id {
+        if predecessor.actor_id == parsed.actor_id.as_str() {
             max_actor_predecessor_seq = Some(
                 max_actor_predecessor_seq.map_or(predecessor.actor_seq, |current: u64| {
                     current.max(predecessor.actor_seq)
@@ -1782,19 +1759,15 @@ pub(super) async fn submit_event_value_with_context(
     let mut strand_status_audit_payload = None;
     if let Some(operation) = projection_operation.as_ref() {
         if let Err(message) = validate_operation_semantics(state, std::slice::from_ref(operation)) {
-            return Err(SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                message,
-            ));
+            return Err(SubmitOneError::semantic_schema_violation(message));
         }
         preflight_moderation_dismiss(state, operation).await?;
         preflight_account_data_cas(state, operation).await?;
         if let Err(reason) =
             crate::routing::identity::agents::sidecar::validate_sidecar_mls_event_binding(
                 state,
-                &parsed.actor_id,
-                &parsed.device_id,
+                parsed.actor_id.as_str(),
+                parsed.device_id.as_str(),
                 operation,
             )
             .await
@@ -1808,7 +1781,7 @@ pub(super) async fn submit_event_value_with_context(
         if let Err(reason) =
             crate::routing::identity::agents::sidecar::validate_sidecar_exchange_control_event(
                 state,
-                &parsed.actor_id,
+                parsed.actor_id.as_str(),
                 operation,
             )
         {
@@ -1903,7 +1876,7 @@ pub(super) async fn submit_event_value_with_context(
             state,
             session,
             envelope_object,
-            &parsed.actor_id,
+            parsed.actor_id.as_str(),
             operation,
             internal_admission,
         )
@@ -1917,7 +1890,7 @@ pub(super) async fn submit_event_value_with_context(
         }
         if let Err(reason) =
             crate::routing::events::projection::validate_invite_cancel_pre_admission(
-                &parsed.actor_id,
+                parsed.actor_id.as_str(),
                 operation,
                 &frozen_pre_state,
             )
@@ -1968,7 +1941,7 @@ pub(super) async fn submit_event_value_with_context(
                 ));
             }
             strand_status_audit_payload =
-                proj.strand_status_transition_audit_payload(operation, &parsed.actor_id);
+                proj.strand_status_transition_audit_payload(operation, parsed.actor_id.as_str());
             if let Err(reason) = proj.check_morph_lifecycle_transition(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -2165,7 +2138,8 @@ pub(super) async fn submit_event_value_with_context(
     // transition. Irreversible device/key/delivery cleanup belongs to the
     // covering-Seal path. Keep the validated target for the atomic Event UOW;
     // never mutate device state before the canonical Event and Ack commit.
-    let device_revoke_target_device_id = (parsed.kind == "ak.device.revoke")
+    let device_revoke_target_device_id = (parsed.kind
+        == arkret_wire::event_kind_str::DEVICE_REVOKE)
         .then(|| validate_device_revoke_submission(session, &parsed, &envelope))
         .transpose()?;
 
@@ -2185,10 +2159,10 @@ pub(super) async fn submit_event_value_with_context(
             let capability_used = payload_field("capability_action")
                 .or_else(|| payload_field("action"))
                 .and_then(|value| value.as_str())
-                .unwrap_or("ak.morph.schema_migrate");
+                .unwrap_or(arkret_wire::event_kind_str::MORPH_SCHEMA_MIGRATE);
             append_audit_log(
                 state,
-                Some(&parsed.actor_id),
+                Some(parsed.actor_id.as_str()),
                 "schema_migration_breaking",
                 json!({
                     "realm_id": parsed.realm_id.clone(),
@@ -2198,7 +2172,7 @@ pub(super) async fn submit_event_value_with_context(
                     "to_schema_refs": payload_field("to_schema_refs"),
                     "compatibility_class": compatibility_class,
                     "capability_used": capability_used,
-                    "profile_ref": "ak.profile.morph.schema_migration_transformations.v1",
+                    "profile_ref": arkret_wire::ProfileId::MORPH_SCHEMA_MIGRATION_TRANSFORMATIONS_V1,
                     "event_id": parsed.event_id.clone(),
                 }),
                 "accepted",
@@ -2212,13 +2186,7 @@ pub(super) async fn submit_event_value_with_context(
     }
 
     let control_proposal_ack = if let Some(event) = control_event_for_proposal.as_ref() {
-        let realm_id = RealmId::new(parsed.realm_id.clone()).map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("validated Control Move Realm id is invalid: {error}"),
-            )
-        })?;
+        let realm_id = parsed.realm_id.clone();
         let proposal_digest = Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -2372,17 +2340,17 @@ pub(super) async fn submit_event_value_with_context(
         None
     };
     let local_device_revocation_gate = if !session.token_hash.starts_with("federation:")
-        && arkret_identifiers::DeviceId::new(parsed.device_id.clone()).is_ok()
+        && !parsed.device_id.as_str().is_empty()
     {
         let producer_principal_id = envelope
             .get("executed_by")
             .and_then(Value::as_str)
-            .unwrap_or(&parsed.actor_id);
+            .unwrap_or(parsed.actor_id.as_str());
         let selector =
             crate::routing::identity::device_generation::active_device_revocation_gate_selector(
                 state,
                 producer_principal_id,
-                &parsed.device_id,
+                parsed.device_id.as_str(),
             )
             .await
             .map_err(|error| {
@@ -2459,7 +2427,7 @@ pub(super) async fn submit_event_value_with_context(
     let projected_event = projection_operation.as_ref().map(|operation| {
         crate::routing::events::projection::projection_event_from_operation(
             operation,
-            Some(&parsed.actor_id),
+            Some(parsed.actor_id.as_str()),
         )
     });
     // Built before the commit and committed with it. Failing to construct the
@@ -2508,31 +2476,13 @@ pub(super) async fn submit_event_value_with_context(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    prospective_frontier_ids.push(EventId::new(parsed.event_id.clone()).map_err(|_| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "validated event_id is invalid",
-        )
-    })?);
+    prospective_frontier_ids.push(parsed.event_id.clone());
     prospective_frontier_ids.sort_by(|left, right| left.as_str().cmp(right.as_str()));
     prospective_frontier_ids.dedup();
     let prospective_frontier = super::super::endpoints::build_realm_actor_frontier(
         state,
-        RealmId::new(parsed.realm_id.clone()).map_err(|_| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "validated realm_id is invalid",
-            )
-        })?,
-        arkret_wire::DidCoreId::new(parsed.actor_id.clone()).map_err(|_| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "validated actor_id is invalid",
-            )
-        })?,
+        parsed.realm_id.clone(),
+        parsed.actor_id.clone(),
         next_actor_seq,
         prospective_frontier_ids,
     )
@@ -2545,11 +2495,11 @@ pub(super) async fn submit_event_value_with_context(
     })?;
     let mut accepted_response = if deferred_agent_membership.is_some() {
         SubmittedEventOutcome {
-            event_id: parsed.event_id.clone(),
+            event_id: parsed.event_id.to_string(),
             duplicate: false,
             outcome: events_submit_outcome(
                 EventsSubmitStatus::Accepted,
-                vec![parsed.event_id.clone()],
+                vec![parsed.event_id.to_string()],
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
@@ -2561,7 +2511,7 @@ pub(super) async fn submit_event_value_with_context(
             state,
             session,
             EventsSubmitStatus::Accepted,
-            parsed.event_id.clone(),
+            parsed.event_id.to_string(),
             prospective_frontier,
         )
         .await
@@ -2593,7 +2543,7 @@ pub(super) async fn submit_event_value_with_context(
             let selector =
             crate::routing::identity::device_generation::active_device_revocation_gate_selector(
                 state,
-                &parsed.actor_id,
+                parsed.actor_id.as_str(),
                 target_device_id,
             )
             .await
@@ -2614,7 +2564,7 @@ pub(super) async fn submit_event_value_with_context(
             })?;
             Some(soland_storage::DeviceRevocationTransition {
                 selector,
-                proposal_event_id: parsed.event_id.clone(),
+                proposal_event_id: parsed.event_id.to_string(),
                 proposal_digest: parsed.canonical_digest.clone(),
                 control_proposal_ack,
             })
@@ -2625,10 +2575,10 @@ pub(super) async fn submit_event_value_with_context(
         device_pairing_authorization: device_pairing_authorization.cloned(),
         contact_projection: contact_projection.cloned(),
         event: soland_services::events::AcceptedEvent {
-            event_id: parsed.event_id.clone(),
-            actor_id: parsed.actor_id.clone(),
+            event_id: parsed.event_id.to_string(),
+            actor_id: parsed.actor_id.to_string(),
             actor_seq: parsed.actor_seq,
-            realm_id: Some(parsed.realm_id.clone()),
+            realm_id: Some(parsed.realm_id.to_string()),
             kind: parsed.kind.clone(),
             schema_id: parsed.schema_id.clone(),
             canonical_digest: parsed.canonical_digest.clone(),
@@ -2719,7 +2669,7 @@ pub(super) async fn submit_event_value_with_context(
             operation,
             projected_cell_writes,
             projected_event,
-            actor_id: parsed.actor_id,
+            actor_id: parsed.actor_id.to_string(),
             ingress_receipts: accepted_response.outcome.ingress_receipts.clone(),
         });
         return Ok(accepted_response);
@@ -2742,20 +2692,8 @@ pub(super) async fn submit_event_value_with_context(
             if conflict == Some(ConflictCode::CasConflict) {
                 let current_frontier = super::super::endpoints::load_realm_actor_frontier(
                     state,
-                    RealmId::new(parsed.realm_id.clone()).map_err(|_| {
-                        SubmitOneError::new(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "internal_error",
-                            "validated realm_id is invalid",
-                        )
-                    })?,
-                    arkret_wire::DidCoreId::new(parsed.actor_id.clone()).map_err(|_| {
-                        SubmitOneError::new(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "internal_error",
-                            "validated actor_id is invalid",
-                        )
-                    })?,
+                    parsed.realm_id.clone(),
+                    parsed.actor_id.clone(),
                 )
                 .await
                 .map_err(|frontier_error| {
@@ -2779,7 +2717,7 @@ pub(super) async fn submit_event_value_with_context(
             }
             if conflict == Some(ConflictCode::ForkQuarantine) {
                 return Err(SubmitOneError::quarantine(
-                    parsed.event_id.clone(),
+                    parsed.event_id.to_string(),
                     "fork_quarantine",
                     "actor_seq sibling fork limit exceeded; event is quarantined pending actor-chain repair",
                 ));
@@ -2813,26 +2751,14 @@ pub(super) async fn submit_event_value_with_context(
                 ));
             }
             if conflict == Some(ConflictCode::DuplicateConflict) {
-                if let Ok(Some(existing)) = service.canonical_event(&parsed.event_id).await
+                if let Ok(Some(existing)) = service.canonical_event(parsed.event_id.as_str()).await
                     && (existing.canonical_bytes == parsed.canonical_bytes
                         || existing.canonical_bytes == accepted_canonical_bytes)
                 {
                     let frontier = super::super::endpoints::load_realm_actor_frontier(
                         state,
-                        RealmId::new(parsed.realm_id.clone()).map_err(|_| {
-                            SubmitOneError::new(
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                "internal_error",
-                                "validated realm_id is invalid",
-                            )
-                        })?,
-                        arkret_wire::DidCoreId::new(parsed.actor_id.clone()).map_err(|_| {
-                            SubmitOneError::new(
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                "internal_error",
-                                "validated actor_id is invalid",
-                            )
-                        })?,
+                        parsed.realm_id.clone(),
+                        parsed.actor_id.clone(),
                     )
                     .await
                     .map_err(|frontier_error| {
@@ -2847,7 +2773,7 @@ pub(super) async fn submit_event_value_with_context(
                             state,
                             session,
                             EventsSubmitStatus::Duplicate,
-                            parsed.event_id.clone(),
+                            parsed.event_id.to_string(),
                             frontier,
                         )
                         .await,
@@ -2882,7 +2808,7 @@ pub(super) async fn submit_event_value_with_context(
                 ));
             }
         }
-        if let Some(collision) = map_event_hash_collision(parsed.event_id.clone(), &error) {
+        if let Some(collision) = map_event_hash_collision(parsed.event_id.to_string(), &error) {
             return Err(collision);
         }
         if error.is_conflict_kind() {
@@ -2926,13 +2852,13 @@ pub(super) async fn submit_event_value_with_context(
     if let Some(operation) = projection_operation {
         crate::routing::events::projection::project_accepted_canonical_event_from_device(
             state,
-            &parsed.actor_id,
-            &parsed.device_id,
+            parsed.actor_id.as_str(),
+            parsed.device_id.as_str(),
             &operation,
             &projected_cell_writes,
         )
         .await;
-        resolve_moderation_dismiss_queue_item(state, &operation, &parsed.event_id).await;
+        resolve_moderation_dismiss_queue_item(state, &operation, parsed.event_id.as_str()).await;
     }
     if parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
         || parsed.kind == arkret_wire::EventKind::IdentityResolutionUpdate.as_str()
@@ -2962,21 +2888,26 @@ pub(super) async fn submit_event_value_with_context(
     if let Some(payload) = strand_status_audit_payload {
         append_audit_log(
             state,
-            Some(&parsed.actor_id),
+            Some(parsed.actor_id.as_str()),
             "incident.status.transition",
             payload,
             "accepted",
         )
         .await;
     }
-    if parsed.kind == "ak.realm.create"
+    if parsed.kind == arkret_wire::event_kind_str::REALM_CREATE
         && let Some(envelope_object) = envelope_for_bootstrap.as_object()
     {
-        bootstrap_realm_member_index(state, &parsed.realm_id, &parsed.actor_id, envelope_object)
-            .await;
+        bootstrap_realm_member_index(
+            state,
+            parsed.realm_id.as_str(),
+            parsed.actor_id.as_str(),
+            envelope_object,
+        )
+        .await;
         organizations::record_realm_organizations_from_event(
             state,
-            &parsed.realm_id,
+            parsed.realm_id.as_str(),
             &envelope_for_bootstrap,
         )
         .await;

@@ -14,7 +14,7 @@ pub(super) fn identity_trust_roots(state: &AppState) -> Vec<Value> {
     let mut trust_roots = vec![json!({
         "id": "soland.local_identity_store",
         "kind": "local_identity_store",
-        "profile": "ak.profile.identity_registry.v1",
+        "profile": arkret_wire::ProfileId::IDENTITY_REGISTRY_V1,
         "service_id": state.service_id(),
         "trust_domain": state.config().trust_domain,
         "proof_verification": {
@@ -28,7 +28,7 @@ pub(super) fn identity_trust_roots(state: &AppState) -> Vec<Value> {
         trust_roots.push(json!({
             "id": "external.webvh",
             "kind": "external",
-            "profile": "ak.identity.webvh.provider.v1",
+            "adapter_version": arkret_models_identity::DID_WEBVH_V1_METHOD,
             "base_url": url,
             "expected_trust_domain": state.config().trust_domain
         }));
@@ -91,6 +91,7 @@ pub(super) fn did_webvh_descriptor(state: &AppState) -> Value {
             "kind": "embedded",
             "label": "Soland embedded did:webvh",
             "method": "did:webvh",
+            "adapter_version": arkret_models_identity::DID_WEBVH_V1_METHOD,
             "default": default_provider_id.as_deref() == Some(embedded_id),
             "active": active,
             // The embedded webvh provider is a soland *deployment* facility, so
@@ -123,6 +124,7 @@ pub(super) fn did_webvh_descriptor(state: &AppState) -> Value {
             "kind": "external",
             "label": "External did:webvh provider",
             "method": "did:webvh",
+            "adapter_version": arkret_models_identity::DID_WEBVH_V1_METHOD,
             "default": default_provider_id.as_deref() == Some(external_id),
             "active": state.config().external_webvh_provider_active,
             "base_url": url,
@@ -152,7 +154,7 @@ pub(super) fn did_webvh_descriptor(state: &AppState) -> Value {
     let default_missing = default_provider_id.is_none();
     json!({
         "method": "did:webvh",
-        "profile": "ak.identity.webvh.provider.v1",
+        "adapter_version": arkret_models_identity::DID_WEBVH_V1_METHOD,
         "enabled": enabled,
         "default_provider_id": default_provider_id,
         "providers": providers,
@@ -260,7 +262,7 @@ pub(super) fn embedded_webvh_location_with_scid(
 ) -> EmbeddedWebvhLocation {
     let path_url = format!("webvh/{local_id}");
     EmbeddedWebvhLocation {
-        did: embedded_webvh_did(method_authority, scid, local_id),
+        did: arkret_signatures::webvh::format_webvh_did(method_authority, scid, local_id),
         scid: scid.to_owned(),
         document_url: format!("https://{https_authority}/{path_url}/did.json"),
         log_url: format!("https://{https_authority}/{path_url}/did.jsonl"),
@@ -268,7 +270,7 @@ pub(super) fn embedded_webvh_location_with_scid(
 }
 
 pub(super) fn embedded_webvh_did(method_authority: &str, scid: &str, local_id: &str) -> String {
-    format!("did:webvh:{scid}:{method_authority}:webvh:{local_id}")
+    arkret_signatures::webvh::format_webvh_did(method_authority, scid, local_id)
 }
 
 pub(super) fn embedded_webvh_authority(public_base_url: &str) -> Result<(String, String), String> {
@@ -280,15 +282,10 @@ pub(super) fn embedded_webvh_authority(public_base_url: &str) -> Result<(String,
     if !host.contains('.') {
         return Err("SOLAND_PUBLIC_BASE_URL host must contain a dot for did:webvh".to_owned());
     }
-    let method_authority = match parsed.port() {
-        Some(port) => format!("{host}%3A{port}"),
-        None => host.to_owned(),
-    };
-    let https_authority = match parsed.port() {
-        Some(port) => format!("{host}:{port}"),
-        None => host.to_owned(),
-    };
-    Ok((method_authority, https_authority))
+    Ok(arkret_signatures::webvh::webvh_authority_pair(
+        host,
+        parsed.port(),
+    ))
 }
 
 pub(super) fn embedded_webvh_document_value(
@@ -322,31 +319,6 @@ pub(super) fn embedded_webvh_document_value(
         "alsoKnownAs": also_known_as,
         "service": service,
     })
-}
-
-pub(super) fn derive_webvh_scid(skeleton: &Value) -> Result<String, String> {
-    if !contains_webvh_placeholder(skeleton) {
-        return Err(format!(
-            "inception log entry must contain {WEBVH_SCID_PLACEHOLDER} placeholders"
-        ));
-    }
-    derive_webvh_scid_from_skeleton(skeleton)
-}
-
-pub(super) fn contains_webvh_placeholder(value: &Value) -> bool {
-    match value {
-        Value::String(value) => value.contains(WEBVH_SCID_PLACEHOLDER),
-        Value::Array(items) => items.iter().any(contains_webvh_placeholder),
-        Value::Object(map) => map.values().any(contains_webvh_placeholder),
-        _ => false,
-    }
-}
-
-pub(super) fn substitute_webvh_scid(value: Value, scid: &str) -> Value {
-    let Ok(text) = serde_json::to_string(&value) else {
-        return value;
-    };
-    serde_json::from_str(&text.replace(WEBVH_SCID_PLACEHOLDER, scid)).unwrap_or(value)
 }
 
 pub(super) fn valid_multibase_key(value: &str) -> bool {

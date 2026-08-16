@@ -127,22 +127,22 @@ const DIRECTORY_RESOURCE_KINDS: &[DirectoryResourceKind] = &[
     DirectoryResourceKind::Organization,
     DirectoryResourceKind::Actor,
 ];
-const DIRECTORY_DISCOVERY_PROFILES: &[&str] = &["ak.profile.directory_service.v1"];
+const DIRECTORY_DISCOVERY_PROFILES: &[&str] = &[arkret_wire::ProfileId::DIRECTORY_SERVICE_V1];
 const DIRECTORY_SUPPORTED_OPERATIONS: &[&str] = &[
-    "ak.find.directory.read.describe",
-    "ak.find.directory.read.search_realms",
-    "ak.find.directory.read.resolve_realm",
-    "ak.find.directory.read.resolve_target",
-    "ak.find.directory.read.search_organizations",
-    "ak.find.directory.read.resolve_organization",
-    "ak.find.directory.read.search_actors",
-    "ak.find.directory.read.search_users",
-    "ak.find.directory.read.resolve_handle",
-    "ak.find.directory.read.resolve_agent_selector",
-    "ak.find.directory.read.list_handles_for_subject",
-    "ak.find.directory.command.announce",
-    "ak.find.directory.command.withdraw",
-    "ak.find.directory.push.command.register",
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_DESCRIBE,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_SEARCH_REALMS,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_REALM,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_TARGET,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_SEARCH_ORGANIZATIONS,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_ORGANIZATION,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_SEARCH_ACTORS,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_SEARCH_USERS,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_HANDLE,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_AGENT_SELECTOR,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_LIST_HANDLES_FOR_SUBJECT,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_COMMAND_ANNOUNCE,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_COMMAND_WITHDRAW,
+    arkret_wire::ServiceOperationId::FIND_DIRECTORY_PUSH_COMMAND_REGISTER,
 ];
 
 pub(crate) fn protocol_router() -> Router {
@@ -174,8 +174,8 @@ pub(crate) fn protocol_router() -> Router {
         .push(Router::with_path("directory/push/register").post(directory_subscribe))
 }
 
-#[salvo::oapi::endpoint(operation_id = "directory_describe", tags("spaces"))]
-#[tracing::instrument(skip_all, fields(op = "directory_describe"))]
+#[salvo::oapi::endpoint(operation_id = "ak.find.directory.read.describe", tags("spaces"))]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.describe"))]
 async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let service_resolution = state.service_resolution_commitment();

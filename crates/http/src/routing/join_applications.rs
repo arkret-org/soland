@@ -108,12 +108,17 @@ fn projection_error(reason: &'static str) -> AppError {
 
 fn service_error(error: ServiceError) -> AppError {
     let detail = error.detail().to_owned();
+    let conflict_code = error.conflict_code();
     match error {
         ServiceError::NotFound(_) => AppError::not_found("join application not found"),
-        ServiceError::Conflict(_) if detail.contains("duplicate_conflict") => {
+        ServiceError::Conflict(_)
+            if conflict_code == Some(soland_storage::ConflictCode::DuplicateConflict) =>
+        {
             AppError::new(ErrorCode::DuplicateConflict, "Idempotency-Key conflict")
         }
-        ServiceError::Conflict(_) if detail.contains("ttl_expired") => {
+        ServiceError::Conflict(_)
+            if conflict_code == Some(soland_storage::ConflictCode::TtlExpired) =>
+        {
             failed_precondition("ttl_expired", "join application has expired")
         }
         ServiceError::Conflict(_) => failed_precondition(
@@ -560,7 +565,7 @@ async fn audit_body_read(
     super::append_audit_log(
         state,
         Some(actor),
-        "ak.audit.accessed",
+        arkret_wire::event_kind_str::AUDIT_ACCESSED,
         json!({
             "realm_id": record.receipt.realm_id,
             "application_ref": record.application_ref,

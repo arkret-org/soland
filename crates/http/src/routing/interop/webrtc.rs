@@ -16,7 +16,9 @@ use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{CallId, CellRef, DeviceId, DidCoreId, Hash, RealmId};
 use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
 use arkret_models_collaboration::objects::media::{
-    MediaIceConfigOutcome, MediaIceConfigRequestBody, MediaIceConfigSignature,
+    ArkretNativeMediaBackendToken, ArkretNativeMediaPermissions,
+    ArkretNativeMediaSignatureAlgorithm, ArkretNativeMediaTokenPayload, MediaBackendKind,
+    MediaBackendToken, MediaIceConfigOutcome, MediaIceConfigRequestBody, MediaIceConfigSignature,
     MediaIceCredentialType, MediaIceMode, MediaIceServer, MediaIceSignatureAlgorithm,
     MediaIceSignatureInput,
 };
@@ -390,10 +392,10 @@ impl MediaProviderKind {
         }
     }
 
-    fn as_wire(self) -> &'static str {
+    fn backend_kind(self) -> MediaBackendKind {
         match self {
-            Self::ArkretNative => "arkret_native",
-            Self::LiveKit => "livekit",
+            Self::ArkretNative => MediaBackendKind::ArkretNative,
+            Self::LiveKit => MediaBackendKind::Livekit,
         }
     }
 }
@@ -481,7 +483,7 @@ struct MediaTokenIssueRequestBody<'a> {
 }
 
 struct IssuedMediaToken {
-    backend_token: String,
+    backend_token: MediaBackendToken,
     connect_url: String,
 }
 
@@ -761,7 +763,7 @@ async fn handle_rtc_token(
 
     json_ok(CallMediaTokenExchangeOutcome {
         focus_id: body.focus_id,
-        backend_kind: focus.provider.as_wire().to_owned(),
+        backend_kind: focus.provider.backend_kind(),
         connect_url,
         backend_token: issued_token.backend_token,
         participant_identity,
@@ -1141,34 +1143,38 @@ fn issue_arkret_native_backend_token(
     signing_key: &ed25519_dalek::SigningKey,
 ) -> Result<IssuedMediaToken, AppError> {
     let (audio, video, screen) = token_media_permissions(request);
-    let payload = json!({
-        "call_id": request.call_id,
-        "focus_id": request.focus.focus_id,
-        "participant_identity": request.participant_identity,
-        "issued_at": arkret_canonical::format_timestamp_canonical(request.issued_at),
-        "expires_at": arkret_canonical::format_timestamp_canonical(request.expires_at),
-        "media": {
-            "audio": audio,
-            "video": video,
-            "screen": screen,
+    let payload = ArkretNativeMediaTokenPayload {
+        call_id: CallId::new(request.call_id.to_owned()).map_err(|error| {
+            AppError::internal(format!("validated media call_id became invalid: {error}"))
+        })?,
+        focus_id: request.focus.focus_id.clone(),
+        participant_identity: request.participant_identity.to_owned(),
+        issued_at: request.issued_at,
+        expires_at: request.expires_at,
+        media: ArkretNativeMediaPermissions {
+            audio,
+            video,
+            screen,
         },
-    });
+    };
     let payload_bytes = arkret_canonical::canonical_json_bytes(&payload).map_err(|error| {
         AppError::internal(format!(
             "arkret-native backend token canonicalization: {error}"
         ))
     })?;
     let signature = signing_key.sign(&payload_bytes);
-    let token = json!({
-        "kid": request.issuer_kid,
-        "payload": payload,
-        "sig": URL_SAFE_NO_PAD.encode(signature.to_bytes()),
-        "signature_algorithm": "Ed25519",
-    });
-    Ok(IssuedMediaToken {
-        backend_token: serde_json::to_string(&token).map_err(|error| {
-            AppError::internal(format!("arkret-native backend token encode: {error}"))
+    let token = ArkretNativeMediaBackendToken {
+        kid: DidUrl::new(request.issuer_kid.to_owned()).map_err(|error| {
+            AppError::internal(format!(
+                "validated media issuer_kid became invalid: {error}"
+            ))
         })?,
+        payload,
+        sig: URL_SAFE_NO_PAD.encode(signature.to_bytes()),
+        signature_algorithm: ArkretNativeMediaSignatureAlgorithm::Ed25519,
+    };
+    Ok(IssuedMediaToken {
+        backend_token: MediaBackendToken::ArkretNative(token),
         connect_url: request.focus.connect_url.clone(),
     })
 }
@@ -1258,7 +1264,7 @@ fn issue_livekit_backend_token(
     let signature_b64 =
         URL_SAFE_NO_PAD.encode(hmac_sha256(api_secret.as_bytes(), signing_input.as_bytes()));
     Ok(IssuedMediaToken {
-        backend_token: format!("{signing_input}.{signature_b64}"),
+        backend_token: MediaBackendToken::Opaque(format!("{signing_input}.{signature_b64}")),
         connect_url: request.focus.connect_url.clone(),
     })
 }

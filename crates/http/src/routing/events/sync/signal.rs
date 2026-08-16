@@ -622,8 +622,9 @@ fn mls_ciphersuite_is_active(canonical_id: &str) -> bool {
 /// ceiling has its own code (`signal_ttl_out_of_range`); everything else is a
 /// malformed envelope.
 fn structural_error(error: arkret_wire::Error) -> AppError {
+    let error_code = error.error_code();
     let message = error.to_string();
-    if message.contains(arkret_wire::ErrorCode::SIGNAL_TTL_OUT_OF_RANGE) {
+    if error_code == Some(arkret_wire::ErrorCode::SignalTtlOutOfRange) {
         return AppError::new(ErrorCode::SignalTtlOutOfRange, message);
     }
     signal_invalid(message)

@@ -764,6 +764,36 @@ async fn verify_with_active_agent_session(
             "Agent Event proof requires a fresh session for the Event actor",
         ));
     }
+    let Some(grant) = session.session_grant.as_ref() else {
+        return Err(event_validation_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_proof",
+            "Agent Event proof requires a typed session-grant authority binding",
+        ));
+    };
+    let arkret_models_identity::SessionGrantHolderBinding::AgentRuntime {
+        agent_id,
+        device_id,
+        agent_key_authorization_ref,
+        verification_method: granted_verification_method,
+    } = &grant.holder_binding
+    else {
+        return Err(event_validation_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_proof",
+            "Agent Event proof cannot use a human-device session grant",
+        ));
+    };
+    if agent_id.as_str() != signer_id
+        || device_id.as_str() != session.device_id
+        || granted_verification_method.as_str() != verification_method
+    {
+        return Err(event_validation_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_proof",
+            "Agent Event proof does not match its typed session-grant key binding",
+        ));
+    }
     let Some((_, authorization_ref)) = state
         .projections()
         .snapshot()
@@ -777,6 +807,13 @@ async fn verify_with_active_agent_session(
             "Agent Event proof verification method is not currently authorized",
         ));
     };
+    if authorization_ref != agent_key_authorization_ref.as_str() {
+        return Err(event_validation_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_proof",
+            "Agent session grant names a stale key authorization Event",
+        ));
+    }
     let authorization = state
         .event_queries()
         .canonical_event(&authorization_ref)

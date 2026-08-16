@@ -275,7 +275,7 @@ async fn policy_check(
         append_audit_log(
             state,
             Some(&session.actor),
-            "ak.self.policy.read.check",
+            arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK,
             json!({
                 "realm_id": body.realm_id.as_str(),
                 "action": body.action.as_str(),
@@ -375,7 +375,7 @@ async fn policy_check(
         append_audit_log(
             state,
             Some(&session.actor),
-            "ak.self.policy.read.check",
+            arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK,
             json!({
                 "realm_id": body.realm_id.as_str(),
                 "action": body.action.as_str(),
@@ -714,7 +714,7 @@ fn policy_check_has_service_delegation(
     let kind_ok = proof
         .get("kind")
         .and_then(Value::as_str)
-        .is_none_or(|kind| matches!(kind, "service_delegation" | "ak.service_delegation"));
+        .is_none_or(|kind| kind == "service_delegation");
     if !kind_ok {
         return false;
     }

@@ -514,13 +514,13 @@ pub(crate) fn apply_claim_level_partition(
     // addition to the MIMI interop staging extension below.
     let mut claimed_profiles = vec![
         arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-            "ak.profile.core_event_store.v1",
+            arkret_wire::ProfileId::CORE_EVENT_STORE_V1,
         ),
         arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-            "ak.profile.principal_server.v1",
+            arkret_wire::ProfileId::PRINCIPAL_SERVER_V1,
         ),
         arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-            "ak.profile.principal_server_events_api.v1",
+            arkret_wire::ProfileId::PRINCIPAL_SERVER_EVENTS_API_V1,
         ),
         arkret_models_discovery::service_description::ClaimedProfileEntry {
             notes: Some(
@@ -534,7 +534,7 @@ pub(crate) fn apply_claim_level_partition(
                     .to_owned(),
             ),
             ..arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-                "ak.profile.mls_governance_binding.full.v1",
+                arkret_wire::ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
             )
         },
         arkret_models_discovery::service_description::ClaimedProfileEntry {
@@ -543,7 +543,7 @@ pub(crate) fn apply_claim_level_partition(
                     .to_owned(),
             ),
             ..arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-                "ak.profile.mimi_interop.v1",
+                arkret_wire::ProfileId::MIMI_INTEROP_V1,
             )
         },
     ];
@@ -599,7 +599,7 @@ pub(crate) fn apply_claim_level_partition(
                         .to_owned(),
                 ),
                 ..arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-                    "ak.profile.candidate.join_policy.v1",
+                    arkret_wire::ProfileId::CANDIDATE_JOIN_POLICY_V1,
                 )
             },
         );
@@ -736,14 +736,16 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
             IntegrationDependencyDescriptor {
                 service: "coauth".to_owned(),
                 purpose: "session_grant_introspection".to_owned(),
-                required_contract: "ak.gate.account.session_grant.introspect".to_owned(),
+                required_contract:
+                    arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT
+                        .to_owned(),
                 discovery_path: "/_arkret/gate/account/session-grants/introspect".to_owned(),
                 mode: "remote_service_contract".to_owned(),
             },
             IntegrationDependencyDescriptor {
                 service: "floria".to_owned(),
                 purpose: "push_gateway_delivery".to_owned(),
-                required_contract: "ak.push.bridge.v1".to_owned(),
+                required_contract: arkret_wire::ServiceContractId::PUSH_BRIDGE_V1.to_owned(),
                 discovery_path: "/_floria/push/bridge/describe".to_owned(),
                 mode: "remote_gateway_contract".to_owned(),
             },
@@ -793,7 +795,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "member_identity_update".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_arkret/self/events".to_owned(),
-                contract: "ak.member.identity.update".to_owned(),
+                contract: arkret_wire::event_kind_str::MEMBER_IDENTITY_UPDATE.to_owned(),
                 stability: "partial_fail_closed".to_owned(),
                 todo: "plaintext Ed25519 MemberIdentity proofs are verified; encrypted proof verification and ES256/ES384 are unsupported and rejected.".to_owned(),
             },
@@ -801,7 +803,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "agent_runtime_attestation".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_arkret/gate/account/agent-key-pair".to_owned(),
-                contract: "ak.gate.account.command.pair_agent_key".to_owned(),
+                contract: arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY.to_owned(),
                 stability: "unsupported_fail_closed".to_owned(),
                 todo: "runtime_attestation verifier and controller approval ledger are not wired; requests carrying runtime_attestation are rejected.".to_owned(),
             },
@@ -809,7 +811,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "extensions_sovereign".to_owned(),
                 method: "POST/GET".to_owned(),
                 path: "/_soland/admin/deployment/*".to_owned(),
-                contract: "ak.profile.sovereign_enclave.v1".to_owned(),
+                contract: arkret_wire::ProfileId::SOVEREIGN_ENCLAVE_V1.to_owned(),
                 stability: "stub_contract".to_owned(),
                 todo: "local sovereign deployment scenario scaffold; outbound guard is not yet wired into every egress call site.".to_owned(),
             },
@@ -817,7 +819,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "blob_presign".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_arkret/self/blob/presign".to_owned(),
-                contract: "ak.self.blob.command.presign".to_owned(),
+                contract: arkret_wire::ServiceOperationId::SELF_BLOB_COMMAND_PRESIGN.to_owned(),
                 stability: "local_direct_serve".to_owned(),
                 todo: "issues soland-signed local /blob/get URLs; backend-native object-store presign is not claimed.".to_owned(),
             },

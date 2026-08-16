@@ -40,7 +40,7 @@ fn constant_time_str_eq(left: &str, right: &str) -> bool {
 
 pub(super) fn recovery_session_summary(record: &RecoverySessionServiceState) -> Value {
     let mut out = json!({
-        "schema": "ak.schema.recovery_session.v1",
+        "schema": arkret_wire::SchemaId::RECOVERY_SESSION_V1,
         "recovery_session_id": record.recovery_session_id,
         "principal_authority": {
             "principal_id": record.principal_id,
@@ -593,7 +593,7 @@ pub(super) async fn recovery_session_create(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ak.root.identity.recovery_session.command.create",
+        arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_CREATE,
         json!({
             "recovery_session_id": record.recovery_session_id.clone(),
             "principal_authority": {
@@ -746,7 +746,7 @@ pub(super) async fn recovery_session_proof_submit(
     append_audit_log(
         state,
         Some(&updated.principal_id),
-        "ak.root.identity.recovery_session.command.submit_proof",
+        arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_SUBMIT_PROOF,
         json!({
             "recovery_session_id": updated.recovery_session_id.clone(),
             "principal_id": updated.principal_id.clone(),

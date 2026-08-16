@@ -346,6 +346,8 @@ pub(crate) async fn validate_direct_mls_generation_operation(
                 .cloned()
         })
         .ok_or("direct_conversation_activation_authority_unavailable")?;
+    let effective_scope = serde_json::from_value::<arkret_wire::ScopeRef>(effective_scope)
+        .map_err(|_| "direct_conversation_activation_authority_unavailable")?;
     let selected_frontier = state
         .mls_commits()
         .commit(&effective_scope, proposed.mls_group_id.as_str())

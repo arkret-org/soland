@@ -560,7 +560,6 @@ fn signed_ghost_provision_body(
     .unwrap();
 
     let profile_external_ref = json!({
-        "schema": "ak.applet.ghost_actor.external_ref.v1",
         "protocol": protocol,
         "tenant": tenant,
         "external_user_id": external_user_id,

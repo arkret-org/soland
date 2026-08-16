@@ -710,7 +710,7 @@ pub struct MorphProjection {
     pub title: Option<String>,
     pub fields: BTreeMap<String, Value>,
     pub schema_refs: Vec<String>,
-    pub facets: Vec<String>,
+    pub facets: BTreeMap<String, BTreeMap<String, Value>>,
     pub versions: Vec<DocumentVersionProjection>,
     pub state: ObjectLifecycleState,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -949,7 +949,6 @@ pub struct PollState {
     pub options: Vec<PollOptionState>,
     pub votes: BTreeMap<String, BTreeSet<String>>,
     pub max_selections: u32,
-    pub closed: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }

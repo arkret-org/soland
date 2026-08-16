@@ -38,7 +38,7 @@ async fn prepare_ghost_event(
             .await?;
     let service = state.event_queries();
     if let Some(existing) = service
-        .canonical_event(&parsed.event_id)
+        .canonical_event(parsed.event_id.as_str())
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -59,7 +59,7 @@ async fn prepare_ghost_event(
         return Err(quarantine_verified_event_collision(state, record).await);
     }
     let scoped_actor_records = service
-        .canonical_events_for_realm_actor(&parsed.realm_id, &parsed.actor_id)
+        .canonical_events_for_realm_actor(parsed.realm_id.as_str(), parsed.actor_id.as_str())
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -82,13 +82,16 @@ async fn prepare_ghost_event(
     }
     let mut max_actor_predecessor_seq = None;
     for prev_ref in &parsed.prev_refs {
-        let predecessor = service.canonical_event(prev_ref).await.map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("events store unavailable: {error}"),
-            )
-        })?;
+        let predecessor = service
+            .canonical_event(prev_ref.as_str())
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("events store unavailable: {error}"),
+                )
+            })?;
         let Some(predecessor) = predecessor else {
             return Err(SubmitOneError::new(
                 StatusCode::CONFLICT,
@@ -103,7 +106,7 @@ async fn prepare_ghost_event(
                 "prev_refs must not reference an Event in another Realm",
             ));
         }
-        if predecessor.actor_id == parsed.actor_id {
+        if predecessor.actor_id == parsed.actor_id.as_str() {
             max_actor_predecessor_seq = Some(
                 max_actor_predecessor_seq.map_or(predecessor.actor_seq, |current: u64| {
                     current.max(predecessor.actor_seq)
@@ -131,9 +134,8 @@ async fn prepare_ghost_event(
     if let Some(operation) = operation.as_ref() {
         let mut aggregate_operations = preceding_operations.to_vec();
         aggregate_operations.push(operation.clone());
-        validate_operation_semantics(state, &aggregate_operations).map_err(|message| {
-            SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", message)
-        })?;
+        validate_operation_semantics(state, &aggregate_operations)
+            .map_err(SubmitOneError::semantic_schema_violation)?;
         validate_operation_policy_with_plaintext_service_binding(
             state,
             &aggregate_operations,
@@ -145,7 +147,7 @@ async fn prepare_ghost_event(
                 crate::routing::events::operations::operation_policy_reason_code(message);
             SubmitOneError::new(status, code, message)
         })?;
-        policy_gate::enforce_operation_policy_server(state, &parsed.actor_id, operation)
+        policy_gate::enforce_operation_policy_server(state, parsed.actor_id.as_str(), operation)
             .await
             .map_err(|rejection| {
                 SubmitOneError::new(rejection.status, rejection.code, rejection.message)
@@ -174,13 +176,7 @@ async fn prepare_ghost_event(
         .ok()
         .filter(|event| event.seal_basis.is_some());
     let control_proposal_ack = if let Some(event) = control_event_for_proposal.as_ref() {
-        let realm_id = RealmId::new(parsed.realm_id.clone()).map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("validated Control Move Realm id is invalid: {error}"),
-            )
-        })?;
+        let realm_id = parsed.realm_id.clone();
         let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
         let (_, authority_set_ref) = worker
             .current_notary_profile_for_events(state, &realm_id, std::slice::from_ref(event))
@@ -257,7 +253,7 @@ async fn prepare_ghost_event(
     let projected_event = operation.as_ref().map(|operation| {
         crate::routing::events::projection::projection_event_from_operation(
             operation,
-            Some(&parsed.actor_id),
+            Some(parsed.actor_id.as_str()),
         )
     });
     let outbox = peer_event_fanout_records(
@@ -280,10 +276,10 @@ async fn prepare_ghost_event(
         device_pairing_authorization: None,
         contact_projection: None,
         event: soland_services::events::AcceptedEvent {
-            event_id: parsed.event_id,
-            actor_id: parsed.actor_id.clone(),
+            event_id: parsed.event_id.to_string(),
+            actor_id: parsed.actor_id.to_string(),
             actor_seq: parsed.actor_seq,
-            realm_id: Some(parsed.realm_id),
+            realm_id: Some(parsed.realm_id.to_string()),
             kind: parsed.kind,
             schema_id: parsed.schema_id,
             canonical_digest: parsed.canonical_digest,
@@ -317,8 +313,8 @@ async fn prepare_ghost_event(
         operation,
         projected_cell_writes,
         projected_event,
-        actor_id: parsed.actor_id,
-        device_id: parsed.device_id,
+        actor_id: parsed.actor_id.to_string(),
+        device_id: parsed.device_id.to_string(),
     })
 }
 

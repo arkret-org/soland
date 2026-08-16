@@ -253,7 +253,9 @@ pub fn identity_anchor_slot_conflicts(
     slot: &IdentityAnchorReanchorSlot,
 ) -> bool {
     records.iter().any(|record| {
-        if record.actor_id != slot.actor_id || record.kind != "ak.device.reanchor" {
+        if record.actor_id != slot.actor_id
+            || record.kind != arkret_wire::event_kind_str::DEVICE_REANCHOR
+        {
             return false;
         }
         let Some(candidate_generation) = record

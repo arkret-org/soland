@@ -367,7 +367,7 @@ pub(crate) fn payload_asserts_circle_manage(payload: &Value, circle_id: &str) ->
     let action_ok = cap
         .get("action")
         .and_then(Value::as_str)
-        .is_some_and(|a| a == "ak.circle.member.manage");
+        .is_some_and(|a| a == arkret_wire::CapabilityActionId::CIRCLE_MEMBER_MANAGE);
     let allowed_ok = cap.get("allowed").and_then(Value::as_bool) == Some(true);
     // The stamped verdict MUST be scoped to *this* Circle (mirrors the
     // `allowed_circle_ids` selector the engine evaluated). A verdict that omits

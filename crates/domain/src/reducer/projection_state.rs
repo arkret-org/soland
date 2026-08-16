@@ -821,7 +821,7 @@ impl ProjectionState {
     /// the JSON null head used by genesis CAS writes.
     fn head_eq_holds(&self, realm_id: &str, cell_ref: &str, expected: &Value) -> bool {
         const MEMBER_STATE_FAMILY: &str = arkret_wire::CellFamilyId::MEMBER_STATE_V1;
-        const STRAND_FIELDS_FAMILY: &str = "ak.component.strand.fields.v1";
+        const STRAND_FIELDS_FAMILY: &str = arkret_wire::CellFamilyId::STRAND_METADATA_V1;
         // CellStore keys are `(realm_id, cell_ref)`. Membership CellRefs use
         // only the actor DID as their subject, so consulting the flattened
         // `cells` cache here would alias the same actor across every Realm.
@@ -1200,7 +1200,11 @@ impl ProjectionState {
                 };
             }
         };
-        if registry.lookup_for_event_kind(kind.as_str()).is_some() {
+        if registry
+            .lookups_for_event_kind(kind.as_str())
+            .next()
+            .is_some()
+        {
             // Canonical hit — log at trace + delegate to inline helpers.
             // The inline helpers and the LatticeRegistry-resolved cell
             // family agree by construction (this whole module has one

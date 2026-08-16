@@ -89,8 +89,8 @@ pub(crate) async fn snapshot_manifest_for_realm(
         realm_id: realm_id_value,
         reducer_profile: arkret_state::SNAPSHOT_REDUCER_PROFILE_V1.to_owned(),
         schema_profile_refs: vec![
-            "ak.profile.core_event_store.v1".to_owned(),
-            "ak.profile.principal_server_events_api.v1".to_owned(),
+            arkret_wire::ProfileId::CORE_EVENT_STORE_V1.to_owned(),
+            arkret_wire::ProfileId::PRINCIPAL_SERVER_EVENTS_API_V1.to_owned(),
         ],
         state_digest,
         frontier: arkret_state::SnapshotFrontier {
@@ -195,7 +195,7 @@ fn snapshot_item_from_event(
     let event_id = arkret_identifiers::EventId::new(record.event_id.clone())
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     Ok(arkret_state::SnapshotMaterializedItem {
-        kind: "ak.event.accepted".to_owned(),
+        kind: record.kind.clone(),
         id: record.event_id.clone(),
         object: json!({
             "event_id": record.event_id,
@@ -296,7 +296,7 @@ fn snapshot_auth_state_digest(
     checked_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<arkret_identifiers::Hash, soland_http::error::AppError> {
     let commitment = json!({
-        "profile": "ak.snapshot.auth_state.issuer_local.v1",
+        "profile": arkret_wire::DomainSeparationId::SNAPSHOT_AUTH_STATE_ISSUER_LOCAL_V1,
         "issuer": service_id,
         "realm_id": realm_id,
         "frontier_event_ids": frontier_event_ids,

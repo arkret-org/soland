@@ -4,8 +4,8 @@
 
 use super::*;
 
-#[endpoint(operation_id = "account_describe")]
-#[tracing::instrument(skip_all, fields(op = "account_describe"))]
+#[endpoint(operation_id = "ak.self.account.read.describe")]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account.read.describe"))]
 pub(super) async fn account_describe(
     depot: &mut Depot,
 ) -> soland_http::result::JsonResult<arkret_models_discovery::ServiceDescribe> {

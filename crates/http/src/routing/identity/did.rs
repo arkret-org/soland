@@ -18,8 +18,10 @@ use arkret_identifiers::{DidCoreId, DidFullId, Hash};
 use arkret_models_identity::http_bodies::IdentityDocumentViewOutcome;
 use arkret_models_identity::identity::{
     DidOperationSubmitOutcome, DidOperationSubmitRequestBody, IdentityDocumentView,
-    IdentityResolveOutcome,
+    IdentityMethodEvidence, IdentityMethodEvidenceKind, IdentityResolveOutcome,
 };
+use arkret_signatures::webvh::WEBVH_SCID_PLACEHOLDER;
+use arkret_wire::NonEmptyString;
 use salvo::http::{StatusCode, header};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -33,16 +35,13 @@ use soland_services::identity::{
 };
 
 use super::webvh_validation::{
-    WebvhLogEntry, derive_webvh_scid_from_skeleton, validate_log_chain,
-    validate_rotation_authorization_for_log, validate_witness_policy_for_log, verify_log_subject,
-    verify_scid_against_did, verify_webvh_log_proof, webvh_entry_hash_multibase,
+    WebvhLogEntry, validate_log_chain, validate_rotation_authorization_for_log,
+    validate_witness_policy_for_log, verify_log_subject, verify_scid_against_did,
+    verify_webvh_log_proof, webvh_entry_hash_multibase,
 };
 use super::{append_audit_log, bearer_token, now, render_error, sha256_hex, validate_did};
 use crate::state::AppState;
 use crate::wire::{IdentityLogListOutcome, IdentityReceiptListOutcome, IdentityResolveRequestBody};
-
-const WEBVH_SCID_PLACEHOLDER: &str = "{SCID}";
-const WEBVH_METHOD_VERSION: &str = "did:webvh:1.0";
 
 mod document;
 mod endpoints;

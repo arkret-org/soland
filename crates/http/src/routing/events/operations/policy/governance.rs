@@ -6,7 +6,10 @@ use super::*;
 ///
 /// Kept in one place so the member-state review branches and the join
 /// application surfaces cannot drift into different action sets.
-pub(crate) const REALM_JOIN_REVIEW_ACTIONS: &[&str] = &["ak.realm.admin", "ak.realm.join.review"];
+pub(crate) const REALM_JOIN_REVIEW_ACTIONS: &[&str] = &[
+    arkret_wire::CapabilityActionId::REALM_ADMIN,
+    arkret_wire::CapabilityActionId::REALM_JOIN_REVIEW,
+];
 
 pub(super) fn validate_direct_conversation_realm_policy(
     state: &AppState,
@@ -227,7 +230,7 @@ pub(super) async fn validate_member_state_policy(
         realm_id,
         actor,
         Some(operation.context.principal_server_id.as_str()),
-        &["ak.realm.admin"],
+        &[arkret_wire::CapabilityActionId::REALM_ADMIN],
         operation.created_at,
     )
     .await
@@ -273,7 +276,7 @@ async fn validate_direct_conversation_rejoin_authority(
     operation: &Operation,
 ) -> Result<bool, &'static str> {
     let repair_presented = operation.context.authorization_ref.as_deref()
-        == Some("ak.authority.direct_conversation_repair.v1");
+        == Some(arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_REPAIR_V1);
     let is_direct = is_direct_conversation_realm(state, operation.realm_id.as_str());
     let is_join = operation.payload.get("membership").and_then(Value::as_str) == Some("join");
     if repair_presented && (!is_direct || !is_join) {
@@ -303,7 +306,7 @@ async fn validate_direct_conversation_rejoin_authority(
             .any(|participant| participant == target)
         || realm_member_is_joined(state, operation.realm_id.as_str(), target).await
         || operation.context.authorization_ref.as_deref()
-            != Some("ak.authority.direct_conversation_repair.v1")
+            != Some(arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_REPAIR_V1)
     {
         return Err(denied);
     }
@@ -391,7 +394,7 @@ async fn has_active_accountability_grant(
         .unwrap_or_default()
         .iter()
         .any(|record| {
-            record.kind == "ak.identity.accountability_grant"
+            record.kind == arkret_wire::event_kind_str::IDENTITY_ACCOUNTABILITY_GRANT
                 && record
                     .envelope
                     .get("executed_by")
@@ -451,7 +454,10 @@ pub(super) async fn validate_set_default_strand_policy(
     // A grant of either the precise action or the broad realm-admin action
     // authorizes the write. `ak.realm.admin` aggregates Realm governance, so
     // an admin holder need not also hold the narrow set_default_strand action.
-    for action in ["ak.realm.set_default_strand", "ak.realm.admin"] {
+    for action in [
+        arkret_wire::CapabilityActionId::REALM_SET_DEFAULT_STRAND,
+        arkret_wire::CapabilityActionId::REALM_ADMIN,
+    ] {
         if state
             .authorization()
             .check(soland_services::authorization::AuthorizationCheck {
@@ -593,7 +599,7 @@ pub(super) async fn validate_realm_organization_policy(
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
             actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
-            action: "ak.realm.admin",
+            action: arkret_wire::CapabilityActionId::REALM_ADMIN,
             resource: realm_id,
             realm_id,
             owner: owner.as_deref(),
@@ -633,19 +639,23 @@ pub(super) async fn validate_moderation_event_policy(
     };
     let actions = match &kind {
         arkret_wire::EventKind::ModerationDecision => &[
-            "ak.realm.moderation_policy",
-            "ak.policy.manage",
-            "ak.moderation.decision",
+            arkret_wire::CapabilityActionId::REALM_MODERATION_POLICY,
+            arkret_wire::CapabilityActionId::POLICY_MANAGE,
+            arkret_wire::CapabilityActionId::MODERATION_DECISION,
         ][..],
         arkret_wire::EventKind::ModerationDecisionLift => &[
-            "ak.realm.moderation_policy",
-            "ak.policy.manage",
-            "ak.moderation.decision.lift",
+            arkret_wire::CapabilityActionId::REALM_MODERATION_POLICY,
+            arkret_wire::CapabilityActionId::POLICY_MANAGE,
+            arkret_wire::CapabilityActionId::MODERATION_DECISION_LIFT,
         ][..],
-        arkret_wire::EventKind::ModerationAppealSubmit => &["ak.moderation.appeal.submit"][..],
+        arkret_wire::EventKind::ModerationAppealSubmit => {
+            &[arkret_wire::CapabilityActionId::MODERATION_APPEAL_SUBMIT][..]
+        }
         arkret_wire::EventKind::ModerationAppealReview
         | arkret_wire::EventKind::ModerationAppealDecision
-        | arkret_wire::EventKind::ModerationAppealClose => &["ak.moderation.appeal.review"][..],
+        | arkret_wire::EventKind::ModerationAppealClose => {
+            &[arkret_wire::CapabilityActionId::MODERATION_APPEAL_REVIEW][..]
+        }
         _ => return Ok(()),
     };
 

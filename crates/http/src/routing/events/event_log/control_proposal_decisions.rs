@@ -11,8 +11,10 @@ use arkret_wire::{
 
 use super::*;
 
-const SUBMIT_OPERATION: &str = "ak.self.control_proposal_decisions.command.submit";
-const READ_OPERATION: &str = "ak.self.control_proposal_decisions.read.get";
+const SUBMIT_OPERATION: &str =
+    arkret_wire::ServiceOperationId::SELF_CONTROL_PROPOSAL_DECISIONS_COMMAND_SUBMIT;
+const READ_OPERATION: &str =
+    arkret_wire::ServiceOperationId::SELF_CONTROL_PROPOSAL_DECISIONS_READ_GET;
 
 fn proposal_not_found() -> AppError {
     AppError::not_found("control proposal not found")

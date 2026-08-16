@@ -335,7 +335,7 @@ async fn append_account_deactivation_propagation_state(
         .collect::<Vec<_>>();
     let federation_incomplete = !peer_targets.is_empty();
     let payload = json!({
-        "schema": "ak.account.status.v1",
+        "schema": arkret_wire::CellFamilyId::ACCOUNT_STATUS_V1,
         "principal_id": did,
         "status": "deactivated",
         "reason_code": if federation_incomplete {
@@ -608,7 +608,7 @@ pub(super) async fn erase_account(
     append_audit_log(
         state,
         Some(&actor),
-        "ak.audit.erasure_receipt",
+        arkret_wire::event_kind_str::AUDIT_ERASURE_RECEIPT,
         erasure_receipt.clone(),
         "accepted",
     )
@@ -951,7 +951,7 @@ fn erasure_retained_stub(
     completed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<arkret_models_collaboration::events_payloads::event_wire::VerificationStub, AppError> {
     serde_json::from_value(json!({
-        "stub_schema": "ak.schema.erasure_verification_stub.v1",
+        "stub_schema": arkret_wire::SchemaId::ERASURE_VERIFICATION_STUB_V1,
         "receipt_id": receipt_id,
         "subject": serde_json::to_value(subject)
             .map_err(|error| AppError::internal(format!("erasure stub subject: {error}")))?,

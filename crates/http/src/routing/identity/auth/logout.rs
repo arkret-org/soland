@@ -1,4 +1,3 @@
-use arkret_models_collaboration::account_lifecycle::SESSION_REVOKE_LIFECYCLE_PROOF_KIND;
 use arkret_models_collaboration::session_grant_bodies::{
     AuthSessionLogoutOutcome, AuthSessionLogoutRequestBody,
 };
@@ -452,11 +451,6 @@ async fn verify_cross_session_revoke_proof(
     let proof = body.proof.as_ref().ok_or_else(|| {
         AppError::capability_denied("cross-session revoke requires a lifecycle proof")
     })?;
-    if proof.proof_kind != SESSION_REVOKE_LIFECYCLE_PROOF_KIND {
-        return Err(session_revoke_proof_invalid(
-            "unsupported session revoke lifecycle proof kind",
-        ));
-    }
     let service_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service core id is invalid: {error}")))?;
     if proof.audience != service_id {

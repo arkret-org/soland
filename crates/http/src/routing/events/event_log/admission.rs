@@ -297,11 +297,11 @@ pub fn realm_policy_bundle_check(
     // (2) T09 — e2ee_relaxed.v1 mutex against audit compliance.
     let relaxed_active = active_profiles
         .iter()
-        .any(|p| p == "ak.profile.e2ee_relaxed.v1")
+        .any(|p| p == arkret_wire::ProfileId::E2EE_RELAXED_V1)
         || payload
             .pointer("/e2ee_relaxed/profile")
             .and_then(Value::as_str)
-            == Some("ak.profile.e2ee_relaxed.v1");
+            == Some(arkret_wire::ProfileId::E2EE_RELAXED_V1);
     let compliance_active = active_profiles.iter().any(|p| {
         soland_services::operation_semantics::AUDIT_COMPLIANCE_PROFILES.contains(&p.as_str())
     });

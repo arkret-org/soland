@@ -222,7 +222,7 @@ pub(super) async fn validate_applet_registration_authz(
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
             actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
-            action: "ak.realm.admin",
+            action: arkret_wire::CapabilityActionId::REALM_ADMIN,
             resource: realm_id,
             realm_id,
             owner: owner.as_deref(),
@@ -238,9 +238,9 @@ pub(super) async fn validate_applet_registration_authz(
 
 /// Control-stream events carry their owning principal in `payload.principal_id`.
 pub(super) const PRINCIPAL_CONTROL_EVENT_KINDS: &[&str] = &[
-    "ak.device.authorize",
-    "ak.device.list_update",
-    "ak.device.revoke",
+    arkret_wire::event_kind_str::DEVICE_AUTHORIZE,
+    arkret_wire::event_kind_str::DEVICE_LIST_UPDATE,
+    arkret_wire::event_kind_str::DEVICE_REVOKE,
 ];
 
 /// Phase 2 — principal control realm isolation (key-management.md §4.1). A
@@ -440,9 +440,15 @@ pub(super) async fn validate_message_edit_redact_window_policy(
     };
 
     let (own_action, broad_action) = if is_redact {
-        ("ak.message.redact.own", "ak.message.redact")
+        (
+            arkret_wire::CapabilityActionId::MESSAGE_REDACT_OWN,
+            arkret_wire::CapabilityActionId::MESSAGE_REDACT,
+        )
     } else {
-        ("ak.message.revise.own", "ak.message.revise")
+        (
+            arkret_wire::CapabilityActionId::MESSAGE_REVISE_OWN,
+            arkret_wire::CapabilityActionId::MESSAGE_REVISE,
+        )
     };
 
     let grants = state.authorization().grants_for_subject(

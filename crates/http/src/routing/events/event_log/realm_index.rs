@@ -174,7 +174,8 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     actor: &str,
     realm_id: &str,
 ) -> bool {
-    if object.get("kind").and_then(Value::as_str) != Some("ak.invite.claim") {
+    if object.get("kind").and_then(Value::as_str) != Some(arkret_wire::event_kind_str::INVITE_CLAIM)
+    {
         return false;
     }
     let Some(payload) = object.get("payload") else {

@@ -572,7 +572,10 @@ fn validate_webvh_provider_describe(
     {
         return Err("webvh provider is in development_mode".to_owned());
     }
-    if !string_array_contains(body.get("supported_operations"), "ak.server.read.describe") {
+    if !string_array_contains(
+        body.get("supported_operations"),
+        arkret_wire::ServiceOperationId::SERVER_READ_DESCRIBE,
+    ) {
         return Err(
             "webvh provider describe does not advertise ak.server.read.describe".to_owned(),
         );

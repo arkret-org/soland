@@ -432,7 +432,7 @@ pub fn install_projected_grant(
 
 fn default_deny_reason(action: &str) -> &'static str {
     match action {
-        "ak.message.create" => "no_strand_track_message_grant",
+        arkret_wire::CapabilityActionId::MESSAGE_CREATE => "no_strand_track_message_grant",
         _ => "capability_denied",
     }
 }

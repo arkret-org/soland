@@ -17,7 +17,7 @@ pub(super) async fn issue_control_proposal_ack(
     let session = aa.authenticated_session(state, req).await?;
     super::super::require_agent_session_scope(
         &session,
-        "ak.self.control_proposal_acks.command.issue",
+        arkret_wire::ServiceOperationId::SELF_CONTROL_PROPOSAL_ACKS_COMMAND_ISSUE,
     )?;
     let request = body.into_inner();
     request.validate_structural().map_err(|error| {

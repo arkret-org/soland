@@ -5,7 +5,7 @@ pub(super) fn stored_recovery_type_error(context: &str, error: impl std::fmt::Di
 }
 
 pub(super) fn recovery_session_store_error(error: PersistenceError) -> AppError {
-    if error.is_conflict_kind() && error.detail().contains("already exists") {
+    if error.conflict_code() == Some(soland_storage::ConflictCode::RecoverySessionAlreadyExists) {
         AppError::conflict(error.detail()).with_wire_code("recovery_session_conflict")
     } else {
         recovery_store_error(error)
@@ -40,11 +40,13 @@ pub(super) fn recovery_policy_store_error(error: PersistenceError) -> AppError {
         return recovery_store_error(error);
     }
     let message = error.detail();
-    if message.contains("principal/version") || message.contains("version") {
-        AppError::conflict(message).with_wire_code("recovery_policy_version_not_monotonic")
-    } else if message.contains("supersedes") {
-        AppError::conflict(message).with_wire_code("recovery_policy_supersedes_invalid")
-    } else {
-        AppError::conflict(message).with_wire_code("recovery_policy_conflict")
+    match error.conflict_code() {
+        Some(soland_storage::ConflictCode::RecoveryPolicyVersionNotMonotonic) => {
+            AppError::conflict(message).with_wire_code("recovery_policy_version_not_monotonic")
+        }
+        Some(soland_storage::ConflictCode::RecoveryPolicySupersedesInvalid) => {
+            AppError::conflict(message).with_wire_code("recovery_policy_supersedes_invalid")
+        }
+        _ => AppError::conflict(message).with_wire_code("recovery_policy_conflict"),
     }
 }

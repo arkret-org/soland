@@ -23,7 +23,7 @@ pub(super) fn batch_contains_identity_anchor(envelopes: &[Value]) -> bool {
                 })
             })
             || event_string_field_from_value(envelope, "kind").as_deref()
-                == Some("ak.device.reanchor")
+                == Some(arkret_wire::event_kind_str::DEVICE_REANCHOR)
     })
 }
 
@@ -180,18 +180,18 @@ pub(super) async fn submit_identity_anchor_batch(
             .await?;
     let identity_anchor_context =
         identity_anchor_head_context.unwrap_or(RealmBootstrapBatchContext {
-            realm_id: first.realm_id.clone(),
-            actor_id: first.actor_id.clone(),
+            realm_id: first.realm_id.to_string(),
+            actor_id: first.actor_id.to_string(),
             digest_algorithm: None,
-            identity_anchor_event_id: Some(first.event_id.clone()),
+            identity_anchor_event_id: Some(first.event_id.to_string()),
             self_principal_pcr_bootstrap: false,
             identity_anchor_candidate_device: identity_anchor_candidate_device(&typed_authorize)?,
             identity_anchor_resolution: None,
             direct_conversation_founding: false,
             authority_root: None,
         });
-    if identity_anchor_context.realm_id != first.realm_id
-        || identity_anchor_context.actor_id != first.actor_id
+    if identity_anchor_context.realm_id != first.realm_id.as_str()
+        || identity_anchor_context.actor_id != first.actor_id.as_str()
         || identity_anchor_context.identity_anchor_event_id.as_deref()
             != Some(first.event_id.as_str())
     {
@@ -274,7 +274,10 @@ pub(super) async fn submit_identity_anchor_batch(
             )
         })?;
     for dependency in &first.prev_refs {
-        if !existing.iter().any(|record| record.event_id == *dependency) {
+        if !existing
+            .iter()
+            .any(|record| record.event_id == dependency.as_str())
+        {
             return Err(SubmitOneError::new(
                 StatusCode::CONFLICT,
                 "dependency_missing",
@@ -286,7 +289,7 @@ pub(super) async fn submit_identity_anchor_batch(
         && existing.iter().any(|record| {
             record.kind == arkret_wire::EventKind::RealmCreate.as_str()
                 && (record.realm_id.as_deref() == Some(first.realm_id.as_str())
-                    || (record.actor_id == first.actor_id
+                    || (record.actor_id == first.actor_id.as_str()
                         && record
                             .envelope
                             .pointer("/payload/object/purpose")
@@ -387,9 +390,7 @@ pub(super) async fn submit_identity_anchor_batch(
             .ok_or_else(|| {
                 unit_error("reanchor requires a Control Proposal Ack for each Control Move")
             })?;
-        let realm_id = RealmId::new(first.realm_id.clone()).map_err(|error| {
-            SubmitOneError::new(StatusCode::BAD_REQUEST, "param_invalid", error.to_string())
-        })?;
+        let realm_id = first.realm_id.clone();
         let policy = crate::control_proposal::control_proposal_policy(
             state,
             &realm_id,
@@ -516,18 +517,16 @@ pub(super) async fn submit_identity_anchor_batch(
                 .expect("PCR genesis audience checked above")
                 .to_string(),
             account_subject: pins.account_subject.to_string(),
-            principal_id: first.actor_id.clone(),
-            realm_id: first.realm_id.clone(),
-            create_event_id: first.event_id.clone(),
+            principal_id: first.actor_id.to_string(),
+            realm_id: first.realm_id.to_string(),
+            create_event_id: first.event_id.to_string(),
         })
     } else {
         None
     };
     let frontier_cas = if is_reanchor {
         let payload = typed_device_reanchor_payload(&envelopes[0])?;
-        let realm_id = RealmId::new(first.realm_id.clone()).map_err(|error| {
-            SubmitOneError::new(StatusCode::BAD_REQUEST, "param_invalid", error.to_string())
-        })?;
+        let realm_id = first.realm_id.clone();
         let raw_leaves = state
             .projections()
             .realm_seal_leaves(&realm_id)
@@ -541,7 +540,7 @@ pub(super) async fn submit_identity_anchor_batch(
         validate_pre_fence_seal_frontier(state, &first, payload.pre_fence_seal_frontier.as_ref())
             .await?;
         Some(soland_services::events::IdentityAnchorFrontierState {
-            realm_id: first.realm_id.clone(),
+            realm_id: first.realm_id.to_string(),
             raw_leaves: raw_leaves
                 .into_iter()
                 .map(|leaf| leaf.to_string())
@@ -553,7 +552,7 @@ pub(super) async fn submit_identity_anchor_batch(
     let reanchor_slot = if is_reanchor {
         let payload = typed_device_reanchor_payload(&envelopes[0])?;
         Some(soland_services::events::IdentityAnchorReanchorState {
-            actor_id: first.actor_id.clone(),
+            actor_id: first.actor_id.to_string(),
             principal_server_id: payload.authority.principal_server_id.to_string(),
             new_device_generation: payload.new_device_generation,
             reanchor_digest: first.canonical_digest.clone(),
@@ -599,7 +598,8 @@ pub(super) async fn submit_identity_anchor_batch(
         .map_err(|error| {
             if error.is_realm_already_exists() {
                 realm_already_exists_error()
-            } else if let Some(collision) = map_event_hash_collision(first.event_id.clone(), &error)
+            } else if let Some(collision) =
+                map_event_hash_collision(first.event_id.to_string(), &error)
             {
                 collision
             } else if error.is_conflict("device_reanchor_frontier_mismatch") {
@@ -681,8 +681,8 @@ pub(super) async fn submit_identity_anchor_batch(
             if let Some(operation) = projection_operation_from_event(parsed, envelope) {
                 crate::routing::events::projection::project_accepted_operations_from_device(
                     state,
-                    &parsed.actor_id,
-                    &parsed.device_id,
+                    parsed.actor_id.as_str(),
+                    parsed.device_id.as_str(),
                     &[operation],
                 )
                 .await;
@@ -705,8 +705,8 @@ pub(super) async fn submit_identity_anchor_batch(
     if is_bootstrap {
         bootstrap_realm_member_index(
             state,
-            &first.realm_id,
-            &first.actor_id,
+            first.realm_id.as_str(),
+            first.actor_id.as_str(),
             envelopes[0].as_object().expect("validated Event object"),
         )
         .await;
@@ -733,7 +733,7 @@ pub(super) async fn submit_identity_anchor_batch(
         .await;
     }
     if reanchor_conflict {
-        conflict_evidence.extend([first.event_id.clone(), second.event_id.clone()]);
+        conflict_evidence.extend([first.event_id.to_string(), second.event_id.to_string()]);
         conflict_evidence.sort_unstable();
         conflict_evidence.dedup();
         let mut outcome = events_submit_outcome(
@@ -750,12 +750,12 @@ pub(super) async fn submit_identity_anchor_batch(
         let cursor = super::super::super::sync::sync_barrier_token_for_event(
             state,
             session,
-            &second.event_id,
+            second.event_id.as_str(),
         )
         .await;
         let mut outcome = events_submit_outcome(
             EventsSubmitStatus::Accepted,
-            vec![first.event_id, second.event_id],
+            vec![first.event_id.to_string(), second.event_id.to_string()],
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -778,11 +778,11 @@ fn validate_identity_anchor_candidate_preconditions(
     authorize_event: &arkret_wire::Event,
     is_bootstrap: bool,
 ) -> Result<(), SubmitOneError> {
-    if authorize_event.actor_id.as_str() != first.actor_id
-        || authorize_event.realm_id.as_str() != first.realm_id
+    if authorize_event.actor_id.as_str() != first.actor_id.as_str()
+        || authorize_event.realm_id.as_str() != first.realm_id.as_str()
         || authorize_event.actor_seq != first.actor_seq.saturating_add(1)
         || authorize_event.prev_refs.len() != 1
-        || authorize_event.prev_refs[0].as_str() != first.event_id
+        || authorize_event.prev_refs[0].as_str() != first.event_id.as_str()
     {
         return Err(unit_error(
             "candidate device authorization does not immediately continue the verified anchor Event",
@@ -795,9 +795,9 @@ fn validate_identity_anchor_candidate_preconditions(
     let authorized_by_root = matches!(
         &authorize.authorized_by,
         arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Principal(did)
-            if did.as_str() == first.actor_id
+            if did.as_str() == first.actor_id.as_str()
     );
-    if authorize.principal_id.as_str() != first.actor_id
+    if authorize.principal_id.as_str() != first.actor_id.as_str()
         || authorize.authorization_binding_kind
             != if is_bootstrap {
                 arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::RegistrationAnchor
@@ -1096,7 +1096,8 @@ fn conflicting_reanchor_slot(
     let mut evidence = existing
         .iter()
         .filter(|record| {
-            record.actor_id == reanchor.actor_id && record.kind == "ak.device.reanchor"
+            record.actor_id == reanchor.actor_id.as_str()
+                && record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
         })
         .filter(|record| {
             let candidate_generation = record
@@ -1143,15 +1144,8 @@ async fn validate_unit_relationships(
             "identity anchor unit Events must share actor_id and principal-control realm_id",
         ));
     }
-    let create_event_id = arkret_wire::EventId::new(first.event_id.clone()).map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "param_invalid",
-            format!("identity anchor create event_id is invalid: {error}"),
-        )
-    })?;
-    let expected_realm = arkret_wire::RealmId::from_event_id(&create_event_id);
-    if first.realm_id != expected_realm.as_str() {
+    let expected_realm = arkret_wire::RealmId::from_event_id(&first.event_id);
+    if first.realm_id != expected_realm {
         return Err(SubmitOneError::new(
             StatusCode::CONFLICT,
             "failed_precondition",
@@ -1174,9 +1168,8 @@ async fn validate_unit_relationships(
     let first_operation = projection_operation_from_event(first, &envelopes[0]);
     let second_operation = projection_operation_from_event(second, &envelopes[1]);
     for operation in first_operation.iter().chain(second_operation.iter()) {
-        validate_operation_semantics(state, std::slice::from_ref(operation)).map_err(
-            |message| SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", message),
-        )?;
+        validate_operation_semantics(state, std::slice::from_ref(operation))
+            .map_err(SubmitOneError::semantic_schema_violation)?;
     }
     if !is_bootstrap && let Some(operation) = second_operation.as_ref() {
         validate_operation_policy(state, std::slice::from_ref(operation))
@@ -1243,9 +1236,9 @@ async fn validate_unit_relationships(
         let authorized_by_root = matches!(
             &authorize.authorized_by,
             arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Principal(did)
-                if did.as_str() == first.actor_id
+                if did.as_str() == first.actor_id.as_str()
         );
-        if authorize.principal_id.as_str() != first.actor_id
+        if authorize.principal_id.as_str() != first.actor_id.as_str()
             || authorize.authorization_binding_kind
                 != arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::RegistrationAnchor
             || !authorized_by_root
@@ -1282,9 +1275,9 @@ async fn validate_unit_relationships(
     .map_err(|message| {
         SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
     })?;
-    if payload.principal_id.as_str() != first.actor_id
+    if payload.principal_id.as_str() != first.actor_id.as_str()
         || payload.replacement_authorize_payload_digest != replacement_payload_digest
-        || authorize.principal_id.as_str() != first.actor_id
+        || authorize.principal_id.as_str() != first.actor_id.as_str()
         || authorize.authorization_binding_kind
             != arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::PcrRecovery
     {
@@ -1297,7 +1290,7 @@ async fn validate_unit_relationships(
     validate_reanchor_recovery_session(state, &payload, &authorize).await?;
     let current = crate::routing::identity::device_generation::current_device_generation(
         state,
-        &first.actor_id,
+        first.actor_id.as_str(),
     )
     .await
     .map_err(|error| {
@@ -1364,8 +1357,8 @@ async fn validate_reanchor_actor_frontier(
         })?;
     let (max_actor_seq, expected_heads) = preserved_actor_frontier(
         &records,
-        &reanchor.actor_id,
-        &reanchor.realm_id,
+        reanchor.actor_id.as_str(),
+        reanchor.realm_id.as_str(),
         &covered_digests,
     )
     .map_err(|message| {
@@ -1400,7 +1393,7 @@ fn preserved_actor_frontier(
     actor_id: &str,
     realm_id: &str,
     covered_digests: &std::collections::BTreeSet<String>,
-) -> Result<(u64, Vec<String>), &'static str> {
+) -> Result<(u64, Vec<EventId>), &'static str> {
     let actor_records = records
         .iter()
         .filter(|record| {
@@ -1464,9 +1457,10 @@ fn preserved_actor_frontier(
         .iter()
         .copied()
         .filter(|event_id| !referenced.contains(event_id))
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    heads.sort_unstable();
+        .map(|event_id| EventId::new(event_id.to_owned()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "accepted history contains an invalid EventId")?;
+    heads.sort_by(|left, right| left.as_str().cmp(right.as_str()));
     if heads.is_empty() {
         return Err("preserved actor history has no canonical head");
     }
@@ -1546,13 +1540,11 @@ async fn validate_pre_fence_seal_frontier(
     parsed: &ValidatedEventEnvelope,
     basis: Option<&arkret_wire::DeviceReanchorPreFenceSealFrontier>,
 ) -> Result<(), SubmitOneError> {
-    let realm_id = RealmId::new(parsed.realm_id.clone()).map_err(|error| {
-        SubmitOneError::new(StatusCode::BAD_REQUEST, "param_invalid", error.to_string())
-    })?;
+    let realm_id = parsed.realm_id.clone();
     let leaves =
         crate::routing::identity::device_generation::accepted_device_generation_seal_leaves(
             state,
-            &parsed.actor_id,
+            parsed.actor_id.as_str(),
             &realm_id,
         )
         .await
@@ -1641,10 +1633,10 @@ pub(super) fn canonical_record(
     received_at: DateTime<Utc>,
 ) -> CanonicalEventRecord {
     CanonicalEventRecord {
-        event_id: parsed.event_id.clone(),
-        actor_id: parsed.actor_id.clone(),
+        event_id: parsed.event_id.to_string(),
+        actor_id: parsed.actor_id.to_string(),
         actor_seq: parsed.actor_seq,
-        realm_id: Some(parsed.realm_id.clone()),
+        realm_id: Some(parsed.realm_id.to_string()),
         kind: parsed.kind.clone(),
         schema_id: parsed.schema_id.clone(),
         canonical_digest: parsed.canonical_digest.clone(),
@@ -1724,7 +1716,7 @@ async fn identity_anchor_device_projection(
     payload_object.insert("device_authorize_projected".to_owned(), Value::Bool(true));
     payload_object.insert(
         "device_authorize_event_id".to_owned(),
-        Value::String(authorize.event_id.clone()),
+        Value::String(authorize.event_id.to_string()),
     );
     if let Some(generation_ref) = authorized_generation_ref {
         payload_object.insert(
@@ -1817,20 +1809,8 @@ fn build_pcr_genesis_batch_receipt(
         scope: arkret_wire::EventBatchReceiptScope::PcrGenesis(
             arkret_wire::event_receipt::PcrGenesisReceiptScope {
                 kind: arkret_wire::event_receipt::PcrGenesisReceiptScopeKind::PcrGenesisUnit,
-                principal_id: DidCoreId::new(create.actor_id.clone()).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("PCR genesis principal is invalid: {error}"),
-                    )
-                })?,
-                realm_id: RealmId::new(create.realm_id.clone()).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("PCR genesis Realm id is invalid: {error}"),
-                    )
-                })?,
+                principal_id: create.actor_id.clone(),
+                realm_id: create.realm_id.clone(),
                 did_version_id: pins.did_version_id.clone(),
                 log_head_digest: pins.log_head_digest.clone(),
                 control_key_digest: pins.control_key_digest.clone(),
@@ -1846,37 +1826,19 @@ fn build_pcr_genesis_batch_receipt(
         ),
         frontier: arkret_wire::EventBatchReceiptFrontier {
             actor_seq: Some(authorize.actor_seq),
-            event_id: Some(EventId::new(authorize.event_id.clone()).map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("PCR genesis authorize Event id is invalid: {error}"),
-                )
-            })?),
+            event_id: Some(authorize.event_id.clone()),
             event_digest: Some(authorize_digest.clone()),
             hlc: None,
         },
         events: vec![
             arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
-                event_id: EventId::new(create.event_id.clone()).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("PCR genesis create Event id is invalid: {error}"),
-                    )
-                })?,
+                event_id: create.event_id.clone(),
                 event_digest: create_digest,
                 kind: arkret_wire::NonEmptyString::new(create.kind.clone())
                     .expect("validated Event kind is non-empty"),
             }),
             arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
-                event_id: EventId::new(authorize.event_id.clone()).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("PCR genesis authorize Event id is invalid: {error}"),
-                    )
-                })?,
+                event_id: authorize.event_id.clone(),
                 event_digest: authorize_digest,
                 kind: arkret_wire::NonEmptyString::new(authorize.kind.clone())
                     .expect("validated Event kind is non-empty"),
@@ -2409,8 +2371,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(max_seq, 2);
-        let mut expected_heads = vec![left_id, right_id];
-        expected_heads.sort_unstable();
+        let mut expected_heads = vec![
+            EventId::new(left_id).unwrap(),
+            EventId::new(right_id).unwrap(),
+        ];
+        expected_heads.sort_by(|left, right| left.as_str().cmp(right.as_str()));
         assert_eq!(heads, expected_heads);
     }
 

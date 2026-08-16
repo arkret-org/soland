@@ -2071,15 +2071,6 @@ impl ProjectionState {
         revoked
     }
 
-    /// AKP-0008 §4.11 — the authorized key ids the agent currently holds
-    /// (for the deactivate `ak.agent.key.revoke` fan-out).
-    pub fn authorized_key_ids_for(&self, agent_id: &str) -> Vec<String> {
-        self.agent_authorized_keys
-            .get(agent_id)
-            .map(|keys| keys.keys().cloned().collect())
-            .unwrap_or_default()
-    }
-
     pub fn active_agent_key_authorizations(&self, agent_id: &str) -> Vec<(String, String)> {
         self.agent_authorized_keys
             .get(agent_id)

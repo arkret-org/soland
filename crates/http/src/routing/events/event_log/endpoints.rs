@@ -12,7 +12,7 @@ mod control_proposal_decisions;
 /// canonical pending rows. The generic projection service cannot resolve
 /// device generations, so the HTTP boundary supplies exact revalidated Event
 /// digests; every other missing-Ack row remains a fail-closed store error.
-async fn frontier_control_governance_health(
+pub(crate) async fn frontier_control_governance_health(
     state: &AppState,
     realm_id: &RealmId,
     policy: arkret_wire::ControlProposalDecisionPolicy,
@@ -134,7 +134,10 @@ async fn submit_event_seal(
 ) -> JsonResult<EventSealSubmitOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    super::super::require_agent_session_scope(&session, "ak.self.events.command.submit_seal")?;
+    super::super::require_agent_session_scope(
+        &session,
+        arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_SEAL,
+    )?;
     let seal = body.into_inner();
     let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
         AppError::new(
@@ -268,8 +271,8 @@ async fn events_describe(
     json_ok(description)
 }
 
-#[salvo::oapi::endpoint(operation_id = "submit_event", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "submit_event"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.command.submit", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.command.submit"))]
 async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     // api-conventions.md §6 — read the generic `Idempotency-Key` header before
@@ -910,7 +913,7 @@ async fn verified_contact_mirror_event(
             && receipt.core.peer.contact_actor_id().as_str() == session.actor
             && receipt.core.request_event_ref == event.event_id
             && receipt.core.request_digest.as_str() == mirror.request_digest
-            && serde_json::to_value(receipt).ok().as_ref() == Some(&mirror.source_receipt)
+            && receipt == &mirror.source_receipt
     });
     if !receipt_matches {
         return Ok(None);

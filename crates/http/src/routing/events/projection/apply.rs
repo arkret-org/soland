@@ -211,12 +211,24 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             creator_device_id,
             ..
         } => {
-            let binding = operation
+            let binding_value = operation
                 .payload
                 .get("governance_binding")
                 .or_else(|| operation.payload.get("mls_governance_binding"))
                 .cloned()
                 .unwrap_or(Value::Null);
+            let Ok(effective_scope) =
+                serde_json::from_value::<arkret_wire::ScopeRef>(effective_scope.clone())
+            else {
+                tracing::warn!(group_id = %group_id, "refusing to mirror MLS genesis with invalid effective_scope");
+                return;
+            };
+            let Ok(binding) = serde_json::from_value::<
+                arkret_models_crypto::MlsGovernanceBindingPayload,
+            >(binding_value) else {
+                tracing::warn!(group_id = %group_id, "refusing to mirror MLS genesis with invalid governance_binding");
+                return;
+            };
             if let Err(error) = state
                 .mls_commits()
                 .initialize_group(soland_services::events::InitializeMlsGroupCommand {
@@ -232,7 +244,13 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             {
                 tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS genesis epoch");
             }
-            bind_circle_mls_group(state, group_id, effective_scope, false).await;
+            bind_circle_mls_group(
+                state,
+                group_id,
+                &serde_json::to_value(&effective_scope).unwrap_or(Value::Null),
+                false,
+            )
+            .await;
         }
         MlsProjectionEffect::CommitEpochAdvanced {
             group_id,
@@ -241,12 +259,24 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             leader_actor_id,
             ..
         } => {
-            let binding = operation
+            let binding_value = operation
                 .payload
                 .get("governance_binding")
                 .or_else(|| operation.payload.get("mls_governance_binding"))
                 .cloned()
                 .unwrap_or(Value::Null);
+            let Ok(effective_scope) =
+                serde_json::from_value::<arkret_wire::ScopeRef>(effective_scope.clone())
+            else {
+                tracing::warn!(group_id = %group_id, "refusing to mirror MLS commit with invalid effective_scope");
+                return;
+            };
+            let Ok(binding) = serde_json::from_value::<
+                arkret_models_crypto::MlsGovernanceBindingPayload,
+            >(binding_value) else {
+                tracing::warn!(group_id = %group_id, "refusing to mirror MLS commit with invalid governance_binding");
+                return;
+            };
             if let Err(error) = state
                 .mls_commits()
                 .advance_epoch(soland_services::events::AdvanceMlsEpochCommand {
@@ -262,20 +292,32 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             {
                 tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS commit epoch");
             }
-            bind_circle_mls_group(state, group_id, effective_scope, true).await;
+            bind_circle_mls_group(
+                state,
+                group_id,
+                &serde_json::to_value(&effective_scope).unwrap_or(Value::Null),
+                true,
+            )
+            .await;
         }
         MlsProjectionEffect::CommitFrontierContested {
             group_id,
             effective_scope,
             epoch,
         } => {
+            let Ok(effective_scope) =
+                serde_json::from_value::<arkret_wire::ScopeRef>(effective_scope.clone())
+            else {
+                tracing::warn!(group_id = %group_id, "refusing to mark MLS frontier contested with invalid effective_scope");
+                return;
+            };
             // §2.5.2 — concurrent commits drove `covered_frontier_cell` to `⊥`.
             // Mirror the contested marker onto the durable epoch row so the
             // group stays fail-closed (`decryption_pending`) across restarts
             // until a resolving commit advances the epoch.
             if let Err(error) = state
                 .mls_commits()
-                .mark_frontier_contested(effective_scope, group_id, *epoch)
+                .mark_frontier_contested(&effective_scope, group_id, *epoch)
                 .await
             {
                 tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS contested frontier");

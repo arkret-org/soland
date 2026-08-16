@@ -206,9 +206,9 @@ pub(super) fn validate_durable_agent_lifecycle(
     event: &Event,
 ) -> Result<(), AppError> {
     let (transition, next_status) = match event_kind {
-        "ak.self.agent.pause" => ("pause", "paused"),
-        "ak.self.agent.resume" => ("resume", "active"),
-        "ak.self.agent.deactivate" => ("deactivate", "deactivated"),
+        arkret_wire::event_kind_str::SELF_AGENT_PAUSE => ("pause", "paused"),
+        arkret_wire::event_kind_str::SELF_AGENT_RESUME => ("resume", "active"),
+        arkret_wire::event_kind_str::SELF_AGENT_DEACTIVATE => ("deactivate", "deactivated"),
         _ => {
             return Err(AppError::param_invalid(
                 "unsupported Agent lifecycle Event kind",

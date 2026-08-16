@@ -99,7 +99,7 @@ pub(super) async fn set_agent_participation(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ak.self.agent.participation.resource.replace",
+        arkret_wire::ServiceOperationId::SELF_AGENT_PARTICIPATION_RESOURCE_REPLACE,
         json!({
             "agent_id": agent_id,
             "controller_id": session.actor.clone(),

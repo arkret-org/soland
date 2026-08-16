@@ -739,7 +739,7 @@ pub(super) async fn list_handles_for_subject(
 
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
     let filter_digest = arkret_server::cursor_filter_digest(&json!({
-        "operation": "ak.find.directory.read.list_handles_for_subject",
+        "operation": arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_LIST_HANDLES_FOR_SUBJECT,
         "realm_id": body.realm_id.as_ref(),
         "intent": body.intent.as_deref(),
         "requester": body.requester.as_ref(),

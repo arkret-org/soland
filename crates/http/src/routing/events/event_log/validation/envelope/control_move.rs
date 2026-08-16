@@ -19,7 +19,9 @@ pub(super) fn validate_control_move_seal_basis(
         }
         return Ok(());
     }
-    if object.get("kind").and_then(Value::as_str) == Some("ak.device.reanchor") {
+    if object.get("kind").and_then(Value::as_str)
+        == Some(arkret_wire::event_kind_str::DEVICE_REANCHOR)
+    {
         if object.contains_key("seal_ref")
             || object.contains_key("auth_context")
             || object.contains_key("seal_basis")

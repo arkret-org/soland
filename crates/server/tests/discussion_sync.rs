@@ -1352,7 +1352,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
 }
 
 #[tokio::test]
-async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
+async fn poll_content_projection_replaces_votes() {
     let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -1507,46 +1507,4 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
             expected_backup_voters
         );
     }
-
-    submit_projection_event(
-        state.clone(),
-        &alice,
-        alice_did,
-        alice_device_id,
-        &realm_id,
-        "ak.message.create",
-        json!({
-            "strand_id": strand_id_for_realm(&realm_id),
-            "track_name": "discussion",
-            "content": {
-                "kind": "ak.content.poll.close",
-                "body": "poll closed",
-                "poll_id": poll_ref
-            }
-        }),
-    )
-    .await;
-    let (status, body) = submit_projection_event_status(
-        state.clone(),
-        &bob,
-        bob_did,
-        bob_device_id,
-        &realm_id,
-        "ak.message.create",
-        json!({
-            "strand_id": strand_id_for_realm(&realm_id),
-            "track_name": "discussion",
-            "content": {
-                "kind": "ak.content.poll.response",
-                "body": "poll response",
-                "poll_response": {
-                    "poll_ref": poll_ref,
-                    "selections": ["now"]
-                }
-            }
-        }),
-    )
-    .await;
-    assert_eq!(status, 403, "{body}");
-    assert!(body.contains("poll_closed"), "{body}");
 }

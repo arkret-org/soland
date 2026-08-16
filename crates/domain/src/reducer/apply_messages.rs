@@ -33,9 +33,6 @@ impl ProjectionState {
             Some("ak.content.poll.response") => {
                 return self.apply_poll_response(&content, &sender, now);
             }
-            Some("ak.content.poll.close") => {
-                return self.apply_poll_close(&content, now);
-            }
             _ => {}
         }
 
@@ -94,11 +91,6 @@ impl ProjectionState {
                     })
                     .unwrap_or(1)
                     .max(1) as u32,
-                closed: message
-                    .content
-                    .get("closed")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
                 created_at: message.created_at,
                 updated_at: message.created_at,
             },
@@ -121,11 +113,6 @@ impl ProjectionState {
         let Some(poll) = self.polls.get_mut(&poll_id) else {
             return ProjectionEffect::Ignored;
         };
-        if poll.closed {
-            return ProjectionEffect::Rejected {
-                reason: "poll_closed".to_owned(),
-            };
-        }
         let valid: BTreeSet<String> = poll
             .options
             .iter()
@@ -141,21 +128,6 @@ impl ProjectionState {
         }
         poll.votes.insert(actor.to_owned(), selected);
         poll.updated_at = now;
-        ProjectionEffect::Ignored
-    }
-
-    pub(crate) fn apply_poll_close(
-        &mut self,
-        content: &Value,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> ProjectionEffect {
-        let Some(poll_id) = poll_id_from_content(content) else {
-            return ProjectionEffect::Ignored;
-        };
-        if let Some(poll) = self.polls.get_mut(&poll_id) {
-            poll.closed = true;
-            poll.updated_at = now;
-        }
         ProjectionEffect::Ignored
     }
 
@@ -465,7 +437,7 @@ impl ProjectionState {
         if !strand
             .schema_refs
             .iter()
-            .any(|schema| schema == "ak.schema.calendar_event.v1")
+            .any(|schema| schema == arkret_wire::SchemaId::CALENDAR_EVENT_V1)
         {
             return ProjectionEffect::Rejected {
                 reason: "rsvp_event_not_calendar".to_owned(),

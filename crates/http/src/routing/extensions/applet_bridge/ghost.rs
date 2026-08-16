@@ -361,7 +361,6 @@ pub(super) async fn validate_signed_ghost_provision_events(
         .filter(|value| !value.is_empty())
         .unwrap_or(provision.external_user_id.as_str());
     let expected_external_ref = json!({
-        "schema": "ak.applet.ghost_actor.external_ref.v1",
         "protocol": provision.protocol,
         "tenant": provision.tenant,
         "external_user_id": provision.external_user_id,

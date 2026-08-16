@@ -240,7 +240,7 @@ pub(super) async fn project_account_data_set(
             content: (!tombstone).then_some(applied.payload.clone()),
             updated_at: applied.updated_at,
         };
-        let update = if account_data_key == "ak.account.blocklist" {
+        let update = if account_data_key == arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST {
             ActorPrivateDeviceUpdate::Blocklist {
                 sender_device_id: source_device_id.to_owned(),
                 content,

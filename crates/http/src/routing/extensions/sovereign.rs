@@ -407,8 +407,8 @@ pub(super) fn self_router() -> Router {
         .push(Router::with_path("directory/realms").get(directory_realms))
 }
 
-#[salvo::oapi::endpoint(operation_id = "deployment.info", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "deployment.info"))]
+#[salvo::oapi::endpoint(operation_id = "org.arkret.soland.deployment.info", tags("extensions"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.deployment.info"))]
 async fn deployment_info(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -447,8 +447,11 @@ async fn deployment_info(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "deployment.configure", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "deployment.configure"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.deployment.configure",
+    tags("extensions")
+)]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.deployment.configure"))]
 async fn configure_deployment(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -490,8 +493,11 @@ async fn configure_deployment(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "deployment.register_enclave", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "deployment.register_enclave"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.deployment.register_enclave",
+    tags("extensions")
+)]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.deployment.register_enclave"))]
 async fn register_enclave(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -533,8 +539,11 @@ async fn register_enclave(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "deployment.realm_create", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "deployment.realm_create"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.deployment.realm_create",
+    tags("extensions")
+)]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.deployment.realm_create"))]
 async fn realm_create(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -594,8 +603,11 @@ async fn realm_create(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "deployment.realm_info", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "deployment.realm_info"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.deployment.realm_info",
+    tags("extensions")
+)]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.deployment.realm_info"))]
 async fn realm_info(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -624,8 +636,11 @@ async fn realm_info(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "deployment.external_invite", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "deployment.external_invite"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.deployment.external_invite",
+    tags("extensions")
+)]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.deployment.external_invite"))]
 async fn external_invite(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -685,8 +700,14 @@ async fn external_invite(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "account.accept_external_invite", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "account.accept_external_invite"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.account.accept_external_invite",
+    tags("extensions")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.account.accept_external_invite")
+)]
 async fn accept_external_invite(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -751,10 +772,13 @@ async fn accept_external_invite(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "deployment.external_account_status",
+    operation_id = "org.arkret.soland.deployment.external_account_status",
     tags("extensions")
 )]
-#[tracing::instrument(skip_all, fields(op = "deployment.external_account_status"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.deployment.external_account_status")
+)]
 async fn external_account_status(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -778,8 +802,14 @@ async fn external_account_status(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "deployment.guard_realm_access", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "deployment.guard_realm_access"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.deployment.guard_realm_access",
+    tags("extensions")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.deployment.guard_realm_access")
+)]
 async fn guard_realm_access(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -811,8 +841,11 @@ async fn guard_realm_access(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "deployment.directory_realms", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "deployment.directory_realms"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.deployment.directory_realms",
+    tags("extensions")
+)]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.deployment.directory_realms"))]
 async fn directory_realms(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -848,8 +881,11 @@ async fn directory_realms(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "deployment.enclave_proxy", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "deployment.enclave_proxy"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.deployment.enclave_proxy",
+    tags("extensions")
+)]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.deployment.enclave_proxy"))]
 async fn enclave_proxy(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -882,8 +918,11 @@ async fn enclave_proxy(
     ))
 }
 
-#[salvo::oapi::endpoint(operation_id = "deployment.network_link", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "deployment.network_link"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.deployment.network_link",
+    tags("extensions")
+)]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.deployment.network_link"))]
 async fn set_network_link(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -903,8 +942,14 @@ async fn set_network_link(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "deployment.store_forward_message", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "deployment.store_forward_message"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.deployment.store_forward_message",
+    tags("extensions")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.deployment.store_forward_message")
+)]
 async fn store_forward_message(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -963,8 +1008,14 @@ async fn store_forward_message(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "deployment.store_forward_drain", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "deployment.store_forward_drain"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.deployment.store_forward_drain",
+    tags("extensions")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.deployment.store_forward_drain")
+)]
 async fn drain_store_forward(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1003,8 +1054,14 @@ async fn drain_store_forward(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "deployment.store_forward_ingest", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "deployment.store_forward_ingest"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.deployment.store_forward_ingest",
+    tags("extensions")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.deployment.store_forward_ingest")
+)]
 async fn ingest_store_forward(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1058,8 +1115,11 @@ async fn ingest_store_forward(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "deployment.enclave_frontier", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "deployment.enclave_frontier"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.deployment.enclave_frontier",
+    tags("extensions")
+)]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.deployment.enclave_frontier"))]
 async fn enclave_frontier(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1095,8 +1155,11 @@ async fn enclave_frontier(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "deployment.audit", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "deployment.audit"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.deployment.audit",
+    tags("extensions")
+)]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.deployment.audit"))]
 async fn deployment_audit(
     aa: AuthArgs,
     depot: &mut Depot,

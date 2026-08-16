@@ -18,7 +18,7 @@ fn bootstrap_error(
 ) -> SubmitOneError {
     let reason = error.reason_code();
     if matches!(reason, "effects_payload_mismatch" | "plane_cross_write") {
-        SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", reason)
+        SubmitOneError::semantic_schema_violation(reason)
     } else {
         SubmitOneError::new(
             StatusCode::PRECONDITION_FAILED,
@@ -166,7 +166,10 @@ pub(super) async fn submit_realm_bootstrap_batch(
     }
     let first = validated.first().expect("shared validator requires create");
     for dependency in &first.prev_refs {
-        if !existing.iter().any(|record| record.event_id == *dependency) {
+        if !existing
+            .iter()
+            .any(|record| record.event_id == dependency.as_str())
+        {
             return Err(SubmitOneError::new(
                 StatusCode::CONFLICT,
                 "dependency_missing",
@@ -190,9 +193,8 @@ pub(super) async fn submit_realm_bootstrap_batch(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    validate_operation_semantics(state, &operations).map_err(|message| {
-        SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", message)
-    })?;
+    validate_operation_semantics(state, &operations)
+        .map_err(SubmitOneError::semantic_schema_violation)?;
     // The genesis unit carries no producer `effects[]` either: each staged
     // Operation is paired with the writes its own signed Event derives from
     // the registered contract (`event-and-patch.md` §2.4.2), in wire order so
@@ -364,7 +366,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         } else if let Some(collision) = map_event_hash_collision(
             validated
                 .first()
-                .map(|event| event.event_id.clone())
+                .map(|event| event.event_id.to_string())
                 .unwrap_or_default(),
             &error,
         ) {
@@ -480,7 +482,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
     }
     let ids = validated
         .iter()
-        .map(|event| event.event_id.clone())
+        .map(|event| event.event_id.to_string())
         .collect::<Vec<_>>();
     let cursor = match ids.last() {
         Some(event_id) => Some(

@@ -668,7 +668,7 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
                     title: Some("Task".to_owned()),
                     fields: std::collections::BTreeMap::new(),
                     schema_refs: Vec::new(),
-                    facets: Vec::new(),
+                    facets: BTreeMap::new(),
                     versions: Vec::new(),
                     state: soland_domain::reducer::ObjectLifecycleState::Active,
                     state_changed_at: None,

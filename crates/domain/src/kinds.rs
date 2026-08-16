@@ -287,8 +287,8 @@ pub fn operation_is_realm_lifecycle(operation: &Operation) -> bool {
 
 /// Active audit-compliance profile ids. Spec T09.
 pub const AUDIT_COMPLIANCE_PROFILES: &[&str] = &[
-    "ak.profile.attested_audit.e2ee.v1",
-    "ak.profile.disclosed_audit.e2ee.v1",
+    arkret_wire::ProfileId::ATTESTED_AUDIT_E2EE_V1,
+    arkret_wire::ProfileId::DISCLOSED_AUDIT_E2EE_V1,
 ];
 
 /// Spec T23 — true when `ak.audit.ryw_receipt` may be accepted as a durable
@@ -297,7 +297,7 @@ pub const AUDIT_COMPLIANCE_PROFILES: &[&str] = &[
 pub fn ryw_receipt_durable_event_allowed(active_profiles: &[String]) -> bool {
     active_profiles
         .iter()
-        .any(|p| p == "ak.profile.attested_audit.e2ee.v1")
+        .any(|p| p == arkret_wire::ProfileId::ATTESTED_AUDIT_E2EE_V1)
 }
 
 /// SEC-08 — does this Realm-lifecycle payload (`ak.realm.create` /

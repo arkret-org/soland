@@ -62,6 +62,9 @@ pub enum WebvhValidationError {
         required: usize,
         valid: usize,
     },
+    ResidualScidPlaceholder {
+        at_index: usize,
+    },
     EmptyLog,
     MalformedEntry {
         at_index: usize,
@@ -80,6 +83,7 @@ impl WebvhValidationError {
             Self::RotationWitnessQuorumMissing { .. } => "webvh_witness_threshold_not_met",
             Self::RotationNotAuthorized { .. } => "webvh_rotation_not_authorized",
             Self::GovernanceQuorumNotMet { .. } => "webvh_governance_quorum_not_met",
+            Self::ResidualScidPlaceholder { .. } => "param_invalid",
             Self::EmptyLog => "webvh_empty_log",
             Self::MalformedEntry { .. } => "webvh_witness_parameter_malformed",
         }
@@ -137,6 +141,9 @@ impl WebvhValidationError {
                 valid,
             } => format!(
                 "did:webvh governance quorum not met at index {at_index}: required {required}, valid {valid}"
+            ),
+            Self::ResidualScidPlaceholder { at_index } => format!(
+                "did:webvh log entry at index {at_index} retains a literal {{SCID}} placeholder"
             ),
             Self::EmptyLog => "did:webvh log is empty".to_owned(),
             Self::MalformedEntry { at_index, reason } => {
@@ -234,6 +241,12 @@ pub fn verify_log_and_witness_bytes(
 }
 
 fn verify_sdk_chain(log: &[WebvhLogEntry]) -> Result<(), WebvhValidationError> {
+    if let Some(at_index) = log
+        .iter()
+        .position(|entry| arkret_signatures::webvh::webvh_scid_placeholder_present(&entry.payload))
+    {
+        return Err(WebvhValidationError::ResidualScidPlaceholder { at_index });
+    }
     let did = did_from_log(log)?;
     arkret_identity::verify_did_webvh_v1_chain(&did, &raw_log(log)).map_err(|error| {
         WebvhValidationError::MalformedEntry {
@@ -255,10 +268,6 @@ pub fn derive_scid_from_genesis(genesis: &WebvhLogEntry) -> Result<String, Webvh
             reason: error.to_string(),
         }
     })
-}
-
-pub(crate) fn derive_webvh_scid_from_skeleton(skeleton: &Value) -> Result<String, String> {
-    arkret_identity::derive_did_webvh_scid(skeleton).map_err(|error| error.to_string())
 }
 
 pub fn scid_from_did(did: &str) -> Option<&str> {
@@ -378,7 +387,33 @@ pub(crate) fn decode_ed25519_public_key(value: &str) -> Result<VerifyingKey, Str
 mod tests {
     use serde_json::{Value, json};
 
-    use super::verify_log_and_witness_bytes;
+    use super::{
+        WebvhLogEntry, WebvhValidationError, validate_log_chain, verify_log_and_witness_bytes,
+    };
+
+    #[test]
+    fn residual_scid_placeholder_has_param_invalid_discriminator() {
+        let log = [WebvhLogEntry::new(json!({
+            "versionId": "1-zQmPublished",
+            "versionTime": "2026-08-16T00:00:00Z",
+            "parameters": {
+                "method": "did:webvh:1.0",
+                "scid": "zQmPublished",
+                "updateKeys": ["z6MkFixture"]
+            },
+            "state": {
+                "id": "did:webvh:zQmPublished:example.com:webvh:alice",
+                "alsoKnownAs": ["literal {SCID} must be rejected"]
+            }
+        }))];
+
+        let error = validate_log_chain(&log).expect_err("residual placeholder must fail closed");
+        assert_eq!(error.code(), "param_invalid");
+        assert_eq!(
+            error,
+            WebvhValidationError::ResidualScidPlaceholder { at_index: 0 }
+        );
+    }
 
     #[test]
     fn soland_adapter_accepts_standard_starid_compatible_witness_documents() {

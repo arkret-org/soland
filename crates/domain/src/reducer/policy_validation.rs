@@ -118,9 +118,9 @@ pub(crate) fn state_payload_value(payload: &Value) -> &Value {
 }
 
 const SEARCH_POLICY_PROFILES: &[&str] = &[
-    "ak.profile.search.client_index.v1",
-    "ak.profile.search.blind_index.v1",
-    "ak.profile.search.forward_private.v1",
+    arkret_wire::ProfileId::SEARCH_CLIENT_INDEX_V1,
+    arkret_wire::ProfileId::SEARCH_BLIND_INDEX_V1,
+    arkret_wire::ProfileId::SEARCH_FORWARD_PRIVATE_V1,
 ];
 const SEARCH_POLICY_DATA_CLASSES: &[&str] = &[
     "encrypted_index",
@@ -204,7 +204,7 @@ pub(crate) fn validate_realm_search_policy_payload(policy: &Value) -> Result<(),
     }
     let forward_private_enabled = profiles
         .iter()
-        .any(|profile| profile == "ak.profile.search.forward_private.v1");
+        .any(|profile| profile == arkret_wire::ProfileId::SEARCH_FORWARD_PRIVATE_V1);
     if forward_private_enabled && leakage_class != "forward_private" {
         return Err("search_policy_forward_private_leakage_class_required");
     }
@@ -214,7 +214,7 @@ pub(crate) fn validate_realm_search_policy_payload(policy: &Value) -> Result<(),
     if forward_private_enabled
         && !profiles
             .iter()
-            .any(|profile| profile == "ak.profile.search.blind_index.v1")
+            .any(|profile| profile == arkret_wire::ProfileId::SEARCH_BLIND_INDEX_V1)
     {
         return Err("search_policy_forward_private_blind_index_required");
     }

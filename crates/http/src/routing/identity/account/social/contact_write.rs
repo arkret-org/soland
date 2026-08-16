@@ -215,7 +215,10 @@ pub(crate) fn validate_request_receipt_cryptography(
             format!("{evidence_field}.core is invalid: {error}"),
         )
     })?;
-    let recomputed = contact_hash("ak.contact.request-acceptance-core.v1", &receipt.core)?;
+    let recomputed = contact_hash(
+        arkret_wire::DomainSeparationId::CONTACT_REQUEST_ACCEPTANCE_CORE_V1,
+        &receipt.core,
+    )?;
     if recomputed != receipt.receipt_digest {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -311,7 +314,7 @@ async fn validate_request_acceptance_receipt(
     )
     .map_err(|error| AppError::internal(format!("stored Contact request payload: {error}")))?;
     let expected_checkpoint = contact_hash(
-        "ak.contact.request-source-checkpoint.v1",
+        arkret_wire::DomainSeparationId::CONTACT_REQUEST_SOURCE_CHECKPOINT_V1,
         &json!({
             "event_ref": request_event.event_id,
             "event_digest": request_digest,
@@ -868,14 +871,17 @@ fn sign_request_receipt(
         request_event_ref: event.event_id.clone(),
         request_digest: request_digest.clone(),
         source_checkpoint: contact_hash(
-            "ak.contact.request-source-checkpoint.v1",
+            arkret_wire::DomainSeparationId::CONTACT_REQUEST_SOURCE_CHECKPOINT_V1,
             &json!({"event_ref": event.event_id, "event_digest": request_digest}),
         )?,
         accepted_at: now(),
         issuer: arkret_identifiers::DidCoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?,
     };
-    let receipt_digest = contact_hash("ak.contact.request-acceptance-core.v1", &core)?;
+    let receipt_digest = contact_hash(
+        arkret_wire::DomainSeparationId::CONTACT_REQUEST_ACCEPTANCE_CORE_V1,
+        &core,
+    )?;
     let signature = service_signature(
         state,
         &json!({"core": core, "receipt_digest": receipt_digest}),
@@ -1361,7 +1367,7 @@ async fn plan_contact_commit(
             })?)
             .map_err(|error| AppError::internal(format!("response digest invalid: {error}")))?;
             let outgoing_slot_absence_digest = contact_hash(
-                "ak.contact.no-outgoing-slot.v1",
+                arkret_wire::DomainSeparationId::CONTACT_NO_OUTGOING_SLOT_V1,
                 &json!({"holder": holder, "peer": peer, "observed_at": event.created_at}),
             )?;
             let accepted_at = now();

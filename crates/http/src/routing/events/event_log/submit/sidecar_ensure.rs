@@ -28,7 +28,7 @@ async fn validate_and_prepare(
             .await?;
     if let Some(existing) = state
         .event_queries()
-        .canonical_event(&parsed.event_id)
+        .canonical_event(parsed.event_id.as_str())
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -61,7 +61,7 @@ async fn validate_and_prepare(
 
     let records = state
         .event_queries()
-        .canonical_events_for_realm_actor(&parsed.realm_id, &parsed.actor_id)
+        .canonical_events_for_realm_actor(parsed.realm_id.as_str(), parsed.actor_id.as_str())
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -104,7 +104,11 @@ async fn validate_and_prepare(
         ));
     }
     if let Some((predecessor_id, _)) = accepted_batch_predecessor {
-        if !parsed.prev_refs.iter().any(|id| id == predecessor_id) {
+        if !parsed
+            .prev_refs
+            .iter()
+            .any(|id| id.as_str() == predecessor_id)
+        {
             return Err(SubmitOneError::new(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
@@ -115,7 +119,7 @@ async fn validate_and_prepare(
         for predecessor in &parsed.prev_refs {
             if state
                 .event_queries()
-                .canonical_event(predecessor)
+                .canonical_event(predecessor.as_str())
                 .await
                 .map_err(|error| {
                     SubmitOneError::new(
@@ -146,16 +150,16 @@ async fn validate_and_prepare(
     stamp_projection_operation_received_at(&mut operation, received_at);
     let projected_event = crate::routing::events::projection::projection_event_from_operation(
         &operation,
-        Some(&parsed.actor_id),
+        Some(parsed.actor_id.as_str()),
     );
     let command = soland_services::events::CommitAcceptedEventCommand {
         device_pairing_authorization: None,
         contact_projection: None,
         event: soland_services::events::AcceptedEvent {
-            event_id: parsed.event_id,
-            actor_id: parsed.actor_id.clone(),
+            event_id: parsed.event_id.to_string(),
+            actor_id: parsed.actor_id.to_string(),
             actor_seq: parsed.actor_seq,
-            realm_id: Some(parsed.realm_id),
+            realm_id: Some(parsed.realm_id.to_string()),
             kind: parsed.kind,
             schema_id: parsed.schema_id,
             canonical_digest: parsed.canonical_digest,
@@ -239,9 +243,8 @@ pub(crate) async fn submit_sidecar_ensure_batch(
         .iter()
         .map(|event| event.operation.clone())
         .collect::<Vec<_>>();
-    crate::routing::events::operations::validate_operation_semantics(state, &operations).map_err(
-        |reason| SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", reason),
-    )?;
+    crate::routing::events::operations::validate_operation_semantics(state, &operations)
+        .map_err(SubmitOneError::semantic_schema_violation)?;
     let mut staged = state.projections().snapshot();
     let hlc = soland_domain::hlc::ServerHlc::new("sidecar-ensure-preflight");
     let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();

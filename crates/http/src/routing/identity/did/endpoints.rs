@@ -104,20 +104,17 @@ pub struct IdentityRegistryVisibility {
     pub write_policy: String,
 }
 
-#[salvo::oapi::endpoint(operation_id = "identity_describe", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "identity_describe"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.root.identity.registry.read.describe",
+    tags("identity")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.root.identity.registry.read.describe"))]
 pub(crate) async fn identity_describe(
     depot: &mut Depot,
 ) -> JsonResult<IdentityRegistryDescription> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let did_webvh = did_webvh_descriptor(state);
-    let mut profiles = vec![
-        "ak.profile.identity_registry.v1".to_owned(),
-        "ak.identity.local-dev.v1".to_owned(),
-    ];
-    if did_webvh["enabled"].as_bool().unwrap_or(false) {
-        profiles.push("ak.identity.webvh.provider.v1".to_owned());
-    }
+    let profiles = vec![arkret_wire::ProfileId::IDENTITY_REGISTRY_V1.to_owned()];
     let (service_id, _) = crate::routing::system::service_resolution::service_ids(state)?;
     let supported_did_methods = state
         .config()
@@ -126,11 +123,13 @@ pub(crate) async fn identity_describe(
         .map(|method| format!("did:{method}"))
         .collect::<Vec<_>>();
     let trust_roots = identity_trust_roots(state);
-    let supported_features = vec![
-        "ak.feature.identity.resolve.v1".to_owned(),
-        "ak.feature.identity.receipts.v1".to_owned(),
-        "ak.feature.identity.did_webvh.v1".to_owned(),
-    ];
+    let supported_features = Vec::new();
+    let experimental_features = state
+        .config()
+        .development_mode
+        .then(|| "org.arkret.soland.identity.local_dev.v1".to_owned())
+        .into_iter()
+        .collect();
 
     json_ok(IdentityRegistryDescription {
         protocol_version: arkret_wire::constants::PROTOCOL_VERSION.to_owned(),
@@ -142,12 +141,12 @@ pub(crate) async fn identity_describe(
         profiles: profiles.clone(),
         supported_profiles: profiles,
         supported_operations: vec![
-            "ak.root.identity.registry.read.describe".to_owned(),
-            "ak.root.identity.read.resolve".to_owned(),
-            "ak.root.identity.document.resource.get".to_owned(),
-            "ak.root.identity.log.read.list".to_owned(),
-            "ak.root.identity.receipts.read.list".to_owned(),
-            "ak.root.identity.command.submit_did_operation".to_owned(),
+            arkret_wire::ServiceOperationId::ROOT_IDENTITY_REGISTRY_READ_DESCRIBE.to_owned(),
+            arkret_wire::ServiceOperationId::ROOT_IDENTITY_READ_RESOLVE.to_owned(),
+            arkret_wire::ServiceOperationId::ROOT_IDENTITY_DOCUMENT_RESOURCE_GET.to_owned(),
+            arkret_wire::ServiceOperationId::ROOT_IDENTITY_LOG_READ_LIST.to_owned(),
+            arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECEIPTS_READ_LIST.to_owned(),
+            arkret_wire::ServiceOperationId::ROOT_IDENTITY_COMMAND_SUBMIT_DID_OPERATION.to_owned(),
             arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE
                 .to_owned(),
             arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_RESOURCE_GET
@@ -184,11 +183,11 @@ pub(crate) async fn identity_describe(
         },
         implemented_features: supported_features,
         claimed_profiles: vec![IdentityRegistryClaimedProfile {
-            profile_id: "ak.profile.identity_registry.v1".to_owned(),
+            profile_id: arkret_wire::ProfileId::IDENTITY_REGISTRY_V1.to_owned(),
             claim_kind: "self_claimed".to_owned(),
         }],
         verified_profiles: Vec::new(),
-        experimental_features: Vec::new(),
+        experimental_features,
         compat_surfaces: Vec::new(),
         development_mode: state.config().development_mode,
         rate_limit_policy: IdentityRegistryRateLimitPolicy {
@@ -385,35 +384,38 @@ pub(crate) async fn embedded_webvh_register(
         &body.also_known_as,
         service_endpoint.as_str(),
     );
-    let mut parameters = json!({
-        "scid": WEBVH_SCID_PLACEHOLDER,
-        "method": WEBVH_METHOD_VERSION,
-        "updateKeys": [body.update_public_key_multibase.clone()],
-        "nextKeyHashes": [
-            arkret_canonical::sha256_multihash_base58btc(
-                body.next_update_public_key_multibase.as_bytes()
-            )
-        ],
-    });
+    let update_keys = [body.update_public_key_multibase.clone()];
+    let next_key_hashes = [arkret_signatures::webvh::webvh_next_key_hash_value(
+        body.next_update_public_key_multibase.as_str(),
+    )];
+    let mut entry_skeleton = arkret_signatures::webvh::build_webvh_inception_skeleton(
+        &arkret_signatures::webvh::WebvhInceptionSkeletonInput {
+            version_time: &version_time,
+            update_keys: &update_keys,
+            next_key_hashes: &next_key_hashes,
+            portable: None,
+            witness: None,
+            state: &did_document_skeleton,
+        },
+    );
     // Optional governance threshold is part of the signed entry and therefore
     // flows through SCID derivation and the entry hash unchanged.
-    if let Value::Object(map) = &mut parameters
+    if let Some(parameters) = entry_skeleton
+        .get_mut("parameters")
+        .and_then(Value::as_object_mut)
         && let Some(governance) = body.governance.clone()
     {
-        map.insert("governance".to_owned(), governance);
+        parameters.insert("governance".to_owned(), governance);
     }
-    let entry_skeleton = json!({
-        "versionId": WEBVH_SCID_PLACEHOLDER,
-        "versionTime": version_time,
-        "parameters": parameters,
-        "state": did_document_skeleton,
-    });
-    let scid = derive_webvh_scid(&entry_skeleton).map_err(AppError::param_invalid)?;
+    let scid = arkret_signatures::webvh::derive_webvh_scid(&entry_skeleton)
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let location =
         embedded_webvh_location_with_scid(&method_authority, &https_authority, &local_id, &scid);
     let did_key_id = format!("{}#{}", location.did, did_key_fragment);
     let update_key_id = format!("{}#{}", location.did, update_key_fragment);
-    let mut log_entry = substitute_webvh_scid(entry_skeleton, &scid);
+    let mut log_entry =
+        arkret_signatures::webvh::finalize_webvh_scid_substitution(&entry_skeleton, &scid)
+            .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let version_hash =
         webvh_entry_hash_multibase(&log_entry, &scid).map_err(AppError::param_invalid)?;
     let version_id = format!("1-{version_hash}");
@@ -702,8 +704,11 @@ fn ensure_webvh_document_id(did: &str, document: &Value) -> Result<(), AppError>
     }
 }
 
-#[salvo::oapi::endpoint(operation_id = "embedded_webvh_document", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "embedded_webvh_document"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.identity.webvh.document.get",
+    tags("identity")
+)]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.identity.webvh.document.get"))]
 pub(crate) async fn embedded_webvh_document(
     depot: &mut Depot,
     req: &mut Request,
@@ -720,8 +725,11 @@ pub(crate) async fn embedded_webvh_document(
     );
 }
 
-#[salvo::oapi::endpoint(operation_id = "embedded_webvh_log", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "embedded_webvh_log"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.identity.webvh.log.get",
+    tags("identity")
+)]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.identity.webvh.log.get"))]
 pub(crate) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let Some(record) = embedded_webvh_record_for_request(state, req, res).await else {
@@ -760,6 +768,9 @@ pub(crate) async fn identity_resolve(
 ) -> JsonResult<IdentityResolveOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
+    let requires_webvh_evidence = body
+        .requested_evidence_kinds
+        .contains(&IdentityMethodEvidenceKind::DidWebvh);
     let did = body.did.as_str();
     if let Ok(Some(record)) = state.dids().document(did).await {
         // G3.S3: every did:webvh resolution MUST first re-validate the
@@ -771,31 +782,29 @@ pub(crate) async fn identity_resolve(
         // proof, a genesis-declared recovery key (key-management.md §3.3),
         // or an organization governance quorum (identity-did.md §8.1–§8.2).
         // Spec: identity-did.md §3.4 + §4.2.1 + §7 + §8.
-        if did.starts_with("did:webvh:") {
-            run_webvh_resolution_checks(state, did).await?;
-        }
+        let method_evidence = if did.starts_with("did:webvh:") {
+            run_webvh_resolution_checks(state, did).await?
+        } else {
+            None
+        };
+        require_requested_webvh_evidence(requires_webvh_evidence, method_evidence.as_ref())?;
         return json_ok(identity_resolve_outcome(
             body.did,
             record.did_document,
             key_log_head_hash(record.key_log_head)?,
             Some(record.seq),
-            record.method_evidence,
+            method_evidence,
         ));
     }
     if let Some(document) = super::document::federation_peer_did_document(state, did) {
+        require_requested_webvh_evidence(requires_webvh_evidence, None)?;
         return json_ok(identity_resolve_outcome(
-            body.did,
-            document,
-            None,
-            None,
-            json!({
-                "mode": "federation_peer_discovery",
-                "source": "endpoint_bound_did_document",
-            }),
+            body.did, document, None, None, None,
         ));
     }
     let sdk_document = state.dids().resolve_did(&body.did).await.ok();
     if let Some(doc) = sdk_document {
+        require_requested_webvh_evidence(requires_webvh_evidence, None)?;
         return json_ok(identity_resolve_outcome(
             body.did,
             json!({
@@ -805,17 +814,36 @@ pub(crate) async fn identity_resolve(
             }),
             None,
             None,
-            json!({"mode": "sdk_resolver", "source": "did_resolver"}),
+            None,
         ));
     }
     let record = identity_document_record(state, did).await;
+    let method_evidence = if did.starts_with("did:webvh:") {
+        run_webvh_resolution_checks(state, did).await?
+    } else {
+        None
+    };
+    require_requested_webvh_evidence(requires_webvh_evidence, method_evidence.as_ref())?;
     json_ok(identity_resolve_outcome(
         body.did,
         record.did_document,
         key_log_head_hash(record.key_log_head)?,
         Some(record.seq),
-        record.method_evidence,
+        method_evidence,
     ))
+}
+
+fn require_requested_webvh_evidence(
+    required: bool,
+    evidence: Option<&IdentityMethodEvidence>,
+) -> Result<(), AppError> {
+    if required && !matches!(evidence, Some(IdentityMethodEvidence::DidWebvh { .. })) {
+        return Err(AppError::new(
+            ErrorCode::CurrentDidAuthorityUnavailable,
+            "requested did_webvh method evidence is unavailable from a fully verified history",
+        ));
+    }
+    Ok(())
 }
 
 #[salvo::oapi::endpoint(
@@ -868,7 +896,7 @@ fn identity_resolve_outcome(
     document: Value,
     key_log_head: Option<Hash>,
     seq: Option<u64>,
-    _method_evidence: Value,
+    method_evidence: Option<IdentityMethodEvidence>,
 ) -> IdentityResolveOutcome {
     let mut did_document =
         serde_json::from_value::<BTreeMap<String, Value>>(document).unwrap_or_default();
@@ -879,6 +907,7 @@ fn identity_resolve_outcome(
         did_document,
         key_log_head,
         seq,
+        method_evidence,
         receipts: Vec::new(),
     }
 }
@@ -1158,7 +1187,7 @@ pub(crate) async fn identity_submit_did_operation(
         seq: next_seq,
         method_evidence: json!({
             "mode": "submitted_operation",
-            "source": "ak.root.identity.command.submit_did_operation",
+            "source": arkret_wire::ServiceOperationId::ROOT_IDENTITY_COMMAND_SUBMIT_DID_OPERATION,
             "version_id": version_id,
         }),
         // put_document authoritatively overwrites freshness evidence with

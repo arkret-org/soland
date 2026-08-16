@@ -1,3 +1,5 @@
+use soland_storage::ConflictCode;
+
 use super::{
     Arc, BTreeMap, BackupSeriesEraseProgressRecord, Mutex, PersistenceError, PersistenceResult,
     RecoveryPolicyRecord, RecoveryPolicyStore, RecoverySessionRecord, RecoverySessionStore,
@@ -49,7 +51,8 @@ impl RecoveryPolicyStore for MemoryRecoveryPolicyStore {
         let mut data = self.data.lock();
         if data.contains_key(&record.policy_id) {
             return Err(PersistenceError::Conflict(format!(
-                "recovery policy_id `{}` already exists",
+                "{}: recovery policy_id `{}` already exists",
+                ConflictCode::RecoveryPolicyConflict,
                 record.policy_id
             )));
         }
@@ -57,26 +60,33 @@ impl RecoveryPolicyStore for MemoryRecoveryPolicyStore {
             existing.principal_id == record.principal_id && existing.version == record.version
         }) {
             return Err(PersistenceError::Conflict(format!(
-                "recovery policy principal/version ({}, {}) already exists",
-                record.principal_id, record.version
+                "{}: recovery policy principal/version ({}, {}) already exists",
+                ConflictCode::RecoveryPolicyVersionNotMonotonic,
+                record.principal_id,
+                record.version
             )));
         }
         if let Some(active) = recovery_active_policy_locked(&data, &record.principal_id) {
             if record.version <= active.version {
                 return Err(PersistenceError::Conflict(format!(
-                    "recovery policy version {} is not greater than active {}",
-                    record.version, active.version
+                    "{}: recovery policy version {} is not greater than active {}",
+                    ConflictCode::RecoveryPolicyVersionNotMonotonic,
+                    record.version,
+                    active.version
                 )));
             }
             if record.supersedes.as_deref() != Some(active.policy_id.as_str()) {
                 return Err(PersistenceError::Conflict(format!(
-                    "recovery policy supersedes {:?} does not match active `{}`",
-                    record.supersedes, active.policy_id
+                    "{}: recovery policy supersedes {:?} does not match active `{}`",
+                    ConflictCode::RecoveryPolicySupersedesInvalid,
+                    record.supersedes,
+                    active.policy_id
                 )));
             }
         } else if record.version != 1 {
             return Err(PersistenceError::Conflict(format!(
-                "recovery genesis policy for `{}` must have version=1",
+                "{}: recovery genesis policy for `{}` must have version=1",
+                ConflictCode::RecoveryPolicyVersionNotMonotonic,
                 record.principal_id
             )));
         }
@@ -110,7 +120,8 @@ impl RecoverySessionStore for MemoryRecoverySessionStore {
         let mut by_id = self.by_id.lock();
         if by_id.contains_key(&record.recovery_session_id) {
             return Err(PersistenceError::Conflict(format!(
-                "recovery_session_id `{}` already exists",
+                "{}: recovery_session_id `{}` already exists",
+                ConflictCode::RecoverySessionAlreadyExists,
                 record.recovery_session_id
             )));
         }
@@ -484,7 +495,10 @@ mod tests {
             authorization_rules: vec![AuthoritySetAuthorizationRule {
                 rule_id: "backup_erase".to_owned(),
                 issuer_role: AuthoritySetIssuerRole::RealmAdmission,
-                allowed_actions: vec!["ak.keys.backup_series.erase".to_owned()],
+                allowed_actions: vec![
+                    arkret_wire::CapabilityActionId::SELF_KEYS_BACKUP_SERIES_COMMAND_ERASE
+                        .to_owned(),
+                ],
                 issuers: vec![AuthoritySetIssuer {
                     verification_method: DidUrl::new(
                         "did:web:principal.example#backup-erase-authority",
@@ -509,7 +523,8 @@ mod tests {
             .unwrap(),
             device_id: DeviceId::new("ak:device:019a7360-0000-7000-8000-000000000113").unwrap(),
             scope_ref,
-            action: "ak.keys.backup_series.erase".to_owned(),
+            action: arkret_wire::CapabilityActionId::SELF_KEYS_BACKUP_SERIES_COMMAND_ERASE
+                .to_owned(),
             authorization_rule_id: "backup_erase".to_owned(),
             risk_tier: RiskTier::High,
             issued_at: now - Duration::minutes(1),

@@ -826,7 +826,9 @@ pub(super) async fn join_candidates_for_resolved_realm(
             service_kind: RealmJoinCandidateServiceKind::PrincipalServer,
             role: RealmJoinCandidateRole::Primary,
             endpoint: None,
-            operations: vec!["ak.self.events.command.submit".to_owned()],
+            operations: vec![
+                arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT.to_owned(),
+            ],
             join_methods,
             encryption_profile,
             priority: Some(0),

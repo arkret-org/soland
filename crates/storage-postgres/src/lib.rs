@@ -15,23 +15,24 @@ pub(crate) use serde_json::Value;
 pub(crate) use soland_storage::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountLifecycleRecord,
     AccountLifecycleStore, AccountLocalpartRecord, AccountLocalpartStore, AccountRecord,
-    AccountStore, AgentPairingCommitIntent, AgentParticipationStore, AgentPrincipalRecord,
-    AgentProvisioningAbandonmentWriteOutcome, AgentRuntimeActivation, AgentRuntimeApprovalWrite,
-    AgentRuntimeEnqueueOutcome, AgentRuntimeMessageRecord, AgentSidecarContextRecord,
-    AgentSidecarRecord, AgentStore, AppletStore, AppletTransactionReplayBegin,
-    AppletTransactionReplayRecord, AuditStore, BackupSeriesEraseProgressRecord, BlobRecord,
-    BlobStore, CanonicalEventRecord, CircleMemberProjectionRecord, CircleProjectionRecord,
-    CircleProjectionStore, ConfirmAgentProvisioningAbandonment, ConsentCellKey, ConsentCellRecord,
-    ConsentCellStore, ContactRecord, ContactStore, ContactVerifiedMirrorRecord,
-    ContactVerifiedMirrorStore, ControlProposalAuthorityAckRecord,
-    ControlProposalAuthorityAckStore, ControlProposalDecisionCommitOutcome, CursorRevocation,
-    DeviceInventoryRecord, DeviceInventoryStore, DeviceMessageBatchCommitOutcome,
-    DeviceMessageBatchInspection, DeviceMessageBatchRecord, DeviceMessageIntentRecord,
-    DeviceMessageRecord, DeviceMessageStore, DevicePairingRecord, DevicePairingStore,
-    DeviceRevocationCleanupIntent, DeviceRevocationGateLinearization,
-    DeviceRevocationGateLinearizationRequest, DeviceRevocationGateSelector,
-    DeviceRevocationGateStatus, DeviceRevocationStore, DeviceRevocationTargetRecord,
-    DeviceRevocationTargetStatus, DeviceRevocationTransition,
+    AccountStatusAuthorityBindingAdvance, AccountStatusAuthorityBindingFloor,
+    AccountStatusAuthorityBindingStore, AccountStore, AgentPairingCommitIntent,
+    AgentParticipationStore, AgentPrincipalRecord, AgentProvisioningAbandonmentWriteOutcome,
+    AgentRuntimeActivation, AgentRuntimeApprovalWrite, AgentRuntimeEnqueueOutcome,
+    AgentRuntimeMessageRecord, AgentSidecarContextRecord, AgentSidecarRecord, AgentStore,
+    AppletStore, AppletTransactionReplayBegin, AppletTransactionReplayRecord, AuditStore,
+    BackupSeriesEraseProgressRecord, BlobRecord, BlobStore, CanonicalEventRecord,
+    CircleMemberProjectionRecord, CircleProjectionRecord, CircleProjectionStore,
+    ConfirmAgentProvisioningAbandonment, ConsentCellKey, ConsentCellRecord, ConsentCellStore,
+    ContactRecord, ContactStore, ContactVerifiedMirrorRecord, ContactVerifiedMirrorStore,
+    ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore,
+    ControlProposalDecisionCommitOutcome, CursorRevocation, DeviceInventoryRecord,
+    DeviceInventoryStore, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
+    DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
+    DevicePairingRecord, DevicePairingStore, DeviceRevocationCleanupIntent,
+    DeviceRevocationGateLinearization, DeviceRevocationGateLinearizationRequest,
+    DeviceRevocationGateSelector, DeviceRevocationGateStatus, DeviceRevocationStore,
+    DeviceRevocationTargetRecord, DeviceRevocationTargetStatus, DeviceRevocationTransition,
     DirectConversationFoundingCommitOutcome, DirectConversationFoundingSlotRecord, DriftResult,
     EnqueueAgentRuntimeMessage, EventStore, FederationFrontierExchangeRecord,
     FederationFrontierExchangeStore, FederationOperationsStore, FederationOutboxClaim,
@@ -89,6 +90,7 @@ pub mod schema;
 pub use db::{Db, PgPool, PoolTuning};
 pub(crate) use query_rows::{ClaimSeqRow, CountRow, ExistsRow, JsonPayloadRow, MaxSeqRow};
 
+mod account_status;
 mod accounts;
 mod agent_membership_cascades;
 mod agent_principal_row;
@@ -136,6 +138,7 @@ mod unit_of_work;
 mod websocket_auth;
 mod webvh;
 
+pub(crate) use account_status::PgAccountStatusAuthorityBindingStore;
 pub use accounts::*;
 pub use agent_membership_cascades::*;
 pub(crate) use agent_principal_row::AgentPrincipalRow;

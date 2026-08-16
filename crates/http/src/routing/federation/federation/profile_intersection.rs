@@ -686,6 +686,6 @@ fn contains_str(values: &[String], needle: &str) -> bool {
 fn schema_can_fall_back_to_event_payload(schema: &str) -> bool {
     schema.starts_with("ak.schema.")
         && schema != SchemaId::CAPABILITY_V1
-        && schema != "ak.schema.grant_constraint.v1"
-        && schema != "ak.schema.resource_selector.v1"
+        && schema != arkret_wire::SchemaId::GRANT_CONSTRAINT_V1
+        && schema != arkret_wire::SchemaId::RESOURCE_SELECTOR_V1
 }

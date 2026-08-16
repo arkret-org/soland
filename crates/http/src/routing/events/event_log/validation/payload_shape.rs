@@ -19,8 +19,8 @@ use super::super::*;
 /// conforming producers never trip this structural scan.
 const SIDECAR_FORBIDDEN_WIRE_KEYS: &[&str] = &["sidecar_exchange_binding", "exchange_id"];
 const SIDECAR_FORBIDDEN_WIRE_STRING_VALUES: &[&str] = &[
-    "ak.schema.agent_sidecar_event_exchange_binding.v1",
-    "ak.schema.agent_sidecar_exchange_control.v1",
+    arkret_wire::SchemaId::AGENT_SIDECAR_EVENT_EXCHANGE_BINDING_V1,
+    arkret_wire::SchemaId::AGENT_SIDECAR_EXCHANGE_CONTROL_V1,
 ];
 
 fn scan_sidecar_forbidden_wire_fields(value: &Value) -> Result<(), EventValidationError> {

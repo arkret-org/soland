@@ -203,7 +203,7 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref() {
         .expect("resumable encrypted metadata is persisted");
     assert_eq!(
         encrypted_attachment["scheme"],
-        "ak.file_transfer.encrypted_blob.v1"
+        arkret_wire::BLOB_SCHEME_WHOLE_FILE_AEAD_V1
     );
 
     // Content-addressing invariant (spec §2.1): the resumable path MUST

@@ -31,7 +31,7 @@ pub(super) async fn issue_authorization_leases(
     let session = aa.authenticated_session(state, req).await?;
     super::super::require_agent_session_scope(
         &session,
-        "ak.self.authorization_leases.command.issue",
+        arkret_wire::ServiceOperationId::SELF_AUTHORIZATION_LEASES_COMMAND_ISSUE,
     )?;
     let request = body.into_inner();
     let idempotency_key = req
@@ -458,10 +458,9 @@ fn publication_action(kind: &str) -> (String, RiskTier) {
         .copied()
         .find(|descriptor| descriptor.action.as_str() == kind)
         .or_else(|| {
-            candidates
-                .iter()
-                .copied()
-                .find(|descriptor| descriptor.action.as_str() == "ak.realm.admin")
+            candidates.iter().copied().find(|descriptor| {
+                descriptor.action.as_str() == arkret_wire::CapabilityActionId::REALM_ADMIN
+            })
         })
         .or_else(|| candidates.first().copied());
     selected.map_or_else(
@@ -548,7 +547,7 @@ pub(crate) fn authority_for_scope(
     })?;
     let policy = AuthoritySetPolicy {
         schema: SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
-        authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
+        authority_set_id: arkret_wire::AuthoritySetId::REALM_ADMISSION_V1.to_owned(),
         policy_kind: AuthoritySetPolicyKind::RealmAdmission,
         scope_ref: scope_ref.clone(),
         source: AuthoritySetPolicySource {
@@ -569,7 +568,7 @@ pub(crate) fn authority_for_scope(
     };
     let authority_set_digest = policy.digest().map_err(lease_internal_error)?;
     let reference = AuthoritySetRef {
-        authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
+        authority_set_id: arkret_wire::AuthoritySetId::REALM_ADMISSION_V1.to_owned(),
         authority_set_digest,
     };
     Ok((reference, policy))

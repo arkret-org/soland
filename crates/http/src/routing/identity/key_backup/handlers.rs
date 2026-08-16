@@ -505,7 +505,7 @@ pub(super) async fn unlock_key_backup(
         append_audit_log(
             state,
             Some(&session.actor),
-            "ak.audit.accessed",
+            arkret_wire::event_kind_str::AUDIT_ACCESSED,
             json!({
                 "access_kind": "key_backup_read",
                 "backup_id": backup_id.clone(),
@@ -635,7 +635,7 @@ pub(super) async fn delete_key_backup(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ak.audit.accessed",
+        arkret_wire::event_kind_str::AUDIT_ACCESSED,
         json!({
             "access_kind": "key_backup_delete",
             "backup_id": backup_id.clone(),

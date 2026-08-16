@@ -814,7 +814,8 @@ async fn try_apply_device_generation_event_seal(
         .map(|record| record.event_id.clone())
         .collect::<BTreeSet<_>>();
     for record in records_by_digest.values().filter(|record| {
-        record.kind == "ak.device.reanchor" && !quarantined.contains(&record.canonical_digest)
+        record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
+            && !quarantined.contains(&record.canonical_digest)
     }) {
         anchor_event_ids.insert(record.event_id.clone());
         if let Some(authorize) = soland_services::events::paired_replacement_authorize(

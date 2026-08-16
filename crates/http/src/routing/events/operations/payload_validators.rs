@@ -9,7 +9,7 @@ pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<()
     let wire_payload = operation.payload.clone();
     event_payload_validator_catalog()
         .map_err(|_| "operation payload validator catalog is unavailable")?
-        .validate_payload("ak.invite.create", &wire_payload)
+        .validate_payload(arkret_wire::event_kind_str::INVITE_CREATE, &wire_payload)
         .map_err(|_| "operation payload violates SDK artifact schema")?;
     validate_invite_create_wire_keys(&wire_payload)
         .map_err(|_| "operation payload carries unsupported fields")?;

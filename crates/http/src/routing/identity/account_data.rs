@@ -42,7 +42,7 @@ struct AccountDataKeySpec {
 
 const REGISTERED_ACCOUNT_DATA_KEY_PATTERNS: &[AccountDataKeySpec] = &[
     AccountDataKeySpec {
-        account_data_key: "ak.agent.draft.v1",
+        account_data_key: arkret_wire::AccountDataKey::AGENT_DRAFT_V1,
         controller_private: true,
     },
     // `ak.agent.sidecar_projection.v1` was removed from the account-data
@@ -82,23 +82,23 @@ const REGISTERED_ACCOUNT_DATA_KEY_PATTERNS: &[AccountDataKeySpec] = &[
         controller_private: true,
     },
     AccountDataKeySpec {
-        account_data_key: "ak.account.blocklist",
+        account_data_key: arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST,
         controller_private: true,
     },
     AccountDataKeySpec {
-        account_data_key: "ak.dnd_schedule",
+        account_data_key: arkret_wire::AccountDataKey::DND_SCHEDULE,
         controller_private: true,
     },
     AccountDataKeySpec {
-        account_data_key: "ak.presence.preference",
+        account_data_key: arkret_wire::AccountDataKey::PRESENCE_PREFERENCE,
         controller_private: true,
     },
     AccountDataKeySpec {
-        account_data_key: "ak.presence.visibility",
+        account_data_key: arkret_wire::AccountDataKey::PRESENCE_VISIBILITY,
         controller_private: true,
     },
     AccountDataKeySpec {
-        account_data_key: "ak.push_rules",
+        account_data_key: arkret_wire::AccountDataKey::PUSH_RULES,
         controller_private: true,
     },
 ];
@@ -116,15 +116,8 @@ fn registered_account_data_key_spec(account_data_key: &str) -> Option<&'static A
 /// neither over resource reads nor over the account stream, even when an
 /// agent-granted session presents the controller as its actor
 /// (zh/models/sidecar.md §7 / private-objects.md §4.2).
-///
-/// Retired prefixes (for example `ak.agent.sidecar_projection.v1`) also count
-/// as controller-private: new writes are already hard-rejected by the key
-/// validator, and treating legacy stored rows as controller-private keeps them
-/// out of agent-session list results and the account stream (fail closed).
 pub(crate) fn is_controller_private_account_data_key(account_data_key: &str) -> bool {
-    crate::routing::account_data_encryption::is_retired_encrypted_account_data_key(account_data_key)
-        || registered_account_data_key_spec(account_data_key)
-            .is_some_and(|spec| spec.controller_private)
+    registered_account_data_key_spec(account_data_key).is_some_and(|spec| spec.controller_private)
 }
 
 fn validate_registered_account_data_key(account_data_key: &str) -> Result<(), AppError> {
@@ -927,12 +920,8 @@ mod tests {
     }
 
     /// S-1 (spec review): the retired `ak.agent.sidecar_projection.v1` prefix
-    /// must be hard-rejected for put/get/delete regardless of session kind.
-    /// All three handlers call `validate_registered_account_data_key` before
-    /// any session/agent branching, so this validator-level rejection is the
-    /// shared param_invalid outcome for agent sessions and plain sessions
-    /// alike; and legacy stored rows stay controller-private so agent-session
-    /// list filtering and the account-stream skip both keep applying.
+    /// must be rejected by the generic registry-membership check, not by a
+    /// production alias list that silently becomes a second registry.
     #[test]
     fn retired_sidecar_projection_prefix_is_rejected_and_stays_controller_private() {
         for key in [
@@ -944,10 +933,6 @@ mod tests {
             assert!(
                 err.to_string().contains("registered private key pattern"),
                 "retired key `{key}` must fail the shared key validator"
-            );
-            assert!(
-                is_controller_private_account_data_key(key),
-                "legacy rows under `{key}` must remain controller-private"
             );
         }
         // The active view-state surface is unaffected.

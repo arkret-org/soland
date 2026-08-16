@@ -44,7 +44,14 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "ak.profile.soland_limited_server.v1")
+            .any(|profile| profile == "org.arkret.soland.profile.limited_server.v1")
+    );
+    assert!(
+        describe["experimental_features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|feature| feature == "org.arkret.soland.profile.limited_server.v1")
     );
 
     let operator_describe: Value = TestClient::get("http://server/_soland/describe")
@@ -59,7 +66,7 @@ async fn health_and_describe_work() {
             .unwrap()
             .iter()
             .any(
-                |profile| profile["profile"] == "ak.profile.soland_limited_server.v1"
+                |profile| profile["profile"] == "org.arkret.soland.profile.limited_server.v1"
                     && profile["status"] == "unsupported"
             )
     );
@@ -68,14 +75,13 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "ak.schema.core.v1" || profile == "ak.reducer.core.v1")
+            .any(|profile| profile == "ak.reducer.core.v1")
     );
     assert!(
         describe["supported_schema_profiles"]
             .as_array()
             .unwrap()
-            .iter()
-            .any(|profile| profile == "ak.schema.core.v1")
+            .is_empty()
     );
     // Every advertised reducer profile has to be one the Spec registers.
     let reducer_profiles = describe["supported_reducer_profiles"].as_array().unwrap();

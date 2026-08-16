@@ -281,7 +281,25 @@ mod tests {
             request_event_id: "ak:event:request".to_owned(),
             request_digest: "sha256:request".to_owned(),
             canonical_event_bytes: br#"{"event_id":"ak:event:request"}"#.to_vec(),
-            source_receipt: serde_json::json!({"request_event_ref":"ak:event:request"}),
+            source_receipt: serde_json::from_value(serde_json::json!({
+                "core": {
+                    "holder": {"kind": "human", "principal_id": "ak:did_core:web:holder.example"},
+                    "peer": {"kind": "human", "principal_id": "ak:did_core:web:peer.example"},
+                    "slot_version": 1,
+                    "request_event_ref": "ak:event:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-",
+                    "request_digest": format!("sha256:{}", "a".repeat(64)),
+                    "source_checkpoint": format!("sha256:{}", "b".repeat(64)),
+                    "accepted_at": "2026-08-09T00:00:00.000Z",
+                    "issuer": "ak:did_core:web:issuer.example"
+                },
+                "receipt_digest": format!("sha256:{}", "c".repeat(64)),
+                "signature": {
+                    "verification_method": "did:web:issuer.example#federation-signing-key",
+                    "created_at": "2026-08-09T00:00:00.000Z",
+                    "jws": "YWJj"
+                }
+            }))
+            .expect("typed Contact receipt fixture"),
             issuer_service_id: "did:web:requester.example".to_owned(),
             verified_at: chrono::Utc
                 .timestamp_opt(1_700_000_000, 0)
@@ -320,7 +338,9 @@ mod tests {
         );
 
         let mut conflicting = record;
-        conflicting.source_receipt = serde_json::json!({"request_event_ref":"ak:event:other"});
+        conflicting.source_receipt.core.request_event_ref =
+            arkret_wire::EventId::new("ak:event:ARTzU1T6HTPffn8VGBicK6XWx4KIC4PXvv0NX-EMSj4G")
+                .unwrap();
         assert!(store.put_verified(&conflicting).await.is_err());
     }
 }

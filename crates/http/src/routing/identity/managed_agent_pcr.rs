@@ -984,13 +984,10 @@ async fn current_managed_frontier(
         .await
         .map_err(|error| AppError::internal(format!("Agent PCR MLS lookup failed: {error}")))?;
     let mut matching = commits.into_iter().filter(|commit| {
-        commit.effective_scope.get("kind").and_then(Value::as_str) == Some("realm")
-            && commit
-                .effective_scope
-                .get("realm_id")
-                .and_then(Value::as_str)
-                == Some(realm_id)
-            && !commit.frontier_contested
+        matches!(
+            &commit.effective_scope,
+            arkret_wire::ScopeRef::Realm { realm_id: candidate } if candidate.as_str() == realm_id
+        ) && !commit.frontier_contested
     });
     let Some(commit) = matching.next() else {
         return Ok(None);

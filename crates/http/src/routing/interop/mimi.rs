@@ -30,8 +30,8 @@ use arkret_models_collaboration::http_bodies::{
     MimiSubmitMessageRequestBody, MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody,
 };
 use arkret_models_collaboration::objects::mimi::{
-    MimiConsentPurpose, MimiConsentTargetKind, MimiDelivery, MimiDeliveryStatus, MimiGroupInfo,
-    MimiIdentifierMatch,
+    MimiCiphertext, MimiConsentPurpose, MimiConsentTargetKind, MimiDelivery, MimiDeliveryStatus,
+    MimiGroupInfo, MimiIdentifierMatch, MimiOpaquePayload,
 };
 use arkret_signatures::http_signature::{
     Component, HttpMessageVerificationError, SignatureError, SignatureInput, SignaturePolicyError,

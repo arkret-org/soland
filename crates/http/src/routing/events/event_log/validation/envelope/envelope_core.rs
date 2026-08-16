@@ -87,7 +87,7 @@ pub(in crate::routing) fn validate_private_invite_envelope<'a>(
 async fn validate_created_at_causal_lower_bound(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
-    prev_refs: &[String],
+    prev_refs: &[EventId],
 ) -> Result<(), EventValidationError> {
     let Some(created_at) = object
         .get("created_at")
@@ -97,7 +97,11 @@ async fn validate_created_at_causal_lower_bound(
         return Ok(());
     };
     for prev_ref in prev_refs {
-        let Ok(Some(record)) = state.event_queries().canonical_event(prev_ref).await else {
+        let Ok(Some(record)) = state
+            .event_queries()
+            .canonical_event(prev_ref.as_str())
+            .await
+        else {
             continue;
         };
         let Some(predecessor) = record
@@ -134,15 +138,13 @@ async fn validate_event_envelope_with_ingress(
             "Event Envelope must be a JSON object",
         )
     })?;
-    let session_actor_id = arkret_wire::DidCoreId::new(session.actor.clone())
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("session actor is invalid: {error}"),
-            )
-        })?
-        .to_string();
+    let session_actor_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
+        event_validation_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("session actor is invalid: {error}"),
+        )
+    })?;
     validate_event_critical_features(state, object)?;
     // `effective_scope` is reducer output and is intentionally absent from
     // the closed SDK Event DTO. Reject it from the raw envelope before
@@ -163,13 +165,13 @@ async fn validate_event_envelope_with_ingress(
             "event_id is required",
         )
     })?;
-    if !is_valid_event_id(&event_id) {
-        return Err(event_validation_error(
+    let event_id = EventId::new(event_id).map_err(|_| {
+        event_validation_error(
             StatusCode::BAD_REQUEST,
             "param_invalid",
             "event_id must use the ak:event: typed prefix",
-        ));
-    }
+        )
+    })?;
 
     let kind = event_string_field(object, &["kind"]).ok_or_else(|| {
         event_validation_error(StatusCode::BAD_REQUEST, "param_missing", "kind is required")
@@ -201,13 +203,13 @@ async fn validate_event_envelope_with_ingress(
             "actor_id is required",
         )
     })?;
-    if arkret_wire::DidCoreId::new(actor_id.clone()).is_err() {
-        return Err(event_validation_error(
+    let actor_id = arkret_wire::DidCoreId::new(actor_id).map_err(|_| {
+        event_validation_error(
             StatusCode::BAD_REQUEST,
             "param_invalid",
             "actor_id must be a Core DidCoreId",
-        ));
-    }
+        )
+    })?;
     let principal_server_id = event_string_field(object, &["principal_server_id"])
         .and_then(|value| arkret_wire::DidCoreId::new(value).ok())
         .ok_or_else(|| {
@@ -228,17 +230,28 @@ async fn validate_event_envelope_with_ingress(
             )
         })?;
     validate_event_time_fields(state, object)?;
-    let realm_id = event_realm_id(object)?;
+    let realm_id = RealmId::new(event_realm_id(object)?).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "param_invalid",
+            "realm_id must be a typed RealmId",
+        )
+    })?;
 
     // Identity verification is deliberately the last purely local gate before
     // any admission lookup. The suite comes from the trusted Realm projection
     // (or the signed Realm-create payload), then the shared storage verifier
     // recomputes the exact digest preimage and binds the complete EventId.
     let canonical_bytes = event_canonical_bytes(envelope)?;
-    let digest_suite =
-        event_digest_suite(state, &kind, &realm_id, object, realm_bootstrap_contexts)?;
+    let digest_suite = event_digest_suite(
+        state,
+        &kind,
+        realm_id.as_str(),
+        object,
+        realm_bootstrap_contexts,
+    )?;
     let canonical_digest = event_digest_for_suite(&canonical_bytes, &digest_suite)?;
-    validate_prelookup_event_identity(&event_id, &canonical_digest, &canonical_bytes)?;
+    validate_prelookup_event_identity(event_id.as_str(), &canonical_digest, &canonical_bytes)?;
     let typed_digest_suite = arkret_canonical::digest_suite(&digest_suite)
         .map_err(|_| unsupported_digest_algorithm_error(&digest_suite))?;
     validate_content_bound_event_id(envelope, typed_digest_suite)?;
@@ -258,7 +271,10 @@ async fn validate_event_envelope_with_ingress(
     {
         let context =
             super::minimal_metadata_author::minimal_metadata_author_context(object, state).await;
-        super::minimal_metadata_author::is_ephemeral_pairwise_author(&actor_id, context.as_ref())
+        super::minimal_metadata_author::is_ephemeral_pairwise_author(
+            actor_id.as_str(),
+            context.as_ref(),
+        )
     } else {
         false
     };
@@ -357,8 +373,14 @@ async fn validate_event_envelope_with_ingress(
     // the accountability-grant Event persisted immediately before it, rather
     // than by an `ak:grant:*` capability object in the runtime grant index.
     if !is_authorized_internal_adapter {
-        validate_applet_delegated_authorization_chain(state, object, &kind, &actor_id, &realm_id)
-            .await?;
+        validate_applet_delegated_authorization_chain(
+            state,
+            object,
+            &kind,
+            actor_id.as_str(),
+            realm_id.as_str(),
+        )
+        .await?;
     }
     // Round R2/R3 (T07) + Stream-F (Wave 1B) — Realm in terminal state
     // (`ak.realm.tombstone` OR `ak.realm.destroy` applied) refuses every
@@ -369,7 +391,7 @@ async fn validate_event_envelope_with_ingress(
     let realm_terminal = state
         .projections()
         .snapshot()
-        .realm_is_in_terminal_state(&realm_id);
+        .realm_is_in_terminal_state(realm_id.as_str());
     if let Some((code, reason)) = terminal_realm_check(realm_terminal, &kind) {
         return Err(event_validation_error(
             error_http_status(code),
@@ -380,7 +402,7 @@ async fn validate_event_envelope_with_ingress(
     let realm_frozen = state
         .projections()
         .snapshot()
-        .realm_is_frozen_at(&realm_id, chrono::Utc::now());
+        .realm_is_frozen_at(realm_id.as_str(), chrono::Utc::now());
     if let Some(reason) = frozen_realm_check(realm_frozen, &kind) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
@@ -397,7 +419,7 @@ async fn validate_event_envelope_with_ingress(
     // materialises the member set in state.realms immediately after
     // store.put succeeds, so any follow-up facet event in the same
     // session naturally passes the regular realm_has_member check.
-    let realm_exists = realm_exists_in_index(state, &realm_id);
+    let realm_exists = realm_exists_in_index(state, realm_id.as_str());
     // A managed-Agent PCR create is initially published through the batch
     // surface, then may be replayed through the single-submission surface to
     // recover its stored Control Proposal Ack. Let an already accepted Event id
@@ -407,7 +429,7 @@ async fn validate_event_envelope_with_ingress(
         if kind == arkret_wire::EventKind::RealmCreate.as_str() && realm_exists {
             state
                 .event_queries()
-                .canonical_event(&event_id)
+                .canonical_event(event_id.as_str())
                 .await
                 .map_err(|error| {
                     event_validation_error(
@@ -431,18 +453,24 @@ async fn validate_event_envelope_with_ingress(
         ));
     }
     let is_realm_create_bootstrap = kind == arkret_wire::EventKind::RealmCreate.as_str()
-        && realm_create_actor_is_creator(object, &actor_id)
+        && realm_create_actor_is_creator(object, actor_id.as_str())
         && (actor_id == session_actor_id || managed_agent_delegation)
         && (!realm_exists || historical_realm_create);
-    let is_invite_acceptance_join =
-        member_join_accepts_pending_invite(state, object, &session_actor_id, &realm_id).await;
+    let is_invite_acceptance_join = member_join_accepts_pending_invite(
+        state,
+        object,
+        session_actor_id.as_str(),
+        realm_id.as_str(),
+    )
+    .await;
     let is_invitee_invite_cancel =
-        invitee_cancels_pending_invite(state, object, &session_actor_id, &realm_id).await;
+        invitee_cancels_pending_invite(state, object, session_actor_id.as_str(), realm_id.as_str())
+            .await;
     let is_third_party_invite_claim = invite_claim_actor_claims_pending_third_party_invite(
         state,
         object,
-        &session_actor_id,
-        &realm_id,
+        session_actor_id.as_str(),
+        realm_id.as_str(),
     )
     .await;
     // `/_arkret/peer/invites` verifies the original signed Event before
@@ -451,20 +479,20 @@ async fn validate_event_envelope_with_ingress(
     // the Event or advances a reducer/frontier on the recipient service.
     let is_private_invite_delivery = private_invite_delivery
         && kind == arkret_wire::EventKind::InviteCreate.as_str()
-        && invite_create_actor_is_inviter(object, &session_actor_id)
+        && invite_create_actor_is_inviter(object, session_actor_id.as_str())
         && !realm_exists;
     let is_direct_conversation_founding = realm_bootstrap_contexts
         .iter()
         .any(|context| context.direct_conversation_founding);
     let is_realm_bootstrap_followup = is_direct_conversation_founding
         || (is_realm_bootstrap_followup_kind(&kind)
-            && realm_bootstrap_contexts
-                .iter()
-                .any(|context| context.realm_id == realm_id && context.actor_id == actor_id));
+            && realm_bootstrap_contexts.iter().any(|context| {
+                context.realm_id == realm_id.as_str() && context.actor_id == actor_id.as_str()
+            }));
     let is_identity_anchor_authorize = kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
         && realm_bootstrap_contexts.iter().any(|context| {
-            context.realm_id == realm_id
-                && context.actor_id == actor_id
+            context.realm_id == realm_id.as_str()
+                && context.actor_id == actor_id.as_str()
                 && context
                     .identity_anchor_event_id
                     .as_deref()
@@ -477,15 +505,15 @@ async fn validate_event_envelope_with_ingress(
         });
     let is_identity_anchor_reanchor = kind == arkret_wire::EventKind::DeviceReanchor.as_str()
         && realm_bootstrap_contexts.iter().any(|context| {
-            context.realm_id == realm_id
-                && context.actor_id == actor_id
+            context.realm_id == realm_id.as_str()
+                && context.actor_id == actor_id.as_str()
                 && context.identity_anchor_event_id.as_deref() == Some(event_id.as_str())
         });
     // join-policy.md §7.1 — a not-yet-member applicant MUST be able to submit
     // their own `ak.member.state{membership=knock}` (and the profile-private
     // application sub-payload it carries). Gate / review enforcement happens at
     // the later `join` transition, not on the knock itself.
-    let is_member_self_knock = member_self_knock(object, &session_actor_id);
+    let is_member_self_knock = member_self_knock(object, session_actor_id.as_str());
     let is_authorized_internal_adapter = internal_admission
         .is_some_and(|admission| admission.authorizes_realm_membership_bypass(session, object));
     let membership_subject = if ephemeral_pairwise_author {
@@ -505,7 +533,7 @@ async fn validate_event_envelope_with_ingress(
         && !is_identity_anchor_authorize
         && !is_identity_anchor_reanchor
         && !is_authorized_internal_adapter
-        && !realm_has_member(state, &realm_id, membership_subject).await
+        && !realm_has_member(state, realm_id.as_str(), membership_subject).await
     {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
@@ -518,8 +546,8 @@ async fn validate_event_envelope_with_ingress(
         == arkret_wire::EventKind::RealmCreate.as_str()
         && realm_bootstrap_contexts.iter().any(|context| {
             context.self_principal_pcr_bootstrap
-                && context.realm_id == realm_id
-                && context.actor_id == actor_id
+                && context.realm_id == realm_id.as_str()
+                && context.actor_id == actor_id.as_str()
                 && context.identity_anchor_event_id.as_deref() == Some(event_id.as_str())
         });
     validate_event_schema_and_payload(
@@ -539,7 +567,7 @@ async fn validate_event_envelope_with_ingress(
     // until the standard digest-verified group-state material operation is
     // available; do not accept the producer-supplied digest on shape alone.
     require_verified_mls_commit_frontier_material(&kind)?;
-    capability_grant::validate_capability_grant_body(&kind, &actor_id, object)?;
+    capability_grant::validate_capability_grant_body(&kind, actor_id.as_str(), object)?;
 
     // The capability gate needs the write set, and v1 carries none on the wire:
     // the receiver projects it from `kind + payload` through the registered
@@ -557,8 +585,8 @@ async fn validate_event_envelope_with_ingress(
     // one another.
     let bootstrap_unit_member = is_realm_bootstrap_unit_member(
         &kind,
-        &realm_id,
-        &actor_id,
+        realm_id.as_str(),
+        actor_id.as_str(),
         is_realm_bootstrap_followup,
         is_identity_anchor_authorize,
         is_identity_anchor_reanchor,
@@ -574,17 +602,17 @@ async fn validate_event_envelope_with_ingress(
         state,
         object,
         &kind,
-        &realm_id,
-        &actor_id,
+        realm_id.as_str(),
+        actor_id.as_str(),
         bootstrap_unit_member,
         realm_bootstrap_contexts,
     )?;
     let data_event_cells = derived_data_event_cells(envelope, object)?;
     validate_data_event_capability_refs(
         state,
-        &actor_id,
+        actor_id.as_str(),
         principal_server_id.as_str(),
-        &realm_id,
+        realm_id.as_str(),
         &kind,
         object,
         &data_event_cells,
@@ -599,10 +627,24 @@ async fn validate_event_envelope_with_ingress(
             .await?;
     }
     if kind == arkret_wire::EventKind::DeviceAuthorize.as_str() {
-        validate_device_authorization_binding(state, object, &actor_id, realm_bootstrap_contexts)
-            .await?;
+        validate_device_authorization_binding(
+            state,
+            object,
+            actor_id.as_str(),
+            realm_bootstrap_contexts,
+        )
+        .await?;
     }
     if kind == arkret_wire::EventKind::AccountStatus.as_str() {
+        if !internal_admission
+            .is_some_and(|admission| admission.is_account_status_peer(session, object))
+        {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "unauthorized",
+                "ak.account.status is accepted only through the authority-evidence peer operation",
+            ));
+        }
         validate_account_status_service_binding(state, object).await?;
     }
     validate_audit_accessed_payload(&kind, object)?;
@@ -636,7 +678,8 @@ async fn validate_event_envelope_with_ingress(
             }
         }
         let media_plaintext_service_present =
-            projected_media_plaintext_service_present(state, &realm_id, policy_bundle).await;
+            projected_media_plaintext_service_present(state, realm_id.as_str(), policy_bundle)
+                .await;
         if let Err((code, reason)) = realm_policy_bundle_check(
             policy_bundle,
             &active_profiles,
@@ -674,15 +717,26 @@ async fn validate_event_envelope_with_ingress(
         }
     }
 
-    let prev_refs = event_ref_list(object, "prev_refs", MAX_EVENT_PREV_REFS)?;
+    let prev_refs = event_ref_list(object, "prev_refs", MAX_EVENT_PREV_REFS)?
+        .into_iter()
+        .map(|event_id| {
+            EventId::new(event_id).map_err(|_| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "param_invalid",
+                    "prev_refs entries must be typed EventIds",
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     validate_created_at_causal_lower_bound(state, object, &prev_refs).await?;
     event_semantic_refs(object, MAX_EVENT_REFS)?;
-    validate_strand_watch_manage_others_levels(&kind, object, &actor_id)?;
+    validate_strand_watch_manage_others_levels(&kind, object, actor_id.as_str())?;
     let producer_signing_key = validate_event_proofs(
         object,
         state,
         session,
-        &actor_id,
+        actor_id.as_str(),
         &canonical_digest,
         typed_digest_suite,
         &canonical_bytes,
@@ -694,12 +748,12 @@ async fn validate_event_envelope_with_ingress(
         state,
         session,
         object,
-        &actor_id,
+        actor_id.as_str(),
         is_identity_anchor_authorize,
         internal_admission,
     )
     .await?;
-    reject_revoked_actor_device_signature(object, state, session, &actor_id).await?;
+    reject_revoked_actor_device_signature(object, state, session, actor_id.as_str()).await?;
     let sidecar_bootstrap = internal_admission.is_some_and(|admission| {
         kind == arkret_wire::EventKind::SidecarCreate.as_str()
             && admission.is_sidecar_ensure(session, object)
@@ -716,12 +770,20 @@ async fn validate_event_envelope_with_ingress(
         state,
         envelope,
         &kind,
-        &realm_id,
+        realm_id.as_str(),
         object,
         realm_bootstrap_contexts,
     )?;
-    let device_id =
-        event_string_field(object, &["device_id"]).unwrap_or_else(|| session.device_id.clone());
+    let device_id = DeviceId::new(
+        event_string_field(object, &["device_id"]).unwrap_or_else(|| session.device_id.clone()),
+    )
+    .map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "param_invalid",
+            "device_id must be a typed DeviceId",
+        )
+    })?;
 
     Ok(ValidatedEventEnvelope {
         event_id,

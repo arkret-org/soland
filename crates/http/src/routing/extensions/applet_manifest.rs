@@ -44,12 +44,12 @@ use soland_http::result::{JsonResult, json_ok};
 /// kept narrow on purpose - the spec defers the full capability lattice
 /// to a follow-up.
 pub const KNOWN_APPLET_CAPABILITIES: &[&str] = &[
-    "ak.strand.create",
-    "ak.strand.read",
-    "ak.strand.update",
-    "ak.message.create",
-    "ak.morph.read",
-    "ak.morph.update",
+    arkret_wire::CapabilityActionId::STRAND_CREATE,
+    arkret_wire::CapabilityActionId::STRAND_READ,
+    arkret_wire::CapabilityActionId::STRAND_UPDATE,
+    arkret_wire::CapabilityActionId::MESSAGE_CREATE,
+    arkret_wire::CapabilityActionId::MORPH_READ,
+    arkret_wire::CapabilityActionId::MORPH_UPDATE,
 ];
 
 /// On-wire applet manifest envelope. The bot/ghost actor registration

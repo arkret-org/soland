@@ -1815,7 +1815,7 @@ fn websocket_events_filter_digest(
         .into_iter()
         .collect::<Vec<_>>();
     sync_filter_digest(Some(&json!({
-        "operation_id": "ak.self.events.stream.subscribe",
+        "operation_id": arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
         "realms": realms,
         "actors": actors,
     })))

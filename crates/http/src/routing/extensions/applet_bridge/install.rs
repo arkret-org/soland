@@ -1036,7 +1036,7 @@ pub(super) async fn build_install_plan(
         .clone()
         .ok_or_else(|| AppError::param_missing("applet_package.package_digest is required"))?;
     let seed = json!({
-        "schema": "ak.schema.applet_install_plan.v1",
+        "schema": arkret_wire::SchemaId::APPLET_INSTALL_PLAN_V1,
         "applet_id": package.applet_id,
         "package_digest": package_digest,
         "registration_epoch": package.registration_epoch,
@@ -1061,7 +1061,7 @@ pub(super) async fn build_install_plan(
         ))
     })?;
     let mut plan = AppletInstallPlan {
-        schema: "ak.schema.applet_install_plan.v1".to_owned(),
+        schema: arkret_wire::SchemaId::APPLET_INSTALL_PLAN_V1.to_owned(),
         plan_id,
         applet_id: applet_install_plan_applet_id(&package.applet_id)?,
         package_digest: package_digest.clone(),
@@ -1257,7 +1257,7 @@ pub(super) async fn require_realm_admin(
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
             actor_principal_server_id: Some(state.service_id()),
-            action: "ak.realm.admin",
+            action: arkret_wire::CapabilityActionId::REALM_ADMIN,
             resource: &realm_id,
             realm_id: &realm_id,
             owner: owner.as_deref(),
@@ -1356,7 +1356,7 @@ pub(super) fn ghost_actors_allowed_for_install(
 }
 
 pub(super) fn capability_allows_message_create(capability: &str) -> bool {
-    capability == "ak.message.create"
+    capability == arkret_wire::CapabilityActionId::MESSAGE_CREATE
 }
 
 #[cfg(test)]

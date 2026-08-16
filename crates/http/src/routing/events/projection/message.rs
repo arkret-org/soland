@@ -27,7 +27,7 @@ pub async fn project_federated_message(state: &AppState, _origin: &str, operatio
     let content = message_content_from_payload(&operation.payload, strand_scope);
     if matches!(
         content.get("kind").and_then(Value::as_str),
-        Some("ak.content.poll.response" | "ak.content.poll.close")
+        Some("ak.content.poll.response")
     ) {
         return;
     }

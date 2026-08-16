@@ -63,16 +63,17 @@ pub(super) async fn mls_governance_proof(
 
     let materialized = materialize_governance_proof(state, &request).await?;
     let chunks = build_mls_governance_proof_chunks(&request, &materialized).map_err(|error| {
+        let error_code = error.error_code();
         let message = error.to_string();
-        if message.contains("expected_bundle_digest") {
-            AppError::new(
+        match error_code {
+            Some(arkret_wire::ErrorCode::StateMismatch) => AppError::new(
                 ErrorCode::FrontierUnavailable,
                 "requested MLS governance proof manifest is no longer available",
-            )
-        } else if message.contains(ErrorCode::MLS_GOVERNANCE_PROOF_BOUNDS_EXCEEDED) {
-            AppError::new(ErrorCode::MlsGovernanceProofBoundsExceeded, message)
-        } else {
-            proof_state_error(message)
+            ),
+            Some(arkret_wire::ErrorCode::MlsGovernanceProofBoundsExceeded) => {
+                AppError::new(ErrorCode::MlsGovernanceProofBoundsExceeded, message)
+            }
+            _ => proof_state_error(message),
         }
     })?;
     let chunk = chunks
@@ -600,7 +601,7 @@ async fn materialize_realm_control_with_transported_seals(
     let mut quarantined_digests = BTreeSet::new();
     for actor in realm_records
         .iter()
-        .filter(|record| record.kind == "ak.device.reanchor")
+        .filter(|record| record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR)
         .map(|record| record.actor_id.as_str())
         .collect::<BTreeSet<_>>()
     {
@@ -624,7 +625,7 @@ async fn materialize_realm_control_with_transported_seals(
     let mut identity_anchor_event_ids = realm_records
         .iter()
         .filter(|record| {
-            record.kind == "ak.device.reanchor"
+            record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
                 && !quarantined_digests.contains(&record.canonical_digest)
         })
         .flat_map(|record| {
@@ -1178,7 +1179,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
 ) -> Result<Option<crate::notary::FirstGenerationEventSealRequirement>, AppError> {
     let actors = records
         .iter()
-        .filter(|record| record.kind == "ak.device.reanchor")
+        .filter(|record| record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR)
         .map(|record| record.actor_id.as_str())
         .collect::<BTreeSet<_>>();
     let mut requirement = None;
@@ -1210,7 +1211,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
             .iter()
             .filter(|record| {
                 record.actor_id == actor
-                    && record.kind == "ak.device.reanchor"
+                    && record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
                     && record
                         .envelope
                         .pointer("/payload/new_device_generation")

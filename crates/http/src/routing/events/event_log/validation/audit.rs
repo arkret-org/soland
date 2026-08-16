@@ -22,7 +22,7 @@ pub(crate) async fn append_encrypted_message_franking(
     };
     append_audit_log(
         state,
-        Some(&parsed.actor_id),
+        Some(parsed.actor_id.as_str()),
         arkret_wire::EventKind::ModerationFrankingProof.as_str(),
         proof,
         "accepted",
@@ -117,13 +117,13 @@ pub(super) fn validate_audit_accessed_payload(
 fn audit_accessed_payload(
     object: &serde_json::Map<String, Value>,
 ) -> Result<AuditAccessedPayload, EventValidationError> {
-    typed_payload(object, "ak.audit.accessed")
+    typed_payload(object, arkret_wire::event_kind_str::AUDIT_ACCESSED)
 }
 
 fn strand_watch_set_payload(
     object: &serde_json::Map<String, Value>,
 ) -> Result<StrandWatchSetPayload, EventValidationError> {
-    typed_payload(object, "ak.strand.watch.set")
+    typed_payload(object, arkret_wire::event_kind_str::STRAND_WATCH_SET)
 }
 
 fn typed_payload<T: serde::de::DeserializeOwned>(
@@ -381,11 +381,18 @@ mod tests {
 
     fn parsed(kind: &str) -> ValidatedEventEnvelope {
         ValidatedEventEnvelope {
-            event_id: "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned(),
-            actor_id: "ak:did_core:web:alice.example".to_owned(),
-            device_id: "ak:device:01904100-0000-7000-8000-000000000002".to_owned(),
+            event_id: EventId::new(
+                "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned(),
+            )
+            .unwrap(),
+            actor_id: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+            device_id: DeviceId::new("ak:device:01904100-0000-7000-8000-000000000002".to_owned())
+                .unwrap(),
             actor_seq: 1,
-            realm_id: "ak:realm:AdA2LFMgPUC2EAmzvOPY69_DX8_NLEXKyCwX9zR989nv".to_owned(),
+            realm_id: RealmId::new(
+                "ak:realm:AdA2LFMgPUC2EAmzvOPY69_DX8_NLEXKyCwX9zR989nv".to_owned(),
+            )
+            .unwrap(),
             kind: kind.to_owned(),
             schema_id: arkret_wire::SchemaId::EVENT_V1.to_owned(),
             prev_refs: Vec::new(),

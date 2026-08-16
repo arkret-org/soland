@@ -101,7 +101,8 @@ pub(in crate::routing) async fn validate_authorization_lease_for_event(
                     format!("authorization lease authority basis digest failed: {error}"),
                 )
             })?;
-        if lease.authority_set_ref.authority_set_id != "ak.authority_set.realm_admission.v1"
+        if lease.authority_set_ref.authority_set_id
+            != arkret_wire::AuthoritySetId::REALM_ADMISSION_V1
             || lease.authority_set_policy.source.source_digest.as_str() != expected_source_digest
             || lease.authority_set_policy.scope_ref != event.scope_ref
         {
@@ -277,7 +278,7 @@ pub(super) fn build_ingress_receipt_record(
     let receipt = sign_ingress_receipt(state, &event_digest, lease, received_at)?;
     Ok(soland_services::events::PublicationEvidenceRecord {
         event_digest: parsed.canonical_digest.clone(),
-        realm_id: parsed.realm_id.clone(),
+        realm_id: parsed.realm_id.to_string(),
         authorization_lease: lease.clone(),
         ingress_receipt: receipt,
     })

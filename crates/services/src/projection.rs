@@ -1954,18 +1954,21 @@ impl ProjectionService {
             .get(&key)
             .and_then(|queue| queue.iter().find(|row| row.id == welcome_id))
             .cloned()
-            .map(|row| crate::events::MlsWelcomeState {
-                id: row.id,
-                group_id: row.group_id,
-                recipient_actor_id: row.recipient_actor_id,
-                recipient_device_id: row.recipient_device_id,
-                welcome_bytes: row.welcome_bytes,
-                key_package_id: row.key_package_id,
-                epoch: row.epoch,
-                commit_ref: row.commit_ref,
-                governance_binding: row.governance_binding,
-                enqueued_at: row.enqueued_at,
-                delivered_at: row.delivered_at,
+            .and_then(|row| {
+                let governance_binding = serde_json::from_value(row.governance_binding).ok()?;
+                Some(crate::events::MlsWelcomeState {
+                    id: row.id,
+                    group_id: row.group_id,
+                    recipient_actor_id: row.recipient_actor_id,
+                    recipient_device_id: row.recipient_device_id,
+                    welcome_bytes: row.welcome_bytes,
+                    key_package_id: row.key_package_id,
+                    epoch: row.epoch,
+                    commit_ref: row.commit_ref,
+                    governance_binding,
+                    enqueued_at: row.enqueued_at,
+                    delivered_at: row.delivered_at,
+                })
             })
     }
 
@@ -2162,7 +2165,7 @@ impl ProjectionService {
         let row = state.key_backup_active_series(actor_id, backup_kind)?;
         Some(
             arkret_models_collaboration::events_payloads::KeyBackupActiveSeries {
-                schema: "ak.schema.key_backup_active_series.v1".to_owned(),
+                schema: arkret_wire::SchemaId::KEY_BACKUP_ACTIVE_SERIES_V1.to_owned(),
                 actor_id: arkret_identifiers::DidCoreId::new(row.actor_id.clone()).ok()?,
                 backup_kind: arkret_models_crypto::BackupKind::try_from(row.backup_kind.as_str())
                     .ok()?,
@@ -2633,15 +2636,10 @@ fn morph_write_through_record(
         scope_circle_id: row.scope_circle_id.clone(),
         morph_kind: row.morph_kind.clone(),
         title: row.title.clone(),
-        fields: Value::Object(
-            row.fields
-                .iter()
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect(),
-        ),
-        schema_refs: serde_json::json!(row.schema_refs),
-        facets: serde_json::json!(row.facets),
-        versions: serde_json::json!(row.versions),
+        fields: row.fields.clone(),
+        schema_refs: row.schema_refs.clone(),
+        facets: row.facets.clone(),
+        versions: row.versions.clone(),
         state: row.state.as_str().to_owned(),
         state_changed_at: row.state_changed_at,
         created_by: row.created_by.clone(),

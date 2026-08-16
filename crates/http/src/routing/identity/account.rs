@@ -435,7 +435,7 @@ async fn append_account_registration_audit(
         Some(did),
         "account.register",
         json!({
-            "operation_contract": "ak.gate.account.command.register",
+            "operation_contract": arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_REGISTER,
             "principal_id": did,
             "handle_requested": handle,
             "via": "gate",
@@ -1536,7 +1536,8 @@ async fn resolved_actor_profile_evidence(
         .filter(|record| {
             matches!(
                 record.kind.as_str(),
-                "ak.profile.create" | "ak.profile.update"
+                arkret_wire::event_kind_str::PROFILE_CREATE
+                    | arkret_wire::event_kind_str::PROFILE_UPDATE
             )
         })
         .collect::<Vec<_>>();
@@ -2137,7 +2138,7 @@ async fn validate_direct_conversation_repair_state(
         && event.realm_id == content.realm_id
         && event.actor_id.as_str() == requester
         && event.authorization_ref.as_ref().map(|value| value.as_str())
-            == Some("ak.authority.direct_conversation_repair.v1")
+            == Some(arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_REPAIR_V1)
         && event.payload.get("actor_id").and_then(Value::as_str) == Some(requester)
         && event.payload.get("membership").and_then(Value::as_str) == Some("join");
     if !self_rejoin {

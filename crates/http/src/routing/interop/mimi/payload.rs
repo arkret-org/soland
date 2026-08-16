@@ -169,17 +169,63 @@ pub(super) fn decode_mimi_update_payload(body: &Value) -> Result<Option<Value>, 
 }
 
 pub(super) fn mimi_room_binding_payload(update_payload: &Value) -> Option<&Value> {
-    if update_payload.get("kind").and_then(Value::as_str) != Some("ak.mimi.room_binding") {
+    if update_payload.get("kind").and_then(Value::as_str)
+        != Some(arkret_wire::event_kind_str::MIMI_ROOM_BINDING)
+    {
         return None;
     }
     update_payload.get("payload")
 }
 
-pub(super) fn decode_mimi_message_payload(body: &Value) -> Result<Value, AppError> {
-    let opaque = body
-        .get("ciphertext")
-        .ok_or_else(|| AppError::param_invalid("MIMI submit_message requires ciphertext"))?;
-    decode_required_mimi_opaque_json(opaque, "ciphertext_digest", "MIMI ciphertext payload")
+pub(super) fn decode_mimi_ciphertext_payload(
+    ciphertext: &MimiCiphertext,
+) -> Result<Value, AppError> {
+    let bytes =
+        arkret_canonical::base64url_decode(ciphertext.payload.as_str()).map_err(|error| {
+            AppError::param_invalid(format!("MIMI ciphertext payload is not base64url: {error}"))
+                .with_wire_code("mimi_payload_invalid")
+        })?;
+    if arkret_canonical::sha256_digest(&bytes) != ciphertext.ciphertext_digest.as_str() {
+        return Err(
+            AppError::param_invalid("MIMI ciphertext payload digest mismatch")
+                .with_wire_code("mimi_payload_digest_mismatch"),
+        );
+    }
+    arkret_canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
+        AppError::param_invalid(format!(
+            "MIMI ciphertext payload is not canonical JSON: {error}"
+        ))
+        .with_wire_code("mimi_payload_invalid")
+    })
+}
+
+pub(super) fn decode_mimi_associated_data(
+    associated_data: Option<&MimiOpaquePayload>,
+) -> Result<Option<Value>, AppError> {
+    let Some(associated_data) = associated_data else {
+        return Ok(None);
+    };
+    let Some(payload) = associated_data.payload.as_ref() else {
+        return Ok(None);
+    };
+    let bytes = arkret_canonical::base64url_decode(payload.as_str()).map_err(|error| {
+        AppError::param_invalid(format!("MIMI associated_data is not base64url: {error}"))
+            .with_wire_code("mimi_payload_invalid")
+    })?;
+    if arkret_canonical::sha256_digest(&bytes) != associated_data.payload_digest.as_str() {
+        return Err(
+            AppError::param_invalid("MIMI associated_data digest mismatch")
+                .with_wire_code("mimi_payload_digest_mismatch"),
+        );
+    }
+    arkret_canonical::from_canonical_json_slice::<Value>(&bytes)
+        .map(Some)
+        .map_err(|error| {
+            AppError::param_invalid(format!(
+                "MIMI associated_data is not canonical JSON: {error}"
+            ))
+            .with_wire_code("mimi_payload_invalid")
+        })
 }
 
 pub(super) fn decode_optional_mimi_opaque_json(
@@ -187,7 +233,7 @@ pub(super) fn decode_optional_mimi_opaque_json(
     digest_field: &str,
     context: &'static str,
 ) -> Result<Option<Value>, AppError> {
-    let Some(bytes) = decode_mimi_opaque_bytes(opaque, digest_field, context, false)? else {
+    let Some(bytes) = decode_mimi_opaque_bytes(opaque, digest_field, context)? else {
         return Ok(None);
     };
     let value = arkret_canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
@@ -197,24 +243,10 @@ pub(super) fn decode_optional_mimi_opaque_json(
     Ok(Some(value))
 }
 
-pub(super) fn decode_required_mimi_opaque_json(
-    opaque: &Value,
-    digest_field: &str,
-    context: &'static str,
-) -> Result<Value, AppError> {
-    let bytes = decode_mimi_opaque_bytes(opaque, digest_field, context, true)?
-        .expect("required opaque payload returns bytes");
-    arkret_canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
-        AppError::param_invalid(format!("{context} is not canonical JSON: {error}"))
-            .with_wire_code("mimi_payload_invalid")
-    })
-}
-
 pub(super) fn decode_mimi_opaque_bytes(
     opaque: &Value,
     digest_field: &str,
     context: &'static str,
-    require_payload: bool,
 ) -> Result<Option<Vec<u8>>, AppError> {
     let digest = opaque
         .get(digest_field)
@@ -225,12 +257,6 @@ pub(super) fn decode_mimi_opaque_bytes(
         })?;
     let payload = match opaque.get("payload").and_then(Value::as_str) {
         Some(payload) if !payload.trim().is_empty() => payload,
-        _ if require_payload => {
-            return Err(
-                AppError::param_invalid(format!("{context} requires payload"))
-                    .with_wire_code("mimi_payload_invalid"),
-            );
-        }
         _ => return Ok(None),
     };
     let bytes = arkret_canonical::base64url_decode(payload).map_err(|error| {
@@ -278,10 +304,10 @@ pub(super) fn mimi_provider_directory_value(
         jws: "eyJhbGciOiJFZDI1NTE5In0..AA".to_owned(),
     };
     let mut directory = ProviderDirectory {
-        schema: "ak.schema.mimi_interop.v1".to_owned(),
+        schema: arkret_wire::SchemaId::MIMI_INTEROP_V1.to_owned(),
         service_id: service_id.clone(),
         service_kind: "mimi_provider_facade".to_owned(),
-        supported_profiles: vec!["ak.profile.mimi_interop.v1".to_owned()],
+        supported_profiles: vec![arkret_wire::ProfileId::MIMI_INTEROP_V1.to_owned()],
         mimi: ProviderDirectoryMimi {
             protocol_draft: "draft-ietf-mimi-protocol-06".to_owned(),
             content_draft: "draft-ietf-mimi-content-08".to_owned(),
@@ -443,7 +469,7 @@ pub(super) fn mimi_receipt(
     extra: Value,
 ) -> Value {
     json!({
-        "profile": "ak.profile.mimi_interop.v1",
+        "profile": arkret_wire::ProfileId::MIMI_INTEROP_V1,
         "operation_id": operation_id,
         "service_id": state.service_id(),
         "provider_id": mimi_provider_id(state),
@@ -471,7 +497,31 @@ pub(super) fn map_mimi_message_content(
     source_format: &str,
 ) -> Result<MimiMappedContent, AppError> {
     let mut content = mimi_content_payload(body, source_format);
+    if !content.is_object() {
+        return Err(AppError::param_invalid(
+            "unsupported MIMI content format: content must map to an Arkret content block",
+        ));
+    }
     let content_kind = mimi_content_kind(body, &content).map(str::to_owned);
+    if let Some(kind) = content_kind.as_deref()
+        && matches!(
+            kind,
+            "m.text" | "text/plain" | "text/markdown" | "m.markdown"
+        )
+    {
+        let object = content
+            .as_object_mut()
+            .expect("content object checked above");
+        object.insert(
+            "kind".to_owned(),
+            Value::String(
+                arkret_models_collaboration::events_payloads::CONTENT_KIND_TEXT.to_owned(),
+            ),
+        );
+        object
+            .entry("source_format".to_owned())
+            .or_insert_with(|| Value::String(kind.to_owned()));
+    }
     let e2ee_boundary = mimi_e2ee_boundary(body, &content);
     let plaintext_detected = mimi_plaintext_detected(body) || mimi_plaintext_detected(&content);
     let transcript_binding = mimi_transcript_binding(body, &content).cloned();
@@ -485,20 +535,19 @@ pub(super) fn map_mimi_message_content(
     }
 
     let mut policy = json!({
-        "profile": "ak.profile.mimi_interop.v1",
+        "profile": arkret_wire::ProfileId::MIMI_INTEROP_V1,
         "e2ee_boundary": "none",
         "plaintext_detected": plaintext_detected,
         "plaintext_guard": "not_e2ee",
     });
     if e2ee_boundary && explicit_downgrade {
-        ensure_content_object(&mut content);
         let object = content.as_object_mut().expect("content object");
         object.insert(
             "e2ee_downgrade".to_owned(),
             Value::String("mimi_bridge".to_owned()),
         );
         policy = json!({
-            "profile": "ak.profile.mimi_interop.v1",
+            "profile": arkret_wire::ProfileId::MIMI_INTEROP_V1,
             "e2ee_boundary": "explicit_downgrade",
             "plaintext_detected": plaintext_detected,
             "plaintext_guard": "marked_explicit_downgrade",
@@ -506,11 +555,10 @@ pub(super) fn map_mimi_message_content(
         });
     } else if e2ee_boundary {
         if let Some(binding) = transcript_binding {
-            ensure_content_object(&mut content);
             let object = content.as_object_mut().expect("content object");
             object.insert("transcript_binding".to_owned(), binding.clone());
             policy = json!({
-                "profile": "ak.profile.mimi_interop.v1",
+                "profile": arkret_wire::ProfileId::MIMI_INTEROP_V1,
                 "e2ee_boundary": "transcript_bound",
                 "plaintext_detected": plaintext_detected,
                 "plaintext_guard": "transcript_binding",
@@ -518,7 +566,7 @@ pub(super) fn map_mimi_message_content(
             });
         } else {
             policy = json!({
-                "profile": "ak.profile.mimi_interop.v1",
+                "profile": arkret_wire::ProfileId::MIMI_INTEROP_V1,
                 "e2ee_boundary": "opaque_ciphertext",
                 "plaintext_detected": false,
                 "plaintext_guard": "opaque_ciphertext_only",
@@ -581,16 +629,6 @@ pub(super) fn mimi_content_payload(body: &Value, source_format: &str) -> Value {
     })
 }
 
-pub(super) fn ensure_content_object(content: &mut Value) {
-    if !content.is_object() {
-        let raw = content.clone();
-        *content = json!({
-            "kind": "ak.content.opaque",
-            "raw_mimi_content": raw,
-        });
-    }
-}
-
 pub(super) fn mimi_content_kind<'a>(body: &'a Value, content: &'a Value) -> Option<&'a str> {
     body.get("content_kind")
         .or_else(|| body.get("mimi_content_kind"))
@@ -605,12 +643,10 @@ pub(super) fn valid_mimi_content_kind(kind: &str) -> bool {
             | "text/plain"
             | "text/markdown"
             | "m.markdown"
-            | "ak.message.text"
-            | "ak.message.revise"
-            | "ak.message.redact"
+            | arkret_wire::event_kind_str::MESSAGE_REVISE
+            | arkret_wire::event_kind_str::MESSAGE_REDACT
             | "ak.content.text"
             | "ak.content.composite"
-            | "ak.content.markdown"
     )
 }
 

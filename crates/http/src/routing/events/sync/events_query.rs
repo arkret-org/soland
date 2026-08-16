@@ -30,7 +30,7 @@ const EVENTS_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 30_000;
 ///      - client disconnects (drops the response stream)
 ///      - the broadcast channel is closed (server shutdown)
 #[handler]
-#[tracing::instrument(skip_all, fields(op = "events_subscribe"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.events.subscribe"))]
 pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot
         .get_typed::<AppState>()
@@ -480,7 +480,7 @@ pub(crate) fn events_subscribe_filter_digest(accessible_realms: &[String]) -> St
         .into_iter()
         .collect::<Vec<_>>();
     sync_filter_digest(Some(&json!({
-        "operation_id": "ak.self.events.stream.subscribe",
+        "operation_id": arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
         "realms": realms,
     })))
 }
@@ -610,7 +610,7 @@ fn events_query_scope_digest(
         .into_iter()
         .collect::<Vec<_>>();
     let binding = json!({
-        "operation_id": "ak.self.events.read.scan",
+        "operation_id": arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN,
         "realms": realms,
         "actors": actors,
         "filters": filters.cloned().unwrap_or_else(|| json!({})),
@@ -1111,7 +1111,7 @@ async fn range_completeness_for_query(
     );
     let mut payload = RangeCompletenessAttestation {
         attestation_id,
-        schema: "ak.schema.range_completeness_attestation.v1".to_owned(),
+        schema: arkret_wire::SchemaId::RANGE_COMPLETENESS_ATTESTATION_V1.to_owned(),
         issuer: issuer_actor.clone(),
         issuer_role: "events_api".to_owned(),
         realm_id: realm_id.clone(),

@@ -218,7 +218,7 @@ pub(crate) fn validate_event_schema_and_payload(
             )
         })?;
         registry
-            .validate_value("ak.schema.event.v1", envelope)
+            .validate_value(arkret_wire::SchemaId::EVENT_V1, envelope)
             .map_err(|error| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
@@ -426,7 +426,7 @@ pub(crate) fn event_requirements_schema_id(
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
         })
-        .unwrap_or_else(|| "ak.schema.event.v1".to_owned());
+        .unwrap_or_else(|| arkret_wire::SchemaId::EVENT_V1.to_owned());
     if !schema_id.starts_with("ak.schema.") || !artifacts::schema_ids().contains(&schema_id) {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,

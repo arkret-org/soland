@@ -8,7 +8,10 @@ impl ProjectionState {
     /// Multiple PCRs may share a principal core, so this API deliberately
     /// cannot discover a supposedly global current PCR from `principal_id`.
     pub fn principal_resolution_for_realm(&self, realm_id: &str) -> Option<&Value> {
-        self.realm_null_subject_cell_value(realm_id, "ak.component.identity.resolution.v1")
+        self.realm_null_subject_cell_value(
+            realm_id,
+            arkret_wire::CellFamilyId::IDENTITY_RESOLUTION_V1,
+        )
     }
 
     pub(crate) fn apply_identity_resolution_update(

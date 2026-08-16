@@ -165,7 +165,7 @@ pub(in crate::routing) fn projection_operation_from_event(
         tracing::debug!(kind = %parsed.kind, "projection: kind is not registered");
         return None;
     }
-    let Some(operation_id) = event_operation_id(envelope, &parsed.event_id) else {
+    let Some(operation_id) = event_operation_id(envelope, parsed.event_id.as_str()) else {
         tracing::debug!(kind = %parsed.kind, event_id = %parsed.event_id, "projection: event_operation_id failed");
         return None;
     };
@@ -200,6 +200,7 @@ pub(crate) fn projection_operation_from_canonical_record(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .or_else(|| record.realm_id.clone())?;
+    let realm_id = RealmId::new(realm_id).ok()?;
     let prev_refs = record
         .envelope
         .get("prev_refs")
@@ -208,15 +209,20 @@ pub(crate) fn projection_operation_from_canonical_record(
         .flatten()
         .filter_map(Value::as_str)
         .map(ToOwned::to_owned)
-        .collect();
+        .map(EventId::new)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
     let parsed = ValidatedEventEnvelope {
-        event_id: record.event_id.clone(),
-        actor_id: record.actor_id.clone(),
-        device_id: object
-            .get("device_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned(),
+        event_id: EventId::new(record.event_id.clone()).ok()?,
+        actor_id: DidCoreId::new(record.actor_id.clone()).ok()?,
+        device_id: DeviceId::new(
+            object
+                .get("device_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+        )
+        .ok()?,
         actor_seq: record.actor_seq,
         realm_id,
         kind: record.kind.clone(),
@@ -704,7 +710,7 @@ pub(in crate::routing) fn validate_device_revoke_submission(
             "ak.device.revoke payload.device_id is required",
         ));
     }
-    if principal_id != parsed.actor_id {
+    if principal_id != parsed.actor_id.as_str() {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "capability_denied",
@@ -829,7 +835,7 @@ pub async fn effective_read_receipt_policy_for_realm(
     for record in &records {
         // CanonicalEventRecord uses `kind` (not event_kind) for the
         // canonical Arkret event kind string.
-        if record.kind != "ak.realm.read_receipt_policy" {
+        if record.kind != arkret_wire::event_kind_str::REALM_READ_RECEIPT_POLICY {
             continue;
         }
         if canonical_realm_id_for_record(record).as_deref() != Some(realm_id) {

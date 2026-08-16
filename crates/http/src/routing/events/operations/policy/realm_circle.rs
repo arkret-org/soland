@@ -178,14 +178,15 @@ pub(super) async fn validate_circle_management_policy(
         arkret_wire::EventKind::CircleUpdate
         | arkret_wire::EventKind::CircleArchive
         | arkret_wire::EventKind::CircleRestore
-        | arkret_wire::EventKind::CircleTombstone => {
-            ("ak.circle.manage", "circle_manage_capability_required")
-        }
+        | arkret_wire::EventKind::CircleTombstone => (
+            arkret_wire::CapabilityActionId::CIRCLE_MANAGE,
+            "circle_manage_capability_required",
+        ),
         arkret_wire::EventKind::CircleMemberState
             if circle_member_manage_required(state, operation) =>
         {
             (
-                "ak.circle.member.manage",
+                arkret_wire::CapabilityActionId::CIRCLE_MEMBER_MANAGE,
                 "circle_member_manage_capability_required",
             )
         }

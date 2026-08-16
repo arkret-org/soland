@@ -57,17 +57,23 @@ struct ContactVerifiedMirrorRow {
     verified_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl From<ContactVerifiedMirrorRow> for ContactVerifiedMirrorRecord {
-    fn from(row: ContactVerifiedMirrorRow) -> Self {
-        Self {
+impl TryFrom<ContactVerifiedMirrorRow> for ContactVerifiedMirrorRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: ContactVerifiedMirrorRow) -> Result<Self, Self::Error> {
+        Ok(Self {
             target_holder_id: row.target_holder_id,
             request_event_id: row.request_event_id,
             request_digest: row.request_digest,
             canonical_event_bytes: row.canonical_event_bytes,
-            source_receipt: row.source_receipt,
+            source_receipt: serde_json::from_value(row.source_receipt).map_err(|error| {
+                PersistenceError::SchemaViolation(format!(
+                    "stored Contact request receipt is invalid: {error}"
+                ))
+            })?,
             issuer_service_id: row.issuer_service_id,
             verified_at: row.verified_at,
-        }
+        })
     }
 }
 
@@ -83,7 +89,7 @@ impl ContactVerifiedMirrorStore for PgContactVerifiedMirrorStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(format!(
+        let row = sql_query(format!(
             "SELECT {CONTACT_VERIFIED_MIRROR_COLUMNS} FROM contact_verified_mirrors WHERE target_holder_id = $1 AND request_event_id = $2"
         ))
         .bind::<Text, _>(target_holder_id)
@@ -91,8 +97,8 @@ impl ContactVerifiedMirrorStore for PgContactVerifiedMirrorStore {
         .get_result::<ContactVerifiedMirrorRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(Into::into))
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?;
+        row.map(TryInto::try_into).transpose()
     }
 
     async fn get_by_digest(
@@ -103,7 +109,7 @@ impl ContactVerifiedMirrorStore for PgContactVerifiedMirrorStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(format!(
+        let row = sql_query(format!(
             "SELECT {CONTACT_VERIFIED_MIRROR_COLUMNS} FROM contact_verified_mirrors WHERE target_holder_id = $1 AND request_digest = $2 LIMIT 1"
         ))
         .bind::<Text, _>(target_holder_id)
@@ -111,14 +117,19 @@ impl ContactVerifiedMirrorStore for PgContactVerifiedMirrorStore {
         .get_result::<ContactVerifiedMirrorRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(Into::into))
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?;
+        row.map(TryInto::try_into).transpose()
     }
 
     async fn put_verified(&self, record: &ContactVerifiedMirrorRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
+        let source_receipt = serde_json::to_value(&record.source_receipt).map_err(|error| {
+            PersistenceError::SchemaViolation(format!(
+                "Contact request receipt encode failed: {error}"
+            ))
+        })?;
         let row = sql_query(format!(
             "INSERT INTO contact_verified_mirrors ({CONTACT_VERIFIED_MIRROR_COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7) \
              ON CONFLICT (target_holder_id, request_event_id) DO UPDATE SET verified_at = contact_verified_mirrors.verified_at \
@@ -132,7 +143,7 @@ impl ContactVerifiedMirrorStore for PgContactVerifiedMirrorStore {
         .bind::<Text, _>(&record.request_event_id)
         .bind::<Text, _>(&record.request_digest)
         .bind::<Binary, _>(&record.canonical_event_bytes)
-        .bind::<Jsonb, _>(&record.source_receipt)
+        .bind::<Jsonb, _>(&source_receipt)
         .bind::<Text, _>(&record.issuer_service_id)
         .bind::<Timestamptz, _>(record.verified_at)
         .get_result::<ContactVerifiedMirrorRow>(&mut *conn)

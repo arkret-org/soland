@@ -150,7 +150,7 @@ pub async fn install(
 
         let is_repair_rejoin = event.kind == EventKind::MemberState
             && event.authorization_ref.as_ref().map(|value| value.as_str())
-                == Some("ak.authority.direct_conversation_repair.v1");
+                == Some(arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_REPAIR_V1);
         if required.contains(&event.kind) && !is_repair_rejoin {
             let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
                 OperationId::new(arkret_identifiers::new_prefixed_uuid7("ak:operation:"))

@@ -161,10 +161,10 @@ async fn protocol_describe_endpoint() -> JsonResult<AppletProtocolDescribeOutcom
                 "destination-service-id",
                 "idempotency-key"
             ],
-            "delivery_authentication_record_digest": "ak.applet.delivery_authentication_record_digest.v1",
+            "delivery_authentication_record_digest": arkret_wire::DomainSeparationId::APPLET_DELIVERY_AUTHENTICATION_RECORD_DIGEST_V1,
             "bearer_only": false
         }),
-        package_schema: "ak.schema.applet_package.v1".to_owned(),
+        package_schema: arkret_wire::SchemaId::APPLET_PACKAGE_V1.to_owned(),
     })
 }
 

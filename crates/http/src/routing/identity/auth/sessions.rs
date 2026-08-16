@@ -124,7 +124,7 @@ async fn enforce_session_device_revocation_gate(
     session: &SessionRecord,
 ) -> Result<(), (StatusCode, &'static str, &'static str)> {
     if session.agent_session.is_some() {
-        return Ok(());
+        return enforce_agent_session_authority(state, session).await;
     }
     let current = super::super::device_generation::active_device_revocation_gate_selector(
         state,
@@ -212,6 +212,78 @@ async fn enforce_session_device_revocation_gate(
             "session device authority binding is no longer current",
         )),
     }
+}
+
+async fn enforce_agent_session_authority(
+    state: &AppState,
+    session: &SessionRecord,
+) -> Result<(), (StatusCode, &'static str, &'static str)> {
+    let Some(grant) = session.session_grant.as_ref() else {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "managed Agent session is missing its typed grant authority",
+        ));
+    };
+    let arkret_models_identity::SessionGrantHolderBinding::AgentRuntime {
+        agent_id,
+        device_id,
+        agent_key_authorization_ref,
+        verification_method,
+    } = &grant.holder_binding
+    else {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "managed Agent session has a human-device grant binding",
+        ));
+    };
+    if agent_id.as_str() != session.actor || device_id.as_str() != session.device_id {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "managed Agent grant binding does not match the authenticated session",
+        ));
+    }
+    let record = state
+        .agent_pairings()
+        .agent(agent_id.as_str())
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                "managed Agent pairing authority is unavailable",
+            )
+        })?
+        .ok_or((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "managed Agent pairing is not accepted",
+        ))?;
+    if record.state != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
+        || record.authorized_event_ref.as_deref() != Some(agent_key_authorization_ref.as_str())
+        || record.authorized_verification_method.as_deref() != Some(verification_method.as_str())
+    {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "auth_expired",
+            "managed Agent lifecycle or key authorization is no longer active",
+        ));
+    }
+    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+        state,
+        &record,
+        crate::wire::now(),
+    )
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::UNAUTHORIZED,
+            "auth_expired",
+            "managed Agent controller, PCR, or accountability authority is no longer current",
+        )
+    })
 }
 
 fn request_requires_fresh_introspection(req: &Request) -> bool {

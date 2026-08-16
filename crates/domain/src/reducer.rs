@@ -78,7 +78,7 @@ use serde_json::Value;
 
 use crate::hlc::ServerHlc;
 
-pub const CHILD_ORDER_CELL_FAMILY: &str = "ak.component.child_order.v1";
+pub const CHILD_ORDER_CELL_FAMILY: &str = arkret_wire::CellFamilyId::CONTAINER_ORDER_V1;
 pub const READ_CURSOR_CAUSAL_RELATION_CONTEXT: &str = "read_cursor_causal_relation";
 
 // Public projection record types — kept `pub` so the external

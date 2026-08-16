@@ -189,6 +189,12 @@ async fn validate_accepted_group_state(
                 .cloned()
         })
         .ok_or_else(|| author_credential_invalid("group_state_ref carries no effective_scope"))?;
+    let effective_scope = serde_json::from_value::<arkret_wire::ScopeRef>(effective_scope)
+        .map_err(|error| {
+            author_credential_invalid(format!(
+                "group_state_ref effective_scope is invalid: {error}"
+            ))
+        })?;
     let epoch_row = state
         .mls_commits()
         .commit(&effective_scope, &coordinates.group_id)

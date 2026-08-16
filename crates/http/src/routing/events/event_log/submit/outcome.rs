@@ -49,7 +49,7 @@ pub(super) async fn enforce_sibling_fork_limit(
     let sibling_count = existing_records
         .iter()
         .filter(|record| {
-            record.actor_id == parsed.actor_id
+            record.actor_id == parsed.actor_id.as_str()
                 && record.realm_id.as_deref() == Some(parsed.realm_id.as_str())
                 && record.actor_seq == parsed.actor_seq
         })
@@ -76,7 +76,7 @@ pub(super) async fn enforce_sibling_fork_limit(
     )
     .await;
     Err(SubmitOneError::quarantine(
-        parsed.event_id.clone(),
+        parsed.event_id.to_string(),
         "fork_quarantine",
         "actor_seq sibling fork limit exceeded; event is quarantined pending actor-chain repair",
     ))

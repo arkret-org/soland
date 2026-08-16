@@ -163,7 +163,7 @@ pub(super) async fn resolve_event_root_anchor_method(
     let valid_shape = match role {
         DID_INCEPTION_REF_ROLE => principal_control_genesis_shape(object, actor_id),
         DID_RECOVERY_ANCHOR_REF_ROLE => {
-            kind == "ak.device.reanchor"
+            kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
                 && object
                     .get("payload")
                     .and_then(|payload| payload.get("principal_id"))

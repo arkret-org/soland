@@ -486,17 +486,33 @@ fn canonical_event_read_operation(req: &Request) -> Option<&'static str> {
     let method = req.method().as_str();
     let path = req.uri().path();
     match (method, path) {
-        ("QUERY", "/_arkret/self/events/describe") => Some("ak.self.events.read.describe"),
-        ("QUERY", "/_arkret/self/events/frontier") => Some("ak.self.events.read.frontier"),
-        ("QUERY", "/_arkret/self/events") => Some("ak.self.events.read.scan"),
-        ("QUERY", "/_arkret/self/events/resolve") => Some("ak.self.events.read.resolve"),
-        ("QUERY", "/_arkret/self/events/mls-governance-proof") => {
-            Some("ak.self.events.read.mls_governance_proof")
+        ("QUERY", "/_arkret/self/events/describe") => {
+            Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_DESCRIBE)
         }
-        ("QUERY", "/_arkret/peer/events/describe") => Some("ak.peer.events.read.describe"),
-        ("QUERY", "/_arkret/peer/events/frontier") => Some("ak.peer.events.read.frontier"),
-        ("QUERY", "/_arkret/peer/events") => Some("ak.peer.events.read.scan"),
-        ("QUERY", "/_arkret/peer/events/resolve") => Some("ak.peer.events.read.resolve"),
+        ("QUERY", "/_arkret/self/events/frontier") => {
+            Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_FRONTIER)
+        }
+        ("QUERY", "/_arkret/self/events") => {
+            Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN)
+        }
+        ("QUERY", "/_arkret/self/events/resolve") => {
+            Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_RESOLVE)
+        }
+        ("QUERY", "/_arkret/self/events/mls-governance-proof") => {
+            Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_MLS_GOVERNANCE_PROOF)
+        }
+        ("QUERY", "/_arkret/peer/events/describe") => {
+            Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_DESCRIBE)
+        }
+        ("QUERY", "/_arkret/peer/events/frontier") => {
+            Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_FRONTIER)
+        }
+        ("QUERY", "/_arkret/peer/events") => {
+            Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_SCAN)
+        }
+        ("QUERY", "/_arkret/peer/events/resolve") => {
+            Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_RESOLVE)
+        }
         _ => None,
     }
 }

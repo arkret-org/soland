@@ -376,7 +376,7 @@ async fn upsert_organization_policy(
     if payload.get("kind").and_then(Value::as_str).is_none() {
         payload.as_object_mut().expect("object checked").insert(
             "kind".to_owned(),
-            json!("ak.organization.moderation_policy"),
+            json!(arkret_wire::event_kind_str::ORGANIZATION_MODERATION_POLICY),
         );
     }
     if payload
@@ -800,7 +800,7 @@ fn organization_policy_record_view(
         .governance()
         .cached_organization_realms(&record.organization_id);
     OrganizationPolicyView {
-        kind: "ak.organization.moderation_policy".to_owned(),
+        kind: arkret_wire::event_kind_str::ORGANIZATION_MODERATION_POLICY.to_owned(),
         organization_id: record.organization_id.clone(),
         policy_id: record.policy_id.clone(),
         version: record.version,
@@ -818,7 +818,7 @@ pub(crate) fn realm_policy_event_outcome(
     updated_at: chrono::DateTime<Utc>,
 ) -> RealmModerationPolicyOutcome {
     RealmModerationPolicyOutcome {
-        kind: "ak.realm.moderation_policy".to_owned(),
+        kind: arkret_wire::event_kind_str::REALM_MODERATION_POLICY.to_owned(),
         realm_id: realm_id.to_owned(),
         policy,
         updated_by: updated_by.to_owned(),

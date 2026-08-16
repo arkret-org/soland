@@ -960,9 +960,9 @@ async fn moderation_routing_visible_to_actor(
             .unwrap_or_default()
     };
     [
-        "ak.moderation.decision",
-        "ak.realm.moderation_policy",
-        "ak.realm.admin",
+        arkret_wire::CapabilityActionId::MODERATION_DECISION,
+        arkret_wire::CapabilityActionId::REALM_MODERATION_POLICY,
+        arkret_wire::CapabilityActionId::REALM_ADMIN,
     ]
     .into_iter()
     .any(|action| {

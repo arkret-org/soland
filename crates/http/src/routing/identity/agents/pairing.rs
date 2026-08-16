@@ -399,7 +399,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         })?;
     let accepted = events.into_iter().find(|event| {
         if event.event_id != pending_authorize_event_id
-            || event.kind != "ak.agent.key.authorize"
+            || event.kind != arkret_wire::event_kind_str::AGENT_KEY_AUTHORIZE
             || event.actor_id != agent_id
         {
             return false;
@@ -1395,7 +1395,9 @@ pub(super) fn ensure_key_authorize_event_matches_request(
     authorized_public_key_digest: &str,
     service_id: &str,
 ) -> Result<(), AppError> {
-    if envelope.get("kind").and_then(Value::as_str) != Some("ak.agent.key.authorize") {
+    if envelope.get("kind").and_then(Value::as_str)
+        != Some(arkret_wire::event_kind_str::AGENT_KEY_AUTHORIZE)
+    {
         return Err(AppError::param_invalid(
             "authorize_event.kind must be ak.agent.key.authorize",
         ));

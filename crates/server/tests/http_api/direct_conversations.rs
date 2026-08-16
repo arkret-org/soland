@@ -368,20 +368,14 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
             "signature": {"kid": verification_method, "signature_algorithm": "Ed25519", "sig": "AA"}
         }))
         .unwrap();
-    let draft = arkret_models_crypto::PeerKeyPackagesClaimAuthorizationDraft {
-        request: unsigned.clone(),
-        transport_binding: arkret_models_crypto::PeerKeyPackagesClaimTransportBinding {
-            source_service_id: source_service_id.clone(),
-            destination_service_id: arkret_identifiers::DidCoreId::new(
-                destination_service_id.clone(),
-            )
+    let service_binding = arkret_models_crypto::KeyPackagesClaimServiceBinding {
+        source_service_id: source_service_id.clone(),
+        destination_service_id: arkret_identifiers::DidCoreId::new(destination_service_id.clone())
             .unwrap(),
-            source_trust_domain: trust_domain.clone(),
-            destination_trust_domain: trust_domain,
-        },
     };
-    let signing_bytes = arkret_models_crypto::peer_keypackage_claim_authorization_signing_bytes(
-        &draft,
+    let signing_bytes = arkret_models_crypto::keypackage_claim_authorization_signing_bytes(
+        &unsigned,
+        &service_binding,
         &authorization,
     )
     .unwrap();
@@ -410,6 +404,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
             "strand_id": unsigned.strand_id,
             "pair_key": unsigned.pair_key,
             "last_resort_allowed": unsigned.last_resort_allowed,
+            "service_binding": service_binding,
             "requester_authorization": authorization
         }))
         .unwrap();

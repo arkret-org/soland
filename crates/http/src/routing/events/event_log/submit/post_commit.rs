@@ -405,12 +405,12 @@ pub(super) async fn peer_event_batch_fanout_records(
         peers.push(DynamicPeerEventTarget {
             url,
             service_id: service_id.to_owned(),
-            membership_frontier: vec![parsed.event_id.clone()],
-            delivery_binding_frontier: vec![parsed.event_id.clone()],
+            membership_frontier: vec![parsed.event_id.to_string()],
+            delivery_binding_frontier: vec![parsed.event_id.to_string()],
             authority_witnesses: vec![soland_services::federation::RealmFanoutAuthorityWitness {
                 member_id: member_id.to_owned(),
-                membership_event_ref: parsed.event_id.clone(),
-                delivery_binding_frontier: parsed.event_id.clone(),
+                membership_event_ref: parsed.event_id.to_string(),
+                delivery_binding_frontier: parsed.event_id.to_string(),
             }],
         });
     }
@@ -430,7 +430,7 @@ pub(super) async fn peer_event_batch_fanout_records(
     // (`mint_and_store_ingress_receipt`), so the store is the only source.
     let submissions = federation_submissions(state, &events, None, &[], &[], None).await?;
     let binding_payload = json!({
-        "domain": "ak.peer.events.command.submit.service_binding.v1",
+        "domain": arkret_wire::DomainSeparationId::PEER_EVENTS_COMMAND_SUBMIT_SERVICE_BINDING_V1,
         "realm_id": first.realm_id,
         "event_ids": parsed_events.iter().map(|event| event.event_id.as_str()).collect::<Vec<_>>(),
         "canonical_digests": parsed_events.iter().map(|event| event.canonical_digest.as_str()).collect::<Vec<_>>(),
@@ -454,7 +454,7 @@ pub(super) async fn peer_event_batch_fanout_records(
         hasher_input.extend_from_slice(peer.service_id.as_bytes());
         for parsed in parsed_events {
             hasher_input.extend_from_slice(b"|");
-            hasher_input.extend_from_slice(parsed.event_id.as_bytes());
+            hasher_input.extend_from_slice(parsed.event_id.as_str().as_bytes());
             hasher_input.extend_from_slice(b"|");
             hasher_input.extend_from_slice(parsed.canonical_digest.as_bytes());
         }
@@ -485,10 +485,10 @@ pub(super) async fn peer_event_batch_fanout_records(
             idempotency_key,
             payload_json,
             realm_fanout: Some(soland_services::federation::RealmFanoutBinding {
-                realm_id: first.realm_id.clone(),
+                realm_id: first.realm_id.to_string(),
                 source_event_ids: parsed_events
                     .iter()
-                    .map(|event| event.event_id.clone())
+                    .map(|event| event.event_id.to_string())
                     .collect(),
                 authority_witnesses: peer.authority_witnesses,
             }),
@@ -537,8 +537,8 @@ pub(super) async fn direct_conversation_founding_fanout_records(
             delivery_binding_frontier: Vec::new(),
             authority_witnesses: vec![soland_services::federation::RealmFanoutAuthorityWitness {
                 member_id: member_id.to_owned(),
-                membership_event_ref: parsed.event_id.clone(),
-                delivery_binding_frontier: parsed.event_id.clone(),
+                membership_event_ref: parsed.event_id.to_string(),
+                delivery_binding_frontier: parsed.event_id.to_string(),
             }],
         });
     }
@@ -590,10 +590,10 @@ pub(super) async fn direct_conversation_founding_fanout_records(
             ),
             payload_json,
             realm_fanout: Some(soland_services::federation::RealmFanoutBinding {
-                realm_id: parsed_events[0].realm_id.clone(),
+                realm_id: parsed_events[0].realm_id.to_string(),
                 source_event_ids: parsed_events
                     .iter()
-                    .map(|event| event.event_id.clone())
+                    .map(|event| event.event_id.to_string())
                     .collect(),
                 authority_witnesses: peer.authority_witnesses,
             }),
@@ -665,13 +665,13 @@ pub(super) async fn peer_event_fanout_records(
             peers.push(DynamicPeerEventTarget {
                 url,
                 service_id: service_id.to_owned(),
-                membership_frontier: vec![parsed.event_id.clone()],
-                delivery_binding_frontier: vec![parsed.event_id.clone()],
+                membership_frontier: vec![parsed.event_id.to_string()],
+                delivery_binding_frontier: vec![parsed.event_id.to_string()],
                 authority_witnesses: vec![
                     soland_services::federation::RealmFanoutAuthorityWitness {
                         member_id: member_id.to_owned(),
-                        membership_event_ref: parsed.event_id.clone(),
-                        delivery_binding_frontier: parsed.event_id.clone(),
+                        membership_event_ref: parsed.event_id.to_string(),
+                        delivery_binding_frontier: parsed.event_id.to_string(),
                     },
                 ],
             });
@@ -682,7 +682,7 @@ pub(super) async fn peer_event_fanout_records(
     }
     let event_id = parsed.event_id.as_str();
     let binding_payload = json!({
-        "domain": "ak.peer.events.command.submit.service_binding.v1",
+        "domain": arkret_wire::DomainSeparationId::PEER_EVENTS_COMMAND_SUBMIT_SERVICE_BINDING_V1,
         "realm_id": parsed.realm_id,
         "event_id": event_id,
         "canonical_digest": parsed.canonical_digest,
@@ -798,8 +798,8 @@ pub(super) async fn peer_event_fanout_records(
             idempotency_key,
             payload_json: payload,
             realm_fanout: Some(soland_services::federation::RealmFanoutBinding {
-                realm_id: parsed.realm_id.clone(),
-                source_event_ids: vec![parsed.event_id.clone()],
+                realm_id: parsed.realm_id.to_string(),
+                source_event_ids: vec![parsed.event_id.to_string()],
                 authority_witnesses: peer.authority_witnesses.clone(),
             }),
             created_at: now,
@@ -816,7 +816,7 @@ async fn realm_event_dependency_records(
 ) -> Result<Vec<CanonicalEventRecord>, String> {
     let records = state
         .event_queries()
-        .realm_events_newest_first(&parsed.realm_id)
+        .realm_events_newest_first(parsed.realm_id.as_str())
         .await
         .map_err(|error| {
             format!(
@@ -848,7 +848,7 @@ async fn realm_event_dependency_records(
     let mut visited = bootstrap_ids;
     let mut ordered = Vec::new();
     for dependency in &parsed.prev_refs {
-        append_stored_event_dependencies(dependency, &by_id, &mut visited, &mut ordered);
+        append_stored_event_dependencies(dependency.as_str(), &by_id, &mut visited, &mut ordered);
     }
     if let Some(seal_ref) = envelope.get("seal_ref").and_then(Value::as_str)
         && let Ok(seal_id) = arkret_identifiers::SealId::new(seal_ref.to_owned())
@@ -916,7 +916,7 @@ async fn realm_bootstrap_fanout_record(
 ) -> Result<Option<soland_services::federation::FederationDeliveryRecord>, String> {
     let records = state
         .event_queries()
-        .realm_events_newest_first(&parsed.realm_id)
+        .realm_events_newest_first(parsed.realm_id.as_str())
         .await
         .map_err(|error| {
             format!(
@@ -970,7 +970,7 @@ async fn realm_bootstrap_fanout_record(
         .map(|record| record.canonical_digest.as_str())
         .collect::<Vec<_>>();
     let binding_payload = json!({
-        "domain": "ak.peer.events.command.submit.service_binding.v1",
+        "domain": arkret_wire::DomainSeparationId::PEER_EVENTS_COMMAND_SUBMIT_SERVICE_BINDING_V1,
         "realm_id": parsed.realm_id,
         "event_ids": event_ids,
         "canonical_digests": canonical_digests,
@@ -979,7 +979,7 @@ async fn realm_bootstrap_fanout_record(
         return Ok(None);
     };
     let service_binding_ref = service_binding_ref_for_realm_target(
-        &parsed.realm_id,
+        parsed.realm_id.as_str(),
         first_record.event_id.as_str(),
         &binding_payload,
         peer,
@@ -995,7 +995,7 @@ async fn realm_bootstrap_fanout_record(
     hasher_input.extend_from_slice(b"|");
     hasher_input.extend_from_slice(peer.service_id.as_bytes());
     hasher_input.extend_from_slice(b"|");
-    hasher_input.extend_from_slice(parsed.realm_id.as_bytes());
+    hasher_input.extend_from_slice(parsed.realm_id.as_str().as_bytes());
     for record in &bootstrap_records {
         hasher_input.extend_from_slice(b"|");
         hasher_input.extend_from_slice(record.event_id.as_bytes());
@@ -1040,7 +1040,7 @@ async fn realm_bootstrap_fanout_record(
             idempotency_key,
             payload_json,
             realm_fanout: Some(soland_services::federation::RealmFanoutBinding {
-                realm_id: parsed.realm_id.clone(),
+                realm_id: parsed.realm_id.to_string(),
                 source_event_ids: bootstrap_records
                     .iter()
                     .map(|record| record.event_id.clone())
@@ -1076,12 +1076,13 @@ async fn dynamic_peer_event_targets(
         // non-capability events are gated.
         let is_capability_control_event = matches!(
             parsed.kind.as_str(),
-            "ak.capability.revoke" | "ak.capability.grant"
+            arkret_wire::event_kind_str::CAPABILITY_REVOKE
+                | arkret_wire::event_kind_str::CAPABILITY_GRANT
         );
         let revoked_peers = if is_capability_control_event {
             std::collections::BTreeSet::new()
         } else {
-            projection.federation_delivery_revoked_peers(&parsed.realm_id)
+            projection.federation_delivery_revoked_peers(parsed.realm_id.as_str())
         };
         let mut service_frontiers: BTreeMap<
             String,
@@ -1091,7 +1092,7 @@ async fn dynamic_peer_event_targets(
                 Vec<soland_services::federation::RealmFanoutAuthorityWitness>,
             ),
         > = BTreeMap::new();
-        for member in projection.members_of_realm(&parsed.realm_id) {
+        for member in projection.members_of_realm(parsed.realm_id.as_str()) {
             if member.state != "join" || member.delivery_status.as_deref() != Some("routable") {
                 continue;
             }
@@ -1167,8 +1168,8 @@ fn service_binding_ref_for_target(
     target: &DynamicPeerEventTarget,
 ) -> Option<arkret_models_collaboration::event_sync::FederationServiceBindingRef> {
     service_binding_ref_for_realm_target(
-        &parsed.realm_id,
-        &parsed.event_id,
+        parsed.realm_id.as_str(),
+        parsed.event_id.as_str(),
         binding_payload,
         target,
     )

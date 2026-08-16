@@ -9,9 +9,9 @@ use super::payload_shape::{
 };
 
 const LOCAL_EVENT_CRITICAL_FEATURES: [&str; 4] = [
-    "ak.event_envelope.v1",
-    "ak.profile.core_event_store.v1",
-    "ak.proof.event_digest.v1",
+    arkret_wire::SchemaId::EVENT_V1,
+    arkret_wire::ProfileId::CORE_EVENT_STORE_V1,
+    arkret_wire::ProofContextId::EVENT_PROOF_V1,
     arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_ROLE_FEATURE,
 ];
 

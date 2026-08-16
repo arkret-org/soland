@@ -269,7 +269,7 @@ fn audit_event_matches_kind(event: &Value, kind: &str) -> bool {
 
 fn franking_proof_digest(proof: &FrankingProofVerifyRequestBody) -> String {
     let material = json!({
-        "kind": proof.kind.as_deref().unwrap_or("ak.moderation.franking_proof"),
+        "kind": proof.kind.as_deref().unwrap_or(arkret_wire::event_kind_str::MODERATION_FRANKING_PROOF),
         "target_event_id": proof.target_event_id.as_deref().unwrap_or_default(),
         "sender_did": proof.sender_did.as_deref().unwrap_or_default(),
         "receiving_service_id": proof.receiving_service_id.as_deref().unwrap_or_default(),

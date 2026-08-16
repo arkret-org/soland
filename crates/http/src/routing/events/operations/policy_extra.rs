@@ -5,7 +5,6 @@ use arkret_models_collaboration::objects::read_receipts::{
 };
 use arkret_wire::EventKind;
 use serde_json::Value;
-use soland_services::operation_semantics::poll_id_from_content;
 
 use super::*;
 
@@ -827,30 +826,6 @@ pub(crate) async fn validate_realm_moderation_policy(
     Ok(())
 }
 
-pub(crate) fn validate_poll_operation_policy(
-    state: &AppState,
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    if !kinds::operation_is_message_create(operation) {
-        return Ok(());
-    }
-    let Some(content) = operation.payload.get("content") else {
-        return Ok(());
-    };
-    if content.get("kind").and_then(serde_json::Value::as_str) != Some("ak.content.poll.response") {
-        return Ok(());
-    }
-    let Some(poll_id) = poll_id_from_content(content) else {
-        return Ok(());
-    };
-    let projection = state.projections().snapshot();
-    if projection.poll(&poll_id).is_some_and(|poll| poll.closed) {
-        Err("poll_closed")
-    } else {
-        Ok(())
-    }
-}
-
 pub(crate) async fn validate_audience_mention_operation_policy(
     state: &AppState,
     operation: &Operation,
@@ -1182,14 +1157,8 @@ pub(crate) fn validate_morph_schema_migrate_capability(
         .get("capability_action")
         .or_else(|| operation.payload.get("action"))
         .and_then(serde_json::Value::as_str);
-    // `capability-action-registry.json` is canonical: the action id is the
-    // same-name `ak.morph.schema_migrate`. The dotted `ak.morph.schema.migrate`
-    // spelling used in some prose is accepted as an alias so existing callers
-    // are not broken.
-    if !matches!(
-        action,
-        Some("ak.morph.schema_migrate" | "ak.morph.schema.migrate")
-    ) {
+    // `capability-action-registry.json` is canonical: there is no dotted alias.
+    if action != Some(arkret_wire::CapabilityActionId::MORPH_SCHEMA_MIGRATE) {
         return Err("ak.morph.schema_migrate requires ak.morph.schema_migrate capability");
     }
     Ok(())

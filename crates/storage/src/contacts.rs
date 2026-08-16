@@ -1,3 +1,4 @@
+use arkret_models_collaboration::contact_operations::RequestAcceptanceReceipt;
 use soland_domain::identity::{ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord};
 
 use super::{BTreeMap, PersistenceResult, Utc, Value, async_trait};
@@ -11,7 +12,7 @@ pub struct ContactVerifiedMirrorRecord {
     pub request_event_id: String,
     pub request_digest: String,
     pub canonical_event_bytes: Vec<u8>,
-    pub source_receipt: Value,
+    pub source_receipt: RequestAcceptanceReceipt,
     pub issuer_service_id: String,
     pub verified_at: chrono::DateTime<Utc>,
 }

@@ -49,10 +49,10 @@ fn generate_openapi_doc(router: &Router, artifact_registry_summary: Value) -> Va
     root.insert(
         "x-operation-aliases".to_owned(),
         json!({
-            "events.submit": "ak.self.events.command.submit",
-            "events.read": "ak.self.events.read.scan",
-            "events.subscribe": "ak.self.events.stream.subscribe",
-            "account.subscribe": "ak.self.account.stream.subscribe",
+            "events.submit": arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT,
+            "events.read": arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN,
+            "events.subscribe": arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
+            "account.subscribe": arkret_wire::ServiceOperationId::SELF_ACCOUNT_STREAM_SUBSCRIBE,
         }),
     );
     root.insert(
@@ -257,7 +257,7 @@ pub fn product_registered_routes() -> anyhow::Result<BTreeMap<String, BTreeSet<S
 }
 
 #[handler]
-#[tracing::instrument(skip_all, fields(op = "arkret_openapi_json"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.openapi.json"))]
 pub async fn arkret_openapi_json(depot: &mut Depot, res: &mut Response) {
     let doc = depot
         .get_typed::<ArkretOpenApiDoc>()
@@ -270,7 +270,7 @@ pub async fn arkret_openapi_json(depot: &mut Depot, res: &mut Response) {
 }
 
 #[handler]
-#[tracing::instrument(skip_all, fields(op = "arkret_openapi_yaml"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.openapi.yaml"))]
 pub async fn arkret_openapi_yaml(depot: &mut Depot, res: &mut Response) {
     let doc = depot
         .get_typed::<ArkretOpenApiDoc>()

@@ -3,14 +3,15 @@
 use soland_storage::ControlProposalAuthorityAckStore;
 
 use super::{
-    AccountDataStore, AccountLifecycleStore, AccountLocalpartStore, AccountRecord, AccountStore,
-    AgentParticipationStore, AgentStore, AppletStore, Arc, AuditStore, BTreeMap, BlobStore,
-    CircleProjectionStore, ConsentCellStore, ContactStore, ContactVerifiedMirrorStore,
-    DeviceInventoryStore, DeviceKeyStore, DeviceMessageStore, DevicePairingAuthorizationCommit,
-    DevicePairingCommitUnitOfWork, DevicePairingStore, EventStore, FederationFrontierExchangeStore,
-    FederationOperationsStore, FederationOutboxStore, HandleReleaseStore, IdempotencyStore,
-    InviteLocatorStore, InviteReceivePolicyStore, KeyBackupStore, MemoryAccountDataStore,
-    MemoryAccountLifecycleStore, MemoryAccountLocalpartStore, MemoryAccountStore,
+    AccountDataStore, AccountLifecycleStore, AccountLocalpartStore, AccountRecord,
+    AccountStatusAuthorityBindingStore, AccountStore, AgentParticipationStore, AgentStore,
+    AppletStore, Arc, AuditStore, BTreeMap, BlobStore, CircleProjectionStore, ConsentCellStore,
+    ContactStore, ContactVerifiedMirrorStore, DeviceInventoryStore, DeviceKeyStore,
+    DeviceMessageStore, DevicePairingAuthorizationCommit, DevicePairingCommitUnitOfWork,
+    DevicePairingStore, EventStore, FederationFrontierExchangeStore, FederationOperationsStore,
+    FederationOutboxStore, HandleReleaseStore, IdempotencyStore, InviteLocatorStore,
+    InviteReceivePolicyStore, KeyBackupStore, MemoryAccountDataStore, MemoryAccountLifecycleStore,
+    MemoryAccountLocalpartStore, MemoryAccountStatusAuthorityBindingStore, MemoryAccountStore,
     MemoryAgentMembershipCascadeStore, MemoryAgentParticipationStore, MemoryAgentStore,
     MemoryAppletStore, MemoryAuditStore, MemoryBlobStore, MemoryCircleProjectionStore,
     MemoryConsentCellStore, MemoryContactStore, MemoryContactVerifiedMirrorStore,
@@ -122,6 +123,7 @@ pub struct SolandMemoryPersistenceStore {
     pub(crate) idempotency_keys: MemoryIdempotencyStore,
     control_proposal_authority_acks: MemoryControlProposalAuthorityAckStore,
     websocket_auth: MemoryWebsocketAuthStore,
+    account_status_authority_bindings: MemoryAccountStatusAuthorityBindingStore,
 }
 
 impl SolandMemoryPersistenceStore {
@@ -257,6 +259,7 @@ impl SolandMemoryPersistenceStore {
             },
             control_proposal_authority_acks: MemoryControlProposalAuthorityAckStore::new(),
             websocket_auth: MemoryWebsocketAuthStore::new(),
+            account_status_authority_bindings: MemoryAccountStatusAuthorityBindingStore::new(),
         }
     }
 
@@ -626,6 +629,10 @@ impl soland_storage::SyncStoreRegistry for SolandMemoryPersistenceStore {
 
     fn websocket_auth(&self) -> &dyn WebsocketAuthStore {
         &self.websocket_auth
+    }
+
+    fn account_status_authority_bindings(&self) -> &dyn AccountStatusAuthorityBindingStore {
+        &self.account_status_authority_bindings
     }
 }
 

@@ -2,8 +2,11 @@ use salvo::oapi::endpoint;
 
 use super::*;
 
-#[endpoint(operation_id = "mimi_protocol_directory")]
-#[tracing::instrument(skip_all, fields(op = "mimi_protocol_directory"))]
+#[endpoint(operation_id = "org.arkret.soland.interop.mimi.protocol_directory")]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.interop.mimi.protocol_directory")
+)]
 pub(super) async fn mimi_protocol_directory(
     depot: &mut Depot,
 ) -> JsonResult<arkret_models_collaboration::objects::interop::ProviderDirectory> {
@@ -11,8 +14,8 @@ pub(super) async fn mimi_protocol_directory(
     json_ok(mimi_provider_directory_value(state)?)
 }
 
-#[endpoint(operation_id = "mimi_provider_directory")]
-#[tracing::instrument(skip_all, fields(op = "mimi_provider_directory"))]
+#[endpoint(operation_id = "ak.open.mimi.read.provider_directory")]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.read.provider_directory"))]
 pub(super) async fn mimi_provider_directory(
     depot: &mut Depot,
 ) -> JsonResult<arkret_models_collaboration::objects::interop::ProviderDirectory> {
@@ -46,7 +49,7 @@ pub(super) async fn mimi_key_material(
         .unwrap_or("unknown");
     let _receipt = mimi_receipt(
         state,
-        "ak.open.mimi.exchange.request_key_material",
+        arkret_wire::ServiceOperationId::OPEN_MIMI_EXCHANGE_REQUEST_KEY_MATERIAL,
         &body,
         json!({
             "target": target,
@@ -110,7 +113,7 @@ pub(super) async fn mimi_room_update(
         .with_wire_code("mimi_room_binding_event_invalid"));
     }
     let binding_event_id = match declared_update_kind {
-        "ak.mimi.room_binding" => {
+        arkret_wire::event_kind_str::MIMI_ROOM_BINDING => {
             let binding = update_payload
                 .as_ref()
                 .and_then(mimi_room_binding_payload)
@@ -147,7 +150,7 @@ pub(super) async fn mimi_room_update(
         .map_err(|error| AppError::internal(format!("MIMI room state ref: {error}")))?;
     let _receipt = mimi_receipt(
         state,
-        "ak.open.mimi.command.update_room",
+        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_UPDATE_ROOM,
         &body,
         json!({
             "mimi_room_uri": mimi_room_uri(state, &room_id)?,
@@ -194,7 +197,7 @@ pub(super) async fn mimi_notify(
     })?;
     let _receipt = mimi_receipt(
         state,
-        "ak.open.mimi.command.notify",
+        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_NOTIFY,
         &body,
         json!({
             "delivery": "queued",
@@ -222,25 +225,16 @@ pub(super) async fn mimi_room_message(
 ) -> JsonResult<MimiSubmitMessageOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let room_id = strand_id.into_inner();
-    let body = typed_body_value(body.into_inner(), "mimi submit message")?;
+    let body = body.into_inner();
     let room_uri = mimi_room_uri(state, &room_id)?;
     verify_mimi_write_service_proof(state, req, Some(room_uri.as_str())).await?;
-    if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
-    }
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::param_invalid("invalid MIMI room id"));
     }
-    let message = decode_mimi_message_payload(&body)?;
-    let source_format = message
-        .get("source_format")
-        .or_else(|| {
-            body.get("ciphertext")
-                .and_then(|ciphertext| ciphertext.get("content_type"))
-        })
-        .and_then(|value| value.as_str())
-        .unwrap_or("application/mimi-content");
-    if !valid_mimi_content_type(source_format) {
+    let message = decode_mimi_ciphertext_payload(&body.ciphertext)?;
+    let associated_data = decode_mimi_associated_data(body.associated_data.as_ref())?;
+    let source_format = body.ciphertext.content_type.as_str().to_owned();
+    if !valid_mimi_content_type(&source_format) {
         return Err(AppError::param_invalid("unsupported MIMI content type"));
     }
     let operation_id = ids::generate_operation_id();
@@ -254,11 +248,9 @@ pub(super) async fn mimi_room_message(
                 operation_id.trim_start_matches("ak:operation:")
             )
         });
-    let original_hash = body
-        .get("original_envelope_hash")
-        .and_then(|value| value.as_str())
-        .map(str::to_owned)
-        .unwrap_or_else(|| arkret_canonical::sha256_digest(body.to_string().as_bytes()));
+    let body_bytes = arkret_canonical::canonical_json_bytes(&body)
+        .map_err(|error| AppError::internal(format!("MIMI request canonicalization: {error}")))?;
+    let original_hash = arkret_canonical::sha256_digest(&body_bytes);
 
     // Map the MIMI message into the canonical Arkret timeline.
     // Append a MessageRecord + a `ak.message.create` projection event so
@@ -272,20 +264,10 @@ pub(super) async fn mimi_room_message(
             AppError::not_found("MIMI room is not bound to any Arkret Realm")
                 .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
         })?;
-    enforce_mimi_submit_binding(&room_binding, &body, &message)?;
+    enforce_mimi_submit_binding(&room_binding, &body, &message, associated_data.as_ref())?;
     let realm_id = room_binding.realm_id.clone();
-    let sender = body
-        .get("sender_actor_id")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned)
-        .unwrap_or_else(|| {
-            // Synthesize a stable sender DID from the MIMI provider
-            // id + message id when the envelope omits one. Real
-            // deployments will normalise this via the identifier
-            // mapping layer per spec §10.
-            format!("{}#mimi-anonymous", state.service_id(),)
-        });
-    let mapped_content = map_mimi_message_content(&message, source_format)?;
+    let sender = body.sender_actor_id.to_string();
+    let mapped_content = map_mimi_message_content(&message, &source_format)?;
     let thread_id = message
         .get("thread_id")
         .and_then(Value::as_str)
@@ -318,16 +300,18 @@ pub(super) async fn mimi_room_message(
     let event_id =
         persist_mimi_canonical_message_event(state, &realm_id, created_at, event_payload).await?;
 
+    let body_value = typed_body_value(&body, "mimi submit message")?;
     let _receipt = mimi_receipt(
         state,
-        "ak.open.mimi.command.submit_message",
-        &body,
+        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_SUBMIT_MESSAGE,
+        &body_value,
         json!({
-            "kind": "ak.mimi.mapping_receipt",
-            "profile": "ak.profile.mimi_interop.v1",
+            "schema": arkret_wire::SchemaId::MIMI_INTEROP_V1,
+            "receipt_kind": "content_mapping_receipt",
+            "profile": arkret_wire::ProfileId::MIMI_INTEROP_V1,
             "mimi_room_uri": mimi_room_uri(state, &room_id)?,
             "source_format": source_format,
-            "target_format": "ak.message.create",
+            "target_format": arkret_wire::event_kind_str::MESSAGE_CREATE,
             "original_envelope_hash": original_hash,
             "mapped_operation_id": operation_id,
             "arkret_event_id": event_id,
@@ -399,7 +383,7 @@ pub(super) async fn mimi_group_info(
     };
     let _receipt = mimi_receipt(
         state,
-        "ak.open.mimi.read.group_info",
+        arkret_wire::ServiceOperationId::OPEN_MIMI_READ_GROUP_INFO,
         &json!({"room_id": room_id}),
         json!({
             "truth_source": "arkret_signed_event_reducer",
@@ -455,7 +439,7 @@ pub(super) async fn mimi_consent_request(
         })?;
     let _receipt = mimi_receipt(
         state,
-        "ak.open.mimi.command.request_consent",
+        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_REQUEST_CONSENT,
         &body_value,
         json!({
             "consent_grants_space_capability": false,
@@ -834,7 +818,7 @@ pub(super) async fn mimi_identifiers_query(
     }
     let _receipt = mimi_receipt(
         state,
-        "ak.open.mimi.read.identifiers",
+        arkret_wire::ServiceOperationId::OPEN_MIMI_READ_IDENTIFIERS,
         &body,
         json!({
             "contact_graph_exposed": false,
@@ -974,7 +958,7 @@ pub(super) async fn mimi_report_abuse(
     ];
     let _receipt = mimi_receipt(
         state,
-        "ak.open.mimi.command.report_abuse",
+        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_REPORT_ABUSE,
         &body,
         json!({
             "e2ee_evidence_plaintext_required": false,
@@ -1068,7 +1052,7 @@ pub(super) async fn mimi_proxy_download(
     }
     let _receipt = mimi_receipt(
         state,
-        "ak.open.mimi.command.proxy_download",
+        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_PROXY_DOWNLOAD,
         &body,
         json!({
             "asset_privacy_policy": asset_policy,

@@ -63,11 +63,11 @@ pub struct ConformanceRealmBasis {
 /// would sign for itself as its first governance act. It is fixture
 /// convenience, not a protocol constant.
 pub const OWNER_BOOTSTRAP_GRANT_ACTIONS: [&str; 5] = [
-    "ak.realm.admin",
-    "ak.capability.grant",
-    "ak.capability.revoke",
-    "ak.realm_key.share",
-    "ak.message.create",
+    arkret_wire::CapabilityActionId::REALM_ADMIN,
+    arkret_wire::CapabilityActionId::CAPABILITY_GRANT,
+    arkret_wire::CapabilityActionId::CAPABILITY_REVOKE,
+    arkret_wire::CapabilityActionId::REALM_KEY_SHARE,
+    arkret_wire::CapabilityActionId::MESSAGE_CREATE,
 ];
 
 /// Build a sealed authority-root, owner-bootstrap-grant and content-grant basis
@@ -456,7 +456,7 @@ fn grant_body(
 ) -> Result<Value, String> {
     Ok(serde_json::json!({
         "grant_id": grant_id,
-        "schema": "ak.schema.capability.v1",
+        "schema": arkret_wire::SchemaId::CAPABILITY_V1,
         "realm_id": realm_id,
         "issuer": subject,
         "issuer_principal_server_id": principal_server_id,

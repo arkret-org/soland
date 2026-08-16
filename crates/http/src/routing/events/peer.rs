@@ -1,6 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{DidCoreId, EventId, RealmId};
+use arkret_models_collaboration::account_lifecycle::{
+    AccountStatusAuthoringFrontiersOutcome, AccountStatusAuthoringFrontiersRequestBody,
+    AccountStatusPropagationState, AccountStatusPublicationOutcome,
+    AccountStatusPublicationRequestBody, AccountStatusPublicationStatus,
+};
 use arkret_models_collaboration::direct_conversation_repair::{
     DirectConversationRepairEnqueueOutcome, DirectConversationRepairRelayRequest,
 };
@@ -10,6 +15,7 @@ use arkret_models_collaboration::event_query::{
 use arkret_models_collaboration::event_sync::{
     EventsFrontierFederationPeerState, EventsSubmitFederationRequestBody, MAX_FEDERATED_EVENTS,
 };
+use arkret_models_collaboration::events_payloads::account::AccountStatusPayload;
 use arkret_models_collaboration::http_bodies::{
     EventsQueryOutcome, PeerEventsResolveOutcome, PeerEventsResolveRequestBody,
 };
@@ -18,7 +24,7 @@ use arkret_models_collaboration::principal_operations::{
 };
 use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
 use arkret_wire::{CbaProofBundle, ServiceKind, SignalRelayOutcome, SignalRelayRequest};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::Serialize;
@@ -69,6 +75,14 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("events/resolve").query(peer_events_resolve))
         .push(Router::with_path("events/frontier").query(peer_events_frontier))
         .push(Router::with_path("principal-genesis").post(peer_principal_genesis))
+        .push(
+            Router::with_path("account-status")
+                .post(peer_account_status_submit)
+                .push(
+                    Router::with_path("authoring-frontiers")
+                        .post(peer_account_status_authoring_frontiers),
+                ),
+        )
         .push(
             Router::with_path("direct-conversations/repair-relay")
                 .post(peer_direct_conversation_repair_relay),
@@ -237,6 +251,565 @@ pub(in crate::routing::events) async fn trusted_account_authority_service_id(
     })
 }
 
+#[salvo::oapi::endpoint(
+    operation_id = "ak.peer.account_status.read.authoring_frontiers",
+    tags("events")
+)]
+async fn peer_account_status_authoring_frontiers(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AccountStatusAuthoringFrontiersOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    validate_peer_request(state, req, true).await?;
+    let source_service_id = source_service_id_from_request(req)?;
+    let request = parse_json_body::<AccountStatusAuthoringFrontiersRequestBody>(
+        req,
+        "invalid ak.peer.account_status.read.authoring_frontiers request body",
+    )
+    .await?;
+    validate_account_status_authority_evidence(
+        state,
+        &source_service_id,
+        &request.authority_evidence,
+    )
+    .await?;
+
+    let realm_id = request
+        .authority_evidence
+        .principal_control_realm_id
+        .clone();
+    let actor_id = request.authority_evidence.issuer_service_id.clone();
+    let actor_frontier =
+        super::event_log::load_realm_actor_frontier(state, realm_id.clone(), actor_id).await?;
+    let seal_frontier = account_status_seal_frontier(state, &realm_id).await?;
+    let current_status_event_ids = current_account_status_heads(
+        state,
+        realm_id.as_str(),
+        request.authority_evidence.account_id.as_str(),
+        request.authority_evidence.principal_id.as_str(),
+    )
+    .await?
+    .into_iter()
+    .map(|(event_id, _)| event_id)
+    .collect();
+    let outcome = AccountStatusAuthoringFrontiersOutcome {
+        account_id: request.authority_evidence.account_id.clone(),
+        principal_id: request.authority_evidence.principal_id.clone(),
+        principal_control_realm_id: realm_id,
+        issuer_service_id: request.authority_evidence.issuer_service_id.clone(),
+        actor_frontier,
+        seal_frontier,
+        current_status_event_ids,
+    };
+    outcome.validate_for_request(&request).map_err(|error| {
+        AppError::internal(format!("account-status frontier snapshot invalid: {error}"))
+    })?;
+    json_ok(outcome)
+}
+
+#[salvo::oapi::endpoint(operation_id = "ak.peer.account_status.command.submit", tags("events"))]
+async fn peer_account_status_submit(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AccountStatusPublicationOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    validate_peer_request(state, req, true).await?;
+    let source_service_id = source_service_id_from_request(req)?;
+    let idempotency_key = required_header(req, "idempotency-key")?;
+    let request = parse_json_body::<AccountStatusPublicationRequestBody>(
+        req,
+        "invalid ak.peer.account_status.command.submit request body",
+    )
+    .await?;
+    request
+        .validate_shape()
+        .map_err(|error| schema_violation(error.to_string()))?;
+    validate_account_status_authority_evidence(
+        state,
+        &source_service_id,
+        &request.authority_evidence,
+    )
+    .await?;
+    let request_hash = arkret_canonical::canonical_sha256(&request).map_err(|error| {
+        AppError::internal(format!("account-status request digest failed: {error}"))
+    })?;
+    let scope = format!("account-status:{source_service_id}:{}", state.service_id());
+    if let Some(stored) = state
+        .jobs()
+        .idempotency_record(&scope, &idempotency_key)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        if stored.request_hash != request_hash {
+            return Err(AppError::conflict(
+                "Idempotency-Key reused with another account-status publication",
+            )
+            .with_wire_code("duplicate_conflict"));
+        }
+        let outcome = serde_json::from_value(stored.response_body).map_err(|error| {
+            AppError::internal(format!("stored account-status outcome invalid: {error}"))
+        })?;
+        return json_ok(outcome);
+    }
+
+    let event = request.publication.event().clone();
+    validate_account_status_current_heads(state, &request).await?;
+    let actor_frontier = super::event_log::load_realm_actor_frontier(
+        state,
+        event.realm_id.clone(),
+        event.actor_id.clone(),
+    )
+    .await?;
+    if event.actor_seq != actor_frontier.next_actor_seq
+        || event.prev_refs != actor_frontier.frontier_event_ids
+    {
+        return Err(AppError::new(
+            soland_http::error::ErrorCode::FailedPrecondition,
+            "account-status actor frontier is stale",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED));
+    }
+    let seal_frontier = account_status_seal_frontier(state, &event.realm_id).await?;
+    if event
+        .seal_basis
+        .as_ref()
+        .map(|basis| basis.leaves.as_slice())
+        != Some(std::slice::from_ref(&seal_frontier.seal_id))
+    {
+        return Err(AppError::new(
+            soland_http::error::ErrorCode::FailedPrecondition,
+            "account-status Seal frontier is stale",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED));
+    }
+    let (verification_method, signing_key) =
+        verify_account_status_event_proof(state, &event).await?;
+    let submitted = super::event_log::submit_account_status_peer_event(
+        state,
+        event.clone(),
+        request.authority_evidence.account_id.as_str(),
+        request.authority_evidence.principal_id.as_str(),
+        verification_method,
+        signing_key,
+    )
+    .await
+    .map_err(|error| {
+        AppError::new(
+            soland_http::error::ErrorCode::FailedPrecondition,
+            error.message,
+        )
+        .with_status(error.status)
+        .with_wire_code(error.code)
+    })?;
+    let heads = current_account_status_heads(
+        state,
+        event.realm_id.as_str(),
+        request.authority_evidence.account_id.as_str(),
+        request.authority_evidence.principal_id.as_str(),
+    )
+    .await?;
+    let head_ids = heads.iter().map(|(id, _)| id).collect::<Vec<_>>();
+    let frontier_digest =
+        arkret_identifiers::Hash::new(arkret_canonical::canonical_sha256(&head_ids).map_err(
+            |error| AppError::internal(format!("account-status frontier digest failed: {error}")),
+        )?)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let barrier_cursor = submitted
+        .outcome
+        .cursor
+        .map(arkret_wire::Cursor::new)
+        .transpose()
+        .map_err(|error| AppError::internal(format!("stored Event cursor is invalid: {error}")))?;
+    let outcome = AccountStatusPublicationOutcome {
+        status: if submitted.duplicate {
+            AccountStatusPublicationStatus::Duplicate
+        } else {
+            AccountStatusPublicationStatus::Accepted
+        },
+        event_id: event.event_id.clone(),
+        account_id: request.authority_evidence.account_id.clone(),
+        principal_id: request.authority_evidence.principal_id.clone(),
+        effective_status_event_id: Some(event.event_id),
+        account_status_frontier_digest: Some(frontier_digest),
+        barrier_cursor,
+        propagation_state: AccountStatusPropagationState::NotRequired,
+        pending_destination_count: None,
+        retry_after_ms: None,
+    };
+    let stored_at = Utc::now();
+    state
+        .jobs()
+        .store_idempotency_record(soland_services::jobs::IdempotencyState {
+            principal_id: scope,
+            idempotency_key,
+            service_id: state.service_id().clone(),
+            request_hash,
+            response_status: StatusCode::OK.as_u16() as i32,
+            response_body: serde_json::to_value(&outcome)
+                .map_err(|error| AppError::internal(error.to_string()))?,
+            created_at: stored_at,
+            expires_at: stored_at + Duration::days(3650),
+        })
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    json_ok(outcome)
+}
+
+async fn validate_account_status_authority_evidence(
+    state: &AppState,
+    source_service_id: &str,
+    evidence: &arkret_models_collaboration::account_lifecycle::AccountStatusAuthorityEvidence,
+) -> Result<(), AppError> {
+    evidence
+        .validate_shape()
+        .map_err(|error| schema_violation(error.to_string()))?;
+    let evaluated_at = Utc::now();
+    if evidence.issued_at > evaluated_at || evidence.expires_at <= evaluated_at {
+        return Err(AppError::capability_denied(
+            "account-status authority evidence is not currently valid",
+        ));
+    }
+    let configured = trusted_account_authority_service_id(state).await?;
+    if source_service_id != evidence.issuer_service_id.as_str()
+        || configured != evidence.account_authority_id
+    {
+        return Err(AppError::capability_denied(
+            "account-status transport source or Account Authority mismatch",
+        ));
+    }
+    let method = evidence.proof.verification_method.as_str();
+    let controller = method
+        .rsplit_once('#')
+        .map(|(controller, _)| controller)
+        .ok_or_else(|| {
+            schema_violation("account-status authority proof method has no controller")
+        })?;
+    let controller = arkret_wire::DidFullId::new(controller.to_owned()).map_err(|error| {
+        schema_violation(format!("account-status authority DID invalid: {error}"))
+    })?;
+    let document =
+        crate::jws_verify::resolve_did_document(state, &controller).map_err(|error| {
+            AppError::capability_denied(format!(
+                "account-status Account Authority resolution failed: {error}"
+            ))
+        })?;
+    let public_key = arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, method)
+        .map_err(|error| {
+            AppError::capability_denied(format!(
+                "account-status authority key unavailable: {error}"
+            ))
+        })?;
+    arkret_signatures::account_status::verify_account_status_authority_evidence(
+        evidence,
+        &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+            bytes: public_key.to_bytes().to_vec(),
+        },
+    )
+    .map_err(|error| {
+        AppError::capability_denied(format!("account-status authority proof invalid: {error}"))
+    })?;
+
+    let local_server = DidCoreId::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let authority =
+        arkret_wire::PrincipalAuthorityKey::new(evidence.principal_id.clone(), local_server);
+    let resolution = state
+        .persistence()
+        .principal_resolution_by_authority_key(&authority)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("account-status PCR binding unavailable: {error}"))
+        })?
+        .ok_or_else(|| AppError::capability_denied("account-status PCR binding is not accepted"))?;
+    let account = state
+        .identities()
+        .account(evidence.principal_id.as_str())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "account-status account binding unavailable: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            AppError::capability_denied("account-status account binding is not accepted")
+        })?;
+    if resolution.pcr_realm_id != evidence.principal_control_realm_id
+        || account.id != evidence.account_id.as_str()
+    {
+        return Err(AppError::capability_denied(
+            "account-status account/principal/PCR binding mismatch",
+        ));
+    }
+    let floor = soland_storage::AccountStatusAuthorityBindingFloor {
+        account_authority_id: evidence.account_authority_id.to_string(),
+        account_id: evidence.account_id.to_string(),
+        binding_version: evidence.binding_version,
+        issuer_service_id: evidence.issuer_service_id.to_string(),
+        principal_control_realm_id: evidence.principal_control_realm_id.to_string(),
+        principal_id: evidence.principal_id.to_string(),
+    };
+    match state
+        .persistence()
+        .advance_account_status_authority_binding(floor)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "account-status authority binding floor unavailable: {error}"
+            ))
+        })? {
+        soland_storage::AccountStatusAuthorityBindingAdvance::Advanced
+        | soland_storage::AccountStatusAuthorityBindingAdvance::Replay => {}
+        soland_storage::AccountStatusAuthorityBindingAdvance::Rollback => {
+            return Err(AppError::new(
+                soland_http::error::ErrorCode::FailedPrecondition,
+                "account-status authority binding_version rollback",
+            )
+            .with_status(StatusCode::PRECONDITION_FAILED));
+        }
+        soland_storage::AccountStatusAuthorityBindingAdvance::Fork => {
+            return Err(AppError::new(
+                soland_http::error::ErrorCode::FailedPrecondition,
+                "account-status authority binding fork",
+            )
+            .with_status(StatusCode::PRECONDITION_FAILED));
+        }
+    }
+    Ok(())
+}
+
+async fn account_status_seal_frontier(
+    state: &AppState,
+    realm_id: &RealmId,
+) -> Result<arkret_models_collaboration::event_sync::RealmSealFrontierView, AppError> {
+    let existing = crate::notary::ensure_realm_seal_head(state, realm_id).map_err(|error| {
+        AppError::internal(format!("account-status Seal head unavailable: {error}"))
+    })?;
+    let view = crate::routing::events::event_log::governance_proof::materialize_realm_event_seal(
+        state, realm_id,
+    )
+    .await;
+    let seal = match view {
+        Ok(view) => view.accepted_seal,
+        Err(error) if error.code == soland_http::error::ErrorCode::FrontierUnavailable => existing
+            .ok_or_else(|| {
+                AppError::new(
+                    soland_http::error::ErrorCode::FrontierUnavailable,
+                    "account-status PCR has no accepted Seal frontier",
+                )
+            })?,
+        Err(error) => return Err(error),
+    };
+    let policy = crate::control_proposal::control_proposal_policy(state, realm_id, &[])
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "account-status governance policy unavailable: {error}"
+            ))
+        })?;
+    let health =
+        super::event_log::frontier_control_governance_health(state, realm_id, policy).await?;
+    Ok(
+        arkret_models_collaboration::event_sync::RealmSealFrontierView::new(
+            realm_id.clone(),
+            seal.id,
+            seal.control_event_set_root,
+            seal.state_root,
+            health,
+            Some(seal.hlc),
+        ),
+    )
+}
+
+async fn current_account_status_heads(
+    state: &AppState,
+    realm_id: &str,
+    account_id: &str,
+    principal_id: &str,
+) -> Result<
+    Vec<(
+        EventId,
+        arkret_models_collaboration::objects::account_status::AccountStatus,
+    )>,
+    AppError,
+> {
+    let mut candidates = Vec::new();
+    let mut visible = BTreeSet::new();
+    for record in state
+        .event_queries()
+        .accepted_events()
+        .await
+        .map_err(|error| AppError::internal(format!("account-status heads unavailable: {error}")))?
+    {
+        if record.kind != arkret_wire::EventKind::AccountStatus.as_str()
+            || record.realm_id.as_deref() != Some(realm_id)
+        {
+            continue;
+        }
+        let event: arkret_wire::Event =
+            serde_json::from_value(record.envelope).map_err(|error| {
+                AppError::internal(format!("accepted account-status Event invalid: {error}"))
+            })?;
+        let payload: AccountStatusPayload = serde_json::from_value(
+            serde_json::to_value(&event.payload)
+                .map_err(|error| AppError::internal(error.to_string()))?,
+        )
+        .map_err(|error| {
+            AppError::internal(format!("accepted account-status payload invalid: {error}"))
+        })?;
+        if payload.account_id != account_id || payload.principal_id.as_str() != principal_id {
+            continue;
+        }
+        let event_id = EventId::new(record.event_id).map_err(|error| {
+            AppError::internal(format!("accepted account-status Event id invalid: {error}"))
+        })?;
+        visible.insert(event_id.clone());
+        candidates.push(
+            arkret_models_collaboration::objects::account_status::AccountStatusProjectionCandidate {
+                event_id,
+                status: payload.status,
+                effective_at: payload.effective_at,
+                event_digest: arkret_identifiers::Hash::new(event.event_digest().map_err(|error| {
+                    AppError::internal(format!("accepted account-status digest invalid: {error}"))
+                })?)
+                .map_err(|error| AppError::internal(error.to_string()))?,
+                supersedes_status_event_ids: payload.supersedes_status_event_ids,
+            },
+        );
+    }
+    let projected =
+        arkret_models_collaboration::objects::account_status::project_account_status_heads(
+            &candidates,
+            &visible,
+        );
+    if !projected.rejected.is_empty() {
+        return Err(AppError::internal(
+            "accepted account-status history contains an invalid transition",
+        ));
+    }
+    let mut heads = projected
+        .current_heads
+        .into_iter()
+        .map(|candidate| (candidate.event_id.clone(), candidate.status))
+        .collect::<Vec<_>>();
+    heads.sort_by(|left, right| left.0.cmp(&right.0));
+    if heads.len() > 64 {
+        return Err(AppError::new(
+            soland_http::error::ErrorCode::FrontierUnavailable,
+            "account-status current head set exceeds the protocol bound",
+        ));
+    }
+    Ok(heads)
+}
+
+async fn validate_account_status_current_heads(
+    state: &AppState,
+    request: &AccountStatusPublicationRequestBody,
+) -> Result<(), AppError> {
+    use arkret_models_collaboration::objects::account_status::AccountStatus;
+    let event = request.publication.event();
+    let payload: AccountStatusPayload =
+        serde_json::from_value(serde_json::to_value(&event.payload).map_err(|error| {
+            schema_violation(format!("account-status payload cannot be encoded: {error}"))
+        })?)
+        .map_err(|error| schema_violation(format!("account-status payload invalid: {error}")))?;
+    let heads = current_account_status_heads(
+        state,
+        event.realm_id.as_str(),
+        &payload.account_id,
+        payload.principal_id.as_str(),
+    )
+    .await?;
+    if heads
+        .iter()
+        .any(|(_, status)| *status == AccountStatus::ErasurePending)
+        && payload.status != AccountStatus::ErasurePending
+    {
+        return Err(AppError::new(
+            soland_http::error::ErrorCode::FailedPrecondition,
+            "erasure_pending_is_terminal",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED));
+    }
+    let blocking = heads
+        .iter()
+        .filter(|(_, status)| status.severity_rank() >= payload.status.severity_rank())
+        .map(|(event_id, _)| event_id.clone())
+        .collect::<Vec<_>>();
+    let lowering = heads
+        .iter()
+        .any(|(_, status)| status.is_stricter_than(payload.status));
+    if lowering && payload.supersedes_status_event_ids.as_deref() != Some(blocking.as_slice()) {
+        return Err(AppError::new(
+            soland_http::error::ErrorCode::FailedPrecondition,
+            "account-status supersedes set is stale or incomplete",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED));
+    }
+    Ok(())
+}
+
+async fn verify_account_status_event_proof(
+    state: &AppState,
+    event: &arkret_wire::Event,
+) -> Result<(arkret_wire::DidUrl, arkret_wire::DidKey), AppError> {
+    let producer = event
+        .proofs
+        .iter()
+        .find_map(|proof| match proof {
+            arkret_wire::EventProof::Producer(producer) => Some(producer),
+            _ => None,
+        })
+        .ok_or_else(|| schema_violation("account-status Event has no producer proof"))?;
+    let controller = producer
+        .verification_method
+        .as_str()
+        .rsplit_once('#')
+        .map(|(controller, _)| controller)
+        .ok_or_else(|| schema_violation("account-status producer proof has no controller"))?;
+    let controller = arkret_wire::DidFullId::new(controller.to_owned()).map_err(|error| {
+        schema_violation(format!("account-status producer DID invalid: {error}"))
+    })?;
+    if arkret_wire::project_full_id_to_core_id(&controller)
+        .map_err(|error| schema_violation(error.to_string()))?
+        != event.actor_id
+    {
+        return Err(AppError::capability_denied(
+            "account-status Event proof controller does not match issuer",
+        ));
+    }
+    let document =
+        crate::jws_verify::resolve_did_document(state, &controller).map_err(|error| {
+            AppError::capability_denied(format!("account-status issuer resolution failed: {error}"))
+        })?;
+    let public_key = arkret_identity::jws::resolve_ed25519_pubkey_from_document(
+        &document,
+        producer.verification_method.as_str(),
+    )
+    .map_err(|error| {
+        AppError::capability_denied(format!("account-status issuer key unavailable: {error}"))
+    })?;
+    let envelope_bytes = arkret_signatures::EventProofBuilder::new()
+        .envelope_bytes(event)
+        .map_err(|error| {
+            schema_violation(format!("account-status Event binding invalid: {error}"))
+        })?;
+    arkret_signatures::verify_ed25519_detached_jws_proof(
+        producer,
+        &envelope_bytes,
+        &event.actor_id,
+        &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+            bytes: public_key.to_bytes().to_vec(),
+        },
+    )
+    .map_err(|error| {
+        AppError::capability_denied(format!("account-status Event proof invalid: {error}"))
+    })?;
+    let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&public_key.to_bytes());
+    let did_key = arkret_wire::DidKey::new(format!("did:key:{multibase}"))
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    Ok((producer.verification_method.clone(), did_key))
+}
+
 #[salvo::oapi::endpoint(operation_id = "ak.peer.signal.command.relay", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.signal.command.relay"))]
 async fn peer_signal_relay(depot: &mut Depot, req: &mut Request) -> JsonResult<SignalRelayOutcome> {
@@ -307,17 +880,17 @@ async fn peer_events_describe(
         protocol_version: "1.0".to_owned(),
         primary_write_path: "/_arkret/peer/events".to_owned(),
         supported_operations: vec![
-            "ak.peer.events.read.describe".to_owned(),
-            "ak.peer.events.command.submit".to_owned(),
-            "ak.peer.events.read.scan".to_owned(),
-            "ak.peer.events.read.resolve".to_owned(),
-            "ak.peer.events.read.frontier".to_owned(),
-            "ak.peer.invites.command.submit".to_owned(),
-            "ak.peer.signal.command.relay".to_owned(),
+            arkret_wire::ServiceOperationId::PEER_EVENTS_READ_DESCRIBE.to_owned(),
+            arkret_wire::ServiceOperationId::PEER_EVENTS_COMMAND_SUBMIT.to_owned(),
+            arkret_wire::ServiceOperationId::PEER_EVENTS_READ_SCAN.to_owned(),
+            arkret_wire::ServiceOperationId::PEER_EVENTS_READ_RESOLVE.to_owned(),
+            arkret_wire::ServiceOperationId::PEER_EVENTS_READ_FRONTIER.to_owned(),
+            arkret_wire::ServiceOperationId::PEER_INVITES_COMMAND_SUBMIT.to_owned(),
+            arkret_wire::ServiceOperationId::PEER_SIGNAL_COMMAND_RELAY.to_owned(),
         ],
         supported_profiles: vec![
-            "ak.profile.federation_minimal.v1".to_owned(),
-            "ak.profile.signal_peer_relay.v1".to_owned(),
+            arkret_wire::ProfileId::FEDERATION_MINIMAL_V1.to_owned(),
+            arkret_wire::ProfileId::SIGNAL_PEER_RELAY_V1.to_owned(),
         ],
         supported_bindings: vec![
             "http-message-signature".to_owned(),
@@ -1400,7 +1973,7 @@ fn peer_events_query_scope_digest(source_service_id: &str, parts: &PeerEventsQue
         .into_iter()
         .collect::<Vec<_>>();
     let binding = json!({
-        "operation_id": "ak.peer.events.read.scan",
+        "operation_id": arkret_wire::ServiceOperationId::PEER_EVENTS_READ_SCAN,
         "source_service_id": source_service_id,
         "realms": realms,
         "actors": actors,

@@ -233,7 +233,7 @@ async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() 
         .expect("file-transfer encrypted metadata is persisted");
     assert_eq!(
         encrypted_attachment["scheme"],
-        "ak.file_transfer.encrypted_blob.v1"
+        arkret_wire::BLOB_SCHEME_WHOLE_FILE_AEAD_V1
     );
 
     let file_transfer_presign = TestClient::post("http://server/_arkret/self/blob/presign")

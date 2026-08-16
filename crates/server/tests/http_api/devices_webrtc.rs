@@ -720,9 +720,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     // `bindings/arkret-native.md` §2 — the backend token is that binding's own
     // object, and its payload carries no long-term actor identity: the SFU sees
     // only the per-exchange `participant_identity` pseudonym.
-    let backend_token: Value =
-        serde_json::from_str(token_response["backend_token"].as_str().unwrap())
-            .expect("arkret-native backend_token is a JSON object");
+    let backend_token = &token_response["backend_token"];
     assert_eq!(backend_token["kid"], test_media_issuer_kid());
     assert_eq!(backend_token["signature_algorithm"], "Ed25519");
     assert!(

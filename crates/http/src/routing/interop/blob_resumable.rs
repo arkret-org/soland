@@ -253,7 +253,7 @@ fn parse_upload_metadata(raw: &str) -> Result<HashMap<String, Option<String>>, &
 }
 
 #[handler]
-#[tracing::instrument(skip_all, fields(op = "blob_resumable_options"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.blob.resumable.options"))]
 async fn tus_options(res: &mut Response) {
     set_tus_header(res);
     let headers = res.headers_mut();
@@ -273,7 +273,7 @@ async fn tus_options(res: &mut Response) {
 }
 
 #[handler]
-#[tracing::instrument(skip_all, fields(op = "blob_resumable_create"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.blob.resumable.create"))]
 async fn tus_create(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res).await else {
@@ -479,7 +479,7 @@ async fn load_gated(
 }
 
 #[handler]
-#[tracing::instrument(skip_all, fields(op = "blob_resumable_head"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.blob.resumable.head"))]
 async fn tus_head(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res).await else {
@@ -513,7 +513,7 @@ async fn tus_head(depot: &mut Depot, req: &mut Request, res: &mut Response) {
 }
 
 #[handler]
-#[tracing::instrument(skip_all, fields(op = "blob_resumable_patch"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.blob.resumable.patch"))]
 async fn tus_patch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res).await else {
@@ -639,7 +639,7 @@ async fn tus_patch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
 }
 
 #[handler]
-#[tracing::instrument(skip_all, fields(op = "blob_resumable_finalize"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.blob.resumable.finalize"))]
 async fn tus_finalize(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res).await else {
@@ -655,7 +655,7 @@ async fn tus_finalize(depot: &mut Depot, req: &mut Request, res: &mut Response) 
 }
 
 #[handler]
-#[tracing::instrument(skip_all, fields(op = "blob_resumable_delete"))]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.blob.resumable.delete"))]
 async fn tus_delete(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let Some(session) = auth_or_render(state, req, res).await else {

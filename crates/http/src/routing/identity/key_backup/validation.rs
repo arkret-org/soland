@@ -190,7 +190,7 @@ pub(super) fn validate_key_backup_domain_separation_typed(
         ));
     }
     let aad = &domain.aead_aad;
-    if aad.schema != "ak.schema.key_backup.v1" {
+    if aad.schema != arkret_wire::SchemaId::KEY_BACKUP_V1 {
         return Err(schema_error("domain_separation.aead_aad.schema mismatch"));
     }
     if aad.actor_id.as_str() != backup.actor_id.as_str() {

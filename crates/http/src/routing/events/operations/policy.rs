@@ -278,7 +278,6 @@ async fn validate_operation_policy_common(
         validate_read_receipt_policy_combination_write(state, operations, operation).await?;
         validate_realm_key_share_policy(state, operation).await?;
         validate_realm_moderation_policy(state, operation).await?;
-        validate_poll_operation_policy(state, operation)?;
         validate_audience_mention_operation_policy(state, operation).await?;
         validate_message_edit_redact_window_policy(state, operation).await?;
         validate_reaction_scope_policy(state, operation)?;

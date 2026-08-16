@@ -27,6 +27,90 @@ const INVITE_LIFECYCLE_LOCK_SHARDS: usize = 1024;
 const AGENT_MEMBERSHIP_CASCADE_LOCK_SHARDS: usize = 256;
 pub(super) const IDEMPOTENCY_KEY_TTL_SECONDS: i64 = 86_400;
 
+/// Bind the SDK's online-self publication lane to the exact authenticated
+/// principal authority context. Delayed publication is authorized by its
+/// signed lease and peer publication by federation admission; neither may be
+/// silently reclassified as an online request merely because an uploader has
+/// a valid session.
+pub(super) fn validate_initial_publication_session_context(
+    session: &SessionRecord,
+    submission: &arkret_wire::EventInitialSubmission,
+) -> Result<(), SubmitOneError> {
+    if submission.publication_lane() != arkret_wire::EventPublicationLane::OnlineSelf {
+        return Ok(());
+    }
+    let request_principal = submission
+        .event
+        .executed_by
+        .as_ref()
+        .unwrap_or(&submission.event.actor_id)
+        .clone();
+    let request_authority = arkret_wire::PrincipalAuthorityKey::new(
+        request_principal,
+        submission.event.principal_server_id.clone(),
+    );
+    let session_principal =
+        arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("authenticated session principal is invalid: {error}"),
+            )
+        })?;
+    let session_server =
+        arkret_wire::DidCoreId::new(session.audience.clone()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("authenticated session audience is invalid: {error}"),
+            )
+        })?;
+    let expected = arkret_wire::PrincipalAuthorityKey::new(session_principal, session_server);
+    if request_authority != expected {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "actor_session_mismatch",
+            "online Event principal/executor and principal_server_id must match the authenticated session authority",
+        ));
+    }
+    if let Some(grant) = session.session_grant.as_ref() {
+        match &grant.holder_binding {
+            arkret_models_identity::SessionGrantHolderBinding::HumanDevice { device_binding } => {
+                let selector = grant.device_binding.as_ref().ok_or_else(|| {
+                    SubmitOneError::new(
+                        StatusCode::UNAUTHORIZED,
+                        "auth_expired",
+                        "online human Event session omitted its device authorization selector",
+                    )
+                })?;
+                if selector.device_id.as_str() != session.device_id
+                    || device_binding != &session.device_id
+                {
+                    return Err(SubmitOneError::new(
+                        StatusCode::UNAUTHORIZED,
+                        "auth_expired",
+                        "online human Event session device selector is inconsistent",
+                    ));
+                }
+            }
+            arkret_models_identity::SessionGrantHolderBinding::AgentRuntime {
+                agent_id,
+                device_id,
+                ..
+            } => {
+                if agent_id.as_str() != session.actor || device_id.as_str() != session.device_id {
+                    return Err(SubmitOneError::new(
+                        StatusCode::UNAUTHORIZED,
+                        "auth_expired",
+                        "online Agent Event session binding is inconsistent",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 static ACTOR_SUBMIT_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
 static ACCOUNT_DATA_SUBMIT_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
 static INVITE_LIFECYCLE_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
@@ -171,14 +255,14 @@ fn batch_is_managed_agent_pcr_create(envelopes: &[Value]) -> bool {
 
 #[derive(Debug)]
 pub(in crate::routing) struct ValidatedEventEnvelope {
-    pub(in crate::routing) event_id: String,
-    pub(in crate::routing) actor_id: String,
-    pub(in crate::routing) device_id: String,
+    pub(in crate::routing) event_id: EventId,
+    pub(in crate::routing) actor_id: DidCoreId,
+    pub(in crate::routing) device_id: DeviceId,
     pub(in crate::routing) actor_seq: u64,
-    pub(in crate::routing) realm_id: String,
+    pub(in crate::routing) realm_id: RealmId,
     pub(in crate::routing) kind: String,
     pub(in crate::routing) schema_id: String,
-    pub(in crate::routing) prev_refs: Vec<String>,
+    pub(in crate::routing) prev_refs: Vec<EventId>,
     pub(in crate::routing) canonical_digest: String,
     pub(in crate::routing) canonical_bytes: Vec<u8>,
     pub(in crate::routing) producer_signing_key: Option<arkret_wire::DidKey>,
@@ -273,6 +357,21 @@ mod event_collision_reason_tests {
         assert_eq!(
             error.quarantine_event_id.as_deref(),
             Some("ak:event:fixture")
+        );
+    }
+
+    #[test]
+    fn semantic_schema_violation_keeps_machine_reason_in_details() {
+        let error = SubmitOneError::semantic_schema_violation("private_view_requires_account_data");
+
+        assert_eq!(error.code, "schema_violation");
+        assert_eq!(
+            error
+                .details
+                .as_ref()
+                .and_then(|details| details.get("reason_code"))
+                .and_then(Value::as_str),
+            Some("private_view_requires_account_data")
         );
     }
 }
@@ -373,6 +472,13 @@ enum InternalEventBinding {
     },
     PeerFederatedEvent {
         event_id: String,
+        producer_verification_method: arkret_wire::DidUrl,
+        producer_signing_key: arkret_wire::DidKey,
+    },
+    AccountStatusPeer {
+        event_id: String,
+        account_id: String,
+        principal_id: String,
         producer_verification_method: arkret_wire::DidUrl,
         producer_signing_key: arkret_wire::DidKey,
     },
@@ -555,6 +661,33 @@ impl InternalEventAdmission {
         }
     }
 
+    pub(in crate::routing) fn account_status_peer(
+        realm_id: impl Into<String>,
+        actor_id: impl Into<String>,
+        device_id: impl Into<String>,
+        event_id: impl Into<String>,
+        account_id: impl Into<String>,
+        principal_id: impl Into<String>,
+        producer_verification_method: arkret_wire::DidUrl,
+        producer_signing_key: arkret_wire::DidKey,
+    ) -> Self {
+        let actor_id = actor_id.into();
+        Self {
+            realm_id: realm_id.into(),
+            session_actor_id: actor_id.clone(),
+            actor_id,
+            kind: arkret_wire::EventKind::AccountStatus.as_str().to_owned(),
+            device_id: device_id.into(),
+            binding: InternalEventBinding::AccountStatusPeer {
+                event_id: event_id.into(),
+                account_id: account_id.into(),
+                principal_id: principal_id.into(),
+                producer_verification_method,
+                producer_signing_key,
+            },
+        }
+    }
+
     pub(in crate::routing::events::event_log) fn matches(
         &self,
         session: &SessionRecord,
@@ -608,6 +741,20 @@ impl InternalEventAdmission {
                 InternalEventBinding::PeerFederatedEvent { event_id, .. } => {
                     object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
                 }
+                InternalEventBinding::AccountStatusPeer {
+                    event_id,
+                    account_id,
+                    principal_id,
+                    ..
+                } => {
+                    object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
+                        && object.get("payload").is_some_and(|payload| {
+                            payload.get("account_id").and_then(Value::as_str)
+                                == Some(account_id.as_str())
+                                && payload.get("principal_id").and_then(Value::as_str)
+                                    == Some(principal_id.as_str())
+                        })
+                }
                 InternalEventBinding::PeerAgentMembershipCascade {
                     event_id,
                     initiator_id,
@@ -647,6 +794,13 @@ impl InternalEventAdmission {
             } if producer_verification_method.as_str() == verification_method => {
                 Some(producer_signing_key)
             }
+            InternalEventBinding::AccountStatusPeer {
+                producer_verification_method,
+                producer_signing_key,
+                ..
+            } if producer_verification_method.as_str() == verification_method => {
+                Some(producer_signing_key)
+            }
             _ => None,
         }
     }
@@ -669,6 +823,15 @@ impl InternalEventAdmission {
         object: &serde_json::Map<String, Value>,
     ) -> bool {
         matches!(self.binding, InternalEventBinding::SidecarEnsure { .. })
+            && self.matches(session, object)
+    }
+
+    pub(in crate::routing::events::event_log) fn is_account_status_peer(
+        &self,
+        session: &SessionRecord,
+        object: &serde_json::Map<String, Value>,
+    ) -> bool {
+        matches!(self.binding, InternalEventBinding::AccountStatusPeer { .. })
             && self.matches(session, object)
     }
 }
@@ -724,6 +887,18 @@ impl SubmitOneError {
     pub(in crate::routing) fn with_details(mut self, details: impl serde::Serialize) -> Self {
         self.details = serde_json::to_value(details).ok();
         self
+    }
+
+    /// A registered operation-semantic rejection is always a schema violation
+    /// at the top level, while its stable machine discriminator belongs in
+    /// `error.details.reason_code`. Keeping this mapping here prevents each
+    /// admission lane from silently flattening the reason back into prose.
+    pub(in crate::routing) fn semantic_schema_violation(reason_code: &'static str) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, "schema_violation", reason_code).with_details(
+            serde_json::json!({
+                "reason_code": reason_code,
+            }),
+        )
     }
 
     pub(in crate::routing) fn quarantine(
@@ -895,6 +1070,59 @@ pub(in crate::routing) fn submit_initial_event_batch_outcome<'a>(
     ))
 }
 
+pub(in crate::routing) async fn submit_account_status_peer_event(
+    state: &AppState,
+    event: arkret_wire::Event,
+    account_id: &str,
+    principal_id: &str,
+    producer_verification_method: arkret_wire::DidUrl,
+    producer_signing_key: arkret_wire::DidKey,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    let received_at = now();
+    let device_id = "peer-account-status-authority".to_owned();
+    let session = SessionRecord {
+        token_hash: format!("account-status:{}", event.event_id),
+        actor: event.actor_id.to_string(),
+        device_id: device_id.clone(),
+        audience: state.service_id().clone(),
+        session_public_key: None,
+        agent_session: None,
+        session_grant: None,
+        expires_at: received_at + Duration::minutes(5),
+        created_at: received_at,
+        revoked_at: None,
+    };
+    let admission = InternalEventAdmission::account_status_peer(
+        event.realm_id.to_string(),
+        event.actor_id.to_string(),
+        device_id,
+        event.event_id.to_string(),
+        account_id,
+        principal_id,
+        producer_verification_method,
+        producer_signing_key,
+    );
+    let envelope = typed_event_to_canonical_value(event)?;
+    value::submit_event_value_with_context(
+        state,
+        &session,
+        envelope,
+        &[],
+        None,
+        Some(&admission),
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+        &[],
+        None,
+        None,
+    )
+    .await
+}
+
 async fn submit_initial_event_batch_outcome_inner(
     state: &AppState,
     session: &SessionRecord,
@@ -917,6 +1145,7 @@ async fn submit_initial_event_batch_outcome_inner(
         };
     for submission in submissions {
         validate_initial_submission_in_context(&submission, submit_context)?;
+        validate_initial_publication_session_context(session, &submission)?;
         if let Some(lease) = &submission.authorization_lease {
             validate_authorization_lease_for_event(state, Some(session), &submission.event, lease)
                 .await?;
@@ -972,6 +1201,9 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
     session: &SessionRecord,
     submission: DirectConversationFoundingUnitSubmission,
 ) -> Result<DirectConversationFoundingAcceptanceOutcome, SubmitOneError> {
+    for event in &submission.events {
+        validate_initial_publication_session_context(session, event)?;
+    }
     let typed_events = submission
         .events
         .iter()
@@ -1559,6 +1791,7 @@ pub(in crate::routing) async fn submit_initial_identity_anchor_batch(
     };
     for submission in &submissions {
         validate_initial_submission_in_context(submission, submit_context)?;
+        validate_initial_publication_session_context(session, submission)?;
     }
     let envelopes = submissions
         .iter()

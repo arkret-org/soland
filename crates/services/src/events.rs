@@ -10,7 +10,8 @@ use arkret_models_collaboration::governance::accountability::{
 };
 use arkret_models_collaboration::governance::invite_addressing::PrincipalLocatorDisplayHint;
 use arkret_models_collaboration::objects::read_receipts::ReadCursorCausalRelation;
-use arkret_wire::EventBatchReceipt;
+use arkret_models_crypto::MlsGovernanceBindingPayload;
+use arkret_wire::{EventBatchReceipt, ScopeRef};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 pub use soland_storage::PublicationEvidenceRecord;
@@ -96,10 +97,10 @@ pub struct MorphProjectionRecord {
     pub scope_circle_id: Option<String>,
     pub morph_kind: String,
     pub title: Option<String>,
-    pub fields: Value,
-    pub schema_refs: Value,
-    pub facets: Value,
-    pub versions: Value,
+    pub fields: BTreeMap<String, Value>,
+    pub schema_refs: Vec<String>,
+    pub facets: BTreeMap<String, BTreeMap<String, Value>>,
+    pub versions: Vec<soland_domain::reducer::DocumentVersionProjection>,
     pub state: String,
     pub state_changed_at: Option<DateTime<Utc>>,
     pub created_by: String,
@@ -1056,7 +1057,7 @@ fn active_agent_accountability(
     let current_grant = events
         .iter()
         .filter(|candidate| {
-            candidate.kind == "ak.identity.accountability_grant"
+            candidate.kind == arkret_wire::event_kind_str::IDENTITY_ACCOUNTABILITY_GRANT
                 && candidate.received_at <= query.accepted_at
                 && candidate.realm_id == original_event.realm_id
                 && candidate
@@ -1093,7 +1094,7 @@ fn active_agent_accountability(
         &query.agent_id,
         query.accepted_at,
     );
-    original_event.kind == "ak.identity.accountability_grant"
+    original_event.kind == arkret_wire::event_kind_str::IDENTITY_ACCOUNTABILITY_GRANT
         && signed_by_controller
         && original_grant.issuer.as_str() == query.controller_id
         && original_grant.subject.as_str() == query.agent_id
@@ -1110,7 +1111,7 @@ fn active_accountability_scopes(
 ) -> BTreeSet<AccountabilityScopeKind> {
     let mut latest_by_cell = BTreeMap::<String, (u64, AccountabilityGrantPayload)>::new();
     for candidate in events.iter().filter(|candidate| {
-        candidate.kind == "ak.identity.accountability_grant"
+        candidate.kind == arkret_wire::event_kind_str::IDENTITY_ACCOUNTABILITY_GRANT
             && candidate.received_at <= at
             && candidate.realm_id.as_deref() == realm_id
             && candidate
@@ -1514,33 +1515,33 @@ impl EventQueryService {
 #[derive(Clone, Debug)]
 pub struct MlsCommitState {
     pub group_id: String,
-    pub effective_scope: Value,
+    pub effective_scope: ScopeRef,
     pub epoch: u64,
     pub creator_device_id: String,
     pub genesis_event_ref: String,
-    pub governance_binding: Value,
+    pub governance_binding: MlsGovernanceBindingPayload,
     pub accepted_commit_ref: Option<String>,
     pub frontier_contested: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct InitializeMlsGroupCommand {
-    pub effective_scope: Value,
+    pub effective_scope: ScopeRef,
     pub group_id: String,
     pub leader_actor_id: String,
     pub creator_device_id: String,
     pub genesis_event_ref: String,
-    pub governance_binding: Value,
+    pub governance_binding: MlsGovernanceBindingPayload,
     pub committed_at: i64,
 }
 
 #[derive(Clone, Debug)]
 pub struct AdvanceMlsEpochCommand {
     pub expected_previous_epoch: u64,
-    pub effective_scope: Value,
+    pub effective_scope: ScopeRef,
     pub group_id: String,
     pub leader_actor_id: String,
-    pub governance_binding: Value,
+    pub governance_binding: MlsGovernanceBindingPayload,
     pub accepted_commit_ref: String,
     pub committed_at: i64,
 }
@@ -1550,7 +1551,7 @@ pub trait MlsCommitReadPort: Send + Sync {
     async fn commits(&self) -> ServiceResult<Vec<MlsCommitState>>;
     async fn commit(
         &self,
-        effective_scope: &Value,
+        effective_scope: &ScopeRef,
         group_id: &str,
     ) -> ServiceResult<Option<MlsCommitState>>;
     async fn initialize_group(
@@ -1563,7 +1564,7 @@ pub trait MlsCommitReadPort: Send + Sync {
     ) -> ServiceResult<Option<MlsCommitState>>;
     async fn mark_frontier_contested(
         &self,
-        effective_scope: &Value,
+        effective_scope: &ScopeRef,
         group_id: &str,
         epoch: u64,
     ) -> ServiceResult<Option<MlsCommitState>>;
@@ -1585,7 +1586,7 @@ impl MlsCommitQueryService {
 
     pub async fn commit(
         &self,
-        effective_scope: &Value,
+        effective_scope: &ScopeRef,
         group_id: &str,
     ) -> ServiceResult<Option<MlsCommitState>> {
         self.commits.commit(effective_scope, group_id).await
@@ -1607,7 +1608,7 @@ impl MlsCommitQueryService {
 
     pub async fn mark_frontier_contested(
         &self,
-        effective_scope: &Value,
+        effective_scope: &ScopeRef,
         group_id: &str,
         epoch: u64,
     ) -> ServiceResult<Option<MlsCommitState>> {
@@ -1776,7 +1777,7 @@ pub struct MlsWelcomeState {
     pub key_package_id: String,
     pub epoch: u64,
     pub commit_ref: Option<String>,
-    pub governance_binding: Value,
+    pub governance_binding: MlsGovernanceBindingPayload,
     pub enqueued_at: i64,
     pub delivered_at: Option<i64>,
 }

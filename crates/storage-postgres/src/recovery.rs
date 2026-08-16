@@ -1,3 +1,5 @@
+use soland_storage::ConflictCode;
+
 use super::{
     Array, Integer, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult,
     PgPool, QueryableByName, RecoveryPolicyRecord, RecoveryPolicyStore, RecoverySessionRecord,
@@ -163,7 +165,8 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .is_some()
         {
             return Err(PersistenceError::Conflict(format!(
-                "recovery policy_id `{}` already exists",
+                "{}: recovery policy_id `{}` already exists",
+                ConflictCode::RecoveryPolicyConflict,
                 record.policy_id
             )));
         }
@@ -174,8 +177,10 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .is_some()
         {
             return Err(PersistenceError::Conflict(format!(
-                "recovery policy principal/version ({}, {}) already exists",
-                record.principal_id, record.version
+                "{}: recovery policy principal/version ({}, {}) already exists",
+                ConflictCode::RecoveryPolicyVersionNotMonotonic,
+                record.principal_id,
+                record.version
             )));
         }
         if let Some(active) = self
@@ -185,19 +190,24 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
         {
             if record.version <= active.version {
                 return Err(PersistenceError::Conflict(format!(
-                    "recovery policy version {} is not greater than active {}",
-                    record.version, active.version
+                    "{}: recovery policy version {} is not greater than active {}",
+                    ConflictCode::RecoveryPolicyVersionNotMonotonic,
+                    record.version,
+                    active.version
                 )));
             }
             if record.supersedes.as_deref() != Some(active.policy_id.as_str()) {
                 return Err(PersistenceError::Conflict(format!(
-                    "recovery policy supersedes {:?} does not match active `{}`",
-                    record.supersedes, active.policy_id
+                    "{}: recovery policy supersedes {:?} does not match active `{}`",
+                    ConflictCode::RecoveryPolicySupersedesInvalid,
+                    record.supersedes,
+                    active.policy_id
                 )));
             }
         } else if record.version != 1 {
             return Err(PersistenceError::Conflict(format!(
-                "recovery genesis policy for `{}` must have version=1",
+                "{}: recovery genesis policy for `{}` must have version=1",
+                ConflictCode::RecoveryPolicyVersionNotMonotonic,
                 record.principal_id
             )));
         }

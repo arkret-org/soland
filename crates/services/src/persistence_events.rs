@@ -822,10 +822,10 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
             scope_circle_id: record.scope_circle_id.clone(),
             morph_kind: record.morph_kind.clone(),
             title: record.title.clone(),
-            fields: record.fields.clone(),
-            schema_refs: record.schema_refs.clone(),
-            facets: record.facets.clone(),
-            versions: record.versions.clone(),
+            fields: encode_mls_contract(&record.fields, "Morph fields")?,
+            schema_refs: encode_mls_contract(&record.schema_refs, "Morph schema_refs")?,
+            facets: encode_mls_contract(&record.facets, "Morph facets")?,
+            versions: encode_mls_contract(&record.versions, "Morph versions")?,
             state: record.state.clone(),
             state_changed_at: record.state_changed_at,
             created_by: record.created_by.clone(),
@@ -871,108 +871,128 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
 #[async_trait::async_trait]
 impl crate::events::MlsCommitReadPort for PersistenceMlsCommitReader {
     async fn commits(&self) -> crate::ServiceResult<Vec<crate::events::MlsCommitState>> {
-        Ok(self
-            .0
+        self.0
             .mls_commits()
             .snapshot_all()
             .await?
             .into_iter()
-            .map(|commit| crate::events::MlsCommitState {
-                group_id: commit.group_id,
-                effective_scope: commit.effective_scope,
-                epoch: commit.epoch,
-                creator_device_id: commit.creator_device_id,
-                genesis_event_ref: commit.genesis_event_ref,
-                governance_binding: commit.governance_binding,
-                accepted_commit_ref: commit.accepted_commit_ref,
-                frontier_contested: commit.frontier_contested,
-            })
-            .collect())
+            .map(application_mls_commit)
+            .collect()
     }
 
     async fn commit(
         &self,
-        effective_scope: &serde_json::Value,
+        effective_scope: &arkret_wire::ScopeRef,
         group_id: &str,
     ) -> crate::ServiceResult<Option<crate::events::MlsCommitState>> {
+        let effective_scope = encode_mls_contract(effective_scope, "effective_scope")?;
         Ok(self
             .0
             .mls_commits()
-            .get(effective_scope, group_id)
+            .get(&effective_scope, group_id)
             .await?
-            .map(application_mls_commit))
+            .map(application_mls_commit)
+            .transpose()?)
     }
 
     async fn initialize_group(
         &self,
         command: crate::events::InitializeMlsGroupCommand,
     ) -> crate::ServiceResult<Option<crate::events::MlsCommitState>> {
+        let effective_scope = encode_mls_contract(&command.effective_scope, "effective_scope")?;
+        let governance_binding =
+            encode_mls_contract(&command.governance_binding, "governance_binding")?;
         Ok(self
             .0
             .mls_commits()
             .initialize_genesis(soland_storage::MlsCommitGenesis {
-                effective_scope: &command.effective_scope,
+                effective_scope: &effective_scope,
                 group_id: &command.group_id,
                 leader_actor_id: &command.leader_actor_id,
                 creator_device_id: &command.creator_device_id,
                 genesis_event_ref: &command.genesis_event_ref,
-                governance_binding: &command.governance_binding,
+                governance_binding: &governance_binding,
                 committed_at: command.committed_at,
             })
             .await?
-            .map(application_mls_commit))
+            .map(application_mls_commit)
+            .transpose()?)
     }
 
     async fn advance_epoch(
         &self,
         command: crate::events::AdvanceMlsEpochCommand,
     ) -> crate::ServiceResult<Option<crate::events::MlsCommitState>> {
+        let effective_scope = encode_mls_contract(&command.effective_scope, "effective_scope")?;
+        let governance_binding =
+            encode_mls_contract(&command.governance_binding, "governance_binding")?;
         Ok(self
             .0
             .mls_commits()
             .try_bump(
                 command.expected_previous_epoch,
                 soland_storage::MlsCommitEpochAdvance {
-                    effective_scope: &command.effective_scope,
+                    effective_scope: &effective_scope,
                     group_id: &command.group_id,
                     leader_actor_id: &command.leader_actor_id,
-                    governance_binding: &command.governance_binding,
+                    governance_binding: &governance_binding,
                     accepted_commit_ref: &command.accepted_commit_ref,
                     committed_at: command.committed_at,
                 },
             )
             .await?
-            .map(application_mls_commit))
+            .map(application_mls_commit)
+            .transpose()?)
     }
 
     async fn mark_frontier_contested(
         &self,
-        effective_scope: &serde_json::Value,
+        effective_scope: &arkret_wire::ScopeRef,
         group_id: &str,
         epoch: u64,
     ) -> crate::ServiceResult<Option<crate::events::MlsCommitState>> {
+        let effective_scope = encode_mls_contract(effective_scope, "effective_scope")?;
         Ok(self
             .0
             .mls_commits()
-            .mark_frontier_contested(effective_scope, group_id, epoch)
+            .mark_frontier_contested(&effective_scope, group_id, epoch)
             .await?
-            .map(application_mls_commit))
+            .map(application_mls_commit)
+            .transpose()?)
     }
 }
 
 fn application_mls_commit(
     commit: soland_storage::MlsCommitEpochRecord,
-) -> crate::events::MlsCommitState {
-    crate::events::MlsCommitState {
+) -> crate::ServiceResult<crate::events::MlsCommitState> {
+    Ok(crate::events::MlsCommitState {
         group_id: commit.group_id,
-        effective_scope: commit.effective_scope,
+        effective_scope: decode_mls_contract(commit.effective_scope, "effective_scope")?,
         epoch: commit.epoch,
         creator_device_id: commit.creator_device_id,
         genesis_event_ref: commit.genesis_event_ref,
-        governance_binding: commit.governance_binding,
+        governance_binding: decode_mls_contract(commit.governance_binding, "governance_binding")?,
         accepted_commit_ref: commit.accepted_commit_ref,
         frontier_contested: commit.frontier_contested,
-    }
+    })
+}
+
+fn encode_mls_contract<T: serde::Serialize>(
+    value: &T,
+    field: &str,
+) -> crate::ServiceResult<serde_json::Value> {
+    serde_json::to_value(value).map_err(|error| {
+        crate::ServiceError::Internal(format!("MLS {field} encode failed: {error}"))
+    })
+}
+
+fn decode_mls_contract<T: serde::de::DeserializeOwned>(
+    value: serde_json::Value,
+    field: &str,
+) -> crate::ServiceResult<T> {
+    serde_json::from_value(value).map_err(|error| {
+        crate::ServiceError::Internal(format!("stored MLS {field} is invalid: {error}"))
+    })
 }
 
 fn application_mls_key_package(
@@ -1327,7 +1347,8 @@ fn persistence_mls_welcome(
         key_package_id: welcome.key_package_id,
         epoch: welcome.epoch,
         commit_ref: welcome.commit_ref,
-        governance_binding: welcome.governance_binding,
+        governance_binding: serde_json::to_value(welcome.governance_binding)
+            .expect("typed MLS governance binding must serialize"),
         enqueued_at: welcome.enqueued_at,
         delivered_at: welcome.delivered_at,
     }

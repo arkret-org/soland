@@ -77,7 +77,10 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(summary = "Describe the outbound push bridge", tags("push_outbound"))]
-#[tracing::instrument(skip_all, fields(op = "outbound_push_bridge_describe"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.outbound.push.bridge.describe")
+)]
 async fn outbound_push_bridge_describe(
     depot: &mut Depot,
 ) -> JsonResult<OutboundPushBridgeDescribeOutcome> {
@@ -96,15 +99,15 @@ async fn outbound_push_bridge_describe(
             bridge_describe_path: "/_floria/push/bridge/describe".to_owned(),
             notify_path: "/_arkret/edge/push/notify".to_owned(),
             accepted_contracts: vec![
-                "ak.push.bridge.v1".to_owned(),
-                "ak.profile.push_gateway.v1".to_owned(),
+                arkret_wire::ServiceContractId::PUSH_BRIDGE_V1.to_owned(),
+                arkret_wire::ProfileId::PUSH_GATEWAY_V1.to_owned(),
             ],
             fetch_mode: "live_http_fetch_with_durable_cache_fallback".to_owned(),
             cache_mode: "durable_snapshot_cache_with_drift_check".to_owned(),
             snapshot_store_mode: "durable_export_import_with_freshness_and_trust_level".to_owned(),
         },
         delivery: OutboundPushDeliveryDescriptor {
-            operation_id: "ak.edge.push.command.notify".to_owned(),
+            operation_id: arkret_wire::ServiceOperationId::EDGE_PUSH_COMMAND_NOTIFY.to_owned(),
             source_service_id_header: "Source-Service-ID".to_owned(),
             destination_service_id_header: "Destination-Service-ID".to_owned(),
             request_id_header: "X-Arkret-Request-Id".to_owned(),
@@ -140,10 +143,10 @@ async fn outbound_push_bridge_describe(
                     "contract_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
                     "fetched_at": now(),
                     "remote_contract": {
-                        "contract": "ak.push.bridge.v1",
+                        "contract": arkret_wire::ServiceContractId::PUSH_BRIDGE_V1,
                         "delivery": {
                             "notify_path": "/_arkret/edge/push/notify",
-                            "operation_id": "ak.edge.push.command.notify"
+                            "operation_id": arkret_wire::ServiceOperationId::EDGE_PUSH_COMMAND_NOTIFY
                         }
                     }
                 }]
@@ -157,7 +160,7 @@ async fn outbound_push_bridge_describe(
                     "cache_state": "memory_cached",
                     "contract_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
                     "remote_contract": {
-                        "contract": "ak.push.bridge.v1"
+                        "contract": arkret_wire::ServiceContractId::PUSH_BRIDGE_V1
                     }
                 }],
                 "snapshot_store_kind": "durable_push_bridge_cache"
@@ -387,7 +390,10 @@ async fn outbound_push_bridge_fetch(
     summary = "Read outbound push bridge cache status",
     tags("push_outbound")
 )]
-#[tracing::instrument(skip_all, fields(op = "outbound_push_bridge_cache_status"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.outbound.push.bridge.cache.status")
+)]
 async fn outbound_push_bridge_cache_status(
     depot: &mut Depot,
 ) -> JsonResult<OutboundPushBridgeCacheStatusOutcome> {
@@ -408,7 +414,10 @@ async fn outbound_push_bridge_cache_status(
     summary = "Export outbound push bridge cache snapshots",
     tags("push_outbound")
 )]
-#[tracing::instrument(skip_all, fields(op = "outbound_push_bridge_cache_export"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.outbound.push.bridge.cache.export")
+)]
 async fn outbound_push_bridge_cache_export(
     depot: &mut Depot,
 ) -> JsonResult<OutboundPushBridgeCacheExportOutcome> {
@@ -590,9 +599,9 @@ pub(super) fn join_push_gateway_url(base: &str, path: &str) -> String {
 
 fn default_outbound_push_resolved_contract() -> OutboundPushResolvedContract {
     OutboundPushResolvedContract {
-        contract: "ak.push.bridge.v1".to_owned(),
+        contract: arkret_wire::ServiceContractId::PUSH_BRIDGE_V1.to_owned(),
         expected_notify_path: "/_arkret/edge/push/notify".to_owned(),
-        expected_operation_id: "ak.edge.push.command.notify".to_owned(),
+        expected_operation_id: arkret_wire::ServiceOperationId::EDGE_PUSH_COMMAND_NOTIFY.to_owned(),
         expected_source_service_id_header: "Source-Service-ID".to_owned(),
         expected_destination_service_id_header: "Destination-Service-ID".to_owned(),
         expected_request_id_header: "X-Arkret-Request-Id".to_owned(),

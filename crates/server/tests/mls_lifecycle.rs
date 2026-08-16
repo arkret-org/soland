@@ -83,6 +83,7 @@ fn signed_keypackage_claim_request(
     authority_service_id: &str,
     requester: &str,
     requester_device: &str,
+    requester_device_authorize_event_id: &str,
     target_principal_id: &str,
     target_device_ids: &[&str],
     intended_realm_id: &str,
@@ -101,35 +102,53 @@ fn signed_keypackage_claim_request(
     let target_full = arkret_identifiers::DidFullId::new(target_principal_id.to_owned()).unwrap();
     let target_principal_id = arkret_wire::project_full_id_to_core_id(&target_full).unwrap();
     let verification_method = format!("{}#{requester_device}", requester_full.as_str());
+    let claim_request_id = b64(claim_nonce);
     let mut body: arkret_models_crypto::KeyPackagesClaimRequestBody =
         serde_json::from_value(json!({
+            "claim_request_id": claim_request_id,
             "target_principal_id": target_principal_id,
             "target_device_ids": target_device_ids,
             "intended_realm_id": intended_realm_id,
             "requester": requester_id,
+        "claim_purpose": "realm_membership",
             "required_capabilities": required_capabilities,
             "claim_nonce": b64(claim_nonce),
             "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
             "mls_group_id": mls_group_id,
-            "holder_acceptance_proof": {
-                "kind": "detached_jws",
+            "service_binding": {
+                "source_service_id": authority_service_id,
+                "destination_service_id": authority_service_id
+            },
+            "requester_authorization": {
+                "kind": "device",
                 "verification_method": verification_method,
-                "payload_digest": format!("sha256:{}", "0".repeat(64)),
-                "created_at": arkret_canonical::format_timestamp_canonical(created_at),
-                "audience": authority_service_id,
-                "proof_purpose": "holder_acceptance",
-                "jws": "pending"
+                "requester_device_id": requester_device,
+                "device_authorize_event_id": requester_device_authorize_event_id,
+                "signed_at": arkret_canonical::format_timestamp_canonical(created_at),
+                "signature": {
+                    "kid": verification_method,
+                    "signature_algorithm": "Ed25519",
+                    "sig": "AA"
+                }
             }
         }))
         .expect("typed self KeyPackage claim request");
-    body.holder_acceptance_proof.payload_digest =
-        body.payload_digest().expect("claim payload digest");
-    let binding = body.proof_binding_bytes().expect("claim proof binding");
-    body.holder_acceptance_proof.jws = arkret_signatures::Ed25519DetachedJwsSigner::new(
-        SigningKey::from_bytes(&[21_u8; 32]),
-        verification_method,
+    let binding = arkret_models_crypto::keypackage_claim_authorization_signing_bytes(
+        &body.unsigned_request(),
+        &body.service_binding,
+        &body.requester_authorization,
     )
-    .sign_detached_jws(&binding);
+    .expect("claim authorization transcript");
+    let arkret_models_crypto::PeerKeyPackageRequesterAuthorization::Device { signature, .. } =
+        &mut body.requester_authorization
+    else {
+        unreachable!("fixture constructs device authorization")
+    };
+    signature.sig = arkret_wire::Base64UrlString::new(sign_b64(
+        &SigningKey::from_bytes(&[21_u8; 32]),
+        &binding,
+    ))
+    .expect("claim authorization signature");
     body
 }
 
@@ -536,6 +555,7 @@ async fn mls_lifecycle_end_to_end() {
         state.service_id(),
         alice_did,
         alice_device,
+        &alice_device_authorize_event_id,
         alice_did,
         &[],
         realm_id,
@@ -574,6 +594,7 @@ async fn mls_lifecycle_end_to_end() {
         state.service_id(),
         alice_did,
         alice_device,
+        &alice_device_authorize_event_id,
         alice_did,
         &[],
         realm_id,
@@ -604,6 +625,7 @@ async fn mls_lifecycle_end_to_end() {
         state.service_id(),
         alice_did,
         alice_device,
+        &alice_device_authorize_event_id,
         alice_did,
         &[],
         realm_id,
@@ -694,6 +716,7 @@ async fn mls_lifecycle_end_to_end() {
         state.service_id(),
         alice_did,
         alice_device,
+        &alice_device_authorize_event_id,
         bob_did,
         &[bob_device],
         realm_id,

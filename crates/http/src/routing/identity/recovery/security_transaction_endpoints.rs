@@ -693,7 +693,8 @@ pub(crate) async fn backup_series_erase_command(
         || binding.backup_rotations != request.series
         || request.authorization_lease.actor_id != transaction.resource.principal_id
         || request.authorization_lease.device_id.as_str() != session.device_id
-        || request.authorization_lease.action != "ak.keys.backup_series.erase"
+        || request.authorization_lease.action
+            != arkret_wire::CapabilityActionId::SELF_KEYS_BACKUP_SERIES_COMMAND_ERASE
         || request.authorization_lease.authorization_rule_id != "realm_admission"
         || request.authorization_lease.risk_tier != arkret_wire::RiskTier::High
         || !request.authorization_lease.covers_instant(now)
