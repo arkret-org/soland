@@ -390,6 +390,7 @@ dependencies = [
  "sha2 0.11.0",
  "thiserror",
  "unicode-normalization",
+ "uuid",
 ]
 
 [[package]]

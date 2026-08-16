@@ -198,7 +198,7 @@ async fn peer_principal_genesis(
         .and_then(json_ok)
 }
 
-pub(in crate::routing::events) async fn trusted_account_authority_service_id(
+pub(crate) async fn trusted_account_authority_service_id(
     state: &AppState,
 ) -> Result<DidCoreId, AppError> {
     if let Some(service_id) = state.config().account_authority_service_id.as_deref() {
@@ -401,6 +401,23 @@ async fn peer_account_status_submit(
         .with_status(error.status)
         .with_wire_code(error.code)
     })?;
+    let accepted_payload: AccountStatusPayload = serde_json::from_value(
+        serde_json::to_value(&event.payload)
+            .map_err(|error| AppError::internal(format!("account-status payload: {error}")))?,
+    )
+    .map_err(|error| AppError::internal(format!("account-status payload invalid: {error}")))?;
+    if accepted_payload.status
+        == arkret_models_collaboration::objects::account_status::AccountStatus::ErasurePending
+    {
+        crate::account_erasure_worker::ensure_intent(
+            state,
+            &source_service_id,
+            &accepted_payload.account_id,
+            &accepted_payload.principal_id,
+            &event.event_id,
+        )
+        .await?;
+    }
     let heads = current_account_status_heads(
         state,
         event.realm_id.as_str(),

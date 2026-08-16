@@ -5,7 +5,7 @@ pub(crate) const READ_CURSOR_CAUSAL_RELATION_CONTEXT: &str = "read_cursor_causal
 
 pub(crate) mod event_log;
 pub(super) mod frontier;
-pub(super) mod peer;
+pub(crate) mod peer;
 mod peer_device_revocations;
 // Strand + projection helpers are `pub(crate)` so the MIMI interop
 // facade can reuse the canonical space→strand mapping + projection-event

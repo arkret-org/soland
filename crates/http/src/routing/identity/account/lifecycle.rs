@@ -469,7 +469,13 @@ pub(super) async fn deactivate_account(
     req: &mut Request,
 ) -> JsonResult<AccountDeactivateOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let _session = aa.authenticated_session(state, req).await?;
+    return Err(AppError::new(
+        soland_http::error::ErrorCode::FailedPrecondition,
+        "hard erasure must be initiated by an accepted erasure_pending account-status Event",
+    ));
+    #[allow(unreachable_code)]
+    let session = _session;
     let actor = session.actor.clone();
     let change = set_account_lifecycle_state(
         state,
@@ -511,136 +517,139 @@ struct AccountDeactivateOutcome {
     pub capability_cache_invalidated: usize,
 }
 
-#[salvo::oapi::endpoint(operation_id = "org.arkret.soland.account.erase", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.erase"))]
-pub(super) async fn erase_account(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AccountEraseOutcome> {
-    // Spec: identity/account-lifecycle.md §3 — erasure pseudonymizes
-    // PII, revokes device records, and flips the actor into a permanent
-    // `erasure_pending` state so subsequent authenticated requests return 401
-    // `account_erased`. The implementation here is the v1 "memory ledger"
-    // variant — full pseudonymization of historical events lands once
-    // the projection rewrite worker ships.
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let actor = session.actor.clone();
-    let affected_realms = affected_erasure_realms_for_actor(state, &actor).await?;
-
-    append_audit_log(
-        state,
-        Some(&actor),
-        "org.arkret.soland.audit.erasure_initiated",
-        json!({"actor": actor.clone()}),
-        "accepted",
+fn deterministic_erasure_receipt_id(
+    triggering_status_event_id: &arkret_wire::EventId,
+    storage_boundary: ErasureStorageBoundary,
+) -> String {
+    arkret_models_collaboration::governance::erasure::account_erasure_receipt_id(
+        triggering_status_event_id,
+        storage_boundary,
     )
-    .await;
+}
 
-    // Pseudonymize the account record (replace display_name / bio /
-    // avatar_blob_ref with placeholders; retain DID + a release-marked
-    // handle so foreign references resolve cleanly).
-    if let Ok(Some(mut account)) = state.identities().account(&actor).await {
+/// Execute the physical side effects authorized by one already accepted
+/// `erasure_pending` account-status Event. The caller owns durable leasing and
+/// exact replay; this function is intentionally transport-free and returns the
+/// exact package to persist before receipt fanout.
+pub(crate) async fn execute_account_status_erasure(
+    state: &AppState,
+    account_id: &str,
+    actor: &str,
+    triggering_status_event_id: &arkret_wire::EventId,
+) -> Result<ErasureReceiptPackage, AppError> {
+    if let Some(mut account) = state
+        .identities()
+        .account(actor)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+    {
         let previous_localpart = account.localpart.clone();
         account.display_name = Some("[user erased]".to_owned());
         account.bio = None;
         account.avatar_blob_ref = None;
         account.localpart = String::new();
-        let _ = state.identities().save_account(account).await;
-        let _ = state.identities().clear_localparts(&actor).await;
+        state
+            .identities()
+            .save_account(account)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        state
+            .identities()
+            .clear_localparts(actor)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
         if !previous_localpart.is_empty() {
-            let _ = record_handle_release(state, &previous_localpart).await;
+            record_handle_release(state, &previous_localpart)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?;
         }
     }
-
-    let previous_state = state.account_lifecycle_state(&actor);
-    let fanout = run_account_deactivation_fanout(state, &actor).await?;
-    let sessions_revoked = fanout.sessions_revoked;
-    let devices_revoked = fanout.devices_revoked;
-    // Spec: A.3 GDPR erasure cascade — remove the principal from every
-    // Realm membership index so realm-scoped reads stop yielding the
-    // actor without waiting for the projection rewrite worker.
-    let memberships_removed = remove_realm_memberships_for_actor(state, &actor);
+    let fanout = run_account_deactivation_fanout(state, actor).await?;
+    let memberships_removed = remove_realm_memberships_for_actor(state, actor);
     let changed_at = now();
-    let lifecycle_record = AccountLifecycleState {
-        state: "erasure_pending".to_owned(),
-        reason: Some("account_erasure".to_owned()),
-        changed_by: Some(actor.clone()),
-        changed_at,
-    };
-    persist_account_lifecycle_record(state, &actor, &lifecycle_record).await?;
-    append_account_state_change_audit(
+    persist_account_lifecycle_record(
         state,
-        &actor,
-        &actor,
-        &previous_state,
-        "erasure_pending",
-        Some("account_erasure".to_owned()),
-        changed_at,
-        sessions_revoked,
-        devices_revoked,
-        fanout.applet_delegated_sessions_revoked,
-        fanout.keypackages_retired,
-        fanout.push_routes_revoked,
-        fanout.to_device_messages_dropped,
-        fanout.identity_link_cache_invalidated,
-        fanout.capability_cache_invalidated,
+        actor,
+        &AccountLifecycleState {
+            state: "erasure_pending".to_owned(),
+            reason: Some("account_status_erasure".to_owned()),
+            changed_by: None,
+            changed_at,
+        },
     )
-    .await;
-
-    // Spec: A.3 GDPR erasure cascade — emit a single audit row that
-    // catalogues every previously-recorded audit entry by `audit_id` +
-    // `created_at` only, marking the body itself as `redacted`. The
-    // append-only audit store still carries the historical rows so the
-    // chain of custody is preserved; downstream consumers honour this
-    // marker by replacing the prior bodies with `[redacted]` on render
-    // (timestamps + audit_ids retained for forensic reconstruction).
-    append_audit_redaction_marker(state, &actor).await;
-
-    let completed_at = now();
-    let completed_at_wire = arkret_canonical::format_timestamp_canonical(completed_at);
-    let erasure_receipt = account_erasure_receipt(state, &actor, completed_at)?;
-    let realm_erasure_receipts = affected_realms
-        .iter()
-        .map(|realm_id| realm_erasure_receipt(state, &actor, realm_id, completed_at))
-        .collect::<Result<Vec<_>, _>>()?;
+    .await?;
     append_audit_log(
         state,
-        Some(&actor),
-        arkret_wire::event_kind_str::AUDIT_ERASURE_RECEIPT,
-        erasure_receipt.clone(),
+        Some(actor),
+        "org.arkret.soland.audit.erasure_executed",
+        json!({
+            "account_id": account_id,
+            "actor": actor,
+            "triggering_status_event_id": triggering_status_event_id,
+            "memberships_removed": memberships_removed,
+            "sessions_revoked": fanout.sessions_revoked,
+            "devices_revoked": fanout.devices_revoked,
+        }),
         "accepted",
     )
     .await;
-    enqueue_erasure_receipt_fanout(
+    append_audit_redaction_marker(state, actor).await;
+    let completed_at = now();
+    let receipt_value = build_erasure_receipt_value(
         state,
-        &affected_realms,
-        std::iter::once(&erasure_receipt).chain(realm_erasure_receipts.iter()),
-    )
-    .await?;
-    // Snapshot the audit log inline so the response is the canonical
-    // last-known-good view of the actor's audit trail — subsequent
-    // authenticated reads will 401 with `account_erased`, making this
-    // the spec-compliant exit-point for the audit chain.
-    let audit_log = state
-        .governance()
-        .audit_entries_for_actor(&actor)
-        .await
-        .unwrap_or_default();
-    json_ok(AccountEraseOutcome {
-        did: actor,
-        state: "erasure_pending".to_owned(),
-        status: "pending_deletion".to_owned(),
-        management_status: "pending_deletion".to_owned(),
-        erased_at: completed_at_wire,
-        erasure_receipt,
-        realm_erasure_receipts,
-        audit_log,
-        memberships_removed,
-        sessions_revoked,
-        devices_revoked,
-    })
+        deterministic_erasure_receipt_id(
+            triggering_status_event_id,
+            ErasureStorageBoundary::AccountPrivateStore,
+        ),
+        triggering_status_event_id,
+        ErasureSubject {
+            kind: ErasureSubjectKind::Principal,
+            subject_ref: actor.to_owned(),
+        },
+        ErasureScope {
+            storage_boundary: ErasureStorageBoundary::AccountPrivateStore,
+            realm_id: None,
+            target_refs: vec![actor.to_owned()],
+            retention_policy_id: None,
+            service_scope: Some("account_status.erasure_execution".to_owned()),
+        },
+        vec![
+            ErasedClass::AccountPrivateState,
+            ErasedClass::PushRoutes,
+            ErasedClass::DeviceSecrets,
+            ErasedClass::ProjectionRows,
+        ],
+        completed_at,
+    )?;
+    let receipt: ErasureReceipt = serde_json::from_value(receipt_value)
+        .map_err(|error| AppError::internal(format!("typed erasure receipt: {error}")))?;
+    let retained_stub = receipt
+        .retained_stub
+        .clone()
+        .ok_or_else(|| AppError::internal("account-status erasure receipt has no retained stub"))?;
+    let mut package = ErasureReceiptPackage {
+        receipt,
+        receipt_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).expect("static digest"),
+        retained_stub,
+    };
+    package.receipt_digest = package
+        .computed_receipt_digest()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    package
+        .validate_bindings()
+        .map_err(|error| AppError::internal(format!("erasure package self-check: {error}")))?;
+    Ok(package)
+}
+
+pub(crate) async fn fanout_account_status_erasure_receipt(
+    state: &AppState,
+    actor: &str,
+    package: &ErasureReceiptPackage,
+) -> Result<(), AppError> {
+    let affected_realms = affected_erasure_realms_for_actor(state, actor).await?;
+    let receipt = serde_json::to_value(&package.receipt)
+        .map_err(|error| AppError::internal(format!("erasure receipt fanout encode: {error}")))?;
+    enqueue_erasure_receipt_fanout(state, &affected_realms, std::iter::once(&receipt)).await
 }
 
 async fn enqueue_erasure_receipt_fanout<'a>(
@@ -722,21 +731,6 @@ async fn enqueue_erasure_receipt_fanout<'a>(
     Ok(())
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct AccountEraseOutcome {
-    pub did: String,
-    pub state: String,
-    pub status: String,
-    pub management_status: String,
-    pub erased_at: String,
-    pub erasure_receipt: Value,
-    pub realm_erasure_receipts: Vec<Value>,
-    pub audit_log: Vec<Value>,
-    pub memberships_removed: usize,
-    pub sessions_revoked: usize,
-    pub devices_revoked: usize,
-}
-
 /// Remove the erased actor from every in-memory Realm membership set.
 /// Returns the count of realms touched so the audit row + response body
 /// can report it. Durable Realm membership lives in the projection
@@ -811,65 +805,10 @@ async fn affected_erasure_realms_for_actor(
     Ok(realms.into_iter().collect())
 }
 
-fn realm_erasure_receipt(
-    state: &AppState,
-    actor: &str,
-    realm_id: &str,
-    completed_at: chrono::DateTime<chrono::Utc>,
-) -> Result<Value, AppError> {
-    let realm_id = RealmId::new(realm_id.to_owned())
-        .map_err(|_| AppError::internal("stored erasure realm_id is invalid"))?;
-    build_erasure_receipt_value(
-        state,
-        crate::ids::generate("receipt"),
-        ErasureSubject {
-            kind: ErasureSubjectKind::Principal,
-            subject_ref: actor.to_owned(),
-        },
-        ErasureScope {
-            storage_boundary: ErasureStorageBoundary::ProjectionStore,
-            realm_id: Some(realm_id),
-            target_refs: vec![actor.to_owned()],
-            retention_policy_id: None,
-            service_scope: Some("soland.account.erase.federation".to_owned()),
-        },
-        vec![ErasedClass::ProjectionRows, ErasedClass::DerivedPlaintext],
-        completed_at,
-    )
-}
-
-fn account_erasure_receipt(
-    state: &AppState,
-    actor: &str,
-    completed_at: chrono::DateTime<chrono::Utc>,
-) -> Result<Value, AppError> {
-    build_erasure_receipt_value(
-        state,
-        crate::ids::generate("receipt"),
-        ErasureSubject {
-            kind: ErasureSubjectKind::Principal,
-            subject_ref: actor.to_owned(),
-        },
-        ErasureScope {
-            storage_boundary: ErasureStorageBoundary::AccountPrivateStore,
-            realm_id: None,
-            target_refs: vec![actor.to_owned()],
-            retention_policy_id: None,
-            service_scope: Some("soland.account.erase".to_owned()),
-        },
-        vec![
-            ErasedClass::AccountPrivateState,
-            ErasedClass::PushRoutes,
-            ErasedClass::DeviceSecrets,
-            ErasedClass::ProjectionRows,
-        ],
-        completed_at,
-    )
-}
-
 fn build_erasure_receipt_value(
     state: &AppState,
     receipt_id: String,
+    triggering_status_event_id: &arkret_wire::EventId,
     subject: ErasureSubject,
     scope: ErasureScope,
     erased_classes: Vec<ErasedClass>,
@@ -877,7 +816,13 @@ fn build_erasure_receipt_value(
 ) -> Result<Value, AppError> {
     let issuer = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
-    let retained_stub = erasure_retained_stub(&receipt_id, &subject, &scope, completed_at)?;
+    let retained_stub = erasure_retained_stub(
+        &receipt_id,
+        triggering_status_event_id,
+        &subject,
+        &scope,
+        completed_at,
+    )?;
     // Canonical timestamp decoding normalizes the stub to millisecond precision.
     // Bind the receipt to that exact decoded timestamp so the inline-stub
     // self-check compares the same wire value instead of the pre-serialization
@@ -892,6 +837,7 @@ fn build_erasure_receipt_value(
     .map_err(|error| AppError::internal(format!("erasure retained stub digest: {error}")))?;
     let mut receipt = ErasureReceipt {
         receipt_id,
+        triggering_event_id: triggering_status_event_id.clone(),
         schema: ErasureReceipt::SCHEMA.to_owned(),
         issuer,
         subject,
@@ -946,6 +892,7 @@ fn build_erasure_receipt_value(
 
 fn erasure_retained_stub(
     receipt_id: &str,
+    triggering_status_event_id: &arkret_wire::EventId,
     subject: &ErasureSubject,
     scope: &ErasureScope,
     completed_at: chrono::DateTime<chrono::Utc>,
@@ -953,6 +900,7 @@ fn erasure_retained_stub(
     serde_json::from_value(json!({
         "stub_schema": arkret_wire::SchemaId::ERASURE_VERIFICATION_STUB_V1,
         "receipt_id": receipt_id,
+        "triggering_event_id": triggering_status_event_id,
         "subject": serde_json::to_value(subject)
             .map_err(|error| AppError::internal(format!("erasure stub subject: {error}")))?,
         "scope": serde_json::to_value(scope)

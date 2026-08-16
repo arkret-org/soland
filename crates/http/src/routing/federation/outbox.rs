@@ -1225,6 +1225,17 @@ impl FederationDispatcher {
             )
             .await
             .map_err(|error| error.to_string()),
+            (
+                arkret_models_collaboration::contact_operations::PeerContactSubmitRequestBody::ContinuityCheckpoint { .. },
+                _,
+            ) => crate::routing::identity::contact_federation::accept_outbound_continuity_checkpoint_outcome(
+                &self.state,
+                &request,
+                &outcome,
+                &row.delivery.peer_did,
+            )
+            .await
+            .map_err(|error| error.to_string()),
             _ => Ok(()),
         }
     }

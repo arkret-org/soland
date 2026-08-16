@@ -23,7 +23,8 @@ use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 // resolves at the crate root, but the invite-addressing strong type lives under `model`;
 // import it via the `model` path to avoid binding the wrong same-named re-export.
 use arkret_models_collaboration::contact_operations::{
-    ContactAcceptRequestBody, ContactNextPrepareInput, ContactOperationOutcome,
+    ContactAcceptRequestBody, ContactContinuityCheckpointOutcome,
+    ContactContinuityCheckpointRequestBody, ContactNextPrepareInput, ContactOperationOutcome,
     ContactOperationRequestBody, ContactPeer, ContactRejectRequestBody,
     ContactScopeUpdateRequestBody, ContactTombstoneRequestBody,
 };
@@ -210,7 +211,7 @@ pub(crate) use social::{
     validate_request_receipt_cryptography, verify_contact_service_signature,
     verify_contact_service_signature_bytes,
 };
-mod lifecycle;
+pub(crate) mod lifecycle;
 pub(in crate::routing) mod repair;
 // Re-export the lifecycle surface used by sibling routing modules.
 pub(crate) use lifecycle::{
@@ -254,8 +255,7 @@ pub(in crate::routing) fn local_router() -> Router {
         Router::with_path("account")
             .push(Router::with_path("register").post(local_account_register))
             .push(Router::with_path("me").get(local_account_me))
-            .push(Router::with_path("deactivate").post(lifecycle::deactivate_account))
-            .push(Router::with_path("erase").post(lifecycle::erase_account)),
+            .push(Router::with_path("deactivate").post(lifecycle::deactivate_account)),
     )
 }
 
@@ -276,6 +276,7 @@ fn contact_routes() -> Router {
         .push(Router::with_path("request").post(contact_request))
         .push(Router::with_path("respond").post(contact_respond))
         .push(Router::with_path("reject").post(contact_reject))
+        .push(Router::with_path("continuity-checkpoint").post(contact_continuity_checkpoint))
         .push(Router::with_path("scope-update").post(contact_scope_update))
         .push(Router::with_path("tombstone").post(contact_tombstone))
 }

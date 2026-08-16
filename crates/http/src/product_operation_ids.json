@@ -1,6 +1,5 @@
 [
   "org.arkret.soland.account.deactivate",
-  "org.arkret.soland.account.erase",
   "org.arkret.soland.account.me",
   "org.arkret.soland.account.register",
   "org.arkret.soland.accounts.localparts.add",

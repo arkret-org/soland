@@ -18,12 +18,16 @@
 use arkret_canonical as canonical;
 use arkret_identifiers::Hash;
 use arkret_models_collaboration::contact_operations::{
-    ContactCurrentProof, ContactRound, ContactRoundEvidenceBundle, ContactScope,
-    ContactScopeUpdatePayload, GlareConcurrencyAttestation, NormalResponseAcceptanceReceipt,
-    PeerContactControlKind, PeerContactControlReceipt, PeerContactControlReceiptDomain,
-    PeerContactControlSubmitOutcome, PeerContactEventSubmitOutcome, PeerContactMirrorReceipt,
-    PeerContactMirrorReceiptDomain, PeerContactOutcome, PeerContactSubmitOutcome,
-    PeerContactSubmitRequestBody, RejectAcceptanceReceipt, RequestAcceptanceReceipt,
+    BilateralContinuityCheckpoint, BilateralContinuityCheckpointCore,
+    BilateralContinuityCheckpointProposal, BilateralContinuityCheckpointSignature,
+    CONTACT_CONTINUITY_CONTEXT, ContactContinuityEvidence, ContactCurrentProof, ContactRound,
+    ContactRoundEvidenceBundle, ContactScope, ContactScopeUpdatePayload,
+    GlareConcurrencyAttestation, NormalResponseAcceptanceReceipt, PeerContactControlKind,
+    PeerContactControlReceipt, PeerContactControlReceiptDomain, PeerContactControlSubmitOutcome,
+    PeerContactEventSubmitOutcome, PeerContactMirrorReceipt, PeerContactMirrorReceiptDomain,
+    PeerContactOutcome, PeerContactSubmitOutcome, PeerContactSubmitRequestBody,
+    RejectAcceptanceReceipt, RequestAcceptanceReceipt, bilateral_checkpoint_digest,
+    bilateral_prefix_accumulator,
 };
 use arkret_models_collaboration::events_payloads::contact::{
     ContactAcceptedPayload, ContactRejectedPayload, ContactRequestedPayload,
@@ -32,7 +36,9 @@ use arkret_models_collaboration::events_payloads::contact::{
 use arkret_models_collaboration::governance::peer_contact::{
     ContactIntroductionEvidence, PeerContactAddress,
 };
-use arkret_wire::{Base64UrlString, DidUrl, Event, IdempotencyKey, ProtocolSignature};
+use arkret_wire::{
+    Base64UrlString, DidUrl, Event, IdempotencyKey, PrincipalAuthorityKey, ProtocolSignature,
+};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer as _;
@@ -174,6 +180,11 @@ fn peer_contact_delivery_address(
             ..
         }
         | PeerContactSubmitRequestBody::GlareFinalize {
+            idempotency_key,
+            contact_address,
+            ..
+        }
+        | PeerContactSubmitRequestBody::ContinuityCheckpoint {
             idempotency_key,
             contact_address,
             ..
@@ -412,7 +423,8 @@ async fn peer_contacts_submit(
             )
         }
         PeerContactSubmitRequestBody::ProofRefresh { .. }
-        | PeerContactSubmitRequestBody::GlareFinalize { .. } => {
+        | PeerContactSubmitRequestBody::GlareFinalize { .. }
+        | PeerContactSubmitRequestBody::ContinuityCheckpoint { .. } => {
             unreachable!("control carrier branches are handled before Event carrier projection")
         }
     };
@@ -505,7 +517,8 @@ async fn peer_contacts_submit(
             (None, None, Some(reject_receipt), None)
         }
         PeerContactSubmitRequestBody::ProofRefresh { .. }
-        | PeerContactSubmitRequestBody::GlareFinalize { .. } => unreachable!(),
+        | PeerContactSubmitRequestBody::GlareFinalize { .. }
+        | PeerContactSubmitRequestBody::ContinuityCheckpoint { .. } => unreachable!(),
     };
     if let Some(request_receipt) = request_receipt {
         let canonical_event_bytes =
@@ -594,7 +607,8 @@ async fn peer_contacts_submit(
             arkret_models_collaboration::contact_operations::ContactResultKind::Tombstone
         }
         PeerContactSubmitRequestBody::ProofRefresh { .. }
-        | PeerContactSubmitRequestBody::GlareFinalize { .. } => unreachable!(),
+        | PeerContactSubmitRequestBody::GlareFinalize { .. }
+        | PeerContactSubmitRequestBody::ContinuityCheckpoint { .. } => unreachable!(),
     };
     let current_proof = if matches!(
         result_kind,
@@ -659,7 +673,8 @@ fn contact_event_issuer_core_id(
             Some(lineage.issuer.contact_actor_id())
         }
         PeerContactSubmitRequestBody::ProofRefresh { .. }
-        | PeerContactSubmitRequestBody::GlareFinalize { .. } => None,
+        | PeerContactSubmitRequestBody::GlareFinalize { .. }
+        | PeerContactSubmitRequestBody::ContinuityCheckpoint { .. } => None,
     }
 }
 
@@ -811,8 +826,632 @@ async fn handle_contact_control_request(
             .await?;
             return Ok(Some(outcome));
         }
+        PeerContactSubmitRequestBody::ContinuityCheckpoint {
+            proposal,
+            contact_address,
+            ..
+        } => {
+            if contact_address.recipient_service_id.as_str() != state.service_id() {
+                return Err(super::super::events::peer::cross_domain_replay(
+                    "contact_address.recipient_service_id does not match this service",
+                ));
+            }
+            let outcome = finalize_continuity_checkpoint(
+                state,
+                request,
+                source_service_id,
+                proposal,
+                contact_address,
+            )
+            .await?;
+            return Ok(Some(outcome));
+        }
         _ => return Ok(None),
     }
+}
+
+fn uncheckpointed_bundle(bundle: &ContactRoundEvidenceBundle) -> ContactRoundEvidenceBundle {
+    let mut bundle = bundle.clone();
+    bundle.continuity_checkpoint = None;
+    bundle
+}
+
+fn continuity_invalid(message: impl Into<String>) -> AppError {
+    AppError::new(soland_http::error::ErrorCode::ContinuityInvalid, message)
+        .with_status(StatusCode::CONFLICT)
+}
+
+fn contact_bundle_digest(bundle: &ContactRoundEvidenceBundle) -> Result<Hash, AppError> {
+    Hash::new(
+        canonical::canonical_sha256(&uncheckpointed_bundle(bundle))
+            .map_err(|error| AppError::internal(format!("Contact basis digest: {error}")))?,
+    )
+    .map_err(|error| AppError::internal(format!("Contact basis digest invalid: {error}")))
+}
+
+fn latest_continuity_checkpoint(record: &ContactRecord) -> Option<BilateralContinuityCheckpoint> {
+    record
+        .contact_round_evidence
+        .as_ref()
+        .and_then(|bundle| bundle.continuity_checkpoint.clone())
+        .or_else(|| {
+            record
+                .contact_round_evidence_history
+                .iter()
+                .find_map(|bundle| bundle.continuity_checkpoint.clone())
+        })
+}
+
+fn participant_authority_pair(
+    state: &AppState,
+    record: &ContactRecord,
+    local_principal_id: &str,
+) -> Result<[PrincipalAuthorityKey; 2], AppError> {
+    let peer_principal_id = if record.requester == local_principal_id {
+        &record.target
+    } else if record.target == local_principal_id {
+        &record.requester
+    } else {
+        return Err(AppError::internal(
+            "Contact record does not contain the local principal",
+        ));
+    };
+    let peer_service_id = record
+        .peer_service_id
+        .as_deref()
+        .unwrap_or_else(|| state.service_id());
+    let mut pair = [
+        PrincipalAuthorityKey {
+            principal_id: arkret_wire::DidCoreId::new(local_principal_id.to_owned()).map_err(
+                |error| AppError::internal(format!("local Contact principal invalid: {error}")),
+            )?,
+            principal_server_id: arkret_wire::DidCoreId::new(state.service_id().to_owned())
+                .map_err(|error| {
+                    AppError::internal(format!("local Contact service invalid: {error}"))
+                })?,
+        },
+        PrincipalAuthorityKey {
+            principal_id: arkret_wire::DidCoreId::new(peer_principal_id.to_owned()).map_err(
+                |error| AppError::internal(format!("peer Contact principal invalid: {error}")),
+            )?,
+            principal_server_id: arkret_wire::DidCoreId::new(peer_service_id.to_owned()).map_err(
+                |error| AppError::internal(format!("peer Contact service invalid: {error}")),
+            )?,
+        },
+    ];
+    pair.sort();
+    Ok(pair)
+}
+
+/// Build the unique next checkpoint core from durable accepted history. The
+/// newest sixteen predecessor rounds remain explicit; the oldest available
+/// contiguous prefix is compacted. Re-running against unchanged history is
+/// byte-identical.
+pub(crate) fn next_continuity_checkpoint_core(
+    state: &AppState,
+    record: &ContactRecord,
+    local_principal_id: &str,
+) -> Result<BilateralContinuityCheckpointCore, AppError> {
+    let current = record.contact_round_evidence.as_ref().ok_or_else(|| {
+        AppError::new(
+            soland_http::error::ErrorCode::FailedPrecondition,
+            "Contact round evidence is unavailable",
+        )
+    })?;
+    if record.contact_round_evidence_history.is_empty() {
+        return Err(AppError::new(
+            soland_http::error::ErrorCode::FailedPrecondition,
+            "Contact continuity has no terminal prefix to compact",
+        ));
+    }
+    let previous = latest_continuity_checkpoint(record);
+    if let Some(previous) = &previous {
+        previous.validate_contact_shape().map_err(|error| {
+            continuity_invalid(format!("durable continuity checkpoint is invalid: {error}"))
+        })?;
+    }
+    let tail_to_keep = record
+        .contact_round_evidence_history
+        .len()
+        .saturating_sub(1)
+        .min(16);
+    let extension_newest_to_oldest = &record.contact_round_evidence_history[tail_to_keep..];
+    let covered_through = extension_newest_to_oldest
+        .first()
+        .expect("non-empty history slice")
+        .contact_round_id
+        .clone();
+    let extension_digests = extension_newest_to_oldest
+        .iter()
+        .rev()
+        .map(contact_bundle_digest)
+        .collect::<Result<Vec<_>, _>>()?;
+    let (root_basis, root_basis_digest, previous_accumulator, covered_prefix_count, sequence) =
+        if let Some(previous) = &previous {
+            (
+                previous.core.root_basis.clone(),
+                previous.core.root_basis_digest.clone(),
+                Some(&previous.core.prefix_accumulator_root),
+                previous
+                    .core
+                    .covered_prefix_count
+                    .checked_add(extension_digests.len() as u64)
+                    .ok_or_else(|| AppError::internal("continuity prefix count overflow"))?,
+                previous
+                    .core
+                    .sequence
+                    .checked_add(1)
+                    .ok_or_else(|| AppError::internal("continuity sequence overflow"))?,
+            )
+        } else {
+            let root = extension_newest_to_oldest
+                .last()
+                .expect("non-empty history slice");
+            if root.previous_terminal_contact_round_id.is_some() {
+                return Err(AppError::new(
+                    soland_http::error::ErrorCode::FailedPrecondition,
+                    "Contact continuity root is unavailable",
+                ));
+            }
+            let root = Box::new(uncheckpointed_bundle(root));
+            let root_digest = contact_bundle_digest(root.as_ref())?;
+            (root, root_digest, None, extension_digests.len() as u64, 1)
+        };
+    let participants = participant_authority_pair(state, record, local_principal_id)?;
+    let current_pair = match &current.contact_round {
+        ContactRound::Normal {
+            sorted_pair_members,
+            ..
+        }
+        | ContactRound::Glare {
+            sorted_pair_members,
+            ..
+        } => sorted_pair_members,
+    };
+    if current_pair[0] != participants[0].principal_id
+        || current_pair[1] != participants[1].principal_id
+    {
+        return Err(continuity_invalid(
+            "Contact participant authority pair changed",
+        ));
+    }
+    let prefix_accumulator_root =
+        bilateral_prefix_accumulator(previous_accumulator, &extension_digests)
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    Ok(BilateralContinuityCheckpointCore {
+        context: CONTACT_CONTINUITY_CONTEXT.to_owned(),
+        participants,
+        root_basis,
+        root_basis_digest,
+        covered_through_contact_round_id: covered_through,
+        prefix_accumulator_root,
+        covered_prefix_count,
+        sequence,
+        previous_checkpoint_digest: previous.map(|checkpoint| checkpoint.checkpoint_digest),
+    })
+}
+
+pub(crate) fn create_continuity_checkpoint_proposal(
+    state: &AppState,
+    record: &ContactRecord,
+    local_principal_id: &str,
+) -> Result<BilateralContinuityCheckpointProposal, AppError> {
+    let core = next_continuity_checkpoint_core(state, record, local_principal_id)?;
+    let checkpoint_digest = bilateral_checkpoint_digest(&core)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let local_signer = core
+        .participants
+        .iter()
+        .find(|participant| {
+            participant.principal_id.as_str() == local_principal_id
+                && participant.principal_server_id.as_str() == state.service_id()
+        })
+        .cloned()
+        .ok_or_else(|| AppError::internal("checkpoint has no local proposer authority"))?;
+    let unsigned = BilateralContinuityCheckpointProposal {
+        core,
+        checkpoint_digest,
+        proposer_signature: BilateralContinuityCheckpointSignature {
+            signer: local_signer.clone(),
+            signature: placeholder_contact_signature(state, now())?,
+        },
+    };
+    let proposer_signature = sign_checkpoint_participant(
+        state,
+        local_signer,
+        &unsigned
+            .signing_bytes()
+            .map_err(|error| AppError::internal(error.to_string()))?,
+    )?;
+    Ok(BilateralContinuityCheckpointProposal {
+        proposer_signature,
+        ..unsigned
+    })
+}
+
+pub(crate) fn committed_continuity_evidence(
+    record: &ContactRecord,
+) -> Option<ContactContinuityEvidence> {
+    let checkpoint = latest_continuity_checkpoint(record)?;
+    let current = record.contact_round_evidence.clone()?;
+    let boundary = &checkpoint.core.covered_through_contact_round_id;
+    let mut tail = vec![uncheckpointed_bundle(&current)];
+    for predecessor in &record.contact_round_evidence_history {
+        if tail
+            .last()
+            .and_then(|bundle| bundle.previous_terminal_contact_round_id.as_ref())
+            == Some(boundary)
+        {
+            break;
+        }
+        tail.push(uncheckpointed_bundle(predecessor));
+    }
+    tail.first_mut()?.continuity_checkpoint = Some(checkpoint.clone());
+    arkret_models_collaboration::contact_operations::validate_recontact_continuity(
+        &tail[0],
+        &tail[1..],
+    )
+    .ok()?;
+    Some(ContactContinuityEvidence {
+        checkpoint,
+        uncompressed_tail: tail,
+    })
+}
+
+fn prune_history_to_checkpoint(
+    record: &mut ContactRecord,
+    checkpoint: &BilateralContinuityCheckpoint,
+) -> Result<(), AppError> {
+    let boundary = &checkpoint.core.covered_through_contact_round_id;
+    let boundary_index = record
+        .contact_round_evidence_history
+        .iter()
+        .position(|bundle| &bundle.contact_round_id == boundary)
+        .ok_or_else(|| {
+            continuity_invalid(
+                "continuity checkpoint boundary is absent from durable Contact history",
+            )
+        })?;
+    // History is newest-to-oldest. Keep only the explicit tail newer than the
+    // checkpoint boundary; the boundary and everything older are represented
+    // exclusively by the signed accumulator.
+    record
+        .contact_round_evidence_history
+        .truncate(boundary_index);
+    Ok(())
+}
+
+pub(crate) async fn commit_same_service_continuity_checkpoint(
+    state: &AppState,
+    record: &ContactRecord,
+    local_principal_id: &str,
+) -> Result<ContactContinuityEvidence, AppError> {
+    let proposal = create_continuity_checkpoint_proposal(state, record, local_principal_id)?;
+    let peer_signer = proposal
+        .core
+        .participants
+        .iter()
+        .find(|participant| participant.principal_id.as_str() != local_principal_id)
+        .cloned()
+        .ok_or_else(|| AppError::internal("same-service checkpoint peer authority missing"))?;
+    if peer_signer.principal_server_id.as_str() != state.service_id() {
+        return Err(AppError::internal(
+            "same-service checkpoint selected a remote authority",
+        ));
+    }
+    let mut signatures = [
+        proposal.proposer_signature.clone(),
+        sign_checkpoint_participant(
+            state,
+            peer_signer,
+            &proposal
+                .signing_bytes()
+                .map_err(|error| AppError::internal(error.to_string()))?,
+        )?,
+    ];
+    signatures.sort_by(|left, right| left.signer.cmp(&right.signer));
+    let checkpoint = BilateralContinuityCheckpoint {
+        core: proposal.core,
+        checkpoint_digest: proposal.checkpoint_digest,
+        signatures,
+    };
+    checkpoint
+        .validate_contact_shape()
+        .map_err(|error| AppError::internal(format!("same-service checkpoint: {error}")))?;
+    let contacts = state.contacts();
+    let mut current = contacts
+        .contact_any(&record.requester, &record.target)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            AppError::new(
+                soland_http::error::ErrorCode::FailedPrecondition,
+                "same-service Contact disappeared",
+            )
+        })?;
+    let expected_updated_at = current.updated_at;
+    current
+        .contact_round_evidence
+        .as_mut()
+        .ok_or_else(|| {
+            AppError::new(
+                soland_http::error::ErrorCode::FailedPrecondition,
+                "same-service Contact evidence disappeared",
+            )
+        })?
+        .continuity_checkpoint = Some(checkpoint.clone());
+    prune_history_to_checkpoint(&mut current, &checkpoint)?;
+    advance_contact_revision(&mut current, expected_updated_at);
+    save_contact_cas(contacts, expected_updated_at, current.clone()).await?;
+    committed_continuity_evidence(&current)
+        .ok_or_else(|| AppError::internal("same-service continuity export is invalid"))
+}
+
+pub(crate) async fn accept_outbound_continuity_checkpoint_outcome(
+    state: &AppState,
+    request: &PeerContactSubmitRequestBody,
+    outcome: &PeerContactSubmitOutcome,
+    peer_service_id: &str,
+) -> Result<(), AppError> {
+    let PeerContactSubmitRequestBody::ContinuityCheckpoint {
+        proposal,
+        contact_address,
+        ..
+    } = request
+    else {
+        return Err(AppError::internal(
+            "outbound continuity outcome paired with another request kind",
+        ));
+    };
+    let PeerContactSubmitOutcome::Control(PeerContactControlSubmitOutcome::ContinuityCheckpoint {
+        status,
+        control_receipt,
+        checkpoint,
+    }) = outcome
+    else {
+        return Err(AppError::internal(
+            "outbound continuity request returned another outcome kind",
+        ));
+    };
+    if !matches!(
+        status,
+        PeerContactOutcome::Accepted | PeerContactOutcome::Duplicate
+    ) || control_receipt.request_kind != PeerContactControlKind::ContinuityCheckpoint
+        || control_receipt.outcome != *status
+        || control_receipt.issuer.as_str() != peer_service_id
+        || checkpoint.checkpoint_digest != proposal.checkpoint_digest
+        || canonical::canonical_json_bytes(&checkpoint.core)
+            .map_err(|error| AppError::internal(error.to_string()))?
+            != canonical::canonical_json_bytes(&proposal.core)
+                .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        return Err(continuity_invalid(
+            "peer continuity outcome does not bind the proposal",
+        ));
+    }
+    verify_contact_evidence_signature(
+        state,
+        peer_service_id,
+        &control_receipt.signature,
+        &contact_control_receipt_signing_bytes(control_receipt)?,
+        "continuity_checkpoint.control_receipt",
+    )?;
+    checkpoint
+        .validate_contact_shape()
+        .map_err(|error| continuity_invalid(format!("peer checkpoint invalid: {error}")))?;
+    let signing_bytes = checkpoint
+        .signing_bytes()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    for signature in &checkpoint.signatures {
+        verify_contact_service_signature_bytes(
+            state,
+            signature.signer.principal_server_id.as_str(),
+            &signature.signature,
+            &signing_bytes,
+            "continuity_checkpoint.signature",
+        )?;
+    }
+    let local_principal_id = proposal.proposer_signature.signer.principal_id.as_str();
+    let remote_principal_id = contact_address.subject_id.as_str();
+    let contacts = state.contacts();
+    let mut record = contacts
+        .contact_any(local_principal_id, remote_principal_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            AppError::new(
+                soland_http::error::ErrorCode::FailedPrecondition,
+                "outbound checkpoint Contact disappeared",
+            )
+        })?;
+    if record.peer_service_id.as_deref() != Some(peer_service_id) {
+        return Err(continuity_invalid(
+            "outbound checkpoint peer service changed",
+        ));
+    }
+    if let Some(existing) = latest_continuity_checkpoint(&record) {
+        if existing.checkpoint_digest == checkpoint.checkpoint_digest {
+            return Ok(());
+        }
+        if existing.core.sequence >= checkpoint.core.sequence {
+            return Err(continuity_invalid(
+                "outbound continuity checkpoint rollback or fork",
+            ));
+        }
+    }
+    let expected_core = next_continuity_checkpoint_core(state, &record, local_principal_id)?;
+    if canonical::canonical_json_bytes(&expected_core)
+        .map_err(|error| AppError::internal(error.to_string()))?
+        != canonical::canonical_json_bytes(&checkpoint.core)
+            .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        return Err(continuity_invalid(
+            "outbound checkpoint no longer matches durable history",
+        ));
+    }
+    let expected_updated_at = record.updated_at;
+    record
+        .contact_round_evidence
+        .as_mut()
+        .ok_or_else(|| {
+            AppError::new(
+                soland_http::error::ErrorCode::FailedPrecondition,
+                "outbound checkpoint current evidence disappeared",
+            )
+        })?
+        .continuity_checkpoint = Some(checkpoint.clone());
+    prune_history_to_checkpoint(&mut record, checkpoint)?;
+    advance_contact_revision(&mut record, expected_updated_at);
+    save_contact_cas(contacts, expected_updated_at, record).await
+}
+
+fn sign_checkpoint_participant(
+    state: &AppState,
+    signer: PrincipalAuthorityKey,
+    signing_bytes: &[u8],
+) -> Result<BilateralContinuityCheckpointSignature, AppError> {
+    Ok(BilateralContinuityCheckpointSignature {
+        signer,
+        signature: sign_contact_evidence_bytes(state, now(), signing_bytes)?,
+    })
+}
+
+async fn finalize_continuity_checkpoint(
+    state: &AppState,
+    request: &PeerContactSubmitRequestBody,
+    source_service_id: &str,
+    proposal: &BilateralContinuityCheckpointProposal,
+    contact_address: &PeerContactAddress,
+) -> Result<PeerContactSubmitOutcome, AppError> {
+    proposal.validate_shape().map_err(|error| {
+        super::super::events::peer::schema_violation(format!(
+            "invalid continuity checkpoint proposal: {error}"
+        ))
+    })?;
+    if proposal
+        .proposer_signature
+        .signer
+        .principal_server_id
+        .as_str()
+        != source_service_id
+    {
+        return Err(super::super::events::peer::cross_domain_replay(
+            "checkpoint proposer service does not match Source-Service-ID",
+        ));
+    }
+    verify_contact_service_signature_bytes(
+        state,
+        source_service_id,
+        &proposal.proposer_signature.signature,
+        &proposal
+            .signing_bytes()
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        "continuity_checkpoint.proposer_signature",
+    )?;
+    let local_principal_id = contact_address.subject_id.as_str();
+    let remote_principal_id = proposal.proposer_signature.signer.principal_id.as_str();
+    let contacts = state.contacts();
+    let mut record = contacts
+        .contact_any(local_principal_id, remote_principal_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            AppError::new(
+                soland_http::error::ErrorCode::FailedPrecondition,
+                "checkpoint Contact lineage is unavailable",
+            )
+        })?;
+    if record.peer_service_id.as_deref() != Some(source_service_id) {
+        return Err(super::super::events::peer::cross_domain_replay(
+            "checkpoint source service does not match durable Contact peer",
+        ));
+    }
+    let request_digest = contact_control_request_digest(request)?;
+    if let Some(outcome) = replayed_contact_control_outcome(
+        &record,
+        &request_digest,
+        PeerContactControlKind::ContinuityCheckpoint,
+    ) {
+        return Ok(outcome);
+    }
+    let expected_core = next_continuity_checkpoint_core(state, &record, local_principal_id)?;
+    if bilateral_checkpoint_digest(&expected_core)
+        .map_err(|error| AppError::internal(error.to_string()))?
+        != proposal.checkpoint_digest
+        || canonical::canonical_json_bytes(&expected_core)
+            .map_err(|error| AppError::internal(error.to_string()))?
+            != canonical::canonical_json_bytes(&proposal.core)
+                .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        return Err(continuity_invalid(
+            "continuity checkpoint proposal does not match durable history",
+        ));
+    }
+    if let Some(existing) = latest_continuity_checkpoint(&record)
+        && existing.core.sequence == proposal.core.sequence
+        && existing.checkpoint_digest != proposal.checkpoint_digest
+    {
+        return Err(continuity_invalid(
+            "continuity checkpoint fork at the same sequence",
+        ));
+    }
+    let local_signer = proposal
+        .core
+        .participants
+        .iter()
+        .find(|participant| participant.principal_server_id.as_str() == state.service_id())
+        .cloned()
+        .ok_or_else(|| {
+            super::super::events::peer::cross_domain_replay(
+                "checkpoint has no local participant authority",
+            )
+        })?;
+    let mut signatures = [
+        proposal.proposer_signature.clone(),
+        sign_checkpoint_participant(
+            state,
+            local_signer,
+            &proposal
+                .signing_bytes()
+                .map_err(|error| AppError::internal(error.to_string()))?,
+        )?,
+    ];
+    signatures.sort_by(|left, right| left.signer.cmp(&right.signer));
+    let checkpoint = BilateralContinuityCheckpoint {
+        core: proposal.core.clone(),
+        checkpoint_digest: proposal.checkpoint_digest.clone(),
+        signatures,
+    };
+    checkpoint
+        .validate_contact_shape()
+        .map_err(|error| AppError::internal(format!("completed checkpoint invalid: {error}")))?;
+    let expected_updated_at = record.updated_at;
+    let current = record.contact_round_evidence.as_mut().ok_or_else(|| {
+        AppError::new(
+            soland_http::error::ErrorCode::FailedPrecondition,
+            "checkpoint current Contact evidence is unavailable",
+        )
+    })?;
+    current.continuity_checkpoint = Some(checkpoint.clone());
+    let result_digest = super::account::canonical_contact_digest(&checkpoint)?;
+    let control_receipt = sign_contact_control_receipt(
+        state,
+        request,
+        PeerContactControlKind::ContinuityCheckpoint,
+        PeerContactOutcome::Accepted,
+        Some(result_digest),
+    )?;
+    let outcome =
+        PeerContactSubmitOutcome::Control(PeerContactControlSubmitOutcome::ContinuityCheckpoint {
+            status: PeerContactOutcome::Accepted,
+            control_receipt,
+            checkpoint: checkpoint.clone(),
+        });
+    record.control_outcomes.push(outcome.clone());
+    prune_history_to_checkpoint(&mut record, &checkpoint)?;
+    advance_contact_revision(&mut record, expected_updated_at);
+    save_contact_cas(contacts, expected_updated_at, record).await?;
+    Ok(outcome)
 }
 
 pub(crate) fn validate_mirror_receipt_cryptography(
@@ -1470,6 +2109,11 @@ fn replayed_contact_control_outcome(
                 control_receipt,
                 ..
             }) if request_kind == PeerContactControlKind::GlareFinalize => control_receipt,
+            PeerContactSubmitOutcome::Control(
+                PeerContactControlSubmitOutcome::ContinuityCheckpoint {
+                    control_receipt, ..
+                },
+            ) if request_kind == PeerContactControlKind::ContinuityCheckpoint => control_receipt,
             _ => return None,
         };
         (receipt.request_digest == *request_digest).then(|| outcome.clone())

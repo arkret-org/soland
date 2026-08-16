@@ -4,6 +4,7 @@
 
 extern crate self as soland_http;
 
+pub mod account_erasure_worker;
 pub mod authz;
 pub mod canonical_body;
 pub mod compactor;

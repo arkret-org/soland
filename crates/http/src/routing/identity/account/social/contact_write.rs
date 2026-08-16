@@ -1827,7 +1827,8 @@ async fn prepare_contact_federation_delivery(
             contact_address, ..
         } => contact_address.recipient_service_id.as_str(),
         PeerContactSubmitRequestBody::ProofRefresh { .. }
-        | PeerContactSubmitRequestBody::GlareFinalize { .. } => {
+        | PeerContactSubmitRequestBody::GlareFinalize { .. }
+        | PeerContactSubmitRequestBody::ContinuityCheckpoint { .. } => {
             unreachable!("Contact commit only emits Event carriers")
         }
     };

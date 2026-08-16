@@ -258,6 +258,14 @@ async fn run() -> anyhow::Result<()> {
         "background worker configured"
     );
 
+    let _account_erasure_worker = soland_http::account_erasure_worker::spawn(state.clone());
+    tracing::info!(
+        worker = "account_erasure",
+        enabled = true,
+        service_id = %state.service_id(),
+        "background worker configured"
+    );
+
     // TTL backstop for the durable sync-cursor handle table (forward-progress
     // pruning on cursor presentation handles the steady state; this clears
     // rows whose client never returned).

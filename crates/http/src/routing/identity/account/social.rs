@@ -102,6 +102,167 @@ pub(crate) async fn contact_tombstone(
     let session = aa.authenticated_session(state, req).await?;
     contact_write::tombstone(state, &session, body.into_inner()).await
 }
+
+#[endpoint(
+    operation_id = "ak.self.contact.command.checkpoint",
+    summary = "Issue or replay a bilateral Contact continuity checkpoint",
+    tags("contacts")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.checkpoint"))]
+pub(crate) async fn contact_continuity_checkpoint(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    body: JsonBody<ContactContinuityCheckpointRequestBody>,
+) -> JsonResult<ContactContinuityCheckpointOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let body = body.into_inner();
+    let peer = body.peer.contact_actor_id();
+    if peer.as_str() == session.actor {
+        return Err(AppError::param_invalid(
+            "continuity checkpoint peer must differ from the holder",
+        ));
+    }
+    let request_hash = arkret_canonical::canonical_sha256(&body)
+        .map_err(|error| AppError::internal(format!("checkpoint request digest: {error}")))?;
+    let replay_key = format!("contact-checkpoint:{}", body.idempotency_key.as_str());
+    if let Some(stored) = state
+        .jobs()
+        .idempotency_record(&session.actor, &replay_key)
+        .await
+        .map_err(|error| AppError::internal(format!("checkpoint replay lookup: {error}")))?
+    {
+        if stored.request_hash != request_hash {
+            return Err(AppError::new(
+                ErrorCode::DuplicateConflict,
+                "checkpoint idempotency key was used for different canonical bytes",
+            )
+            .with_status(salvo::http::StatusCode::CONFLICT));
+        }
+        let mut outcome: ContactContinuityCheckpointOutcome =
+            serde_json::from_value(stored.response_body).map_err(|error| {
+                AppError::internal(format!("stored checkpoint outcome: {error}"))
+            })?;
+        if outcome.status
+            == arkret_models_collaboration::contact_operations::ContactContinuityCheckpointStatus::Pending
+            && let Some(record) = state
+                .contacts()
+                .contact_any(&session.actor, peer.as_str())
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+            && let Some(evidence) =
+                crate::routing::identity::contact_federation::committed_continuity_evidence(
+                    &record,
+                )
+            && evidence.checkpoint.checkpoint_digest == outcome.checkpoint_digest
+        {
+            outcome.status = arkret_models_collaboration::contact_operations::ContactContinuityCheckpointStatus::Committed;
+            outcome.continuity_evidence = Some(evidence);
+        }
+        return json_ok(outcome);
+    }
+    let record = state
+        .contacts()
+        .contact_any(&session.actor, peer.as_str())
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::new(ErrorCode::NotFound, "Contact lineage not found"))?;
+    let (outcome, delivery) = if record
+        .peer_service_id
+        .as_deref()
+        .is_none_or(|service| service == state.service_id())
+    {
+        let evidence = crate::routing::identity::contact_federation::commit_same_service_continuity_checkpoint(
+            state,
+            &record,
+            &session.actor,
+        )
+        .await?;
+        (
+            ContactContinuityCheckpointOutcome {
+                status: arkret_models_collaboration::contact_operations::ContactContinuityCheckpointStatus::Committed,
+                checkpoint_digest: evidence.checkpoint.checkpoint_digest.clone(),
+                continuity_evidence: Some(evidence),
+            },
+            None,
+        )
+    } else {
+        let peer_service_id = record.peer_service_id.as_deref().expect("checked remote");
+        let service_resolution = record
+            .peer_service_resolution
+            .clone()
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    "Contact peer service resolution is unavailable",
+                )
+            })
+            .and_then(|value| {
+                serde_json::from_value(value).map_err(|error| {
+                    AppError::internal(format!("stored Contact service resolution: {error}"))
+                })
+            })?;
+        let peer_service_id = DidCoreId::new(peer_service_id.to_owned()).map_err(|error| {
+            AppError::internal(format!("stored Contact peer service invalid: {error}"))
+        })?;
+        let contact_address =
+            arkret_models_collaboration::governance::peer_contact::PeerContactAddress::principal_server(
+                peer.clone(),
+                arkret_wire::PrincipalAuthorityKey {
+                    principal_id: peer,
+                    principal_server_id: peer_service_id.clone(),
+                },
+                peer_service_id.clone(),
+                service_resolution,
+            );
+        let proposal =
+            crate::routing::identity::contact_federation::create_continuity_checkpoint_proposal(
+                state,
+                &record,
+                &session.actor,
+            )?;
+        let checkpoint_digest = proposal.checkpoint_digest.clone();
+        let delivery = arkret_models_collaboration::contact_operations::PeerContactSubmitRequestBody::ContinuityCheckpoint {
+            idempotency_key: body.idempotency_key.clone(),
+            proposal,
+            contact_address,
+        };
+        (
+            ContactContinuityCheckpointOutcome {
+                status: arkret_models_collaboration::contact_operations::ContactContinuityCheckpointStatus::Pending,
+                checkpoint_digest,
+                continuity_evidence: None,
+            },
+            Some((peer_service_id, delivery)),
+        )
+    };
+    if let Some((peer_service_id, delivery)) = delivery {
+        crate::routing::identity::contact_federation::enqueue_peer_contact_carrier(
+            state,
+            peer_service_id.as_str(),
+            &delivery,
+        )
+        .await?;
+    }
+    let created_at = now();
+    state
+        .jobs()
+        .store_idempotency_record(soland_services::jobs::IdempotencyState {
+            principal_id: session.actor,
+            idempotency_key: replay_key,
+            service_id: state.service_id().clone(),
+            request_hash,
+            response_status: salvo::http::StatusCode::OK.as_u16().into(),
+            response_body: serde_json::to_value(&outcome)
+                .map_err(|error| AppError::internal(format!("checkpoint outcome: {error}")))?,
+            created_at,
+            expires_at: created_at + chrono::Duration::days(30),
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("checkpoint replay store: {error}")))?;
+    json_ok(outcome)
+}
 #[endpoint(
     operation_id = "ak.self.invite_receive_policy.resource.get",
     summary = "Get the invite receive policy",
@@ -316,6 +477,8 @@ async fn contact_list_rows(
                 .peer_service_id
                 .as_deref()
                 .and_then(|did| arkret_identifiers::DidCoreId::new(did.to_owned()).ok()),
+            continuity_evidence:
+                crate::routing::identity::contact_federation::committed_continuity_evidence(&record),
             direct_conversation: None,
             agents: Vec::new(),
         };

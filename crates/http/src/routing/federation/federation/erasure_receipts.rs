@@ -92,7 +92,7 @@ async fn submit(
         }
         let outcome = serde_json::from_value(stored.response_body)
             .map_err(|error| AppError::internal(format!("stored erasure outcome: {error}")))?;
-        persist_lookup(state, &body.package, &outcome).await?;
+        persist_lookup(state, &body.package, &outcome, None).await?;
         return json_ok(outcome);
     }
 
@@ -144,7 +144,7 @@ async fn submit(
         })
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    persist_lookup(state, &body.package, &outcome).await?;
+    persist_lookup(state, &body.package, &outcome, None).await?;
     json_ok(outcome)
 }
 
@@ -171,6 +171,11 @@ async fn get(
         .map_err(|error| AppError::internal(format!("stored erasure package: {error}")))?;
     if source != stored.package.receipt.issuer.as_str()
         && source != stored.acceptance.receiver_service_id.as_str()
+        && stored
+            .authorized_requester_service_id
+            .as_ref()
+            .map(|id| id.as_str())
+            != Some(source.as_str())
     {
         return Err(AppError::not_found("erasure receipt not found"));
     }
@@ -183,12 +188,15 @@ async fn get(
 struct StoredReceipt {
     package: ErasureReceiptPackage,
     acceptance: ErasureReceiptAcceptance,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    authorized_requester_service_id: Option<arkret_wire::DidCoreId>,
 }
 
 async fn persist_lookup(
     state: &AppState,
     package: &ErasureReceiptPackage,
     outcome: &ErasureReceiptSubmitOutcome,
+    authorized_requester_service_id: Option<&arkret_wire::DidCoreId>,
 ) -> Result<(), AppError> {
     let ErasureReceiptSubmitOutcome::Accepted(acceptance) = outcome else {
         return Ok(());
@@ -206,6 +214,7 @@ async fn persist_lookup(
             response_body: serde_json::to_value(StoredReceipt {
                 package: package.clone(),
                 acceptance: acceptance.clone(),
+                authorized_requester_service_id: authorized_requester_service_id.cloned(),
             })
             .map_err(|error| AppError::internal(error.to_string()))?,
             created_at: now,
@@ -213,6 +222,30 @@ async fn persist_lookup(
         })
         .await
         .map_err(|error| AppError::internal(error.to_string()))
+}
+
+pub(crate) async fn persist_issued_package(
+    state: &AppState,
+    package: &ErasureReceiptPackage,
+    authorized_requester_service_id: &arkret_wire::DidCoreId,
+) -> Result<(), AppError> {
+    package
+        .validate_bindings()
+        .map_err(|error| AppError::internal(format!("issued erasure package invalid: {error}")))?;
+    let acceptance = signed_acceptance(
+        state,
+        package,
+        ErasureReceiptAcceptanceStatus::Accepted,
+        Utc::now(),
+    )
+    .await?;
+    persist_lookup(
+        state,
+        package,
+        &ErasureReceiptSubmitOutcome::Accepted(acceptance),
+        Some(authorized_requester_service_id),
+    )
+    .await
 }
 
 async fn signed_acceptance(
