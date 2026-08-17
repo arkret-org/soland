@@ -227,7 +227,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
             .collect(),
         verified_profiles: Vec::new(),
         experimental_features: Vec::new(),
-        compat_surfaces: Vec::new(),
+        interop_surfaces: Vec::new(),
         development_mode: state.config().development_mode,
         rate_limit_policy: Some(arkret_models_discovery::service_description::RateLimitPolicy::unspecified()),
         rate_limit_policy_id: None,

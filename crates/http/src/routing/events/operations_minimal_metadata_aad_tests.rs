@@ -7,21 +7,21 @@ use super::*;
 fn aad_visibility_maps_known_wire_values() {
     // SEC-08 — wire discriminator → SDK enum, root and nested forms.
     assert!(matches!(
-        minimal_metadata_aad_visibility(&json!({"aad_visibility_event_id": "hidden"})),
+        minimal_metadata_aad_visibility(&json!({"aad_visibility_event_id_kind": "hidden"})),
         Some(EncryptedEnvelopeAadVisibility::Hidden)
     ));
     assert!(matches!(
-        minimal_metadata_aad_visibility(&json!({"aad_visibility_event_id": "routing_digest"})),
+        minimal_metadata_aad_visibility(&json!({"aad_visibility_event_id_kind": "routing_digest"})),
         Some(EncryptedEnvelopeAadVisibility::RoutingDigest)
     ));
     assert!(matches!(
-        minimal_metadata_aad_visibility(&json!({"aad_visibility_event_id": "opaque_id"})),
+        minimal_metadata_aad_visibility(&json!({"aad_visibility_event_id_kind": "opaque_id"})),
         Some(EncryptedEnvelopeAadVisibility::OpaqueId)
     ));
     // Spec wire example nests the envelope under `envelope`.
     assert!(matches!(
         minimal_metadata_aad_visibility(
-            &json!({"envelope": {"aad_visibility_event_id": "hidden"}})
+            &json!({"envelope": {"aad_visibility_event_id_kind": "hidden"}})
         ),
         Some(EncryptedEnvelopeAadVisibility::Hidden)
     ));
@@ -33,6 +33,7 @@ fn aad_visibility_missing_or_unknown_is_none() {
     // as fail-closed for a minimal-metadata Realm.
     assert!(minimal_metadata_aad_visibility(&json!({})).is_none());
     assert!(
-        minimal_metadata_aad_visibility(&json!({"aad_visibility_event_id": "bogus"})).is_none()
+        minimal_metadata_aad_visibility(&json!({"aad_visibility_event_id_kind": "bogus"}))
+            .is_none()
     );
 }

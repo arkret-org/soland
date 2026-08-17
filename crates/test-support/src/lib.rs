@@ -815,3 +815,34 @@ pub async fn project_authorized_principal_device(
     soland_http::project_accepted_operations(state, principal_id.as_str(), &[operation]).await;
     authorize_event_id
 }
+
+/// Read the service-derived `push_target_id` for one registered device.
+///
+/// `push_register_device_outcome` deliberately returns only the gateway-local
+/// `registration_id`: the push target pseudonym is the receiving service's
+/// private linkability namespace and MUST NOT be published to the client
+/// (`zh/discovery/push-notifications.md`). A notify caller inside the service
+/// reads it from the stored registration, which is what this helper does; a
+/// test that reuses `registration_id` as a push target is asserting a
+/// conflation the two values no longer have.
+pub async fn registered_push_target_id(
+    state: &AppState,
+    principal_id: &str,
+    device_id: &str,
+) -> String {
+    state
+        .test_push_devices()
+        .await
+        .into_iter()
+        .find(|record| {
+            record.get("principal_id").and_then(|v| v.as_str()) == Some(principal_id)
+                && record.get("device_id").and_then(|v| v.as_str()) == Some(device_id)
+        })
+        .and_then(|record| {
+            record
+                .get("push_target_id")
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned)
+        })
+        .expect("registered push device carries a push_target_id")
+}

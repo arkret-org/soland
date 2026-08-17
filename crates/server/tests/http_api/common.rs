@@ -771,7 +771,7 @@ pub(crate) async fn seed_test_realm(
                     "recipient_service_kind": "principal_server"
                 })),
                 introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
-                third_party_id: None,
+                third_party_invite: None,
                 join_rule_snapshot: None,
                 invite_token,
                 status: "pending".to_owned(),
@@ -787,7 +787,7 @@ pub(crate) async fn seed_test_realm(
     serde_json::json!({
         "ok": true,
         "realm_id": realm_id,
-        "owner": owner,
+        "owner_id": owner,
         "members": [{"did": owner}],
         "seal_basis": seal_basis,
         "deleted": false
@@ -1178,7 +1178,7 @@ pub(crate) fn signed_message_event_envelope(
                 Value::String("application/vnd.arkret.message+json".to_owned()),
             );
             object.insert(
-                "aad_visibility_event_id".to_owned(),
+                "aad_visibility_event_id_kind".to_owned(),
                 Value::String("hidden".to_owned()),
             );
             object.insert(
@@ -2686,9 +2686,32 @@ fn typed_relation_create_payload(payload: Value) -> Value {
     let to_ref = relation_payload_str(&payload, &["to_ref", "to"])
         .expect("relation create payload requires to_ref");
     let rank = relation_payload_str(&payload, &["rank"]);
+    // `#/$defs/relation_create_object` is the whole Relation object minus the
+    // id, so the typed payload carries every required object member.
+    let relation = arkret_models_collaboration::objects::relation::Relation {
+        schema: arkret_wire::SchemaId::RELATION_V1.to_owned(),
+        id: None,
+        realm_id: arkret_wire::RealmId::new(DEMO_REALM_ID.to_owned()).expect("fixture realm id"),
+        scope_circle_id: None,
+        effective_scope: None,
+        relation_kind: arkret_wire::RelationKind::from_wire(&kind),
+        from_ref,
+        to_ref,
+        rank: None,
+        fields: Default::default(),
+        state: None,
+        state_changed_at: None,
+        created_by: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
+            .expect("fixture actor id"),
+        created_at: "2026-08-18T00:00:00.000Z"
+            .parse()
+            .expect("fixture created_at"),
+        updated_by: None,
+        updated_at: None,
+    };
     let mut typed =
         arkret_models_collaboration::governance::membership_invite::RelationCreatePayload::new(
-            kind, from_ref, to_ref,
+            relation,
         );
     if let Some(rank) = rank {
         typed = typed.with_rank(rank);

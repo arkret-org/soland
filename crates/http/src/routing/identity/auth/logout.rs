@@ -325,7 +325,7 @@ async fn revoke_sessions_for_actor_device(
 /// `ak.gate.account.command.revoke_session` (surface group `account_auth`).
 ///
 /// Spec: sync/service-http-binding.md — the body MAY be omitted (revoke the
-/// calling session); `target_grant_id` / `target_device_id` /
+/// calling session); `target_session_grant_id` / `target_device_id` /
 /// `all_sessions=true` are mutually exclusive selectors and the target MUST
 /// belong to the calling principal. Revokes session grants / bearer
 /// sessions only — device authorization is NOT touched and no
@@ -351,7 +351,7 @@ pub(super) async fn session_revoke(
             AppError::json_invalid(format!("invalid session-revoke body: {error}"))
         })?,
         _ => SessionRevokeRequestBody {
-            target_grant_id: None,
+            target_session_grant_id: None,
             target_device_id: None,
             all_sessions: None,
             applet_id: None,
@@ -368,14 +368,14 @@ pub(super) async fn session_revoke(
             "all_sessions must be true when present",
         ));
     }
-    let selector_count = usize::from(body.target_grant_id.is_some())
+    let selector_count = usize::from(body.target_session_grant_id.is_some())
         + usize::from(body.target_device_id.is_some())
         + usize::from(body.all_sessions == Some(true))
         + usize::from(session_revoke_has_applet_selector(&body));
     if selector_count > 1 {
         return Err(AppError::new(
             ErrorCode::SessionRevokeSelectorConflict,
-            "target_grant_id, target_device_id, all_sessions and applet selector are mutually exclusive",
+            "target_session_grant_id, target_device_id, all_sessions and applet selector are mutually exclusive",
         ));
     }
     if session_revoke_has_applet_selector(&body) {
@@ -408,7 +408,7 @@ pub(super) async fn session_revoke(
             .revoke_actor_device_sessions(&session.actor, target_device_id.as_str(), revoked_at)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
-    } else if body.target_grant_id.is_some() {
+    } else if body.target_session_grant_id.is_some() {
         // Session grants are issued by coauth; soland only ever sees the
         // grant JWT during the exchange and keeps no grant_id -> session
         // mapping, so a grant-addressed revoke cannot resolve here.
@@ -439,7 +439,7 @@ pub(super) async fn session_revoke(
     .await;
     json_ok(SessionRevokeOutcome {
         revoked_count: revoked_count as u64,
-        revoked_grant_ids: Vec::new(),
+        revoked_session_grant_ids: Vec::new(),
     })
 }
 
@@ -486,7 +486,7 @@ async fn verify_cross_session_revoke_proof(
         &actor,
         &service_id,
         &session_device,
-        body.target_grant_id.as_ref(),
+        body.target_session_grant_id.as_ref(),
         body.target_device_id.as_ref(),
         body.all_sessions == Some(true),
         None,

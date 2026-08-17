@@ -1099,7 +1099,7 @@ diesel::table! {
         invitee_id -> Nullable<Text>,
         invite_delivery_target -> Nullable<Jsonb>,
         introduction_evidence_digest -> Nullable<Text>,
-        third_party_id -> Nullable<Jsonb>,
+        third_party_invite -> Nullable<Jsonb>,
         join_rule_snapshot -> Nullable<Jsonb>,
         invite_token -> Text,
         status -> Text,

@@ -1191,13 +1191,13 @@ impl ProjectionState {
         } else {
             None
         };
-        let owner = operation
-            .payload
-            .get("owner")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
-            .or_else(|| creator.clone());
-        // Display state is carried only by `ak.realm.profile`.
+        // `realm_create_payload` is `{object}` with `additionalProperties:false`,
+        // so `ak.realm.create` cannot carry a top-level `owner`: the owning
+        // principal is the genesis authority-root controller.
+        let owner = creator.clone();
+        // `ak.realm.profile` is the one Realm facet payload that carries the
+        // human-readable title (`zh/models/realm-and-space.md`); no other kind
+        // handled here declares it.
         let title = operation
             .payload
             .get("title")

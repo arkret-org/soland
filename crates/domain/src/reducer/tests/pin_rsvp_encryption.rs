@@ -35,7 +35,7 @@ fn encrypted_payload_with_scheme(event_kind: &str, scheme: &str, algorithm: &str
         "epoch": 7u64,
         "content_type": "application/json",
         "ciphertext": "Y2lwaGVydGV4dA",
-        "aad_visibility_event_id": "hidden",
+        "aad_visibility_event_id_kind": "hidden",
         "aad": {
             "realm_id": REALM_ID,
             "scope_digest": scope_digest,

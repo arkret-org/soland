@@ -55,17 +55,14 @@ fn consent_revoke_rejects_untyped_consent_id() {
     assert_eq!(err.0, arkret_wire::ErrorCode::SCHEMA_VIOLATION);
 }
 
-/// `relation.md` §2 — `effective_scope` is reducer-stamped. The payload root is
-/// already closed by `relation_create_payload`, so the only reachable carrier
-/// is the open `relation_create_object` under `payload.relation`.
+/// `relation.md` §2 — `effective_scope` is reducer-stamped, and on the create
+/// side the criterion now belongs entirely to the schema:
+/// `relation_create_object` reuses `relation.schema.json` and forbids `id`,
+/// `type` and `effective_scope`, so the SDK artifact schema rejects the payload
+/// before this validator runs. Re-deciding it here would be a second, drifting
+/// copy of a rule the schema owns.
 #[test]
-fn relation_create_rejects_actor_supplied_effective_scope() {
-    let canonical = wire_operation(
-        arkret_wire::EventKind::RelationCreate,
-        json!({"relation": {"kind": "references", "from_ref": TEST_STRAND, "to_ref": TEST_STRAND_2}}),
-    );
-    assert_eq!(validate_relation_operation_payload(&canonical), Ok(()));
-
+fn relation_create_effective_scope_ban_is_owned_by_the_payload_schema() {
     let stamped = wire_operation(
         arkret_wire::EventKind::RelationCreate,
         json!({"relation": {
@@ -75,14 +72,13 @@ fn relation_create_rejects_actor_supplied_effective_scope() {
             "effective_scope": {"kind": "circle", "circle_id": TEST_CIRCLE}
         }}),
     );
-    assert_eq!(
-        validate_relation_operation_payload(&stamped),
-        Err("effective_scope_reducer_managed")
-    );
+    assert_eq!(validate_relation_operation_payload(&stamped), Ok(()));
 }
 
-/// The same rule applies to the `patch` document, whose paths the schema does
-/// not enumerate.
+/// The update side stays in this layer because `payload.patch` is the generic
+/// `ak.schema.patch.v1` document, whose paths no generic patch schema can
+/// enumerate. The forbidden set comes from the SDK projection of
+/// `registry/reducer-managed-path-registry.json`, never from a local list.
 #[test]
 fn relation_update_rejects_effective_scope_patch_paths() {
     let canonical = wire_operation(

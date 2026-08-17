@@ -34,10 +34,10 @@ impl ProjectionState {
         if arkret_identifiers::DidCoreId::new(inviter.clone()).is_err() {
             return rejected("inviter_invalid");
         }
-        let Some(third_party_id) = payload.get("third_party_id") else {
-            return rejected("third_party_id_required");
+        let Some(third_party_invite) = payload.get("third_party_invite") else {
+            return rejected("third_party_invite_required");
         };
-        if let Err(reason) = validate_third_party_id(third_party_id) {
+        if let Err(reason) = validate_third_party_invite(third_party_invite) {
             return rejected(reason);
         }
         let Some(expires_at) = payload
@@ -61,7 +61,7 @@ impl ProjectionState {
                 invitee: existing.invitee.clone(),
             };
         }
-        if let Some(token_commitment) = token_commitment_for_third_party(third_party_id)
+        if let Some(token_commitment) = token_commitment_for_third_party(third_party_invite)
             && self.invites.values().any(|existing| {
                 existing.invite_id != invite_id
                     && matches!(
@@ -69,7 +69,7 @@ impl ProjectionState {
                         INVITE_STATE_PENDING | INVITE_STATE_CLAIMED
                     )
                     && existing
-                        .third_party_id
+                        .third_party_invite
                         .as_ref()
                         .and_then(token_commitment_for_third_party)
                         == Some(token_commitment)
@@ -83,7 +83,7 @@ impl ProjectionState {
             realm_id: realm_id.clone(),
             inviter,
             invitee: None,
-            third_party_id: Some(third_party_id.clone()),
+            third_party_invite: Some(third_party_invite.clone()),
             join_rule_snapshot,
             state: INVITE_STATE_PENDING.to_owned(),
             expires_at,
@@ -176,10 +176,10 @@ impl ProjectionState {
         {
             return rejected("not_found");
         }
-        let Some(third_party_id) = invite.third_party_id.as_ref() else {
+        let Some(third_party_invite) = invite.third_party_invite.as_ref() else {
             return rejected("not_found");
         };
-        let Some(expected_token_commitment) = token_commitment_for_third_party(third_party_id)
+        let Some(expected_token_commitment) = token_commitment_for_third_party(third_party_invite)
         else {
             return rejected("not_found");
         };
@@ -191,7 +191,7 @@ impl ProjectionState {
         }
         if let Err(reason) = validate_binding_proof(
             binding_proof,
-            third_party_id,
+            third_party_invite,
             &invite.realm_id,
             &subject_id,
             &claim_nonce,
@@ -209,7 +209,7 @@ impl ProjectionState {
             &subject_id,
             &token_commitment,
             &claim_nonce,
-            third_party_id,
+            third_party_invite,
         ) {
             return rejected(reason);
         }
@@ -274,13 +274,13 @@ fn valid_hash(value: &str) -> bool {
     value.starts_with("sha256:") && arkret_identifiers::Hash::new(value.to_owned()).is_ok()
 }
 
-fn validate_third_party_id(third_party_id: &Value) -> Result<(), &'static str> {
-    let Some(object) = third_party_id.as_object() else {
-        return Err("third_party_id_not_object");
+fn validate_third_party_invite(third_party_invite: &Value) -> Result<(), &'static str> {
+    let Some(object) = third_party_invite.as_object() else {
+        return Err("third_party_invite_not_object");
     };
     for forbidden in ["token", "plaintext_token", "email", "phone", "address"] {
         if object.contains_key(forbidden) {
-            return Err("third_party_id_contains_plaintext_secret");
+            return Err("third_party_invite_contains_plaintext_secret");
         }
     }
     let Some(service_id) = object
@@ -306,21 +306,21 @@ fn validate_third_party_id(third_party_id: &Value) -> Result<(), &'static str> {
     {
         return Err("unsupported_max_claims");
     }
-    if let Some(token_commitment) = token_commitment_for_third_party(third_party_id)
+    if let Some(token_commitment) = token_commitment_for_third_party(third_party_invite)
         && !valid_hash(token_commitment)
     {
         return Err("token_commitment_invalid");
     }
     if object.get("lookup_table_ref").is_none()
-        && token_commitment_for_third_party(third_party_id).is_none()
+        && token_commitment_for_third_party(third_party_invite).is_none()
     {
         return Err("token_commitment_required");
     }
     Ok(())
 }
 
-fn token_commitment_for_third_party(third_party_id: &Value) -> Option<&str> {
-    third_party_id
+fn token_commitment_for_third_party(third_party_invite: &Value) -> Option<&str> {
+    third_party_invite
         .get("token_commitment")
         .and_then(Value::as_str)
         .map(str::trim)
@@ -343,7 +343,7 @@ fn validate_claim_join_rule(snapshot: &Value) -> Result<(), &'static str> {
 #[allow(clippy::too_many_arguments)]
 fn validate_binding_proof(
     binding_proof: &Value,
-    third_party_id: &Value,
+    third_party_invite: &Value,
     invite_realm_id: &str,
     subject_id: &str,
     claim_nonce: &str,
@@ -357,7 +357,7 @@ fn validate_binding_proof(
         .validate()
         .map_err(|_| "binding_proof_invalid")?;
     let service_id = binding_proof.verification_service_id.as_str();
-    let expected_service_id = third_party_id
+    let expected_service_id = third_party_invite
         .get("verification_service_id")
         .and_then(Value::as_str)
         .unwrap_or_default();
@@ -387,7 +387,7 @@ fn validate_binding_proof(
         return Err("binding_proof_expired");
     }
     let method = binding_proof.verification_method.as_str();
-    if let Some(expected_method) = third_party_id
+    if let Some(expected_method) = third_party_invite
         .get("verification_public_key")
         .and_then(Value::as_str)
         .map(str::trim)
@@ -407,7 +407,7 @@ fn validate_subject_proof(
     subject_id: &str,
     token_commitment: &str,
     claim_nonce: &str,
-    third_party_id: &Value,
+    third_party_invite: &Value,
 ) -> Result<(), &'static str> {
     if !subject_proof.is_object() {
         return Err("subject_proof_not_object");
@@ -439,7 +439,7 @@ fn validate_subject_proof(
         realm_id,
         token_commitment,
         claim_nonce,
-        third_party_id
+        third_party_invite
             .get("verification_service_id")
             .and_then(Value::as_str)
             .unwrap_or_default(),
@@ -477,8 +477,8 @@ fn value_allowlists_service(policy_bundle: &Value, service_id: &str) -> bool {
 }
 
 fn cleanup_third_party_projection(invite: &mut InviteProjection) {
-    if let Some(third_party_id) = invite.third_party_id.as_mut()
-        && let Some(object) = third_party_id.as_object_mut()
+    if let Some(third_party_invite) = invite.third_party_invite.as_mut()
+        && let Some(object) = third_party_invite.as_object_mut()
     {
         for key in [
             "token_salt",

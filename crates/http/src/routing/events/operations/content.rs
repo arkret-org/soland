@@ -330,28 +330,25 @@ pub(crate) fn validate_patch_semantic_safety(
     Ok(())
 }
 
+/// Whether a patch path addresses a field the generic update surface does not
+/// own.
+///
+/// The path set is the canonical projection of
+/// `registry/reducer-managed-path-registry.json`; this module never spells its
+/// own list. This admission hop dispatches on the operation alone and has no
+/// object kind, so it applies the conservative object-agnostic superset
+/// (`event-and-patch.md` §4.2.5); a hop that knows the object kind decides with
+/// `arkret_wire::patch::reducer_managed_patch_reason` instead.
 fn patch_path_targets_reducer_managed(path: &str) -> bool {
-    const FIELDS: &[&str] = &[
-        "id",
-        "schema",
-        "realm_id",
-        "created_by",
-        "created_at",
-        "updated_by",
-        "updated_at",
-        "state",
-        "state_changed_at",
-        "stage_changed_at",
-        "deleted_at",
-        "effective_scope",
-        "actor_kind",
-    ];
     let root = patch_segment_head(path.split('.').next().unwrap_or_default());
-    if root == Some("object") {
-        let second = path.split('.').nth(1).unwrap_or_default();
-        return patch_segment_head(second).is_some_and(|field| FIELDS.contains(&field));
-    }
-    root.is_some_and(|field| FIELDS.contains(&field))
+    let field = if root == Some("object") {
+        patch_segment_head(path.split('.').nth(1).unwrap_or_default())
+    } else {
+        root
+    };
+    field.is_some_and(|field| {
+        arkret_wire::generated::REDUCER_MANAGED_ANY_OBJECT_PATCH_PATHS.contains(&field)
+    })
 }
 
 /// Whether a patch path addresses a registered redactable content-carrier slot.

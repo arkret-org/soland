@@ -68,7 +68,11 @@ fn push_target_salt_epoch_id_at(now: chrono::DateTime<chrono::Utc>) -> String {
     format!("ak.push.salt_epoch.{epoch}")
 }
 
-fn derive_push_target_id(
+const PUSH_TARGET_ID_PREFIX: &str = "ak:pseudonym:push:";
+
+/// The keyed pairwise tag both the push target pseudonym and the gateway-local
+/// registration handle are spelled from.
+fn derive_push_target_tag(
     root_key: &[u8; 32],
     recipient_service_id: &str,
     principal_id: &str,
@@ -87,7 +91,38 @@ fn derive_push_target_id(
         .map_err(|error| AppError::internal(format!("push target canonicalize: {error}")))?;
     let epoch_key = hmac_sha256(root_key, salt_epoch_id.as_bytes());
     let tag = hmac_sha256(&epoch_key, &canonical);
-    Ok(format!("ak:pseudonym:push:{}", URL_SAFE_NO_PAD.encode(tag)))
+    Ok(URL_SAFE_NO_PAD.encode(tag))
+}
+
+fn derive_push_target_id(
+    root_key: &[u8; 32],
+    recipient_service_id: &str,
+    principal_id: &str,
+    device_id: &str,
+    push_route_id: &str,
+    salt_epoch_id: &str,
+) -> Result<String, AppError> {
+    let tag = derive_push_target_tag(
+        root_key,
+        recipient_service_id,
+        principal_id,
+        device_id,
+        push_route_id,
+        salt_epoch_id,
+    )?;
+    Ok(format!("{PUSH_TARGET_ID_PREFIX}{tag}"))
+}
+
+/// Gateway-local registration handle for one accepted push registration.
+///
+/// `push-operations.schema.json#/$defs/registration_id` is an
+/// `opaque_correlation` carrier, so it MUST NOT borrow the `ak:` typed-ID
+/// lexical space the push target pseudonym owns. It is spelled from the same
+/// pairwise tag, so re-registering an unchanged route stays idempotent without
+/// minting a second correlation key.
+fn push_registration_id(push_target_tag: &str) -> Result<arkret_wire::OpaqueLocalId, AppError> {
+    arkret_wire::OpaqueLocalId::new(format!("push_registration:{push_target_tag}"))
+        .map_err(|error| AppError::internal(format!("push registration id is invalid: {error}")))
 }
 #[salvo::oapi::endpoint(operation_id = "ak.edge.push.command.register_device", tags("interop"))]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.push.command.register_device"))]
@@ -126,7 +161,7 @@ pub(super) async fn push_register(
     }
     let push_route_id = push_route_id_for_registration(&body);
     let salt_epoch_id = push_target_salt_epoch_id_at(now());
-    let push_target_id = derive_push_target_id(
+    let push_target_tag = derive_push_target_tag(
         state.deliveries().push_target_hmac_key(),
         state.service_id(),
         &principal_id,
@@ -134,7 +169,8 @@ pub(super) async fn push_register(
         &push_route_id,
         &salt_epoch_id,
     )?;
-    let registration_id = push_target_id.clone();
+    let push_target_id = format!("{PUSH_TARGET_ID_PREFIX}{push_target_tag}");
+    let registration_id = push_registration_id(&push_target_tag)?;
     let previous_registrations = state
         .deliveries()
         .push_devices()

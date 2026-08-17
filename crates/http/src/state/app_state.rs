@@ -248,7 +248,7 @@ pub struct AppStateRuntime {
 /// Realm identity derived from the canonical deterministic development
 /// genesis fixture. Keep this single source shared with integration fixtures;
 /// changing the genesis payload must update the derived identity atomically.
-pub const DEVELOPMENT_DEMO_REALM_ID: &str = "ak:realm:AXCdgLbAeYp5QLVoa0yGlSTeJyScWZ-qB7wNKozodFBn";
+pub const DEVELOPMENT_DEMO_REALM_ID: &str = "ak:realm:ASDJh1a6wjwTKbZmepxQWwIYMSht_GCvmOA4orilzkK2";
 
 pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
     let mut realms = RealmDirectoryIndex::new();
@@ -1623,6 +1623,23 @@ impl AppState {
     #[doc(hidden)]
     pub fn test_hlc(&self) -> &ServiceClock {
         self.hlc()
+    }
+
+    /// Stored push-device registrations, for tests that need the
+    /// service-private `push_target_id`.
+    ///
+    /// `push_register_device_outcome` returns only the gateway-local
+    /// `registration_id`: the push target pseudonym is this service's private
+    /// linkability namespace and is never published to the client
+    /// (`zh/discovery/push-notifications.md`). A test that needs it reads the
+    /// stored registration, exactly as the notify path does.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub async fn test_push_devices(&self) -> Vec<serde_json::Value> {
+        self.deliveries()
+            .push_devices()
+            .await
+            .expect("push device registrations are readable")
     }
 
     #[cfg(any(test, feature = "test-support"))]

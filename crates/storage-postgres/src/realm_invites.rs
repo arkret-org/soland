@@ -21,7 +21,7 @@ struct RealmInviteRow {
     #[diesel(sql_type = Nullable<Text>)]
     introduction_evidence_digest: Option<String>,
     #[diesel(sql_type = Nullable<Jsonb>)]
-    third_party_id: Option<Value>,
+    third_party_invite: Option<Value>,
     #[diesel(sql_type = Nullable<Jsonb>)]
     join_rule_snapshot: Option<Value>,
     #[diesel(sql_type = Text)]
@@ -53,7 +53,7 @@ impl From<RealmInviteRow> for RealmInviteRecord {
             invitee: row.invitee,
             invite_delivery_target: row.invite_delivery_target,
             introduction_evidence_digest: row.introduction_evidence_digest,
-            third_party_id: row.third_party_id,
+            third_party_invite: row.third_party_invite,
             join_rule_snapshot: row.join_rule_snapshot,
             invite_token: row.invite_token,
             status: row.status,
@@ -73,7 +73,7 @@ impl RealmInviteStore for PgRealmInviteStore {
         let invite_id_token =
             ids::event_token_part_or_schema_violation(invite_id, "invite")?.to_vec();
         sql_query(
-            "SELECT id, realm_id, inviter_id AS inviter, invitee_id AS invitee, invite_delivery_target, introduction_evidence_digest, third_party_id, join_rule_snapshot, invite_token, status, claim_nonces, expires_at, created_at, updated_at \
+            "SELECT id, realm_id, inviter_id AS inviter, invitee_id AS invitee, invite_delivery_target, introduction_evidence_digest, third_party_invite, join_rule_snapshot, invite_token, status, claim_nonces, expires_at, created_at, updated_at \
              FROM realm_invites WHERE id = $1",
         )
         .bind::<Binary, _>(invite_id_token)
@@ -93,7 +93,7 @@ impl RealmInviteStore for PgRealmInviteStore {
         crate::realm_identity::ensure_realm_pk(&mut conn, &record.realm_id).await?;
         sql_query(
             "INSERT INTO realm_invites \
-             (id, realm_id, inviter_id, invitee_id, invite_delivery_target, introduction_evidence_digest, third_party_id, join_rule_snapshot, invite_token, status, claim_nonces, expires_at, created_at, updated_at) \
+             (id, realm_id, inviter_id, invitee_id, invite_delivery_target, introduction_evidence_digest, third_party_invite, join_rule_snapshot, invite_token, status, claim_nonces, expires_at, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
@@ -101,7 +101,7 @@ impl RealmInviteStore for PgRealmInviteStore {
                 invitee_id = EXCLUDED.invitee_id, \
                 invite_delivery_target = EXCLUDED.invite_delivery_target, \
                 introduction_evidence_digest = EXCLUDED.introduction_evidence_digest, \
-                third_party_id = EXCLUDED.third_party_id, \
+                third_party_invite = EXCLUDED.third_party_invite, \
                 join_rule_snapshot = EXCLUDED.join_rule_snapshot, \
                 invite_token = EXCLUDED.invite_token, \
                 status = EXCLUDED.status, \
@@ -115,7 +115,7 @@ impl RealmInviteStore for PgRealmInviteStore {
         .bind::<Nullable<Text>, _>(&record.invitee)
         .bind::<Nullable<Jsonb>, _>(&record.invite_delivery_target)
         .bind::<Nullable<Text>, _>(&record.introduction_evidence_digest)
-        .bind::<Nullable<Jsonb>, _>(&record.third_party_id)
+        .bind::<Nullable<Jsonb>, _>(&record.third_party_invite)
         .bind::<Nullable<Jsonb>, _>(&record.join_rule_snapshot)
         .bind::<Text, _>(&record.invite_token)
         .bind::<Text, _>(&record.status)
@@ -141,10 +141,10 @@ impl RealmInviteStore for PgRealmInviteStore {
             "UPDATE realm_invites \
              SET invite_token = '', updated_at = $2 \
              WHERE invite_token = $1 \
-               AND third_party_id IS NOT NULL \
+               AND third_party_invite IS NOT NULL \
                AND status = 'pending' \
                AND (expires_at IS NULL OR expires_at > $2) \
-             RETURNING id, realm_id, inviter_id AS inviter, invitee_id AS invitee, invite_delivery_target, introduction_evidence_digest, third_party_id, join_rule_snapshot, invite_token, status, claim_nonces, expires_at, created_at, updated_at",
+             RETURNING id, realm_id, inviter_id AS inviter, invitee_id AS invitee, invite_delivery_target, introduction_evidence_digest, third_party_invite, join_rule_snapshot, invite_token, status, claim_nonces, expires_at, created_at, updated_at",
         )
         .bind::<Text, _>(token_digest)
         .bind::<Timestamptz, _>(now)
@@ -160,10 +160,10 @@ impl RealmInviteStore for PgRealmInviteStore {
             "UPDATE realm_invites \
              SET status = 'expired', \
                  invite_token = '', \
-                 third_party_id = ((((((third_party_id - 'token_salt') - 'token_salt_id') - 'lookup_table_ref') - 'pepper') - 'pepper_id') - 'token_commitment'), \
+                 third_party_invite = ((((((third_party_invite - 'token_salt') - 'token_salt_id') - 'lookup_table_ref') - 'pepper') - 'pepper_id') - 'token_commitment'), \
                  updated_at = $2 \
              WHERE invite_token = $1 \
-               AND third_party_id IS NOT NULL \
+               AND third_party_invite IS NOT NULL \
                AND status = 'pending' \
                AND expires_at IS NOT NULL \
                AND expires_at <= $2",
@@ -182,7 +182,7 @@ impl RealmInviteStore for PgRealmInviteStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id, realm_id, inviter_id AS inviter, invitee_id AS invitee, invite_delivery_target, introduction_evidence_digest, third_party_id, join_rule_snapshot, invite_token, status, claim_nonces, expires_at, created_at, updated_at \
+            "SELECT id, realm_id, inviter_id AS inviter, invitee_id AS invitee, invite_delivery_target, introduction_evidence_digest, third_party_invite, join_rule_snapshot, invite_token, status, claim_nonces, expires_at, created_at, updated_at \
              FROM realm_invites ORDER BY created_at ASC, pk ASC",
         )
         .load::<RealmInviteRow>(&mut *conn)

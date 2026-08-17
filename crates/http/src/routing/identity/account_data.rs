@@ -320,14 +320,14 @@ async fn admit_caller_signed_account_data_set(
             "set_event payload.key must equal the path account_data_key",
         ));
     }
-    // `owner` is optional and redundant with `actor_id`; when present it MUST agree
-    // (`zh/discovery/client-preferences.md` §180).
-    if let Some(owner) = payload_str("owner")
-        && owner != session.actor
+    // `holder_id` is optional and redundant with `actor_id`; when present it MUST
+    // agree (`zh/discovery/client-preferences.md` §3.5).
+    if let Some(holder_id) = payload_str("holder_id")
+        && holder_id != session.actor
     {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
-            "set_event payload.owner must equal the Event actor_id",
+            "set_event payload.holder_id must equal the Event actor_id",
         ));
     }
     let has_tombstone = event

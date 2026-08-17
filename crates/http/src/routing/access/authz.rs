@@ -760,8 +760,8 @@ fn invite_record_to_sdk(
             .map_err(|error| AppError::internal(error.to_string()))?,
         invite_delivery_target,
         introduction_evidence_digest,
-        third_party_id: invite
-            .third_party_id
+        third_party_invite: invite
+            .third_party_invite
             .and_then(|value| serde_json::from_value(value).ok()),
         join_rule_snapshot: invite
             .join_rule_snapshot

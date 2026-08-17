@@ -1909,7 +1909,7 @@ pub struct RealmMetadata {
     pub plaintext_visible_service_classes:
         BTreeMap<String, BTreeSet<arkret_wire::PlaintextDataClassKind>>,
     pub minimal_metadata_realm: bool,
-    /// Realm ceiling on encrypted-envelope `aad_visibility_event_id`, re-derived
+    /// Realm ceiling on encrypted-envelope `aad_visibility_event_id_kind`, re-derived
     /// from every accepted `ak.realm.policy_bundle` revision
     /// (`crypto-media/encryption-and-audit.md` §2.8). `hidden` by default and
     /// when the bundle declares no `aad_visibility` component.
@@ -1987,7 +1987,7 @@ pub struct RealmInviteState {
     pub invitee: Option<String>,
     pub invite_delivery_target: Option<Value>,
     pub introduction_evidence_digest: Option<String>,
-    pub third_party_id: Option<Value>,
+    pub third_party_invite: Option<Value>,
     pub join_rule_snapshot: Option<Value>,
     pub invite_token: String,
     pub status: String,

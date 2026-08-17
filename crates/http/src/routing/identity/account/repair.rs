@@ -787,7 +787,7 @@ async fn accept_agent_relay(
             "agent_id": record.agent_id,
             "verification_method": record.verification_method,
             "authorized_event_ref": record.authorized_event_ref,
-            "message_id": record.message_id,
+            "device_message_id": record.message_id,
         }),
     )?;
     Ok(DirectConversationRepairEnqueueOutcome {
@@ -858,7 +858,7 @@ fn target_outcome_from_markers(
         .map(|marker| {
             json!({
                 "recipient_device_id": marker.recipient_device_id,
-                "message_id": marker.message_id,
+                "device_message_id": marker.message_id,
             })
         })
         .collect::<Vec<_>>();

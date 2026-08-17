@@ -302,7 +302,7 @@ pub fn ryw_receipt_durable_event_allowed(active_profiles: &[String]) -> bool {
 /// The declaration is the `profiles[]` / `active_profiles[]` array the T09/T12
 /// path already reads off the same payloads. Used to latch
 /// `RealmMetaRecord::minimal_metadata_realm` so the message-ingest aad gate can
-/// fail closed on non-`hidden` `aad_visibility_event_id`.
+/// fail closed on non-`hidden` `aad_visibility_event_id_kind`.
 pub fn payload_declares_minimal_metadata_realm(payload: &serde_json::Value) -> bool {
     ["profiles", "active_profiles"].iter().any(|field| {
         payload
@@ -332,7 +332,7 @@ pub fn policy_bundle_aad_visibility_ceiling(
     bundle.get("policy_revision")?;
     let declared = bundle
         .get("aad_visibility")
-        .and_then(|component| component.get("event_id"))
+        .and_then(|component| component.get("event_id_kind"))
         .and_then(serde_json::Value::as_str)
         .and_then(|value| {
             serde_json::from_value::<arkret_models_crypto::EncryptedEnvelopeAadVisibility>(

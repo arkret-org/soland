@@ -262,7 +262,7 @@ pub(super) fn accountability_grant_value_active_for(
 ///
 /// For a Realm that has declared the minimal-metadata profile, an encrypted
 /// `ak.message.create` / reaction envelope MUST set
-/// `aad_visibility_event_id="hidden"`; any other value (or an absent
+/// `aad_visibility_event_id_kind="hidden"`; any other value (or an absent
 /// discriminator on an encrypted envelope) is rejected so message-id exposure
 /// cannot widen reaction-frequency correlation from per-`target_ref` to
 /// per-message. The fail-closed decision is delegated to the SDK helper
@@ -313,15 +313,15 @@ pub(super) async fn validate_minimal_metadata_aad_policy(
         // Minimal-metadata Realm + encrypted envelope with no / unrecognised
         // discriminator → cannot prove it is `hidden`, so fail closed.
         return Err(
-            "minimal_metadata_realm encrypted envelope requires aad_visibility_event_id=hidden",
+            "minimal_metadata_realm encrypted envelope requires aad_visibility_event_id_kind=hidden",
         );
     };
     arkret_policy::enforce_minimal_metadata_aad(&visibility, true)
-        .map_err(|_| "minimal_metadata_realm requires aad_visibility_event_id=hidden")
+        .map_err(|_| "minimal_metadata_realm requires aad_visibility_event_id_kind=hidden")
 }
 
 /// `encryption-and-audit.md` §§2.3.2 / 2.8 — reject an encrypted envelope that
-/// declares an `aad_visibility_event_id` wider than the Realm ceiling.
+/// declares an `aad_visibility_event_id_kind` wider than the Realm ceiling.
 ///
 /// This is the Realm-policy gate, orthogonal to the minimal-metadata profile
 /// gate above: that one pins `hidden` for one profile, this one enforces
@@ -380,7 +380,7 @@ fn encrypted_envelope_of(operation: &Operation) -> Option<&Value> {
         .or_else(|| operation.payload.get("encrypted_payload"))?;
     // Account Data has a separate, closed AEAD envelope and AAD transcript
     // (`models/account-data.md` section 3). It intentionally has no
-    // `aad_visibility_event_id`: that discriminator belongs to the canonical
+    // `aad_visibility_event_id_kind`: that discriminator belongs to the canonical
     // Realm E2EE content envelope from `encryption-and-audit.md` section 2.3.
     // Treating both domains as the same envelope makes every valid encrypted
     // Account Data value fail the Realm disclosure ceiling.
@@ -392,7 +392,7 @@ fn encrypted_envelope_of(operation: &Operation) -> Option<&Value> {
     Some(envelope)
 }
 
-/// SEC-08 — map the wire `aad_visibility_event_id` discriminator on an encrypted
+/// SEC-08 — map the wire `aad_visibility_event_id_kind` discriminator on an encrypted
 /// envelope to the SDK [`arkret_models_crypto::encrypted_envelope::EncryptedEnvelopeAadVisibility`]
 /// enum. Returns `None` when the field is missing or carries an unknown value, which the caller
 /// treats as fail-closed for a minimal-metadata Realm.
@@ -403,8 +403,8 @@ pub(in crate::routing::events::operations) fn minimal_metadata_aad_visibility(
     // The discriminator lives at the envelope root; tolerate a nested
     // `envelope` wrapper as shown in the spec wire example.
     let raw = envelope
-        .pointer("/aad_visibility_event_id")
-        .or_else(|| envelope.pointer("/envelope/aad_visibility_event_id"))
+        .pointer("/aad_visibility_event_id_kind")
+        .or_else(|| envelope.pointer("/envelope/aad_visibility_event_id_kind"))
         .and_then(Value::as_str)?;
     match raw {
         "hidden" => Some(EncryptedEnvelopeAadVisibility::Hidden),

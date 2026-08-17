@@ -839,7 +839,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     .await;
     let realm_id = created_realm["realm_id"].as_str().unwrap().to_owned();
     assert!(realm_id.starts_with("ak:realm:"));
-    assert_eq!(created_realm["owner"], "did:web:alice.example");
+    assert_eq!(created_realm["owner_id"], "did:web:alice.example");
 
     let hidden_realm: Value =
         TestClient::post("http://server/_arkret/find/directory/search-realms")
@@ -878,8 +878,8 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     );
     assert_eq!(bob_invites["invites"][0]["realm_id"], invite_realm_id);
     // invite.schema.json + decision 0008: a direct member invite (invitee is a
-    // DID, no third_party_id) carries the recipient binding in
-    // invite_delivery_target.recipient_service_id; third_party_id exists only for
+    // DID, no third_party_invite) carries the recipient binding in
+    // invite_delivery_target.recipient_service_id; third_party_invite exists only for
     // third-party/3PID invites and only holds a verification_service_id.
     assert_eq!(
         bob_invites["invites"][0]["invite_delivery_target"]["recipient_service_id"],

@@ -677,7 +677,7 @@ impl InternalEventAdmission {
                 }
                 InternalEventBinding::AccountData { owner, key } => {
                     object.get("payload").is_some_and(|payload| {
-                        payload.get("owner").and_then(Value::as_str) == Some(owner.as_str())
+                        payload.get("holder_id").and_then(Value::as_str) == Some(owner.as_str())
                             && payload.get("key").and_then(Value::as_str) == Some(key.as_str())
                     })
                 }

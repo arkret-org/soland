@@ -13,10 +13,10 @@ pub trait RealmInviteStore: Send + Sync {
 }
 #[doc(hidden)]
 pub fn remove_third_party_active_material(
-    third_party_id: &mut Option<Value>,
+    third_party_invite: &mut Option<Value>,
     remove_commitment: bool,
 ) {
-    let Some(value) = third_party_id.as_mut() else {
+    let Some(value) = third_party_invite.as_mut() else {
         return;
     };
     let Some(object) = value.as_object_mut() else {

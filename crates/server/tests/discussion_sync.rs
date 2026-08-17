@@ -266,7 +266,7 @@ async fn seed_pending_invite(
                 "recipient_service_kind": "principal_server"
             })),
             introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
-            third_party_id: None,
+            third_party_invite: None,
             join_rule_snapshot: Some(json!({"join_rule": "invite"})),
             invite_token: new_prefixed_uuid7("ak:invite-token:"),
             status: "pending".to_owned(),
@@ -489,7 +489,7 @@ async fn send_circle_scoped_encrypted_message(
             "epoch": 1,
             "content_type": "application/vnd.arkret.message+json",
             "ciphertext": "Q2lyY2xlQ2lwaGVydGV4dA",
-            "aad_visibility_event_id": "hidden",
+            "aad_visibility_event_id_kind": "hidden",
             "aad": {
                 "realm_id": realm_id,
                 "event_kind": "ak.message.create"

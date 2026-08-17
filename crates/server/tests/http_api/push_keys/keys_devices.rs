@@ -603,9 +603,22 @@ async fn auth_keys_device_messages_and_blobs_work() {
             .await
             .unwrap();
     assert_eq!(push_registration["ok"], true);
-    let push_target_id = push_registration["registration_id"]
-        .as_str()
-        .expect("push registration returns push_target_id");
+    assert!(
+        push_registration["registration_id"]
+            .as_str()
+            .expect("push registration returns a gateway-local registration id")
+            .starts_with("push_registration:"),
+        "registration_id is an opaque_correlation handle, not the push target pseudonym"
+    );
+    // The push target pseudonym is service-private and is never published to
+    // the client, so a notify caller reads it from the stored registration.
+    let push_target_id = soland_test_support::registered_push_target_id(
+        &state,
+        "ak:did_core:web:alice.example",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+    )
+    .await;
+    let push_target_id = push_target_id.as_str();
 
     let mut plaintext_push = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&serde_json::json!({

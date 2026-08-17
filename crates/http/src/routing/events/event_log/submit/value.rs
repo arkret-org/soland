@@ -1468,7 +1468,7 @@ pub(super) async fn submit_event_value_with_context(
                 .and_then(Value::as_object)
                 .and_then(|payload| {
                     Some((
-                        payload.get("owner")?.as_str()?,
+                        payload.get("holder_id")?.as_str()?,
                         payload.get("key")?.as_str()?,
                     ))
                 })
@@ -3050,13 +3050,13 @@ async fn preflight_account_data_cas(
         )
     })?;
     let owner = payload
-        .get("owner")
+        .get("holder_id")
         .and_then(Value::as_str)
         .ok_or_else(|| {
             SubmitOneError::new(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "account_data payload is missing owner",
+                "account_data payload is missing holder_id",
             )
         })?;
     let key = payload.get("key").and_then(Value::as_str).ok_or_else(|| {

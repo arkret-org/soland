@@ -29,7 +29,7 @@ pub struct IdentityRegistryDescription {
     pub claimed_profiles: Vec<IdentityRegistryClaimedProfile>,
     pub verified_profiles: Vec<IdentityRegistryVerifiedProfile>,
     pub experimental_features: Vec<String>,
-    pub compat_surfaces: Vec<String>,
+    pub interop_surfaces: Vec<String>,
     pub development_mode: bool,
     pub rate_limit_policy: IdentityRegistryRateLimitPolicy,
     pub supported_did_methods: Vec<String>,
@@ -188,7 +188,7 @@ pub(crate) async fn identity_describe(
         }],
         verified_profiles: Vec::new(),
         experimental_features,
-        compat_surfaces: Vec::new(),
+        interop_surfaces: Vec::new(),
         development_mode: state.config().development_mode,
         rate_limit_policy: IdentityRegistryRateLimitPolicy {
             kind: "windowed".to_owned(),

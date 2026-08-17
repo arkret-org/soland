@@ -1391,14 +1391,14 @@ impl ProjectionService {
             .ok_or("invite_id_required")?;
         let state = self.state.lock();
         let invite = state.invites.get(invite_id).ok_or("not_found")?;
-        let third_party_id = invite.third_party_id.as_ref().ok_or("not_found")?;
-        let expected_verification_public_key = third_party_id
+        let third_party_invite = invite.third_party_invite.as_ref().ok_or("not_found")?;
+        let expected_verification_public_key = third_party_invite
             .get("verification_public_key")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or("verification_public_key_required")?;
-        let expected_verification_service_id = third_party_id
+        let expected_verification_service_id = third_party_invite
             .get("verification_service_id")
             .and_then(Value::as_str)
             .map(str::trim)
@@ -1408,7 +1408,7 @@ impl ProjectionService {
             "expires_at": arkret_canonical::format_timestamp_canonical(invite.expires_at),
             "invite_id": invite.invite_id,
             "realm_id": invite.realm_id,
-            "third_party_id": third_party_id,
+            "third_party_invite": third_party_invite,
         });
         let invite_digest = arkret_canonical::canonical_sha256(&invite_record)
             .map_err(|_| "invite_digest_invalid")?;

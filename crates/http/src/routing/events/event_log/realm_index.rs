@@ -191,7 +191,7 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
         return false;
     }
     let actor_is_invitee = invite.invitee.as_deref() == Some(actor);
-    let is_pending_third_party = invite.status == "pending" && invite.third_party_id.is_some();
+    let is_pending_third_party = invite.status == "pending" && invite.third_party_invite.is_some();
     let is_duplicate_claim_by_invitee = invite.status == "claimed" && actor_is_invitee;
     if !is_pending_third_party && !is_duplicate_claim_by_invitee {
         return false;

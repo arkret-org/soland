@@ -46,39 +46,39 @@ pub(crate) fn validate_invite_third_party_payload(
     if arkret_identifiers::DidFullId::new(inviter).is_err() {
         return Err("ak.invite.third_party inviter must be a DID");
     }
-    let third_party_id = invite_value(payload, invite, "third_party_id")
+    let third_party_invite = invite_value(payload, invite, "third_party_invite")
         .and_then(Value::as_object)
-        .ok_or("ak.invite.third_party third_party_id must be an object")?;
+        .ok_or("ak.invite.third_party third_party_invite must be an object")?;
     for forbidden in ["token", "plaintext_token", "email", "phone", "address"] {
-        if third_party_id.contains_key(forbidden) {
+        if third_party_invite.contains_key(forbidden) {
             return Err("ak.invite.third_party must not carry plaintext token or 3PID");
         }
     }
-    let service_id = third_party_id
+    let service_id = third_party_invite
         .get("verification_service_id")
         .and_then(Value::as_str)
-        .ok_or("third_party_id.verification_service_id is required")?;
+        .ok_or("third_party_invite.verification_service_id is required")?;
     if arkret_identifiers::DidCoreId::new(service_id.to_owned()).is_err() {
-        return Err("third_party_id.verification_service_id must be a DID");
+        return Err("third_party_invite.verification_service_id must be a DID");
     }
-    if third_party_id
+    if third_party_invite
         .get("verification_public_key")
         .and_then(Value::as_str)
         .is_none_or(str::is_empty)
     {
-        return Err("third_party_id.verification_public_key is required");
+        return Err("third_party_invite.verification_public_key is required");
     }
-    if let Some(token_commitment) = third_party_id
+    if let Some(token_commitment) = third_party_invite
         .get("token_commitment")
         .and_then(Value::as_str)
         && arkret_identifiers::Hash::new(token_commitment.to_owned()).is_err()
     {
-        return Err("third_party_id.token_commitment must be a hash");
+        return Err("third_party_invite.token_commitment must be a hash");
     }
-    if third_party_id.get("lookup_table_ref").is_none()
-        && third_party_id.get("token_commitment").is_none()
+    if third_party_invite.get("lookup_table_ref").is_none()
+        && third_party_invite.get("token_commitment").is_none()
     {
-        return Err("third_party_id requires token_commitment or lookup_table_ref");
+        return Err("third_party_invite requires token_commitment or lookup_table_ref");
     }
     let expires_at = invite_field(payload, invite, "expires_at", "expires_at")
         .ok_or("ak.invite.third_party requires expires_at")?;
@@ -255,9 +255,9 @@ pub(crate) fn validate_account_data_set_payload(operation: &Operation) -> Result
     }
     let owner = operation
         .payload
-        .get("owner")
+        .get("holder_id")
         .and_then(Value::as_str)
-        .ok_or("account_data.set requires owner")?;
+        .ok_or("account_data.set requires holder_id")?;
     crate::routing::account_data_encryption::validate_encrypted_account_data_value_for_actor(
         key,
         &operation.payload,
@@ -492,23 +492,21 @@ fn validate_read_cursor_hlc(hlc: &str) -> Result<(), &'static str> {
     }
     Ok(())
 }
-/// `relation.md` §2 stateless admission guard for `ak.relation.create` /
-/// `.update` / `.tombstone`.
+/// `relation.md` §2 stateless admission guard for `ak.relation.update`.
 ///
-/// This layer only rejects what is decidable without the projection pre-state:
-/// `effective_scope` is reducer-stamped (§2 table), so an actor-supplied one is
-/// `schema_violation` / `effective_scope_reducer_managed` — a sub-reason
-/// `error-code-registry.json` classifies under `schema_validation`, which is
-/// why it stays on the schema side of the split.
+/// The create side is gone from this layer on purpose:
+/// `event-payload.schema.json#/$defs/relation_create_object` now reuses
+/// `relation.schema.json` and additionally forbids `id`, `type` and
+/// `effective_scope`, so the SDK artifact schema that runs immediately before
+/// this validator already rejects an actor-supplied `effective_scope` on
+/// `payload.relation`. Re-checking it here would be a second, drifting copy of
+/// a criterion the schema owns.
 ///
-/// `event-payload.schema.json#/$defs/relation_create_payload`,
-/// `#/$defs/relation_update_payload` and `#/$defs/relation_tombstone_payload`
-/// are all `additionalProperties:false`, so a payload-root `effective_scope` is
-/// already rejected by the SDK artifact schema that runs immediately before
-/// this validator. The two places the schema still admits the name are the open
-/// `#/$defs/relation_create_object` (`additionalProperties:true`) under
-/// `payload.relation` and the free-form `#/$defs/patch` document under
-/// `payload.patch`.
+/// The update side stays because `payload.patch` is the generic
+/// `ak.schema.patch.v1` document, which cannot express a per-object forbidden
+/// set. The set is read from the SDK projection of
+/// `registry/reducer-managed-path-registry.json`; this module never spells its
+/// own list.
 ///
 /// Derived-edge admission (`watches`, container `contains`), endpoint scope and
 /// every tombstone decision need the Relation pre-state, so they live solely in
@@ -517,22 +515,13 @@ fn validate_read_cursor_hlc(hlc: &str) -> Result<(), &'static str> {
 pub(crate) fn validate_relation_operation_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let in_create_object = operation
-        .payload
-        .get("relation")
-        .and_then(Value::as_object)
-        .is_some_and(|relation| relation.contains_key("effective_scope"));
-    let in_patch = operation
-        .payload
-        .get("patch")
-        .and_then(Value::as_object)
-        .is_some_and(|patch| {
-            patch
-                .keys()
-                .any(|path| path == "effective_scope" || path.starts_with("effective_scope."))
-        });
-    if in_create_object || in_patch {
-        return Err("effective_scope_reducer_managed");
+    let Some(patch) = operation.payload.get("patch").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    for path in patch.keys() {
+        if let Some(reason) = arkret_wire::patch::reducer_managed_patch_reason("relation", path) {
+            return Err(reason);
+        }
     }
     Ok(())
 }
@@ -809,7 +798,7 @@ mod tests {
             "epoch": 7u64,
             "content_type": "application/json",
             "ciphertext": "Y2lwaGVydGV4dA",
-            "aad_visibility_event_id": "hidden",
+            "aad_visibility_event_id_kind": "hidden",
             "aad": {
                 "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
                 "scope_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",

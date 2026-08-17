@@ -162,7 +162,7 @@ async fn signed_account_data_submission(
     let mut payload = json!({
         "key": account_data_key,
         "expected_revision": expected_revision,
-        "owner": actor_core,
+        "holder_id": actor_core,
         "updated_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
     });
     if let Some(content) = content {
@@ -554,7 +554,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         arkret_wire::EventKind::AccountDataSet.as_str()
     );
     assert_eq!(event["actor_id"].as_str(), Some(actor_core.as_str()));
-    assert_eq!(event["payload"]["owner"], actor_core.as_str());
+    assert_eq!(event["payload"]["holder_id"], actor_core.as_str());
     assert_eq!(event["payload"]["expected_revision"], 1);
     assert_eq!(event["payload"]["body"], "second");
     assert!(
@@ -676,7 +676,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         json!({
             "key": "ak.account.blocklist",
             "expected_revision": 0,
-            "owner": alice_actor_core.as_str(),
+            "holder_id": alice_actor_core.as_str(),
             "body": plaintext_blocklist,
             "updated_at": "2026-05-21T00:00:00.000Z",
         }),
@@ -715,7 +715,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         json!({
             "key": "ak.account.blocklist",
             "expected_revision": 0,
-            "owner": alice_actor_core.as_str(),
+            "holder_id": alice_actor_core.as_str(),
             "body": encrypted_blocklist.clone(),
             "updated_at": "2026-05-21T00:00:00.000Z",
         }),
@@ -747,7 +747,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         json!({
             "key": "ak.account.blocklist",
             "expected_revision": 0,
-            "owner": alice_actor_core.as_str(),
+            "holder_id": alice_actor_core.as_str(),
             "body": encrypted_account_data_value(
                 &alice_actor_core,
                 "ak.account.blocklist",
@@ -960,9 +960,20 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
         .await
         .unwrap();
     assert_eq!(registered["ok"], true);
-    let push_target_id = registered["registration_id"]
-        .as_str()
-        .expect("register-device returns push target registration id");
+    assert!(
+        registered["registration_id"]
+            .as_str()
+            .expect("register-device returns a gateway-local registration id")
+            .starts_with("push_registration:"),
+        "registration_id is an opaque_correlation handle, not the push target pseudonym"
+    );
+    let push_target_id = soland_test_support::registered_push_target_id(
+        &state,
+        "ak:did_core:web:alice.example",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+    )
+    .await;
+    let push_target_id = push_target_id.as_str();
 
     let rejected = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&json!({

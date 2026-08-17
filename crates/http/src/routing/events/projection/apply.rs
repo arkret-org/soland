@@ -1435,7 +1435,7 @@ mod tests {
             "created_at": "2026-06-30T00:00:00.000Z"
         });
         let created_at = chrono::Utc::now();
-        // Production assigns the `message_id` in the storage `append`
+        // Production assigns the `device_message_id` in the storage `append`
         // (the persistence adapter assigns a message id); this test builds the
         // record by hand, so inject it the same way the store would.
         let projected = RealmKeyShareProjectedDeviceMessage {
@@ -1446,7 +1446,7 @@ mod tests {
         };
         let mut content = serde_json::to_value(projected).unwrap();
         content.as_object_mut().unwrap().insert(
-            "message_id".to_owned(),
+            "device_message_id".to_owned(),
             json!("ak:device_message:0196419b-1000-7000-8000-000000000099"),
         );
         let record = DeviceMessageState {

@@ -306,7 +306,7 @@ pub struct RealmInviteRecord {
     pub invitee: Option<String>,
     pub invite_delivery_target: Option<Value>,
     pub introduction_evidence_digest: Option<String>,
-    pub third_party_id: Option<Value>,
+    pub third_party_invite: Option<Value>,
     pub join_rule_snapshot: Option<Value>,
     pub invite_token: String,
     pub status: String,
@@ -350,10 +350,10 @@ pub struct RealmMetaRecord {
     /// `ak.realm.policy_bundle` operation. Once observed it latches true:
     /// soland is not the committer and never relaxes a minimal-metadata Realm
     /// back to a wider profile on its own. Drives the server-side
-    /// defence-in-depth reject of non-`hidden` `aad_visibility_event_id` on
+    /// defence-in-depth reject of non-`hidden` `aad_visibility_event_id_kind` on
     /// encrypted `ak.message.create` / reaction envelopes.
     pub minimal_metadata_realm: bool,
-    /// Realm ceiling on encrypted-envelope `aad_visibility_event_id`, projected
+    /// Realm ceiling on encrypted-envelope `aad_visibility_event_id_kind`, projected
     /// from the `aad_visibility` component of the accepted
     /// `ak.realm.policy_bundle` (`crypto-media/encryption-and-audit.md` §2.8).
     ///

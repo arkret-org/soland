@@ -324,7 +324,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
         .test_persistence()
         .push_devices()
         .register(serde_json::json!({
-            "registration_id": "ak:push:device-a-main",
+            "registration_id": "push:device-a-main",
             "actor": actor,
             "device_id": device_a,
             "push_gateway": "https://floria.example",
@@ -337,7 +337,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
         .test_persistence()
         .push_devices()
         .register(serde_json::json!({
-            "registration_id": "ak:push:device-a-voip",
+            "registration_id": "push:device-a-voip",
             "actor": actor,
             "device_id": device_a,
             "push_gateway": "https://floria.example",
@@ -350,7 +350,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
         .test_persistence()
         .push_devices()
         .register(serde_json::json!({
-            "registration_id": "ak:push:device-b-main",
+            "registration_id": "push:device-b-main",
             "actor": actor,
             "device_id": device_b,
             "push_gateway": "https://floria.example",
@@ -420,7 +420,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
     assert!(
         device_b_push_devices_before_logout
             .iter()
-            .any(|registration| registration["registration_id"] == "ak:push:device-b-main"),
+            .any(|registration| registration["registration_id"] == "push:device-b-main"),
         "the control device must have the test push registration before logout"
     );
 

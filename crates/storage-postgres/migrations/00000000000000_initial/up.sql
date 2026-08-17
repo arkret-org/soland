@@ -1816,7 +1816,7 @@ CREATE TABLE public.realm_invites (
     invitee_id text,
     invite_delivery_target jsonb,
     introduction_evidence_digest text,
-    third_party_id jsonb,
+    third_party_invite jsonb,
     join_rule_snapshot jsonb,
     invite_token text NOT NULL,
     status text NOT NULL,
@@ -1831,7 +1831,7 @@ ALTER TABLE ONLY public.realm_invites
 
 CREATE INDEX realm_invites_invitee_idx ON public.realm_invites USING btree (invitee_id);
 
-CREATE UNIQUE INDEX realm_invites_live_direct_unique_idx ON public.realm_invites USING btree (realm_id, invitee_id) WHERE ((invitee_id IS NOT NULL) AND (third_party_id IS NULL) AND (status = ANY (ARRAY['pending'::text, 'claimed'::text, 'send_failed'::text])));
+CREATE UNIQUE INDEX realm_invites_live_direct_unique_idx ON public.realm_invites USING btree (realm_id, invitee_id) WHERE ((invitee_id IS NOT NULL) AND (third_party_invite IS NULL) AND (status = ANY (ARRAY['pending'::text, 'claimed'::text, 'send_failed'::text])));
 
 CREATE INDEX realm_invites_realm_idx ON public.realm_invites USING btree (realm_id);
 

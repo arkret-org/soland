@@ -61,7 +61,7 @@ fn authored_call_id() -> String {
 
 fn device_message_target(kind: &str, content: Value) -> Value {
     serde_json::json!({
-        "message_id": new_prefixed_uuid7("ak:device_message:"),
+        "device_message_id": new_prefixed_uuid7("ak:device_message:"),
         "kind": kind,
         "content": content,
         "expires_at": arkret_canonical::format_timestamp_canonical(

@@ -765,6 +765,20 @@ pub fn apply_registered_cba_plane(
 /// accepted Seal on its frontier, and its Moves have to cite *that* — the
 /// synthetic basis of [`realm_basis_seal`] belongs to a Realm that was stood up
 /// straight in `AppState` and covers nothing the notary ever sealed.
+/// `auth_context.key_id` is a bounded opaque local id, not a typed object id:
+/// `event-envelope.schema.json` anchors it to `^(?!ak:)[A-Za-z0-9._:-]{1,128}$`
+/// because the `ak:` lexical space belongs to typed object ids and
+/// responsibility DIDs alone (`zh/models/common-fields.md` section 2.1). The
+/// fixture verification method carries `#ak:device:<uuid>` as its fragment, so
+/// the sigil is stripped before the fragment becomes a key id.
+fn fixture_auth_context_key_id(verification_method: &str) -> arkret_wire::OpaqueLocalId {
+    let fragment = verification_method
+        .split_once('#')
+        .map_or(verification_method, |(_, key)| key);
+    arkret_wire::OpaqueLocalId::new(fragment.strip_prefix("ak:").unwrap_or(fragment))
+        .expect("fixture auth_context key id is an opaque local id")
+}
+
 pub fn apply_registered_cba_plane_seal(
     event: &mut arkret_wire::Event,
     verification_method: &str,
@@ -791,9 +805,7 @@ pub fn apply_registered_cba_plane_seal(
                     .expect("fixture verification method DID"),
                 )
                 .expect("fixture verification method projection"),
-                key_id: verification_method
-                    .split_once('#')
-                    .map_or_else(|| verification_method.to_owned(), |(_, key)| key.to_owned()),
+                key_id: fixture_auth_context_key_id(verification_method),
                 key_epoch: 0,
                 credential_epoch: None,
             });

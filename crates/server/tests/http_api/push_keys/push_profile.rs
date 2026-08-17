@@ -415,10 +415,15 @@ async fn push_profile_and_moderation_contracts_work() {
         .unwrap();
     assert_eq!(push["ok"], true);
     // push-notifications.md §5.1: push_target_id is the HMAC-derived pairwise
-    // pseudonym (ak:pseudonym:push:...) the server returns as registration_id; a
-    // hard-coded stable "ak:push_target:<uuid>" is both rejected by
-    // is_valid_push_target_id and can never match the registration.
-    let push_target = push["registration_id"].as_str().unwrap().to_owned();
+    // pseudonym (ak:pseudonym:push:...). It is service-private and is never
+    // published to the client, so a notify caller reads it from the stored
+    // registration; the client only sees the gateway-local registration_id.
+    let push_target = soland_test_support::registered_push_target_id(
+        &state,
+        fixture_actor_core_id(ALICE).as_str(),
+        ALICE_DEVICE,
+    )
+    .await;
 
     let initial_rules = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
     assert!(
@@ -436,7 +441,7 @@ async fn push_profile_and_moderation_contracts_work() {
         serde_json::json!({
             "key": "ak.push_rules",
             "expected_revision": 0,
-            "owner": fixture_actor_core_id("did:web:alice.example"),
+            "holder_id": fixture_actor_core_id("did:web:alice.example"),
             "body": {
                 "rules": [{
                     "rule_id": "mute-device",
@@ -1022,7 +1027,7 @@ async fn signal_fanout_is_filtered_by_signed_scope_only() {
         serde_json::json!({
             "key": "ak.account.blocklist",
             "expected_revision": 0,
-            "owner": fixture_actor_core_id(bob),
+            "holder_id": fixture_actor_core_id(bob),
             "body": serde_json::to_value(
                 arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
                     &[7u8; 32],
@@ -1346,8 +1351,14 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
         .unwrap();
     assert_eq!(registered["ok"], true);
     // push-notifications.md §5.1: notify MUST use the HMAC-derived pairwise
-    // pseudonym returned as registration_id, not a stable literal id.
-    let push_target = registered["registration_id"].as_str().unwrap().to_owned();
+    // pseudonym, which stays service-private; the client only sees the
+    // gateway-local registration_id.
+    let push_target = soland_test_support::registered_push_target_id(
+        &state,
+        fixture_actor_core_id(ALICE).as_str(),
+        ALICE_DEVICE,
+    )
+    .await;
 
     let stale_notify: arkret_models_integration::models_push::PushNotifyOutcome =
         TestClient::post("http://server/_arkret/edge/push/notify")

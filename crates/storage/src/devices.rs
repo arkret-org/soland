@@ -133,10 +133,10 @@ pub fn device_message_expires_at(message: &DeviceMessageRecord) -> chrono::DateT
 #[doc(hidden)]
 pub fn ensure_device_message_id(message: &mut DeviceMessageRecord) {
     if let Some(content) = message.content.as_object_mut()
-        && !content.contains_key("message_id")
+        && !content.contains_key("device_message_id")
     {
         content.insert(
-            "message_id".to_owned(),
+            "device_message_id".to_owned(),
             Value::String(crate::ids::generate("device_message")),
         );
     }

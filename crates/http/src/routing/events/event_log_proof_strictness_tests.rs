@@ -311,7 +311,7 @@ async fn policy_bundle_media_plaintext_reads_realm_meta() {
 #[tokio::test]
 async fn minimal_metadata_realm_rejects_non_hidden_aad() {
     // SEC-08 — a minimal-metadata Realm rejects an encrypted message whose
-    // aad_visibility_event_id is not `hidden`, and accepts `hidden`.
+    // aad_visibility_event_id_kind is not `hidden`, and accepts `hidden`.
     let state = make_state(true);
     let realm_id = "ak:realm:AYsBNj0a7HLJqOe9-NntccoPREQfK8qFgK7Oon_kf_JO";
     let now = chrono::Utc::now();
@@ -361,7 +361,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
                 "epoch": 12,
                 "content_type": "application/json",
                 "ciphertext": "base64url",
-                "aad_visibility_event_id": visibility,
+                "aad_visibility_event_id_kind": visibility,
                 "aad": {
                     "realm_id": realm_id,
                     "scope_digest": scope_digest,
@@ -393,14 +393,14 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
     let err = validate_operation_policy(&state, std::slice::from_ref(&routing))
         .await
         .unwrap_err();
-    assert!(err.contains("aad_visibility_event_id=hidden"));
+    assert!(err.contains("aad_visibility_event_id_kind=hidden"));
 
     // Encrypted envelope with no discriminator → fail closed.
     let mut no_disc = encrypted_envelope("hidden");
     no_disc["encrypted_content"]
         .as_object_mut()
         .unwrap()
-        .remove("aad_visibility_event_id");
+        .remove("aad_visibility_event_id_kind");
     let missing = message_op(no_disc);
     assert!(
         validate_operation_policy(&state, std::slice::from_ref(&missing))
@@ -877,7 +877,7 @@ async fn a_non_minimal_realm_still_needs_a_declared_aad_visibility_ceiling() {
                 "epoch": 12,
                 "content_type": "application/json",
                 "ciphertext": "base64url",
-                "aad_visibility_event_id": "routing_digest",
+                "aad_visibility_event_id_kind": "routing_digest",
                 "aad": {
                     "realm_id": realm_id,
                     "scope_digest": scope_digest,
@@ -1996,7 +1996,7 @@ fn data_event_object_with_refs(
             .collect::<Vec<Value>>(),
         "auth_context": {
             "did": DATA_EVENT_ACTOR,
-            "key_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            "key_id": "device:01904100-0000-7000-8000-a11ce0000001",
             "key_epoch": 1
         }
     })
@@ -2022,7 +2022,7 @@ fn data_event_e2ee_object_with_refs(
                 "epoch": 7,
                 "content_type": "application/json",
                 "ciphertext": "base64url",
-                "aad_visibility_event_id": "hidden",
+                "aad_visibility_event_id_kind": "hidden",
                 "payload_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
                 "aad_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
             }

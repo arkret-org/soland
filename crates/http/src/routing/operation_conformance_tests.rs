@@ -105,9 +105,13 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // to_ref} form has no derivable cell value.
             payload: json!({
                 "relation": {
-                    "kind": "blocks",
+                    "schema": "ak.schema.relation.v1",
+                    "realm_id": "ak:realm:Ac1aCK8aQdnkYImvdH3DFjq4jDCP198pXYWCGzGuVyj5",
+                    "relation_kind": "blocks",
                     "from_ref": "ak:strand:AUtQ1IrDq4bUl2tchpqyVaLFC99If4UbReAATcBFDUhp",
-                    "to_ref": "ak:morph:AQ-DRvjAp7PmXKkjoqk8vbmRDFZoSMbThbqNN0j6guzb"
+                    "to_ref": "ak:morph:AQ-DRvjAp7PmXKkjoqk8vbmRDFZoSMbThbqNN0j6guzb",
+                    "created_by": "ak:did_core:web:alice.example",
+                    "created_at": "2026-08-18T00:00:00.000Z"
                 }
             }),
             valid: true,

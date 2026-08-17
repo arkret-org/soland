@@ -12,10 +12,10 @@
 //!
 //! The SDK helper already enforces the wire-shape half of §9.0.1 — production
 //! proof material, `payload_digest` equality against the proofs-stripped
-//! canonical request, single-valued `audience`, absent `domain` and absent
-//! `proof_purpose`. This module adds the receiver-side half: the audience must
-//! name *this* service, the proof must be fresh, and the JWS must verify under
-//! the family's originator.
+//! canonical request, single-valued `audience` in `did_core_id` form, absent
+//! `domain` and absent `proof_purpose`. This module adds the receiver-side
+//! half: the audience must name *this* service, the proof must be fresh, and
+//! the JWS must verify under the family's originator.
 
 use super::*;
 
@@ -62,9 +62,11 @@ async fn directory_requester_proof_verified(
     if proof.kind != proof_kind::DETACHED_JWS {
         return false;
     }
-    // §9.0.1: `audience` MUST be the single target Directory service DID. The
-    // SDK rejects a multi-valued audience; the receiver decides whether the
-    // single value actually names it.
+    // §9.0.1: `audience` MUST be the target Directory `service_id` published by
+    // `ak.find.directory.read.describe`, single valued and in `did_core_id`
+    // form. The SDK rejects any other shape; the receiver decides whether the
+    // single value actually names it. `state.service_id()` is this deployment's
+    // projected core id, which is exactly the value describe publishes.
     let Some(Audience::Single(audience)) = proof.audience.as_ref() else {
         return false;
     };
@@ -183,8 +185,16 @@ mod tests {
         let target = target_body(Vec::new());
         let handle = handle_body(Vec::new());
 
-        let target_proof = proof("did:web:svc.invalid", now, target.payload_digest().unwrap());
-        let handle_proof = proof("did:web:svc.invalid", now, handle.payload_digest().unwrap());
+        let target_proof = proof(
+            "ak:did_core:web:svc.invalid",
+            now,
+            target.payload_digest().unwrap(),
+        );
+        let handle_proof = proof(
+            "ak:did_core:web:svc.invalid",
+            now,
+            handle.payload_digest().unwrap(),
+        );
 
         let target_bytes = target.proof_binding_bytes(&target_proof).unwrap();
         let handle_bytes = handle.proof_binding_bytes(&handle_proof).unwrap();
@@ -208,7 +218,11 @@ mod tests {
     fn a_sibling_family_proof_never_reproduces_the_handled_family_transcript() {
         let now = Utc::now();
         let handle = handle_body(Vec::new());
-        let handle_proof = proof("did:web:svc.invalid", now, handle.payload_digest().unwrap());
+        let handle_proof = proof(
+            "ak:did_core:web:svc.invalid",
+            now,
+            handle.payload_digest().unwrap(),
+        );
         let signed_bytes = handle.proof_binding_bytes(&handle_proof).unwrap();
 
         // Replay the same proof into resolve_target, re-stamping only the
@@ -232,7 +246,11 @@ mod tests {
         let now = Utc::now();
         let handle = handle_body(Vec::new());
         let target = target_body(Vec::new());
-        let borrowed = proof("did:web:svc.invalid", now, handle.payload_digest().unwrap());
+        let borrowed = proof(
+            "ak:did_core:web:svc.invalid",
+            now,
+            handle.payload_digest().unwrap(),
+        );
         assert!(target.proof_binding_bytes(&borrowed).is_err());
     }
 
@@ -244,23 +262,25 @@ mod tests {
         let target = target_body(Vec::new());
         let digest = target.payload_digest().unwrap();
 
-        let mut with_domain = proof("did:web:svc.invalid", now, digest.clone());
+        let mut with_domain = proof("ak:did_core:web:svc.invalid", now, digest.clone());
         with_domain.domain = Some("directory-proof-test.invalid".to_owned());
         assert!(target.proof_binding_bytes(&with_domain).is_err());
 
-        let mut with_purpose = proof("did:web:svc.invalid", now, digest);
+        let mut with_purpose = proof("ak:did_core:web:svc.invalid", now, digest);
         with_purpose.proof_purpose = Some(arkret_wire::PayloadProofPurpose::HolderAcceptance);
         assert!(target.proof_binding_bytes(&with_purpose).is_err());
     }
 
-    /// §9.0.1: `audience` MUST be the single target Directory service DID.
+    /// §9.0.1: `audience` MUST be the single target Directory `service_id` in
+    /// `did_core_id` form. A well-formed core id naming a different directory
+    /// is still rejected.
     #[tokio::test]
     async fn an_audience_naming_another_service_is_rejected() {
         let state = state();
         let now = Utc::now();
         let body = target_body(Vec::new());
         let wrong = proof(
-            "did:web:some-other-directory.invalid",
+            "ak:did_core:web:some-other-directory.invalid",
             now,
             body.payload_digest().unwrap(),
         );

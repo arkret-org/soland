@@ -13,7 +13,7 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
         "ak.mls.application",
         encrypted_envelope("ak.mls.application", ciphertext),
     );
-    let message_id = target["message_id"].as_str().unwrap().to_owned();
+    let device_message_id = target["device_message_id"].as_str().unwrap().to_owned();
 
     TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -37,7 +37,10 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
         .await
         .unwrap();
     let content = &delivered["messages"][0]["content"];
-    assert_eq!(delivered["messages"][0]["message_id"], message_id);
+    assert_eq!(
+        delivered["messages"][0]["device_message_id"],
+        device_message_id
+    );
     assert_eq!(content["ciphertext"], ciphertext);
     assert!(content.get("plaintext").is_none());
     assert!(
@@ -49,7 +52,7 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
 }
 
 #[tokio::test]
-async fn message_id_idempotency_survives_ack_and_rejects_canonical_target_conflicts() {
+async fn device_message_id_idempotency_survives_ack_and_rejects_canonical_target_conflicts() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let sender_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -219,7 +222,7 @@ async fn message_id_idempotency_survives_ack_and_rejects_canonical_target_confli
     assert_eq!(conflict["error"]["code"], "duplicate_conflict");
     assert_eq!(
         conflict["error"]["details"]["reason_code"],
-        "message_id_conflict"
+        "device_message_id_conflict"
     );
 }
 

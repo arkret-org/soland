@@ -103,7 +103,7 @@ pub struct InviteProjection {
     pub realm_id: String,
     pub inviter: String,
     pub invitee: Option<String>,
-    pub third_party_id: Option<Value>,
+    pub third_party_invite: Option<Value>,
     pub join_rule_snapshot: Value,
     pub state: String,
     pub expires_at: chrono::DateTime<chrono::Utc>,

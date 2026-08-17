@@ -179,7 +179,7 @@ pub(in crate::routing::events) async fn freeze_invite_cancel_pre_state(
     if record.realm_id != event.realm_id.as_str() {
         return Err("reducer_projection_failed");
     }
-    if record.third_party_id.is_none() && record.invitee.is_none() {
+    if record.third_party_invite.is_none() && record.invitee.is_none() {
         return Err("reducer_projection_failed");
     }
 
@@ -205,10 +205,10 @@ pub(in crate::routing::events) async fn freeze_invite_cancel_pre_state(
         ("state".to_owned(), Value::String(record.status)),
         (
             "third_party".to_owned(),
-            Value::Bool(record.third_party_id.is_some()),
+            Value::Bool(record.third_party_invite.is_some()),
         ),
     ]);
-    if record.third_party_id.is_none()
+    if record.third_party_invite.is_none()
         && let Some(invitee) = record.invitee
     {
         let member_cell = arkret_identifiers::CellRef::new(format!(
@@ -403,7 +403,10 @@ async fn project_invite_terminal_operation(
     record.status = terminal_status.to_owned();
     record.updated_at = Some(operation.created_at);
     record.invite_token.clear();
-    remove_third_party_active_material(&mut record.third_party_id, terminal_status != "rejected");
+    remove_third_party_active_material(
+        &mut record.third_party_invite,
+        terminal_status != "rejected",
+    );
     let realm_id = record.realm_id.clone();
     match invites.put(record).await {
         Ok(()) => {
@@ -501,9 +504,10 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
         tracing::warn!(invite_id = %invite_id, "ak.invite.third_party missing inviter");
         return;
     };
-    let Some(third_party_id) = invite_value_field(payload, invite, "third_party_id").cloned()
+    let Some(third_party_invite) =
+        invite_value_field(payload, invite, "third_party_invite").cloned()
     else {
-        tracing::warn!(invite_id = %invite_id, "ak.invite.third_party missing third_party_id");
+        tracing::warn!(invite_id = %invite_id, "ak.invite.third_party missing third_party_invite");
         return;
     };
     let expires_at = invite_string_field(payload, invite, "expires_at", "expires_at")
@@ -520,11 +524,11 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
     if matches!(invites.get(&invite_id).await, Ok(Some(_))) {
         return;
     }
-    let mut third_party_id = Some(third_party_id);
+    let mut third_party_invite = Some(third_party_invite);
     let mut status = "pending".to_owned();
     if expires_at.is_some_and(|expires_at| expires_at <= operation.created_at) {
         status = "expired".to_owned();
-        remove_third_party_active_material(&mut third_party_id, true);
+        remove_third_party_active_material(&mut third_party_invite, true);
     }
     let record = RealmInviteRecord {
         invite_id: invite_id.clone(),
@@ -533,7 +537,7 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
         invitee: None,
         invite_delivery_target: None,
         introduction_evidence_digest: None,
-        third_party_id,
+        third_party_invite,
         join_rule_snapshot: Some(join_rule_snapshot),
         invite_token: String::new(),
         status,
@@ -592,7 +596,7 @@ pub(super) async fn project_invite_claim_operation(state: &AppState, operation: 
         record.status = "expired".to_owned();
         record.updated_at = Some(operation.created_at);
         record.invite_token.clear();
-        remove_third_party_active_material(&mut record.third_party_id, true);
+        remove_third_party_active_material(&mut record.third_party_invite, true);
         let _ = invites.put(record).await;
         return;
     }
@@ -600,7 +604,7 @@ pub(super) async fn project_invite_claim_operation(state: &AppState, operation: 
         return;
     }
     if record
-        .third_party_id
+        .third_party_invite
         .as_ref()
         .and_then(third_party_token_commitment)
         != Some(token_commitment.as_str())
@@ -622,7 +626,7 @@ pub(super) async fn project_invite_claim_operation(state: &AppState, operation: 
     record.invitee = Some(subject_id);
     record.updated_at = Some(operation.created_at);
     record.invite_token.clear();
-    remove_third_party_active_material(&mut record.third_party_id, false);
+    remove_third_party_active_material(&mut record.third_party_invite, false);
     match invites.put(record).await {
         Ok(()) => touch_realm(state, operation.realm_id.as_str()).await,
         Err(error) => {
@@ -697,7 +701,7 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
                 && existing.invitee.as_deref() == Some(invitee.as_str())
                 && existing.invite_delivery_target == invite_delivery_target
                 && existing.introduction_evidence_digest == introduction_evidence_digest
-                && existing.third_party_id.is_none()
+                && existing.third_party_invite.is_none()
                 && existing.claim_nonces.is_empty()
                 && existing.expires_at == expires_at
                 && existing.created_at == operation.created_at;
@@ -744,7 +748,7 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
         .any(|existing| {
             existing.realm_id == operation.realm_id.as_str()
                 && existing.invitee.as_deref() == Some(invitee.as_str())
-                && existing.third_party_id.is_none()
+                && existing.third_party_invite.is_none()
                 && matches!(
                     existing.status.as_str(),
                     "pending" | "claimed" | "send_failed"
@@ -775,7 +779,7 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
         invitee: Some(invitee.as_str().to_owned()),
         invite_delivery_target,
         introduction_evidence_digest,
-        third_party_id: None,
+        third_party_invite: None,
         join_rule_snapshot: None,
         invite_token,
         // The accepted create always initializes the reducer lifecycle at
@@ -873,16 +877,19 @@ fn string_field(payload: &serde_json::Map<String, Value>, field: &str) -> Option
         .map(ToOwned::to_owned)
 }
 
-fn third_party_token_commitment(third_party_id: &Value) -> Option<&str> {
-    third_party_id
+fn third_party_token_commitment(third_party_invite: &Value) -> Option<&str> {
+    third_party_invite
         .get("token_commitment")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
 }
 
-fn remove_third_party_active_material(third_party_id: &mut Option<Value>, remove_commitment: bool) {
-    let Some(value) = third_party_id.as_mut() else {
+fn remove_third_party_active_material(
+    third_party_invite: &mut Option<Value>,
+    remove_commitment: bool,
+) {
+    let Some(value) = third_party_invite.as_mut() else {
         return;
     };
     let Some(object) = value.as_object_mut() else {
@@ -931,7 +938,7 @@ fn claim_binding_matches(
         return false;
     };
     if record
-        .third_party_id
+        .third_party_invite
         .as_ref()
         .and_then(|third_party| third_party.get("verification_service_id"))
         .and_then(Value::as_str)
@@ -1159,7 +1166,7 @@ mod tests {
                     })
                 }),
                 introduction_evidence_digest: None,
-                third_party_id: third_party.then(|| {
+                third_party_invite: third_party.then(|| {
                     json!({
                         "kind": "email",
                         "token_commitment": format!("sha256:{}", "a".repeat(64))
@@ -1364,7 +1371,7 @@ mod tests {
                 invitee: Some(invitee.to_owned()),
                 invite_delivery_target: Some(delivery_target.clone()),
                 introduction_evidence_digest: Some(evidence_digest.clone()),
-                third_party_id: None,
+                third_party_invite: None,
                 join_rule_snapshot: Some(json!({"private_delivery": true})),
                 invite_token: "private-token".to_owned(),
                 status: "pending".to_owned(),
@@ -1450,7 +1457,7 @@ mod tests {
                 invitee: Some(invitee.to_owned()),
                 invite_delivery_target: None,
                 introduction_evidence_digest: None,
-                third_party_id: None,
+                third_party_invite: None,
                 join_rule_snapshot: None,
                 invite_token: "private-token".to_owned(),
                 status: "pending".to_owned(),

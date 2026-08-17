@@ -140,7 +140,7 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
     event.seal_ref = Some(seal.id);
     event.auth_context = Some(arkret_wire::AuthContext {
         actor_id: event.actor_id.clone(),
-        key_id: "notary-key".to_owned(),
+        key_id: arkret_wire::OpaqueLocalId::new("notary-key").expect("notary key id is opaque"),
         key_epoch: 0,
         credential_epoch: None,
     });

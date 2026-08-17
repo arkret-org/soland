@@ -1622,7 +1622,7 @@ fn the_bundle_projects_every_registered_component() {
     );
     let payload = serde_json::json!({
         "policy_revision": 1,
-        "aad_visibility": {"event_id": "routing_digest"},
+        "aad_visibility": {"event_id_kind": "routing_digest"},
         "mls_send_pause": "advisory",
         "relaxed_window_max_ms": 60000,
         "media_service_decrypts": true,

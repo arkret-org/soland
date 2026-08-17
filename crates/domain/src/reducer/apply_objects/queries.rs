@@ -825,7 +825,7 @@ impl ProjectionState {
             .unwrap_or_default()
     }
 
-    /// Realm ceiling on encrypted-envelope `aad_visibility_event_id`, resolved
+    /// Realm ceiling on encrypted-envelope `aad_visibility_event_id_kind`, resolved
     /// from the accepted policy bundle. An absent component is the `hidden`
     /// ceiling, never an unchecked one.
     pub fn realm_aad_visibility_ceiling(

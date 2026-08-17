@@ -797,7 +797,7 @@ pub fn describe(
     // defaults here so out-of-tree typed consumers see the correct shape
     // and pass `ServiceDescribe::validate`.
     // Round 4 — typed entries match `service-describe.schema.json`
-    // (`claimed_profiles[*]`, `compat_surfaces[*]`). The routing-layer
+    // (`claimed_profiles[*]`, `interop_surfaces[*]`). The routing-layer
     // `apply_claim_level_partition` populates these SDK-typed fields
     // before the response is serialized so the JSON wire shape and the
     // typed surface can never drift.
@@ -827,7 +827,7 @@ pub fn describe(
         "index.query.local_projection".to_owned(),
         "org.arkret.soland.profile.limited_server.v1".to_owned(),
     ];
-    let compat_surfaces = Vec::new();
+    let interop_surfaces = Vec::new();
     let service_id = arkret_wire::DidCoreId::from(
         arkret_wire::project_full_id_to_core_id(&service_resolution.full_id)
             .expect("service resolution DidFullId must project to a stable service id"),
@@ -906,7 +906,7 @@ pub fn describe(
         claimed_profiles,
         verified_profiles,
         experimental_features,
-        compat_surfaces,
+        interop_surfaces,
         development_mode,
         // service-describe.schema.json requires `rate_limit_policy` or
         // `rate_limit_policy_id`. Derive the advertised per-class policy from the SAME runtime

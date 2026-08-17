@@ -153,7 +153,7 @@ pub(super) async fn project_account_data_set(
     };
     let owner = operation
         .payload
-        .get("owner")
+        .get("holder_id")
         .and_then(Value::as_str)
         .unwrap_or(origin);
     if owner != origin && origin != state.service_id() {
@@ -161,7 +161,7 @@ pub(super) async fn project_account_data_set(
             owner,
             origin,
             account_data_key,
-            "ak.account_data.set owner does not match accepted operation origin"
+            "ak.account_data.set holder_id does not match accepted operation origin"
         );
         return;
     }

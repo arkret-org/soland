@@ -566,13 +566,13 @@ pub async fn realm_lifecycle_response(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
-    let owner = DidCoreId::new(record.owner.clone()).map_err(|error| {
+    let owner_id = DidCoreId::new(record.owner.clone()).map_err(|error| {
         AppError::internal(format!("stored realm owner DID is invalid: {error}"))
     })?;
     Ok(RealmLifecycleView {
         ok: true,
         realm_id: realm_id_value,
-        owner,
+        owner_id,
         members,
         deleted: record.deleted,
         archived,
@@ -1327,7 +1327,7 @@ mod tests {
                 invitee: Some(invitee.to_owned()),
                 invite_delivery_target: None,
                 introduction_evidence_digest: None,
-                third_party_id: None,
+                third_party_invite: None,
                 join_rule_snapshot: None,
                 invite_token: "private-token".to_owned(),
                 status: "pending".to_owned(),

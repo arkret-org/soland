@@ -2261,7 +2261,7 @@ mod tests {
             );
             event.auth_context = Some(arkret_wire::event_envelope::AuthContext {
                 actor_id: crate::test_actor_id(&actor_full_id),
-                key_id: "did:webvh:z6mkalice:alice.example#device-1".to_owned(),
+                key_id: arkret_wire::OpaqueLocalId::new("device-1").unwrap(),
                 key_epoch: 0,
                 credential_epoch: None,
             });

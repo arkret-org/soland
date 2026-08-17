@@ -1262,10 +1262,13 @@ async fn applet_message_event(
     event.seal_ref = Some(seal_id);
     event.auth_context = Some(arkret_wire::AuthContext {
         actor_id: package.service_id.clone(),
-        key_id: verification_method.as_str().split_once('#').map_or_else(
-            || verification_method.as_str().to_owned(),
-            |(_, key)| key.to_owned(),
-        ),
+        key_id: arkret_wire::OpaqueLocalId::new(
+            verification_method
+                .as_str()
+                .split_once('#')
+                .map_or(verification_method.as_str(), |(_, key)| key),
+        )
+        .expect("fixture auth_context key id is an opaque local id"),
         key_epoch: 0,
         credential_epoch: None,
     });

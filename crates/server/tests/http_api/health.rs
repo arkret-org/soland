@@ -405,12 +405,12 @@ async fn describe_separates_claim_levels() {
         "experimental_features must not overlap verified_profiles"
     );
 
-    let compat = describe["compat_surfaces"]
+    let interop = describe["interop_surfaces"]
         .as_array()
-        .expect("compat_surfaces array present");
+        .expect("interop_surfaces array present");
     assert!(
-        compat.is_empty(),
-        "Soland product-private routes are not compat surfaces"
+        interop.is_empty(),
+        "Soland product-private routes are not interop surfaces"
     );
     let _: arkret_models_discovery::ServiceDescribe = serde_json::from_value(describe)
         .expect("server describe must deserialize with the SDK client model");

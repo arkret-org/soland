@@ -370,7 +370,7 @@ pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
     // See arkret-spec/spec/v1/zh/sync/service-surface.md §3.0 and
     // `ak.schema.service_describe.v1`. `supported_operations` is
     // wire-callable only; this helper separates implementation state,
-    // self-claims, cotest-verified claims, and compat surfaces while the
+    // self-claims, cotest-verified claims, and interop surfaces while the
     // response is still the SDK's typed `ServiceDescribe`.
     apply_claim_level_partition(
         &mut description,
@@ -401,7 +401,7 @@ async fn build_server_description_resolved(
 }
 
 /// Inject the T6.1 claim-level partition fields (`implemented_features`,
-/// `claimed_profiles`, `verified_profiles`, `compat_surfaces`) into a
+/// `claimed_profiles`, `verified_profiles`, `interop_surfaces`) into a
 /// describe response. `experimental_features` is already carried by the typed
 /// [`crate::wire::describe`] `ServiceDescribe`.
 ///
@@ -666,7 +666,7 @@ pub(crate) fn apply_claim_level_partition(
         "development_mode=true requires verified_profiles=[] (service-surface.md §3.0)"
     );
     description.verified_profiles = verified_profiles;
-    description.compat_surfaces.clear();
+    description.interop_surfaces.clear();
 }
 
 #[endpoint(operation_id = "org.arkret.soland.auth.bridge.describe")]
@@ -712,7 +712,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
             unregister_device_request: json!({
                 "principal_id": "did:web:alice.example",
                 "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
-                "registration_id": "ak:device:01904100-0000-7000-8000-000000000001#webpush"
+                "registration_id": "push:01904100-0000-7000-8000-000000000001.webpush"
             }),
         },
         todos: Vec::new(),

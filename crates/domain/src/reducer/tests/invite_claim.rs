@@ -17,7 +17,7 @@ fn third_party_invite(expires_at: &str) -> Value {
         "event_id": INVITE.replacen("ak:invite:", "ak:event:", 1),
         "sender": INVITER,
         "expires_at": expires_at,
-        "third_party_id": {
+        "third_party_invite": {
             "oob_code_kind": "offline_token",
             "token_commitment": TOKEN_COMMITMENT,
             "token_salt_id": "salt-1",
@@ -134,14 +134,17 @@ fn invite_claim_converts_third_party_invite_to_claimed_invite() {
             .get("nonce-0000000001")
             .is_some_and(|operation_id| operation_id.starts_with("ak:operation:"))
     );
-    let third_party_id = invite.third_party_id.as_ref().expect("third_party_id");
+    let third_party_invite = invite
+        .third_party_invite
+        .as_ref()
+        .expect("third_party_invite");
     assert_eq!(
-        third_party_id
+        third_party_invite
             .get("token_commitment")
             .and_then(Value::as_str),
         Some(TOKEN_COMMITMENT)
     );
-    assert!(third_party_id.get("token_salt_id").is_none());
+    assert!(third_party_invite.get("token_salt_id").is_none());
     let member = state
         .member(REALM, SUBJECT)
         .expect("claimed subject should have an invite membership proposal");
@@ -370,18 +373,20 @@ fn expired_claim_is_rejected_without_mutating_the_pending_invite() {
     let invite = state.invites.get(INVITE).expect("invite remains projected");
     assert_eq!(invite.state, "pending");
     assert!(invite.claim_nonces.is_empty());
-    let third_party_id = invite
-        .third_party_id
+    let third_party_invite = invite
+        .third_party_invite
         .as_ref()
-        .expect("third_party_id remains");
+        .expect("third_party_invite remains");
     assert_eq!(
-        third_party_id
+        third_party_invite
             .get("token_commitment")
             .and_then(Value::as_str),
         Some(TOKEN_COMMITMENT)
     );
     assert_eq!(
-        third_party_id.get("token_salt_id").and_then(Value::as_str),
+        third_party_invite
+            .get("token_salt_id")
+            .and_then(Value::as_str),
         Some("salt-1")
     );
 }

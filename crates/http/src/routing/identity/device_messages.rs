@@ -135,11 +135,11 @@ async fn send_device_messages(
             let message_key = arkret_canonical::canonical_sha256(&json!({
                 "sender_principal_id": session.actor,
                 "sender_device_id": session.device_id,
-                "message_id": target.message_id,
+                "device_message_id": target.device_message_id,
             }))
             .map_err(|error| AppError::internal(error.to_string()))?;
             let intent_digest = arkret_canonical::canonical_sha256(&json!({
-                "message_id": target.message_id,
+                "device_message_id": target.device_message_id,
                 "kind": target.kind,
                 "sender_principal_id": session.actor,
                 "sender_device_id": session.device_id,
@@ -347,9 +347,9 @@ fn device_message_request_conflict() -> AppError {
 }
 
 fn device_message_intent_conflict() -> AppError {
-    AppError::conflict("message_id was already used for a different canonical target")
+    AppError::conflict("device_message_id was already used for a different canonical target")
         .with_wire_code("duplicate_conflict")
-        .with_reason_code("message_id_conflict")
+        .with_reason_code("device_message_id_conflict")
 }
 
 /// Fan an actor-private update (account-data / blocklist / read-cursor
@@ -721,8 +721,12 @@ fn device_message_envelope_from_record(
     // would mean choosing a sender identity the producer never wrote down.
     let sender = <DeviceMessageSender as serde::Deserialize>::deserialize(&message.content).ok()?;
     Some(DeviceMessageEnvelope {
-        message_id: arkret_identifiers::DeviceMessageId::new(
-            message.content.get("message_id")?.as_str()?.to_owned(),
+        device_message_id: arkret_identifiers::DeviceMessageId::new(
+            message
+                .content
+                .get("device_message_id")?
+                .as_str()?
+                .to_owned(),
         )
         .ok()?,
         kind,

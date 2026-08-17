@@ -1032,7 +1032,7 @@ pub(crate) fn validate_mls_send_pause(
     Err(arkret_wire::ReasonCode::MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE)
 }
 
-/// The Realm ceiling on encrypted-envelope `aad_visibility_event_id`, resolved
+/// The Realm ceiling on encrypted-envelope `aad_visibility_event_id_kind`, resolved
 /// from the accepted `ak.realm.policy_bundle` value.
 ///
 /// An absent or malformed component resolves to the `hidden` ceiling. That is
@@ -1043,7 +1043,7 @@ pub(crate) fn aad_visibility_ceiling_from_bundle(
 ) -> arkret_models_crypto::AadVisibilityCeiling {
     let declared = bundle
         .and_then(|value| value.get("aad_visibility"))
-        .and_then(|component| component.get("event_id"))
+        .and_then(|component| component.get("event_id_kind"))
         .and_then(Value::as_str)
         .and_then(|value| {
             serde_json::from_value::<arkret_models_crypto::EncryptedEnvelopeAadVisibility>(
@@ -1125,7 +1125,7 @@ mod policy_bundle_component_tests {
     fn an_undeclared_aad_visibility_component_is_the_hidden_ceiling() {
         use arkret_models_crypto::EncryptedEnvelopeAadVisibility as Visibility;
 
-        let declared = json!({"aad_visibility": {"event_id": "routing_digest"}});
+        let declared = json!({"aad_visibility": {"event_id_kind": "routing_digest"}});
         let ceiling = aad_visibility_ceiling_from_bundle(Some(&declared));
         assert!(ceiling.permits(Visibility::RoutingDigest));
         assert!(!ceiling.permits(Visibility::OpaqueId));
