@@ -687,9 +687,8 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
         push: AuthBridgePushDescriptor {
             register_device_path: "/_arkret/edge/push/register-device".to_owned(),
             unregister_device_path: "/_arkret/edge/push/unregister-device".to_owned(),
-            session_grant_header: "X-Arkret-Session-Grant".to_owned(),
             principal_id_body_field: "principal_id".to_owned(),
-            register_device_mode: "session_grant_presentation_or_dev_session".to_owned(),
+            register_device_mode: "session_grant_presentation".to_owned(),
         },
         examples: AuthBridgeExamples {
             session_grant_issue_request: json!({
@@ -716,9 +715,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
                 "registration_id": "ak:device:01904100-0000-7000-8000-000000000001#webpush"
             }),
         },
-        todos: vec![
-            "replace push register grant bridge headers with the same session-grant presentation used by ordinary requests".to_owned(),
-        ],
+        todos: Vec::new(),
     })
 }
 
@@ -843,7 +840,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
 #[cfg(test)]
 mod tests {
     use arkret_models_discovery::service_description::ServiceDescribe;
-    use arkret_wire::{DidFullId, ProfileId, ServiceKind, TypedTrustDomainId};
+    use arkret_wire::{DidFullId, ProfileId, ServiceKind, TrustDomainId};
 
     use super::apply_claim_level_partition;
 
@@ -851,7 +848,7 @@ mod tests {
     fn candidate_join_policy_claim_is_complete_and_flag_gated() {
         let mut description = ServiceDescribe::development(
             DidFullId::new("did:web:soland.example".to_owned()).unwrap(),
-            TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
+            TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
             ServiceKind::PrincipalServer,
         );
         apply_claim_level_partition(&mut description, &[], true, false);
@@ -906,7 +903,7 @@ mod tests {
     fn advertised_profiles_include_sdk_generated_discovery_requirements() {
         let mut description = ServiceDescribe::development(
             DidFullId::new("did:web:soland.example".to_owned()).unwrap(),
-            TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
+            TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
             ServiceKind::PrincipalServer,
         );
         description

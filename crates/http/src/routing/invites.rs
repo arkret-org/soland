@@ -631,6 +631,8 @@ async fn enqueue_remote_invite_delivery(
                 endpoint: PEER_INVITES_ENDPOINT.to_owned(),
                 idempotency_key: delivery.idempotency_key.clone(),
                 payload_json,
+                coalescing_key: None,
+                coalescing_position: None,
                 realm_fanout: None,
                 created_at: now().timestamp(),
             },

@@ -232,7 +232,7 @@ below. Producers on the old wire MUST upgrade.
 - Operators MUST set `SOLAND_TRUST_DOMAIN` (or rely on the
   `service_id`-derived default) before processing the removed legacy reset
   events. The boot path validates the value via the SDK
-  `TypedTrustDomainId` regex.
+  `TrustDomainId` regex.
 - Producers MUST move ephemeral kinds off `ak.self.events.command.submit`; the
   endpoint no longer accepts them under any compatibility flag.
 - Producers MUST add `trust_domain` and `reset_event_id` to every

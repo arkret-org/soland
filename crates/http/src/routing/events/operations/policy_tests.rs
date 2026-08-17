@@ -2511,7 +2511,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
         json!({
             "relation_id": relation_id,
             "sender": "ak:did_core:web:bob.example",
-            "fields": {"label": "nope"}
+            "patch": {"fields.label": "nope"}
         }),
     );
     assert_eq!(
@@ -2528,7 +2528,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
         json!({
             "relation_id": relation_id,
             "sender": "ak:did_core:web:alice.example",
-            "fields": {"label": "ok"}
+            "patch": {"fields.label": "ok"}
         }),
     );
     validate_operation_policy(&state, &[alice_update])

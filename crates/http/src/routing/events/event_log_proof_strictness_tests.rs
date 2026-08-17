@@ -958,7 +958,7 @@ fn production_requires_canonical_event_time_fields() {
 }
 
 #[test]
-fn development_keeps_fixture_time_field_compatibility() {
+fn development_allows_fixtures_to_omit_time_fields() {
     let state = make_state(true);
     let object = serde_json::Map::new();
     validate_event_time_fields(&state, &object)

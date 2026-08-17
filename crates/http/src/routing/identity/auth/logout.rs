@@ -22,7 +22,7 @@ use super::*;
 ///    grant rotation chain + browser session are terminated (§4.1 step 2).
 ///  - **Principal-side (after Auth-side success):** revoke the principal's local bearer sessions
 ///    for the grant's device, remove push registrations, and drop queued to-device messages. It
-///    does NOT write `ak.account.status`, emit `ak.device.revoke`, or mark the durable device
+///    does NOT issue an AccountStatusRecord, emit `ak.device.revoke`, or mark the durable device
 ///    inventory record revoked; a later login restores a session for the same authorized device.
 #[salvo::oapi::endpoint(operation_id = "ak.gate.account.command.logout", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.logout"))]
@@ -329,7 +329,7 @@ async fn revoke_sessions_for_actor_device(
 /// `all_sessions=true` are mutually exclusive selectors and the target MUST
 /// belong to the calling principal. Revokes session grants / bearer
 /// sessions only — device authorization is NOT touched and no
-/// `ak.account.status` write happens implicitly. Cross-session selectors
+/// no AccountStatusRecord is issued implicitly. Cross-session selectors
 /// require a fresh lifecycle proof whose request digest and Ed25519 signature
 /// verify against the caller DID.
 #[salvo::oapi::endpoint(

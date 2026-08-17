@@ -84,7 +84,9 @@ fn persistence_projected_event(
 fn persistence_outbox_row(
     delivery: crate::events::FederationDelivery,
 ) -> soland_storage::FederationOutboxRecord {
-    match delivery.realm_fanout {
+    let coalescing_key = delivery.coalescing_key.clone();
+    let coalescing_position = delivery.coalescing_position;
+    let mut persisted = match delivery.realm_fanout {
         Some(binding) => soland_storage::FederationOutboxRecord::realm_fanout(
             delivery.id,
             delivery.peer_did,
@@ -106,7 +108,10 @@ fn persistence_outbox_row(
             delivery.payload_json,
             delivery.created_at,
         ),
-    }
+    };
+    persisted.coalescing_key = coalescing_key;
+    persisted.coalescing_position = coalescing_position;
+    persisted
 }
 
 fn persistence_event_commit_request(

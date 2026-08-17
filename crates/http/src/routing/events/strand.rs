@@ -1,6 +1,6 @@
 //! Strand ID derivation + discussion-track projection helpers.
 //!
-//! Legacy Realm companion Strand IDs are obtained only by re-tagging an already
+//! Realm companion Strand IDs are obtained only by re-tagging an already
 //! validated canonical Realm ID. Invalid input fails closed; it is never hashed
 //! into a string that merely looks like a protocol Strand ID. v1 Message
 //! payloads expose the discussion track as the const string `discussion`.

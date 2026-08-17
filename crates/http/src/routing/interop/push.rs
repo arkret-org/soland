@@ -6,16 +6,13 @@
 //! - `POST /_arkret/edge/push/notify` — validate the privacy-preserving target and gateway contract
 //!   before fan-out.
 //!
-//! `push_register_session_grant_bridge` is the local stand-in that accepts an
-//! `X-Arkret-Session-Grant` header for clients that haven't yet picked up a
-//! bearer session. When coauth introspection is configured, the bridge uses
-//! the same audience/scope/proof validation as `/_arkret/gate/account/session-grants`.
+//! Device registration authenticates with an ordinary bearer session; there is
+//! no header-carried alternative.
 //! Spec rule: no DID in push payload / TURN username.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, KeyInit, Mac};
-use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -23,18 +20,16 @@ use sha2::Sha256;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::delivery::PushContractDrift as DriftResult;
-use soland_services::identity::SessionIdentityState as SessionRecord;
 use subtle::ConstantTimeEq;
 
 use super::audit::append_audit_log;
-use super::auth::{SessionGrantValidationInput, validate_session_grant_binding};
 use super::push_outbound::{derive_push_gateway_service_base_url, join_push_gateway_url};
 use super::{authenticated_session, now, sha256_hex};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
     PushNotifyOutcome, PushNotifyRequestBody, PushRegisterDeviceRequestBody,
-    PushUnregisterDeviceRequestBody, SessionGrantIntrospectionProof,
+    PushUnregisterDeviceRequestBody,
 };
 
 /// C33.1 (T0-3a): freshness budget for the persisted gateway-contract
@@ -104,25 +99,11 @@ pub(super) async fn push_register(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let auth_result = authenticated_session(state, req);
     let body = body.into_inner();
-    let (session, auth_warning) = match auth_result.await {
-        Ok(session) => (session, None),
-        Err((status, code, message)) => match push_register_session_grant_bridge(state, req, &body)
-            .await
-        {
-            Ok(Some(session)) => (
-                session,
-                Some(
-                    "session grant bridge accepted; configure coauth introspection in production"
-                        .to_owned(),
-                ),
-            ),
-            Ok(None) => {
-                return Err(AppError::new(canonical_error_code(code), message).with_status(status));
-            }
-            Err((status, code, message)) => {
-                return Err(AppError::new(canonical_error_code(code), message).with_status(status));
-            }
-        },
+    let session = match auth_result.await {
+        Ok(session) => session,
+        Err((status, code, message)) => {
+            return Err(AppError::new(canonical_error_code(code), message).with_status(status));
+        }
     };
     if body.device_id.as_str().trim().is_empty() {
         return Err(AppError::param_invalid("invalid device_id"));
@@ -170,10 +151,6 @@ pub(super) async fn push_register(
         &push_target_id,
         now() + chrono::Duration::seconds(PUSH_TARGET_RETAIN_SECONDS),
     );
-    let mut warnings = Vec::new();
-    if let Some(auth_warning) = auth_warning {
-        warnings.push(auth_warning);
-    }
     state
         .deliveries()
         .unregister_push_device(&principal_id, &device_id, None, app_id.as_deref())
@@ -196,7 +173,7 @@ pub(super) async fn push_register(
             "salt_epoch_id": salt_epoch_id,
             "salt_rotation_seconds": PUSH_TARGET_SALT_ROTATION_SECONDS,
             "retained_push_targets": retained_push_targets,
-            "auth_mode": if warnings.is_empty() { "bearer" } else { "session_grant_bridge" },
+            "auth_mode": "bearer",
         }))
         .await
     {
@@ -212,9 +189,8 @@ pub(super) async fn push_register(
 }
 
 /// Map the `(status, code, message)` triplet produced by
-/// `authenticated_session` + `push_register_session_grant_bridge` to a
-/// canonical `ErrorCode`. The lookup is fast and lossless because both call
-/// sites only emit a small closed set.
+/// `authenticated_session` to a canonical `ErrorCode`. The lookup is fast and
+/// lossless because the call site only emits a small closed set.
 fn canonical_error_code(wire: &str) -> soland_http::error::ErrorCode {
     use soland_http::error::ErrorCode;
     match wire {
@@ -518,125 +494,6 @@ async fn verify_push_gateway_contract_drift(
         .verify_push_bridge_contract_freshness(&bridge_describe_url, &snapshot_digest, max_age)
         .await
         .unwrap_or(DriftResult::Unknown)
-}
-
-async fn push_register_session_grant_bridge(
-    state: &AppState,
-    req: &Request,
-    body: &PushRegisterDeviceRequestBody,
-) -> Result<Option<SessionRecord>, (StatusCode, &'static str, &'static str)> {
-    let Some(grant) = req.headers().get("x-arkret-session-grant") else {
-        return Ok(None);
-    };
-    let grant = grant.to_str().map_err(|_| {
-        (
-            StatusCode::BAD_REQUEST,
-            "param_invalid",
-            "X-Arkret-Session-Grant must be ASCII",
-        )
-    })?;
-    if grant.trim().is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "param_invalid",
-            "X-Arkret-Session-Grant must not be empty",
-        ));
-    }
-    let Some(principal_identity) =
-        optional_ascii_header(req, "x-arkret-principal-id", "X-Arkret-Principal-Id")?
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-    else {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "param_invalid",
-            "X-Arkret-Principal-Id is required when using X-Arkret-Session-Grant",
-        ));
-    };
-    let principal_id =
-        arkret_wire::DidCoreId::new(principal_identity.to_owned()).map_err(|_| {
-            (
-                StatusCode::BAD_REQUEST,
-                "param_invalid",
-                "principal_id must be a core id",
-            )
-        })?;
-    let challenge = optional_ascii_header(
-        req,
-        "x-arkret-session-grant-challenge",
-        "X-Arkret-Session-Grant-Challenge",
-    )?;
-    let proof_jwt = optional_ascii_header(
-        req,
-        "x-arkret-session-grant-proof",
-        "X-Arkret-Session-Grant-Proof",
-    )?;
-    let proof = match (challenge, proof_jwt) {
-        (Some(challenge), Some(proof_jwt)) => Some(SessionGrantIntrospectionProof {
-            challenge: challenge.to_owned(),
-            proof_jwt: proof_jwt.to_owned(),
-        }),
-        (None, None) => None,
-        _ => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "param_invalid",
-                "session grant challenge and proof headers must be supplied together",
-            ));
-        }
-    };
-    let validated = validate_session_grant_binding(
-        state,
-        SessionGrantValidationInput {
-            grant_jwt: grant,
-            principal_id: principal_id.as_str(),
-            device_id: body.device_id.as_str(),
-            proof: proof.as_ref(),
-        },
-    )
-    .await
-    .map_err(|error| {
-        (
-            error.http_status(),
-            error.code.as_str(),
-            "session grant bridge rejected by coauth introspection",
-        )
-    })?;
-    let expires_at = validated
-        .as_ref()
-        .map(|grant| grant.expires_at)
-        .unwrap_or_else(|| now() + chrono::Duration::minutes(5));
-    let session_public_key = validated
-        .as_ref()
-        .and_then(|grant| grant.session_public_key.clone());
-
-    Ok(Some(SessionRecord {
-        token_hash: format!("grant-bridge:{}", sha256_hex(grant.as_bytes())),
-        actor: principal_id.to_string(),
-        device_id: body.device_id.as_str().to_owned(),
-        audience: state.service_id().clone(),
-        session_public_key,
-        agent_session: None,
-        session_grant: None,
-        expires_at,
-        created_at: now(),
-        revoked_at: None,
-    }))
-}
-
-fn optional_ascii_header<'a>(
-    req: &'a Request,
-    name: &'static str,
-    display_name: &'static str,
-) -> Result<Option<&'a str>, (StatusCode, &'static str, &'static str)> {
-    req.headers()
-        .get(name)
-        .map(|value| {
-            value
-                .to_str()
-                .map_err(|_| (StatusCode::BAD_REQUEST, "param_invalid", display_name))
-        })
-        .transpose()
 }
 
 fn push_notification_leaks_private_payload(

@@ -1228,7 +1228,7 @@ impl ProjectionState {
         if let Some(ref new_td) = payload_trust_domain {
             // Shape MUST be `ak:trust_domain:<scope>` — delegate to SDK
             // typed id validator.
-            if arkret_identifiers::TypedTrustDomainId::new(new_td.clone()).is_err() {
+            if arkret_identifiers::TrustDomainId::new(new_td.clone()).is_err() {
                 return ProjectionEffect::Rejected {
                     reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                 };

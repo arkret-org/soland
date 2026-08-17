@@ -12,7 +12,7 @@ use super::{
 
 /// Every column of `federation_outbox`, aliased to the record field names.
 pub(crate) const OUTBOX_COLUMNS: &str = "id, peer_id AS peer_did, peer_url, endpoint, idempotency_key, \
-     payload_json, state, leased_from_state, realm_fanout, attempts, semantic_attempts, next_attempt_at, last_http_status, \
+     payload_json, coalescing_key, coalescing_position, state, leased_from_state, realm_fanout, attempts, semantic_attempts, next_attempt_at, last_http_status, \
      last_error_code, last_response_excerpt, lease_owner, lease_token, lease_expires_at, \
      policy_version, supersedes_outbox_id, created_at, completed_at";
 
@@ -41,12 +41,12 @@ pub(crate) async fn insert_federation_outbox_row(
         .map_err(|error| PersistenceError::Conflict(format!("schema_violation: {error}")))?;
     sql_query(
         "INSERT INTO federation_outbox \
-         (id, peer_id, peer_url, endpoint, idempotency_key, payload_json, state, leased_from_state, realm_fanout, attempts, \
+         (id, peer_id, peer_url, endpoint, idempotency_key, payload_json, coalescing_key, coalescing_position, state, leased_from_state, realm_fanout, attempts, \
           semantic_attempts, next_attempt_at, last_http_status, last_error_code, \
           last_response_excerpt, lease_owner, lease_token, lease_expires_at, policy_version, \
           supersedes_outbox_id, created_at, completed_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, \
-          $19, $20, $21, $22) \
+          $19, $20, $21, $22, $23, $24) \
          ON CONFLICT (peer_id, idempotency_key) DO NOTHING",
     )
     .bind::<Text, _>(&record.id)
@@ -55,6 +55,8 @@ pub(crate) async fn insert_federation_outbox_row(
     .bind::<Text, _>(&record.endpoint)
     .bind::<Text, _>(&record.idempotency_key)
     .bind::<Text, _>(&record.payload_json)
+    .bind::<Nullable<Text>, _>(record.coalescing_key.as_deref())
+    .bind::<Nullable<BigInt>, _>(record.coalescing_position)
     .bind::<Text, _>(record.state.as_str())
     .bind::<Nullable<Text>, _>(
         record
@@ -95,7 +97,72 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        Ok(insert_federation_outbox_row(&mut conn, record).await? > 0)
+        let record = record.clone();
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let Some(coalescing_key) = record.coalescing_key.as_deref() else {
+                return Ok(insert_federation_outbox_row(conn, &record).await? > 0);
+            };
+            let coalescing_position = record.coalescing_position.ok_or_else(|| {
+                PersistenceError::Conflict(
+                    "schema_violation: coalescing lane omits its position".to_owned(),
+                )
+            })?;
+            let lock_key = format!("{}\0{coalescing_key}", record.peer_did);
+            sql_query("SELECT true AS present FROM pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind::<Text, _>(&lock_key)
+                .get_result::<ExistsRow>(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+
+            let duplicate = sql_query(
+                "SELECT true AS present FROM federation_outbox \
+                 WHERE peer_id = $1 AND idempotency_key = $2 LIMIT 1",
+            )
+            .bind::<Text, _>(&record.peer_did)
+            .bind::<Text, _>(&record.idempotency_key)
+            .get_result::<ExistsRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+            .is_some();
+            if duplicate {
+                return Ok(false);
+            }
+
+            let active = sql_query(
+                "SELECT id, coalescing_position FROM federation_outbox \
+                 WHERE peer_id = $1 AND coalescing_key = $2 \
+                   AND state IN ('pending', 'pending_route', 'leased', 'policy_suppressed') \
+                 ORDER BY coalescing_position DESC LIMIT 1 FOR UPDATE",
+            )
+            .bind::<Text, _>(&record.peer_did)
+            .bind::<Text, _>(coalescing_key)
+            .get_result::<ActiveCoalescingLaneRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?;
+            let mut record = record;
+            if let Some(active) = active {
+                if active.coalescing_position >= coalescing_position {
+                    return Ok(false);
+                }
+                sql_query(
+                    "UPDATE federation_outbox SET state = 'superseded', completed_at = $2, \
+                     next_attempt_at = $2, lease_owner = NULL, lease_token = NULL, \
+                     lease_expires_at = NULL, leased_from_state = NULL, policy_version = NULL \
+                     WHERE id = $1",
+                )
+                .bind::<Text, _>(&active.id)
+                .bind::<BigInt, _>(record.created_at)
+                .execute(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+                record.supersedes_outbox_id = Some(active.id);
+            }
+            Ok(insert_federation_outbox_row(conn, &record).await? > 0)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn claim_due(
@@ -156,6 +223,18 @@ impl FederationOutboxStore for PgFederationOutboxStore {
             .await
             .map_err(PersistenceError::database)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            if let FederationOutboxOutcome::Superseded(successor) = &transition.outcome
+                && let Some(coalescing_key) = successor.coalescing_key.as_deref()
+            {
+                let lock_key = format!("{}\0{coalescing_key}", successor.peer_did);
+                sql_query(
+                    "SELECT true AS present FROM pg_advisory_xact_lock(hashtextextended($1, 0))",
+                )
+                .bind::<Text, _>(&lock_key)
+                .get_result::<ExistsRow>(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+            }
             let row_kind = sql_query(
                 "SELECT realm_fanout IS NOT NULL AS present FROM federation_outbox \
                  WHERE id = $1 AND lease_token = $2 FOR UPDATE",
@@ -791,6 +870,14 @@ impl From<FederationFrontierExchangeRow> for FederationFrontierExchangeRecord {
     }
 }
 #[derive(QueryableByName)]
+struct ActiveCoalescingLaneRow {
+    #[diesel(sql_type = Text)]
+    id: String,
+    #[diesel(sql_type = BigInt)]
+    coalescing_position: i64,
+}
+
+#[derive(QueryableByName)]
 pub(crate) struct FederationOutboxRow {
     #[diesel(sql_type = Text)]
     id: String,
@@ -804,6 +891,10 @@ pub(crate) struct FederationOutboxRow {
     idempotency_key: String,
     #[diesel(sql_type = Text)]
     payload_json: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    coalescing_key: Option<String>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    coalescing_position: Option<i64>,
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -874,6 +965,8 @@ impl TryFrom<FederationOutboxRow> for FederationOutboxRecord {
             endpoint: row.endpoint,
             idempotency_key: row.idempotency_key,
             payload_json: row.payload_json,
+            coalescing_key: row.coalescing_key,
+            coalescing_position: row.coalescing_position,
             state,
             leased_from_state,
             realm_fanout,

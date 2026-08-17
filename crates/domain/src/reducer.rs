@@ -12,9 +12,9 @@
 //! [`ProjectionState::apply`] is a direct match-on-canonical-kind
 //! dispatcher to inline projection helpers.
 //!
-//! The standard peer-event receive pipeline routes through
-//! [`registry::LatticeKind`] / [`registry::LatticeRegistry`]. Concrete impls live in
-//! [`lattice_kinds`]; [`lattice_kinds::build_sdk_cell_registry`] feeds
+//! The standard peer-event receive pipeline routes through the SDK's
+//! `arkret_lattice_registry::LatticeKind` / `LatticeRegistry`;
+//! [`lattice_kinds::default_lattice_registry`] feeds
 //! the SDK's `verify_move` / `apply_seal` pipeline. This is the
 //! protocol-canonical path; [`ProjectionState`]'s structured fields
 //! (`messages`, `reactions`, `read_cursors`, etc.) are an in-memory
@@ -43,7 +43,6 @@ pub mod mls;
 pub mod realm_links;
 // G3.S2: policy server cell reducer
 pub mod realm_policy_server;
-pub mod registry;
 
 // Structural split (2026-06-18) — the direct content of this mod file
 // (top-level projection types, free helpers, dispatch registry, and the

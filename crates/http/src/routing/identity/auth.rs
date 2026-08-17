@@ -25,7 +25,7 @@ use arkret_models_collaboration::http_bodies::{
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::{DateTime, Duration, Utc};
+use chrono::Duration;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -41,13 +41,11 @@ use super::{
 use crate::state::AppState;
 use crate::wire::{
     DevLoginRequestBody, LogoutOutcome, SessionGrantIntrospectOutcome,
-    SessionGrantIntrospectRequestBody, SessionGrantIntrospectStatus,
-    SessionGrantIntrospectionProof, SessionLoginOutcome,
+    SessionGrantIntrospectRequestBody, SessionLoginOutcome,
 };
 use crate::{JsonResult, ids, json_ok};
 
 mod device_pair;
-mod grant;
 mod login;
 mod logout;
 mod revocation;
@@ -64,7 +62,6 @@ use device_pair::account_device_pair;
 // Cross-submodule private helpers, re-exported at `pub(super)` so every
 // submodule's `use super::*;` glob can see them.
 pub(super) use device_pair::initial_session_device_verification_state;
-pub(crate) use grant::{SessionGrantValidationInput, validate_session_grant_binding};
 pub(super) use login::account_existing_session_error;
 use login::dev_login;
 use logout::session_revoke;

@@ -174,11 +174,7 @@ pub fn apply_keypackage_publish(
     else {
         return reject("mls_keypackage_id_missing");
     };
-    let Some(actor_id) = payload
-        .get("actor_id")
-        .or_else(|| payload.get("principal_id"))
-        .and_then(Value::as_str)
-    else {
+    let Some(actor_id) = payload.get("principal_id").and_then(Value::as_str) else {
         return reject("mls_keypackage_actor_missing");
     };
     let Some(device_id) = payload.get("device_id").and_then(Value::as_str) else {
@@ -378,12 +374,12 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
 /// Payload shape:
 /// ```json
 /// {
-///   "welcome_id":             "ak:mls_welcome:<uuid>",
-///   "group_id":               "ak:mls_group:<uuid>",
-///   "recipient_actor_id":     "ak:did_core:web:bob.example",
+///   "welcome_ref":            "ak:mls_welcome:<uuid>",
+///   "mls_group_id":           "ak:mls_group:<uuid>",
+///   "recipient_principal_id": "ak:did_core:web:bob.example",
 ///   "recipient_device_id":    "ak:device:<uuid>",
 ///   "ciphertext":             "<base64url(opaque MLS Welcome)>",
-///   "key_package_id":         "ak:mls_keypackage:<uuid>"
+///   "keypackage_ref":         "ak:mls_keypackage:<uuid>"
 /// }
 /// ```
 ///
@@ -398,24 +394,18 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
         return reject(REASON_WELCOME_METADATA_LEAK);
     }
     let Some(welcome_id) = payload
-        .get("welcome_id")
-        .or_else(|| payload.get("welcome_ref"))
+        .get("welcome_ref")
         .or_else(|| payload.get("encrypted_welcome_ref"))
         .or_else(|| payload.get("claim_id"))
         .and_then(Value::as_str)
     else {
         return reject("mls_welcome_id_missing");
     };
-    let Some(group_id) = payload
-        .get("group_id")
-        .or_else(|| payload.get("mls_group_id"))
-        .and_then(Value::as_str)
-    else {
+    let Some(group_id) = payload.get("mls_group_id").and_then(Value::as_str) else {
         return reject("mls_welcome_group_missing");
     };
     let Some(recipient_actor_id) = payload
-        .get("recipient_actor_id")
-        .or_else(|| payload.get("recipient_principal_id"))
+        .get("recipient_principal_id")
         .and_then(Value::as_str)
     else {
         return reject("mls_welcome_recipient_actor_missing");
@@ -424,11 +414,7 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
     else {
         return reject("mls_welcome_recipient_device_missing");
     };
-    let Some(key_package_id) = payload
-        .get("key_package_id")
-        .or_else(|| payload.get("keypackage_ref"))
-        .and_then(Value::as_str)
-    else {
+    let Some(key_package_id) = payload.get("keypackage_ref").and_then(Value::as_str) else {
         return reject("mls_welcome_key_package_id_missing");
     };
     let Some(epoch) = payload.get("epoch").and_then(Value::as_u64) else {
@@ -513,19 +499,14 @@ pub fn apply_remove_proposal(state: &mut ProjectionState, op: &Operation) -> Pro
     if payload.get("proposal_type").and_then(Value::as_str) != Some("remove") {
         return ProjectionEffectOut::Ignored;
     }
-    let Some(group_id) = payload
-        .get("group_id")
-        .or_else(|| payload.get("mls_group_id"))
-        .and_then(Value::as_str)
-    else {
+    let Some(group_id) = payload.get("mls_group_id").and_then(Value::as_str) else {
         return reject("mls_proposal_group_missing");
     };
     let Some(base_epoch) = payload.get("base_epoch").and_then(Value::as_u64) else {
         return reject("mls_proposal_base_epoch_missing");
     };
     let Some(target_actor_id) = payload
-        .get("target_actor_id")
-        .or_else(|| payload.get("target_principal_id"))
+        .get("target_principal_id")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
     else {
@@ -565,22 +546,14 @@ pub fn apply_remove_proposal(state: &mut ProjectionState, op: &Operation) -> Pro
 
 pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {
     let payload = &op.payload;
-    let Some(group_id) = payload
-        .get("group_id")
-        .or_else(|| payload.get("mls_group_id"))
-        .and_then(Value::as_str)
-    else {
+    let Some(group_id) = payload.get("mls_group_id").and_then(Value::as_str) else {
         return reject("mls_genesis_group_missing");
     };
     let epoch = payload.get("epoch").and_then(Value::as_u64).unwrap_or(0);
     if epoch != 0 {
         return reject("mls_genesis_epoch_invalid");
     }
-    let Some(creator_actor_id) = payload
-        .get("creator_actor_id")
-        .or_else(|| payload.get("creator_principal_id"))
-        .and_then(Value::as_str)
-    else {
+    let Some(creator_actor_id) = payload.get("creator_principal_id").and_then(Value::as_str) else {
         return reject("mls_genesis_creator_missing");
     };
     let Some(creator_device_id) = payload
@@ -593,7 +566,6 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
     let genesis_event_ref = op.context.event_id.to_string();
     let Some(governance_binding) = payload
         .get("governance_binding")
-        .or_else(|| payload.get("mls_governance_binding"))
         .cloned()
     else {
         return reject("mls_genesis_governance_binding_missing");
@@ -644,33 +616,25 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
 /// Payload shape:
 /// ```json
 /// {
-///   "group_id":            "ak:mls_group:<uuid>",
-///   "expected_prev_epoch": <u64>,
-///   "leader_actor_id":     "ak:did_core:web:alice.example",
-///   "commit_bytes_b64":    "<base64url(opaque MLS Commit)>"
+///   "mls_group_id":     "ak:mls_group:<uuid>",
+///   "base_epoch":       <u64>,
+///   "leader_actor_id":  "ak:did_core:web:alice.example",
+///   "commit_bytes_b64": "<base64url(opaque MLS Commit)>"
 /// }
 /// ```
 ///
 /// The reducer accepts a commit IFF
-/// `payload.expected_prev_epoch == current_stored_epoch` (defaulting to
+/// `payload.base_epoch == current_stored_epoch` (defaulting to
 /// `0` for a never-seen group). On success the stored epoch is set to
-/// `expected_prev_epoch + 1`. Stale or out-of-order commits leave state
+/// `base_epoch + 1`. Stale or out-of-order commits leave state
 /// untouched and emit `ProjectionEffect::Rejected { reason:
 /// "mls_epoch_skew" }`.
 pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {
     let payload = &op.payload;
-    let Some(group_id) = payload
-        .get("group_id")
-        .or_else(|| payload.get("mls_group_id"))
-        .and_then(Value::as_str)
-    else {
+    let Some(group_id) = payload.get("mls_group_id").and_then(Value::as_str) else {
         return reject("mls_commit_group_missing");
     };
-    let expected_prev_epoch = match payload
-        .get("expected_prev_epoch")
-        .or_else(|| payload.get("base_epoch"))
-        .and_then(Value::as_u64)
-    {
+    let expected_prev_epoch = match payload.get("base_epoch").and_then(Value::as_u64) {
         Some(v) => v,
         None => return reject("mls_commit_expected_prev_epoch_missing"),
     };
@@ -715,7 +679,6 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
     let current = existing.epoch;
     let governance_binding = payload
         .get("governance_binding")
-        .or_else(|| payload.get("mls_governance_binding"))
         .cloned()
         .unwrap_or(Value::Null);
     let accepted_digest = existing.accepted_commit_digest.clone();
@@ -871,7 +834,6 @@ fn proposal_effective_scope(
 ) -> Result<Value, &'static str> {
     if let Some(binding) = payload
         .get("governance_binding")
-        .or_else(|| payload.get("mls_governance_binding"))
     {
         if binding.get("mls_group_id").and_then(Value::as_str) != Some(group_id) {
             return Err("mls_governance_binding_group_mismatch");
@@ -966,7 +928,6 @@ fn genesis_effective_scope(payload: &Value) -> Result<Value, &'static str> {
     validate_effective_scope(scope)?;
     let binding_scope = payload
         .get("governance_binding")
-        .or_else(|| payload.get("mls_governance_binding"))
         .and_then(|binding| binding.get("effective_scope"))
         .ok_or("mls_governance_binding_scope_missing")?;
     validate_effective_scope(binding_scope)?;
@@ -983,7 +944,6 @@ fn validate_genesis_governance_binding(
 ) -> Result<(), &'static str> {
     let binding = payload
         .get("governance_binding")
-        .or_else(|| payload.get("mls_governance_binding"))
         .ok_or("mls_genesis_governance_binding_missing")?;
     if binding.get("binding_version").and_then(Value::as_u64) != Some(1) {
         return Err("mls_governance_binding_version_invalid");
@@ -1010,7 +970,6 @@ fn validate_genesis_governance_binding(
 fn commit_effective_scope(payload: &Value) -> Result<Value, &'static str> {
     let scope = payload
         .get("governance_binding")
-        .or_else(|| payload.get("mls_governance_binding"))
         .and_then(|binding| binding.get("effective_scope"))
         .ok_or("mls_governance_binding_scope_missing")?;
     validate_effective_scope(scope)?;
@@ -1079,7 +1038,6 @@ fn validate_welcome_trust_binding(
 ) -> Result<(), &'static str> {
     let binding = payload
         .get("governance_binding")
-        .or_else(|| payload.get("mls_governance_binding"))
         .ok_or("mls_welcome_governance_binding_missing")?;
     let effective_scope = binding
         .get("effective_scope")
@@ -1233,7 +1191,6 @@ fn validate_welcome_recipient_binding(
 ) -> Result<(), &'static str> {
     let Some(bound_recipient) = payload
         .get("recipient_principal_id")
-        .or_else(|| payload.get("recipient_actor_id"))
         .and_then(Value::as_str)
     else {
         return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);

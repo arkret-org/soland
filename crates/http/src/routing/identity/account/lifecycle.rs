@@ -3,6 +3,7 @@
 //! cohesive unit; external paths preserved via `pub(crate) use` re-export in
 //! the parent module.
 
+use arkret_models_collaboration::events_payloads::event_wire::ErasureTrigger;
 use arkret_models_collaboration::governance::erasure::{
     ErasedClass, ErasureOutcome, ErasureReceipt, ErasureReceiptPackage, ErasureReceiptProof,
     ErasureReceiptSubmitRequestBody, ErasureScope, ErasureStorageBoundary, ErasureSubject,
@@ -335,7 +336,7 @@ async fn append_account_deactivation_propagation_state(
         .collect::<Vec<_>>();
     let federation_incomplete = !peer_targets.is_empty();
     let payload = json!({
-        "schema": arkret_wire::CellFamilyId::ACCOUNT_STATUS_V1,
+        "schema": "org.arkret.soland.account.deactivation_propagation.v1",
         "principal_id": did,
         "status": "deactivated",
         "reason_code": if federation_incomplete {
@@ -472,7 +473,7 @@ pub(super) async fn deactivate_account(
     let _session = aa.authenticated_session(state, req).await?;
     return Err(AppError::new(
         soland_http::error::ErrorCode::FailedPrecondition,
-        "hard erasure must be initiated by an accepted erasure_pending account-status Event",
+        "hard erasure must be initiated by an accepted erasure_pending AccountStatusRecord",
     ));
     #[allow(unreachable_code)]
     let session = _session;
@@ -518,24 +519,24 @@ struct AccountDeactivateOutcome {
 }
 
 fn deterministic_erasure_receipt_id(
-    triggering_status_event_id: &arkret_wire::EventId,
+    triggering_status_record_id: &arkret_wire::AccountStatusRecordId,
     storage_boundary: ErasureStorageBoundary,
 ) -> String {
     arkret_models_collaboration::governance::erasure::account_erasure_receipt_id(
-        triggering_status_event_id,
+        triggering_status_record_id,
         storage_boundary,
     )
 }
 
 /// Execute the physical side effects authorized by one already accepted
-/// `erasure_pending` account-status Event. The caller owns durable leasing and
+/// `erasure_pending` account-status record. The caller owns durable leasing and
 /// exact replay; this function is intentionally transport-free and returns the
 /// exact package to persist before receipt fanout.
 pub(crate) async fn execute_account_status_erasure(
     state: &AppState,
     account_id: &str,
     actor: &str,
-    triggering_status_event_id: &arkret_wire::EventId,
+    triggering_status_record_id: &arkret_wire::AccountStatusRecordId,
 ) -> Result<ErasureReceiptPackage, AppError> {
     if let Some(mut account) = state
         .identities()
@@ -585,7 +586,7 @@ pub(crate) async fn execute_account_status_erasure(
         json!({
             "account_id": account_id,
             "actor": actor,
-            "triggering_status_event_id": triggering_status_event_id,
+            "triggering_status_record_id": triggering_status_record_id,
             "memberships_removed": memberships_removed,
             "sessions_revoked": fanout.sessions_revoked,
             "devices_revoked": fanout.devices_revoked,
@@ -598,10 +599,10 @@ pub(crate) async fn execute_account_status_erasure(
     let receipt_value = build_erasure_receipt_value(
         state,
         deterministic_erasure_receipt_id(
-            triggering_status_event_id,
+            triggering_status_record_id,
             ErasureStorageBoundary::AccountPrivateStore,
         ),
-        triggering_status_event_id,
+        triggering_status_record_id,
         ErasureSubject {
             kind: ErasureSubjectKind::Principal,
             subject_ref: actor.to_owned(),
@@ -808,7 +809,7 @@ async fn affected_erasure_realms_for_actor(
 fn build_erasure_receipt_value(
     state: &AppState,
     receipt_id: String,
-    triggering_status_event_id: &arkret_wire::EventId,
+    triggering_status_record_id: &arkret_wire::AccountStatusRecordId,
     subject: ErasureSubject,
     scope: ErasureScope,
     erased_classes: Vec<ErasedClass>,
@@ -818,7 +819,7 @@ fn build_erasure_receipt_value(
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
     let retained_stub = erasure_retained_stub(
         &receipt_id,
-        triggering_status_event_id,
+        triggering_status_record_id,
         &subject,
         &scope,
         completed_at,
@@ -837,7 +838,9 @@ fn build_erasure_receipt_value(
     .map_err(|error| AppError::internal(format!("erasure retained stub digest: {error}")))?;
     let mut receipt = ErasureReceipt {
         receipt_id,
-        triggering_event_id: triggering_status_event_id.clone(),
+        trigger: ErasureTrigger::AccountStatusRecord {
+            account_status_record_id: triggering_status_record_id.clone(),
+        },
         schema: ErasureReceipt::SCHEMA.to_owned(),
         issuer,
         subject,
@@ -892,7 +895,7 @@ fn build_erasure_receipt_value(
 
 fn erasure_retained_stub(
     receipt_id: &str,
-    triggering_status_event_id: &arkret_wire::EventId,
+    triggering_status_record_id: &arkret_wire::AccountStatusRecordId,
     subject: &ErasureSubject,
     scope: &ErasureScope,
     completed_at: chrono::DateTime<chrono::Utc>,
@@ -900,7 +903,10 @@ fn erasure_retained_stub(
     serde_json::from_value(json!({
         "stub_schema": arkret_wire::SchemaId::ERASURE_VERIFICATION_STUB_V1,
         "receipt_id": receipt_id,
-        "triggering_event_id": triggering_status_event_id,
+        "trigger": {
+            "kind": "account_status_record",
+            "account_status_record_id": triggering_status_record_id,
+        },
         "subject": serde_json::to_value(subject)
             .map_err(|error| AppError::internal(format!("erasure stub subject: {error}")))?,
         "scope": serde_json::to_value(scope)

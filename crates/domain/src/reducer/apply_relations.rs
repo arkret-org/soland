@@ -52,69 +52,20 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        let relation_id = operation
-            .payload
-            .get("relation_id")
-            .or_else(|| operation.payload.get("id"))
-            .or_else(|| {
-                operation
-                    .payload
-                    .get("relation")
-                    .and_then(|relation| relation.get("id"))
-            })
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| {
-                arkret_identifiers::RelationId::from_event_id(&operation.context.event_id)
-                    .to_string()
-            });
-        let relation_kind = operation
-            .payload
-            .get("relation_kind")
-            .or_else(|| operation.payload.get("kind"))
-            .or_else(|| {
-                operation
-                    .payload
-                    .get("relation")
-                    .and_then(|relation| relation.get("kind"))
-            })
+        let relation = relation_create_object(&operation.payload);
+        let relation_id =
+            arkret_identifiers::RelationId::from_event_id(&operation.context.event_id).to_string();
+        let relation_kind = relation
+            .get("kind")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_owned();
-        let from_ref = operation
-            .payload
-            .get("from")
-            .or_else(|| operation.payload.get("from_ref"))
-            .or_else(|| {
-                operation
-                    .payload
-                    .get("relation")
-                    .and_then(|relation| relation.get("from"))
-            })
-            .or_else(|| {
-                operation
-                    .payload
-                    .get("relation")
-                    .and_then(|relation| relation.get("from_ref"))
-            })
+        let from_ref = relation
+            .get("from_ref")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        let to_ref = operation
-            .payload
-            .get("to")
-            .or_else(|| operation.payload.get("to_ref"))
-            .or_else(|| {
-                operation
-                    .payload
-                    .get("relation")
-                    .and_then(|relation| relation.get("to"))
-            })
-            .or_else(|| {
-                operation
-                    .payload
-                    .get("relation")
-                    .and_then(|relation| relation.get("to_ref"))
-            })
+        let to_ref = relation
+            .get("to_ref")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
         if let Some(target_ref) =
@@ -122,19 +73,12 @@ impl ProjectionState {
         {
             return self.queue_pending_replay(target_ref, operation, "relation_endpoint_unknown");
         }
-        let fields = operation
-            .payload
+        let fields = relation
             .get("fields")
-            .or_else(|| {
-                operation
-                    .payload
-                    .get("relation")
-                    .and_then(|relation| relation.get("fields"))
-            })
             .and_then(|v| v.as_object())
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default();
-        let scope_circle_id = relation_scope_circle_id_from_payload(&operation.payload);
+        let scope_circle_id = relation_scope_circle_id(relation);
         let source_event_id = Some(operation.context.event_id.to_string());
         let source_event_digest = Some(relation_event_digest(operation));
 
@@ -499,7 +443,7 @@ impl ProjectionState {
 
     fn relation_endpoint_scope_floor(
         &self,
-        operation: &Operation,
+        relation: &Value,
         relation_kind: &str,
     ) -> Result<Option<String>, &'static str> {
         if !matches!(
@@ -508,16 +452,7 @@ impl ProjectionState {
         ) {
             return Ok(None);
         }
-        let endpoints = [
-            operation
-                .payload
-                .get("from")
-                .or_else(|| operation.payload.get("from_ref")),
-            operation
-                .payload
-                .get("to")
-                .or_else(|| operation.payload.get("to_ref")),
-        ];
+        let endpoints = [relation.get("from_ref"), relation.get("to_ref")];
         let mut floor: Option<String> = None;
         for endpoint in endpoints.into_iter().flatten().filter_map(Value::as_str) {
             let Some(scope_circle_id) = self.resolve_object_scope_circle_id(endpoint) else {
@@ -535,18 +470,18 @@ impl ProjectionState {
 
     fn check_relation_effective_scope(
         &self,
-        operation: &Operation,
+        realm_id: &str,
+        relation: &Value,
         relation_kind: &str,
     ) -> Result<(), &'static str> {
-        let scope_circle_id = relation_scope_circle_id_from_payload(&operation.payload);
+        let scope_circle_id = relation_scope_circle_id(relation);
         if relation_kind == "confidential_discussion_of" && scope_circle_id.is_none() {
             return Err("relation_scope_circle_id_required");
         }
         if let Some(scope_circle_id) = scope_circle_id.as_deref() {
-            self.validate_scope_circle_id(scope_circle_id, operation.realm_id.as_str())?;
+            self.validate_scope_circle_id(scope_circle_id, realm_id)?;
         }
-        if let Some(endpoint_scope) =
-            self.relation_endpoint_scope_floor(operation, relation_kind)?
+        if let Some(endpoint_scope) = self.relation_endpoint_scope_floor(relation, relation_kind)?
             && scope_circle_id.as_deref() != Some(endpoint_scope.as_str())
         {
             return Err("relation_scope_wider_than_endpoint");
@@ -567,23 +502,13 @@ impl ProjectionState {
         {
             return Ok(());
         }
-        let relation_kind = operation
-            .payload
-            .get("relation_kind")
-            .or_else(|| operation.payload.get("kind"))
+        let relation = relation_create_object(&operation.payload);
+        let relation_kind = relation
+            .get("kind")
             .and_then(Value::as_str)
             .unwrap_or_default();
         let relation_realm = operation.realm_id.as_str();
-        let endpoints = [
-            operation
-                .payload
-                .get("from")
-                .or_else(|| operation.payload.get("from_ref")),
-            operation
-                .payload
-                .get("to")
-                .or_else(|| operation.payload.get("to_ref")),
-        ];
+        let endpoints = [relation.get("from_ref"), relation.get("to_ref")];
         let endpoint_realms = endpoints
             .into_iter()
             .flatten()
@@ -611,97 +536,72 @@ impl ProjectionState {
         }
 
         if kind == arkret_wire::EventKind::RelationCreate {
-            let relation_kind = operation
-                .payload
-                .get("relation_kind")
-                .or_else(|| operation.payload.get("kind"))
+            let relation = relation_create_object(&operation.payload);
+            let relation_kind = relation
+                .get("kind")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             if relation_kind == "watches" {
                 return Err(arkret_wire::ReasonCode::RELATION_KIND_WATCHES_DERIVED);
             }
             self.check_relation_cross_realm(operation)?;
-            self.check_relation_effective_scope(operation, relation_kind)?;
+            self.check_relation_effective_scope(
+                operation.realm_id.as_str(),
+                relation,
+                relation_kind,
+            )?;
             return Ok(());
         }
 
         if kind == arkret_wire::EventKind::RelationUpdate {
-            let relation_id = operation
-                .payload
-                .get("relation_id")
-                .or_else(|| operation.payload.get("id"))
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if operation
-                .payload
-                .get("relation_kind")
-                .or_else(|| operation.payload.get("kind"))
-                .and_then(Value::as_str)
-                == Some("watches")
-            {
+            let relation_id = relation_update_target_id(&operation.payload).unwrap_or_default();
+            let patch = relation_update_patch(&operation.payload);
+            // `watches` is a derived edge (`relation.md` §3.2): patching a
+            // Relation *into* that kind is the same direct write the create
+            // path rejects.
+            if let Some(patch) = patch {
+                validate_patch_semantic_safety(patch)?;
+                if patch_string_value(patch, "relation_kind").flatten().as_deref()
+                    == Some("watches")
+                {
+                    return Err(arkret_wire::ReasonCode::RELATION_KIND_WATCHES_DERIVED);
+                }
+            }
+            let Some(relation) = self.relations.get(relation_id) else {
+                return Ok(());
+            };
+            if relation.relation_kind == "watches" {
                 return Err(arkret_wire::ReasonCode::RELATION_KIND_WATCHES_DERIVED);
             }
-            if let Some(relation) = self.relations.get(relation_id)
-                && relation.relation_kind == "watches"
-            {
-                return Err(arkret_wire::ReasonCode::RELATION_KIND_WATCHES_DERIVED);
-            }
-            if let Some(relation) = self.relations.get(relation_id)
-                && let Some(next_scope) = relation_scope_circle_id_from_payload(&operation.payload)
-                && relation.scope_circle_id.as_deref() != Some(next_scope.as_str())
+            if let Some(patch) = patch
+                && let Some(next_scope) = patch_string_value(patch, "scope_circle_id")
+                && next_scope.as_deref() != relation.scope_circle_id.as_deref()
             {
                 return Err("relation_effective_scope_immutable");
             }
-            if let Some(relation) = self.relations.get(relation_id) {
-                let mut merged = serde_json::Map::new();
-                merged.insert(
-                    "relation_kind".to_owned(),
-                    Value::String(relation.relation_kind.clone()),
-                );
-                if let Some(from_ref) = &relation.from_ref {
-                    merged.insert("from_ref".to_owned(), Value::String(from_ref.clone()));
-                }
-                if let Some(to_ref) = &relation.to_ref {
-                    merged.insert("to_ref".to_owned(), Value::String(to_ref.clone()));
-                }
-                if let Some(scope_circle_id) = &relation.scope_circle_id {
-                    merged.insert(
-                        "scope_circle_id".to_owned(),
-                        Value::String(scope_circle_id.clone()),
-                    );
-                }
-                for key in ["relation_kind", "kind", "from_ref", "from", "to_ref", "to"] {
-                    if let Some(value) = operation.payload.get(key) {
-                        merged.insert(key.to_owned(), value.clone());
-                    }
-                }
-                let relation_kind = merged
-                    .get("relation_kind")
-                    .or_else(|| merged.get("kind"))
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                let mut merged_operation = operation.clone();
-                merged_operation.payload = Value::Object(merged);
-                self.check_relation_effective_scope(&merged_operation, &relation_kind)?;
+            // Effective scope is checked against the post-patch Relation, so a
+            // patch that moves an endpoint cannot land outside the endpoint
+            // scope floor.
+            let mut patched = relation.clone();
+            if let Some(patch) = patch {
+                apply_relation_patch(&mut patched, patch);
             }
+            let relation_kind = patched.relation_kind.clone();
+            self.check_relation_effective_scope(
+                operation.realm_id.as_str(),
+                &relation_scope_check_object(&patched),
+                &relation_kind,
+            )?;
             return Ok(());
         }
 
         if kind == arkret_wire::EventKind::RelationTombstone {
-            if operation
-                .payload
-                .get("relation_kind")
-                .or_else(|| operation.payload.get("kind"))
-                .and_then(Value::as_str)
-                == Some("watches")
-            {
-                return Err(arkret_wire::ReasonCode::RELATION_KIND_WATCHES_DERIVED);
-            }
+            // `relation_tombstone_payload` carries only `relation_id` (+ an
+            // optional `reason`), so the derived-edge check reads the kind off
+            // the stored Relation rather than off the payload.
             let relation_id = operation
                 .payload
                 .get("relation_id")
-                .or_else(|| operation.payload.get("id"))
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             if let Some(relation) = self.relations.get(relation_id)
@@ -719,12 +619,8 @@ impl ProjectionState {
         now: chrono::DateTime<chrono::Utc>,
         _hlc: &ServerHlc,
     ) -> ProjectionEffect {
-        let relation_id = operation
-            .payload
-            .get("relation_id")
-            .or_else(|| operation.payload.get("id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
+        let relation_id = relation_update_target_id(&operation.payload)
+            .unwrap_or_default()
             .to_owned();
         if relation_id.is_empty() {
             return ProjectionEffect::Ignored;
@@ -740,28 +636,10 @@ impl ProjectionState {
         let Some(existing_relation) = self.relations.get(&relation_id) else {
             return self.queue_pending_replay(relation_id, operation, "relation_unknown");
         };
+        let patch = relation_update_patch(&operation.payload).cloned();
         let mut candidate_relation = existing_relation.clone();
-        if let Some(kind) = operation
-            .payload
-            .get("relation_kind")
-            .or_else(|| operation.payload.get("kind"))
-            .and_then(|v| v.as_str())
-        {
-            candidate_relation.relation_kind = kind.to_owned();
-        }
-        if let Some(value) = operation
-            .payload
-            .get("from")
-            .or_else(|| operation.payload.get("from_ref"))
-        {
-            candidate_relation.from_ref = value.as_str().map(ToOwned::to_owned);
-        }
-        if let Some(value) = operation
-            .payload
-            .get("to")
-            .or_else(|| operation.payload.get("to_ref"))
-        {
-            candidate_relation.to_ref = value.as_str().map(ToOwned::to_owned);
+        if let Some(patch) = &patch {
+            apply_relation_patch(&mut candidate_relation, patch);
         }
         let profile = match self.relation_profile_for(&candidate_relation) {
             Ok(profile) => profile,
@@ -780,43 +658,8 @@ impl ProjectionState {
             .relations
             .get_mut(&relation_id)
             .expect("relation state exists after immutable lookup");
-        if let Some(scope_circle_id) = relation_scope_circle_id_from_payload(&operation.payload)
-            && relation.scope_circle_id.as_deref() != Some(scope_circle_id.as_str())
-        {
-            return ProjectionEffect::Rejected {
-                reason: "relation_effective_scope_immutable".to_owned(),
-            };
-        }
-        if let Some(kind) = operation
-            .payload
-            .get("relation_kind")
-            .or_else(|| operation.payload.get("kind"))
-            .and_then(|v| v.as_str())
-        {
-            relation.relation_kind = kind.to_owned();
-        }
-        if let Some(value) = operation
-            .payload
-            .get("from")
-            .or_else(|| operation.payload.get("from_ref"))
-        {
-            relation.from_ref = value.as_str().map(ToOwned::to_owned);
-        }
-        if let Some(value) = operation
-            .payload
-            .get("to")
-            .or_else(|| operation.payload.get("to_ref"))
-        {
-            relation.to_ref = value.as_str().map(ToOwned::to_owned);
-        }
-        if let Some(fields) = operation.payload.get("fields").and_then(|v| v.as_object()) {
-            for (k, v) in fields.iter() {
-                if v.is_null() {
-                    relation.fields.remove(k);
-                } else {
-                    relation.fields.insert(k.clone(), v.clone());
-                }
-            }
+        if let Some(patch) = &patch {
+            apply_relation_patch(relation, patch);
         }
         relation.updated_at = now;
         self.enforce_relation_cardinality_for(&relation_id, &profile, now);
@@ -832,7 +675,6 @@ impl ProjectionState {
         let relation_id = operation
             .payload
             .get("relation_id")
-            .or_else(|| operation.payload.get("id"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
@@ -984,24 +826,89 @@ fn container_cell_digest(state: Option<&CellState>) -> Option<String> {
         .map(arkret_canonical::sha256_digest)
 }
 
-fn relation_scope_circle_id_from_payload(payload: &Value) -> Option<String> {
-    payload
+/// The `relation` object a `relation_create_payload` carries.
+///
+/// `event-payload.schema.json#/$defs/relation_create_payload` is
+/// `additionalProperties:false` over `{relation, rank}`, so the whole Relation
+/// snapshot lives under `payload.relation` and the reducer has exactly one
+/// place to read `kind` / `from_ref` / `to_ref` / `fields` / `scope_circle_id`
+/// from.
+fn relation_create_object(payload: &Value) -> &Value {
+    payload.get("relation").unwrap_or(&Value::Null)
+}
+
+fn relation_scope_circle_id(relation: &Value) -> Option<String> {
+    relation
         .get("scope_circle_id")
-        .or_else(|| {
-            payload
-                .get("relation")
-                .and_then(Value::as_object)
-                .and_then(|relation| relation.get("scope_circle_id"))
-        })
-        .or_else(|| {
-            payload
-                .get("object")
-                .and_then(Value::as_object)
-                .and_then(|object| object.get("scope_circle_id"))
-        })
         .and_then(Value::as_str)
         .filter(|value| value.starts_with("ak:circle:"))
         .map(ToOwned::to_owned)
+}
+
+/// The Relation an `ak.relation.update` targets.
+///
+/// `event-payload.schema.json#/$defs/relation_update_payload` is
+/// `additionalProperties:false` with a `oneOf` over `{relation_id, patch}` and
+/// `{target_ref, patch}`, so exactly one of the two carriers is present and
+/// both name the same Relation.
+fn relation_update_target_id(payload: &Value) -> Option<&str> {
+    payload
+        .get("relation_id")
+        .or_else(|| payload.get("target_ref"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+}
+
+/// The `ak.schema.patch.v1` document an `ak.relation.update` carries. It is the
+/// only expression of change the payload schema admits.
+fn relation_update_patch(payload: &Value) -> Option<&serde_json::Map<String, Value>> {
+    payload.get("patch").and_then(Value::as_object)
+}
+
+/// Apply an `ak.schema.patch.v1` patch to a materialized Relation.
+///
+/// Patch paths are `relation.schema.json` field names: `relation_kind`,
+/// `from_ref`, `to_ref`, `scope_circle_id` at the object root, and edge
+/// metadata under `fields` / `fields.<name>` (identical in shape to the Morph
+/// root-level `fields` patch, so that walker is reused verbatim).
+fn apply_relation_patch(
+    relation: &mut SolandRelationState,
+    patch: &serde_json::Map<String, Value>,
+) {
+    if let Some(Some(relation_kind)) = patch_string_value(patch, "relation_kind") {
+        relation.relation_kind = relation_kind;
+    }
+    if let Some(from_ref) = patch_string_value(patch, "from_ref") {
+        relation.from_ref = from_ref;
+    }
+    if let Some(to_ref) = patch_string_value(patch, "to_ref") {
+        relation.to_ref = to_ref;
+    }
+    if let Some(scope_circle_id) = patch_string_value(patch, "scope_circle_id") {
+        relation.scope_circle_id =
+            scope_circle_id.filter(|value| value.starts_with("ak:circle:"));
+    }
+    apply_morph_fields_patch(&mut relation.fields, patch);
+}
+
+/// Render a materialized Relation into the `{from_ref, to_ref,
+/// scope_circle_id}` object shape `check_relation_effective_scope` reads, so
+/// the create path and the post-patch update path share one scope check.
+fn relation_scope_check_object(relation: &SolandRelationState) -> Value {
+    let mut object = serde_json::Map::new();
+    if let Some(from_ref) = &relation.from_ref {
+        object.insert("from_ref".to_owned(), Value::String(from_ref.clone()));
+    }
+    if let Some(to_ref) = &relation.to_ref {
+        object.insert("to_ref".to_owned(), Value::String(to_ref.clone()));
+    }
+    if let Some(scope_circle_id) = &relation.scope_circle_id {
+        object.insert(
+            "scope_circle_id".to_owned(),
+            Value::String(scope_circle_id.clone()),
+        );
+    }
+    Value::Object(object)
 }
 
 fn relation_endpoint_needs_projection(endpoint: &str) -> bool {
@@ -1064,13 +971,22 @@ mod cross_realm_relation_tests {
             .unwrap(),
             arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
             arkret_wire::EventKind::RelationCreate.as_str(),
-            json!({"relation_kind": relation_kind, "from_ref": from, "to_ref": to}),
+            json!({"relation": {"kind": relation_kind, "from_ref": from, "to_ref": to}}),
         )
     }
 
-    fn relation_op_with_id_digest(
+    /// The Relation id `ak.relation.create` derives from its own Event id.
+    ///
+    /// `relation_create_payload` is `additionalProperties:false` over
+    /// `{relation, rank}` and `relation_create_object` bans `id`, so the id is
+    /// never carried on the wire and the test has to derive it the same way
+    /// the reducer does.
+    fn relation_id_of(operation: &Operation) -> String {
+        arkret_identifiers::RelationId::from_event_id(&operation.context.event_id).to_string()
+    }
+
+    fn relation_op_with_digest(
         seed: &str,
-        relation_id: &str,
         relation_kind: &str,
         from: &str,
         to: &str,
@@ -1088,10 +1004,11 @@ mod cross_realm_relation_tests {
             arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
             arkret_wire::EventKind::RelationCreate.as_str(),
             json!({
-                "relation_id": relation_id,
-                "relation_kind": relation_kind,
-                "from_ref": from,
-                "to_ref": to,
+                "relation": {
+                    "kind": relation_kind,
+                    "from_ref": from,
+                    "to_ref": to
+                },
                 "event_id": event_id
             }),
         );
@@ -1183,17 +1100,15 @@ mod cross_realm_relation_tests {
     fn duplicate_relation_requires_review_without_digest_winner() {
         let mut proj = proj();
         let now = chrono::Utc::now();
-        let high = relation_op_with_id_digest(
+        let high = relation_op_with_digest(
             "000000000d01",
-            "ak:relation:AX902LOuy9qEqZChg4B-vKC9mR8298G7Jz__9A30BdnF",
             "references",
             STRAND_A,
             STRAND_A2,
             "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
         );
-        let low = relation_op_with_id_digest(
+        let low = relation_op_with_digest(
             "000000000d02",
-            "ak:relation:AYeK5_s0r5tOiZrSoEYLq8GtuFao4BJU9fGipyX8sRI_",
             "references",
             STRAND_A,
             STRAND_A2,
@@ -1204,10 +1119,10 @@ mod cross_realm_relation_tests {
         proj.apply_relation_create(&low, now);
 
         assert_eq!(
-            proj.relations[high.payload["relation_id"].as_str().unwrap()].state,
+            proj.relations[relation_id_of(&high).as_str()].state,
             "review_required"
         );
-        let low_state = &proj.relations[low.payload["relation_id"].as_str().unwrap()];
+        let low_state = &proj.relations[relation_id_of(&low).as_str()];
         assert_eq!(low_state.state, "review_required");
         assert_eq!(
             low_state.source_event_digest.as_deref(),
@@ -1221,17 +1136,9 @@ mod cross_realm_relation_tests {
         let now = chrono::Utc::now();
         for index in 1..=RELATION_CONFLICT_FANOUT_LIMIT {
             let seed = format!("{index:012x}");
-            let relation_id = format!("ak:relation:01904100-0000-8000-8000-{seed}");
             let digest = format!("sha256:{index:064x}");
             let effect = proj.apply_relation_create(
-                &relation_op_with_id_digest(
-                    &seed,
-                    &relation_id,
-                    "references",
-                    STRAND_A,
-                    STRAND_A2,
-                    &digest,
-                ),
+                &relation_op_with_digest(&seed, "references", STRAND_A, STRAND_A2, &digest),
                 now,
             );
             assert!(
@@ -1242,16 +1149,15 @@ mod cross_realm_relation_tests {
 
         let overflow_index = RELATION_CONFLICT_FANOUT_LIMIT + 1;
         let overflow_seed = format!("{overflow_index:012x}");
-        let overflow_id = format!("ak:relation:01904100-0000-8000-8000-{overflow_seed}");
         let overflow_digest = format!("sha256:{overflow_index:064x}");
-        let overflow = relation_op_with_id_digest(
+        let overflow = relation_op_with_digest(
             &overflow_seed,
-            &overflow_id,
             "references",
             STRAND_A,
             STRAND_A2,
             &overflow_digest,
         );
+        let overflow_id = relation_id_of(&overflow);
 
         assert!(matches!(
             proj.apply_relation_create(&overflow, now),
@@ -1305,7 +1211,7 @@ mod cross_realm_relation_tests {
             .unwrap(),
             arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
             arkret_wire::EventKind::RelationUpdate.as_str(),
-            json!({"relation_id": relation_id, "fields": {"level": "muted"}}),
+            json!({"relation_id": relation_id, "patch": {"fields.level": "muted"}}),
         );
         assert!(matches!(
             proj.apply_relation_update(&update, now, &ServerHlc::new("relation-test")),
@@ -1327,21 +1233,123 @@ mod cross_realm_relation_tests {
         ));
     }
 
+    fn relation_update_op(seed: &str, payload: Value) -> Operation {
+        arkret_event_draft::test_support::raw_projected_operation(
+            arkret_identifiers::OperationId::new(format!(
+                "ak:operation:01904100-0000-7000-8000-{seed}"
+            ))
+            .unwrap(),
+            arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
+            arkret_wire::EventKind::RelationUpdate.as_str(),
+            payload,
+        )
+    }
+
+    /// `relation_update_payload` is `additionalProperties:false` over
+    /// `{relation_id|target_ref, patch, expected_state_digest}`: the flat
+    /// `kind` / `relation_kind` / `from` / `from_ref` / `to` / `to_ref` /
+    /// `fields` / `scope_circle_id` shape is not a spec payload and therefore
+    /// has no reducer consumption path left. A payload carrying only those keys
+    /// changes nothing; the same change expressed through `patch` lands.
+    #[test]
+    fn flat_relation_update_fields_have_no_consumption_path() {
+        let mut proj = proj();
+        let now = chrono::Utc::now();
+        let create = relation_op("references", STRAND_A, STRAND_A2);
+        proj.apply_relation_create(&create, now);
+        let relation_id = relation_id_of(&create);
+        let before = proj.relations[relation_id.as_str()].clone();
+
+        let flat = relation_update_op(
+            "0000000000f1",
+            json!({
+                "relation_id": relation_id,
+                "kind": "belongs_to",
+                "relation_kind": "belongs_to",
+                "from": STRAND_A3,
+                "from_ref": STRAND_A3,
+                "to": STRAND_A3,
+                "to_ref": STRAND_A3,
+                "scope_circle_id": CIRCLE_A,
+                "fields": {"label": "flat"}
+            }),
+        );
+        assert!(matches!(
+            proj.apply_relation_update(&flat, now, &ServerHlc::new("relation-test")),
+            ProjectionEffect::RelationUpdated(_)
+        ));
+        let after = &proj.relations[relation_id.as_str()];
+        assert_eq!(after.relation_kind, before.relation_kind);
+        assert_eq!(after.from_ref, before.from_ref);
+        assert_eq!(after.to_ref, before.to_ref);
+        assert_eq!(after.scope_circle_id, before.scope_circle_id);
+        assert_eq!(after.fields, before.fields);
+        assert!(!after.fields.contains_key("label"));
+
+        let patched = relation_update_op(
+            "0000000000f2",
+            json!({
+                "relation_id": relation_id,
+                "patch": {"fields.label": "patched", "to_ref": STRAND_A3}
+            }),
+        );
+        assert!(matches!(
+            proj.apply_relation_update(&patched, now, &ServerHlc::new("relation-test")),
+            ProjectionEffect::RelationUpdated(_)
+        ));
+        let after = &proj.relations[relation_id.as_str()];
+        assert_eq!(after.fields["label"], "patched");
+        assert_eq!(after.to_ref.as_deref(), Some(STRAND_A3));
+    }
+
+    /// The scope-immutability and derived-edge rules are now decided from the
+    /// patch document, not from flat payload keys.
+    #[test]
+    fn relation_update_rules_are_decided_from_the_patch() {
+        let mut proj = proj();
+        let now = chrono::Utc::now();
+        let create = relation_op("references", STRAND_A, STRAND_A2);
+        proj.apply_relation_create(&create, now);
+        let relation_id = relation_id_of(&create);
+
+        let rescope = relation_update_op(
+            "0000000000f3",
+            json!({
+                "relation_id": relation_id,
+                "patch": {"scope_circle_id": CIRCLE_A}
+            }),
+        );
+        assert_eq!(
+            proj.check_relation_invariants(&rescope),
+            Err("relation_effective_scope_immutable")
+        );
+
+        let to_watches = relation_update_op(
+            "0000000000f4",
+            json!({
+                "relation_id": relation_id,
+                "patch": {"relation_kind": "watches"}
+            }),
+        );
+        assert_eq!(
+            proj.check_relation_invariants(&to_watches),
+            Err(arkret_wire::ReasonCode::RELATION_KIND_WATCHES_DERIVED)
+        );
+    }
+
     #[test]
     fn belongs_to_many_to_one_requires_review_for_both_heads() {
         let mut proj = proj();
         let now = chrono::Utc::now();
-        let losing_parent = relation_op_with_id_digest(
+        let losing_parent = relation_op_with_digest(
             "000000000e01",
-            "ak:relation:ASd8lPgETJRJ4JQ0274gi-i5TXmaCSCy2zyj2kA4ZAPh",
             "belongs_to",
             STRAND_A,
             STRAND_A2,
             "sha256:0000000000000000000000000000000000000000000000000000000000000002",
         );
-        let winning_parent = relation_op_with_id_digest(
+        let winning_parent = relation_op_with_digest(
             "000000000e02",
-            "ak:relation:AZaXSCMas1BQtiPqP1WWsUpy3ZS3TZ-w31x1aVyqJcB6",
             "belongs_to",
             STRAND_A,
             STRAND_A3,
@@ -1352,11 +1360,11 @@ mod cross_realm_relation_tests {
         proj.apply_relation_create(&winning_parent, now);
 
         assert_eq!(
-            proj.relations[losing_parent.payload["relation_id"].as_str().unwrap()].state,
+            proj.relations[relation_id_of(&losing_parent).as_str()].state,
             "review_required"
         );
         assert_eq!(
-            proj.relations[winning_parent.payload["relation_id"].as_str().unwrap()].state,
+            proj.relations[relation_id_of(&winning_parent).as_str()].state,
             "review_required"
         );
     }
@@ -1365,25 +1373,22 @@ mod cross_realm_relation_tests {
     fn assigned_to_allows_multiple_actors_but_dedupes_same_tuple() {
         let mut proj = proj();
         let now = chrono::Utc::now();
-        let alice_old = relation_op_with_id_digest(
+        let alice_old = relation_op_with_digest(
             "000000000f01",
-            "ak:relation:Ae5nQV8vc0vdLoM4E0eWMAvKPBzLpSToH_xqOfADuOnG",
             "assigned_to",
             STRAND_A,
             "ak:did_core:web:alice.example",
             "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         );
-        let bob = relation_op_with_id_digest(
+        let bob = relation_op_with_digest(
             "000000000f02",
-            "ak:relation:AbgYe9iozlpYfT_UYRVvVPZMNqDryanxxBDlEdIY7ANC",
             "assigned_to",
             STRAND_A,
             "ak:did_core:web:bob.example",
             "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         );
-        let alice_new = relation_op_with_id_digest(
+        let alice_new = relation_op_with_digest(
             "000000000f03",
-            "ak:relation:Adb3UVZv-3xCDNGPJdzLl3MFKNLpKv5XtLbCpPalk8uj",
             "assigned_to",
             STRAND_A,
             "ak:did_core:web:alice.example",
@@ -1395,12 +1400,12 @@ mod cross_realm_relation_tests {
         proj.apply_relation_create(&alice_new, now);
 
         assert_eq!(
-            proj.relations[alice_old.payload["relation_id"].as_str().unwrap()].state,
+            proj.relations[relation_id_of(&alice_old).as_str()].state,
             "review_required"
         );
-        assert!(proj.relations[bob.payload["relation_id"].as_str().unwrap()].is_active());
+        assert!(proj.relations[relation_id_of(&bob).as_str()].is_active());
         assert_eq!(
-            proj.relations[alice_new.payload["relation_id"].as_str().unwrap()].state,
+            proj.relations[relation_id_of(&alice_new).as_str()].state,
             "review_required"
         );
     }
@@ -1428,10 +1433,12 @@ mod cross_realm_relation_tests {
             arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
             arkret_wire::EventKind::RelationCreate.as_str(),
             json!({
-                "relation_kind": "contains",
-                "from_ref": STRAND_A,
-                "to_ref": STRAND_A2,
-                "scope_circle_id": CIRCLE_A
+                "relation": {
+                    "kind": "contains",
+                    "from_ref": STRAND_A,
+                    "to_ref": STRAND_A2,
+                    "scope_circle_id": CIRCLE_A
+                }
             }),
         );
         assert!(proj.check_relation_invariants(&scoped).is_ok());

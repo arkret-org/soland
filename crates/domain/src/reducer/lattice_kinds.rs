@@ -1,37 +1,16 @@
-//! Concrete `LatticeKind` impls + factory (SDK re-export shim).
+//! Canonical shared-FSM registry resolution for Soland state resolution.
 //!
-//! All `LatticeKind` impls and the [`default_lattice_registry`] /
-//! [`build_sdk_cell_registry`] factories moved to
-//! `arkret_lattice_registry` (SDK-8). This module is a thin
-//! re-export shim. Existing callers
-//! (`crate::reducer::lattice_kinds::default_lattice_registry()`,
-//! `build_sdk_cell_registry()`) keep working without changes.
+//! The `LatticeKind` impls and the registry factories live in
+//! `arkret_lattice_registry` (SDK-8); this module owns the startup gate that
+//! validates the canonical FSM closure before any resolution path uses it.
 
 use std::collections::BTreeSet;
 
 use arkret_identifiers::{CellRef, RealmId};
-// Re-export the individual cell-family impl structs as well so any
-// soland test that referenced them by name (e.g. `ViewCreate`,
-// `ViewUpdate`, `ViewReconcile` mentioned in `routing/events/operations.rs`
-// comments) continues to compile.
-pub use arkret_lattice_registry::{
-    AccountStatus, AgentKey, AgentStatus, CallState, CallSummary, CapabilityDerived,
-    CapabilityGrant, CircleCreate, CircleMember, CircleTombstone, ConsentGrant, ContactFactLog,
-    DeviceAuthorized, DeviceListUpdate, DirectConversationBinding, KeyBackupActiveSeries,
-    MemberIdentityLattice as MemberIdentity, MemberState, MimiRoomBinding, MlsEpoch, MorphStage,
-    NotaryCell, PolicyRule, ProfileCreate, RealmArchive, RealmAssetPrivacyPolicy, RealmCreate,
-    RealmDeliveryBindingPolicy, RealmDestroy, RealmDiscovery, RealmFreeze,
-    RealmHistorySharingPolicy, RealmHistoryVisibility, RealmInheritancePolicy, RealmJoinRule,
-    RealmLink, RealmMediaService, RealmModerationPolicy, RealmOrganization,
-    RealmPlaintextVisibleServices, RealmPolicy, RealmPolicyBundle, RealmPolicyServer,
-    RealmPreviewPolicy, RealmReadReceiptPolicy, RealmReducerProfile, RealmSchema,
-    RealmSearchPolicy, RealmTombstone, SpaceParent, StrandPosition, StrandStage, ViewCreate,
-    ViewReconcile, ViewUpdate, build_sdk_cell_registry, default_lattice_registry,
-    lattice_bindings_for_sdk_registry,
-};
+pub use arkret_lattice_registry::default_lattice_registry;
 use arkret_lattice_registry::{
     ContractRegistryError, ResolvedFsmContract, canonical_fsm_contracts,
-    try_build_sdk_cell_registry,
+    lattice_bindings_for_sdk_registry, try_build_sdk_cell_registry,
 };
 use arkret_state::lattice::LatticeKind;
 use arkret_state::state::{BottomMode, CellRegistry, MemoryCellRegistry};
@@ -132,5 +111,64 @@ mod tests {
         let mut duplicate = contracts;
         duplicate.push(duplicate[0].clone());
         assert!(validate_canonical_fsm_exact_closure(&duplicate).is_err());
+    }
+
+    /// A `LatticeKind` impl plugs into the SDK registry and is reachable by
+    /// `cell_family` lookup. Pins the SDK trait surface soland depends on.
+    #[test]
+    fn registry_register_and_lookup_works() {
+        use arkret_lattice_registry::{
+            BottomPolicy, ComponentDescriptor, Criticality, LatticeRegistry,
+        };
+
+        struct ConsentCell;
+        impl arkret_lattice_registry::LatticeKind for ConsentCell {
+            fn cell_family(&self) -> &'static str {
+                "ak.component.consent.v1"
+            }
+            fn lattice(&self) -> LatticeKind {
+                LatticeKind::OrSet
+            }
+            fn bottom_policy(&self) -> BottomPolicy {
+                BottomPolicy::Reject
+            }
+            fn component(&self) -> ComponentDescriptor {
+                ComponentDescriptor {
+                    component_type: "ak.component.consent.v1",
+                    component_version: 1,
+                    criticality: Criticality::Required,
+                }
+            }
+        }
+        let mut registry = LatticeRegistry::new();
+        assert!(registry.is_empty());
+        registry.register(ConsentCell);
+        assert_eq!(registry.len(), 1);
+        let found = registry.lookup("ak.component.consent.v1").unwrap();
+        assert_eq!(found.lattice(), LatticeKind::OrSet);
+        assert_eq!(found.bottom_policy(), BottomPolicy::Reject);
+        assert_eq!(found.bottom_policy().as_str(), "reject");
+        assert!(registry.lookup("ak.component.unknown.v1").is_none());
+    }
+
+    #[test]
+    fn lattice_kind_error_display_is_stable() {
+        use arkret_lattice_registry::LatticeKindError;
+
+        let err = LatticeKindError::MissingSubjectField {
+            cell_family: arkret_wire::CellFamilyId::STRAND_POSITION_V1,
+            field: "strand_id",
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains(arkret_wire::CellFamilyId::STRAND_POSITION_V1));
+        assert!(msg.contains("strand_id"));
+
+        let err = LatticeKindError::UnknownCellFamily {
+            observed: "ak.component.unrecognised.v1".to_owned(),
+            declared: "ak.component.consent.v1",
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("ak.component.unrecognised.v1"));
+        assert!(msg.contains("ak.component.consent.v1"));
     }
 }

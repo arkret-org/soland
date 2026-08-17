@@ -84,7 +84,6 @@ fn merge_typed_plaintext_services(
         };
         let Some(service_id) = object
             .get("service_id")
-            .or_else(|| object.get("did"))
             .and_then(Value::as_str)
             .filter(|value| DidCoreId::new((*value).to_owned()).is_ok())
         else {
@@ -1089,13 +1088,7 @@ pub fn hydrate_realm_member_state_event(
         return;
     }
     let Some(member) = payload
-        .and_then(|payload| {
-            payload
-                .get("actor_id")
-                .or_else(|| payload.get("member"))
-                .or_else(|| payload.get("member_id"))
-                .or_else(|| payload.get("subject"))
-        })
+        .and_then(|payload| payload.get("actor_id"))
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned)

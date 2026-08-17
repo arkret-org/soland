@@ -140,6 +140,8 @@ pub(crate) async fn prepare_peer_contact_carrier(
         endpoint: "/_arkret/peer/contacts".to_owned(),
         idempotency_key: idempotency_key.to_owned(),
         payload_json,
+        coalescing_key: None,
+        coalescing_position: None,
         realm_fanout: None,
         created_at: now().timestamp(),
     }))

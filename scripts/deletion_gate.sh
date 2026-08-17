@@ -21,7 +21,7 @@ cd "$ROOT"
 BASELINES=$(cat <<'EOF'
 Cokret|0|brand rename (closed)|Cokret
 ck_ops|0|brand rename (closed)|ck_ops
-register_session_|4|interop push session-grant bridge stand-in|register_session_
+register_session_|0|interop push session-grant bridge stand-in (closed)|register_session_
 ArkretApi-doc-ref|0|I-ARCH-003 stale client doc reference (closed)|ArkretApi
 AdminActorProjection|0|D14 dev collection (closed)|AdminActorProjection
 EOF

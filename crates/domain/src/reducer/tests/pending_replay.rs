@@ -4,6 +4,11 @@ const REALM: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
 const SPACE: &str = "ak:space:ATu1E_hCvaxzpXDswPMlN3ypwETWAa7O994Etg387rA6";
 const STRAND: &str = "ak:strand:ATw_yJRaz2EEXAz-44u3FE2jGCVrpM3MQQZhKmxheDqW";
 const RELATION: &str = "ak:relation:AdGtCyltkLGkKlrj8jazJOSalIEWRmqDqr2ikq7IOWcL";
+/// The Event a `ak.relation.create` for [`RELATION`] must carry: the id is
+/// `retype(event_id)` (`relation_create_payload` has no `relation_id` member),
+/// so the fixture pins the Event token instead of the object id.
+const RELATION_CREATE_EVENT: &str =
+    "ak:event:AdGtCyltkLGkKlrj8jazJOSalIEWRmqDqr2ikq7IOWcL";
 const EVENT: &str = "ak:event:AUiaY2u0jL7j0v1YowBxmn8e4QEpBDWA7QtOlNdhtZ1N";
 
 fn space_create() -> Operation {
@@ -95,10 +100,12 @@ fn relation_create_waits_for_unknown_endpoint() {
         arkret_wire::EventKind::RelationCreate,
         REALM,
         serde_json::json!({
-            "relation_id": RELATION,
-            "relation_kind": "references",
-            "from_ref": STRAND,
-            "to_ref": "ak:did_core:web:bob.example"
+            "event_id": RELATION_CREATE_EVENT,
+            "relation": {
+                "kind": "references",
+                "from_ref": STRAND,
+                "to_ref": "ak:did_core:web:bob.example"
+            }
         }),
     );
 
@@ -123,7 +130,7 @@ fn relation_update_pending_replays_after_create() {
         REALM,
         serde_json::json!({
             "relation_id": RELATION,
-            "fields": { "rank": "m" }
+            "patch": { "fields.label": "m" }
         }),
     );
 
@@ -136,16 +143,18 @@ fn relation_update_pending_replays_after_create() {
         arkret_wire::EventKind::RelationCreate,
         REALM,
         serde_json::json!({
-            "relation_id": RELATION,
-            "relation_kind": "assigned_to",
-            "from_ref": "ak:did_core:web:alice.example",
-            "to_ref": "ak:did_core:web:bob.example"
+            "event_id": RELATION_CREATE_EVENT,
+            "relation": {
+                "kind": "assigned_to",
+                "from_ref": "ak:did_core:web:alice.example",
+                "to_ref": "ak:did_core:web:bob.example"
+            }
         }),
     );
     state.apply(&create, &hlc);
 
     assert!(!state.pending_replay.contains_key(RELATION));
-    assert_eq!(state.relations[RELATION].fields["rank"], "m");
+    assert_eq!(state.relations[RELATION].fields["label"], "m");
 }
 
 #[test]
@@ -196,7 +205,7 @@ fn object_redaction_pending_replays_after_object_create() {
         REALM,
         serde_json::json!({
             "target_event_id": EVENT,
-            "object_ref": STRAND,
+            "target_ref": STRAND,
             "by": "ak:did_core:web:alice.example"
         }),
     );

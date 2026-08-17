@@ -35,14 +35,73 @@ pub struct PersistenceHandle {
 }
 
 impl PersistenceHandle {
-    pub async fn advance_account_status_authority_binding(
+    pub async fn append_account_status_record(
         &self,
-        candidate: soland_storage::AccountStatusAuthorityBindingFloor,
-    ) -> crate::ServiceResult<soland_storage::AccountStatusAuthorityBindingAdvance> {
+        record: &arkret_models_collaboration::account_lifecycle::AccountStatusRecord,
+        receipt: &arkret_models_collaboration::account_lifecycle::AccountStatusReceipt,
+    ) -> crate::ServiceResult<soland_storage::AccountStatusReplicaAppend> {
         Ok(self
             .persistence
-            .account_status_authority_bindings()
-            .advance(candidate)
+            .account_status_replicas()
+            .append(record, receipt)
+            .await?)
+    }
+
+    pub async fn current_account_status_record(
+        &self,
+        account_authority_id: &str,
+        account_id: &str,
+    ) -> crate::ServiceResult<
+        Option<arkret_models_collaboration::account_lifecycle::AccountStatusRecord>,
+    > {
+        Ok(self
+            .persistence
+            .account_status_replicas()
+            .current(account_authority_id, account_id)
+            .await?)
+    }
+
+    pub async fn resolve_account_status_records(
+        &self,
+        account_authority_id: &str,
+        account_id: &str,
+        from_status_seq: u64,
+        limit: u16,
+    ) -> crate::ServiceResult<
+        Vec<arkret_models_collaboration::account_lifecycle::AccountStatusRecord>,
+    > {
+        Ok(self
+            .persistence
+            .account_status_replicas()
+            .resolve(account_authority_id, account_id, from_status_seq, limit)
+            .await?)
+    }
+
+    pub async fn erasure_pending_account_status_records(
+        &self,
+        limit: u16,
+    ) -> crate::ServiceResult<
+        Vec<arkret_models_collaboration::account_lifecycle::AccountStatusRecord>,
+    > {
+        Ok(self
+            .persistence
+            .account_status_replicas()
+            .erasure_pending(limit)
+            .await?)
+    }
+
+    pub async fn account_status_receipt(
+        &self,
+        account_authority_id: &str,
+        account_id: &str,
+        status_seq: u64,
+    ) -> crate::ServiceResult<
+        Option<arkret_models_collaboration::account_lifecycle::AccountStatusReceipt>,
+    > {
+        Ok(self
+            .persistence
+            .account_status_replicas()
+            .receipt(account_authority_id, account_id, status_seq)
             .await?)
     }
 

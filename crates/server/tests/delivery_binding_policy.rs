@@ -97,7 +97,7 @@ fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) -> S
     let creator_actor_id = arkret_wire::project_full_id_to_core_id(&creator).unwrap();
     let payload = arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
         arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
-        arkret_identifiers::TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
+        arkret_identifiers::TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
         arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
         arkret_wire::notary::NotaryValue::single_did(creator_actor_id.clone()),
         arkret_policy::current_capability_action_registry_digest().unwrap(),

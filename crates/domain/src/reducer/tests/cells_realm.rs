@@ -791,7 +791,7 @@ fn direct_conversation_role_survives_sealed_create_log_reload_via_genesis() {
     let creator_actor_id = arkret_wire::project_full_id_to_core_id(&creator).unwrap();
     let payload = arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
         arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
-        arkret_identifiers::TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
+        arkret_identifiers::TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
         arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
         arkret_wire::notary::NotaryValue::single_did(creator_actor_id),
         arkret_policy::current_capability_action_registry_digest().unwrap(),
@@ -1383,7 +1383,7 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
             arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
                 .unwrap(),
             managed_agent_initial_resolution(),
-            arkret_identifiers::TypedTrustDomainId::new(
+            arkret_identifiers::TrustDomainId::new(
                 "ak:trust_domain:managed-agent-pcr".to_owned(),
             )
             .unwrap(),
@@ -1463,7 +1463,7 @@ fn managed_agent_genesis_requires_the_registered_status_projection() {
             arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
                 .unwrap(),
             managed_agent_initial_resolution(),
-            arkret_identifiers::TypedTrustDomainId::new(
+            arkret_identifiers::TrustDomainId::new(
                 "ak:trust_domain:managed-agent-pcr".to_owned(),
             )
             .unwrap(),

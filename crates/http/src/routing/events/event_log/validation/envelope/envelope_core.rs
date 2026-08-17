@@ -176,9 +176,9 @@ async fn validate_event_envelope_with_ingress(
     let kind = event_string_field(object, &["kind"]).ok_or_else(|| {
         event_validation_error(StatusCode::BAD_REQUEST, "param_missing", "kind is required")
     })?;
-    // Receipt objects are not durable Event kinds. Legacy plaintext transient
-    // kinds are absent from the active registry and fail the registry gate
-    // below; current transient product payloads travel encrypted inside Signal.
+    // Receipt objects are not durable Event kinds. Plaintext transient kinds
+    // are absent from the active registry and fail the registry gate below;
+    // transient product payloads travel encrypted inside Signal.
     if let Some((code, reason)) = events_submit_pre_admit_check(&kind) {
         return Err(event_validation_error(
             error_http_status(code),
@@ -634,18 +634,6 @@ async fn validate_event_envelope_with_ingress(
             realm_bootstrap_contexts,
         )
         .await?;
-    }
-    if kind == arkret_wire::EventKind::AccountStatus.as_str() {
-        if !internal_admission
-            .is_some_and(|admission| admission.is_account_status_peer(session, object))
-        {
-            return Err(event_validation_error(
-                StatusCode::FORBIDDEN,
-                "unauthorized",
-                "ak.account.status is accepted only through the authority-evidence peer operation",
-            ));
-        }
-        validate_account_status_service_binding(state, object).await?;
     }
     validate_audit_accessed_payload(&kind, object)?;
     // Round R2/R3 (T09 + T12) — realm.policy_bundle hard ceiling,

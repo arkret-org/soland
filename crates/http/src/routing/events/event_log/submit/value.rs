@@ -2355,12 +2355,12 @@ pub(super) async fn submit_event_value_with_context(
             .await
             .map_err(|error| {
                 SubmitOneError::new(
-                    if error.is_conflict_kind() || error.is_not_found() {
-                        StatusCode::PRECONDITION_FAILED
+                    if error.is_not_found() {
+                        StatusCode::FORBIDDEN
                     } else {
                         StatusCode::INTERNAL_SERVER_ERROR
                     },
-                    if error.is_conflict_kind() || error.is_not_found() {
+                    if error.is_not_found() {
                         "device_unauthorized"
                     } else {
                         "internal_error"
@@ -2549,12 +2549,12 @@ pub(super) async fn submit_event_value_with_context(
             .await
             .map_err(|error| {
                 SubmitOneError::new(
-                    if error.is_conflict_kind() || error.is_not_found() {
-                        StatusCode::PRECONDITION_FAILED
+                    if error.is_not_found() {
+                        StatusCode::FORBIDDEN
                     } else {
                         StatusCode::INTERNAL_SERVER_ERROR
                     },
-                    if error.is_conflict_kind() || error.is_not_found() {
+                    if error.is_not_found() {
                         "device_unauthorized"
                     } else {
                         "internal_error"

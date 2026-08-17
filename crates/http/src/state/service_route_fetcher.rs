@@ -602,7 +602,7 @@ mod tests {
     use arkret_models_identity::{
         ResolutionCommitment, ServiceResolutionRecord, ServiceResolutionRecordCore,
     };
-    use arkret_wire::{Base64UrlString, DidFullId, DidUrl, ProtocolSignature, TypedTrustDomainId};
+    use arkret_wire::{Base64UrlString, DidFullId, DidUrl, ProtocolSignature, TrustDomainId};
     use chrono::{Duration, TimeZone as _};
 
     use super::*;
@@ -619,7 +619,7 @@ mod tests {
         };
         let mut description = ServiceDescribe::development(
             full_id.clone(),
-            TypedTrustDomainId::new("ak:trust_domain:route.example").unwrap(),
+            TrustDomainId::new("ak:trust_domain:route.example").unwrap(),
             ServiceKind::PrincipalServer,
         );
         description.service_resolution = commitment.clone();

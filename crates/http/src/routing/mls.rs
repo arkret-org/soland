@@ -868,12 +868,12 @@ fn peer_claim_transport_binding(
     let destination_service_id =
         arkret_wire::DidCoreId::new(peer_required_header(req, "destination-service-id")?)
             .map_err(|_| peer_claim_schema_violation("destination-service-id must be a core_id"))?;
-    let source_trust_domain = arkret_identifiers::TypedTrustDomainId::new(peer_required_header(
+    let source_trust_domain = arkret_identifiers::TrustDomainId::new(peer_required_header(
         req,
         "source-trust-domain",
     )?)
     .map_err(|_| peer_claim_schema_violation("source-trust-domain is invalid"))?;
-    let destination_trust_domain = arkret_identifiers::TypedTrustDomainId::new(
+    let destination_trust_domain = arkret_identifiers::TrustDomainId::new(
         peer_required_header(req, "destination-trust-domain")?,
     )
     .map_err(|_| peer_claim_schema_violation("destination-trust-domain is invalid"))?;

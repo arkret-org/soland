@@ -1,104 +1,402 @@
+use arkret_models_collaboration::account_lifecycle::{AccountStatusReceipt, AccountStatusRecord};
 use soland_storage::{
-    AccountStatusAuthorityBindingAdvance, AccountStatusAuthorityBindingFloor,
-    AccountStatusAuthorityBindingStore, PersistenceResult,
+    AccountStatusReplicaAppend, AccountStatusReplicaConflictKind, AccountStatusReplicaStore,
+    PersistenceError, PersistenceResult,
 };
 
 use crate::{BTreeMap, Mutex, async_trait};
 
 #[derive(Default)]
-pub struct MemoryAccountStatusAuthorityBindingStore {
-    floors: Mutex<BTreeMap<(String, String), AccountStatusAuthorityBindingFloor>>,
+pub struct MemoryAccountStatusReplicaStore {
+    records: Mutex<BTreeMap<(String, String, u64), (AccountStatusRecord, AccountStatusReceipt)>>,
 }
 
-impl MemoryAccountStatusAuthorityBindingStore {
+impl MemoryAccountStatusReplicaStore {
     pub fn new() -> Self {
         Self::default()
     }
 }
 
 #[async_trait]
-impl AccountStatusAuthorityBindingStore for MemoryAccountStatusAuthorityBindingStore {
-    async fn advance(
+impl AccountStatusReplicaStore for MemoryAccountStatusReplicaStore {
+    async fn append(
         &self,
-        candidate: AccountStatusAuthorityBindingFloor,
-    ) -> PersistenceResult<AccountStatusAuthorityBindingAdvance> {
-        let key = (
-            candidate.account_authority_id.clone(),
-            candidate.account_id.clone(),
-        );
-        let mut floors = self.floors.lock();
-        let Some(current) = floors.get(&key) else {
-            floors.insert(key, candidate);
-            return Ok(AccountStatusAuthorityBindingAdvance::Advanced);
-        };
-        if candidate.binding_version < current.binding_version {
-            return Ok(AccountStatusAuthorityBindingAdvance::Rollback);
-        }
-        if candidate.binding_version == current.binding_version {
-            return Ok(if candidate.same_binding_tuple(current) {
-                AccountStatusAuthorityBindingAdvance::Replay
+        record: &AccountStatusRecord,
+        receipt: &AccountStatusReceipt,
+    ) -> PersistenceResult<AccountStatusReplicaAppend> {
+        receipt.validate_for_record(record).map_err(|error| {
+            PersistenceError::SchemaViolation(format!(
+                "account-status record/receipt pair is invalid: {error}"
+            ))
+        })?;
+        let authority = record.account_authority_id.to_string();
+        let account = record.account_id.to_string();
+        let key = (authority.clone(), account.clone(), record.status_seq);
+        let mut records = self.records.lock();
+        if let Some((existing, accepted_receipt)) = records.get(&key) {
+            return Ok(if existing.account_status_record_id == record.account_status_record_id {
+                AccountStatusReplicaAppend::Duplicate(accepted_receipt.clone())
             } else {
-                AccountStatusAuthorityBindingAdvance::Fork
+                AccountStatusReplicaAppend::Conflict {
+                    current_record: current(&records, &authority, &account),
+                    kind: AccountStatusReplicaConflictKind::Fork,
+                }
             });
         }
-        floors.insert(key, candidate);
-        Ok(AccountStatusAuthorityBindingAdvance::Advanced)
+        let head = current(&records, &authority, &account);
+        let required_status_seq = head.as_ref().map_or(1, |head| head.status_seq + 1);
+        if let Some(head) = head.as_ref()
+            && record.status_seq < required_status_seq
+        {
+            return Ok(AccountStatusReplicaAppend::Stale {
+                current_record: head.clone(),
+            });
+        }
+        if record.status_seq > required_status_seq {
+            return Ok(AccountStatusReplicaAppend::DependencyMissing {
+                current_record: head,
+                required_status_seq,
+            });
+        }
+        if let Some(kind) = chain_conflict(record, head.as_ref()) {
+            return Ok(AccountStatusReplicaAppend::Conflict {
+                current_record: head,
+                kind,
+            });
+        }
+        records.insert(key, (record.clone(), receipt.clone()));
+        Ok(AccountStatusReplicaAppend::Accepted(receipt.clone()))
+    }
+
+    async fn current(
+        &self,
+        account_authority_id: &str,
+        account_id: &str,
+    ) -> PersistenceResult<Option<AccountStatusRecord>> {
+        Ok(current(
+            &self.records.lock(),
+            account_authority_id,
+            account_id,
+        ))
+    }
+
+    async fn resolve(
+        &self,
+        account_authority_id: &str,
+        account_id: &str,
+        from_status_seq: u64,
+        limit: u16,
+    ) -> PersistenceResult<Vec<AccountStatusRecord>> {
+        Ok(self
+            .records
+            .lock()
+            .range(
+                (
+                    account_authority_id.to_owned(),
+                    account_id.to_owned(),
+                    from_status_seq,
+                )
+                    ..=(
+                        account_authority_id.to_owned(),
+                        account_id.to_owned(),
+                        u64::MAX,
+                    ),
+            )
+            .take(usize::from(limit))
+            .map(|(_, (record, _))| record.clone())
+            .collect())
+    }
+
+    async fn erasure_pending(&self, limit: u16) -> PersistenceResult<Vec<AccountStatusRecord>> {
+        Ok(self
+            .records
+            .lock()
+            .values()
+            .map(|(record, _)| record)
+            .filter(|record| {
+                record.status
+                    == arkret_models_collaboration::objects::account_status::AccountStatus::ErasurePending
+            })
+            .take(usize::from(limit))
+            .cloned()
+            .collect())
+    }
+
+    async fn receipt(
+        &self,
+        account_authority_id: &str,
+        account_id: &str,
+        status_seq: u64,
+    ) -> PersistenceResult<Option<AccountStatusReceipt>> {
+        Ok(self
+            .records
+            .lock()
+            .get(&(
+                account_authority_id.to_owned(),
+                account_id.to_owned(),
+                status_seq,
+            ))
+            .map(|(_, receipt)| receipt.clone()))
+    }
+}
+
+fn current(
+    records: &BTreeMap<(String, String, u64), (AccountStatusRecord, AccountStatusReceipt)>,
+    authority: &str,
+    account: &str,
+) -> Option<AccountStatusRecord> {
+    records
+        .range(
+            (authority.to_owned(), account.to_owned(), 0)
+                ..=(authority.to_owned(), account.to_owned(), u64::MAX),
+        )
+        .next_back()
+        .map(|(_, (record, _))| record.clone())
+}
+
+fn chain_conflict(
+    record: &AccountStatusRecord,
+    head: Option<&AccountStatusRecord>,
+) -> Option<AccountStatusReplicaConflictKind> {
+    match head {
+        None => (!(record.status_seq == 1
+            && record.previous_account_status_record_id.is_none()))
+            .then_some(AccountStatusReplicaConflictKind::Fork),
+        Some(head) => {
+            if record.previous_account_status_record_id.as_ref()
+                != Some(&head.account_status_record_id)
+            {
+                return Some(AccountStatusReplicaConflictKind::Fork);
+            }
+            if record.binding_version < head.binding_version {
+                return Some(AccountStatusReplicaConflictKind::BindingRollback);
+            }
+            if record.binding_version == head.binding_version
+                && (record.principal_authority != head.principal_authority
+                    || record.principal_control_realm_id != head.principal_control_realm_id)
+            {
+                return Some(AccountStatusReplicaConflictKind::Fork);
+            }
+            if head.status
+                == arkret_models_collaboration::objects::account_status::AccountStatus::ErasurePending
+            {
+                return Some(AccountStatusReplicaConflictKind::ErasurePendingTerminal);
+            }
+            (!head.status.can_transition_to(record.status))
+                .then_some(AccountStatusReplicaConflictKind::TransitionInvalid)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use arkret_models_collaboration::account_lifecycle::{
+        AccountStatusPrincipalAuthority, UnsignedAccountStatusReceipt, UnsignedAccountStatusRecord,
+    };
+    use arkret_models_collaboration::objects::account_status::AccountStatus;
+    use arkret_signatures::account_status::{
+        sign_account_status_receipt, sign_account_status_record,
+    };
+    use arkret_wire::{DidCoreId, DidUrl, NonEmptyString, RealmId, ReceiptId, SchemaId};
+    use ed25519_dalek::SigningKey;
+
     use super::*;
 
-    fn floor(version: u64, issuer: &str) -> AccountStatusAuthorityBindingFloor {
-        AccountStatusAuthorityBindingFloor {
-            account_authority_id: "ak:did_core:web:authority.example".to_owned(),
-            account_id: "account-1".to_owned(),
-            binding_version: version,
-            issuer_service_id: issuer.to_owned(),
-            principal_control_realm_id: "ak:realm:ARQRpvtCGBgQfVQzTK4_Hgbg0D0HSnc3gPCvXOQUICir"
-                .to_owned(),
-            principal_id: "ak:did_core:web:alice.example".to_owned(),
-        }
+    fn record(
+        seq: u64,
+        previous: Option<arkret_wire::AccountStatusRecordId>,
+        binding_version: u64,
+        status: AccountStatus,
+        issued_second: u8,
+    ) -> AccountStatusRecord {
+        sign_account_status_record(
+            UnsignedAccountStatusRecord {
+                schema: SchemaId::ACCOUNT_STATUS_RECORD_V1.to_owned(),
+                account_authority_id: DidCoreId::new("ak:did_core:web:authority.example").unwrap(),
+                account_id: NonEmptyString::new("account-1").unwrap(),
+                principal_authority: AccountStatusPrincipalAuthority {
+                    principal_id: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                    principal_server_id: DidCoreId::new("ak:did_core:web:principal.example")
+                        .unwrap(),
+                },
+                principal_control_realm_id: RealmId::new(
+                    "ak:realm:ARQRpvtCGBgQfVQzTK4_Hgbg0D0HSnc3gPCvXOQUICir",
+                )
+                .unwrap(),
+                binding_version,
+                status_seq: seq,
+                previous_account_status_record_id: previous,
+                status,
+                reason_code: None,
+                reason: None,
+                issued_at: format!("2026-08-16T00:00:{issued_second:02}.000Z")
+                    .parse()
+                    .unwrap(),
+                effective_at: format!("2026-08-16T00:00:{issued_second:02}.000Z")
+                    .parse()
+                    .unwrap(),
+                expires_at: None,
+                verification_method: DidUrl::new("did:web:authority.example#account-status-key")
+                    .unwrap(),
+            },
+            &SigningKey::from_bytes(&[51; 32]),
+        )
+        .unwrap()
+    }
+
+    fn receipt(record: &AccountStatusRecord, suffix: u8) -> AccountStatusReceipt {
+        sign_account_status_receipt(
+            UnsignedAccountStatusReceipt {
+                receipt_id: ReceiptId::new(format!(
+                    "ak:receipt:01904100-0000-7000-8000-{suffix:012}"
+                ))
+                .unwrap(),
+                account_status_record_id: record.account_status_record_id.clone(),
+                record_digest: record.payload_digest().unwrap(),
+                account_authority_id: record.account_authority_id.clone(),
+                account_id: record.account_id.clone(),
+                status_seq: record.status_seq,
+                receiver_service_id: DidCoreId::new("ak:did_core:web:receiver.example").unwrap(),
+                accepted_at: format!("2026-08-16T00:01:{suffix:02}.000Z")
+                    .parse()
+                    .unwrap(),
+                verification_method: DidUrl::new("did:web:receiver.example#notary-key").unwrap(),
+            },
+            &SigningKey::from_bytes(&[53; 32]),
+        )
+        .unwrap()
     }
 
     #[tokio::test]
-    async fn binding_floor_accepts_reissue_and_advance_but_rejects_rollback_and_fork() {
-        let store = MemoryAccountStatusAuthorityBindingStore::new();
-        assert_eq!(
-            store
-                .advance(floor(1, "ak:did_core:web:issuer.example"))
-                .await
-                .unwrap(),
-            AccountStatusAuthorityBindingAdvance::Advanced
+    async fn replica_is_monotonic_and_returns_the_original_duplicate_receipt() {
+        let store = MemoryAccountStatusReplicaStore::new();
+        let genesis = record(1, None, 1, AccountStatus::Active, 1);
+        let first_receipt = receipt(&genesis, 1);
+        assert!(matches!(
+            store.append(&genesis, &first_receipt).await.unwrap(),
+            AccountStatusReplicaAppend::Accepted(_)
+        ));
+
+        let retry_receipt = receipt(&genesis, 2);
+        let AccountStatusReplicaAppend::Duplicate(stored_receipt) =
+            store.append(&genesis, &retry_receipt).await.unwrap()
+        else {
+            panic!("exact replay must be duplicate");
+        };
+        assert_eq!(stored_receipt, first_receipt);
+
+        let gap = record(
+            3,
+            Some(genesis.account_status_record_id.clone()),
+            1,
+            AccountStatus::Suspended,
+            3,
         );
+        assert!(matches!(
+            store.append(&gap, &receipt(&gap, 3)).await.unwrap(),
+            AccountStatusReplicaAppend::DependencyMissing {
+                required_status_seq: 2,
+                ..
+            }
+        ));
         assert_eq!(
             store
-                .advance(floor(1, "ak:did_core:web:issuer.example"))
+                .current(
+                    genesis.account_authority_id.as_str(),
+                    genesis.account_id.as_str()
+                )
                 .await
-                .unwrap(),
-            AccountStatusAuthorityBindingAdvance::Replay
+                .unwrap()
+                .unwrap()
+                .account_status_record_id,
+            genesis.account_status_record_id
         );
-        assert_eq!(
-            store
-                .advance(floor(1, "ak:did_core:web:fork.example"))
-                .await
-                .unwrap(),
-            AccountStatusAuthorityBindingAdvance::Fork
+
+        let fork = record(1, None, 1, AccountStatus::Active, 4);
+        assert!(matches!(
+            store.append(&fork, &receipt(&fork, 4)).await.unwrap(),
+            AccountStatusReplicaAppend::Conflict {
+                kind: AccountStatusReplicaConflictKind::Fork,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn replica_distinguishes_binding_rollback_and_terminal_successor() {
+        let store = MemoryAccountStatusReplicaStore::new();
+        let genesis = record(1, None, 2, AccountStatus::Active, 11);
+        store
+            .append(&genesis, &receipt(&genesis, 11))
+            .await
+            .unwrap();
+
+        let rollback = record(
+            2,
+            Some(genesis.account_status_record_id.clone()),
+            1,
+            AccountStatus::Locked,
+            12,
         );
-        assert_eq!(
+        assert!(matches!(
             store
-                .advance(floor(2, "ak:did_core:web:issuer.example"))
+                .append(&rollback, &receipt(&rollback, 12))
                 .await
                 .unwrap(),
-            AccountStatusAuthorityBindingAdvance::Advanced
+            AccountStatusReplicaAppend::Conflict {
+                kind: AccountStatusReplicaConflictKind::BindingRollback,
+                ..
+            }
+        ));
+
+        let erasure = record(
+            2,
+            Some(genesis.account_status_record_id.clone()),
+            2,
+            AccountStatus::ErasurePending,
+            13,
         );
-        assert_eq!(
+        store
+            .append(&erasure, &receipt(&erasure, 13))
+            .await
+            .unwrap();
+        let successor = record(
+            3,
+            Some(erasure.account_status_record_id.clone()),
+            2,
+            AccountStatus::Active,
+            14,
+        );
+        assert!(matches!(
             store
-                .advance(floor(1, "ak:did_core:web:issuer.example"))
+                .append(&successor, &receipt(&successor, 14))
                 .await
                 .unwrap(),
-            AccountStatusAuthorityBindingAdvance::Rollback
+            AccountStatusReplicaAppend::Conflict {
+                kind: AccountStatusReplicaConflictKind::ErasurePendingTerminal,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn replica_rejects_a_receipt_bound_to_another_record() {
+        let store = MemoryAccountStatusReplicaStore::new();
+        let genesis = record(1, None, 1, AccountStatus::Active, 21);
+        let other = record(1, None, 1, AccountStatus::Active, 22);
+        assert!(matches!(
+            store.append(&genesis, &receipt(&other, 21)).await,
+            Err(PersistenceError::SchemaViolation(_))
+        ));
+        assert!(
+            store
+                .current(
+                    genesis.account_authority_id.as_str(),
+                    genesis.account_id.as_str()
+                )
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 }

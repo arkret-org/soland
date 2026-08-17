@@ -34,16 +34,13 @@ pub enum SolandEventsSubmitRequestBody {
     /// evidence that lets the Event be federated later. It is transport
     /// evidence: it is not an Event field and never enters the Event digest.
     ///
-    /// Ordered before [`Self::Batch`] and [`Self::Single`] because those two
-    /// are strictly more permissive shapes — `Single(Value)` matches any JSON
-    /// object at all, so it MUST stay last.
+    /// Ordered before [`Self::Single`] because that variant is a strictly more
+    /// permissive shape — `Single(Value)` matches any JSON object at all, so it
+    /// MUST stay last.
     Initial(arkret_wire::EventInitialSubmission),
-    /// Current account-client batch form. Every Event carries its own
-    /// authorization lease outside the signed Event envelope.
+    /// Account-client batch form. Every Event carries its own authorization
+    /// lease outside the signed Event envelope.
     InitialBatch(SolandEventsInitialSubmitBatchRequestBody),
-    /// Legacy internal batch form retained for implementation-owned callers.
-    /// Protocol producers use [`Self::InitialBatch`].
-    Batch(SolandEventsSubmitBatchRequestBody),
     /// Single Event Envelope (dominant shape).
     Single(Value),
 }
@@ -59,7 +56,7 @@ impl<'de> serde::Deserialize<'de> for SolandEventsSubmitRequestBody {
         let object = value.as_object();
         // `unit_kind` is a protocol discriminator, not an ignorable extension.
         // Dispatch it before the permissive ordinary carriers so a malformed
-        // founding unit cannot silently degrade into InitialBatch/Batch/Single.
+        // founding unit cannot silently degrade into InitialBatch/Single.
         if object.is_some_and(|object| object.contains_key("unit_kind")) {
             return match object
                 .and_then(|object| object.get("unit_kind"))
@@ -98,11 +95,6 @@ impl<'de> serde::Deserialize<'de> for SolandEventsSubmitRequestBody {
         {
             return Ok(Self::InitialBatch(batch));
         }
-        if let Ok(batch) =
-            serde_json::from_value::<SolandEventsSubmitBatchRequestBody>(value.clone())
-        {
-            return Ok(Self::Batch(batch));
-        }
         Ok(Self::Single(value))
     }
 }
@@ -111,14 +103,6 @@ impl<'de> serde::Deserialize<'de> for SolandEventsSubmitRequestBody {
 #[serde(deny_unknown_fields)]
 pub struct SolandEventsInitialSubmitBatchRequestBody {
     pub events: Vec<arkret_wire::EventInitialSubmission>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SolandEventsSubmitBatchRequestBody {
-    pub events: Vec<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub idempotency_key: Option<String>,
 }
 
 impl SolandEventsSubmitRequestBody {

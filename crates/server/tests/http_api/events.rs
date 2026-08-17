@@ -4,6 +4,18 @@
 
 use super::common::*;
 
+/// Wrap raw Event envelopes into the `events[]` element shape
+/// `/_arkret/self/events` accepts: one `EventInitialSubmission` per Event, each
+/// carrying its own (here absent) authorization lease outside the signed
+/// envelope. The envelopes stay `Value` because these fixtures deliberately
+/// mutate and re-sign them before submission.
+fn initial_submissions(events: impl IntoIterator<Item = Value>) -> Vec<Value> {
+    events
+        .into_iter()
+        .map(|event| serde_json::json!({"event": event}))
+        .collect()
+}
+
 struct ControllerSealSigner {
     did: arkret_identifiers::DidFullId,
     verification_method: arkret_wire::DidUrl,
@@ -809,7 +821,9 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
     let rootless_realm_id = RealmId::from_event_id(&rootless_create.event_id).to_string();
     let mut rootless_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({"events": [rootless_create]}))
+        .json(&serde_json::json!({
+            "events": [arkret_wire::EventInitialSubmission::online(rootless_create)]
+        }))
         .send(&app_from_state(state.clone()))
         .await;
     let rootless_status = rootless_response.status_code.expect("rootless status");
@@ -854,20 +868,19 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         serde_json::to_value(test_realm_basis_seal(&realm_id, &actor).seal_basis())
             .expect("fixture seal basis serializes");
     resign_canonical_event(&mut malformed_member_state);
+    let mismatch_submissions = initial_submissions([
+        event.clone(),
+        profile.clone(),
+        policy.clone(),
+        join_rule.clone(),
+        history_visibility.clone(),
+        discovery.clone(),
+        delivery_binding.clone(),
+        malformed_member_state,
+    ]);
     let mut mismatch_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "events": [
-                event.clone(),
-                profile.clone(),
-                policy.clone(),
-                join_rule.clone(),
-                history_visibility.clone(),
-                discovery.clone(),
-                delivery_binding.clone(),
-                malformed_member_state
-            ]
-        }))
+        .json(&serde_json::json!({"events": mismatch_submissions}))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(mismatch_response.status_code, Some(StatusCode::BAD_REQUEST));
@@ -903,7 +916,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
     let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "events": [
+            "events": initial_submissions([
                 event.clone(),
                 profile.clone(),
                 policy.clone(),
@@ -912,7 +925,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
                 discovery.clone(),
                 delivery_binding.clone(),
                 member_state.clone()
-            ]
+            ])
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -1243,7 +1256,13 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
         .to_string();
     let mut create_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({"events": bootstrap_unit}))
+        .json(&serde_json::json!({
+            "events": bootstrap_unit
+                .iter()
+                .cloned()
+                .map(arkret_wire::EventInitialSubmission::online)
+                .collect::<Vec<_>>()
+        }))
         .send(&app_from_state(state.clone()))
         .await;
     let create_status = create_response.status_code.expect("genesis status");

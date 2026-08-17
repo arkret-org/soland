@@ -24,7 +24,7 @@ use arkret_models_identity::{
 };
 use arkret_wire::{
     Base64UrlString, DidCoreId, DidFullId, DidUrl, Hash, ProtocolSignature, ServiceKind,
-    TypedTrustDomainId,
+    TrustDomainId,
 };
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -203,7 +203,7 @@ fn verified_peer_route(
                 service_resolution: commitment,
                 http_json_base_url: base_url,
                 route_binding_digest: describe_digest,
-                trust_domain: TypedTrustDomainId::new(trust_domain)
+                trust_domain: TrustDomainId::new(trust_domain)
                     .expect("fixture peer trust domain"),
                 protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
             },

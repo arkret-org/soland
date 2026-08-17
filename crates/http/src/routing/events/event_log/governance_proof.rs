@@ -1792,11 +1792,10 @@ mod tests {
         )));
     }
 
-    /// Fail-closed replaces the old "reject the producer's legacy effect"
-    /// premise: a producer can no longer name a cell at all, so the only way
-    /// the materializer can go wrong is by inventing writes for an Event whose
-    /// registered contract will not evaluate. `event-and-patch.md` §2.4.2 makes
-    /// that an outright rejection, not a partial op set.
+    /// A producer cannot name a cell at all, so the only way the materializer
+    /// can go wrong is by inventing writes for an Event whose registered
+    /// contract will not evaluate. `event-and-patch.md` §2.4.2 makes that an
+    /// outright rejection, not a partial op set.
     #[test]
     fn governance_materializer_rejects_a_realm_create_it_cannot_project() {
         let state = test_state();

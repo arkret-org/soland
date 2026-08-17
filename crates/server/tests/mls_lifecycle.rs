@@ -784,7 +784,16 @@ async fn mls_lifecycle_end_to_end() {
     let mut create_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .add_header("content-type", "application/json", true)
-        .body(arkret_canonical::canonical_json_bytes(&json!({"events": realm_bootstrap})).unwrap())
+        .body(
+            arkret_canonical::canonical_json_bytes(&json!({
+                "events": realm_bootstrap
+                    .iter()
+                    .cloned()
+                    .map(arkret_wire::EventInitialSubmission::online)
+                    .collect::<Vec<_>>()
+            }))
+            .unwrap(),
+        )
         .send(&app_from_state(state.clone()))
         .await;
     let create_status = create_resp.status_code;

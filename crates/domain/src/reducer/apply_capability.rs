@@ -54,15 +54,10 @@ fn selector_string_field<'a>(selector: &'a Value, field: &str) -> Option<&'a str
 }
 
 fn selector_realm_id<'a>(selector: &'a Value, fallback: &'a str) -> &'a str {
-    selector_string_field(selector, "realm_id")
-        .or_else(|| selector_string_field(selector, "id").filter(|id| id.starts_with("ak:realm:")))
-        .unwrap_or(fallback)
+    selector_string_field(selector, "realm_id").unwrap_or(fallback)
 }
 
 fn normalize_selector_object(selector: &Value, realm_id: &str) -> Option<String> {
-    if let Some(id) = selector_string_field(selector, "id") {
-        return Some(id.to_owned());
-    }
     if let Some(object_ref) = selector_string_field(selector, "object_ref") {
         return Some(object_ref.to_owned());
     }
@@ -213,7 +208,6 @@ pub fn engine_grant_from_cell_body(
     let constraints = engine_constraints_from_body(body);
     let created_at = body
         .get("issued_at")
-        .or_else(|| body.get("created_at"))
         .and_then(Value::as_str)
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc))
@@ -605,7 +599,6 @@ fn grant_issuer(payload: &Value) -> Option<String> {
     grant_body(payload)
         .get("issuer")
         .and_then(Value::as_str)
-        .or_else(|| payload.get("issuer").and_then(Value::as_str))
         .map(ToOwned::to_owned)
 }
 
@@ -749,10 +742,7 @@ fn body_effective_expires_at(body: &Value) -> Option<chrono::DateTime<chrono::Ut
     let constraint_expiry = value_array_field(body, "constraints")
         .into_iter()
         .filter_map(|constraint| {
-            let constraint_kind = constraint
-                .get("constraint_kind")
-                .and_then(Value::as_str)
-                .or_else(|| constraint.get("type").and_then(Value::as_str));
+            let constraint_kind = constraint.get("constraint_kind").and_then(Value::as_str);
             if constraint_kind != Some("temporal") {
                 return None;
             }
@@ -775,10 +765,7 @@ fn body_max_authority_depth(body: &Value) -> Option<u32> {
     value_array_field(body, "constraints")
         .into_iter()
         .filter_map(|constraint| {
-            let constraint_kind = constraint
-                .get("constraint_kind")
-                .and_then(Value::as_str)
-                .or_else(|| constraint.get("type").and_then(Value::as_str));
+            let constraint_kind = constraint.get("constraint_kind").and_then(Value::as_str);
             if constraint_kind != Some("authority_control") {
                 return None;
             }

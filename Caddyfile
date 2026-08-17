@@ -4,7 +4,7 @@
 		Access-Control-Allow-Origin "{http.request.header.Origin}"
 		Access-Control-Allow-Credentials "true"
 		Access-Control-Allow-Methods "GET, QUERY, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
-		Access-Control-Allow-Headers "authorization, content-type, signature, signature-input, content-digest, dpop, idempotency-key, x-arkret-request-id, x-arkret-wait-for, x-arkret-content-digest, x-arkret-realm-id, x-arkret-filename, x-arkret-blob-encrypted, x-arkret-blob-purpose, x-arkret-purpose, x-arkret-attachment-envelope, x-arkret-key-backup-unlock-proof, x-arkret-session-grant-challenge, x-arkret-session-grant-proof, range"
+		Access-Control-Allow-Headers "authorization, content-type, signature, signature-input, content-digest, dpop, idempotency-key, x-arkret-request-id, x-arkret-wait-for, x-arkret-content-digest, x-arkret-realm-id, x-arkret-filename, x-arkret-blob-encrypted, x-arkret-blob-purpose, x-arkret-purpose, x-arkret-attachment-envelope, x-arkret-key-backup-unlock-proof, range"
 		Access-Control-Expose-Headers "retry-after, x-arkret-wait-for-satisfied, content-range, accept-ranges"
 		Vary "Origin"
 		defer
@@ -18,7 +18,7 @@
 			Access-Control-Allow-Origin "{http.request.header.Origin}"
 			Access-Control-Allow-Credentials "true"
 			Access-Control-Allow-Methods "GET, QUERY, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
-			Access-Control-Allow-Headers "authorization, content-type, signature, signature-input, content-digest, dpop, idempotency-key, x-arkret-request-id, x-arkret-wait-for, x-arkret-content-digest, x-arkret-realm-id, x-arkret-filename, x-arkret-blob-encrypted, x-arkret-blob-purpose, x-arkret-purpose, x-arkret-attachment-envelope, x-arkret-key-backup-unlock-proof, x-arkret-session-grant-challenge, x-arkret-session-grant-proof, range"
+			Access-Control-Allow-Headers "authorization, content-type, signature, signature-input, content-digest, dpop, idempotency-key, x-arkret-request-id, x-arkret-wait-for, x-arkret-content-digest, x-arkret-realm-id, x-arkret-filename, x-arkret-blob-encrypted, x-arkret-blob-purpose, x-arkret-purpose, x-arkret-attachment-envelope, x-arkret-key-backup-unlock-proof, range"
 			Access-Control-Expose-Headers "retry-after, x-arkret-wait-for-satisfied, content-range, accept-ranges"
 			Vary "Origin"
 		}

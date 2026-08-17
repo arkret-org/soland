@@ -128,7 +128,57 @@ pub async fn enqueue_outbound(
     idempotency_key: &str,
     payload_json: &str,
 ) -> soland_services::ServiceResult<soland_services::federation::FederationDeliveryRecord> {
+    enqueue_outbound_with_lane(
+        state,
+        peer_url,
+        peer_did,
+        endpoint,
+        idempotency_key,
+        payload_json,
+        None,
+    )
+    .await
+}
+
+/// Queue one monotonic state update while keeping at most one unfinished row
+/// for the same `(peer, lane)`. A higher position atomically supersedes the
+/// older row; a stale/equal enqueue is a no-op.
+pub async fn enqueue_coalesced_outbound(
+    state: &AppState,
+    peer_url: &str,
+    peer_did: &str,
+    endpoint: &str,
+    idempotency_key: &str,
+    payload_json: &str,
+    coalescing_key: &str,
+    coalescing_position: i64,
+) -> soland_services::ServiceResult<soland_services::federation::FederationDeliveryRecord> {
+    enqueue_outbound_with_lane(
+        state,
+        peer_url,
+        peer_did,
+        endpoint,
+        idempotency_key,
+        payload_json,
+        Some((coalescing_key, coalescing_position)),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn enqueue_outbound_with_lane(
+    state: &AppState,
+    peer_url: &str,
+    peer_did: &str,
+    endpoint: &str,
+    idempotency_key: &str,
+    payload_json: &str,
+    coalescing_lane: Option<(&str, i64)>,
+) -> soland_services::ServiceResult<soland_services::federation::FederationDeliveryRecord> {
     let now = now_unix_secs();
+    let (coalescing_key, coalescing_position) = coalescing_lane
+        .map(|(key, position)| (Some(key.to_owned()), Some(position)))
+        .unwrap_or((None, None));
     let result = state
         .federation()
         .enqueue_delivery(
@@ -140,6 +190,8 @@ pub async fn enqueue_outbound(
                     endpoint: endpoint.to_owned(),
                     idempotency_key: idempotency_key.to_owned(),
                     payload_json: payload_json.to_owned(),
+                    coalescing_key,
+                    coalescing_position,
                     realm_fanout: None,
                     created_at: now,
                 },
@@ -329,6 +381,23 @@ fn excerpt(body: &str) -> String {
 }
 
 fn peer_event_application_failure(endpoint: &str, body: &str) -> Option<&'static str> {
+    if endpoint == "/_arkret/peer/account-status" {
+        return match serde_json::from_str::<
+            arkret_models_collaboration::account_lifecycle::AccountStatusPublicationOutcome,
+        >(body)
+        .ok()
+        .map(|outcome| outcome.status)
+        {
+            Some(
+                arkret_models_collaboration::account_lifecycle::AccountStatusPublicationStatus::Accepted
+                | arkret_models_collaboration::account_lifecycle::AccountStatusPublicationStatus::Duplicate,
+            ) => None,
+            Some(
+                arkret_models_collaboration::account_lifecycle::AccountStatusPublicationStatus::DependencyMissing,
+            ) => Some(error_code::DEPENDENCY_MISSING),
+            None => Some("invalid_account_status_outcome"),
+        };
+    }
     if endpoint == "/_soland/peer/federation/operations" {
         return match serde_json::from_str::<serde_json::Value>(body)
             .ok()
@@ -382,6 +451,7 @@ fn peer_event_application_failure(endpoint: &str, body: &str) -> Option<&'static
 struct SemanticResubmission {
     payload_json: String,
     idempotency_key: String,
+    coalescing_position: Option<i64>,
 }
 
 enum KeyPackageClaimRecovery {
@@ -423,6 +493,7 @@ fn dependency_resubmission(
     SemanticResubmission {
         payload_json: request_body.to_owned(),
         idempotency_key: semantic_resubmission_key(previous_key, semantic_attempts, request_body),
+        coalescing_position: None,
     }
 }
 
@@ -488,6 +559,7 @@ fn peer_event_partial_retry(
     Some(SemanticResubmission {
         payload_json,
         idempotency_key,
+        coalescing_position: None,
     })
 }
 
@@ -1016,7 +1088,7 @@ impl FederationDispatcher {
             reqwest::header::CONTENT_TYPE,
             reqwest::header::HeaderValue::from_static("application/json"),
         );
-        // The private operations rail uses its legacy federation signature
+        // The private operations rail uses its own federation signature
         // transcript, which does not cover Idempotency-Key. Outbox persistence
         // still deduplicates the delivery by this key; only the HTTP header is
         // omitted for that wire profile.
@@ -1063,6 +1135,16 @@ impl FederationDispatcher {
                 let status = resp.status().as_u16() as i32;
                 let response_headers = resp.headers().clone();
                 let body_text = resp.text().await.unwrap_or_default();
+                let account_status_resubmission = if (200..300).contains(&status) {
+                    self.account_status_resubmission(
+                        &row,
+                        &body_text,
+                        row.semantic_attempts.saturating_add(1),
+                    )
+                    .await
+                } else {
+                    Ok(None)
+                };
                 if (200..300).contains(&status)
                     && let Err(error) = self.capture_contact_outcome(&row, &body_text).await
                 {
@@ -1091,6 +1173,17 @@ impl FederationDispatcher {
                         None,
                         now,
                     )
+                } else if let Err(error) = &account_status_resubmission {
+                    self.transport_retry(
+                        &row,
+                        &lease_token,
+                        attempts,
+                        Some(status),
+                        error_code::TRANSPORT_ERROR,
+                        excerpt(&format!("account_status_lane_recovery: {error}")),
+                        None,
+                        now,
+                    )
                 } else {
                     self.classify_response(
                         &row,
@@ -1100,6 +1193,8 @@ impl FederationDispatcher {
                         &response_headers,
                         &body_text,
                         now,
+                        account_status_resubmission
+                            .expect("account-status recovery error was handled above"),
                     )
                 }
             }
@@ -1344,6 +1439,181 @@ impl FederationDispatcher {
         .await
     }
 
+    async fn account_status_resubmission(
+        &self,
+        row: &PendingFederationDelivery,
+        response_body: &str,
+        semantic_attempts: i32,
+    ) -> Result<Option<SemanticResubmission>, String> {
+        use arkret_models_collaboration::account_lifecycle::{
+            AccountStatusPublication, AccountStatusPublicationRequestBody,
+            AccountStatusPublicationStatus, AccountStatusReceiptedPublication,
+        };
+
+        if row.delivery.endpoint != "/_arkret/peer/account-status" {
+            return Ok(None);
+        }
+        let outcome: arkret_models_collaboration::account_lifecycle::AccountStatusPublicationOutcome =
+            serde_json::from_str(response_body)
+                .map_err(|error| format!("account-status outcome decode failed: {error}"))?;
+        let request: AccountStatusPublicationRequestBody =
+            serde_json::from_str(&row.delivery.payload_json)
+                .map_err(|error| format!("account-status request decode failed: {error}"))?;
+        let submitted = request.publication.record();
+        if matches!(
+            outcome.status,
+            AccountStatusPublicationStatus::Accepted | AccountStatusPublicationStatus::Duplicate
+        ) {
+            let mut ancestor_id = row.supersedes_outbox_id.clone();
+            let mut desired: Option<(u64, String)> = None;
+            for _ in 0..128 {
+                let Some(id) = ancestor_id else {
+                    break;
+                };
+                let Some(ancestor) = self
+                    .state
+                    .federation()
+                    .delivery(&id)
+                    .await
+                    .map_err(|error| error.to_string())?
+                else {
+                    break;
+                };
+                if ancestor.delivery.endpoint != row.delivery.endpoint
+                    || ancestor.delivery.peer_did != row.delivery.peer_did
+                    || ancestor.delivery.coalescing_key != row.delivery.coalescing_key
+                {
+                    break;
+                }
+                let ancestor_request: AccountStatusPublicationRequestBody =
+                    serde_json::from_str(&ancestor.delivery.payload_json).map_err(|error| {
+                        format!("account-status ancestor request decode failed: {error}")
+                    })?;
+                let ancestor_seq = ancestor_request.publication.record().status_seq;
+                if ancestor_seq > submitted.status_seq
+                    && desired
+                        .as_ref()
+                        .is_none_or(|(desired_seq, _)| ancestor_seq > *desired_seq)
+                {
+                    desired = Some((ancestor_seq, ancestor.delivery.payload_json.clone()));
+                }
+                ancestor_id = ancestor.supersedes_outbox_id;
+            }
+            let Some((desired_seq, desired_payload_json)) = desired else {
+                return Ok(None);
+            };
+            let next_seq = submitted.status_seq.saturating_add(1);
+            let payload_json = if next_seq == desired_seq {
+                desired_payload_json
+            } else {
+                let next_record = self
+                    .state
+                    .persistence()
+                    .resolve_account_status_records(
+                        submitted.account_authority_id.as_str(),
+                        submitted.account_id.as_str(),
+                        next_seq,
+                        1,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| {
+                        "local account-status replica omits the next sequential record".to_owned()
+                    })?;
+                let next_receipt = self
+                    .state
+                    .persistence()
+                    .account_status_receipt(
+                        submitted.account_authority_id.as_str(),
+                        submitted.account_id.as_str(),
+                        next_seq,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| {
+                        "local account-status next record omits durable receipt".to_owned()
+                    })?;
+                arkret_canonical::canonical_json_string(&AccountStatusPublicationRequestBody {
+                    publication: AccountStatusPublication::Receipted(
+                        AccountStatusReceiptedPublication {
+                            record: next_record,
+                            account_status_receipts: vec![next_receipt],
+                        },
+                    ),
+                })
+                .map_err(|error| error.to_string())?
+            };
+            return Ok(Some(SemanticResubmission {
+                idempotency_key: semantic_resubmission_key(
+                    &row.delivery.idempotency_key,
+                    semantic_attempts,
+                    &payload_json,
+                ),
+                payload_json,
+                coalescing_position: Some(i64::try_from(next_seq).map_err(|_| {
+                    "account-status desired sequence exceeds outbox lane range".to_owned()
+                })?),
+            }));
+        }
+        if outcome.status != AccountStatusPublicationStatus::DependencyMissing {
+            return Ok(None);
+        }
+        let required = outcome
+            .required_status_seq
+            .ok_or_else(|| "dependency_missing outcome omits required_status_seq".to_owned())?;
+        if required >= submitted.status_seq {
+            return Err(
+                "account-status required_status_seq does not precede submitted record".to_owned(),
+            );
+        }
+        let predecessor = self
+            .state
+            .persistence()
+            .resolve_account_status_records(
+                submitted.account_authority_id.as_str(),
+                submitted.account_id.as_str(),
+                required,
+                1,
+            )
+            .await
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "local account-status replica omits required predecessor".to_owned())?;
+        let receipt = self
+            .state
+            .persistence()
+            .account_status_receipt(
+                submitted.account_authority_id.as_str(),
+                submitted.account_id.as_str(),
+                required,
+            )
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "local account-status predecessor omits durable receipt".to_owned())?;
+        let body = AccountStatusPublicationRequestBody {
+            publication: AccountStatusPublication::Receipted(AccountStatusReceiptedPublication {
+                record: predecessor.clone(),
+                account_status_receipts: vec![receipt],
+            }),
+        };
+        let payload =
+            arkret_canonical::canonical_json_string(&body).map_err(|error| error.to_string())?;
+        Ok(Some(SemanticResubmission {
+            idempotency_key: semantic_resubmission_key(
+                &row.delivery.idempotency_key,
+                semantic_attempts,
+                &payload,
+            ),
+            payload_json: payload,
+            coalescing_position: Some(i64::try_from(required).map_err(|_| {
+                "account-status required sequence exceeds outbox lane range".to_owned()
+            })?),
+        }))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn classify_response(
         &self,
@@ -1354,6 +1624,7 @@ impl FederationDispatcher {
         headers: &reqwest::header::HeaderMap,
         body_text: &str,
         now: i64,
+        account_status_resubmission: Option<SemanticResubmission>,
     ) -> RecordFederationAttemptCommand {
         let response_excerpt = excerpt(body_text);
         let transport_succeeded = (200..300).contains(&status);
@@ -1406,13 +1677,25 @@ impl FederationDispatcher {
         // transport identity (`federation.md` §8.5).
         let semantic_attempts = row.semantic_attempts.saturating_add(1);
         let resubmission = if transport_succeeded {
-            peer_event_partial_retry(
-                &row.delivery.endpoint,
-                &row.delivery.payload_json,
-                body_text,
-                &row.delivery.idempotency_key,
-                semantic_attempts,
-            )
+            account_status_resubmission
+                .or_else(|| {
+                    peer_event_partial_retry(
+                        &row.delivery.endpoint,
+                        &row.delivery.payload_json,
+                        body_text,
+                        &row.delivery.idempotency_key,
+                        semantic_attempts,
+                    )
+                })
+                .or_else(|| {
+                    (application_failure == Some(error_code::DEPENDENCY_MISSING)).then(|| {
+                        dependency_resubmission(
+                            &row.delivery.idempotency_key,
+                            semantic_attempts,
+                            &row.delivery.payload_json,
+                        )
+                    })
+                })
         } else if causal_dependencies_pending(body_text) {
             Some(dependency_resubmission(
                 &row.delivery.idempotency_key,
@@ -1425,7 +1708,12 @@ impl FederationDispatcher {
 
         if let Some(resubmission) = resubmission {
             let reason = application_failure.unwrap_or(error_code::DEPENDENCY_MISSING);
-            if semantic_attempts > MAX_SEMANTIC_ATTEMPTS {
+            let semantic_limit = if row.delivery.endpoint == "/_arkret/peer/account-status" {
+                128
+            } else {
+                MAX_SEMANTIC_ATTEMPTS
+            };
+            if semantic_attempts > semantic_limit {
                 // `federation.md` §4.1: bounded resubmission. Stop the loop and
                 // hand the case to an operator instead of polling forever.
                 return self.dead_letter(
@@ -1471,6 +1759,10 @@ impl FederationDispatcher {
                         endpoint: row.delivery.endpoint.clone(),
                         idempotency_key: resubmission.idempotency_key,
                         payload_json: resubmission.payload_json,
+                        coalescing_key: row.delivery.coalescing_key.clone(),
+                        coalescing_position: resubmission
+                            .coalescing_position
+                            .or(row.delivery.coalescing_position),
                         realm_fanout: row.delivery.realm_fanout.clone(),
                         created_at: now,
                     }),
@@ -2136,6 +2428,7 @@ mod tests {
         let Some(SemanticResubmission {
             payload_json,
             idempotency_key,
+            ..
         }) = peer_event_partial_retry(
             "/_arkret/peer/events",
             &serde_json::to_string(&request).unwrap(),

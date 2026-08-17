@@ -934,7 +934,7 @@ pub(crate) fn validate_agent_pcr_genesis_object(
                     ))
                 },
             )?,
-            trust_domain: arkret_wire::TypedTrustDomainId::new(trust_domain.to_owned()).map_err(
+            trust_domain: arkret_wire::TrustDomainId::new(trust_domain.to_owned()).map_err(
                 |error| schema_error(format!("configured trust domain is invalid: {error}")),
             )?,
             capability_action_registry_digest:
@@ -1299,7 +1299,7 @@ mod tests {
                     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                 )
                 .unwrap(),
-                trust_domain: arkret_wire::TypedTrustDomainId::new(TRUST_DOMAIN).unwrap(),
+                trust_domain: arkret_wire::TrustDomainId::new(TRUST_DOMAIN).unwrap(),
                 capability_action_registry_digest:
                     arkret_policy::current_capability_action_registry_digest().unwrap(),
                 created_at: Utc::now(),
@@ -1382,10 +1382,8 @@ mod tests {
 
     /// The genesis gate is the registered contract, not a producer array: a
     /// signed `ak.realm.create` either derives the canonical registered genesis cells
-    /// or fails closed (`event-and-patch.md` §2.4.2). The old negative case
-    /// declared a legacy per-Realm create cell in `effects[]`; v1 removed that
-    /// field, so the surviving negative is a genesis payload the contract
-    /// cannot project at all.
+    /// or fails closed (`event-and-patch.md` §2.4.2). The negative case is a
+    /// genesis payload the contract cannot project at all.
     #[test]
     fn agent_pcr_genesis_requires_the_canonical_four_genesis_cells() {
         let mut event = crate::test_event::raw_event(

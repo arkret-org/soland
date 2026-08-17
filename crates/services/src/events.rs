@@ -2364,6 +2364,8 @@ mod tests {
                     endpoint: "/_arkret/peer/events".to_owned(),
                     idempotency_key: "event:test".to_owned(),
                     payload_json: "{}".to_owned(),
+                    coalescing_key: None,
+                    coalescing_position: None,
                     realm_fanout: None,
                     created_at: now.timestamp(),
                 }],

@@ -73,26 +73,13 @@ pub async fn active_device_revocation_gate_selector(
         })
         .await?
         .ok_or_else(|| ServiceError::NotFound("device authorization is unavailable".to_owned()))?;
-    if device.verification_state != "verified" || device.revoked_at.is_some() {
-        return Err(ServiceError::Conflict(
+    let Some((target_device_authorize_event_id, authorized_generation_ref)) =
+        verified_device_authorization_binding(&device)?
+    else {
+        return Err(ServiceError::NotFound(
             "device authorization is not active".to_owned(),
         ));
-    }
-    let target_device_authorize_event_id = device
-        .payload
-        .get("device_authorize_event_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            ServiceError::SchemaViolation(
-                "device authorization omits its accepted Event id".to_owned(),
-            )
-        })?;
-    let target_device_authorize_event_id = arkret_identifiers::EventId::new(
-        target_device_authorize_event_id.to_owned(),
-    )
-    .map_err(|error| {
-        ServiceError::SchemaViolation(format!("device authorization Event id is invalid: {error}"))
-    })?;
+    };
     let authorize_event = state
         .event_queries()
         .canonical_event(target_device_authorize_event_id.as_str())
@@ -124,15 +111,6 @@ pub async fn active_device_revocation_gate_selector(
         .filter(|generation| generation.status == DeviceGenerationStatus::Active)
         .ok_or_else(|| ServiceError::Conflict("device generation is not active".to_owned()))?;
     let target_device_generation_ref = generation.current_ref;
-    let authorized_generation_ref = device
-        .payload
-        .get("authorized_generation_ref")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            ServiceError::SchemaViolation(
-                "device authorization omits its generation binding".to_owned(),
-            )
-        })?;
     if authorized_generation_ref != target_device_generation_ref {
         return Err(ServiceError::Conflict(
             "device authorization is outside the current generation".to_owned(),
@@ -145,6 +123,42 @@ pub async fn active_device_revocation_gate_selector(
         target_device_authorize_event_id: target_device_authorize_event_id.to_string(),
         target_device_generation_ref,
     })
+}
+
+fn verified_device_authorization_binding(
+    device: &soland_services::identity::DeviceIdentity,
+) -> Result<Option<(arkret_identifiers::EventId, u64)>, ServiceError> {
+    if device.verification_state != "verified" || device.revoked_at.is_some() {
+        return Ok(None);
+    }
+    let target_device_authorize_event_id = device
+        .payload
+        .get("device_authorize_event_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ServiceError::SchemaViolation(
+                "device authorization omits its accepted Event id".to_owned(),
+            )
+        })?;
+    let target_device_authorize_event_id = arkret_identifiers::EventId::new(
+        target_device_authorize_event_id.to_owned(),
+    )
+    .map_err(|error| {
+        ServiceError::SchemaViolation(format!("device authorization Event id is invalid: {error}"))
+    })?;
+    let authorized_generation_ref = device
+        .payload
+        .get("authorized_generation_ref")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            ServiceError::SchemaViolation(
+                "device authorization omits its generation binding".to_owned(),
+            )
+        })?;
+    Ok(Some((
+        target_device_authorize_event_id,
+        authorized_generation_ref,
+    )))
 }
 
 async fn generation_view_from_records(
@@ -469,6 +483,44 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    fn device(
+        verification_state: &str,
+        payload: Value,
+    ) -> soland_services::identity::DeviceIdentity {
+        soland_services::identity::DeviceIdentity {
+            actor_id: "ak:did_core:webvh:z6mkfixture:alice.example".to_owned(),
+            device_id: "ak:device:01904100-0000-7000-8000-000000000030".to_owned(),
+            display_name: None,
+            verification_state: verification_state.to_owned(),
+            payload,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            revoked_at: None,
+        }
+    }
+
+    #[test]
+    fn absent_authorization_and_malformed_verified_projection_are_distinct() {
+        assert_eq!(
+            verified_device_authorization_binding(&device("unverified", json!({}))).unwrap(),
+            None
+        );
+
+        let malformed = verified_device_authorization_binding(&device(
+            "verified",
+            json!({"authorized_generation_ref": 1}),
+        ));
+        assert!(matches!(malformed, Err(ServiceError::SchemaViolation(_))));
+
+        let malformed = verified_device_authorization_binding(&device(
+            "verified",
+            json!({
+                "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
+            }),
+        ));
+        assert!(matches!(malformed, Err(ServiceError::SchemaViolation(_))));
+    }
 
     fn record(id: &str, kind: &str, digest: &str, envelope: Value) -> CanonicalEventRecord {
         CanonicalEventRecord {

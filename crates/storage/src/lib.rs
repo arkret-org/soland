@@ -442,7 +442,7 @@ pub trait SyncStoreRegistry: Send + Sync {
     fn control_proposal_authority_acks(&self) -> &dyn ControlProposalAuthorityAckStore;
     /// `ak.profile.binding.websocket.v1` challenge + replay ledger.
     fn websocket_auth(&self) -> &dyn WebsocketAuthStore;
-    fn account_status_authority_bindings(&self) -> &dyn AccountStatusAuthorityBindingStore;
+    fn account_status_replicas(&self) -> &dyn AccountStatusReplicaStore;
 }
 
 /// Owner-published identity resolution and remote-route safety persistence.

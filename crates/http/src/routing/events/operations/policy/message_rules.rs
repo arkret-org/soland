@@ -97,8 +97,12 @@ pub(super) fn operation_target_scope_circle_id(
         arkret_wire::EventKind::RelationCreate => inline_scope("relation")
             .or_else(|| inline_scope("object"))
             .or_else(top_level_scope),
+        // `relation_update_payload` names its target with either `relation_id`
+        // or `target_ref`; `relation_tombstone_payload` allows only
+        // `relation_id`. Both carriers resolve to the same Relation, so the
+        // Circle-scope check MUST NOT be bypassable by picking the other one.
         arkret_wire::EventKind::RelationUpdate | arkret_wire::EventKind::RelationTombstone => {
-            relation_scope("relation_id")
+            relation_scope("relation_id").or_else(|| relation_scope("target_ref"))
         }
         arkret_wire::EventKind::MessageCreate => strand_scope("strand_id"),
         arkret_wire::EventKind::StrandUpdate => strand_scope("target_ref"),

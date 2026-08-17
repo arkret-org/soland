@@ -1671,7 +1671,7 @@ impl ProjectionService {
             });
         }
         if is_strand_watch_kind {
-            let strand_id = string_field("strand_id").or_else(|| string_field("target_ref"))?;
+            let strand_id = string_field("strand_id")?;
             let actor_id = operation.context.sender.to_string();
             return state.strand_watches.get(&(strand_id, actor_id)).map(|row| {
                 ProjectionWriteThroughRecord::StrandWatch(
@@ -1775,12 +1775,7 @@ impl ProjectionService {
             }?;
             return state.morphs.get(&id).map(morph_write_through_record);
         }
-        let object_ref = operation
-            .payload
-            .get("object_ref")
-            .or_else(|| operation.payload.get("target_object_ref"))
-            .or_else(|| operation.payload.get("target_ref"))
-            .and_then(Value::as_str)?;
+        let object_ref = operation.payload.get("target_ref").and_then(Value::as_str)?;
         state
             .strands
             .get(object_ref)
@@ -2608,7 +2603,6 @@ fn agent_action_target_matches(target: &Value, operation: &Operation) -> bool {
             operation
                 .payload
                 .get("strand_id")
-                .or_else(|| operation.payload.get("thread_id"))
                 .and_then(Value::as_str)
                 .is_some_and(|strand_id| strand_id == target_ref)
         }

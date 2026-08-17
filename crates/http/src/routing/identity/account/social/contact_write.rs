@@ -1731,7 +1731,7 @@ async fn prepare_contact_federation_delivery(
             introduction_evidence,
             ..
         } => contact_request_delivery_address(state, holder, peer, introduction_evidence).await?,
-        // Stored legacy delivery coordinates do not retain the exact authority
+        // Stored delivery coordinates do not retain the exact authority
         // instance and therefore cannot authorize a later human-PCR route.
         _ => None,
     };

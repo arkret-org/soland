@@ -313,6 +313,8 @@ pub async fn requeue_dead_letter(
                 endpoint: original.delivery.endpoint.clone(),
                 idempotency_key: idempotency_key.clone(),
                 payload_json: original.delivery.payload_json.clone(),
+                coalescing_key: original.delivery.coalescing_key.clone(),
+                coalescing_position: original.delivery.coalescing_position,
                 realm_fanout: None,
                 created_at: requeued_at,
             },

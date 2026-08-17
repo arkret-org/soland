@@ -19,7 +19,9 @@ struct PersistenceMaintenance(Arc<dyn PersistenceStore>);
 fn federation_delivery_record(
     record: crate::federation::FederationDeliveryRecord,
 ) -> FederationOutboxRecord {
-    match record.realm_fanout {
+    let coalescing_key = record.coalescing_key.clone();
+    let coalescing_position = record.coalescing_position;
+    let mut persisted = match record.realm_fanout {
         Some(binding) => FederationOutboxRecord::realm_fanout(
             record.id,
             record.peer_did,
@@ -41,7 +43,10 @@ fn federation_delivery_record(
             record.payload_json,
             record.created_at,
         ),
-    }
+    };
+    persisted.coalescing_key = coalescing_key;
+    persisted.coalescing_position = coalescing_position;
+    persisted
 }
 
 fn application_delivery_record(
@@ -54,6 +59,8 @@ fn application_delivery_record(
         endpoint: record.endpoint.clone(),
         idempotency_key: record.idempotency_key.clone(),
         payload_json: record.payload_json.clone(),
+        coalescing_key: record.coalescing_key.clone(),
+        coalescing_position: record.coalescing_position,
         realm_fanout: record.realm_fanout.clone(),
         created_at: record.created_at,
     }

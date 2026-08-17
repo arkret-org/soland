@@ -80,15 +80,9 @@ impl ProjectionState {
                 votes: BTreeMap::new(),
                 max_selections: message
                     .content
-                    .get("max_selections")
+                    .get("poll")
+                    .and_then(|poll| poll.get("max_selections"))
                     .and_then(Value::as_u64)
-                    .or_else(|| {
-                        message
-                            .content
-                            .get("poll")
-                            .and_then(|poll| poll.get("max_selections"))
-                            .and_then(Value::as_u64)
-                    })
                     .unwrap_or(1)
                     .max(1) as u32,
                 created_at: message.created_at,
@@ -192,8 +186,8 @@ impl ProjectionState {
     /// `redaction_value: null` (or the equivalent `unredact: true` flag)
     /// resets the cas-register and removes the tombstone.
     ///
-    /// When the payload also carries `object_ref` / `target_object_ref`
-    /// naming a `ak:strand:` or `ak:morph:` typed-id, the redaction
+    /// When the payload's `target_ref` names a `ak:strand:` or
+    /// `ak:morph:` typed-id, the redaction
     /// additionally flips the corresponding projection's state to
     /// `ObjectLifecycleState::Redacted` per spec common-fields.md section 5.1.
     /// Space containers are intentionally excluded: they have no Redacted
@@ -246,9 +240,8 @@ impl ProjectionState {
             msg.redacted_at = Some(operation.created_at);
         }
 
-        // Strand / Morph object-level redaction. If payload
-        // carries an `object_ref` (or fallback `target_object_ref`)
-        // naming a typed-id, push the projection to the Redacted terminal
+        // Strand / Morph object-level redaction. If the payload's
+        // `target_ref` names a typed-id, push the projection to the Redacted terminal
         // state. State-machine guard against terminal source is policed
         // by `check_redaction_target_transition` preflight; by the time
         // the reducer runs here, the source state is known-permissible.
@@ -308,7 +301,6 @@ impl ProjectionState {
         let key = operation
             .payload
             .get("key")
-            .or_else(|| operation.payload.get("reaction"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
@@ -348,7 +340,6 @@ impl ProjectionState {
         let key = operation
             .payload
             .get("key")
-            .or_else(|| operation.payload.get("reaction"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();

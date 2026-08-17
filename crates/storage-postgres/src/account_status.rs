@@ -1,86 +1,280 @@
+use arkret_models_collaboration::account_lifecycle::{AccountStatusReceipt, AccountStatusRecord};
+
 use super::{
-    AccountStatusAuthorityBindingAdvance, AccountStatusAuthorityBindingFloor,
-    AccountStatusAuthorityBindingStore, BigInt, OptionalExtension, PersistenceError,
-    PersistenceResult, PgPool, QueryableByName, RunQueryDsl, Text, async_trait, pg_conn, sql_query,
+    AccountStatusReplicaAppend, AccountStatusReplicaConflictKind, AccountStatusReplicaStore,
+    AsyncConnection, BigInt, Jsonb, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
+    PgTransactionError, QueryableByName, RunQueryDsl, Text, async_trait, pg_conn, sql_query,
 };
 
-pub struct PgAccountStatusAuthorityBindingStore {
+pub struct PgAccountStatusReplicaStore {
     pub pool: PgPool,
 }
 
 #[derive(QueryableByName)]
-struct BindingFloorRow {
-    #[diesel(sql_type = BigInt)]
-    binding_version: i64,
-    #[diesel(sql_type = Text)]
-    issuer_service_id: String,
-    #[diesel(sql_type = Text)]
-    principal_control_realm_id: String,
-    #[diesel(sql_type = Text)]
-    principal_id: String,
+struct RecordRow {
+    #[diesel(sql_type = Jsonb)]
+    record: serde_json::Value,
+    #[diesel(sql_type = Jsonb)]
+    receipt: serde_json::Value,
+}
+
+fn decode_record(row: &RecordRow) -> PersistenceResult<AccountStatusRecord> {
+    serde_json::from_value(row.record.clone()).map_err(|error| {
+        PersistenceError::Internal(format!("stored account-status record is invalid: {error}"))
+    })
+}
+
+fn decode_receipt(row: &RecordRow) -> PersistenceResult<AccountStatusReceipt> {
+    serde_json::from_value(row.receipt.clone()).map_err(|error| {
+        PersistenceError::Internal(format!("stored account-status receipt is invalid: {error}"))
+    })
+}
+
+fn chain_conflict(
+    record: &AccountStatusRecord,
+    head: Option<&AccountStatusRecord>,
+) -> Option<AccountStatusReplicaConflictKind> {
+    match head {
+        None => (!(record.status_seq == 1
+            && record.previous_account_status_record_id.is_none()))
+            .then_some(AccountStatusReplicaConflictKind::Fork),
+        Some(head) => {
+            if record.previous_account_status_record_id.as_ref()
+                != Some(&head.account_status_record_id)
+            {
+                return Some(AccountStatusReplicaConflictKind::Fork);
+            }
+            if record.binding_version < head.binding_version {
+                return Some(AccountStatusReplicaConflictKind::BindingRollback);
+            }
+            if record.binding_version == head.binding_version
+                && (record.principal_authority != head.principal_authority
+                    || record.principal_control_realm_id != head.principal_control_realm_id)
+            {
+                return Some(AccountStatusReplicaConflictKind::Fork);
+            }
+            if head.status
+                == arkret_models_collaboration::objects::account_status::AccountStatus::ErasurePending
+            {
+                return Some(AccountStatusReplicaConflictKind::ErasurePendingTerminal);
+            }
+            (!head.status.can_transition_to(record.status))
+                .then_some(AccountStatusReplicaConflictKind::TransitionInvalid)
+        }
+    }
 }
 
 #[async_trait]
-impl AccountStatusAuthorityBindingStore for PgAccountStatusAuthorityBindingStore {
-    async fn advance(
+impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
+    async fn append(
         &self,
-        candidate: AccountStatusAuthorityBindingFloor,
-    ) -> PersistenceResult<AccountStatusAuthorityBindingAdvance> {
-        let version = i64::try_from(candidate.binding_version).map_err(|_| {
-            PersistenceError::Internal(
-                "account-status authority binding_version exceeds PostgreSQL BIGINT".to_owned(),
-            )
+        record: &AccountStatusRecord,
+        receipt: &AccountStatusReceipt,
+    ) -> PersistenceResult<AccountStatusReplicaAppend> {
+        receipt.validate_for_record(record).map_err(|error| {
+            PersistenceError::SchemaViolation(format!(
+                "account-status record/receipt pair is invalid: {error}"
+            ))
         })?;
-        let mut conn = pg_conn(&self.pool)
+        let mut conn = pg_conn(&self.pool).await?;
+        let record = record.clone();
+        let receipt = receipt.clone();
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let authority = record.account_authority_id.to_string();
+            let account = record.account_id.to_string();
+            let lock_key = format!("account-status:{authority}:{account}");
+            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind::<Text, _>(&lock_key)
+                .execute(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+
+            let existing = sql_query(
+                "SELECT record, receipt FROM account_status_replica_records \
+                 WHERE account_authority_id = $1 AND account_id = $2 AND status_seq = $3",
+            )
+            .bind::<Text, _>(&authority)
+            .bind::<Text, _>(&account)
+            .bind::<BigInt, _>(i64::try_from(record.status_seq).map_err(|_| {
+                PersistenceError::SchemaViolation(
+                    "account-status sequence exceeds PostgreSQL bigint".to_owned(),
+                )
+            })?)
+            .get_result::<RecordRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+            .map(|row| -> PersistenceResult<_> {
+                let record = decode_record(&row)?;
+                let receipt = decode_receipt(&row)?;
+                Ok((record, receipt))
+            })
+            .transpose()?;
+
+            let head = sql_query(
+                "SELECT record, receipt FROM account_status_replica_records \
+                 WHERE account_authority_id = $1 AND account_id = $2 \
+                 ORDER BY status_seq DESC LIMIT 1",
+            )
+            .bind::<Text, _>(&authority)
+            .bind::<Text, _>(&account)
+            .get_result::<RecordRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+            .map(|row| decode_record(&row))
+            .transpose()?;
+
+            if let Some((existing, accepted_receipt)) = existing {
+                return Ok(if existing.account_status_record_id
+                    == record.account_status_record_id
+                {
+                    AccountStatusReplicaAppend::Duplicate(accepted_receipt)
+                } else {
+                    AccountStatusReplicaAppend::Conflict {
+                        current_record: head,
+                        kind: AccountStatusReplicaConflictKind::Fork,
+                    }
+                });
+            }
+            let required_status_seq = head.as_ref().map_or(1, |head| head.status_seq + 1);
+            if let Some(head) = head.as_ref()
+                && record.status_seq < required_status_seq
+            {
+                return Ok(AccountStatusReplicaAppend::Stale {
+                    current_record: head.clone(),
+                });
+            }
+            if record.status_seq > required_status_seq {
+                return Ok(AccountStatusReplicaAppend::DependencyMissing {
+                    current_record: head,
+                    required_status_seq,
+                });
+            }
+            if let Some(kind) = chain_conflict(&record, head.as_ref()) {
+                return Ok(AccountStatusReplicaAppend::Conflict {
+                    current_record: head,
+                    kind,
+                });
+            }
+
+            sql_query(
+                "INSERT INTO account_status_replica_records \
+                 (account_authority_id, account_id, status_seq, record_id, record, receipt) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind::<Text, _>(&authority)
+            .bind::<Text, _>(&account)
+            .bind::<BigInt, _>(i64::try_from(record.status_seq).map_err(|_| {
+                PersistenceError::SchemaViolation(
+                    "account-status sequence exceeds PostgreSQL bigint".to_owned(),
+                )
+            })?)
+            .bind::<Text, _>(record.account_status_record_id.as_str())
+            .bind::<Jsonb, _>(serde_json::to_value(&record).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "account-status record cannot be encoded: {error}"
+                ))
+            })?)
+            .bind::<Jsonb, _>(serde_json::to_value(&receipt).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "account-status receipt cannot be encoded: {error}"
+                ))
+            })?)
+            .execute(&mut *conn)
             .await
             .map_err(PersistenceError::database)?;
-        let advanced = sql_query(
-            "INSERT INTO account_status_authority_binding_floors \
-             (account_authority_id, account_id, binding_version, issuer_service_id, \
-              principal_control_realm_id, principal_id) VALUES ($1, $2, $3, $4, $5, $6) \
-             ON CONFLICT (account_authority_id, account_id) DO UPDATE SET \
-               binding_version = EXCLUDED.binding_version, \
-               issuer_service_id = EXCLUDED.issuer_service_id, \
-               principal_control_realm_id = EXCLUDED.principal_control_realm_id, \
-               principal_id = EXCLUDED.principal_id \
-             WHERE EXCLUDED.binding_version > account_status_authority_binding_floors.binding_version \
-             RETURNING binding_version, issuer_service_id, principal_control_realm_id, principal_id",
+            Ok(AccountStatusReplicaAppend::Accepted(receipt))
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn current(
+        &self,
+        account_authority_id: &str,
+        account_id: &str,
+    ) -> PersistenceResult<Option<AccountStatusRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT record, receipt FROM account_status_replica_records \
+             WHERE account_authority_id = $1 AND account_id = $2 \
+             ORDER BY status_seq DESC LIMIT 1",
         )
-        .bind::<Text, _>(&candidate.account_authority_id)
-        .bind::<Text, _>(&candidate.account_id)
-        .bind::<BigInt, _>(version)
-        .bind::<Text, _>(&candidate.issuer_service_id)
-        .bind::<Text, _>(&candidate.principal_control_realm_id)
-        .bind::<Text, _>(&candidate.principal_id)
-        .get_result::<BindingFloorRow>(&mut *conn)
+        .bind::<Text, _>(account_authority_id)
+        .bind::<Text, _>(account_id)
+        .get_result::<RecordRow>(&mut *conn)
         .await
         .optional()
-        .map_err(PersistenceError::database)?;
-        if advanced.is_some() {
-            return Ok(AccountStatusAuthorityBindingAdvance::Advanced);
-        }
-        let current = sql_query(
-            "SELECT binding_version, issuer_service_id, principal_control_realm_id, principal_id \
-             FROM account_status_authority_binding_floors \
-             WHERE account_authority_id = $1 AND account_id = $2",
+        .map_err(PersistenceError::database)?
+        .map(|row| decode_record(&row))
+        .transpose()
+    }
+
+    async fn resolve(
+        &self,
+        account_authority_id: &str,
+        account_id: &str,
+        from_status_seq: u64,
+        limit: u16,
+    ) -> PersistenceResult<Vec<AccountStatusRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let rows = sql_query(
+            "SELECT record, receipt FROM account_status_replica_records \
+             WHERE account_authority_id = $1 AND account_id = $2 AND status_seq >= $3 \
+             ORDER BY status_seq ASC LIMIT $4",
         )
-        .bind::<Text, _>(&candidate.account_authority_id)
-        .bind::<Text, _>(&candidate.account_id)
-        .get_result::<BindingFloorRow>(&mut *conn)
+        .bind::<Text, _>(account_authority_id)
+        .bind::<Text, _>(account_id)
+        .bind::<BigInt, _>(i64::try_from(from_status_seq).map_err(|_| {
+            PersistenceError::SchemaViolation(
+                "account-status sequence exceeds PostgreSQL bigint".to_owned(),
+            )
+        })?)
+        .bind::<BigInt, _>(i64::from(limit))
+        .load::<RecordRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
-        if current.binding_version != version {
-            return Ok(AccountStatusAuthorityBindingAdvance::Rollback);
-        }
-        Ok(
-            if current.issuer_service_id == candidate.issuer_service_id
-                && current.principal_control_realm_id == candidate.principal_control_realm_id
-                && current.principal_id == candidate.principal_id
-            {
-                AccountStatusAuthorityBindingAdvance::Replay
-            } else {
-                AccountStatusAuthorityBindingAdvance::Fork
-            },
+        rows.into_iter().map(|row| decode_record(&row)).collect()
+    }
+
+    async fn erasure_pending(&self, limit: u16) -> PersistenceResult<Vec<AccountStatusRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let rows = sql_query(
+            "SELECT record, receipt FROM account_status_replica_records \
+             WHERE record #>> '{status}' = 'erasure_pending' \
+             ORDER BY accepted_at, account_authority_id, account_id, status_seq LIMIT $1",
         )
+        .bind::<BigInt, _>(i64::from(limit))
+        .load::<RecordRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        rows.into_iter().map(|row| decode_record(&row)).collect()
+    }
+
+    async fn receipt(
+        &self,
+        account_authority_id: &str,
+        account_id: &str,
+        status_seq: u64,
+    ) -> PersistenceResult<Option<AccountStatusReceipt>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT record, receipt FROM account_status_replica_records \
+             WHERE account_authority_id = $1 AND account_id = $2 AND status_seq = $3",
+        )
+        .bind::<Text, _>(account_authority_id)
+        .bind::<Text, _>(account_id)
+        .bind::<BigInt, _>(i64::try_from(status_seq).map_err(|_| {
+            PersistenceError::SchemaViolation(
+                "account-status sequence exceeds PostgreSQL bigint".to_owned(),
+            )
+        })?)
+        .get_result::<RecordRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(|row| decode_receipt(&row))
+        .transpose()
     }
 }

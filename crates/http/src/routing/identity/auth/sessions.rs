@@ -139,18 +139,12 @@ async fn enforce_session_device_revocation_gate(
             // synthetic session before a PCR authorization exists so pairing
             // and account-bootstrap flows can be exercised. Such a placeholder
             // has no accepted generation that could be pending or revoked; the
-            // legacy revoked_at check above still rejects an explicitly revoked
+            // revoked_at check above still rejects an explicitly revoked
             // device. Production and SessionGrant-backed sessions remain
             // fail-closed on every missing or stale authority selector.
             return Ok(());
         }
-        Err(_) => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                "device_revoked",
-                "device authorization is not active",
-            ));
-        }
+        Err(error) => return Err(session_device_selector_error(&error)),
     };
     let selector = if let Some(grant) = session.session_grant.as_ref() {
         let binding = grant.device_binding.as_ref().ok_or((
@@ -211,6 +205,24 @@ async fn enforce_session_device_revocation_gate(
             "auth_expired",
             "session device authority binding is no longer current",
         )),
+    }
+}
+
+fn session_device_selector_error(
+    error: &soland_services::ServiceError,
+) -> (StatusCode, &'static str, &'static str) {
+    if error.is_not_found() {
+        (
+            StatusCode::FORBIDDEN,
+            "device_unauthorized",
+            "device authorization is not active",
+        )
+    } else {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "device authorization projection is invalid",
+        )
     }
 }
 
@@ -325,7 +337,8 @@ fn bearer_looks_like_session_grant(token: &str) -> bool {
     let Some(payload) = decode_jwt_payload_json(payload) else {
         return false;
     };
-    token_type_claim(&payload) == Some("ak.session.grant")
+    payload.get("kind").and_then(serde_json::Value::as_str)
+        == Some(arkret_models_identity::SESSION_GRANT_CREDENTIAL_KIND)
 }
 
 fn decode_jwt_payload_json(payload: &str) -> Option<serde_json::Value> {
@@ -335,13 +348,6 @@ fn decode_jwt_payload_json(payload: &str) -> Option<serde_json::Value> {
         .decode(payload.as_bytes())
         .ok()?;
     serde_json::from_slice(&bytes).ok()
-}
-
-fn token_type_claim(payload: &serde_json::Value) -> Option<&str> {
-    payload
-        .get("type")
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| payload.get("kind").and_then(serde_json::Value::as_str))
 }
 
 #[cfg(test)]
@@ -388,17 +394,31 @@ mod tests {
     }
 
     #[test]
-    fn bare_session_grant_jwt_is_classified_from_wire_type() {
-        let token = compact_jwt(serde_json::json!({
-            "type": "ak.session.grant",
-            "subject": "did:web:alice.example",
-        }));
-
-        assert!(bearer_looks_like_session_grant(&token));
+    fn selector_absence_is_403_but_projection_corruption_is_500() {
+        assert_eq!(
+            session_device_selector_error(&soland_services::ServiceError::NotFound(
+                "absent".to_owned()
+            )),
+            (
+                StatusCode::FORBIDDEN,
+                "device_unauthorized",
+                "device authorization is not active"
+            )
+        );
+        assert_eq!(
+            session_device_selector_error(&soland_services::ServiceError::SchemaViolation(
+                "corrupt".to_owned()
+            )),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "device authorization projection is invalid"
+            )
+        );
     }
 
     #[test]
-    fn bare_session_grant_jwt_is_classified_from_compat_kind() {
+    fn bare_session_grant_jwt_is_classified_from_the_kind_claim() {
         let token = compact_jwt(serde_json::json!({
             "kind": "ak.session.grant",
             "subject": "did:web:alice.example",
@@ -410,11 +430,18 @@ mod tests {
     #[test]
     fn non_grant_bearers_are_not_classified_as_session_grants() {
         let other = compact_jwt(serde_json::json!({
-            "type": "other",
+            "kind": "other",
             "sub": "did:web:alice.example",
+        }));
+        // `SignedSessionGrantClaims` carries the credential name in `kind`
+        // only; a `type` claim is not a session-grant discriminator.
+        let mislabelled = compact_jwt(serde_json::json!({
+            "type": "ak.session.grant",
+            "subject": "did:web:alice.example",
         }));
 
         assert!(!bearer_looks_like_session_grant(&other));
+        assert!(!bearer_looks_like_session_grant(&mislabelled));
         assert!(!bearer_looks_like_session_grant("opaque-dev-bearer"));
         assert!(!bearer_looks_like_session_grant("not.valid.base64"));
     }

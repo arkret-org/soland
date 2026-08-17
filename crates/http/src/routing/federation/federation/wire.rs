@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 /// on every inbound federation request.
 #[derive(Debug, Clone)]
 pub(crate) struct FederationTrustHeaders {
-    pub source_trust_domain: arkret_identifiers::TypedTrustDomainId,
-    pub destination_trust_domain: arkret_identifiers::TypedTrustDomainId,
+    pub source_trust_domain: arkret_identifiers::TrustDomainId,
+    pub destination_trust_domain: arkret_identifiers::TrustDomainId,
 }
 
 impl FederationTrustHeaders {
@@ -33,13 +33,13 @@ impl FederationTrustHeaders {
         let source = header_value(arkret_wire::constants::HEADER_SOURCE_TRUST_DOMAIN)?.to_owned();
         let destination =
             header_value(arkret_wire::constants::HEADER_DESTINATION_TRUST_DOMAIN)?.to_owned();
-        let source = arkret_identifiers::TypedTrustDomainId::new(source).map_err(|_| {
+        let source = arkret_identifiers::TrustDomainId::new(source).map_err(|_| {
             HeaderViolation::Malformed(
                 arkret_wire::constants::HEADER_SOURCE_TRUST_DOMAIN.to_owned(),
             )
         })?;
         let destination =
-            arkret_identifiers::TypedTrustDomainId::new(destination).map_err(|_| {
+            arkret_identifiers::TrustDomainId::new(destination).map_err(|_| {
                 HeaderViolation::Malformed(
                     arkret_wire::constants::HEADER_DESTINATION_TRUST_DOMAIN.to_owned(),
                 )
@@ -55,7 +55,7 @@ impl FederationTrustHeaders {
     /// `cross_domain_replay_rejected`.
     pub(crate) fn verify_destination(
         &self,
-        expected: &arkret_identifiers::TypedTrustDomainId,
+        expected: &arkret_identifiers::TrustDomainId,
     ) -> Result<(), &'static str> {
         if self.destination_trust_domain != *expected {
             return Err(arkret_wire::ReasonCode::CROSS_DOMAIN_REPLAY_REJECTED);

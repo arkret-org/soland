@@ -484,6 +484,8 @@ pub(super) async fn peer_event_batch_fanout_records(
             endpoint: "/_arkret/peer/events".to_owned(),
             idempotency_key,
             payload_json,
+            coalescing_key: None,
+            coalescing_position: None,
             realm_fanout: Some(soland_services::federation::RealmFanoutBinding {
                 realm_id: first.realm_id.to_string(),
                 source_event_ids: parsed_events
@@ -589,6 +591,8 @@ pub(super) async fn direct_conversation_founding_fanout_records(
                 receipt.pair_key, receipt.founding_unit_digest
             ),
             payload_json,
+            coalescing_key: None,
+            coalescing_position: None,
             realm_fanout: Some(soland_services::federation::RealmFanoutBinding {
                 realm_id: parsed_events[0].realm_id.to_string(),
                 source_event_ids: parsed_events
@@ -797,6 +801,8 @@ pub(super) async fn peer_event_fanout_records(
             endpoint: "/_arkret/peer/events".to_owned(),
             idempotency_key,
             payload_json: payload,
+            coalescing_key: None,
+            coalescing_position: None,
             realm_fanout: Some(soland_services::federation::RealmFanoutBinding {
                 realm_id: parsed.realm_id.to_string(),
                 source_event_ids: vec![parsed.event_id.to_string()],
@@ -1039,6 +1045,8 @@ async fn realm_bootstrap_fanout_record(
             endpoint: "/_arkret/peer/events".to_owned(),
             idempotency_key,
             payload_json,
+            coalescing_key: None,
+            coalescing_position: None,
             realm_fanout: Some(soland_services::federation::RealmFanoutBinding {
                 realm_id: parsed.realm_id.to_string(),
                 source_event_ids: bootstrap_records

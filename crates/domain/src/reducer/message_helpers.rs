@@ -34,15 +34,8 @@ pub(crate) fn message_event_id_from_ref(value: &str) -> String {
 }
 
 pub fn message_redaction_target_ref(payload: &Value) -> Option<String> {
-    [
-        "target_event_id",
-        "message_id",
-        "target_ref",
-        "target",
-        "redacts",
-        "event_id",
-    ]
-    .into_iter()
+    ["target_event_id", "message_id", "target_ref", "event_id"]
+        .into_iter()
     .find_map(|field| {
         payload
             .get(field)
@@ -76,23 +69,12 @@ pub fn message_id_from_payload_or_event_id(payload: &Value, event_id: &str) -> S
 }
 
 pub(crate) fn reaction_target_event_id(operation: &Operation) -> Option<String> {
-    [
-        "target_ref",
-        "target_event_id",
-        "target",
-        "target_message_id",
-        "message_id",
-        "event_id",
-    ]
-    .into_iter()
-    .find_map(|field| {
-        operation
-            .payload
-            .get(field)
-            .and_then(|v| v.as_str())
-            .filter(|value| !value.is_empty())
-            .map(message_event_id_from_ref)
-    })
+    operation
+        .payload
+        .get("target_ref")
+        .and_then(|v| v.as_str())
+        .filter(|value| !value.is_empty())
+        .map(message_event_id_from_ref)
 }
 
 /// Canonical acting-principal for message projections, via the SDK's
@@ -164,37 +146,18 @@ pub fn poll_id_from_content(content: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned)
-        .or_else(|| {
-            content
-                .get("poll")
-                .and_then(|poll| poll.get("id"))
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(ToOwned::to_owned)
-        })
-        .or_else(|| {
-            content
-                .get("poll_id")
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(ToOwned::to_owned)
-        })
 }
 
 pub(crate) fn text_body(value: &Value) -> Option<&str> {
-    value.as_str().or_else(|| {
-        value
-            .get("body")
-            .or_else(|| value.get("label"))
-            .and_then(Value::as_str)
-    })
+    value
+        .as_str()
+        .or_else(|| value.get("body").and_then(Value::as_str))
 }
 
 pub(crate) fn poll_question_from_content(content: &Value) -> Option<String> {
     content
-        .get("question")
+        .get("body")
         .and_then(Value::as_str)
-        .or_else(|| content.get("body").and_then(Value::as_str))
         .or_else(|| {
             content
                 .get("poll")
@@ -207,14 +170,9 @@ pub(crate) fn poll_question_from_content(content: &Value) -> Option<String> {
 
 pub(crate) fn poll_options_from_content(content: &Value) -> Vec<PollOptionState> {
     let options = content
-        .get("options")
-        .and_then(Value::as_array)
-        .or_else(|| {
-            content
-                .get("poll")
-                .and_then(|poll| poll.get("answers"))
-                .and_then(Value::as_array)
-        });
+        .get("poll")
+        .and_then(|poll| poll.get("answers"))
+        .and_then(Value::as_array);
     options
         .map(|items| {
             items
@@ -232,12 +190,7 @@ pub(crate) fn poll_options_from_content(content: &Value) -> Vec<PollOptionState>
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned)
                         .unwrap_or_else(|| format!("opt-{idx}"));
-                    let label = item
-                        .get("label")
-                        .and_then(Value::as_str)
-                        .or_else(|| item.get("text").and_then(text_body))?
-                        .trim()
-                        .to_owned();
+                    let label = item.get("text").and_then(text_body)?.trim().to_owned();
                     if label.is_empty() {
                         None
                     } else {
@@ -262,26 +215,6 @@ pub(crate) fn poll_choices_from_content(content: &Value) -> Vec<String> {
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>()
         })
-        .or_else(|| {
-            content
-                .get("choices")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .filter(|value| !value.trim().is_empty())
-                        .map(ToOwned::to_owned)
-                        .collect::<Vec<_>>()
-                })
-        })
-        .or_else(|| {
-            content
-                .get("choice")
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(|choice| vec![choice.to_owned()])
-        })
         .unwrap_or_default()
 }
 
@@ -303,9 +236,7 @@ pub(crate) fn read_scope_key(scope: &ReadScopeWire) -> String {
 pub(crate) fn redaction_object_ref(operation: &Operation) -> Option<String> {
     operation
         .payload
-        .get("object_ref")
-        .or_else(|| operation.payload.get("target_object_ref"))
-        .or_else(|| operation.payload.get("target_ref"))
+        .get("target_ref")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned)
 }

@@ -2,7 +2,7 @@ use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_wire::{CORE_REDUCER_PROFILE, EventKind, ProfileId};
 // Standard protocol event kind constants intentionally live in the SDK.
 // Soland code should refer to `arkret_wire::events::kinds::*` directly instead
-// of re-exporting legacy aliases from this module.
+// of re-exporting aliases from this module.
 use serde_json::Value;
 
 use crate::artifacts;
@@ -152,7 +152,6 @@ pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discuss
 pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static str> {
     let binding = payload
         .get("governance_binding")
-        .or_else(|| payload.get("mls_governance_binding"))
         .ok_or("mls_governance_binding_missing")?;
     if binding.get("binding_version").and_then(Value::as_u64) != Some(1) {
         return Err("mls_governance_binding_version_invalid");
@@ -170,19 +169,14 @@ pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static s
     if binding.get("reducer_profile").and_then(Value::as_str) != Some(CORE_REDUCER_PROFILE) {
         return Err("mls_governance_binding_reducer_profile_invalid");
     }
-    let Some(group_id) = payload
-        .get("mls_group_id")
-        .or_else(|| payload.get("group_id"))
-        .and_then(Value::as_str)
-    else {
+    let Some(group_id) = payload.get("mls_group_id").and_then(Value::as_str) else {
         return Err("mls_commit_group_missing");
     };
     if binding.get("mls_group_id").and_then(Value::as_str) != Some(group_id) {
         return Err("mls_governance_binding_group_mismatch");
     }
     let expected_prev_epoch = payload
-        .get("expected_prev_epoch")
-        .or_else(|| payload.get("base_epoch"))
+        .get("base_epoch")
         .and_then(Value::as_u64)
         .ok_or("mls_commit_expected_prev_epoch_missing")?;
     let expected_next_epoch = payload

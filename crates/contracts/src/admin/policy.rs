@@ -17,8 +17,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The v1 policy decision set. The legacy `deny` value is not a valid wire
-/// decision.
+/// The v1 policy decision set. A bare `deny` is not a valid wire decision —
+/// callers MUST choose `soft_deny` or `hard_deny`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(rename_all = "snake_case")]

@@ -226,7 +226,7 @@ pub(crate) async fn seed_active_controller_device_generation(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             )
             .unwrap(),
-            trust_domain: arkret_identifiers::TypedTrustDomainId::new(
+            trust_domain: arkret_identifiers::TrustDomainId::new(
                 "ak:trust_domain:soland.local".to_owned(),
             )
             .unwrap(),

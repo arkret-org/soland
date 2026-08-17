@@ -15,7 +15,6 @@ pub(crate) use blob_resumable::{TUS_EXTENSIONS, TUS_VERSIONS};
 pub(crate) use push::push_target_privacy_derivation_claim;
 
 use super::admin::audit;
-use super::identity::auth;
 use super::{
     append_audit_log, auth_or_render, authenticated_session, is_valid_sha256_digest,
     is_valid_sha256_hex, now, query_param, realm_allows_plaintext_service_for_data_class,

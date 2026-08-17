@@ -475,13 +475,6 @@ enum InternalEventBinding {
         producer_verification_method: arkret_wire::DidUrl,
         producer_signing_key: arkret_wire::DidKey,
     },
-    AccountStatusPeer {
-        event_id: String,
-        account_id: String,
-        principal_id: String,
-        producer_verification_method: arkret_wire::DidUrl,
-        producer_signing_key: arkret_wire::DidKey,
-    },
     PeerAgentMembershipCascade {
         event_id: String,
         initiator_id: String,
@@ -661,33 +654,6 @@ impl InternalEventAdmission {
         }
     }
 
-    pub(in crate::routing) fn account_status_peer(
-        realm_id: impl Into<String>,
-        actor_id: impl Into<String>,
-        device_id: impl Into<String>,
-        event_id: impl Into<String>,
-        account_id: impl Into<String>,
-        principal_id: impl Into<String>,
-        producer_verification_method: arkret_wire::DidUrl,
-        producer_signing_key: arkret_wire::DidKey,
-    ) -> Self {
-        let actor_id = actor_id.into();
-        Self {
-            realm_id: realm_id.into(),
-            session_actor_id: actor_id.clone(),
-            actor_id,
-            kind: arkret_wire::EventKind::AccountStatus.as_str().to_owned(),
-            device_id: device_id.into(),
-            binding: InternalEventBinding::AccountStatusPeer {
-                event_id: event_id.into(),
-                account_id: account_id.into(),
-                principal_id: principal_id.into(),
-                producer_verification_method,
-                producer_signing_key,
-            },
-        }
-    }
-
     pub(in crate::routing::events::event_log) fn matches(
         &self,
         session: &SessionRecord,
@@ -741,20 +707,6 @@ impl InternalEventAdmission {
                 InternalEventBinding::PeerFederatedEvent { event_id, .. } => {
                     object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
                 }
-                InternalEventBinding::AccountStatusPeer {
-                    event_id,
-                    account_id,
-                    principal_id,
-                    ..
-                } => {
-                    object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
-                        && object.get("payload").is_some_and(|payload| {
-                            payload.get("account_id").and_then(Value::as_str)
-                                == Some(account_id.as_str())
-                                && payload.get("principal_id").and_then(Value::as_str)
-                                    == Some(principal_id.as_str())
-                        })
-                }
                 InternalEventBinding::PeerAgentMembershipCascade {
                     event_id,
                     initiator_id,
@@ -794,13 +746,6 @@ impl InternalEventAdmission {
             } if producer_verification_method.as_str() == verification_method => {
                 Some(producer_signing_key)
             }
-            InternalEventBinding::AccountStatusPeer {
-                producer_verification_method,
-                producer_signing_key,
-                ..
-            } if producer_verification_method.as_str() == verification_method => {
-                Some(producer_signing_key)
-            }
             _ => None,
         }
     }
@@ -823,15 +768,6 @@ impl InternalEventAdmission {
         object: &serde_json::Map<String, Value>,
     ) -> bool {
         matches!(self.binding, InternalEventBinding::SidecarEnsure { .. })
-            && self.matches(session, object)
-    }
-
-    pub(in crate::routing::events::event_log) fn is_account_status_peer(
-        &self,
-        session: &SessionRecord,
-        object: &serde_json::Map<String, Value>,
-    ) -> bool {
-        matches!(self.binding, InternalEventBinding::AccountStatusPeer { .. })
             && self.matches(session, object)
     }
 }
@@ -1030,32 +966,6 @@ pub(super) fn render_submit_one_error(res: &mut Response, error: SubmitOneError)
     }
 }
 
-pub(super) async fn submit_event_batch(
-    state: &AppState,
-    session: &SessionRecord,
-    envelopes: Vec<Value>,
-    res: &mut Response,
-) {
-    match submit_event_batch_outcome(state, session, envelopes).await {
-        Ok(outcome) => res.render(Json(outcome)),
-        Err(error) => render_submit_one_error(res, error),
-    }
-}
-
-/// Run a multi-envelope batch and return its `EventsSubmitOutcome` without
-/// rendering, so the caller can also feed the value through the generic
-/// `Idempotency-Key` cache (api-conventions.md §6) before rendering. The batch
-/// surface never produces a 409 on its own — per-envelope conflicts are folded
-/// into `rejected[]` / `quarantine[]` and the aggregate status is `partial` —
-/// so only the two early body-shape guards short-circuit as a `SubmitOneError`.
-pub(super) async fn submit_event_batch_outcome(
-    state: &AppState,
-    session: &SessionRecord,
-    envelopes: Vec<Value>,
-) -> Result<EventsSubmitOutcome, SubmitOneError> {
-    submit_event_batch_outcome_with_leases(state, session, envelopes, None, None, None).await
-}
-
 pub(in crate::routing) fn submit_initial_event_batch_outcome<'a>(
     state: &'a AppState,
     session: &'a SessionRecord,
@@ -1068,59 +978,6 @@ pub(in crate::routing) fn submit_initial_event_batch_outcome<'a>(
         session,
         submissions,
     ))
-}
-
-pub(in crate::routing) async fn submit_account_status_peer_event(
-    state: &AppState,
-    event: arkret_wire::Event,
-    account_id: &str,
-    principal_id: &str,
-    producer_verification_method: arkret_wire::DidUrl,
-    producer_signing_key: arkret_wire::DidKey,
-) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    let received_at = now();
-    let device_id = "peer-account-status-authority".to_owned();
-    let session = SessionRecord {
-        token_hash: format!("account-status:{}", event.event_id),
-        actor: event.actor_id.to_string(),
-        device_id: device_id.clone(),
-        audience: state.service_id().clone(),
-        session_public_key: None,
-        agent_session: None,
-        session_grant: None,
-        expires_at: received_at + Duration::minutes(5),
-        created_at: received_at,
-        revoked_at: None,
-    };
-    let admission = InternalEventAdmission::account_status_peer(
-        event.realm_id.to_string(),
-        event.actor_id.to_string(),
-        device_id,
-        event.event_id.to_string(),
-        account_id,
-        principal_id,
-        producer_verification_method,
-        producer_signing_key,
-    );
-    let envelope = typed_event_to_canonical_value(event)?;
-    value::submit_event_value_with_context(
-        state,
-        &session,
-        envelope,
-        &[],
-        None,
-        Some(&admission),
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        &[],
-        None,
-        None,
-    )
-    .await
 }
 
 async fn submit_initial_event_batch_outcome_inner(
@@ -3594,7 +3451,7 @@ mod managed_agent_pcr_batch_tests {
                     method_history_head: format!("sha256:{}", "8".repeat(64)),
                     version_id: "1-Qmfixture".to_owned(),
                 },
-                arkret_identifiers::TypedTrustDomainId::new(
+                arkret_identifiers::TrustDomainId::new(
                     "ak:trust_domain:managed-agent-pcr".to_owned(),
                 )
                 .unwrap(),

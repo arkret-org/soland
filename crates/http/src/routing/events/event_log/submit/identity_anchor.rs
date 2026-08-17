@@ -2097,7 +2097,7 @@ mod tests {
                     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                 )
                 .unwrap(),
-                trust_domain: arkret_identifiers::TypedTrustDomainId::new(
+                trust_domain: arkret_identifiers::TrustDomainId::new(
                     "ak:trust_domain:example.net".to_owned(),
                 )
                 .unwrap(),

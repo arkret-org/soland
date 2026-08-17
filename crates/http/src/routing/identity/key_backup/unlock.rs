@@ -240,9 +240,10 @@ pub(super) async fn verify_key_backup_unlock_proof_signature(
 /// Recovery-ceremony proof kinds whose transcript MUST be anchored to a
 /// verified/completed recovery session (key-management.md §7.7.1 / §7.8:
 /// an unbound proof MUST be rejected with `recovery_evidence_unbound`).
-/// `principal_signing` is exempt here only as a documented compatibility
-/// window: some deployed clients can provide only a device-signed decrypt
-/// proof until the policy-layer recovery-session driver is available.
+/// `principal_signing` is outside that closed set: it is a device-signed
+/// decrypt proof, not a ceremony, and is therefore not anchored to a recovery
+/// session. It moves inside the set once the policy-layer recovery-session
+/// driver exists.
 fn proof_kind_requires_recovery_session(proof_kind: &str) -> bool {
     matches!(
         proof_kind,
@@ -357,9 +358,9 @@ mod tests {
     }
 
     // key-management.md §7.7.1 / §7.8 — recovery-ceremony proof kinds fail
-    // closed when the claimed recovery session record is absent; only the
-    // documented `principal_signing` device-proof compatibility window may
-    // proceed without a durable session record.
+    // closed when the claimed recovery session record is absent; the
+    // `principal_signing` device proof is outside that closed set and proceeds
+    // without a durable session record.
     #[test]
     fn recovery_ceremony_proof_kinds_require_a_recovery_session() {
         for kind in [

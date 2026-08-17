@@ -1773,11 +1773,11 @@ mod tests {
     #[test]
     fn attachment_envelope_unknown_scheme_passes_through_without_nonce() {
         let digest = format!("sha256:{}", "0".repeat(64));
-        // Forward-compatible: unknown scheme is accepted opaquely and is NOT
-        // forced to carry a whole-file `nonce`.
+        // An unregistered scheme is accepted opaquely and is NOT forced to
+        // carry a whole-file `nonce`.
         assert!(
             validate_encrypted_attachment_metadata(&json!({
-                "scheme": "ak.blob.future_scheme.v9",
+                "scheme": "ak.blob.unregistered_scheme.v1",
                 "encryption_algorithm": "something-new",
                 "key_ref": "ak:mls:exporter",
                 "ciphertext_digest": digest,

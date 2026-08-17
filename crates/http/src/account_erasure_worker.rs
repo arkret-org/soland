@@ -1,14 +1,13 @@
-//! Durable physical-erasure execution derived from accepted account-status
-//! Events. The Event is the command; this worker owns no parallel peer API.
+//! Durable physical-erasure execution derived from accepted immutable
+//! account-status records. The record is the command; this worker owns no
+//! parallel peer API.
 
 use std::sync::Arc;
 
-use arkret_models_collaboration::events_payloads::account::AccountStatusPayload;
 use arkret_models_collaboration::governance::erasure::{
     ErasureReceiptPackage, ErasureStorageBoundary,
 };
-use arkret_models_collaboration::objects::account_status::AccountStatus;
-use arkret_wire::EventId;
+use arkret_wire::AccountStatusRecordId;
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -32,7 +31,7 @@ struct AccountErasureExecution {
     account_authority_service_id: arkret_wire::DidCoreId,
     account_id: String,
     principal_id: arkret_wire::DidCoreId,
-    triggering_status_event_id: EventId,
+    triggering_status_record_id: AccountStatusRecordId,
     storage_boundary: ErasureStorageBoundary,
     state: ExecutionState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -43,13 +42,13 @@ fn execution_scope(state: &AppState) -> String {
     format!("erasure-execution:{}", state.service_id())
 }
 
-fn execution_key(event_id: &EventId, state: ExecutionState) -> String {
+fn execution_key(record_id: &AccountStatusRecordId, state: ExecutionState) -> String {
     let phase = match state {
         ExecutionState::Pending => "intent",
         ExecutionState::Completed => "completed",
         ExecutionState::FanoutEnqueued => "fanout_enqueued",
     };
-    format!("{}:account_private_store:{phase}", event_id.as_str())
+    format!("{}:account_private_store:{phase}", record_id.as_str())
 }
 
 fn execution_hash(execution: &AccountErasureExecution) -> Result<String, AppError> {
@@ -59,7 +58,7 @@ fn execution_hash(execution: &AccountErasureExecution) -> Result<String, AppErro
         account_authority_service_id: &'a arkret_wire::DidCoreId,
         account_id: &'a str,
         principal_id: &'a arkret_wire::DidCoreId,
-        triggering_status_event_id: &'a EventId,
+        triggering_status_record_id: &'a AccountStatusRecordId,
         storage_boundary: ErasureStorageBoundary,
     }
     arkret_canonical::canonical_sha256(&Coordinates {
@@ -67,24 +66,24 @@ fn execution_hash(execution: &AccountErasureExecution) -> Result<String, AppErro
         account_authority_service_id: &execution.account_authority_service_id,
         account_id: &execution.account_id,
         principal_id: &execution.principal_id,
-        triggering_status_event_id: &execution.triggering_status_event_id,
+        triggering_status_record_id: &execution.triggering_status_record_id,
         storage_boundary: execution.storage_boundary,
     })
     .map_err(|error| AppError::internal(format!("erasure execution digest: {error}")))
 }
 
 /// Persist the execution intent before the account-status receiver acknowledges
-/// an erasure_pending Event. Exact replay is a no-op; any coordinate change is
+/// an erasure_pending record. Exact replay is a no-op; any coordinate change is
 /// a permanent duplicate conflict.
 pub async fn ensure_intent(
     state: &AppState,
     account_authority_service_id: &str,
     account_id: &str,
     principal_id: &arkret_wire::DidCoreId,
-    event_id: &EventId,
+    record_id: &AccountStatusRecordId,
 ) -> Result<(), AppError> {
     let scope = execution_scope(state);
-    let key = execution_key(event_id, ExecutionState::Pending);
+    let key = execution_key(record_id, ExecutionState::Pending);
     let execution = AccountErasureExecution {
         receiver_service_id: arkret_wire::DidCoreId::new(state.service_id().to_owned())
             .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?,
@@ -94,7 +93,7 @@ pub async fn ensure_intent(
         .map_err(|error| AppError::internal(format!("Account Authority DID invalid: {error}")))?,
         account_id: account_id.to_owned(),
         principal_id: principal_id.clone(),
-        triggering_status_event_id: event_id.clone(),
+        triggering_status_record_id: record_id.clone(),
         storage_boundary: ErasureStorageBoundary::AccountPrivateStore,
         state: ExecutionState::Pending,
         package: None,
@@ -140,7 +139,7 @@ async fn store_execution(
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
             principal_id: execution_scope(state),
-            idempotency_key: execution_key(&execution.triggering_status_event_id, execution.state),
+            idempotency_key: execution_key(&execution.triggering_status_record_id, execution.state),
             service_id: state.service_id().clone(),
             request_hash: execution_hash(execution)?,
             response_status: if execution.state == ExecutionState::Pending {
@@ -162,7 +161,7 @@ async fn run_execution(
     state: &AppState,
     account_id: &str,
     principal_id: &arkret_wire::DidCoreId,
-    event_id: &EventId,
+    record_id: &AccountStatusRecordId,
 ) -> Result<(), AppError> {
     let account_authority_service_id =
         crate::routing::events::peer::trusted_account_authority_service_id(state).await?;
@@ -171,7 +170,7 @@ async fn run_execution(
         account_authority_service_id.as_str(),
         account_id,
         principal_id,
-        event_id,
+        record_id,
     )
     .await?;
     let scope = execution_scope(state);
@@ -183,7 +182,7 @@ async fn run_execution(
     ] {
         if let Some(record) = state
             .jobs()
-            .idempotency_record(&scope, &execution_key(event_id, phase))
+            .idempotency_record(&scope, &execution_key(record_id, phase))
             .await
             .map_err(|error| AppError::internal(format!("erasure execution lookup: {error}")))?
         {
@@ -205,7 +204,7 @@ async fn run_execution(
             state,
             &execution.account_id,
             execution.principal_id.as_str(),
-            &execution.triggering_status_event_id,
+            &execution.triggering_status_record_id,
         )
         .await?;
         execution.package = Some(package);
@@ -213,7 +212,7 @@ async fn run_execution(
         store_execution(state, &execution, stored.created_at).await?;
         let completed = state
             .jobs()
-            .idempotency_record(&scope, &execution_key(event_id, ExecutionState::Completed))
+            .idempotency_record(&scope, &execution_key(record_id, ExecutionState::Completed))
             .await
             .map_err(|error| AppError::internal(format!("erasure completion lookup: {error}")))?
             .ok_or_else(|| AppError::internal("erasure completion was not persisted"))?;
@@ -243,35 +242,22 @@ async fn run_execution(
     Ok(())
 }
 
-/// Reconcile every accepted erasure_pending Event. This makes a crash between
-/// Event commit and intent persistence recoverable without introducing a
+/// Reconcile every accepted erasure_pending record. This makes a crash between
+/// replica commit and intent persistence recoverable without introducing a
 /// second command carrier.
 pub async fn run_once(state: &AppState) -> Result<usize, AppError> {
     let mut processed = 0_usize;
     for record in state
-        .event_queries()
-        .accepted_events()
+        .persistence()
+        .erasure_pending_account_status_records(256)
         .await
-        .map_err(|error| AppError::internal(format!("erasure Event scan: {error}")))?
+        .map_err(|error| AppError::internal(format!("erasure record scan: {error}")))?
     {
-        if record.kind != arkret_wire::EventKind::AccountStatus.as_str() {
-            continue;
-        }
-        let event: arkret_wire::Event = serde_json::from_value(record.envelope)
-            .map_err(|error| AppError::internal(format!("erasure Event decode: {error}")))?;
-        let payload: AccountStatusPayload = serde_json::from_value(
-            serde_json::to_value(&event.payload)
-                .map_err(|error| AppError::internal(format!("erasure payload encode: {error}")))?,
-        )
-        .map_err(|error| AppError::internal(format!("erasure payload decode: {error}")))?;
-        if payload.status != AccountStatus::ErasurePending {
-            continue;
-        }
         run_execution(
             state,
-            &payload.account_id,
-            &payload.principal_id,
-            &event.event_id,
+            record.account_id.as_str(),
+            &record.principal_authority.principal_id,
+            &record.account_status_record_id,
         )
         .await?;
         processed += 1;
@@ -308,8 +294,8 @@ mod tests {
             account_id: "account-1".to_owned(),
             principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
                 .unwrap(),
-            triggering_status_event_id: EventId::new(
-                "ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1".to_owned(),
+            triggering_status_record_id: AccountStatusRecordId::new(
+                "ak:account_status_record:sha256:8f61d5bf09f035f78c6f263f3d662f35b03eb67f95e108472f4036274a7dc41a".to_owned(),
             )
             .unwrap(),
             storage_boundary: ErasureStorageBoundary::AccountPrivateStore,
@@ -328,19 +314,22 @@ mod tests {
             execution_hash(&completed).unwrap()
         );
         assert_ne!(
-            execution_key(&pending.triggering_status_event_id, ExecutionState::Pending),
             execution_key(
-                &pending.triggering_status_event_id,
+                &pending.triggering_status_record_id,
+                ExecutionState::Pending
+            ),
+            execution_key(
+                &pending.triggering_status_record_id,
                 ExecutionState::Completed
             )
         );
         assert_ne!(
             execution_key(
-                &pending.triggering_status_event_id,
+                &pending.triggering_status_record_id,
                 ExecutionState::Completed
             ),
             execution_key(
-                &pending.triggering_status_event_id,
+                &pending.triggering_status_record_id,
                 ExecutionState::FanoutEnqueued
             )
         );

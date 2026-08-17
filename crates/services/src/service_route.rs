@@ -5,7 +5,7 @@ use arkret_models_identity::{
     ServiceResolutionCarrier, ServiceResolutionLastSeenFloor, ServiceResolutionRecord,
     ServiceRouteCacheEntry,
 };
-use arkret_wire::{DidCoreId, Hash, TypedTrustDomainId};
+use arkret_wire::{DidCoreId, Hash, TrustDomainId};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use soland_storage::{MonotonicRouteWrite, ServiceResolutionForkEvidence, ServiceRouteStore};
@@ -38,7 +38,7 @@ pub struct VerifiedServiceDescribeMetadata {
     pub service_resolution: arkret_models_identity::ResolutionCommitment,
     pub http_json_base_url: String,
     pub route_binding_digest: Hash,
-    pub trust_domain: TypedTrustDomainId,
+    pub trust_domain: TrustDomainId,
     pub protocol_version: String,
 }
 
@@ -48,7 +48,7 @@ pub struct VerifiedServiceDescribeMetadata {
 #[derive(Clone, Debug)]
 pub struct ResolvedServiceRoute {
     pub cache_entry: ServiceRouteCacheEntry,
-    pub trust_domain: TypedTrustDomainId,
+    pub trust_domain: TrustDomainId,
     pub protocol_version: String,
     pub describe_verified_at: DateTime<Utc>,
     pub describe_cache_expires_at: DateTime<Utc>,
@@ -560,7 +560,7 @@ mod tests {
             },
             http_json_base_url: record.record.base_url.clone(),
             route_binding_digest: record.record.describe_digest.clone(),
-            trust_domain: TypedTrustDomainId::new("ak:trust_domain:route.example").unwrap(),
+            trust_domain: TrustDomainId::new("ak:trust_domain:route.example").unwrap(),
             protocol_version: "1".to_owned(),
         }
     }
@@ -762,7 +762,7 @@ mod tests {
                 cached_at: now,
                 cache_expires_at: now + Duration::minutes(1),
             },
-            trust_domain: TypedTrustDomainId::new("ak:trust_domain:route.example").unwrap(),
+            trust_domain: TrustDomainId::new("ak:trust_domain:route.example").unwrap(),
             protocol_version: "1".to_owned(),
             describe_verified_at: now,
             describe_cache_expires_at: now + Duration::minutes(1),

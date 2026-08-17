@@ -1,5 +1,5 @@
 //! Multi-Realm / multi-actor event stream (`ak.self.events.stream.subscribe`),
-//! projection-aware events read (`ak.self.events.read.scan` + compatibility forms),
+//! projection-aware events read (`ak.self.events.read.scan`),
 //! signed snapshot-manifest head, plus the NDJSON framing and reconnect-gate
 //! helpers shared by both subscribe surfaces.
 

@@ -185,7 +185,6 @@ pub(crate) fn strand_position_from_lifecycle_payload(
         .to_owned();
     let list_space_id = payload
         .get("target_space_id")
-        .or_else(|| payload.get("list_space_id"))
         .or_else(|| payload.get("space_id"))
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())?

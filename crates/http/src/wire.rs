@@ -127,7 +127,6 @@ pub struct AuthBridgeAuthDescriptor {
 pub struct AuthBridgePushDescriptor {
     pub register_device_path: String,
     pub unregister_device_path: String,
-    pub session_grant_header: String,
     pub principal_id_body_field: String,
     pub register_device_mode: String,
 }
@@ -910,8 +909,7 @@ pub fn describe(
         compat_surfaces,
         development_mode,
         // service-describe.schema.json requires `rate_limit_policy` or
-        // `rate_limit_policy_id` (the legacy top-level `rate_limit` field was
-        // removed). Derive the advertised per-class policy from the SAME runtime
+        // `rate_limit_policy_id`. Derive the advertised per-class policy from the SAME runtime
         // config the HTTP middleware enforces so wire and
         // enforcement can never drift — a conformant client budgeting against
         // this policy cannot trip a 429 it could not predict.

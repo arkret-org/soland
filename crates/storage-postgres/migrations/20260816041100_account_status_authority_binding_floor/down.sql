@@ -1,1 +1,1 @@
-DROP TABLE IF EXISTS public.account_status_authority_binding_floors;
+DROP TABLE IF EXISTS public.account_status_replica_records;

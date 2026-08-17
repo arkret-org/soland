@@ -475,9 +475,6 @@ fn submit_event_authenticated<'a>(
                     Err(error) => render_submit_one_error(res, error),
                 }
             }
-            SolandEventsSubmitRequestBody::Batch(batch) => {
-                submit_event_batch(state, session, batch.events, res).await;
-            }
             SolandEventsSubmitRequestBody::Single(envelope) => {
                 let envelope_for_chaos = envelope.clone();
                 match submit_event_value(state, session, envelope).await {
@@ -532,12 +529,6 @@ async fn submit_event_dispatch(
         }
         SolandEventsSubmitRequestBody::InitialBatch(batch) => {
             match submit_initial_event_batch_outcome(state, session, batch.events).await {
-                Ok(outcome) => (StatusCode::OK, submit_outcome_value(&outcome)),
-                Err(error) => submit_one_error_value(error),
-            }
-        }
-        SolandEventsSubmitRequestBody::Batch(batch) => {
-            match submit_event_batch_outcome(state, session, batch.events).await {
                 Ok(outcome) => (StatusCode::OK, submit_outcome_value(&outcome)),
                 Err(error) => submit_one_error_value(error),
             }

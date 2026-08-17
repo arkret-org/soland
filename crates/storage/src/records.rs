@@ -677,6 +677,12 @@ pub struct FederationOutboxRecord {
     pub idempotency_key: String,
     /// Canonical request body the dispatcher POSTs verbatim.
     pub payload_json: String,
+    /// Optional stable lane used by monotonic state replication. At most one
+    /// unfinished row may exist for `(peer_did, coalescing_key)`; a higher
+    /// `coalescing_position` atomically supersedes the older unfinished row.
+    pub coalescing_key: Option<String>,
+    /// Monotonic position within `coalescing_key` (account-status `status_seq`).
+    pub coalescing_position: Option<i64>,
     /// Explicit lifecycle state — the single source of truth for whether this
     /// intent is still owed to the peer.
     pub state: FederationOutboxState,
@@ -724,6 +730,20 @@ pub struct FederationOutboxRecord {
 
 impl FederationOutboxRecord {
     pub fn validate_shape(&self) -> Result<(), String> {
+        if self.coalescing_key.is_some() != self.coalescing_position.is_some() {
+            return Err(
+                "federation coalescing key and position must be present together".to_owned(),
+            );
+        }
+        if self.coalescing_key.is_some() && self.realm_fanout.is_some() {
+            return Err("Realm fanout rows cannot use a generic coalescing lane".to_owned());
+        }
+        if self
+            .coalescing_position
+            .is_some_and(|position| position < 0)
+        {
+            return Err("federation coalescing position cannot be negative".to_owned());
+        }
         match self.realm_fanout.as_ref() {
             Some(binding) => {
                 binding.validate_for_target(&self.peer_did)?;
@@ -786,6 +806,8 @@ impl FederationOutboxRecord {
             endpoint,
             idempotency_key,
             payload_json,
+            coalescing_key: None,
+            coalescing_position: None,
             state: FederationOutboxState::Pending,
             leased_from_state: None,
             realm_fanout: None,
@@ -827,6 +849,8 @@ impl FederationOutboxRecord {
             endpoint,
             idempotency_key,
             payload_json,
+            coalescing_key: None,
+            coalescing_position: None,
             leased_from_state: None,
             realm_fanout: Some(binding),
             attempts: 0,
@@ -843,6 +867,13 @@ impl FederationOutboxRecord {
             created_at,
             completed_at: None,
         }
+    }
+
+    /// Attach a monotonic coalescing lane to a generic pending delivery.
+    pub fn with_coalescing_lane(mut self, key: String, position: i64) -> Self {
+        self.coalescing_key = Some(key);
+        self.coalescing_position = Some(position);
+        self
     }
 }
 

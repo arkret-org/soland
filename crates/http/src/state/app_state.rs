@@ -1169,7 +1169,7 @@ impl AppState {
     /// key expects.
     pub fn did_binding_trust_domain(
         &self,
-    ) -> Result<arkret_identifiers::TypedTrustDomainId, String> {
+    ) -> Result<arkret_identifiers::TrustDomainId, String> {
         Ok(self.config().trust_domain.clone())
     }
 

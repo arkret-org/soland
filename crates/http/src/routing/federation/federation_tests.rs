@@ -4,8 +4,8 @@ use super::*;
 
 const FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST: &str = "federation request authentication failed";
 
-fn trust_domain(value: &str) -> arkret_identifiers::TypedTrustDomainId {
-    arkret_identifiers::TypedTrustDomainId::new(value.to_owned()).unwrap()
+fn trust_domain(value: &str) -> arkret_identifiers::TrustDomainId {
+    arkret_identifiers::TrustDomainId::new(value.to_owned()).unwrap()
 }
 
 fn federation_headers() -> FederationTrustHeaders {

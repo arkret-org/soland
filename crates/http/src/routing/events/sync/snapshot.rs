@@ -426,7 +426,7 @@ async fn account_notification_delta(
 
 /// SYNC-MEM-1..4 + ROST-SOL-1..3 (arkret-spec @ b56cab1) — build the
 /// per-Realm `members[]` roster v2 projection from the structured membership
-/// FSM, the legacy in-memory `RealmDirectoryEntry`, and the MemberIdentity
+/// FSM, the in-memory `RealmDirectoryEntry`, and the MemberIdentity
 /// registry.
 ///
 /// Schema source:

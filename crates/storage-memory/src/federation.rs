@@ -45,7 +45,49 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
         if already_present {
             return Ok(false);
         }
-        data.insert(record.id.clone(), record.clone());
+        let mut record = record.clone();
+        if let (Some(coalescing_key), Some(coalescing_position)) =
+            (record.coalescing_key.as_deref(), record.coalescing_position)
+        {
+            let active = data
+                .values()
+                .filter(|existing| {
+                    existing.peer_did == record.peer_did
+                        && existing.coalescing_key.as_deref() == Some(coalescing_key)
+                        && matches!(
+                            existing.state,
+                            FederationOutboxState::Pending
+                                | FederationOutboxState::PendingRoute
+                                | FederationOutboxState::Leased
+                                | FederationOutboxState::PolicySuppressed
+                        )
+                })
+                .max_by_key(|existing| existing.coalescing_position.unwrap_or(i64::MIN))
+                .map(|existing| {
+                    (
+                        existing.id.clone(),
+                        existing.coalescing_position.unwrap_or(i64::MIN),
+                    )
+                });
+            if let Some((active_id, active_position)) = active {
+                if active_position >= coalescing_position {
+                    return Ok(false);
+                }
+                let active = data
+                    .get_mut(&active_id)
+                    .expect("active coalescing row was selected under the same lock");
+                active.state = FederationOutboxState::Superseded;
+                active.next_attempt_at = record.created_at;
+                active.completed_at = Some(record.created_at);
+                active.leased_from_state = None;
+                active.lease_owner = None;
+                active.lease_token = None;
+                active.lease_expires_at = None;
+                active.policy_version = None;
+                record.supersedes_outbox_id = Some(active_id);
+            }
+        }
+        data.insert(record.id.clone(), record);
         Ok(true)
     }
 

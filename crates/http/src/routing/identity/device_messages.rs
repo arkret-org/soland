@@ -99,6 +99,12 @@ async fn send_device_messages(
         {
             Ok(selector) => Some(selector),
             Err(_) if restricted_fresh_device_verification => None,
+            Err(error) if error.is_not_found() => {
+                return Err(
+                    AppError::capability_denied("device authorization is not active")
+                        .with_wire_code("device_unauthorized"),
+                );
+            }
             Err(error) => {
                 return Err(AppError::internal(format!(
                     "current device revocation selector unavailable: {error}"

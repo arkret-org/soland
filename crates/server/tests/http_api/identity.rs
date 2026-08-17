@@ -470,8 +470,8 @@ async fn identity_describe_exposes_external_webvh_provider() {
         "external webvh provider must be present in resolver trust roots: {describe}"
     );
     // The freshness probe lives on the provider entry and uses the canonical
-    // describe path (did_resolver_chain::CANONICAL_DESCRIBE_PATH), not the
-    // legacy `/describe`.
+    // describe path (did_resolver_chain::CANONICAL_DESCRIBE_PATH), not a bare
+    // `/describe`.
     assert_eq!(
         describe["did_webvh"]["providers"][0]["freshness_probe"],
         "/_arkret/describe"

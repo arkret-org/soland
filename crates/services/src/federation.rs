@@ -113,6 +113,8 @@ pub struct FederationDeliveryRecord {
     pub endpoint: String,
     pub idempotency_key: String,
     pub payload_json: String,
+    pub coalescing_key: Option<String>,
+    pub coalescing_position: Option<i64>,
     pub realm_fanout: Option<RealmFanoutBinding>,
     pub created_at: i64,
 }
@@ -334,14 +336,32 @@ impl FederationService {
         if self.outbox.enqueue(&command.delivery).await? {
             return Ok(command.delivery);
         }
-        Ok(self
+        if let Some(existing) = self
             .outbox
             .find(
                 &command.delivery.peer_did,
                 &command.delivery.idempotency_key,
             )
             .await?
-            .unwrap_or(command.delivery))
+        {
+            return Ok(existing);
+        }
+        if let Some(coalescing_key) = command.delivery.coalescing_key.as_deref()
+            && let Some(existing) = self.outbox.deliveries().await?.into_iter().find(|row| {
+                row.delivery.peer_did == command.delivery.peer_did
+                    && row.delivery.coalescing_key.as_deref() == Some(coalescing_key)
+                    && matches!(
+                        row.state,
+                        FederationDeliveryState::Pending
+                            | FederationDeliveryState::PendingRoute
+                            | FederationDeliveryState::Leased
+                            | FederationDeliveryState::PolicySuppressed
+                    )
+            })
+        {
+            return Ok(existing.delivery);
+        }
+        Ok(command.delivery)
     }
 
     pub async fn claim_deliveries(
@@ -764,6 +784,8 @@ mod tests {
                     endpoint: "/_arkret/federation/v1/events".to_owned(),
                     idempotency_key: "key:1".to_owned(),
                     payload_json: "{}".to_owned(),
+                    coalescing_key: None,
+                    coalescing_position: None,
                     realm_fanout: None,
                     created_at: 10,
                 },

@@ -83,14 +83,13 @@ fn welcome_payload(welcome_id: &str) -> Value {
     let keypackage_digest =
         "sha256:5555555555555555555555555555555555555555555555555555555555555555";
     json!({
-        "welcome_id": welcome_id,
-        "group_id": "ak:mls_group:abc",
+        "welcome_ref": welcome_id,
+        "mls_group_id": "ak:mls_group:abc",
         "epoch": 1,
         "commit_ref": "ak:event:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
-        "recipient_actor_id": "ak:did_core:web:bob.example",
+        "recipient_principal_id": "ak:did_core:web:bob.example",
         "recipient_device_id": "ak:device:bob-phone",
         "welcome_bytes_b64": b64(b"opaque-welcome-bytes"),
-        "key_package_id": keypackage_ref,
         "keypackage_ref": keypackage_ref,
         "keypackage_digest": keypackage_digest,
         "claim_id": "claim-01",
@@ -178,7 +177,7 @@ fn publish_payload(id: &str, actor: &str, device: &str, not_after: i64) -> serde
     json!({
         "action": "publish",
         "keypackage_id": id,
-        "actor_id": actor,
+        "principal_id": actor,
         "device_id": device,
         "lifetime": {"not_before": 1, "not_after": not_after},
         "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa",
@@ -679,7 +678,6 @@ fn welcome_enqueue_decodes_schema_ciphertext_base64_to_raw_welcome_bytes() {
     let mut payload = welcome_payload("ak:mls_welcome:w-ciphertext");
     let object = payload.as_object_mut().unwrap();
     object.remove("welcome_bytes_b64");
-    object.remove("key_package_id");
     object.insert("ciphertext".to_owned(), Value::String(b64(raw_welcome)));
     payload["claim_envelope"]["welcome_digest"] =
         Value::String(arkret_canonical::sha256_digest(raw_welcome));
@@ -739,8 +737,8 @@ fn commit_epoch_in_order_succeeds() {
         500,
         "ak.mls.commit",
         json!({
-            "group_id": "ak:mls_group:abc",
-            "expected_prev_epoch": 0,
+            "mls_group_id": "ak:mls_group:abc",
+            "base_epoch": 0,
             "next_epoch": 1,
             "leader_actor_id": "ak:did_core:web:alice.example",
             "commit_bytes_b64": b64(b"opaque-commit-1"),
@@ -765,8 +763,8 @@ fn commit_epoch_in_order_succeeds() {
         501,
         "ak.mls.commit",
         json!({
-            "group_id": "ak:mls_group:abc",
-            "expected_prev_epoch": 1,
+            "mls_group_id": "ak:mls_group:abc",
+            "base_epoch": 1,
             "next_epoch": 2,
             "leader_actor_id": "ak:did_core:web:alice.example",
             "commit_bytes_b64": b64(b"opaque-commit-2"),
@@ -841,8 +839,8 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
             501,
             "ak.mls.commit",
             json!({
-                "group_id": "ak:mls_group:abc",
-                "expected_prev_epoch": 0,
+                "mls_group_id": "ak:mls_group:abc",
+                "base_epoch": 0,
                 "next_epoch": 1,
                 "leader_actor_id": "ak:did_core:web:alice.example",
                 "commit_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -914,8 +912,8 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
             501,
             "ak.mls.commit",
             json!({
-                "group_id": "ak:mls_group:abc",
-                "expected_prev_epoch": 0,
+                "mls_group_id": "ak:mls_group:abc",
+                "base_epoch": 0,
                 "next_epoch": 1,
                 "leader_actor_id": "ak:did_core:web:alice.example",
                 "commit_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -941,8 +939,8 @@ fn commit_epoch_requires_effective_genesis() {
             500,
             "ak.mls.commit",
             json!({
-                "group_id": "ak:mls_group:abc",
-                "expected_prev_epoch": 0,
+                "mls_group_id": "ak:mls_group:abc",
+                "base_epoch": 0,
                 "next_epoch": 1,
                 "leader_actor_id": "ak:did_core:web:alice.example",
                 "commit_bytes_b64": b64(b"opaque-commit-1"),
@@ -984,8 +982,8 @@ fn same_group_id_is_independent_across_effective_scopes() {
         502,
         "ak.mls.commit",
         json!({
-            "group_id": "ak:mls_group:abc",
-            "expected_prev_epoch": 0,
+            "mls_group_id": "ak:mls_group:abc",
+            "base_epoch": 0,
             "next_epoch": 1,
             "leader_actor_id": "ak:did_core:web:alice.example",
             "commit_bytes_b64": b64(b"realm-commit"),
@@ -1031,8 +1029,8 @@ fn commit_future_epoch_rejected() {
             602,
             "ak.mls.commit",
             json!({
-                "group_id": "ak:mls_group:abc",
-                "expected_prev_epoch": 5,
+                "mls_group_id": "ak:mls_group:abc",
+                "base_epoch": 5,
                 "next_epoch": 6,
                 "leader_actor_id": "ak:did_core:web:alice.example",
                 "commit_bytes_b64": b64(b"leap"),
@@ -1055,8 +1053,8 @@ fn commit_future_epoch_rejected() {
 
 fn commit_op(secs: i64, label: &[u8], extra: Value) -> Operation {
     let mut payload = json!({
-        "group_id": "ak:mls_group:abc",
-        "expected_prev_epoch": 0,
+        "mls_group_id": "ak:mls_group:abc",
+        "base_epoch": 0,
         "next_epoch": 1,
         "leader_actor_id": "ak:did_core:web:alice.example",
         "commit_bytes_b64": b64(label),
@@ -1151,7 +1149,7 @@ fn concurrent_commits_contend_then_resolve() {
             503,
             b"commit-resolve",
             json!({
-                "expected_prev_epoch": 1,
+                "base_epoch": 1,
                 "next_epoch": 2,
                 "governance_binding": governance_binding(1),
             }),

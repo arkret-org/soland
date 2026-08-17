@@ -1184,7 +1184,7 @@ impl ProjectionState {
         operation: &Operation,
         cell_writes: &[ProjectedCellWrite],
         hlc: &ServerHlc,
-        registry: &registry::LatticeRegistry,
+        registry: &arkret_lattice_registry::LatticeRegistry,
     ) -> ProjectionEffect {
         let kind = match crate::kinds::canonical_kind_for_operation(operation) {
             Some(k) => k,

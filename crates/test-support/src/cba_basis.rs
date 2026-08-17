@@ -266,7 +266,7 @@ pub fn fixture_principal_control_realm_create(principal_id: &str) -> arkret_wire
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             )
             .expect("fixture PCR genesis salt"),
-            trust_domain: arkret_identifiers::TypedTrustDomainId::new(
+            trust_domain: arkret_identifiers::TrustDomainId::new(
                 "ak:trust_domain:soland.test".to_owned(),
             )
             .expect("fixture PCR trust domain"),

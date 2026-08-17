@@ -10,11 +10,11 @@ pub(crate) use serde_json::Value;
 pub(crate) use soland_storage::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountLifecycleRecord,
     AccountLifecycleStore, AccountLocalpartRecord, AccountLocalpartStore, AccountRecord,
-    AccountStatusAuthorityBindingStore, AccountStore, AgentPairingCommitIntent,
-    AgentParticipationStore, AgentPrincipalRecord, AgentProvisioningAbandonmentWriteOutcome,
-    AgentRuntimeActivation, AgentRuntimeApprovalWrite, AgentRuntimeEnqueueOutcome,
-    AgentRuntimeMessageRecord, AgentSidecarContextRecord, AgentSidecarRecord, AgentStore,
-    AppletStore, AppletTransactionReplayBegin, AppletTransactionReplayRecord, AuditStore,
+    AccountStatusReplicaStore, AccountStore, AgentPairingCommitIntent, AgentParticipationStore,
+    AgentPrincipalRecord, AgentProvisioningAbandonmentWriteOutcome, AgentRuntimeActivation,
+    AgentRuntimeApprovalWrite, AgentRuntimeEnqueueOutcome, AgentRuntimeMessageRecord,
+    AgentSidecarContextRecord, AgentSidecarRecord, AgentStore, AppletStore,
+    AppletTransactionReplayBegin, AppletTransactionReplayRecord, AuditStore,
     BackupSeriesEraseProgressRecord, BlobRecord, BlobStore, CanonicalEventRecord,
     CircleMemberProjectionRecord, CircleProjectionRecord, CircleProjectionStore,
     ConfirmAgentProvisioningAbandonment, ConsentCellKey, ConsentCellRecord, ConsentCellStore,
@@ -119,7 +119,7 @@ mod unit_of_work;
 mod websocket_auth;
 mod webvh;
 
-pub(crate) use account_status::MemoryAccountStatusAuthorityBindingStore;
+pub(crate) use account_status::MemoryAccountStatusReplicaStore;
 pub(crate) use accounts::{
     MemoryAccountDataStore, MemoryAccountLifecycleStore, MemoryAccountLocalpartStore,
     MemoryAccountStore,

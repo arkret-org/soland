@@ -109,7 +109,12 @@ async fn bootstrap_realm(state: &AppState, token: &str, title: &str) -> String {
     let bootstrap = complete_realm_bootstrap_unit(genesis, ALICE, ALICE_DEVICE, title);
     let mut create_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&json!({"events": bootstrap}))
+        .json(&json!({
+            "events": bootstrap
+                .into_iter()
+                .map(arkret_wire::EventInitialSubmission::online)
+                .collect::<Vec<_>>()
+        }))
         .send(&app_from_state(state.clone()))
         .await;
     let create_status = create_resp.status_code;

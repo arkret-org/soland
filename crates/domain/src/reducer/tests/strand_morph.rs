@@ -434,11 +434,11 @@ fn strand_position_events_queue_unknown_strand() {
 
 // ── ak.redaction -> Strand / Morph terminal-state push ──
 
-/// `ak.redaction` carrying `object_ref: ak:strand:...` flips the
+/// `ak.redaction` carrying `target_ref: ak:strand:...` flips the
 /// StrandProjection state to Redacted (terminal) per spec
 /// common-fields.md §5.1.
 #[test]
-fn redaction_with_strand_object_ref_flips_to_redacted() {
+fn redaction_with_strand_target_ref_flips_to_redacted() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
@@ -467,7 +467,7 @@ fn redaction_with_strand_object_ref_flips_to_redacted() {
             realm_id,
             serde_json::json!({
                 "target_event_id": "ak:event:AZpcyCdqige1P-5w7zjYU5ugeAn8qSwSCpFRU9CRz2SA",
-                "object_ref": strand_id,
+                "target_ref": strand_id,
                 "by": "ak:did_core:web:alice.example",
                 "reason": "policy violation",
             }),
@@ -488,9 +488,9 @@ fn redaction_with_strand_object_ref_flips_to_redacted() {
     assert!(state.strands[strand_id].state.is_terminal());
 }
 
-/// Same for Morph via `object_ref: ak:morph:...`.
+/// Same for Morph via `target_ref: ak:morph:...`.
 #[test]
-fn redaction_with_morph_object_ref_flips_to_redacted() {
+fn redaction_with_morph_target_ref_flips_to_redacted() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
@@ -518,7 +518,7 @@ fn redaction_with_morph_object_ref_flips_to_redacted() {
             realm_id,
             serde_json::json!({
                 "target_event_id": "ak:event:AUYmiWygi5zNhCFs6fat_lSDpnktIttb8rT9AIwOHC5i",
-                "object_ref": morph_id,
+                "target_ref": morph_id,
                 "sender": "ak:did_core:web:alice.example",
             }),
         ),
@@ -566,7 +566,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
             realm_id,
             serde_json::json!({
                 "target_event_id": "ak:event:AUjlgn4nYH_fSr1KSG7RGczLy67WEbCUAwgZxRWSWeVV",
-                "object_ref": strand_id,
+                "target_ref": strand_id,
             }),
         ),
         &hlc,
@@ -582,7 +582,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
         realm_id,
         serde_json::json!({
             "target_event_id": "ak:event:AcJZwpHoLnl8gt3a7i-eGe5eXRORCzvRNhbunn_arfUk",
-            "object_ref": strand_id,
+            "target_ref": strand_id,
         }),
     );
     assert_eq!(
@@ -613,7 +613,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
             realm_id,
             serde_json::json!({
                 "target_event_id": "ak:event:AUoKFAblyZ8FTmGILTwrp8-QvuGeSJ3_9PJ0uQl4S6Da",
-                "object_ref": morph_id,
+                "target_ref": morph_id,
             }),
         ),
         &hlc,
@@ -623,7 +623,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
         realm_id,
         serde_json::json!({
             "target_event_id": "ak:event:AWOSoyRcAABZT-emSL_OMbFhcDghvn0yier07wSAVfmk",
-            "object_ref": morph_id,
+            "target_ref": morph_id,
         }),
     );
     assert_eq!(
@@ -825,23 +825,23 @@ fn strand_tracks_preflight_tolerates_unknown_strand() {
 }
 
 /// Preflight tolerates redactions against unknown objects (causal /
-/// backfill window) and against missing `object_ref` (message
+/// backfill window) and against missing `target_ref` (message
 /// redaction path).
 #[test]
 fn redaction_preflight_tolerates_unknown_object_or_message_path() {
     let state = ProjectionState::new();
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    // Unknown object_ref.
+    // Unknown target_ref.
     let unknown = make_operation(
         arkret_wire::EventKind::Redaction,
         realm_id,
         serde_json::json!({
             "target_event_id": "ak:event:Ab9oE_tzbcCqFJMmwLq9c6rt2grDdJgQy1JXeT9W5nH-",
-            "object_ref": "ak:strand:nope-not-here",
+            "target_ref": "ak:strand:nope-not-here",
         }),
     );
     assert_eq!(state.check_redaction_target_transition(&unknown), Ok(()));
-    // Missing object_ref (message redaction path).
+    // Missing target_ref (message redaction path).
     let message_redact = make_operation(
         arkret_wire::EventKind::Redaction,
         realm_id,

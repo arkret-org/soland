@@ -30,7 +30,9 @@ uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]
 arkret-models-crypto.workspace = true
+arkret-signatures = {workspace = true, features = ["collaboration"]}
 arkret-wire = {workspace = true,features = ["test-support"]}
+ed25519-dalek.workspace = true
 tokio = {workspace = true,features = ["macros", "rt-multi-thread"]}
 
 [lints]

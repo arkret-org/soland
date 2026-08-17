@@ -103,14 +103,14 @@ use realm_index::{
 };
 
 mod submit;
-pub(crate) use endpoints::{frontier_control_governance_health, load_realm_actor_frontier};
+pub(crate) use endpoints::load_realm_actor_frontier;
 pub(super) use submit::submit_federation_events;
 pub(in crate::routing) use submit::{
     EventCommitIdempotency, ValidatedEventEnvelope, service_event_authoring_lock,
-    submit_account_data_event_value, submit_account_status_peer_event,
-    submit_agent_membership_cascade, submit_direct_conversation_founding_unit, submit_event_value,
-    submit_ghost_provision_batch, submit_initial_event_batch_outcome,
-    submit_initial_event_submission, submit_initial_event_submission_with_contact_projection,
+    submit_account_data_event_value, submit_agent_membership_cascade,
+    submit_direct_conversation_founding_unit, submit_event_value, submit_ghost_provision_batch,
+    submit_initial_event_batch_outcome, submit_initial_event_submission,
+    submit_initial_event_submission_with_contact_projection,
     submit_initial_event_submission_with_device_pairing, submit_initial_identity_anchor_batch,
     submit_mimi_event_value, submit_mimi_moderation_report_event_value,
     submit_one_error_to_app_error, submit_peer_pcr_genesis, submit_sidecar_ensure_batch,
@@ -118,7 +118,7 @@ pub(in crate::routing) use submit::{
 use submit::{
     EventValidationError, IDEMPOTENCY_KEY_TTL_SECONDS, RealmBootstrapBatchContext, SubmitOneError,
     SubmittedEventOutcome, event_validation_error, events_submit_outcome, render_submit_one_error,
-    submit_event_batch, submit_event_batch_outcome, submit_event_value_with_idempotency,
+    submit_event_value_with_idempotency,
 };
 
 mod validation;

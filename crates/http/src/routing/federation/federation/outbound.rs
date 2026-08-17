@@ -162,7 +162,7 @@ pub(super) fn parse_peer_target(entry: &str) -> Option<FederationPeerTarget> {
         return None;
     }
     if let Some(trust_domain) = trust_domain {
-        arkret_identifiers::TypedTrustDomainId::new(trust_domain.to_owned()).ok()?;
+        arkret_identifiers::TrustDomainId::new(trust_domain.to_owned()).ok()?;
     }
     Some(FederationPeerTarget {
         url: url.trim_end_matches('/').to_owned(),

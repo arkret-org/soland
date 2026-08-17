@@ -73,14 +73,7 @@ pub(super) async fn check_device_revocation_gate(
         .await
         {
             Ok(selector) => Some(selector),
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    ServiceErrorKind::NotFound | ServiceErrorKind::Conflict
-                ) =>
-            {
-                None
-            }
+            Err(error) if matches!(error.kind(), ServiceErrorKind::NotFound) => None,
             Err(error) => {
                 return Err(AppError::internal(format!(
                     "origin device authorization projection is unavailable: {error}"

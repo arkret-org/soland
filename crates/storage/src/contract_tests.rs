@@ -1041,6 +1041,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
             endpoint: "/_arkret/peer/events".to_owned(),
             idempotency_key: format!("peer:{event_uuid}"),
             payload_json: "{}".to_owned(),
+            coalescing_key: None,
+            coalescing_position: None,
             state: FederationOutboxState::Pending,
             leased_from_state: None,
             realm_fanout: None,
@@ -1412,6 +1414,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
             endpoint: "/_arkret/peer/events".to_owned(),
             idempotency_key: format!("peer:{rollback_uuid}"),
             payload_json: "{}".to_owned(),
+            coalescing_key: None,
+            coalescing_position: None,
             state: FederationOutboxState::Pending,
             leased_from_state: None,
             realm_fanout: None,
@@ -1474,7 +1478,9 @@ pub async fn assert_event_commit_unit_of_work_contract(
 /// 4. an expired lease is reclaimable by another worker;
 /// 5. terminal state and its dead-letter row commit together;
 /// 6. a superseded attempt and its replacement commit together;
-/// 7. `policy_suppressed` only leaves that state through revalidation.
+/// 7. `policy_suppressed` only leaves that state through revalidation;
+/// 8. Realm fanout route misses remain durable and authority loss is terminal;
+/// 9. a monotonic coalescing lane retains one unfinished highest position.
 pub async fn assert_federation_outbox_store_contract(
     store: &dyn FederationOutboxStore,
     namespace: &str,
@@ -2002,6 +2008,72 @@ pub async fn assert_federation_outbox_store_contract(
             .iter()
             .all(|row| row.id != route_missing.id),
         "later route or authority changes must not revive a cancelled intent"
+    );
+
+    // (9) Monotonic state fanout has exactly one unfinished row per target
+    // lane. A newer head supersedes the old intent atomically; stale/equal
+    // positions cannot replace it.
+    let lane_key = format!("account-status:{namespace}:account-1");
+    let lane_row = |suffix: &str, position: i64, created_at: i64| {
+        FederationOutboxRecord::pending(
+            format!("outbox:{namespace}:lane:{suffix}"),
+            peer_did.clone(),
+            "https://peer.example".to_owned(),
+            "/_arkret/peer/account-status".to_owned(),
+            format!("ak:outbox:account-status:{namespace}:{suffix}"),
+            format!(r#"{{"status_seq":{position}}}"#),
+            created_at,
+        )
+        .with_coalescing_lane(lane_key.clone(), position)
+    };
+    let lane_one = lane_row("one", 1, 2_000);
+    let lane_three = lane_row("three", 3, 2_001);
+    let lane_two = lane_row("two", 2, 2_002);
+    assert!(store.enqueue(&lane_one).await.expect("enqueue lane head 1"));
+    assert!(
+        store
+            .enqueue(&lane_three)
+            .await
+            .expect("enqueue lane head 3")
+    );
+    assert!(
+        !store
+            .enqueue(&lane_two)
+            .await
+            .expect("enqueue stale lane head"),
+        "a stale position cannot replace the unfinished highest head"
+    );
+    assert_eq!(
+        store
+            .get(&lane_one.id)
+            .await
+            .expect("read superseded lane head")
+            .expect("superseded lane head present")
+            .state,
+        FederationOutboxState::Superseded
+    );
+    let active_lane = store
+        .snapshot_all()
+        .await
+        .expect("snapshot coalescing lane")
+        .into_iter()
+        .filter(|row| {
+            row.peer_did == peer_did
+                && row.coalescing_key.as_deref() == Some(lane_key.as_str())
+                && matches!(
+                    row.state,
+                    FederationOutboxState::Pending
+                        | FederationOutboxState::PendingRoute
+                        | FederationOutboxState::Leased
+                        | FederationOutboxState::PolicySuppressed
+                )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(active_lane.len(), 1);
+    assert_eq!(active_lane[0].id, lane_three.id);
+    assert_eq!(
+        active_lane[0].supersedes_outbox_id.as_deref(),
+        Some(lane_one.id.as_str())
     );
 
     let depth = store.state_depth().await.expect("state depth");
