@@ -288,14 +288,21 @@ fn paired_device_outcome(
     })
 }
 
+/// `device-lifecycle.md` §5 — only an accepted `ak.device.authorize` can put a
+/// device into the authorized set, and §5.1 makes even the founding device go
+/// through the PCR genesis unit. A session login therefore never promotes a
+/// device: it may only preserve a verification state some accepted
+/// authorization already established. Treating "this account has no device
+/// yet" as authorization would mint exactly the row §5 calls a projection
+/// integrity failure — `verified` with no `device_authorize_event_id` — which
+/// every revocation-gate read then has to reject as an internal fault.
 pub(crate) fn initial_session_device_verification_state<'a>(
     existing_devices: &'a [soland_services::identity::DeviceIdentity],
     device_id: &str,
 ) -> &'a str {
-    if existing_devices.is_empty()
-        || existing_devices
-            .iter()
-            .any(|device| device.device_id == device_id && device.verification_state == "verified")
+    if existing_devices
+        .iter()
+        .any(|device| device.device_id == device_id && device.verification_state == "verified")
     {
         "verified"
     } else {
