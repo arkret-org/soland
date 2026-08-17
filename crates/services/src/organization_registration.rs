@@ -179,7 +179,7 @@ impl OrganizationRegistrationService {
         .map_err(|error| internal(error.to_string()))?;
         let challenge = OrganizationRegistrationChallenge {
             challenge_id: format!(
-                "ak:organization-registration-challenge:{}",
+                "ak:organization_registration_challenge:{}",
                 challenge_digest
                     .strip_prefix("sha256:")
                     .unwrap_or(&challenge_digest)
@@ -1260,7 +1260,7 @@ fn sign_outcome(
 ) -> Result<OrganizationRegistrationOutcome, OrganizationRegistrationError> {
     let issued_at = canonical_time(now);
     let mut receipt = OrganizationRegistrationReceipt {
-        registration_receipt_id: "ak:organization-registration-receipt:placeholder".to_owned(),
+        registration_receipt_id: "ak:organization_registration_receipt:placeholder".to_owned(),
         organization_id: organization_id.clone(),
         full_id: full_id.clone(),
         registration_generation,

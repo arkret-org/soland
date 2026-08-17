@@ -161,18 +161,39 @@ pub(in crate::routing) fn projection_operation_from_event(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) -> Option<Operation> {
-    if arkret_wire::EventKind::try_new(&parsed.kind).is_none() {
-        tracing::debug!(kind = %parsed.kind, "projection: kind is not registered");
+    projection_operation_from_wire(&parsed.kind, parsed.event_id.as_str(), envelope)
+}
+
+/// The single Event -> `Operation` mapper.
+///
+/// It is deliberately a function of the accepted wire envelope alone. The
+/// authenticated submitting device is request context, not an Event field
+/// (`event-envelope.schema.json` declares no `device_id` and closes the
+/// object), so replay can reach exactly the same Operation as admission did.
+fn projection_operation_from_wire(
+    kind: &str,
+    event_id: &str,
+    envelope: &Value,
+) -> Option<Operation> {
+    if arkret_wire::EventKind::try_new(kind).is_none() {
+        tracing::debug!(kind, "projection: kind is not registered");
         return None;
     }
-    let Some(operation_id) = event_operation_id(envelope, parsed.event_id.as_str()) else {
-        tracing::debug!(kind = %parsed.kind, event_id = %parsed.event_id, "projection: event_operation_id failed");
+    let Some(operation_id) = event_operation_id(envelope, event_id) else {
+        tracing::debug!(kind, event_id, "projection: event_operation_id failed");
         return None;
     };
-    let event = event_for_canonical_digest(envelope).map_err(|error| {
-        tracing::debug!(kind = %parsed.kind, event_id = %parsed.event_id, ?error, "projection: SDK Event decode failed");
-        error
-    }).ok()?;
+    let event = event_for_canonical_digest(envelope)
+        .map_err(|error| {
+            tracing::debug!(
+                kind,
+                event_id,
+                ?error,
+                "projection: SDK Event decode failed"
+            );
+            error
+        })
+        .ok()?;
     Operation::from_accepted_event(
         operation_id,
         arkret_wire::OperationKind::Create,
@@ -180,7 +201,12 @@ pub(in crate::routing) fn projection_operation_from_event(
         &event,
     )
     .map_err(|error| {
-        tracing::debug!(kind = %parsed.kind, event_id = %parsed.event_id, %error, "projection: SDK accepted Event projection failed");
+        tracing::debug!(
+            kind,
+            event_id,
+            %error,
+            "projection: SDK accepted Event projection failed"
+        );
         error
     })
     .ok()
@@ -193,46 +219,12 @@ pub(in crate::routing) fn projection_operation_from_event(
 pub(crate) fn projection_operation_from_canonical_record(
     record: &CanonicalEventRecord,
 ) -> Option<Operation> {
-    let object = record.envelope.as_object()?;
-    let realm_id = record
-        .envelope
-        .get("realm_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .or_else(|| record.realm_id.clone())?;
-    let realm_id = RealmId::new(realm_id).ok()?;
-    let prev_refs = record
-        .envelope
-        .get("prev_refs")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(ToOwned::to_owned)
-        .map(EventId::new)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
-    let parsed = ValidatedEventEnvelope {
-        event_id: EventId::new(record.event_id.clone()).ok()?,
-        actor_id: DidCoreId::new(record.actor_id.clone()).ok()?,
-        device_id: DeviceId::new(
-            object
-                .get("device_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-        )
-        .ok()?,
-        actor_seq: record.actor_seq,
-        realm_id,
-        kind: record.kind.clone(),
-        schema_id: record.schema_id.clone(),
-        prev_refs,
-        canonical_digest: record.canonical_digest.clone(),
-        canonical_bytes: record.canonical_bytes.clone(),
-        producer_signing_key: None,
-    };
-    projection_operation_from_event(&parsed, &record.envelope)
+    // The stored envelope is the accepted Event verbatim, so every typed
+    // field it carries (`realm_id`, `actor_id`, `prev_refs`, …) is revalidated
+    // by the SDK `Event` decode inside the shared mapper. Rebuilding an
+    // admission-shaped DTO here would only reintroduce request context that
+    // replay does not have.
+    projection_operation_from_wire(&record.kind, &record.event_id, &record.envelope)
 }
 
 /// Domain separator for the Operation handle soland derives for an accepted

@@ -86,7 +86,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         arkret_wire::EventKind::StrandCreate,
         serde_json::to_value(arkret_models_collaboration::objects::direct_conversation::direct_conversation_main_strand_create_payload(
             realm_id.clone(),
-            alice,
+            alice.clone(),
             now,
         ))
         .unwrap(),
@@ -99,11 +99,35 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
             .unwrap();
     strand_create.context.event_id = strand_create_event_id.clone();
     strand_create.context.accepted_event_id = strand_create_event_id;
+    // `contact-and-direct-conversation.md` §6.1 closes the founding unit at
+    // exactly four Events: `ak.realm.create` -> peer `ak.member.state{join}`
+    // -> main `ak.strand.create` -> founder `ak.member.state{join}`. The
+    // genesis payload does not imply creator membership, so the founder slot
+    // is what puts Alice in the Realm member set.
+    let mut founder_join = op(
+        realm_id.clone(),
+        "000000000694",
+        arkret_wire::EventKind::MemberState,
+        arkret_models_collaboration::objects::direct_conversation::direct_conversation_member_join_payload(
+            realm_id.clone(),
+            alice.clone(),
+            arkret_models_identity::DeliveryStatus::Unroutable,
+        )
+        .to_value()
+        .unwrap(),
+    );
+    founder_join.context.sender = alice;
+    let founder_join_event_id =
+        arkret_identifiers::EventId::new("ak:event:AU6CWyScSLnnHmi5-Yxv-n_v4-cC1vgdBdubYasL9BgQ")
+            .unwrap();
+    founder_join.context.event_id = founder_join_event_id.clone();
+    founder_join.context.accepted_event_id = founder_join_event_id;
     {
         let mut projection = state.test_projection().lock();
         apply_with_registered_cell_writes(&mut projection, &realm_create, 0, state.hlc());
         apply_with_registered_cell_writes(&mut projection, &peer_join, 1, state.hlc());
         apply_with_registered_cell_writes(&mut projection, &strand_create, 2, state.hlc());
+        apply_bootstrap_membership_with_registered_cell_writes(&mut projection, &founder_join, 3);
     }
     state.contacts().install_direct_binding(
         "sha256:00000000000000000000000000000000000000000000000000000000000006a1".to_owned(),
@@ -125,11 +149,12 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
     (state, realm_id)
 }
 
-fn apply_with_registered_cell_writes(
-    projection: &mut soland_domain::reducer::ProjectionState,
+fn registered_projection_inputs(
     operation: &Operation,
     actor_seq: u64,
-    server_hlc: &soland_domain::hlc::ServerHlc,
+) -> (
+    arkret_event_draft::ProjectedEventOperation,
+    Vec<arkret_wire::cba::ProjectedCellWrite>,
 ) {
     let mut event = crate::test_event::raw_event_at(
         operation.event_kind.as_str(),
@@ -156,7 +181,10 @@ fn apply_with_registered_cell_writes(
         arkret_canonical::DigestSuite::Sha256,
     )
     .unwrap();
-    let effect = projection.apply_projected(&projected, &writes, server_hlc);
+    (projected, writes)
+}
+
+fn assert_projected(effect: soland_domain::reducer::ProjectionEffect) {
     assert!(
         !matches!(
             effect,
@@ -164,6 +192,32 @@ fn apply_with_registered_cell_writes(
         ),
         "canonical fixture projection rejected: {effect:?}"
     );
+}
+
+fn apply_with_registered_cell_writes(
+    projection: &mut soland_domain::reducer::ProjectionState,
+    operation: &Operation,
+    actor_seq: u64,
+    server_hlc: &soland_domain::hlc::ServerHlc,
+) {
+    let (projected, writes) = registered_projection_inputs(operation, actor_seq);
+    assert_projected(projection.apply_projected(&projected, &writes, server_hlc));
+}
+
+/// Apply the founder's own `ak.member.state{join}` — the closing slot of a
+/// genesis bootstrap unit — through the reducer admission actually uses for it.
+///
+/// A self-authored join is refused by the ordinary entry gate whenever the
+/// Realm's join rule is `invite` or `closed`, which is exactly the Direct
+/// Conversation profile. Genesis membership is admitted as part of the
+/// validated bootstrap unit instead.
+fn apply_bootstrap_membership_with_registered_cell_writes(
+    projection: &mut soland_domain::reducer::ProjectionState,
+    operation: &Operation,
+    actor_seq: u64,
+) {
+    let (projected, writes) = registered_projection_inputs(operation, actor_seq);
+    assert_projected(projection.apply_validated_realm_bootstrap_membership(&projected, &writes));
 }
 
 fn op(

@@ -121,9 +121,10 @@ fn normalize_selector_object(selector: &Value, realm_id: &str) -> Option<String>
     }
 }
 
+/// `capability-grant.schema.json` names the selector list `resources`; the
+/// grant root is `additionalProperties:false`, so there is no second carrier.
 fn engine_resources_from_body(body: &Value, realm_id: &str) -> Vec<String> {
-    let mut selectors = value_array_field(body, "resources");
-    selectors.extend(value_array_field(body, "resource_selectors"));
+    let selectors = value_array_field(body, "resources");
     let mut resources = Vec::new();
     for selector in &selectors {
         match selector {
@@ -473,6 +474,8 @@ fn validate_grant_actions(body: &Value) -> Result<Vec<String>, &'static str> {
         .collect()
 }
 
+/// `capability-grant.schema.json` requires `resources` and forbids any other
+/// root selector carrier, so the grant body has exactly one list to validate.
 fn validate_grant_resources(body: &Value) -> Result<(), &'static str> {
     let mut selectors = Vec::new();
     if let Some(resources) = body.get("resources") {
@@ -480,12 +483,6 @@ fn validate_grant_resources(body: &Value) -> Result<(), &'static str> {
             return Err("capability_grant_resources_invalid");
         };
         selectors.extend(resources.iter());
-    }
-    if let Some(resource_selectors) = body.get("resource_selectors") {
-        let Some(resource_selectors) = resource_selectors.as_array() else {
-            return Err("capability_grant_resources_invalid");
-        };
-        selectors.extend(resource_selectors.iter());
     }
     if selectors.is_empty() {
         return Err("capability_grant_resources_empty");
@@ -1145,11 +1142,7 @@ impl ProjectionState {
             return false;
         };
         let resources = value_array_field(body, "resources");
-        let resource_selectors = value_array_field(body, "resource_selectors");
-        if resources.len() != 1
-            || !resource_selectors.is_empty()
-            || resources.first() != Some(registration_scope_ref)
-        {
+        if resources.len() != 1 || resources.first() != Some(registration_scope_ref) {
             return false;
         }
         let Some(constraints) = body.get("constraints").and_then(Value::as_array) else {

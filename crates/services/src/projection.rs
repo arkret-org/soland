@@ -1775,7 +1775,10 @@ impl ProjectionService {
             }?;
             return state.morphs.get(&id).map(morph_write_through_record);
         }
-        let object_ref = operation.payload.get("target_ref").and_then(Value::as_str)?;
+        let object_ref = operation
+            .payload
+            .get("target_ref")
+            .and_then(Value::as_str)?;
         state
             .strands
             .get(object_ref)

@@ -740,7 +740,7 @@ fn commit_epoch_in_order_succeeds() {
             "mls_group_id": "ak:mls_group:abc",
             "base_epoch": 0,
             "next_epoch": 1,
-            "leader_actor_id": "ak:did_core:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "commit_bytes_b64": b64(b"opaque-commit-1"),
             "governance_binding": governance_binding(0),
         }),
@@ -766,7 +766,7 @@ fn commit_epoch_in_order_succeeds() {
             "mls_group_id": "ak:mls_group:abc",
             "base_epoch": 1,
             "next_epoch": 2,
-            "leader_actor_id": "ak:did_core:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "commit_bytes_b64": b64(b"opaque-commit-2"),
             "governance_binding": governance_binding(1),
         }),
@@ -842,7 +842,7 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
                 "mls_group_id": "ak:mls_group:abc",
                 "base_epoch": 0,
                 "next_epoch": 1,
-                "leader_actor_id": "ak:did_core:web:alice.example",
+                "sender": "ak:did_core:web:alice.example",
                 "commit_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
                 "proposal_refs": [proposal_ref],
                 "governance_binding": governance_binding(0),
@@ -915,7 +915,7 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
                 "mls_group_id": "ak:mls_group:abc",
                 "base_epoch": 0,
                 "next_epoch": 1,
-                "leader_actor_id": "ak:did_core:web:alice.example",
+                "sender": "ak:did_core:web:alice.example",
                 "commit_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
                 "proposal_refs": targets.map(|(_, proposal_ref)| proposal_ref),
                 "governance_binding": governance_binding(0),
@@ -930,6 +930,43 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
     assert!(state.pending_mls_removals.is_empty());
 }
 
+/// `event-payload.schema.json#/$defs/mls_commit_payload` is a closed object
+/// with no committer field, and `encryption-and-audit.md` §5.6 puts the
+/// committing identity on the signed Event envelope. A payload carrying only
+/// the registered fields MUST therefore be accepted, and the epoch row MUST
+/// record the envelope author.
+#[test]
+fn schema_exact_commit_without_a_payload_committer_is_accepted() {
+    let mut state = ProjectionState::default();
+    initialize_genesis(&mut state);
+    let commit = op_at(
+        500,
+        "ak.mls.commit",
+        json!({
+            "mls_group_id": "ak:mls_group:abc",
+            "base_epoch": 0,
+            "base_epoch_ref": "ak:event:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
+            "proposal_refs": [],
+            "next_epoch": 1,
+            "commit_bytes_b64": b64(b"schema-exact-commit"),
+            "commit_digest":
+                "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "governance_binding": governance_binding(0),
+        }),
+    );
+    let committer = commit.context.sender.to_string();
+    assert!(matches!(
+        apply_commit_epoch(&mut state, &commit),
+        ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced { new_epoch: 1, .. })
+    ));
+    let row = state
+        .mls_commit_epochs
+        .get(&mls_epoch_key(&realm_scope(), "ak:mls_group:abc").unwrap())
+        .expect("epoch row advanced");
+    assert_eq!(row.epoch, 1);
+    assert_eq!(row.leader_actor_id, committer);
+}
+
 #[test]
 fn commit_epoch_requires_effective_genesis() {
     let mut state = ProjectionState::default();
@@ -942,7 +979,7 @@ fn commit_epoch_requires_effective_genesis() {
                 "mls_group_id": "ak:mls_group:abc",
                 "base_epoch": 0,
                 "next_epoch": 1,
-                "leader_actor_id": "ak:did_core:web:alice.example",
+                "sender": "ak:did_core:web:alice.example",
                 "commit_bytes_b64": b64(b"opaque-commit-1"),
                 "governance_binding": governance_binding(0),
             }),
@@ -985,7 +1022,7 @@ fn same_group_id_is_independent_across_effective_scopes() {
             "mls_group_id": "ak:mls_group:abc",
             "base_epoch": 0,
             "next_epoch": 1,
-            "leader_actor_id": "ak:did_core:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "commit_bytes_b64": b64(b"realm-commit"),
             "governance_binding": governance_binding_for_scope(
                 0,
@@ -1032,7 +1069,7 @@ fn commit_future_epoch_rejected() {
                 "mls_group_id": "ak:mls_group:abc",
                 "base_epoch": 5,
                 "next_epoch": 6,
-                "leader_actor_id": "ak:did_core:web:alice.example",
+                "sender": "ak:did_core:web:alice.example",
                 "commit_bytes_b64": b64(b"leap"),
                 "governance_binding": governance_binding(5),
             }),
@@ -1056,7 +1093,7 @@ fn commit_op(secs: i64, label: &[u8], extra: Value) -> Operation {
         "mls_group_id": "ak:mls_group:abc",
         "base_epoch": 0,
         "next_epoch": 1,
-        "leader_actor_id": "ak:did_core:web:alice.example",
+        "sender": "ak:did_core:web:alice.example",
         "commit_bytes_b64": b64(label),
         "governance_binding": governance_binding(0),
     });

@@ -440,7 +440,7 @@ mod tests {
                 "service_id",
             ]
         );
-        assert_eq!(object["context"], "ak.keys.backup_delete.v1");
+        assert_eq!(object["context"], "ak.key-backup-delete-proof-v1");
         assert_eq!(object["operation"], "ak.self.keys.backups.resource.delete");
         assert!(
             object["reason"].is_null(),

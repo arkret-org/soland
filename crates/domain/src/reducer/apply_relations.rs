@@ -187,10 +187,14 @@ impl ProjectionState {
         let Some(object_ref) = object_ref else {
             return false;
         };
+        // A relation profile's type constraint is satisfied only by a
+        // canonical value of that id-kind: `id-kind-registry.json` fixes each
+        // kind's payload shape, so an `ak:<kind>:` prefix on its own is not
+        // the constraint's value space.
         match type_constraint {
-            "did" => object_ref.starts_with("did:"),
-            "realm" => object_ref.starts_with("ak:realm:"),
-            "space" => object_ref.starts_with("ak:space:"),
+            "did" => arkret_identifiers::DidFullId::new(object_ref).is_ok(),
+            "realm" => arkret_identifiers::RealmId::new(object_ref).is_ok(),
+            "space" => arkret_identifiers::SpaceId::new(object_ref).is_ok(),
             "space:board" => self
                 .space_containers
                 .get(object_ref)
@@ -199,18 +203,19 @@ impl ProjectionState {
                 .space_containers
                 .get(object_ref)
                 .is_some_and(|space| space.kind == "list"),
-            "strand" => object_ref.starts_with("ak:strand:"),
+            "strand" => arkret_identifiers::StrandId::new(object_ref).is_ok(),
             "message" => {
-                object_ref.starts_with("ak:message:") || object_ref.starts_with("ak:event:")
+                arkret_identifiers::MessageId::new(object_ref).is_ok()
+                    || arkret_identifiers::EventId::new(object_ref).is_ok()
             }
-            "morph" => object_ref.starts_with("ak:morph:"),
+            "morph" => arkret_identifiers::MorphId::new(object_ref).is_ok(),
             type_constraint if type_constraint.starts_with("morph:") => {
-                object_ref.starts_with("ak:morph:")
+                arkret_identifiers::MorphId::new(object_ref).is_ok()
             }
-            "relation" => object_ref.starts_with("ak:relation:"),
-            "event" => object_ref.starts_with("ak:event:"),
-            "view" => object_ref.starts_with("ak:view:"),
-            "blob" => object_ref.starts_with("ak:blob:"),
+            "relation" => arkret_identifiers::RelationId::new(object_ref).is_ok(),
+            "event" => arkret_identifiers::EventId::new(object_ref).is_ok(),
+            "view" => arkret_identifiers::ViewId::new(object_ref).is_ok(),
+            "blob" => crate::capability::is_typed_blob_ref(object_ref),
             _ => false,
         }
     }
@@ -522,18 +527,34 @@ impl ProjectionState {
         )
     }
 
+    /// The single stateful admission rule for direct `ak.relation.*` writes on
+    /// a derived edge (`relation.md` §3.2).
+    ///
+    /// `relation_direct_write_reject_reason` is the SDK's one expression of the
+    /// rule: `watches` (truth source `ak.component.strand.watch.v1`, write path
+    /// `ak.strand.watch.set`) is always derived, and `contains` is derived only
+    /// in the container shape identified by a Space `from_ref` (`ak:space:…`).
+    /// A `Strand -> Strand` `contains` stays a directly-writable weak relation
+    /// (§3.2) and is not blocked.
+    fn check_relation_direct_write(
+        relation_kind: &str,
+        from_ref: Option<&str>,
+    ) -> Result<(), &'static str> {
+        arkret_models_collaboration::objects::relation::validate_relation_direct_write(
+            relation_kind,
+            from_ref,
+        )
+    }
+
+    /// The sole stateful admission gate for `ak.relation.create` / `.update` /
+    /// `.tombstone`. Submit calls it before any persistent effect; the reducer
+    /// apply paths re-call the same function defensively. There is deliberately
+    /// no second parser of relation fields anywhere else: the HTTP layer only
+    /// checks the stateless `effective_scope` forbidden field.
     pub fn check_relation_invariants(&self, operation: &Operation) -> Result<(), &'static str> {
         let Some(kind) = crate::kinds::canonical_kind_for_operation(operation) else {
             return Ok(());
         };
-        if !matches!(
-            &kind,
-            arkret_wire::EventKind::RelationCreate
-                | arkret_wire::EventKind::RelationUpdate
-                | arkret_wire::EventKind::RelationTombstone
-        ) {
-            return Ok(());
-        }
 
         if kind == arkret_wire::EventKind::RelationCreate {
             let relation = relation_create_object(&operation.payload);
@@ -541,9 +562,10 @@ impl ProjectionState {
                 .get("kind")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            if relation_kind == "watches" {
-                return Err(arkret_wire::ReasonCode::RELATION_KIND_WATCHES_DERIVED);
-            }
+            Self::check_relation_direct_write(
+                relation_kind,
+                relation.get("from_ref").and_then(Value::as_str),
+            )?;
             self.check_relation_cross_realm(operation)?;
             self.check_relation_effective_scope(
                 operation.realm_id.as_str(),
@@ -556,36 +578,47 @@ impl ProjectionState {
         if kind == arkret_wire::EventKind::RelationUpdate {
             let relation_id = relation_update_target_id(&operation.payload).unwrap_or_default();
             let patch = relation_update_patch(&operation.payload);
-            // `watches` is a derived edge (`relation.md` §3.2): patching a
-            // Relation *into* that kind is the same direct write the create
-            // path rejects.
             if let Some(patch) = patch {
                 validate_patch_semantic_safety(patch)?;
-                if patch_string_value(patch, "relation_kind").flatten().as_deref()
-                    == Some("watches")
-                {
-                    return Err(arkret_wire::ReasonCode::RELATION_KIND_WATCHES_DERIVED);
+                // A patch that names a derived kind is a direct write even when
+                // the target Relation has not been observed locally yet, so
+                // this decision must not wait for the pre-state lookup.
+                if let Some(Some(next_kind)) = patch_string_value(patch, "relation_kind") {
+                    Self::check_relation_direct_write(
+                        next_kind.as_str(),
+                        patch_string_value(patch, "from_ref").flatten().as_deref(),
+                    )?;
                 }
             }
             let Some(relation) = self.relations.get(relation_id) else {
                 return Ok(());
             };
-            if relation.relation_kind == "watches" {
-                return Err(arkret_wire::ReasonCode::RELATION_KIND_WATCHES_DERIVED);
-            }
+            // The stored Relation decides first: an update that only touches
+            // `fields` still MUST NOT land on an edge the derived projection
+            // owns.
+            Self::check_relation_direct_write(
+                relation.relation_kind.as_str(),
+                relation.from_ref.as_deref(),
+            )?;
             if let Some(patch) = patch
                 && let Some(next_scope) = patch_string_value(patch, "scope_circle_id")
                 && next_scope.as_deref() != relation.scope_circle_id.as_deref()
             {
                 return Err("relation_effective_scope_immutable");
             }
-            // Effective scope is checked against the post-patch Relation, so a
-            // patch that moves an endpoint cannot land outside the endpoint
-            // scope floor.
+            // The post-patch Relation decides second: patching a Relation
+            // *into* a derived kind or *onto* a Space container `from_ref` is
+            // the same direct write the create path rejects, and effective
+            // scope is checked against the patched endpoints so a move cannot
+            // land outside the endpoint scope floor.
             let mut patched = relation.clone();
             if let Some(patch) = patch {
                 apply_relation_patch(&mut patched, patch);
             }
+            Self::check_relation_direct_write(
+                patched.relation_kind.as_str(),
+                patched.from_ref.as_deref(),
+            )?;
             let relation_kind = patched.relation_kind.clone();
             self.check_relation_effective_scope(
                 operation.realm_id.as_str(),
@@ -597,17 +630,18 @@ impl ProjectionState {
 
         if kind == arkret_wire::EventKind::RelationTombstone {
             // `relation_tombstone_payload` carries only `relation_id` (+ an
-            // optional `reason`), so the derived-edge check reads the kind off
-            // the stored Relation rather than off the payload.
+            // optional `reason`), so the derived-edge check reads the kind and
+            // the `from_ref` off the stored Relation, never off the payload.
             let relation_id = operation
                 .payload
                 .get("relation_id")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            if let Some(relation) = self.relations.get(relation_id)
-                && relation.relation_kind == "watches"
-            {
-                return Err(arkret_wire::ReasonCode::RELATION_KIND_WATCHES_DERIVED);
+            if let Some(relation) = self.relations.get(relation_id) {
+                Self::check_relation_direct_write(
+                    relation.relation_kind.as_str(),
+                    relation.from_ref.as_deref(),
+                )?;
             }
         }
         Ok(())
@@ -885,8 +919,7 @@ fn apply_relation_patch(
         relation.to_ref = to_ref;
     }
     if let Some(scope_circle_id) = patch_string_value(patch, "scope_circle_id") {
-        relation.scope_circle_id =
-            scope_circle_id.filter(|value| value.starts_with("ak:circle:"));
+        relation.scope_circle_id = scope_circle_id.filter(|value| value.starts_with("ak:circle:"));
     }
     apply_morph_fields_patch(&mut relation.fields, patch);
 }
@@ -911,13 +944,16 @@ fn relation_scope_check_object(relation: &SolandRelationState) -> Value {
     Value::Object(object)
 }
 
+/// Whether this endpoint names a projected object whose existence the reducer
+/// must resolve. Only a canonical typed id can: a value that is not a valid id
+/// of one of these kinds never resolves to a projection row.
 fn relation_endpoint_needs_projection(endpoint: &str) -> bool {
-    endpoint.starts_with("ak:space:")
-        || endpoint.starts_with("ak:strand:")
-        || endpoint.starts_with("ak:morph:")
-        || endpoint.starts_with("ak:relation:")
-        || endpoint.starts_with("ak:event:")
-        || endpoint.starts_with("ak:message:")
+    arkret_identifiers::SpaceId::new(endpoint).is_ok()
+        || arkret_identifiers::StrandId::new(endpoint).is_ok()
+        || arkret_identifiers::MorphId::new(endpoint).is_ok()
+        || arkret_identifiers::RelationId::new(endpoint).is_ok()
+        || arkret_identifiers::EventId::new(endpoint).is_ok()
+        || arkret_identifiers::MessageId::new(endpoint).is_ok()
 }
 
 fn relation_event_digest(operation: &Operation) -> String {
@@ -937,6 +973,7 @@ mod cross_realm_relation_tests {
     const STRAND_A2: &str = "ak:strand:AbGG69lPDSbhcQKggUhmn2pvWMDjx2tZmKL9GHisS290";
     const STRAND_A3: &str = "ak:strand:ARIngJWB7taB_e9HVc82Y3GVlqIEDbFe05dX8Xj_OL29";
     const STRAND_B: &str = "ak:strand:ARc7BSRzEkVPtZvqxpxC9cZzx8LzgKlSdyzxddWkHy9a";
+    const SPACE_A: &str = "ak:space:ATu1E_hCvaxzpXDswPMlN3ypwETWAa7O994Etg387rA6";
 
     fn strand_in_scope(realm: &str, scope_circle_id: Option<&str>) -> StrandProjection {
         StrandProjection {
@@ -1454,5 +1491,216 @@ mod cross_realm_relation_tests {
             )),
             Err("relation_scope_circle_id_required")
         );
+    }
+
+    /// `relation.md` §3.2 — a container `contains` (Space `from_ref`) is a
+    /// derived projection owned by `ak.space.parent` / `ak.strand.move`, so a
+    /// direct `ak.relation.create` on it is rejected before it persists. A
+    /// `Strand -> Strand` `contains` keeps the same kind name and stays
+    /// directly writable.
+    #[test]
+    fn container_contains_direct_create_is_rejected_from_state() {
+        assert_eq!(
+            proj().check_relation_invariants(&relation_op("contains", SPACE_A, STRAND_A)),
+            Err(arkret_wire::ReasonCode::RELATION_KIND_CONTAINS_DERIVED)
+        );
+        assert!(
+            proj()
+                .check_relation_invariants(&relation_op("contains", STRAND_A, STRAND_A2))
+                .is_ok()
+        );
+    }
+
+    /// `relation_update_payload` expresses change only through `patch`, whose
+    /// entries are either a bare value or a `$op` envelope. Both encodings
+    /// MUST reach the same derived-edge decision.
+    #[test]
+    fn relation_update_rejects_derived_kind_in_both_patch_encodings() {
+        let mut proj = proj();
+        let now = chrono::Utc::now();
+        let create = relation_op("references", STRAND_A, STRAND_A2);
+        proj.apply_relation_create(&create, now);
+        let relation_id = relation_id_of(&create);
+
+        let direct_value = relation_update_op(
+            "00000000a001",
+            json!({
+                "relation_id": relation_id,
+                "patch": {"relation_kind": "watches"}
+            }),
+        );
+        assert_eq!(
+            proj.check_relation_invariants(&direct_value),
+            Err(arkret_wire::ReasonCode::RELATION_KIND_WATCHES_DERIVED)
+        );
+
+        let op_envelope = relation_update_op(
+            "00000000a002",
+            json!({
+                "relation_id": relation_id,
+                "patch": {"relation_kind": {"$op": "set", "value": "watches"}}
+            }),
+        );
+        assert_eq!(
+            proj.check_relation_invariants(&op_envelope),
+            Err(arkret_wire::ReasonCode::RELATION_KIND_WATCHES_DERIVED)
+        );
+
+        // Patching an ordinary edge into the container `contains` shape is the
+        // same direct write; the decision needs the post-patch `from_ref`.
+        let into_container = relation_update_op(
+            "00000000a003",
+            json!({
+                "relation_id": relation_id,
+                "patch": {
+                    "relation_kind": {"$op": "set", "value": "contains"},
+                    "from_ref": {"$op": "set", "value": SPACE_A}
+                }
+            }),
+        );
+        assert_eq!(
+            proj.check_relation_invariants(&into_container),
+            Err(arkret_wire::ReasonCode::RELATION_KIND_CONTAINS_DERIVED)
+        );
+
+        // A patch that keeps the edge weak stays admissible.
+        let weak = relation_update_op(
+            "00000000a004",
+            json!({
+                "relation_id": relation_id,
+                "patch": {"fields.label": {"$op": "set", "value": "ok"}}
+            }),
+        );
+        assert!(proj.check_relation_invariants(&weak).is_ok());
+    }
+
+    /// `relation_tombstone_payload` carries only `relation_id` (+ `reason`), so
+    /// the derived-edge decision can only come from the stored Relation.
+    #[test]
+    fn relation_tombstone_reads_the_derived_edge_from_pre_state() {
+        let mut proj = proj();
+        let now = chrono::Utc::now();
+        let derived_id = "ak:relation:kanban.position:ak:space:A:ak:strand:B".to_owned();
+        proj.relations.insert(
+            derived_id.clone(),
+            SolandRelationState {
+                relation_id: derived_id.clone(),
+                realm_id: REALM_A.to_owned(),
+                relation_kind: "contains".to_owned(),
+                scope_circle_id: None,
+                from_ref: Some(SPACE_A.to_owned()),
+                to_ref: Some(STRAND_A.to_owned()),
+                fields: Default::default(),
+                state: "active".to_owned(),
+                source_event_id: None,
+                source_event_digest: None,
+                created_at: now,
+                history_basis_seals: Vec::new(),
+                updated_at: now,
+            },
+        );
+        let weak = relation_op("references", STRAND_A, STRAND_A2);
+        proj.apply_relation_create(&weak, now);
+        let weak_id = relation_id_of(&weak);
+
+        let tombstone = |seed: &str, relation_id: &str| {
+            arkret_event_draft::test_support::raw_projected_operation(
+                arkret_identifiers::OperationId::new(format!(
+                    "ak:operation:01904100-0000-7000-8000-{seed}"
+                ))
+                .unwrap(),
+                arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
+                arkret_wire::EventKind::RelationTombstone.as_str(),
+                json!({"relation_id": relation_id}),
+            )
+        };
+
+        // Identical payload shape; only the stored pre-state differs.
+        assert_eq!(
+            proj.check_relation_invariants(&tombstone("00000000b001", &derived_id)),
+            Err(arkret_wire::ReasonCode::RELATION_KIND_CONTAINS_DERIVED)
+        );
+        assert!(
+            proj.check_relation_invariants(&tombstone("00000000b002", &weak_id))
+                .is_ok()
+        );
+    }
+
+    /// An update that touches only `fields` still MUST NOT land on a derived
+    /// container edge: the rejection comes from the stored `from_ref`, which no
+    /// stateless payload validator can see.
+    #[test]
+    fn container_contains_update_is_rejected_from_pre_state() {
+        let mut proj = proj();
+        let now = chrono::Utc::now();
+        let derived_id = "ak:relation:kanban.position:list:strand".to_owned();
+        proj.relations.insert(
+            derived_id.clone(),
+            SolandRelationState {
+                relation_id: derived_id.clone(),
+                realm_id: REALM_A.to_owned(),
+                relation_kind: "contains".to_owned(),
+                scope_circle_id: None,
+                from_ref: Some(SPACE_A.to_owned()),
+                to_ref: Some(STRAND_A.to_owned()),
+                fields: Default::default(),
+                state: "active".to_owned(),
+                source_event_id: None,
+                source_event_digest: None,
+                created_at: now,
+                history_basis_seals: Vec::new(),
+                updated_at: now,
+            },
+        );
+        let update = relation_update_op(
+            "00000000c001",
+            json!({
+                "relation_id": derived_id,
+                "patch": {"fields.label": "moved"}
+            }),
+        );
+        assert_eq!(
+            proj.check_relation_invariants(&update),
+            Err(arkret_wire::ReasonCode::RELATION_KIND_CONTAINS_DERIVED)
+        );
+    }
+}
+
+#[cfg(test)]
+mod relation_endpoint_typing_tests {
+    use super::*;
+
+    const EVENT_A: &str = "ak:event:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D";
+    const MESSAGE_A: &str = "ak:message:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D";
+    const STRAND: &str = "ak:strand:ATXlnYLuNA5AB7Pide0IGeEtDJ6YeQ19_FUbKXtjQhum";
+
+    // A relation profile type constraint is a value-space check, not a prefix
+    // check: `ak:event:not-a-token` is not an Event id and must not satisfy
+    // the `event` (or `message`) constraint.
+    #[test]
+    fn type_constraints_reject_a_kind_prefix_without_a_canonical_payload() {
+        let projection = ProjectionState::new();
+        assert!(projection.relation_profile_matches_endpoint(Some("event"), Some(EVENT_A)));
+        assert!(!projection.relation_profile_matches_endpoint(Some("event"), Some("ak:event:x")));
+        assert!(projection.relation_profile_matches_endpoint(Some("message"), Some(MESSAGE_A)));
+        assert!(projection.relation_profile_matches_endpoint(Some("message"), Some(EVENT_A)));
+        assert!(
+            !projection.relation_profile_matches_endpoint(Some("message"), Some("ak:message:1"))
+        );
+        assert!(projection.relation_profile_matches_endpoint(Some("strand"), Some(STRAND)));
+        assert!(!projection.relation_profile_matches_endpoint(Some("strand"), Some("ak:strand:a")));
+        assert!(projection.relation_profile_matches_endpoint(
+            Some("blob"),
+            Some(&format!("ak:blob:sha256:{}", "a".repeat(64)))
+        ));
+        assert!(!projection.relation_profile_matches_endpoint(Some("blob"), Some("ak:blob:abc")));
+    }
+
+    #[test]
+    fn only_canonical_endpoints_are_resolved_against_projections() {
+        assert!(relation_endpoint_needs_projection(EVENT_A));
+        assert!(relation_endpoint_needs_projection(STRAND));
+        assert!(!relation_endpoint_needs_projection("ak:event:not-a-token"));
+        assert!(!relation_endpoint_needs_projection("ak:strand:main"));
     }
 }

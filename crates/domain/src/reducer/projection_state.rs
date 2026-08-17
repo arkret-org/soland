@@ -391,7 +391,9 @@ impl ProjectionState {
         if target_ref.starts_with("ak:relation:") {
             return self.relations.contains_key(target_ref);
         }
-        if target_ref.starts_with("ak:event:") || target_ref.starts_with("ak:message:") {
+        if arkret_identifiers::EventId::new(target_ref).is_ok()
+            || arkret_identifiers::MessageId::new(target_ref).is_ok()
+        {
             return self.message_by_target_ref(target_ref).is_some();
         }
         false

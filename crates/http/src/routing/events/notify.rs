@@ -26,17 +26,18 @@ use crate::routing::agent_participation::{
 };
 use crate::state::AppState;
 
-fn value_string<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
-    keys.iter()
-        .find_map(|key| value.get(*key).and_then(Value::as_str))
-}
-
-fn relation_value_string<'a>(payload: &'a Value, keys: &[&str]) -> Option<&'a str> {
-    value_string(payload, keys).or_else(|| {
-        payload
-            .get("relation")
-            .and_then(|relation| value_string(relation, keys))
-    })
+/// A field of the Relation an `ak.relation.create` carries.
+///
+/// `event-payload.schema.json#/$defs/relation_create_payload` is
+/// `additionalProperties:false` over `{relation, rank}`, so the whole Relation
+/// snapshot lives under `payload.relation` and there is exactly one place to
+/// read `kind` / `from_ref` / `to_ref` from. The flat root spellings
+/// (`relation_kind` / `from` / `to`) are not spec payload members.
+fn relation_field<'a>(payload: &'a Value, key: &str) -> Option<&'a str> {
+    payload
+        .get("relation")
+        .and_then(|relation| relation.get(key))
+        .and_then(Value::as_str)
 }
 
 fn operation_source_event_id(operation: &arkret_event_draft::ProjectedEventOperation) -> String {
@@ -423,16 +424,16 @@ pub(crate) async fn dispatch_assignment_notifications(
     operation: &arkret_event_draft::ProjectedEventOperation,
 ) {
     let payload = &operation.payload;
-    if relation_value_string(payload, &["relation_kind", "kind"]) != Some("assigned_to") {
+    if relation_field(payload, "kind") != Some("assigned_to") {
         return;
     }
-    let Some(strand_id) = relation_value_string(payload, &["from_ref", "from"])
-        .filter(|value| value.starts_with("ak:strand:"))
+    let Some(strand_id) =
+        relation_field(payload, "from_ref").filter(|value| value.starts_with("ak:strand:"))
     else {
         return;
     };
-    let Some(assignee) = relation_value_string(payload, &["to_ref", "to"])
-        .filter(|value| value.starts_with("ak:did_core:"))
+    let Some(assignee) =
+        relation_field(payload, "to_ref").filter(|value| value.starts_with("ak:did_core:"))
     else {
         return;
     };
@@ -448,7 +449,11 @@ pub(crate) async fn dispatch_assignment_notifications(
         return;
     }
     let source_event_id = operation_source_event_id(operation);
-    let relation_id = relation_value_string(payload, &["relation_id", "id"]);
+    // `relation_create_object` bans `id`, so the Relation id is never on the
+    // wire: it is `retype(event_id)`, exactly as the reducer derives it.
+    let relation_id =
+        arkret_identifiers::RelationId::from_event_id(&operation.context.event_id).to_string();
+    let relation_id = Some(relation_id.as_str());
     put_notification(
         state,
         assignee,
@@ -897,7 +902,6 @@ mod tests {
         assignee: &str,
     ) -> arkret_event_draft::ProjectedEventOperation {
         let event_id = fixture_event_id(seed);
-        let relation_id = arkret_identifiers::RelationId::from_event_id(&event_id);
         arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
@@ -905,13 +909,18 @@ mod tests {
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
             arkret_wire::EventKind::RelationCreate.as_str(),
+            // `relation_create_payload` is `additionalProperties:false` over
+            // `{relation, rank}` and `relation_create_object` bans `id`, so the
+            // whole snapshot lives under `relation` and the Relation id is
+            // `retype(event_id)`.
             json!({
                 "sender": sender,
                 "event_id": event_id,
-                "relation_id": relation_id,
-                "relation_kind": "assigned_to",
-                "from_ref": strand_id,
-                "to_ref": assignee,
+                "relation": {
+                    "kind": "assigned_to",
+                    "from_ref": strand_id,
+                    "to_ref": assignee,
+                }
             }),
         )
     }

@@ -1,10 +1,15 @@
 use arkret_models_collaboration::account_lifecycle::{AccountStatusReceipt, AccountStatusRecord};
+use arkret_models_collaboration::objects::account_status::AccountStatus;
 
 use super::{
     AccountStatusReplicaAppend, AccountStatusReplicaConflictKind, AccountStatusReplicaStore,
     AsyncConnection, BigInt, Jsonb, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
     PgTransactionError, QueryableByName, RunQueryDsl, Text, async_trait, pg_conn, sql_query,
 };
+
+/// The durable replica head for one `(account_authority_id, account_id)` pair:
+/// the accepted record and the receipt that acknowledged it.
+type ReplicaHead = (AccountStatusRecord, AccountStatusReceipt);
 
 pub struct PgAccountStatusReplicaStore {
     pub pool: PgPool,
@@ -30,38 +35,101 @@ fn decode_receipt(row: &RecordRow) -> PersistenceResult<AccountStatusReceipt> {
     })
 }
 
-fn chain_conflict(
+/// Classifies an already transport- and proof-verified submission against the
+/// durable replica head, which the account-status replica decision table
+/// declares to be the only comparison baseline. Rows are evaluated top to
+/// bottom and the first match wins. `None` means the submission is admitted and
+/// the caller must perform the advancing write; every other outcome classifies
+/// the submission with zero replica, receipt and outbox writes.
+fn classify(
     record: &AccountStatusRecord,
-    head: Option<&AccountStatusRecord>,
-) -> Option<AccountStatusReplicaConflictKind> {
-    match head {
-        None => (!(record.status_seq == 1
-            && record.previous_account_status_record_id.is_none()))
-            .then_some(AccountStatusReplicaConflictKind::Fork),
-        Some(head) => {
-            if record.previous_account_status_record_id.as_ref()
-                != Some(&head.account_status_record_id)
-            {
-                return Some(AccountStatusReplicaConflictKind::Fork);
-            }
-            if record.binding_version < head.binding_version {
-                return Some(AccountStatusReplicaConflictKind::BindingRollback);
-            }
-            if record.binding_version == head.binding_version
-                && (record.principal_authority != head.principal_authority
-                    || record.principal_control_realm_id != head.principal_control_realm_id)
-            {
-                return Some(AccountStatusReplicaConflictKind::Fork);
-            }
-            if head.status
-                == arkret_models_collaboration::objects::account_status::AccountStatus::ErasurePending
-            {
-                return Some(AccountStatusReplicaConflictKind::ErasurePendingTerminal);
-            }
-            (!head.status.can_transition_to(record.status))
-                .then_some(AccountStatusReplicaConflictKind::TransitionInvalid)
+    head: Option<&ReplicaHead>,
+) -> Option<AccountStatusReplicaAppend> {
+    let Some((head_record, head_receipt)) = head else {
+        // genesis_gap: an absent head requires the genesis record first.
+        if record.status_seq > 1 {
+            return Some(AccountStatusReplicaAppend::DependencyMissing {
+                current_record: None,
+                required_status_seq: 1,
+            });
         }
+        // genesis_admission.
+        return None;
+    };
+    // binding_version_rollback is evaluated before every sequence row so a
+    // rolled-back binding can never be written by the advance branch.
+    if record.binding_version < head_record.binding_version {
+        return Some(conflict(
+            head_record,
+            AccountStatusReplicaConflictKind::BindingRollback,
+        ));
     }
+    if record.status_seq == head_record.status_seq + 1 {
+        // fork_predecessor_mismatch, otherwise advance.
+        if record.previous_account_status_record_id.as_ref()
+            != Some(&head_record.account_status_record_id)
+        {
+            return Some(conflict(
+                head_record,
+                AccountStatusReplicaConflictKind::Fork,
+            ));
+        }
+        return admission_conflict(record, head_record).map(|kind| conflict(head_record, kind));
+    }
+    if record.status_seq == head_record.status_seq {
+        // duplicate is the terminal ack only when the head already is the
+        // submitted record; a different record at the head sequence forks.
+        return Some(
+            if record.account_status_record_id == head_record.account_status_record_id {
+                AccountStatusReplicaAppend::Duplicate(head_receipt.clone())
+            } else {
+                conflict(head_record, AccountStatusReplicaConflictKind::Fork)
+            },
+        );
+    }
+    if record.status_seq < head_record.status_seq {
+        // stale is unconditional. How much history this receiver still retains
+        // for the submitted sequence is a local retention decision and must not
+        // turn a below-head submission into a duplicate.
+        return Some(AccountStatusReplicaAppend::Stale {
+            current_record: head_record.clone(),
+        });
+    }
+    // sequence_gap.
+    Some(AccountStatusReplicaAppend::DependencyMissing {
+        current_record: Some(head_record.clone()),
+        required_status_seq: head_record.status_seq + 1,
+    })
+}
+
+fn conflict(
+    head: &AccountStatusRecord,
+    kind: AccountStatusReplicaConflictKind,
+) -> AccountStatusReplicaAppend {
+    AccountStatusReplicaAppend::Conflict {
+        current_record: Some(head.clone()),
+        kind,
+    }
+}
+
+/// Admission guards that refine the `advance` row: the submission is the exact
+/// successor of the head, and these checks reject a successor whose binding or
+/// status transition the receiver must not durably record.
+fn admission_conflict(
+    record: &AccountStatusRecord,
+    head: &AccountStatusRecord,
+) -> Option<AccountStatusReplicaConflictKind> {
+    if record.binding_version == head.binding_version
+        && (record.principal_authority != head.principal_authority
+            || record.principal_control_realm_id != head.principal_control_realm_id)
+    {
+        return Some(AccountStatusReplicaConflictKind::Fork);
+    }
+    if head.status == AccountStatus::ErasurePending {
+        return Some(AccountStatusReplicaConflictKind::ErasurePendingTerminal);
+    }
+    (!head.status.can_transition_to(record.status))
+        .then_some(AccountStatusReplicaConflictKind::TransitionInvalid)
 }
 
 #[async_trait]
@@ -89,28 +157,6 @@ impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
                 .await
                 .map_err(PersistenceError::database)?;
 
-            let existing = sql_query(
-                "SELECT record, receipt FROM account_status_replica_records \
-                 WHERE account_authority_id = $1 AND account_id = $2 AND status_seq = $3",
-            )
-            .bind::<Text, _>(&authority)
-            .bind::<Text, _>(&account)
-            .bind::<BigInt, _>(i64::try_from(record.status_seq).map_err(|_| {
-                PersistenceError::SchemaViolation(
-                    "account-status sequence exceeds PostgreSQL bigint".to_owned(),
-                )
-            })?)
-            .get_result::<RecordRow>(&mut *conn)
-            .await
-            .optional()
-            .map_err(PersistenceError::database)?
-            .map(|row| -> PersistenceResult<_> {
-                let record = decode_record(&row)?;
-                let receipt = decode_receipt(&row)?;
-                Ok((record, receipt))
-            })
-            .transpose()?;
-
             let head = sql_query(
                 "SELECT record, receipt FROM account_status_replica_records \
                  WHERE account_authority_id = $1 AND account_id = $2 \
@@ -122,40 +168,13 @@ impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
             .await
             .optional()
             .map_err(PersistenceError::database)?
-            .map(|row| decode_record(&row))
+            .map(|row| -> PersistenceResult<ReplicaHead> {
+                Ok((decode_record(&row)?, decode_receipt(&row)?))
+            })
             .transpose()?;
 
-            if let Some((existing, accepted_receipt)) = existing {
-                return Ok(if existing.account_status_record_id
-                    == record.account_status_record_id
-                {
-                    AccountStatusReplicaAppend::Duplicate(accepted_receipt)
-                } else {
-                    AccountStatusReplicaAppend::Conflict {
-                        current_record: head,
-                        kind: AccountStatusReplicaConflictKind::Fork,
-                    }
-                });
-            }
-            let required_status_seq = head.as_ref().map_or(1, |head| head.status_seq + 1);
-            if let Some(head) = head.as_ref()
-                && record.status_seq < required_status_seq
-            {
-                return Ok(AccountStatusReplicaAppend::Stale {
-                    current_record: head.clone(),
-                });
-            }
-            if record.status_seq > required_status_seq {
-                return Ok(AccountStatusReplicaAppend::DependencyMissing {
-                    current_record: head,
-                    required_status_seq,
-                });
-            }
-            if let Some(kind) = chain_conflict(&record, head.as_ref()) {
-                return Ok(AccountStatusReplicaAppend::Conflict {
-                    current_record: head,
-                    kind,
-                });
+            if let Some(outcome) = classify(&record, head.as_ref()) {
+                return Ok(outcome);
             }
 
             sql_query(
@@ -276,5 +295,44 @@ impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
         .map_err(PersistenceError::database)?
         .map(|row| decode_receipt(&row))
         .transpose()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use soland_storage::contract_tests::assert_account_status_replica_decision_table_contract;
+
+    use super::*;
+
+    /// Follows the gating convention of `tests/store_contracts.rs`: the
+    /// PostgreSQL contracts run only when `DATABASE_URL` points at a migrated
+    /// database and are skipped otherwise.
+    async fn test_pool() -> Option<PgPool> {
+        crate::Db::connect(
+            std::env::var("DATABASE_URL").ok().as_deref(),
+            Default::default(),
+        )
+        .await
+        .expect("initialize test database")
+        .pool
+    }
+
+    /// Each run claims a fresh account so the shared database cannot leak a
+    /// durable head between runs.
+    fn unique_namespace() -> String {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock is after the unix epoch")
+            .as_nanos();
+        format!("postgres-account-status-{nanos}")
+    }
+
+    #[tokio::test]
+    async fn postgres_adapter_satisfies_account_status_decision_table_when_configured() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let store = PgAccountStatusReplicaStore { pool };
+        assert_account_status_replica_decision_table_contract(&store, &unique_namespace()).await;
     }
 }

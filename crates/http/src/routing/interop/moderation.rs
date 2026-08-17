@@ -551,14 +551,24 @@ async fn validate_moderation_franking_proof(
             "franking_proof.realm_id must match report realm_id",
         ));
     }
-    if !required_string_field(object, "franking_proof_id", "franking_proof")?
-        .starts_with("ak:franking_proof:")
+    if arkret_identifiers::FrankingProofId::new(required_string_field(
+        object,
+        "franking_proof_id",
+        "franking_proof",
+    )?)
+    .is_err()
     {
         return Err(AppError::param_invalid(
             "franking_proof.franking_proof_id must be a franking proof id",
         ));
     }
-    if !required_string_field(object, "event_id", "franking_proof")?.starts_with("ak:event:") {
+    if arkret_identifiers::EventId::new(required_string_field(
+        object,
+        "event_id",
+        "franking_proof",
+    )?)
+    .is_err()
+    {
         return Err(AppError::param_invalid(
             "franking_proof.event_id must be an event id",
         ));

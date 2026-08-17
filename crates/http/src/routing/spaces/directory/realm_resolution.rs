@@ -147,6 +147,16 @@ pub(super) async fn resolve_target(
         return Err(AppError::param_missing("address is required"));
     }
     let parsed = parse_address(address).map_err(|_| AppError::not_found("not found"))?;
+    if !super::requester_proof::directory_requester_proofs_verified(
+        state,
+        &body.proofs,
+        body.requester.as_ref().map(DidCoreId::as_str),
+        |proof| body.proof_binding_bytes(proof).ok(),
+    )
+    .await
+    {
+        return Err(AppError::not_found("not found"));
+    }
     let session = authenticated_session(state, req).await.ok();
     let token = body
         .token

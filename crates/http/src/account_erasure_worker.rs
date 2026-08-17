@@ -295,7 +295,7 @@ mod tests {
             principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
                 .unwrap(),
             triggering_status_record_id: AccountStatusRecordId::new(
-                "ak:account_status_record:sha256:8f61d5bf09f035f78c6f263f3d662f35b03eb67f95e108472f4036274a7dc41a".to_owned(),
+                "ak:account_status_record:AY9h1b8J8DX3jG8mPz1mLzWwPrZ_leEIRy9ANidKfcQa".to_owned(),
             )
             .unwrap(),
             storage_boundary: ErasureStorageBoundary::AccountPrivateStore,

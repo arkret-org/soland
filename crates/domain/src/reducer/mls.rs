@@ -564,10 +564,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
         return reject("mls_genesis_creator_device_missing");
     };
     let genesis_event_ref = op.context.event_id.to_string();
-    let Some(governance_binding) = payload
-        .get("governance_binding")
-        .cloned()
-    else {
+    let Some(governance_binding) = payload.get("governance_binding").cloned() else {
         return reject("mls_genesis_governance_binding_missing");
     };
     let effective_scope = match genesis_effective_scope(payload) {
@@ -613,15 +610,25 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
 
 /// G3.S1 — bump an MLS group's commit epoch.
 ///
-/// Payload shape:
+/// Payload shape (`event-payload.schema.json#/$defs/mls_commit_payload`, a
+/// closed object):
 /// ```json
 /// {
 ///   "mls_group_id":     "ak:mls_group:<uuid>",
 ///   "base_epoch":       <u64>,
-///   "leader_actor_id":  "ak:did_core:web:alice.example",
-///   "commit_bytes_b64": "<base64url(opaque MLS Commit)>"
+///   "base_epoch_ref":   "ak:event:<token>",
+///   "proposal_refs":    ["ak:event:<token>"],
+///   "next_epoch":       <u64>,
+///   "commit_bytes_b64": "<base64url(opaque MLS Commit)>",
+///   "commit_digest":    "sha256:<hex>",
+///   "governance_binding": { … }
 /// }
 /// ```
+///
+/// The committer is **not** a payload field. `encryption-and-audit.md` §5.6
+/// lets any member holding the scope's `ak.mls.commit` capability author a
+/// Commit, so the committing identity is the Event envelope author and the
+/// closed payload schema has no slot for it to be restated in.
 ///
 /// The reducer accepts a commit IFF
 /// `payload.base_epoch == current_stored_epoch` (defaulting to
@@ -638,13 +645,9 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         Some(v) => v,
         None => return reject("mls_commit_expected_prev_epoch_missing"),
     };
-    let Some(leader_actor_id) = payload
-        .get("leader_actor_id")
-        .or_else(|| payload.get("sender"))
-        .and_then(Value::as_str)
-    else {
-        return reject("mls_commit_leader_missing");
-    };
+    // The committing member is the signed Event author; the registered commit
+    // payload is closed and carries no committer field.
+    let committer_actor_id = op.context.sender.as_str();
     // Body bytes are not validated at the reducer level beyond a
     // presence check; the routing layer logs the digest for audit.
     if !payload
@@ -756,7 +759,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
             group_id: group_id.to_owned(),
             effective_scope: effective_scope.clone(),
             epoch: new_epoch,
-            leader_actor_id: leader_actor_id.to_owned(),
+            leader_actor_id: committer_actor_id.to_owned(),
             creator_device_id,
             genesis_event_ref,
             committed_at,
@@ -779,7 +782,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         effective_scope,
         previous_epoch: current,
         new_epoch,
-        leader_actor_id: leader_actor_id.to_owned(),
+        leader_actor_id: committer_actor_id.to_owned(),
     })
 }
 
@@ -832,9 +835,7 @@ fn proposal_effective_scope(
     group_id: &str,
     base_epoch: u64,
 ) -> Result<Value, &'static str> {
-    if let Some(binding) = payload
-        .get("governance_binding")
-    {
+    if let Some(binding) = payload.get("governance_binding") {
         if binding.get("mls_group_id").and_then(Value::as_str) != Some(group_id) {
             return Err("mls_governance_binding_group_mismatch");
         }

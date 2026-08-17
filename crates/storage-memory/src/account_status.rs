@@ -1,4 +1,5 @@
 use arkret_models_collaboration::account_lifecycle::{AccountStatusReceipt, AccountStatusRecord};
+use arkret_models_collaboration::objects::account_status::AccountStatus;
 use soland_storage::{
     AccountStatusReplicaAppend, AccountStatusReplicaConflictKind, AccountStatusReplicaStore,
     PersistenceError, PersistenceResult,
@@ -6,9 +7,13 @@ use soland_storage::{
 
 use crate::{BTreeMap, Mutex, async_trait};
 
+/// The durable replica head for one `(account_authority_id, account_id)` pair:
+/// the accepted record and the receipt that acknowledged it.
+type ReplicaHead = (AccountStatusRecord, AccountStatusReceipt);
+
 #[derive(Default)]
 pub struct MemoryAccountStatusReplicaStore {
-    records: Mutex<BTreeMap<(String, String, u64), (AccountStatusRecord, AccountStatusReceipt)>>,
+    records: Mutex<BTreeMap<(String, String, u64), ReplicaHead>>,
 }
 
 impl MemoryAccountStatusReplicaStore {
@@ -31,40 +36,15 @@ impl AccountStatusReplicaStore for MemoryAccountStatusReplicaStore {
         })?;
         let authority = record.account_authority_id.to_string();
         let account = record.account_id.to_string();
-        let key = (authority.clone(), account.clone(), record.status_seq);
         let mut records = self.records.lock();
-        if let Some((existing, accepted_receipt)) = records.get(&key) {
-            return Ok(if existing.account_status_record_id == record.account_status_record_id {
-                AccountStatusReplicaAppend::Duplicate(accepted_receipt.clone())
-            } else {
-                AccountStatusReplicaAppend::Conflict {
-                    current_record: current(&records, &authority, &account),
-                    kind: AccountStatusReplicaConflictKind::Fork,
-                }
-            });
+        let head = replica_head(&records, &authority, &account);
+        if let Some(outcome) = classify(record, head.as_ref()) {
+            return Ok(outcome);
         }
-        let head = current(&records, &authority, &account);
-        let required_status_seq = head.as_ref().map_or(1, |head| head.status_seq + 1);
-        if let Some(head) = head.as_ref()
-            && record.status_seq < required_status_seq
-        {
-            return Ok(AccountStatusReplicaAppend::Stale {
-                current_record: head.clone(),
-            });
-        }
-        if record.status_seq > required_status_seq {
-            return Ok(AccountStatusReplicaAppend::DependencyMissing {
-                current_record: head,
-                required_status_seq,
-            });
-        }
-        if let Some(kind) = chain_conflict(record, head.as_ref()) {
-            return Ok(AccountStatusReplicaAppend::Conflict {
-                current_record: head,
-                kind,
-            });
-        }
-        records.insert(key, (record.clone(), receipt.clone()));
+        records.insert(
+            (authority, account, record.status_seq),
+            (record.clone(), receipt.clone()),
+        );
         Ok(AccountStatusReplicaAppend::Accepted(receipt.clone()))
     }
 
@@ -113,10 +93,7 @@ impl AccountStatusReplicaStore for MemoryAccountStatusReplicaStore {
             .lock()
             .values()
             .map(|(record, _)| record)
-            .filter(|record| {
-                record.status
-                    == arkret_models_collaboration::objects::account_status::AccountStatus::ErasurePending
-            })
+            .filter(|record| record.status == AccountStatus::ErasurePending)
             .take(usize::from(limit))
             .cloned()
             .collect())
@@ -140,52 +117,123 @@ impl AccountStatusReplicaStore for MemoryAccountStatusReplicaStore {
     }
 }
 
-fn current(
-    records: &BTreeMap<(String, String, u64), (AccountStatusRecord, AccountStatusReceipt)>,
+fn replica_head(
+    records: &BTreeMap<(String, String, u64), ReplicaHead>,
     authority: &str,
     account: &str,
-) -> Option<AccountStatusRecord> {
+) -> Option<ReplicaHead> {
     records
         .range(
             (authority.to_owned(), account.to_owned(), 0)
                 ..=(authority.to_owned(), account.to_owned(), u64::MAX),
         )
         .next_back()
-        .map(|(_, (record, _))| record.clone())
+        .map(|(_, head)| head.clone())
 }
 
-fn chain_conflict(
+fn current(
+    records: &BTreeMap<(String, String, u64), ReplicaHead>,
+    authority: &str,
+    account: &str,
+) -> Option<AccountStatusRecord> {
+    replica_head(records, authority, account).map(|(record, _)| record)
+}
+
+/// Classifies an already transport- and proof-verified submission against the
+/// durable replica head, which the account-status replica decision table
+/// declares to be the only comparison baseline. Rows are evaluated top to
+/// bottom and the first match wins. `None` means the submission is admitted and
+/// the caller must perform the advancing write; every other outcome classifies
+/// the submission with zero replica, receipt and outbox writes.
+fn classify(
     record: &AccountStatusRecord,
-    head: Option<&AccountStatusRecord>,
-) -> Option<AccountStatusReplicaConflictKind> {
-    match head {
-        None => (!(record.status_seq == 1
-            && record.previous_account_status_record_id.is_none()))
-            .then_some(AccountStatusReplicaConflictKind::Fork),
-        Some(head) => {
-            if record.previous_account_status_record_id.as_ref()
-                != Some(&head.account_status_record_id)
-            {
-                return Some(AccountStatusReplicaConflictKind::Fork);
-            }
-            if record.binding_version < head.binding_version {
-                return Some(AccountStatusReplicaConflictKind::BindingRollback);
-            }
-            if record.binding_version == head.binding_version
-                && (record.principal_authority != head.principal_authority
-                    || record.principal_control_realm_id != head.principal_control_realm_id)
-            {
-                return Some(AccountStatusReplicaConflictKind::Fork);
-            }
-            if head.status
-                == arkret_models_collaboration::objects::account_status::AccountStatus::ErasurePending
-            {
-                return Some(AccountStatusReplicaConflictKind::ErasurePendingTerminal);
-            }
-            (!head.status.can_transition_to(record.status))
-                .then_some(AccountStatusReplicaConflictKind::TransitionInvalid)
+    head: Option<&ReplicaHead>,
+) -> Option<AccountStatusReplicaAppend> {
+    let Some((head_record, head_receipt)) = head else {
+        // genesis_gap: an absent head requires the genesis record first.
+        if record.status_seq > 1 {
+            return Some(AccountStatusReplicaAppend::DependencyMissing {
+                current_record: None,
+                required_status_seq: 1,
+            });
         }
+        // genesis_admission.
+        return None;
+    };
+    // binding_version_rollback is evaluated before every sequence row so a
+    // rolled-back binding can never be written by the advance branch.
+    if record.binding_version < head_record.binding_version {
+        return Some(conflict(
+            head_record,
+            AccountStatusReplicaConflictKind::BindingRollback,
+        ));
     }
+    if record.status_seq == head_record.status_seq + 1 {
+        // fork_predecessor_mismatch, otherwise advance.
+        if record.previous_account_status_record_id.as_ref()
+            != Some(&head_record.account_status_record_id)
+        {
+            return Some(conflict(
+                head_record,
+                AccountStatusReplicaConflictKind::Fork,
+            ));
+        }
+        return admission_conflict(record, head_record).map(|kind| conflict(head_record, kind));
+    }
+    if record.status_seq == head_record.status_seq {
+        // duplicate is the terminal ack only when the head already is the
+        // submitted record; a different record at the head sequence forks.
+        return Some(
+            if record.account_status_record_id == head_record.account_status_record_id {
+                AccountStatusReplicaAppend::Duplicate(head_receipt.clone())
+            } else {
+                conflict(head_record, AccountStatusReplicaConflictKind::Fork)
+            },
+        );
+    }
+    if record.status_seq < head_record.status_seq {
+        // stale is unconditional. How much history this receiver still retains
+        // for the submitted sequence is a local retention decision and must not
+        // turn a below-head submission into a duplicate.
+        return Some(AccountStatusReplicaAppend::Stale {
+            current_record: head_record.clone(),
+        });
+    }
+    // sequence_gap.
+    Some(AccountStatusReplicaAppend::DependencyMissing {
+        current_record: Some(head_record.clone()),
+        required_status_seq: head_record.status_seq + 1,
+    })
+}
+
+fn conflict(
+    head: &AccountStatusRecord,
+    kind: AccountStatusReplicaConflictKind,
+) -> AccountStatusReplicaAppend {
+    AccountStatusReplicaAppend::Conflict {
+        current_record: Some(head.clone()),
+        kind,
+    }
+}
+
+/// Admission guards that refine the `advance` row: the submission is the exact
+/// successor of the head, and these checks reject a successor whose binding or
+/// status transition the receiver must not durably record.
+fn admission_conflict(
+    record: &AccountStatusRecord,
+    head: &AccountStatusRecord,
+) -> Option<AccountStatusReplicaConflictKind> {
+    if record.binding_version == head.binding_version
+        && (record.principal_authority != head.principal_authority
+            || record.principal_control_realm_id != head.principal_control_realm_id)
+    {
+        return Some(AccountStatusReplicaConflictKind::Fork);
+    }
+    if head.status == AccountStatus::ErasurePending {
+        return Some(AccountStatusReplicaConflictKind::ErasurePendingTerminal);
+    }
+    (!head.status.can_transition_to(record.status))
+        .then_some(AccountStatusReplicaConflictKind::TransitionInvalid)
 }
 
 #[cfg(test)]

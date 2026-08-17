@@ -70,9 +70,11 @@ pub(super) fn member_self_knock(object: &serde_json::Map<String, Value>, actor: 
     if !is_knock && !is_gate_proof_join {
         return false;
     }
+    // `membership_payload` names the subject `actor_id` and is
+    // `additionalProperties:false`; an omitted `actor_id` means the Event
+    // author is the subject.
     payload
         .get("actor_id")
-        .or_else(|| payload.get("member"))
         .and_then(Value::as_str)
         .map(|target| target == actor)
         .unwrap_or(true)
@@ -96,20 +98,12 @@ pub(super) async fn member_join_accepts_pending_invite(
     let Some(payload) = object.get("payload") else {
         return false;
     };
-    let target_actor = payload
-        .get("actor_id")
-        .or_else(|| payload.get("member"))
-        .or_else(|| payload.get("invitee"))
-        .and_then(Value::as_str)
-        .unwrap_or(actor);
-    if target_actor != actor {
-        return false;
-    }
-    let Some(invite_id) = payload
-        .get("invite_ref")
-        .or_else(|| payload.get("invite_id"))
-        .and_then(Value::as_str)
-    else {
+    // `event-payload.schema.json#/$defs/invite_accept_payload` is
+    // `additionalProperties:false` over `{invite_id, delivery_status,
+    // delivery_binding}`: the accepting subject is the Event actor, so there is
+    // no payload actor field to read, and `invite_id` is the only target
+    // carrier (`invite_ref` belongs to `membership_payload`, a different kind).
+    let Some(invite_id) = payload.get("invite_id").and_then(Value::as_str) else {
         return false;
     };
     if arkret_identifiers::InviteId::new(invite_id.to_owned()).is_err() {
@@ -358,5 +352,62 @@ pub(super) async fn bootstrap_realm_member_index(
     };
     if let Err(error) = state.realms().store_realm_metadata(realm_id, meta).await {
         tracing::error!(%error, %realm_id, "bootstrap_realm_member_index: failed to persist Realm meta record");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    const ALICE: &str = "ak:did_core:web:alice.example";
+    const BOB: &str = "ak:did_core:web:bob.example";
+
+    fn member_state(payload: Value) -> serde_json::Map<String, Value> {
+        json!({
+            "kind": arkret_wire::EventKind::MemberState.as_str(),
+            "payload": payload,
+        })
+        .as_object()
+        .expect("event object")
+        .clone()
+    }
+
+    /// `event-payload.schema.json#/$defs/membership_payload` names the subject
+    /// `actor_id` and is `additionalProperties:false`. The canonical positive
+    /// is a self-authored knock; the legacy `member` spelling is not a spec
+    /// field, so a payload carrying only it cannot retarget the knock away
+    /// from the Event author.
+    #[test]
+    fn member_self_knock_reads_only_actor_id() {
+        assert!(member_self_knock(
+            &member_state(json!({"membership": "knock", "actor_id": ALICE})),
+            ALICE
+        ));
+        assert!(!member_self_knock(
+            &member_state(json!({"membership": "knock", "actor_id": BOB})),
+            ALICE
+        ));
+
+        // Legacy `member`: unread, so the payload reduces to "no actor field"
+        // and the Event author is the subject. Alice knocking for herself is
+        // still admitted; the legacy key can no longer name Bob as the target.
+        assert!(member_self_knock(
+            &member_state(json!({"membership": "knock", "member": BOB})),
+            ALICE
+        ));
+    }
+
+    /// The not-yet-member exemption is only for `ak.member.state`; the invite
+    /// acceptance path has its own canonical event.
+    #[test]
+    fn member_self_knock_only_applies_to_member_state() {
+        let mut object = member_state(json!({"membership": "knock", "actor_id": ALICE}));
+        object.insert(
+            "kind".to_owned(),
+            json!(arkret_wire::EventKind::InviteAccept.as_str()),
+        );
+        assert!(!member_self_knock(&object, ALICE));
     }
 }

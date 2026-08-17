@@ -2008,7 +2008,11 @@ mod invite_locator_security_tests {
                 "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E2".to_owned(),
             )
             .unwrap(),
-            actor_id: DidCoreId::new("did:web:alice.example".to_owned()).unwrap(),
+            // `ValidatedEventEnvelope::actor_id` is a `DidCoreId`, whose wire
+            // form is `ak:did_core:<method>:<rest>`; a bare `did:web:` string
+            // is a full DID and belongs only where a complete DID is required
+            // (verification methods, proof controllers).
+            actor_id: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
             device_id: arkret_wire::DeviceId::new(
                 "ak:device:01904100-0000-7000-8000-000000000404".to_owned(),
             )

@@ -784,13 +784,18 @@ fn realm_key_share_epoch_span(from_epoch: Option<u64>, to_epoch: Option<u64>) ->
     Some(to_epoch?.saturating_sub(from_epoch?).saturating_add(1))
 }
 
+/// The principal an `ak.member.state` / `ak.circle.member.state` operation acts
+/// on.
+///
+/// `event-payload.schema.json#/$defs/membership_payload` and
+/// `#/$defs/circle_member_state_payload` both name it `actor_id` and are
+/// `additionalProperties:false`; `member` / `actor` are not spec fields. When
+/// the payload omits `actor_id` the subject is the Event author.
 pub(crate) fn membership_target(operation: &Operation) -> Option<&str> {
     Some(
         operation
             .payload
             .get("actor_id")
-            .or_else(|| operation.payload.get("member"))
-            .or_else(|| operation.payload.get("actor"))
             .and_then(Value::as_str)
             .unwrap_or_else(|| operation.context.sender.as_str()),
     )

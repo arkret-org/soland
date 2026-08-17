@@ -153,6 +153,16 @@ pub(super) async fn resolve_agent_selector(
     require_demo_directory_provider(state)?;
     let body = body.into_inner();
     validate_agent_slug(&body.agent_slug).map_err(|_| selector_not_found())?;
+    if !super::requester_proof::directory_requester_proofs_verified(
+        state,
+        &body.proofs,
+        Some(body.requester.as_str()),
+        |proof| body.proof_binding_bytes(proof).ok(),
+    )
+    .await
+    {
+        return Err(selector_not_found());
+    }
     let session = authenticated_session(state, req).await.ok();
     let service_domain = service_handle_domain(state);
     let Some(lookup) = handle_lookup(&body.controller_handle.to_string(), &service_domain) else {

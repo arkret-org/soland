@@ -96,11 +96,15 @@ pub async fn active_device_revocation_gate_selector(
         .envelope
         .pointer("/payload/device_id")
         .and_then(Value::as_str);
-    if authorize_event.actor_id != principal_id.as_str()
-        || authorize_event.kind != arkret_wire::EventKind::DeviceAuthorize.as_str()
-        || event_principal_server_id != Some(principal_server_id.as_str())
-        || event_device_id != Some(device_id.as_str())
-    {
+    if !accepted_authorization_binds_authority_tuple(
+        authorize_event.actor_id.as_str(),
+        authorize_event.kind.as_str(),
+        event_principal_server_id,
+        event_device_id,
+        principal_id.as_str(),
+        principal_server_id.as_str(),
+        device_id.as_str(),
+    ) {
         return Err(ServiceError::Conflict(
             "accepted device authorization Event does not bind the current authority tuple"
                 .to_owned(),
@@ -123,6 +127,30 @@ pub async fn active_device_revocation_gate_selector(
         target_device_authorize_event_id: target_device_authorize_event_id.to_string(),
         target_device_generation_ref,
     })
+}
+
+/// `device-lifecycle.md` — the accepted `ak.device.authorize` Event a derived
+/// selector points at MUST re-verify the whole local account-authority tuple
+/// verbatim before the selector may be used: the same principal actor, the
+/// `ak.device.authorize` kind, this exact Principal Server, and the same
+/// device. The same all-or-nothing re-check covers genesis, pairing and
+/// re-anchor writers, because all three reach durable state only through this
+/// selector. A selector is never partially trusted: one mismatched member is a
+/// conflict, and the caller MUST NOT fall back to a placeholder Event id,
+/// principal server or device.
+fn accepted_authorization_binds_authority_tuple(
+    event_actor_id: &str,
+    event_kind: &str,
+    event_principal_server_id: Option<&str>,
+    event_device_id: Option<&str>,
+    principal_id: &str,
+    principal_server_id: &str,
+    device_id: &str,
+) -> bool {
+    event_actor_id == principal_id
+        && event_kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
+        && event_principal_server_id == Some(principal_server_id)
+        && event_device_id == Some(device_id)
 }
 
 fn verified_device_authorization_binding(
@@ -520,6 +548,101 @@ mod tests {
             }),
         ));
         assert!(matches!(malformed, Err(ServiceError::SchemaViolation(_))));
+    }
+
+    const TUPLE_PRINCIPAL: &str = "ak:did_core:webvh:z6mkfixture:alice.example";
+    const TUPLE_PRINCIPAL_SERVER: &str = "ak:did_core:web:soland.example";
+    const TUPLE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-000000000030";
+
+    fn binds_tuple(
+        actor_id: &str,
+        kind: &str,
+        principal_server_id: Option<&str>,
+        device_id: Option<&str>,
+    ) -> bool {
+        accepted_authorization_binds_authority_tuple(
+            actor_id,
+            kind,
+            principal_server_id,
+            device_id,
+            TUPLE_PRINCIPAL,
+            TUPLE_PRINCIPAL_SERVER,
+            TUPLE_DEVICE,
+        )
+    }
+
+    /// The canonical positive: every member of the authority tuple matches.
+    #[test]
+    fn accepted_authorization_binds_the_exact_authority_tuple() {
+        assert!(binds_tuple(
+            TUPLE_PRINCIPAL,
+            arkret_wire::EventKind::DeviceAuthorize.as_str(),
+            Some(TUPLE_PRINCIPAL_SERVER),
+            Some(TUPLE_DEVICE),
+        ));
+    }
+
+    /// One mismatched member — actor, kind, Principal Server or device — is
+    /// enough to reject. Nothing is trusted partially, and a missing member is
+    /// never treated as a wildcard.
+    #[test]
+    fn a_single_authority_tuple_mismatch_rejects_the_selector() {
+        let authorize = arkret_wire::EventKind::DeviceAuthorize.as_str();
+        assert!(!binds_tuple(
+            "ak:did_core:webvh:z6mkfixture:mallory.example",
+            authorize,
+            Some(TUPLE_PRINCIPAL_SERVER),
+            Some(TUPLE_DEVICE),
+        ));
+        assert!(!binds_tuple(
+            TUPLE_PRINCIPAL,
+            arkret_wire::event_kind_str::DEVICE_REANCHOR,
+            Some(TUPLE_PRINCIPAL_SERVER),
+            Some(TUPLE_DEVICE),
+        ));
+        assert!(!binds_tuple(
+            TUPLE_PRINCIPAL,
+            authorize,
+            Some("ak:did_core:web:other-server.example"),
+            Some(TUPLE_DEVICE),
+        ));
+        assert!(!binds_tuple(
+            TUPLE_PRINCIPAL,
+            authorize,
+            None,
+            Some(TUPLE_DEVICE)
+        ));
+        assert!(!binds_tuple(
+            TUPLE_PRINCIPAL,
+            authorize,
+            Some(TUPLE_PRINCIPAL_SERVER),
+            Some("ak:device:01904100-0000-7000-8000-000000000031"),
+        ));
+        assert!(!binds_tuple(
+            TUPLE_PRINCIPAL,
+            authorize,
+            Some(TUPLE_PRINCIPAL_SERVER),
+            None
+        ));
+    }
+
+    /// The generation half of the same re-check: the projection's
+    /// `authorized_generation_ref` is read back verbatim so the caller can
+    /// compare it with the account's current active generation and reject an
+    /// authorization that sits outside it.
+    #[test]
+    fn verified_projection_surfaces_the_authorized_generation_ref() {
+        let binding = verified_device_authorization_binding(&device(
+            "verified",
+            json!({
+                "device_authorize_event_id":
+                    "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa",
+                "authorized_generation_ref": 3
+            }),
+        ))
+        .expect("well-formed verified projection")
+        .expect("verified device carries a binding");
+        assert_eq!(binding.1, 3);
     }
 
     fn record(id: &str, kind: &str, digest: &str, envelope: Value) -> CanonicalEventRecord {

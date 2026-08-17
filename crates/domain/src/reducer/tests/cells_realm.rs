@@ -1383,10 +1383,8 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
             arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
                 .unwrap(),
             managed_agent_initial_resolution(),
-            arkret_identifiers::TrustDomainId::new(
-                "ak:trust_domain:managed-agent-pcr".to_owned(),
-            )
-            .unwrap(),
+            arkret_identifiers::TrustDomainId::new("ak:trust_domain:managed-agent-pcr".to_owned())
+                .unwrap(),
             vec!["ak.profile.principal_control_realm.v1".to_owned()],
             arkret_wire::CORE_REDUCER_PROFILE,
             arkret_canonical::DigestSuite::Sha256,
@@ -1463,10 +1461,8 @@ fn managed_agent_genesis_requires_the_registered_status_projection() {
             arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
                 .unwrap(),
             managed_agent_initial_resolution(),
-            arkret_identifiers::TrustDomainId::new(
-                "ak:trust_domain:managed-agent-pcr".to_owned(),
-            )
-            .unwrap(),
+            arkret_identifiers::TrustDomainId::new("ak:trust_domain:managed-agent-pcr".to_owned())
+                .unwrap(),
             vec!["ak.profile.principal_control_realm.v1".to_owned()],
             arkret_wire::CORE_REDUCER_PROFILE,
             arkret_canonical::DigestSuite::Sha256,

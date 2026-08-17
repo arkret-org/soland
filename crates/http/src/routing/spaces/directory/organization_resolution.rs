@@ -53,6 +53,18 @@ pub(super) async fn resolve_organization(
             "organization_principal_id or handle is required",
         ));
     }
+    // This family has no originator wire field, so the signer identity is
+    // borne only by `verification_method` (`discovery-directory.md` §9.0.1).
+    if !super::requester_proof::directory_requester_proofs_verified(
+        state,
+        &body.proofs,
+        None,
+        |proof| body.proof_binding_bytes(proof).ok(),
+    )
+    .await
+    {
+        return Err(AppError::not_found("not found"));
+    }
     organizations::refresh_organization_projection(state)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;

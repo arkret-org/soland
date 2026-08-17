@@ -291,6 +291,13 @@ async fn fetch_remote_handle_from_peer(
     lookup: &HandleLookup,
 ) -> Result<Option<DirectoryHandleResolutionOutcome>, AppError> {
     let mut remote_body = body.clone();
+    // `handle` is a bound target member and `audience` is inside the proofs
+    // -stripped `payload_digest`, so rewriting either detaches the requester's
+    // signature from the bytes it covers (`discovery-directory.md` §9.0.1).
+    // Only the requester can re-sign for the peer's audience, so the forwarded
+    // request drops the proofs rather than carrying material that is
+    // guaranteed not to verify.
+    remote_body.proofs.clear();
     remote_body.handle = lookup.canonical.clone();
     if remote_body.audience.is_none() {
         remote_body.audience = Some(resolve_handle_audience(
@@ -497,6 +504,16 @@ pub(super) async fn resolve_handle(
     let body = body.into_inner();
     if body.handle.trim().is_empty() {
         return Err(AppError::param_missing("handle is required"));
+    }
+    if !super::requester_proof::directory_requester_proofs_verified(
+        state,
+        &body.proofs,
+        body.requester.as_ref().map(DidCoreId::as_str),
+        |proof| body.proof_binding_bytes(proof).ok(),
+    )
+    .await
+    {
+        return Err(AppError::not_found("not found"));
     }
     let service_domain = service_handle_domain(state);
     let Some(lookup) = handle_lookup(&body.handle, &service_domain) else {
@@ -723,6 +740,16 @@ pub(super) async fn list_handles_for_subject(
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_demo_directory_provider(state)?;
     let body = body.into_inner();
+    if !super::requester_proof::directory_requester_proofs_verified(
+        state,
+        &body.proofs,
+        body.requester.as_ref().map(DidCoreId::as_str),
+        |proof| body.proof_binding_bytes(proof).ok(),
+    )
+    .await
+    {
+        return Err(AppError::not_found("not found"));
+    }
     let subject_did = body.subject.clone();
     let subject = subject_did.as_str().to_owned();
     if subject.is_empty() {

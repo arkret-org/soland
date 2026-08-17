@@ -492,43 +492,49 @@ fn validate_read_cursor_hlc(hlc: &str) -> Result<(), &'static str> {
     }
     Ok(())
 }
-/// `relation.md` admission guard for `ak.relation.create` / `.update` /
-/// `.tombstone`, covering two reducer-managed invariants:
+/// `relation.md` §2 stateless admission guard for `ak.relation.create` /
+/// `.update` / `.tombstone`.
 ///
-/// 1. **`effective_scope` is reducer-stamped** (§2 table): the actor MUST NOT submit it; the
-///    reducer materialises it from `scope_circle_id`. Any actor-supplied `effective_scope` is
-///    `schema_violation` (`effective_scope_reducer_managed`).
-/// 2. **derived-edge single-source** (§3.2): `watches` (truth source
-///    `ak.component.strand.watch.v1`, write path `ak.strand.watch.set`) and Board/List `contains`
-///    (truth source `ak.space.parent` / `ak.strand.move`) are derived projections; a direct
-///    `ak.relation.*` on them MUST `schema_violation`. The container `contains` shape is identified
-///    by a Space `from_ref` (`ak:space:…`); a `Strand -> Strand` `contains` stays a
-///    directly-writable weak relation (§3.2 line 85) and is not blocked.
+/// This layer only rejects what is decidable without the projection pre-state:
+/// `effective_scope` is reducer-stamped (§2 table), so an actor-supplied one is
+/// `schema_violation` / `effective_scope_reducer_managed` — a sub-reason
+/// `error-code-registry.json` classifies under `schema_validation`, which is
+/// why it stays on the schema side of the split.
+///
+/// `event-payload.schema.json#/$defs/relation_create_payload`,
+/// `#/$defs/relation_update_payload` and `#/$defs/relation_tombstone_payload`
+/// are all `additionalProperties:false`, so a payload-root `effective_scope` is
+/// already rejected by the SDK artifact schema that runs immediately before
+/// this validator. The two places the schema still admits the name are the open
+/// `#/$defs/relation_create_object` (`additionalProperties:true`) under
+/// `payload.relation` and the free-form `#/$defs/patch` document under
+/// `payload.patch`.
+///
+/// Derived-edge admission (`watches`, container `contains`), endpoint scope and
+/// every tombstone decision need the Relation pre-state, so they live solely in
+/// `ProjectionState::check_relation_invariants`, which submit calls before any
+/// persistent effect.
 pub(crate) fn validate_relation_operation_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if operation.payload.get("effective_scope").is_some()
-        || operation
-            .payload
-            .get("relation")
-            .and_then(Value::as_object)
-            .is_some_and(|relation| relation.contains_key("effective_scope"))
-    {
+    let in_create_object = operation
+        .payload
+        .get("relation")
+        .and_then(Value::as_object)
+        .is_some_and(|relation| relation.contains_key("effective_scope"));
+    let in_patch = operation
+        .payload
+        .get("patch")
+        .and_then(Value::as_object)
+        .is_some_and(|patch| {
+            patch
+                .keys()
+                .any(|path| path == "effective_scope" || path.starts_with("effective_scope."))
+        });
+    if in_create_object || in_patch {
         return Err("effective_scope_reducer_managed");
     }
-    let relation_kind = ["relation_kind", "kind"]
-        .iter()
-        .find_map(|field| operation.payload.get(*field).and_then(Value::as_str));
-    let Some(relation_kind) = relation_kind else {
-        return Ok(());
-    };
-    let from_ref = ["from_ref", "from"]
-        .iter()
-        .find_map(|field| operation.payload.get(*field).and_then(Value::as_str));
-    arkret_models_collaboration::objects::relation::validate_relation_direct_write(
-        relation_kind,
-        from_ref,
-    )
+    Ok(())
 }
 
 pub(crate) fn validate_morph_update_payload(operation: &Operation) -> Result<(), &'static str> {

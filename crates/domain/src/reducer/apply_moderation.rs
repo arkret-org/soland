@@ -360,7 +360,7 @@ impl ProjectionState {
         };
         let realm_id = operation.realm_id.to_string();
         if decision_kind == "dismiss" {
-            if !target_ref.starts_with("ak:event:") {
+            if arkret_identifiers::EventId::new(target_ref.as_str()).is_err() {
                 return ProjectionEffect::Rejected {
                     reason: "moderation_dismiss_requires_report_event".to_owned(),
                 };

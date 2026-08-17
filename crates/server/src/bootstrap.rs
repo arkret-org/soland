@@ -311,6 +311,7 @@ async fn resolve_external_service_identity(
             let request = ServiceRegistrationEnsureRequestBody::new(
                 registration_key.clone(),
                 operation,
+                uuid::Uuid::now_v7().to_string(),
                 None,
             )
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -720,6 +721,7 @@ async fn restore_identity_bundle(
     let request = ServiceRegistrationEnsureRequestBody::new(
         registration_key.clone(),
         inception.clone(),
+        uuid::Uuid::now_v7().to_string(),
         None,
     )
     .map_err(|error| anyhow::anyhow!("identity bundle inception is invalid: {error}"))?;
@@ -1063,6 +1065,7 @@ async fn mint_local_service_identity(
     let request = ServiceRegistrationEnsureRequestBody::new(
         registration_key.clone(),
         inception_operation,
+        uuid::Uuid::now_v7().to_string(),
         None,
     )
     .map_err(|error| anyhow::anyhow!("building service registration failed: {error}"))?;

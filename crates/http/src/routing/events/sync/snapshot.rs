@@ -1366,10 +1366,10 @@ pub(crate) async fn projection_record_visible_to_session(
             .get("sidecar_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        _ => event
-            .payload
-            .get("governance_binding")
-            .or_else(|| event.payload.get("mls_governance_binding"))
+        // Remaining sidecar-bearing kinds are the MLS events, whose payloads
+        // name the binding `governance_binding` (`mls_governance_binding` is a
+        // profile / reason-code prefix, never a payload field).
+        _ => crate::routing::mls::payload_fields::governance_binding(&event.payload)
             .and_then(|binding| binding.get("sidecar_id"))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),

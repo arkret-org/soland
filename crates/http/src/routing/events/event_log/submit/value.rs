@@ -10,6 +10,30 @@ pub(super) struct PreparedAgentMembershipEvent {
     pub(super) ingress_receipts: Vec<arkret_wire::IngressReceipt>,
 }
 
+/// Classify a failed origin-selector derivation on the origin Principal
+/// Server's own `/_arkret/self/*` write path.
+///
+/// `device-lifecycle.md` §"派生的定义域与缺失结论" separates this surface from
+/// the peer gate: locally the write MUST fail closed with `device_unauthorized`
+/// *before* the revocation record is consulted and before any business effect
+/// lands, rather than answering with a signed anti-enumeration receipt. A row
+/// that claims verified / current while omitting its schema-required
+/// authorization Event id or generation ref is instead a projection integrity
+/// failure, which surfaces as an internal availability fault and never as an
+/// authorization answer.
+fn local_device_authorization_error(error: soland_services::ServiceError) -> SubmitOneError {
+    let (status, code) = if error.is_not_found() {
+        (StatusCode::FORBIDDEN, "device_unauthorized")
+    } else {
+        (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
+    };
+    SubmitOneError::new(
+        status,
+        code,
+        format!("Event author device authorization unavailable: {error}"),
+    )
+}
+
 pub(super) fn stored_prev_frontier_digest(
     record: &CanonicalEventRecord,
 ) -> Result<String, SubmitOneError> {
@@ -2353,21 +2377,7 @@ pub(super) async fn submit_event_value_with_context(
                 parsed.device_id.as_str(),
             )
             .await
-            .map_err(|error| {
-                SubmitOneError::new(
-                    if error.is_not_found() {
-                        StatusCode::FORBIDDEN
-                    } else {
-                        StatusCode::INTERNAL_SERVER_ERROR
-                    },
-                    if error.is_not_found() {
-                        "device_unauthorized"
-                    } else {
-                        "internal_error"
-                    },
-                    format!("Event author device authorization unavailable: {error}"),
-                )
-            })?;
+            .map_err(local_device_authorization_error)?;
         let gate_status = state
             .persistence()
             .device_revocation_gate_status(&selector)
@@ -3100,4 +3110,39 @@ async fn preflight_account_data_cas(
         "expected_revision does not match current account data revision",
     )
     .with_details(details))
+}
+
+#[cfg(test)]
+mod local_device_authorization_tests {
+    use soland_services::ServiceError;
+
+    use super::*;
+
+    /// Canonical negative on the local write surface: the device has no
+    /// accepted, current, verified authorization, so the submit fails closed
+    /// with `device_unauthorized` before the revocation record is queried and
+    /// before any durable effect. This surface deliberately does NOT reuse the
+    /// peer gate's signed `authority_mismatch` receipt.
+    #[test]
+    fn undefined_local_derivation_is_device_unauthorized() {
+        let error = local_device_authorization_error(ServiceError::NotFound(
+            "device authorization is not active".to_owned(),
+        ));
+        assert_eq!(error.status, StatusCode::FORBIDDEN);
+        assert_eq!(error.code, "device_unauthorized");
+    }
+
+    /// A malformed verified projection row is a projection integrity failure,
+    /// not an authorization answer: it MUST surface as an internal availability
+    /// fault so the row can be isolated, and it MUST NOT be reported as an
+    /// ordinary unauthorized device.
+    #[test]
+    fn malformed_local_projection_is_an_internal_fault() {
+        let error = local_device_authorization_error(ServiceError::SchemaViolation(
+            "device authorization omits its generation binding".to_owned(),
+        ));
+        assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.code, "internal_error");
+        assert_ne!(error.code, "device_unauthorized");
+    }
 }

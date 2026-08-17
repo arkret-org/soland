@@ -36,20 +36,25 @@ pub(crate) fn message_event_id_from_ref(value: &str) -> String {
 pub fn message_redaction_target_ref(payload: &Value) -> Option<String> {
     ["target_event_id", "message_id", "target_ref", "event_id"]
         .into_iter()
-    .find_map(|field| {
-        payload
-            .get(field)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .and_then(|value| {
-                if value.starts_with("ak:event:") || value.starts_with("ak:message:") {
-                    Some(value.to_owned())
-                } else {
-                    None
-                }
-            })
-    })
+        .find_map(|field| {
+            payload
+                .get(field)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .and_then(|value| {
+                    // A redaction target is a canonical Event or Message id;
+                    // both are 44-char Event tokens, so the kind prefix alone
+                    // never establishes that the payload names one.
+                    if arkret_identifiers::EventId::new(value).is_ok()
+                        || arkret_identifiers::MessageId::new(value).is_ok()
+                    {
+                        Some(value.to_owned())
+                    } else {
+                        None
+                    }
+                })
+        })
 }
 
 pub fn message_id_from_event_id(value: &str) -> String {

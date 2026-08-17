@@ -306,10 +306,9 @@ pub(crate) async fn validate_direct_mls_generation_operation(
         .get("payload")
         .cloned()
         .ok_or("direct_conversation_activation_authority_unavailable")?;
-    if selected_payload
-        .get("group_id")
-        .or_else(|| selected_payload.get("mls_group_id"))
-        .and_then(Value::as_str)
+    // The selected state is an `ak.mls.genesis` / `ak.mls.commit`; both name the
+    // group `mls_group_id`.
+    if crate::routing::mls::payload_fields::mls_group_id(&selected_payload)
         != Some(proposed.mls_group_id.as_str())
     {
         return Err("direct_conversation_activation_authority_unavailable");
@@ -325,27 +324,14 @@ pub(crate) async fn validate_direct_mls_generation_operation(
         || genesis
             .envelope
             .get("payload")
-            .and_then(|payload| {
-                payload
-                    .get("group_id")
-                    .or_else(|| payload.get("mls_group_id"))
-            })
-            .and_then(Value::as_str)
+            .and_then(crate::routing::mls::payload_fields::mls_group_id)
             != Some(proposed.mls_group_id.as_str())
     {
         return Err("direct_conversation_activation_authority_unavailable");
     }
-    let effective_scope = selected_payload
-        .get("effective_scope")
-        .cloned()
-        .or_else(|| {
-            selected_payload
-                .get("governance_binding")
-                .or_else(|| selected_payload.get("mls_governance_binding"))
-                .and_then(|binding| binding.get("effective_scope"))
-                .cloned()
-        })
-        .ok_or("direct_conversation_activation_authority_unavailable")?;
+    let effective_scope =
+        crate::routing::mls::payload_fields::group_state_effective_scope(&selected_payload)
+            .ok_or("direct_conversation_activation_authority_unavailable")?;
     let effective_scope = serde_json::from_value::<arkret_wire::ScopeRef>(effective_scope)
         .map_err(|_| "direct_conversation_activation_authority_unavailable")?;
     let selected_frontier = state

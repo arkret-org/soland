@@ -24,7 +24,9 @@ fn is_policy_frontier_component(component: &str) -> bool {
 
 impl ProjectionState {
     pub(crate) fn message_by_target_ref(&self, target_ref: &str) -> Option<&MessageState> {
-        if target_ref.starts_with("ak:message:") {
+        // Classify by canonical typed id, not by kind prefix: `ak:event:x` is
+        // not an Event id, so it must not take the Event-keyed branch.
+        if arkret_identifiers::MessageId::new(target_ref).is_ok() {
             return self
                 .messages
                 .values()
@@ -35,7 +37,7 @@ impl ProjectionState {
                     self.messages.get(&event_id)
                 });
         }
-        if target_ref.starts_with("ak:event:") {
+        if arkret_identifiers::EventId::new(target_ref).is_ok() {
             return self.messages.get(target_ref);
         }
         self.messages.get(target_ref).or_else(|| {

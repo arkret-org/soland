@@ -129,7 +129,9 @@ fn validate_caller_signed_read_cursor(
         ));
     }
     validate_read_scope(&cursor.read_scope)?;
-    validate_position(&cursor.position)?;
+    // `position` needs no local check: `ReadCursorPosition` carries the SDK
+    // `EventId` and `Hlc` newtypes, so a non-canonical Event token or HLC is
+    // already rejected when the payload is decoded.
     Ok(cursor)
 }
 
@@ -242,25 +244,6 @@ fn validate_track(track: &str) -> Result<(), AppError> {
         || !bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
     {
         return Err(AppError::param_invalid("invalid read_scope.track_name"));
-    }
-    Ok(())
-}
-
-fn validate_position(position: &ReadCursorPosition) -> Result<(), AppError> {
-    if !position.event_id.as_str().starts_with("ak:event:") {
-        return Err(AppError::param_invalid("invalid position.event_id"));
-    }
-    let parts = position.hlc.as_str().split('-').collect::<Vec<_>>();
-    if parts.len() != 3
-        || parts[0].len() != 12
-        || parts[1].len() != 4
-        || parts[2].len() != 8
-        || !parts.iter().all(|part| {
-            part.bytes()
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        })
-    {
-        return Err(AppError::param_invalid("invalid position.hlc"));
     }
     Ok(())
 }

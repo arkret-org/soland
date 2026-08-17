@@ -1,14 +1,21 @@
+use arkret_models_collaboration::account_lifecycle::{
+    AccountStatusPrincipalAuthority, AccountStatusReceipt, AccountStatusRecord,
+    UnsignedAccountStatusReceipt, UnsignedAccountStatusRecord,
+};
+use arkret_models_collaboration::objects::account_status::AccountStatus;
 use arkret_models_identity::{
     OrganizationControlProofKind, OrganizationRegistrationChallenge,
     OrganizationRegistrationOutcome, OrganizationRegistrationReceipt,
     OrganizationRegistrationScope, OrganizationRegistrationStatus,
 };
 use arkret_wire::{
-    DidCoreId, DidFullId, Hash, PayloadProof, ProofContextId, project_full_id_to_core_id,
+    AccountStatusRecordId, DidCoreId, DidFullId, DidUrl, Hash, NonEmptyString, PayloadProof,
+    ProofContextId, RealmId, ReceiptId, SchemaId, project_full_id_to_core_id,
 };
 use chrono::{Duration, Utc};
 
 use super::{
+    AccountStatusReplicaAppend, AccountStatusReplicaConflictKind, AccountStatusReplicaStore,
     CanonicalEventRecord, ContactProjectionCommit, ContactRecord, ContactStore,
     ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore, DeviceInventoryRecord,
     DeviceInventoryStore, DeviceMessageBatchCommitOutcome, DeviceMessageBatchItemRecord,
@@ -395,7 +402,7 @@ pub async fn assert_organization_registration_store_contract(
             .mark_stale(
                 &organization_id,
                 2,
-                "ak:organization-registration-receipt:wrong",
+                "ak:organization_registration_receipt:wrong",
                 now + Duration::seconds(8),
             )
             .await
@@ -605,7 +612,7 @@ pub async fn assert_organization_registration_store_contract(
             .deactivate(OrganizationRegistrationLifecycleCommit {
                 organization_id: organization_id.clone(),
                 expected_current_generation: 3,
-                expected_current_outcome_id: "ak:organization-registration-receipt:wrong"
+                expected_current_outcome_id: "ak:organization_registration_receipt:wrong"
                     .to_owned(),
                 outcome: deactivated_outcome.clone(),
                 reason: OrganizationRegistrationTerminalReason::ExternalDidDeactivated,
@@ -692,7 +699,7 @@ fn registration_challenge(
 ) -> OrganizationRegistrationChallenge {
     let challenge_hash = test_hash_hex(&format!("{namespace}:challenge:{label}"));
     OrganizationRegistrationChallenge {
-        challenge_id: format!("ak:organization-registration-challenge:{challenge_hash}"),
+        challenge_id: format!("ak:organization_registration_challenge:{challenge_hash}"),
         organization_id: organization_id.clone(),
         full_id: organization_full_id.clone(),
         purpose: ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1.to_owned(),
@@ -724,7 +731,7 @@ fn registration_outcome(
     let issuer_full =
         DidFullId::new("did:webvh:zService:service.example").expect("valid service DID");
     let mut receipt = OrganizationRegistrationReceipt {
-        registration_receipt_id: "ak:organization-registration-receipt:placeholder".to_owned(),
+        registration_receipt_id: "ak:organization_registration_receipt:placeholder".to_owned(),
         organization_id: organization_id.clone(),
         full_id: organization_full_id.clone(),
         registration_generation: generation,
@@ -2496,5 +2503,416 @@ pub async fn assert_last_resort_claim_ledger_contract(
             .expect("valid last-resort lifecycle")
             .claim_state,
         super::PersistedKeyPackageClaimState::Available
+    );
+}
+
+fn account_status_base_time() -> chrono::DateTime<Utc> {
+    "2026-08-16T00:00:00.000Z"
+        .parse()
+        .expect("account-status fixture base timestamp")
+}
+
+fn account_status_fixture_proof(
+    verification_method: &DidUrl,
+    payload_digest: Hash,
+    created_at: chrono::DateTime<Utc>,
+) -> PayloadProof {
+    PayloadProof {
+        kind: "detached_jws".to_owned(),
+        verification_method: verification_method.clone(),
+        payload_digest,
+        created_at,
+        domain: None,
+        audience: None,
+        proof_purpose: None,
+        jws: "eyJhbGciOiJFZDI1NTE5In0..account-status-contract-fixture".to_owned(),
+    }
+}
+
+fn account_status_record(
+    account_id: &str,
+    status_seq: u64,
+    previous: Option<AccountStatusRecordId>,
+    binding_version: u64,
+    status: AccountStatus,
+    issued_offset: i64,
+) -> AccountStatusRecord {
+    let issued_at = account_status_base_time() + Duration::seconds(issued_offset);
+    let unsigned = UnsignedAccountStatusRecord {
+        schema: SchemaId::ACCOUNT_STATUS_RECORD_V1.to_owned(),
+        account_authority_id: DidCoreId::new("ak:did_core:web:authority.example")
+            .expect("account authority core id"),
+        account_id: NonEmptyString::new(account_id).expect("account id is not empty"),
+        principal_authority: AccountStatusPrincipalAuthority {
+            principal_id: DidCoreId::new("ak:did_core:web:alice.example")
+                .expect("principal core id"),
+            principal_server_id: DidCoreId::new("ak:did_core:web:principal.example")
+                .expect("principal server core id"),
+        },
+        principal_control_realm_id: RealmId::new(
+            "ak:realm:ARQRpvtCGBgQfVQzTK4_Hgbg0D0HSnc3gPCvXOQUICir",
+        )
+        .expect("principal control realm id"),
+        binding_version,
+        status_seq,
+        previous_account_status_record_id: previous,
+        status,
+        reason_code: None,
+        reason: None,
+        issued_at,
+        effective_at: issued_at,
+        expires_at: None,
+        verification_method: DidUrl::new("did:web:authority.example#account-status-key")
+            .expect("account authority verification method"),
+    };
+    let proof = account_status_fixture_proof(
+        &unsigned.verification_method,
+        unsigned.payload_digest().expect("record payload digest"),
+        unsigned.issued_at,
+    );
+    unsigned
+        .attach_proof(proof)
+        .expect("account-status record fixture is valid")
+}
+
+fn account_status_receipt(record: &AccountStatusRecord, suffix: u32) -> AccountStatusReceipt {
+    let accepted_at = account_status_base_time() + Duration::seconds(600 + i64::from(suffix));
+    let unsigned = UnsignedAccountStatusReceipt {
+        receipt_id: ReceiptId::new(format!("ak:receipt:01904100-0000-7000-8000-{suffix:012}"))
+            .expect("account-status receipt id"),
+        account_status_record_id: record.account_status_record_id.clone(),
+        record_digest: record.payload_digest().expect("record payload digest"),
+        account_authority_id: record.account_authority_id.clone(),
+        account_id: record.account_id.clone(),
+        status_seq: record.status_seq,
+        receiver_service_id: DidCoreId::new("ak:did_core:web:receiver.example")
+            .expect("receiver core id"),
+        accepted_at,
+        verification_method: DidUrl::new("did:web:receiver.example#notary-key")
+            .expect("receiver verification method"),
+    };
+    let proof = account_status_fixture_proof(
+        &unsigned.verification_method,
+        unsigned.payload_digest().expect("receipt payload digest"),
+        unsigned.accepted_at,
+    );
+    unsigned
+        .attach_proof(proof)
+        .expect("account-status receipt fixture is valid")
+}
+
+/// Exercises every row of the canonical account-status replica decision table
+/// (`account-status-replica-decision-table.json`, the machine-readable form of
+/// `zh/identity/account-lifecycle.md` section 3.1) against one backend. The
+/// durable replica head is the only comparison baseline, so every adapter must
+/// return the same typed outcome for the same submission.
+pub async fn assert_account_status_replica_decision_table_contract(
+    store: &dyn AccountStatusReplicaStore,
+    namespace: &str,
+) {
+    let account_id = format!("account-{namespace}");
+    let genesis = account_status_record(&account_id, 1, None, 2, AccountStatus::Active, 1);
+    let authority = genesis.account_authority_id.as_str().to_owned();
+    let second = account_status_record(
+        &account_id,
+        2,
+        Some(genesis.account_status_record_id.clone()),
+        2,
+        AccountStatus::Suspended,
+        2,
+    );
+    let third = account_status_record(
+        &account_id,
+        3,
+        Some(second.account_status_record_id.clone()),
+        2,
+        AccountStatus::Locked,
+        3,
+    );
+
+    // genesis_gap: with no durable head a non-genesis submission stays
+    // retryable behind required_status_seq = 1 and writes nothing.
+    assert_eq!(
+        store
+            .append(&second, &account_status_receipt(&second, 1))
+            .await
+            .expect("classify a submission against an absent head"),
+        AccountStatusReplicaAppend::DependencyMissing {
+            current_record: None,
+            required_status_seq: 1,
+        }
+    );
+    assert_eq!(
+        store
+            .current(&authority, &account_id)
+            .await
+            .expect("read the replica head"),
+        None
+    );
+    assert_eq!(
+        store
+            .receipt(&authority, &account_id, 2)
+            .await
+            .expect("read the receipt for the rejected sequence"),
+        None
+    );
+
+    // genesis_admission.
+    let genesis_receipt = account_status_receipt(&genesis, 2);
+    assert_eq!(
+        store
+            .append(&genesis, &genesis_receipt)
+            .await
+            .expect("admit the genesis record"),
+        AccountStatusReplicaAppend::Accepted(genesis_receipt.clone())
+    );
+    assert_eq!(
+        store
+            .current(&authority, &account_id)
+            .await
+            .expect("read the replica head"),
+        Some(genesis.clone())
+    );
+
+    // duplicate: the durable head already is the submitted record, so the
+    // originally accepted receipt is replayed and nothing is rewritten.
+    assert_eq!(
+        store
+            .append(&genesis, &account_status_receipt(&genesis, 3))
+            .await
+            .expect("replay the durable head"),
+        AccountStatusReplicaAppend::Duplicate(genesis_receipt.clone())
+    );
+    assert_eq!(
+        store
+            .receipt(&authority, &account_id, 1)
+            .await
+            .expect("read the genesis receipt"),
+        Some(genesis_receipt.clone())
+    );
+
+    // fork_same_sequence: a different record at the head sequence.
+    let rival_genesis = account_status_record(&account_id, 1, None, 2, AccountStatus::Active, 4);
+    assert_eq!(
+        store
+            .append(&rival_genesis, &account_status_receipt(&rival_genesis, 4))
+            .await
+            .expect("classify a rival genesis record"),
+        AccountStatusReplicaAppend::Conflict {
+            current_record: Some(genesis.clone()),
+            kind: AccountStatusReplicaConflictKind::Fork,
+        }
+    );
+    assert_eq!(
+        store
+            .current(&authority, &account_id)
+            .await
+            .expect("read the replica head"),
+        Some(genesis.clone())
+    );
+
+    // fork_predecessor_mismatch: the next sequence that does not name the head.
+    let forked_successor = account_status_record(
+        &account_id,
+        2,
+        Some(rival_genesis.account_status_record_id.clone()),
+        2,
+        AccountStatus::Suspended,
+        5,
+    );
+    assert_eq!(
+        store
+            .append(
+                &forked_successor,
+                &account_status_receipt(&forked_successor, 5)
+            )
+            .await
+            .expect("classify a successor with a foreign predecessor"),
+        AccountStatusReplicaAppend::Conflict {
+            current_record: Some(genesis.clone()),
+            kind: AccountStatusReplicaConflictKind::Fork,
+        }
+    );
+    assert_eq!(
+        store
+            .receipt(&authority, &account_id, 2)
+            .await
+            .expect("read the receipt for the rejected sequence"),
+        None
+    );
+
+    // sequence_gap.
+    assert_eq!(
+        store
+            .append(&third, &account_status_receipt(&third, 6))
+            .await
+            .expect("classify a submission beyond the next sequence"),
+        AccountStatusReplicaAppend::DependencyMissing {
+            current_record: Some(genesis.clone()),
+            required_status_seq: 2,
+        }
+    );
+    assert_eq!(
+        store
+            .receipt(&authority, &account_id, 3)
+            .await
+            .expect("read the receipt for the rejected sequence"),
+        None
+    );
+
+    // binding_version_rollback is evaluated before the advance row, so a rolled
+    // back binding at head + 1 is rejected instead of advancing the chain.
+    let rollback_successor = account_status_record(
+        &account_id,
+        2,
+        Some(genesis.account_status_record_id.clone()),
+        1,
+        AccountStatus::Suspended,
+        7,
+    );
+    assert_eq!(
+        store
+            .append(
+                &rollback_successor,
+                &account_status_receipt(&rollback_successor, 7)
+            )
+            .await
+            .expect("classify a rolled back binding at the next sequence"),
+        AccountStatusReplicaAppend::Conflict {
+            current_record: Some(genesis.clone()),
+            kind: AccountStatusReplicaConflictKind::BindingRollback,
+        }
+    );
+    assert_eq!(
+        store
+            .current(&authority, &account_id)
+            .await
+            .expect("read the replica head"),
+        Some(genesis.clone())
+    );
+    assert_eq!(
+        store
+            .receipt(&authority, &account_id, 2)
+            .await
+            .expect("read the receipt for the rejected sequence"),
+        None
+    );
+
+    // advance, twice, so the head sits above a retained history row.
+    let second_receipt = account_status_receipt(&second, 8);
+    assert_eq!(
+        store
+            .append(&second, &second_receipt)
+            .await
+            .expect("advance to the second record"),
+        AccountStatusReplicaAppend::Accepted(second_receipt.clone())
+    );
+    let third_receipt = account_status_receipt(&third, 9);
+    assert_eq!(
+        store
+            .append(&third, &third_receipt)
+            .await
+            .expect("advance to the third record"),
+        AccountStatusReplicaAppend::Accepted(third_receipt)
+    );
+    assert_eq!(
+        store
+            .current(&authority, &account_id)
+            .await
+            .expect("read the replica head"),
+        Some(third.clone())
+    );
+
+    // stale is unconditional. The receiver still stores the byte-identical
+    // history row for status_seq 2, and local retention must never turn a
+    // below-head submission into a duplicate terminal ack.
+    assert_eq!(
+        store
+            .receipt(&authority, &account_id, 2)
+            .await
+            .expect("read the retained history receipt"),
+        Some(second_receipt.clone()),
+        "the history row for the resubmitted sequence must still be retained"
+    );
+    assert_eq!(
+        store
+            .append(&second, &account_status_receipt(&second, 10))
+            .await
+            .expect("classify a byte-identical resubmission below the head"),
+        AccountStatusReplicaAppend::Stale {
+            current_record: third.clone(),
+        }
+    );
+    assert_eq!(
+        store
+            .receipt(&authority, &account_id, 2)
+            .await
+            .expect("read the retained history receipt"),
+        Some(second_receipt),
+        "a stale classification must not rewrite the retained history row"
+    );
+    assert_eq!(
+        store
+            .current(&authority, &account_id)
+            .await
+            .expect("read the replica head"),
+        Some(third.clone())
+    );
+
+    // stale also covers a different record below the head: the head decides,
+    // never the retained history row.
+    let rival_second = account_status_record(
+        &account_id,
+        2,
+        Some(genesis.account_status_record_id.clone()),
+        2,
+        AccountStatus::Suspended,
+        11,
+    );
+    assert_eq!(
+        store
+            .append(&rival_second, &account_status_receipt(&rival_second, 11))
+            .await
+            .expect("classify a rival record below the head"),
+        AccountStatusReplicaAppend::Stale {
+            current_record: third.clone(),
+        }
+    );
+
+    // binding_version_rollback still precedes the sequence rows below the head.
+    let rollback_below_head = account_status_record(
+        &account_id,
+        2,
+        Some(genesis.account_status_record_id.clone()),
+        1,
+        AccountStatus::Suspended,
+        12,
+    );
+    assert_eq!(
+        store
+            .append(
+                &rollback_below_head,
+                &account_status_receipt(&rollback_below_head, 12)
+            )
+            .await
+            .expect("classify a rolled back binding below the head"),
+        AccountStatusReplicaAppend::Conflict {
+            current_record: Some(third.clone()),
+            kind: AccountStatusReplicaConflictKind::BindingRollback,
+        }
+    );
+    assert_eq!(
+        store
+            .current(&authority, &account_id)
+            .await
+            .expect("read the replica head"),
+        Some(third.clone())
+    );
+    assert_eq!(
+        store
+            .resolve(&authority, &account_id, 1, 16)
+            .await
+            .expect("resolve the durable chain"),
+        vec![genesis, second, third]
     );
 }

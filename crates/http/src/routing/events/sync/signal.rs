@@ -834,11 +834,19 @@ mod tests {
 
     #[test]
     fn ttl_overrun_surfaces_the_registered_wire_code() {
-        let error = structural_error(arkret_wire::Error::Protocol(format!(
-            "{}: signal TTL 90s exceeds the Session class ceiling of 30s",
-            arkret_wire::ErrorCode::SIGNAL_TTL_OUT_OF_RANGE
-        )));
+        let error = structural_error(arkret_wire::Error::ProtocolCode {
+            code: arkret_wire::ErrorCode::SignalTtlOutOfRange,
+            message: "signal TTL 90s exceeds the Session class ceiling of 30s".to_owned(),
+        });
         assert_eq!(error.wire_code(), "signal_ttl_out_of_range");
         assert_eq!(error.http_status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn other_structural_rejections_stay_on_the_generic_param_code() {
+        let error = structural_error(arkret_wire::Error::Protocol(
+            "signal expires_at must be strictly after sent_at".to_owned(),
+        ));
+        assert_eq!(error.wire_code(), "param_invalid");
     }
 }

@@ -70,6 +70,12 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::now;
 
+/// Canonical MLS event-payload field readers shared by every surface that
+/// inspects a raw `ak.mls.*` payload (submit preflight, projection mirroring,
+/// sync visibility, sidecar binding, MIMI interop, circle scope rotation).
+#[path = "mls_payload_fields.rs"]
+pub(crate) mod payload_fields;
+
 const LAST_RESORT_KEYPACKAGE_MAX_LIFETIME_SECS: i64 = 30 * 24 * 60 * 60;
 
 fn welcome_recipient_device_id(
@@ -868,14 +874,13 @@ fn peer_claim_transport_binding(
     let destination_service_id =
         arkret_wire::DidCoreId::new(peer_required_header(req, "destination-service-id")?)
             .map_err(|_| peer_claim_schema_violation("destination-service-id must be a core_id"))?;
-    let source_trust_domain = arkret_identifiers::TrustDomainId::new(peer_required_header(
+    let source_trust_domain =
+        arkret_identifiers::TrustDomainId::new(peer_required_header(req, "source-trust-domain")?)
+            .map_err(|_| peer_claim_schema_violation("source-trust-domain is invalid"))?;
+    let destination_trust_domain = arkret_identifiers::TrustDomainId::new(peer_required_header(
         req,
-        "source-trust-domain",
+        "destination-trust-domain",
     )?)
-    .map_err(|_| peer_claim_schema_violation("source-trust-domain is invalid"))?;
-    let destination_trust_domain = arkret_identifiers::TrustDomainId::new(
-        peer_required_header(req, "destination-trust-domain")?,
-    )
     .map_err(|_| peer_claim_schema_violation("destination-trust-domain is invalid"))?;
     let local_trust_domain = state.config().trust_domain.clone();
     if destination_service_id.as_str() != state.service_id()

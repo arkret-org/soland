@@ -208,10 +208,12 @@ pub(super) fn mimi_governance_binding_candidate<'a>(
         .or_else(|| governance_binding_field(binding_payload))
 }
 
+/// `governance_binding` is the canonical carrier name in every schema that
+/// defines the object (`event-payload.schema.json#/$defs/mls_governance_binding`
+/// and `mls-governance-proof-bundle.schema.json`); no spec schema defines a
+/// field named `mls_governance_binding`.
 pub(super) fn governance_binding_field(value: &Value) -> Option<&Value> {
-    value
-        .get("governance_binding")
-        .or_else(|| value.get("mls_governance_binding"))
+    crate::routing::mls::payload_fields::governance_binding(value)
 }
 
 pub(super) fn validate_mimi_submit_governance_binding(

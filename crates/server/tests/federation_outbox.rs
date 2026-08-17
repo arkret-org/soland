@@ -203,8 +203,7 @@ fn verified_peer_route(
                 service_resolution: commitment,
                 http_json_base_url: base_url,
                 route_binding_digest: describe_digest,
-                trust_domain: TrustDomainId::new(trust_domain)
-                    .expect("fixture peer trust domain"),
+                trust_domain: TrustDomainId::new(trust_domain).expect("fixture peer trust domain"),
                 protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
             },
         },

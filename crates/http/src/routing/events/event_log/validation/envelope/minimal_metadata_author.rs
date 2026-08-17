@@ -147,25 +147,22 @@ async fn validate_accepted_group_state(
         .get("payload")
         .cloned()
         .unwrap_or(Value::Null);
-    let ref_group_id = payload
-        .get("group_id")
-        .or_else(|| payload.get("mls_group_id"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    // `mls_genesis_payload` / `mls_commit_payload` both name the group
+    // `mls_group_id`; `group_id` is an `encrypted-envelope.schema.json` field
+    // and never appears on an MLS event payload.
+    let ref_group_id =
+        crate::routing::mls::payload_fields::mls_group_id(&payload).unwrap_or_default();
     if ref_group_id != coordinates.group_id {
         return Err(author_credential_invalid(
             "group_state_ref group does not match envelope group_id",
         ));
     }
     // The epoch the referenced state event established: genesis pins its own
-    // epoch (0 unless declared); a commit lands at expected_prev_epoch + 1.
+    // epoch (0 unless declared); a commit lands at `base_epoch + 1`.
     let ref_epoch = if is_genesis {
         payload.get("epoch").and_then(Value::as_u64).unwrap_or(0)
     } else {
-        let base = payload
-            .get("expected_prev_epoch")
-            .or_else(|| payload.get("base_epoch"))
-            .and_then(Value::as_u64)
+        let base = crate::routing::mls::payload_fields::commit_base_epoch(&payload)
             .ok_or_else(|| author_credential_invalid("commit ref missing base epoch"))?;
         base.saturating_add(1)
     };
@@ -178,17 +175,13 @@ async fn validate_accepted_group_state(
     // Winning-frontier check: the group must have an accepted epoch row that
     // has advanced at least to the envelope epoch, and the envelope epoch must
     // not sit on a contested (`⊥`) frontier.
-    let effective_scope = payload
-        .get("effective_scope")
-        .cloned()
-        .or_else(|| {
-            payload
-                .get("governance_binding")
-                .or_else(|| payload.get("mls_governance_binding"))
-                .and_then(|binding| binding.get("effective_scope"))
-                .cloned()
-        })
-        .ok_or_else(|| author_credential_invalid("group_state_ref carries no effective_scope"))?;
+    // Genesis pins the scope at the payload root; a commit carries it inside
+    // the required `governance_binding`. Both spellings are canonical for their
+    // own kind.
+    let effective_scope = crate::routing::mls::payload_fields::group_state_effective_scope(
+        &payload,
+    )
+    .ok_or_else(|| author_credential_invalid("group_state_ref carries no effective_scope"))?;
     let effective_scope = serde_json::from_value::<arkret_wire::ScopeRef>(effective_scope)
         .map_err(|error| {
             author_credential_invalid(format!(

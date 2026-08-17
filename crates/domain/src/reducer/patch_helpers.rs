@@ -272,24 +272,17 @@ fn patch_path_targets_reducer_managed(path: &str) -> bool {
     root.is_some_and(|field| FIELDS.contains(&field))
 }
 
+/// Whether a patch path addresses a registered redactable content-carrier slot.
+///
+/// The slot set is the canonical projection of
+/// `registry/redactable-field-registry.json`; this module never spells its own
+/// list. `metadata`, `metadata.summary`, `encrypted_metadata`, `body` and
+/// `attachments` are ordinary optional members, not content slots, so their
+/// `$op="unset"` MUST be accepted (`event-and-patch.md` §4.2.4).
 fn patch_path_targets_redactable_unset(path: &str) -> bool {
-    const PATHS: &[&str] = &[
-        "content",
-        "encrypted_content",
-        "encrypted_metadata",
-        "encrypted_payload",
-        "body",
-        "attachments",
-        "summary",
-        "metadata.summary",
-        "metadata.fields.summary",
-    ];
-    if path == "metadata" {
-        return true;
-    }
-    PATHS
+    arkret_wire::generated::REDACTABLE_FIELD_PATHS
         .iter()
-        .any(|redactable| path == *redactable || path.starts_with(&format!("{redactable}.")))
+        .any(|slot| path == *slot || path.starts_with(&format!("{slot}.")))
 }
 
 fn patch_segment_head(segment: &str) -> Option<&str> {

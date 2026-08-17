@@ -1167,9 +1167,7 @@ impl AppState {
 
     /// This deployment's trust domain as the typed identifier the SDK binding
     /// key expects.
-    pub fn did_binding_trust_domain(
-        &self,
-    ) -> Result<arkret_identifiers::TrustDomainId, String> {
+    pub fn did_binding_trust_domain(&self) -> Result<arkret_identifiers::TrustDomainId, String> {
         Ok(self.config().trust_domain.clone())
     }
 

@@ -7,8 +7,7 @@ const RELATION: &str = "ak:relation:AdGtCyltkLGkKlrj8jazJOSalIEWRmqDqr2ikq7IOWcL
 /// The Event a `ak.relation.create` for [`RELATION`] must carry: the id is
 /// `retype(event_id)` (`relation_create_payload` has no `relation_id` member),
 /// so the fixture pins the Event token instead of the object id.
-const RELATION_CREATE_EVENT: &str =
-    "ak:event:AdGtCyltkLGkKlrj8jazJOSalIEWRmqDqr2ikq7IOWcL";
+const RELATION_CREATE_EVENT: &str = "ak:event:AdGtCyltkLGkKlrj8jazJOSalIEWRmqDqr2ikq7IOWcL";
 const EVENT: &str = "ak:event:AUiaY2u0jL7j0v1YowBxmn8e4QEpBDWA7QtOlNdhtZ1N";
 
 fn space_create() -> Operation {

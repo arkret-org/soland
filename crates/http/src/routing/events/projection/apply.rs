@@ -211,12 +211,11 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             creator_device_id,
             ..
         } => {
-            let binding_value = operation
-                .payload
-                .get("governance_binding")
-                .or_else(|| operation.payload.get("mls_governance_binding"))
-                .cloned()
-                .unwrap_or(Value::Null);
+            // `mls_genesis_payload` requires `governance_binding`.
+            let binding_value =
+                crate::routing::mls::payload_fields::governance_binding(&operation.payload)
+                    .cloned()
+                    .unwrap_or(Value::Null);
             let Ok(effective_scope) =
                 serde_json::from_value::<arkret_wire::ScopeRef>(effective_scope.clone())
             else {
@@ -259,12 +258,11 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             leader_actor_id,
             ..
         } => {
-            let binding_value = operation
-                .payload
-                .get("governance_binding")
-                .or_else(|| operation.payload.get("mls_governance_binding"))
-                .cloned()
-                .unwrap_or(Value::Null);
+            // `mls_commit_payload` requires `governance_binding`.
+            let binding_value =
+                crate::routing::mls::payload_fields::governance_binding(&operation.payload)
+                    .cloned()
+                    .unwrap_or(Value::Null);
             let Ok(effective_scope) =
                 serde_json::from_value::<arkret_wire::ScopeRef>(effective_scope.clone())
             else {

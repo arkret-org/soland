@@ -56,13 +56,10 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
     if kinds::canonical_kind(operation) != arkret_wire::EventKind::MlsWelcome {
         return None;
     }
-    let recipient_actor_id = operation
-        .payload
-        .get("recipient_actor_id")
-        .or_else(|| operation.payload.get("recipient_principal_id"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
+    // `mls_welcome_payload` requires `recipient_principal_id`; the payload is
+    // `additionalProperties:false`, so no other recipient carrier exists.
+    let recipient_actor_id =
+        crate::routing::mls::payload_fields::welcome_recipient_principal_id(&operation.payload)?;
     let recipient_device_id = operation
         .payload
         .get("recipient_device_id")

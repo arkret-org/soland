@@ -168,12 +168,13 @@ pub(crate) fn derive_requested_actions(payload: &Value) -> BTreeSet<String> {
     out
 }
 
+/// `capability-grant.schema.json` names the grant's selector list `resources`
+/// and is `additionalProperties:false` over the grant root, so `resources` is
+/// the only carrier a grant can present.
 pub(crate) fn derive_requested_resources(payload: &Value) -> Vec<Value> {
     let mut out = value_array_field(payload, "resources");
-    out.extend(value_array_field(payload, "resource_selectors"));
     if let Some(bundle) = payload.get("bundle") {
         out.extend(value_array_field(bundle, "resources"));
-        out.extend(value_array_field(bundle, "resource_selectors"));
     }
     out
 }
@@ -256,9 +257,7 @@ pub(crate) fn grant_snapshot_from_value(value: &Value) -> CapabilityGrantSnapsho
     actions.extend(string_set_field(value, "actions"));
 
     let mut resources = value_array_field(body, "resources");
-    resources.extend(value_array_field(body, "resource_selectors"));
     resources.extend(value_array_field(value, "resources"));
-    resources.extend(value_array_field(value, "resource_selectors"));
 
     let mut constraints = value_array_field(body, "constraints");
     constraints.extend(value_array_field(value, "constraints"));

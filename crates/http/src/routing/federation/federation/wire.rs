@@ -38,12 +38,11 @@ impl FederationTrustHeaders {
                 arkret_wire::constants::HEADER_SOURCE_TRUST_DOMAIN.to_owned(),
             )
         })?;
-        let destination =
-            arkret_identifiers::TrustDomainId::new(destination).map_err(|_| {
-                HeaderViolation::Malformed(
-                    arkret_wire::constants::HEADER_DESTINATION_TRUST_DOMAIN.to_owned(),
-                )
-            })?;
+        let destination = arkret_identifiers::TrustDomainId::new(destination).map_err(|_| {
+            HeaderViolation::Malformed(
+                arkret_wire::constants::HEADER_DESTINATION_TRUST_DOMAIN.to_owned(),
+            )
+        })?;
         Ok(Self {
             source_trust_domain: source,
             destination_trust_domain: destination,

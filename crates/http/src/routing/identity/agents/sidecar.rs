@@ -376,10 +376,9 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
     ) {
         return Ok(());
     }
-    let binding_value = operation
-        .payload
-        .get("governance_binding")
-        .or_else(|| operation.payload.get("mls_governance_binding"))
+    // `mls_genesis_payload` / `mls_proposal_payload` / `mls_commit_payload` /
+    // `mls_welcome_payload` all name the binding `governance_binding`.
+    let binding_value = crate::routing::mls::payload_fields::governance_binding(&operation.payload)
         .ok_or("mls_governance_binding_missing")?;
     let binding = serde_json::from_value::<MlsGovernanceBindingPayload>(binding_value.clone())
         .map_err(|_| "mls_governance_binding_invalid")?;
@@ -417,11 +416,7 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
     if supplied != &expected {
         return Err("mls_sidecar_binding_stale");
     }
-    let payload_group_id = operation
-        .payload
-        .get("mls_group_id")
-        .or_else(|| operation.payload.get("group_id"))
-        .and_then(Value::as_str)
+    let payload_group_id = crate::routing::mls::payload_fields::mls_group_id(&operation.payload)
         .ok_or("mls_group_id_missing")?;
     if binding.mls_group_id() != payload_group_id {
         return Err("mls_sidecar_binding_mismatch");

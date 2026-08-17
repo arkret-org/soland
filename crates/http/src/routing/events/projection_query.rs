@@ -505,14 +505,17 @@ struct TargetRowVisibilitySnapshot {
     scope_circle_id: Option<String>,
 }
 
+/// Whether this reference names a projected object the read path must resolve
+/// before it can answer. Only canonical typed ids do: a value that is not a
+/// valid id of one of these kinds resolves to no projection row.
 fn projection_ref_requires_lookup(ref_id: &str) -> bool {
-    ref_id.starts_with("ak:realm:")
-        || ref_id.starts_with("ak:space:")
-        || ref_id.starts_with("ak:strand:")
-        || ref_id.starts_with("ak:morph:")
-        || ref_id.starts_with("ak:relation:")
-        || ref_id.starts_with("ak:event:")
-        || ref_id.starts_with("ak:message:")
+    arkret_identifiers::RealmId::new(ref_id).is_ok()
+        || arkret_identifiers::SpaceId::new(ref_id).is_ok()
+        || arkret_identifiers::StrandId::new(ref_id).is_ok()
+        || arkret_identifiers::MorphId::new(ref_id).is_ok()
+        || arkret_identifiers::RelationId::new(ref_id).is_ok()
+        || arkret_identifiers::EventId::new(ref_id).is_ok()
+        || arkret_identifiers::MessageId::new(ref_id).is_ok()
 }
 
 fn message_event_id_from_projection_ref(ref_id: &str) -> String {
@@ -607,7 +610,9 @@ fn target_info_for_relation_ref(
             None,
         );
     }
-    if target_ref.starts_with("ak:event:") || target_ref.starts_with("ak:message:") {
+    if arkret_identifiers::EventId::new(target_ref).is_ok()
+        || arkret_identifiers::MessageId::new(target_ref).is_ok()
+    {
         let event_id = message_event_id_from_projection_ref(target_ref);
         if let Some(message) = projection
             .messages

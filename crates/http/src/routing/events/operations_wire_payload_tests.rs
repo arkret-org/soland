@@ -2,6 +2,26 @@ use serde_json::json;
 
 use super::*;
 
+const TEST_REALM: &str = "ak:realm:AWBLVNs9HeoGO5lSMOgHAujzyX_u-d_6wfDWF_3lEM2J";
+const TEST_STRAND: &str = "ak:strand:ATXlnYLuNA5AB7Pide0IGeEtDJ6YeQ19_FUbKXtjQhum";
+const TEST_STRAND_2: &str = "ak:strand:AbGG69lPDSbhcQKggUhmn2pvWMDjx2tZmKL9GHisS290";
+const TEST_SPACE: &str = "ak:space:ATu1E_hCvaxzpXDswPMlN3ypwETWAa7O994Etg387rA6";
+const TEST_RELATION: &str = "ak:relation:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml";
+const TEST_CIRCLE: &str = "ak:circle:AQk4t8f1mPAFEQjKNzmTl_TZMxmpSbc_1ldQlxRUZBZ7";
+const TEST_ISSUER: &str = "ak:did_core:web:alice.example";
+const TEST_SUBJECT: &str = "ak:did_core:web:bob.example";
+const TEST_PRINCIPAL_SERVER: &str = "ak:did_core:web:soland.example";
+
+fn wire_operation(kind: arkret_wire::EventKind, payload: Value) -> Operation {
+    arkret_event_draft::test_support::raw_projected_operation(
+        arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
+            .unwrap(),
+        arkret_identifiers::RealmId::new(TEST_REALM.to_owned()).unwrap(),
+        kind.as_str(),
+        payload,
+    )
+}
+
 #[test]
 fn consent_revoke_empty_observed_dots_rejected() {
     let err = validate_consent_revoke_payload(&json!({
@@ -33,4 +53,161 @@ fn consent_revoke_rejects_untyped_consent_id() {
     }))
     .unwrap_err();
     assert_eq!(err.0, arkret_wire::ErrorCode::SCHEMA_VIOLATION);
+}
+
+/// `relation.md` §2 — `effective_scope` is reducer-stamped. The payload root is
+/// already closed by `relation_create_payload`, so the only reachable carrier
+/// is the open `relation_create_object` under `payload.relation`.
+#[test]
+fn relation_create_rejects_actor_supplied_effective_scope() {
+    let canonical = wire_operation(
+        arkret_wire::EventKind::RelationCreate,
+        json!({"relation": {"kind": "references", "from_ref": TEST_STRAND, "to_ref": TEST_STRAND_2}}),
+    );
+    assert_eq!(validate_relation_operation_payload(&canonical), Ok(()));
+
+    let stamped = wire_operation(
+        arkret_wire::EventKind::RelationCreate,
+        json!({"relation": {
+            "kind": "references",
+            "from_ref": TEST_STRAND,
+            "to_ref": TEST_STRAND_2,
+            "effective_scope": {"kind": "circle", "circle_id": TEST_CIRCLE}
+        }}),
+    );
+    assert_eq!(
+        validate_relation_operation_payload(&stamped),
+        Err("effective_scope_reducer_managed")
+    );
+}
+
+/// The same rule applies to the `patch` document, whose paths the schema does
+/// not enumerate.
+#[test]
+fn relation_update_rejects_effective_scope_patch_paths() {
+    let canonical = wire_operation(
+        arkret_wire::EventKind::RelationUpdate,
+        json!({"relation_id": TEST_RELATION, "patch": {"fields.label": "ok"}}),
+    );
+    assert_eq!(validate_relation_operation_payload(&canonical), Ok(()));
+
+    for path in ["effective_scope", "effective_scope.circle_id"] {
+        let patched = wire_operation(
+            arkret_wire::EventKind::RelationUpdate,
+            json!({"relation_id": TEST_RELATION, "patch": {path: {"$op": "set", "value": "x"}}}),
+        );
+        assert_eq!(
+            validate_relation_operation_payload(&patched),
+            Err("effective_scope_reducer_managed")
+        );
+    }
+}
+
+/// The derived-edge rule needs the Relation pre-state, so the stateless
+/// validator MUST NOT re-decide it. The flat `kind` / `from_ref` shape the old
+/// second implementation read is not a spec payload at all: the SDK artifact
+/// schema rejects it because `relation_create_payload` is
+/// `additionalProperties:false` over `{relation, rank}`.
+#[test]
+fn relation_derived_edge_admission_is_not_duplicated_in_the_payload_validator() {
+    let derived = wire_operation(
+        arkret_wire::EventKind::RelationCreate,
+        json!({"relation": {"kind": "contains", "from_ref": TEST_SPACE, "to_ref": TEST_STRAND}}),
+    );
+    assert_eq!(validate_relation_operation_payload(&derived), Ok(()));
+
+    let flat_legacy = wire_operation(
+        arkret_wire::EventKind::RelationCreate,
+        json!({
+            "relation": {"kind": "contains", "from_ref": TEST_SPACE, "to_ref": TEST_STRAND},
+            "relation_kind": "contains",
+            "from_ref": TEST_SPACE
+        }),
+    );
+    assert!(
+        validate_operation_schema_from_sdk_artifact(
+            &arkret_wire::EventKind::RelationCreate,
+            &flat_legacy
+        )
+        .is_err()
+    );
+}
+
+fn capability_grant_payload(extra: Option<(&str, Value)>) -> Value {
+    let mut grant = json!({
+        "schema": "ak.schema.capability.v1",
+        "realm_id": TEST_REALM,
+        "issuer": TEST_ISSUER,
+        "subject": TEST_SUBJECT,
+        "subject_principal_server_id": TEST_PRINCIPAL_SERVER,
+        "actions": ["ak.strand.read"],
+        "resources": [{"kind": "strand", "realm_id": TEST_REALM, "strand_id": TEST_STRAND}],
+        "issued_at": "2026-08-17T00:00:00.000Z",
+        "issuer_authority_refs": [{
+            "kind": "realm_root",
+            "realm_id": TEST_REALM,
+            "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
+            "controller_epoch_at_issuance": 0,
+            "authority_generation": 0
+        }]
+    });
+    if let Some((field, value)) = extra {
+        grant[field] = value;
+    }
+    json!({"grant": grant})
+}
+
+/// `capability-grant.schema.json` names the selector list `resources` and the
+/// authoring shape in `capability_grant_payload` is
+/// `additionalProperties:false`, so `resource_selectors` is an unknown field
+/// the schema rejects outright — soland no longer consumes it anywhere.
+#[test]
+fn capability_grant_resource_selectors_alias_is_a_schema_violation() {
+    let canonical = wire_operation(
+        arkret_wire::EventKind::CapabilityGrant,
+        capability_grant_payload(None),
+    );
+    validate_operation_schema_from_sdk_artifact(
+        &arkret_wire::EventKind::CapabilityGrant,
+        &canonical,
+    )
+    .expect("canonical `resources` grant passes the artifact schema");
+
+    let aliased = wire_operation(
+        arkret_wire::EventKind::CapabilityGrant,
+        capability_grant_payload(Some((
+            "resource_selectors",
+            json!([{"kind": "strand", "realm_id": TEST_REALM, "strand_id": TEST_STRAND}]),
+        ))),
+    );
+    assert!(
+        validate_operation_schema_from_sdk_artifact(
+            &arkret_wire::EventKind::CapabilityGrant,
+            &aliased
+        )
+        .is_err()
+    );
+}
+
+/// `membership_payload` / `circle_member_state_payload` name the subject
+/// `actor_id` and are `additionalProperties:false`; `member` / `actor` are not
+/// spec fields, so a payload carrying only those falls back to the Event
+/// author rather than retargeting the membership move.
+#[test]
+fn membership_target_reads_only_actor_id() {
+    let canonical = wire_operation(
+        arkret_wire::EventKind::MemberState,
+        json!({"actor_id": TEST_SUBJECT, "membership": "join"}),
+    );
+    assert_eq!(membership_target(&canonical), Some(TEST_SUBJECT));
+
+    let legacy = wire_operation(
+        arkret_wire::EventKind::MemberState,
+        json!({"member": TEST_SUBJECT, "actor": TEST_SUBJECT, "membership": "join"}),
+    );
+    assert_eq!(
+        membership_target(&legacy),
+        Some(legacy.context.sender.as_str())
+    );
+    assert_ne!(membership_target(&legacy), Some(TEST_SUBJECT));
 }

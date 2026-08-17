@@ -557,6 +557,7 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
         arkret_models_identity::service_identity::ServiceRegistrationEnsureRequestBody::new(
             key.clone(),
             prepared.service_registration_operation().unwrap(),
+            "ensure-correlation-initial",
             None,
         )
         .unwrap();
@@ -637,6 +638,7 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
         arkret_models_identity::service_identity::ServiceRegistrationEnsureRequestBody::new(
             key,
             fork.service_registration_operation().unwrap(),
+            "ensure-correlation-fork",
             None,
         )
         .unwrap();

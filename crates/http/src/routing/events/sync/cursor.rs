@@ -703,7 +703,7 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
         .ok_or(SyncCursorError::Integrity(
             "events query cursor handle is missing target.event_id",
         ))?;
-    if !target.starts_with("ak:event:") {
+    if arkret_identifiers::EventId::new(target).is_err() {
         return Err(SyncCursorError::Integrity(
             "events query cursor target must be an event id",
         ));
@@ -763,7 +763,7 @@ pub(crate) async fn parse_and_validate_barrier_cursor(
         .ok_or(SyncCursorError::Integrity(
             "barrier cursor handle is missing target.event_id",
         ))?;
-    if !event_id.starts_with("ak:event:") {
+    if arkret_identifiers::EventId::new(event_id).is_err() {
         return Err(SyncCursorError::Integrity(
             "barrier cursor target must be an event id",
         ));

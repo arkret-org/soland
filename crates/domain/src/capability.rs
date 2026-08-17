@@ -1,3 +1,7 @@
+use arkret_identifiers::{
+    BlobRef, CircleId, DidCoreId, EventId, InviteId, MessageId, MorphId, NotificationId, PolicyId,
+    ReadCursorId, RealmId, RelationId, SpaceId, StrandId, ViewId,
+};
 pub use arkret_policy::authz::authority::{
     Grant, GrantConstraint as Constraint, IssuerAuthorityRef, grant_effective_expiry,
     is_grant_expired, max_authority_depth,
@@ -84,28 +88,38 @@ fn resource_term_matches(pattern: &str, resource: &str) -> bool {
     if pattern == resource {
         return true;
     }
+    // A kind term matches only a canonical value of that id-kind. The `ak:`
+    // prefix alone is not the value space: `id-kind-registry.json` fixes each
+    // kind's payload (UUIDv7, 44-char Event token, or suite-tagged digest), so
+    // a grant term must not be satisfied by a string that merely opens with
+    // the right kind segment.
     match pattern {
-        "realm" => return resource.starts_with("ak:realm:"),
-        "space" => return resource.starts_with("ak:space:"),
-        "circle" => return resource.starts_with("ak:circle:"),
-        "strand" => return resource.starts_with("ak:strand:"),
+        "realm" => return RealmId::new(resource).is_ok(),
+        "space" => return SpaceId::new(resource).is_ok(),
+        "circle" => return CircleId::new(resource).is_ok(),
+        "strand" => return StrandId::new(resource).is_ok(),
         "message" => {
-            return resource.starts_with("ak:message:") || resource.starts_with("ak:event:");
+            return MessageId::new(resource).is_ok() || EventId::new(resource).is_ok();
         }
-        "morph" => return resource.starts_with("ak:morph:"),
+        "morph" => return MorphId::new(resource).is_ok(),
         "object" => return is_canonical_object_ref(resource),
-        "relation" => return resource.starts_with("ak:relation:"),
-        "view" => return resource.starts_with("ak:view:"),
-        "event" => return resource.starts_with("ak:event:"),
-        "actor" => return resource.starts_with("ak:did_core:"),
-        "schema" => {
-            return resource.starts_with("ak:schema:") || resource.starts_with("ak.schema.");
-        }
-        "policy" => return resource.starts_with("ak:policy:"),
-        "invite" => return resource.starts_with("ak:invite:"),
-        "notification" => return resource.starts_with("ak:notification:"),
-        "read_cursor" => return resource.starts_with("ak:read_cursor:"),
-        "blob" => return resource.starts_with("ak:blob:"),
+        "relation" => return RelationId::new(resource).is_ok(),
+        "view" => return ViewId::new(resource).is_ok(),
+        "event" => return EventId::new(resource).is_ok(),
+        "actor" => return DidCoreId::new(resource).is_ok(),
+        // `schema` is deliberately the one coarse branch left: it is not an
+        // `id-kind-registry.json` kind at all (neither `id_kinds` nor
+        // `special_forms` declares it), so no SDK newtype owns its value
+        // space. `resource-selector-grammar.md` defines `schema_ref` as a
+        // schema *registry* id (`ak.schema.<name>.v<n>` or a reverse-domain
+        // id), and `ak:schema:` appears nowhere in the spec — it is not a v1
+        // spelling and must not match here.
+        "schema" => return resource.starts_with("ak.schema."),
+        "policy" => return PolicyId::new(resource).is_ok(),
+        "invite" => return InviteId::new(resource).is_ok(),
+        "notification" => return NotificationId::new(resource).is_ok(),
+        "read_cursor" => return ReadCursorId::new(resource).is_ok(),
+        "blob" => return is_typed_blob_ref(resource),
         _ => {}
     }
     pattern
@@ -113,23 +127,30 @@ fn resource_term_matches(pattern: &str, resource: &str) -> bool {
         .is_some_and(|prefix| resource.starts_with(prefix))
 }
 
+/// A blob reference in one of its two typed wire forms: the content-addressed
+/// `ak:blob:<suite>:<digest>` or the `ak:blob:<uuidv7>` metadata id.
+///
+/// `BlobRef` additionally accepts a bare `<suite>:<digest>` digest. That form
+/// carries no kind segment, and `id-kind-registry.json` storage rules make the
+/// `<kind>` segment part of the canonical wire value, so a bare digest never
+/// names a blob resource here.
+pub fn is_typed_blob_ref(value: &str) -> bool {
+    value.starts_with("ak:blob:") && BlobRef::new(value).is_ok()
+}
+
 fn is_canonical_object_ref(value: &str) -> bool {
-    [
-        "ak:realm:",
-        "ak:space:",
-        "ak:circle:",
-        "ak:strand:",
-        "ak:message:",
-        "ak:morph:",
-        "ak:relation:",
-        "ak:view:",
-        "ak:event:",
-        "ak:policy:",
-        "ak:invite:",
-        "ak:blob:",
-    ]
-    .iter()
-    .any(|prefix| value.starts_with(prefix))
+    RealmId::new(value).is_ok()
+        || SpaceId::new(value).is_ok()
+        || CircleId::new(value).is_ok()
+        || StrandId::new(value).is_ok()
+        || MessageId::new(value).is_ok()
+        || MorphId::new(value).is_ok()
+        || RelationId::new(value).is_ok()
+        || ViewId::new(value).is_ok()
+        || EventId::new(value).is_ok()
+        || PolicyId::new(value).is_ok()
+        || InviteId::new(value).is_ok()
+        || is_typed_blob_ref(value)
 }
 
 pub fn validate_capability_actions(actions: &[String]) -> Result<(), &'static str> {
@@ -343,7 +364,10 @@ fn selector_uses_governance_wildcard(map: &Map<String, Value>) -> bool {
             let object_ref = map.get("object_ref").and_then(Value::as_str);
             let governance_type = matches!(object_kind, Some("policy" | "schema"));
             let governance_ref = object_ref.is_some_and(|value| {
-                value.starts_with("ak:policy:") || value.starts_with("ak:schema:")
+                // `policy` is a typed UUIDv7 kind and is validated; `schema`
+                // has no registered id-kind and is matched by its registry-id
+                // spelling.
+                PolicyId::new(value).is_ok() || value.starts_with("ak.schema.")
             });
             (governance_type
                 && (selector_field_missing_or_wildcard(map, "object_ref")
@@ -385,5 +409,63 @@ mod tests {
         ));
         assert!(!resource_matches("actor", "did:web:actor.example"));
         assert!(!resource_matches("actor", "ak:member:z6mkactorfixture"));
+    }
+
+    // A kind term is satisfied by a canonical id of that kind, never by a
+    // string that merely opens with the kind segment.
+    #[test]
+    fn kind_terms_reject_a_kind_prefix_without_a_canonical_payload() {
+        assert!(resource_matches(
+            "event",
+            "ak:event:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D"
+        ));
+        assert!(!resource_matches("event", "ak:event:not-a-token"));
+        assert!(!resource_matches("event", "ak:event:"));
+
+        assert!(resource_matches(
+            "message",
+            "ak:message:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D"
+        ));
+        assert!(!resource_matches("message", "ak:message:1"));
+
+        assert!(resource_matches(
+            "realm",
+            "ak:realm:AYcO0aKZZvKELI-s58wUjRHsrz5v8Y51T0_sGUTciDVw"
+        ));
+        assert!(!resource_matches("realm", "ak:realm:local-fixture"));
+
+        assert!(resource_matches(
+            "policy",
+            "ak:policy:01964137-0000-7000-8000-000000000777"
+        ));
+        assert!(!resource_matches("policy", "ak:policy:default"));
+    }
+
+    #[test]
+    fn blob_terms_require_the_typed_wire_form() {
+        assert!(resource_matches(
+            "blob",
+            &format!("ak:blob:sha256:{}", "a".repeat(64))
+        ));
+        assert!(resource_matches(
+            "blob",
+            "ak:blob:01964137-0000-7000-8000-000000000777"
+        ));
+        assert!(!resource_matches("blob", "ak:blob:abc"));
+        // A bare digest carries no kind segment, so it names no blob resource.
+        assert!(!resource_matches(
+            "blob",
+            &format!("sha256:{}", "a".repeat(64))
+        ));
+    }
+
+    #[test]
+    fn object_terms_reject_non_canonical_members_of_every_kind() {
+        assert!(resource_matches(
+            "object",
+            "ak:strand:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D"
+        ));
+        assert!(!resource_matches("object", "ak:strand:main"));
+        assert!(!resource_matches("object", "ak:blob:abc"));
     }
 }

@@ -501,10 +501,21 @@ fn session_binding_from_introspection(
     };
     let holder_device_id = DeviceId::new(device_binding.clone())
         .map_err(|_| unauthenticated("session grant holder binding has an invalid device id"))?;
-    if binding.device_id != holder_device_id || grant.device_id.as_ref() != Some(&binding.device_id)
-    {
+    // `api-conventions.md` §3.3 states two separate MUSTs, both fail-closed as
+    // `unauthenticated`. First: the device authorization selector MUST name the
+    // same device as the signed typed `holder_binding`.
+    if binding.device_id != holder_device_id {
         return Err(unauthenticated(
             "session grant device selector does not match its holder binding",
+        ));
+    }
+    // Second: when introspection also returns top-level device metadata, that
+    // metadata MUST equal the signed holder binding verbatim. It is compared
+    // against the signed binding itself, never against the selector, so the
+    // clause never depends on the selector check having passed.
+    if grant.device_id.as_ref() != Some(&holder_device_id) {
+        return Err(unauthenticated(
+            "session grant device metadata does not match its holder binding",
         ));
     }
     Ok((binding.device_id.to_string(), None))

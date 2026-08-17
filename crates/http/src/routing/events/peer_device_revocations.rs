@@ -15,6 +15,88 @@ use super::peer::{
 };
 use crate::state::AppState;
 
+/// Admit the origin-derived selector, or classify why it could not be derived.
+///
+/// `device-lifecycle.md` §"派生的定义域与缺失结论" makes this a two-way split,
+/// never a three-way one:
+///
+/// * the derivation is a partial function — an unknown device, a device that belongs to another
+///   account, a never-authorized device and an authorization that is no longer current all leave it
+///   undefined. On this authenticated peer surface every one of them MUST collapse into the same
+///   anti-enumeration `authority_mismatch` receipt, so the caller cannot tell them apart. That is
+///   expressed here as `Ok(None)`.
+/// * a projection row that claims current / active / verified while omitting its schema-required
+///   authorization Event id or generation ref is a projection integrity failure, not an ordinary
+///   "unauthorized" answer. It MUST surface as an internal availability fault and MUST NOT be
+///   signed as `allow`.
+fn admit_origin_current_selector(
+    derived: Result<soland_storage::DeviceRevocationGateSelector, soland_services::ServiceError>,
+) -> Result<Option<soland_storage::DeviceRevocationGateSelector>, AppError> {
+    match derived {
+        Ok(selector) => Ok(Some(selector)),
+        Err(error) if matches!(error.kind(), ServiceErrorKind::NotFound) => Ok(None),
+        Err(error) => Err(AppError::internal(format!(
+            "origin device authorization projection is unavailable: {error}"
+        ))),
+    }
+}
+
+/// The receipt members a linearized gate status projects to, before typed-id
+/// parsing.
+struct GateDecisionProjection {
+    decision: DeviceRevocationGateDecision,
+    derived_binding: Option<(String, u64)>,
+    blocking_proposal_digest: Option<String>,
+    covering_seal_id: Option<String>,
+}
+
+/// `service-http-binding.md` §`ak.peer.device_revocations.command.check` —
+/// only `allow` carries the origin-derived selector. Every other decision,
+/// `authority_mismatch` included, MUST return no `derived_binding` so the
+/// receipt cannot be read as an oracle for "does this device exist".
+fn project_gate_decision(
+    status: soland_storage::DeviceRevocationGateStatus,
+    origin_current_selector: Option<&soland_storage::DeviceRevocationGateSelector>,
+) -> GateDecisionProjection {
+    let plain = |decision| GateDecisionProjection {
+        decision,
+        derived_binding: None,
+        blocking_proposal_digest: None,
+        covering_seal_id: None,
+    };
+    match status {
+        soland_storage::DeviceRevocationGateStatus::Active => GateDecisionProjection {
+            decision: DeviceRevocationGateDecision::Allow,
+            derived_binding: origin_current_selector.map(|selector| {
+                (
+                    selector.target_device_authorize_event_id.clone(),
+                    selector.target_device_generation_ref,
+                )
+            }),
+            blocking_proposal_digest: None,
+            covering_seal_id: None,
+        },
+        soland_storage::DeviceRevocationGateStatus::Pending {
+            blocking_proposal_digest,
+        } => GateDecisionProjection {
+            blocking_proposal_digest: Some(blocking_proposal_digest),
+            ..plain(DeviceRevocationGateDecision::RevocationPending)
+        },
+        soland_storage::DeviceRevocationGateStatus::Revoked { covering_seal_id } => {
+            GateDecisionProjection {
+                covering_seal_id: Some(covering_seal_id),
+                ..plain(DeviceRevocationGateDecision::Revoked)
+            }
+        }
+        soland_storage::DeviceRevocationGateStatus::AuthorityMismatch => {
+            plain(DeviceRevocationGateDecision::AuthorityMismatch)
+        }
+        soland_storage::DeviceRevocationGateStatus::GenerationMismatch => {
+            plain(DeviceRevocationGateDecision::GenerationMismatch)
+        }
+    }
+}
+
 #[salvo::oapi::endpoint(
     operation_id = "ak.peer.device_revocations.command.check",
     tags("events")
@@ -64,22 +146,14 @@ pub(super) async fn check_device_revocation_gate(
         ));
     }
 
-    let origin_current_selector =
-        match crate::routing::identity::device_generation::active_device_revocation_gate_selector(
+    let origin_current_selector = admit_origin_current_selector(
+        crate::routing::identity::device_generation::active_device_revocation_gate_selector(
             state,
             request.principal_authority.principal_id.as_str(),
             request.device_id.as_str(),
         )
-        .await
-        {
-            Ok(selector) => Some(selector),
-            Err(error) if matches!(error.kind(), ServiceErrorKind::NotFound) => None,
-            Err(error) => {
-                return Err(AppError::internal(format!(
-                    "origin device authorization projection is unavailable: {error}"
-                )));
-            }
-        };
+        .await,
+    )?;
     let action_class = match request.action_class {
         DeviceRevocationGateActionClass::SessionGrantIssue => {
             soland_storage::DeviceRevocationGateAction::SessionGrantIssue
@@ -114,52 +188,31 @@ pub(super) async fn check_device_revocation_gate(
             ))
         })?;
 
-    let (decision, derived_binding, blocking_proposal_digest, covering_seal_id) =
-        match linearization.status {
-            soland_storage::DeviceRevocationGateStatus::Active => (
-                DeviceRevocationGateDecision::Allow,
-                origin_current_selector.as_ref().map(|selector| {
-                    (
-                        selector.target_device_authorize_event_id.clone(),
-                        selector.target_device_generation_ref,
-                    )
-                }),
-                None,
-                None,
-            ),
-            soland_storage::DeviceRevocationGateStatus::Pending {
-                blocking_proposal_digest,
-            } => (
-                DeviceRevocationGateDecision::RevocationPending,
-                None,
-                Some(Hash::new(blocking_proposal_digest).map_err(|error| {
-                    AppError::internal(format!(
-                        "stored blocking proposal digest is invalid: {error}"
-                    ))
-                })?),
-                None,
-            ),
-            soland_storage::DeviceRevocationGateStatus::Revoked { covering_seal_id } => (
-                DeviceRevocationGateDecision::Revoked,
-                None,
-                None,
-                Some(SealId::new(covering_seal_id).map_err(|error| {
-                    AppError::internal(format!("stored covering Seal id is invalid: {error}"))
-                })?),
-            ),
-            soland_storage::DeviceRevocationGateStatus::AuthorityMismatch => (
-                DeviceRevocationGateDecision::AuthorityMismatch,
-                None,
-                None,
-                None,
-            ),
-            soland_storage::DeviceRevocationGateStatus::GenerationMismatch => (
-                DeviceRevocationGateDecision::GenerationMismatch,
-                None,
-                None,
-                None,
-            ),
-        };
+    let GateDecisionProjection {
+        decision,
+        derived_binding,
+        blocking_proposal_digest,
+        covering_seal_id,
+    } = project_gate_decision(
+        linearization.status.clone(),
+        origin_current_selector.as_ref(),
+    );
+    let blocking_proposal_digest = blocking_proposal_digest
+        .map(|digest| {
+            Hash::new(digest).map_err(|error| {
+                AppError::internal(format!(
+                    "stored blocking proposal digest is invalid: {error}"
+                ))
+            })
+        })
+        .transpose()?;
+    let covering_seal_id = covering_seal_id
+        .map(|seal_id| {
+            SealId::new(seal_id).map_err(|error| {
+                AppError::internal(format!("stored covering Seal id is invalid: {error}"))
+            })
+        })
+        .transpose()?;
     let (target_device_authorize_event_id, target_device_generation_ref) = match derived_binding {
         Some((event_id, generation)) => (
             Some(arkret_wire::EventId::new(event_id).map_err(|error| {
@@ -214,4 +267,121 @@ pub(super) async fn check_device_revocation_gate(
         .validate_for_request(&request)
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(outcome)
+}
+
+#[cfg(test)]
+mod tests {
+    use soland_services::ServiceError;
+    use soland_storage::{DeviceRevocationGateSelector, DeviceRevocationGateStatus};
+
+    use super::*;
+
+    const PRINCIPAL: &str = "ak:did_core:webvh:z6mkfixture:alice.example";
+    const PRINCIPAL_SERVER: &str = "ak:did_core:web:soland.example";
+    const DEVICE: &str = "ak:device:01904100-0000-7000-8000-000000000030";
+    const AUTHORIZE_EVENT: &str = "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa";
+
+    fn selector() -> DeviceRevocationGateSelector {
+        DeviceRevocationGateSelector {
+            principal_id: PRINCIPAL.to_owned(),
+            principal_server_id: PRINCIPAL_SERVER.to_owned(),
+            device_id: DEVICE.to_owned(),
+            target_device_authorize_event_id: AUTHORIZE_EVENT.to_owned(),
+            target_device_generation_ref: 1,
+        }
+    }
+
+    /// Canonical positive: a fully derivable selector is admitted and flows
+    /// into the `allow` receipt as the origin-derived binding.
+    #[test]
+    fn derivable_selector_is_admitted_and_only_allow_carries_it() {
+        let admitted =
+            admit_origin_current_selector(Ok(selector())).expect("derivable selector is admitted");
+        assert!(admitted.is_some());
+
+        let projected =
+            project_gate_decision(DeviceRevocationGateStatus::Active, admitted.as_ref());
+        assert_eq!(projected.decision, DeviceRevocationGateDecision::Allow);
+        assert_eq!(
+            projected.derived_binding,
+            Some((AUTHORIZE_EVENT.to_owned(), 1))
+        );
+    }
+
+    /// An unknown / never-authorized / foreign device leaves the derivation
+    /// undefined (`NotFound`). On this authenticated peer surface that is the
+    /// anti-enumeration case: a signed `authority_mismatch` receipt with no
+    /// derived binding and no revocation evidence, never an HTTP error that
+    /// would distinguish the four causes.
+    #[test]
+    fn undefined_derivation_becomes_a_bindingless_authority_mismatch() {
+        let admitted = admit_origin_current_selector(Err(ServiceError::NotFound(
+            "device authorization is unavailable".to_owned(),
+        )))
+        .expect("an undefined derivation is not an error on the peer surface");
+        assert!(admitted.is_none());
+
+        let projected = project_gate_decision(
+            DeviceRevocationGateStatus::AuthorityMismatch,
+            admitted.as_ref(),
+        );
+        assert_eq!(
+            projected.decision,
+            DeviceRevocationGateDecision::AuthorityMismatch
+        );
+        assert!(projected.derived_binding.is_none());
+        assert!(projected.blocking_proposal_digest.is_none());
+        assert!(projected.covering_seal_id.is_none());
+    }
+
+    /// A projection row that claims verified / current but omits its
+    /// schema-required authorization Event id or generation ref is a projection
+    /// integrity failure. It MUST become an internal availability fault, and it
+    /// MUST NOT be laundered into the `authority_mismatch` receipt.
+    #[test]
+    fn malformed_verified_projection_is_an_internal_fault_not_a_decision() {
+        let error = admit_origin_current_selector(Err(ServiceError::SchemaViolation(
+            "device authorization omits its accepted Event id".to_owned(),
+        )))
+        .expect_err("a projection integrity failure must not be signed as a decision");
+        assert_eq!(error.code, arkret_wire::ErrorCode::InternalError);
+    }
+
+    /// No non-allow decision may leak the origin-derived selector, even when
+    /// the selector itself was derivable.
+    #[test]
+    fn non_allow_decisions_never_carry_the_derived_binding() {
+        let selector = selector();
+        let cases = [
+            (
+                DeviceRevocationGateStatus::Pending {
+                    blocking_proposal_digest: format!("sha256:{}", "a".repeat(64)),
+                },
+                DeviceRevocationGateDecision::RevocationPending,
+            ),
+            (
+                DeviceRevocationGateStatus::Revoked {
+                    covering_seal_id: "ak:seal:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml"
+                        .to_owned(),
+                },
+                DeviceRevocationGateDecision::Revoked,
+            ),
+            (
+                DeviceRevocationGateStatus::GenerationMismatch,
+                DeviceRevocationGateDecision::GenerationMismatch,
+            ),
+            (
+                DeviceRevocationGateStatus::AuthorityMismatch,
+                DeviceRevocationGateDecision::AuthorityMismatch,
+            ),
+        ];
+        for (status, expected) in cases {
+            let projected = project_gate_decision(status, Some(&selector));
+            assert_eq!(projected.decision, expected);
+            assert!(
+                projected.derived_binding.is_none(),
+                "{expected:?} must not carry the origin-derived selector"
+            );
+        }
+    }
 }
