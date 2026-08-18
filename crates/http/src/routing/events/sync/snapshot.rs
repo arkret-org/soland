@@ -891,7 +891,15 @@ async fn timeline_events_for_realm(
         let Some(event) = accepted_event(state, &record.event_id).await else {
             continue;
         };
-        let target_ref = event.payload.get("target_ref").and_then(Value::as_str);
+        // Message-scoped kinds carry the target as `message_id`; cross-object
+        // kinds (pins, reactions, redaction) carry it as `target_ref`. The two
+        // member names are disjoint, so this is a per-kind lookup rather than a
+        // fallback chain over alternative spellings of one target.
+        let target_ref = event
+            .payload
+            .get("message_id")
+            .or_else(|| event.payload.get("target_ref"))
+            .and_then(Value::as_str);
         let circle_scope = target_ref.and_then(|target| projection.message_circle_scope(target));
         if !circle_scope_visible_to_session(
             projection,

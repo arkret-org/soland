@@ -33,7 +33,13 @@ use soland_http::service;
 use soland_http::state::AppState;
 use soland_test_support::AppStateTestExt as _;
 
-const DEMO_REALM_ID: &str = soland_http::state::DEVELOPMENT_DEMO_REALM_ID;
+/// Derived, never copied: the demo Realm id is `retype(genesis.event_id)` and
+/// moves with any `arkret-spec` change that touches the genesis payload.
+fn demo_realm_id() -> &'static str {
+    static ID: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| soland_http::state::development_demo_realm_id().to_string());
+    &ID
+}
 // `new_with_demo_data` metadata still uses a historical fixture Realm id.
 // Clone it into the Realm derived from the shared canonical development
 // genesis before exercising authenticated routes.
@@ -107,11 +113,11 @@ async fn dev_login_token(state: AppState, actor: &str, device_suffix: &str) -> S
 
 async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> String {
     state.hydrate().await.unwrap();
-    let typed_realm_id = arkret_identifiers::RealmId::new(DEMO_REALM_ID.to_owned()).unwrap();
+    let typed_realm_id = arkret_identifiers::RealmId::new(demo_realm_id().to_owned()).unwrap();
     if state
         .test_persistence()
         .realm_meta()
-        .get(DEMO_REALM_ID)
+        .get(demo_realm_id())
         .await
         .unwrap()
         .is_none()
@@ -126,7 +132,7 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
         state
             .test_persistence()
             .realm_meta()
-            .put(DEMO_REALM_ID, &meta)
+            .put(demo_realm_id(), &meta)
             .await
             .unwrap();
     }
@@ -137,7 +143,7 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
     {
         let mut realms = state.test_realms().lock();
         let mut realm = realms.get(&typed_realm_id).cloned().unwrap_or_else(|| {
-            let seeded_realm_id = RealmId::new(DEMO_REALM_ID.to_owned()).unwrap();
+            let seeded_realm_id = RealmId::new(demo_realm_id().to_owned()).unwrap();
             let mut seeded = realms
                 .get(&seeded_realm_id)
                 .cloned()
@@ -149,10 +155,10 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
         realms.upsert(realm);
     }
     state.test_projection().lock().members.insert(
-        (DEMO_REALM_ID.to_owned(), actor_did.to_string()),
+        (demo_realm_id().to_owned(), actor_did.to_string()),
         soland_domain::reducer::SolandMembershipState {
             member: actor_did.to_string(),
-            realm_id: DEMO_REALM_ID.to_owned(),
+            realm_id: demo_realm_id().to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
             delivery_status: None,
@@ -221,13 +227,13 @@ async fn applet_service_token(
 async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     const ADMIN_GRANT_ID: &str = "ak:grant:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-";
     ingest_extension_admin_document(state).await;
-    let realm = arkret_identifiers::RealmId::new(DEMO_REALM_ID).unwrap();
+    let realm = arkret_identifiers::RealmId::new(demo_realm_id()).unwrap();
     {
         let mut projection = state.test_projection().lock();
         let genesis = projection
             .realm_null_subject_cells
             .entry((
-                DEMO_REALM_ID.to_owned(),
+                demo_realm_id().to_owned(),
                 arkret_wire::REALM_GENESIS_CELL.to_owned(),
             ))
             .or_insert_with(|| arkret_state::lattice::CellState::Value(serde_json::json!({})));
@@ -239,7 +245,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         }
         projection.realm_null_subject_cells.insert(
             (
-                DEMO_REALM_ID.to_owned(),
+                demo_realm_id().to_owned(),
                 format!(
                     "ak:cell:{}:null",
                     arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1
@@ -258,7 +264,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         );
         projection.realm_null_subject_cells.insert(
             (
-                DEMO_REALM_ID.to_owned(),
+                demo_realm_id().to_owned(),
                 arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
             ),
             arkret_state::lattice::CellState::Value(serde_json::to_value(authority_root).unwrap()),
@@ -325,12 +331,12 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                 value: Some(json!({
                     "grant_id": ADMIN_GRANT_ID,
                     "schema": arkret_wire::SchemaId::CAPABILITY_V1,
-                    "realm_id": DEMO_REALM_ID,
+                    "realm_id": demo_realm_id(),
                     "issuer": "ak:did_core:web:alice.example",
                     "issuer_principal_server_id": soland_test_support::fixture_principal_server_id(),
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
-                        "realm_id": DEMO_REALM_ID,
+                        "realm_id": demo_realm_id(),
                         "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
                         "controller_epoch_at_issuance": 0,
                         "authority_generation": 0
@@ -340,7 +346,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                     "actions": soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS,
                     "resources": [{
                         "kind": "realm",
-                        "realm_id": DEMO_REALM_ID,
+                        "realm_id": demo_realm_id(),
                         "match_scope": "realm_wide"
                     }],
                     "capability_action_registry_digest":
@@ -403,7 +409,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     state.test_refresh_grant_from_sealed_cells(&realm, ADMIN_GRANT_ID);
     soland_test_support::cba_basis::seed_realm_genesis_event(
         state,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         "did:web:alice.example",
     )
     .await;
@@ -475,7 +481,7 @@ fn signed_ghost_provision_body(
         AccountabilityGrantPayload, AccountabilityScope, AccountabilityScopeKind,
     };
 
-    let realm_id = arkret_identifiers::RealmId::new(DEMO_REALM_ID.to_owned()).unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(demo_realm_id().to_owned()).unwrap();
     let ghost_actor_id = arkret_identifiers::DidCoreId::new(ghost_actor_id.to_owned()).unwrap();
     let applet_id =
         arkret_identifiers::AppletId::new(package.applet_id.clone()).expect("valid applet id");
@@ -621,7 +627,7 @@ fn signed_ghost_provision_body(
         "tenant": tenant,
         "external_user_id": external_user_id,
         "display_name": display_name,
-        "realm_id": DEMO_REALM_ID,
+        "realm_id": demo_realm_id(),
         "external_ref": {
             "protocol": protocol,
             "external_id": external_user_id,
@@ -692,7 +698,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     seed_extension_test_seal(&state).await;
     let app = service(state.clone());
     let suffix = fixture_suffix();
-    let realm_id = DEMO_REALM_ID;
+    let realm_id = demo_realm_id();
     let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.install.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
@@ -803,7 +809,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     let namespace = format!("bridge.provision.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
     ingest_applet_service_id_document(&state, &package).await;
-    let realm_id = DEMO_REALM_ID;
+    let realm_id = demo_realm_id();
     let install = install_applet_package(
         &state,
         &app,
@@ -1037,7 +1043,7 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     let namespace = format!("bridge.no-ghost-scope.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
     ingest_applet_service_id_document(&state, &package).await;
-    let realm_id = DEMO_REALM_ID;
+    let realm_id = demo_realm_id();
     let install = install_applet_package_with_approved_actions(
         &state,
         &app,
@@ -1086,7 +1092,7 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
     let namespace = format!("bridge.namespace.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
     ingest_applet_service_id_document(&state, &package).await;
-    let realm_id = DEMO_REALM_ID;
+    let realm_id = demo_realm_id();
     let install = install_applet_package(
         &state,
         &app,
@@ -1370,7 +1376,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let namespace = format!("bridge.smoke.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
     ingest_applet_service_id_document(&state, &package).await;
-    let realm_id = DEMO_REALM_ID;
+    let realm_id = demo_realm_id();
     let install = install_applet_package(
         &state,
         &app,
@@ -1382,7 +1388,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     .await;
     assert_eq!(install["effective_status"], json!("installed"));
     let service_token = applet_service_token(state.clone(), &package, "a11ce0000005").await;
-    allow_service_message_plaintext(&state, DEMO_REALM_ID).await;
+    allow_service_message_plaintext(&state, demo_realm_id()).await;
     let bot_actor_id = install["bot_actor_id"].as_str().unwrap().to_owned();
     let message_grant_ref =
         capability_grant_ref_for_action(&install, &package.requested_scopes, "ak.message.create");
@@ -2042,7 +2048,7 @@ async fn install_applet_package_with_approved_actions(
             "effective_scope": effective_scope,
             "approval_request": {
                 "approve_actions": approve_actions,
-                "ghost_actors_allowed": ghost_actors_allowed,
+                "ghost_actor_mode": if ghost_actors_allowed { "policy_declared" } else { "disallowed" },
                 "delegated_native_actors_allowed": false,
                 "e2ee_join_allowed": false,
                 "widget_allowed": false,

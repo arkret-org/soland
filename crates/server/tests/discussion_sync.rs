@@ -576,37 +576,6 @@ async fn submit_projection_event(
     accepted_event_id
 }
 
-async fn submit_projection_event_status(
-    state: AppState,
-    token: &str,
-    actor_id: &str,
-    device_id: &str,
-    realm_id: &str,
-    kind: &str,
-    payload: Value,
-) -> (u16, String) {
-    let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
-    let event = signed_event(SignedEvent {
-        state: &state,
-        token,
-        event_id: &event_id,
-        actor_id,
-        device_id,
-        realm_id,
-        kind,
-        payload,
-    })
-    .await;
-    let mut response = TestClient::post("http://server/_arkret/self/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&event)
-        .send(&app_from_state(state))
-        .await;
-    let status = response.status_code.unwrap().as_u16();
-    let body = response.take_string().await.unwrap_or_default();
-    (status, body)
-}
-
 struct SignedEvent<'a> {
     state: &'a AppState,
     token: &'a str,

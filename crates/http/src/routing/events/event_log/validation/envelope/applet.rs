@@ -1,41 +1,29 @@
 use super::*;
 
-pub(super) async fn validate_applet_delegated_authorization_chain(
+/// The registration gate every `applet_id`-carrying Event has to clear.
+async fn validate_applet_registration_is_live(
     state: &AppState,
-    object: &serde_json::Map<String, Value>,
-    kind: &str,
-    actor_id: &str,
+    applet_id: &str,
     realm_id: &str,
 ) -> Result<(), EventValidationError> {
-    let Some(applet_id) = event_string_field(object, &["applet_id"]) else {
-        return Ok(());
-    };
-    let executed_by = event_string_field(object, &["executed_by"]).ok_or_else(|| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            arkret_wire::ReasonCode::EXECUTED_BY_MISSING,
-            "applet-originated delegated Event requires executed_by",
-        )
-    })?;
-    let authorization_ref =
-        event_string_field(object, &["authorization_ref"]).ok_or_else(|| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "authorization_ref_missing",
-                "applet-originated Event requires authorization_ref",
-            )
-        })?;
-    if !authorization_ref.starts_with("ak:grant:") {
+    let record = load_installed_applet_record(state, applet_id).await?;
+    if record.portal_realm_id != realm_id {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
-            "authorization_ref_invalid",
-            "applet-originated Event authorization_ref must reference an accepted capability grant",
+            "applet_effective_scope_mismatch",
+            "applet_id is not installed in the Event Realm",
         ));
     }
+    Ok(())
+}
 
+async fn load_installed_applet_record(
+    state: &AppState,
+    applet_id: &str,
+) -> Result<crate::routing::extensions::applet_bridge::AppletRecord, EventValidationError> {
     let record_value = state
         .event_queries()
-        .applet(&applet_id)
+        .applet(applet_id)
         .await
         .map_err(|error| {
             tracing::error!(%error, %applet_id, "failed to read applet record for delegated event");
@@ -70,6 +58,53 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
             "applet install has been revoked",
         ));
     }
+    Ok(record)
+}
+
+/// `is_delegated` is `applet-integration.md` §11's own trigger: the envelope
+/// signature is an applet / delegated agent key while `actor_id` names a
+/// different DID. Only §11's field triple (`executed_by` / `authorization_ref`
+/// / the grant behind them) is scoped that way — an applet signing as itself
+/// still has to be a live, unrevoked registration bound to this Realm, so the
+/// registration gate below runs for every Event carrying `applet_id`.
+pub(super) async fn validate_applet_delegated_authorization_chain(
+    state: &AppState,
+    object: &serde_json::Map<String, Value>,
+    kind: &str,
+    actor_id: &str,
+    realm_id: &str,
+    is_delegated: bool,
+) -> Result<(), EventValidationError> {
+    let Some(applet_id) = event_string_field(object, &["applet_id"]) else {
+        return Ok(());
+    };
+    if !is_delegated {
+        return validate_applet_registration_is_live(state, &applet_id, realm_id).await;
+    }
+    let executed_by = event_string_field(object, &["executed_by"]).ok_or_else(|| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            arkret_wire::ReasonCode::EXECUTED_BY_MISSING,
+            "applet-originated delegated Event requires executed_by",
+        )
+    })?;
+    let authorization_ref =
+        event_string_field(object, &["authorization_ref"]).ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "authorization_ref_missing",
+                "applet-originated Event requires authorization_ref",
+            )
+        })?;
+    if !authorization_ref.starts_with("ak:grant:") {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "authorization_ref_invalid",
+            "applet-originated Event authorization_ref must reference an accepted capability grant",
+        ));
+    }
+
+    let record = load_installed_applet_record(state, &applet_id).await?;
     if record.portal_realm_id != realm_id {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
@@ -298,9 +333,6 @@ pub(super) fn delegated_applet_resource_candidates(
     append_authz_resource_candidates(&mut resources, Some(&projection), realm_id, realm_id);
     append_authz_resource_candidates(&mut resources, Some(&projection), realm_id, actor_id);
     append_authz_resource_candidates(&mut resources, Some(&projection), realm_id, event_id);
-    if let Some(redacts) = event_string_field(object, &["redacts"]) {
-        append_authz_resource_candidates(&mut resources, Some(&projection), realm_id, &redacts);
-    }
     if let Some(payload) = object.get("payload").and_then(Value::as_object) {
         for field in [
             "strand_id",

@@ -75,6 +75,8 @@ impl ProjectionState {
             schema_refs,
             facets,
             versions,
+            content: object.get("content").cloned(),
+            encrypted_content: object.get("encrypted_content").cloned(),
             state: ObjectLifecycleState::Active,
             state_changed_at: None,
             created_by,

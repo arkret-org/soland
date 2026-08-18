@@ -10,8 +10,9 @@ mod notification;
 mod service_route_fetcher;
 
 pub use app_state::{
-    AppState, AppStateRuntime, ConnectionDrain, DEVELOPMENT_DEMO_REALM_ID, build_realm_directory,
-    getrandom_seed,
+    AppState, AppStateRuntime, ConnectionDrain, DEVELOPMENT_DEMO_SUBJECT_DID,
+    DEVELOPMENT_SERVICE_DID, build_realm_directory, development_demo_genesis_event,
+    development_demo_realm_id, getrandom_seed, realm_genesis_payload,
 };
 pub(crate) use member_identity::{
     HandleClaimDigestInput, HandleClaimEvidenceRecord, MemberIdentityEventRecord,

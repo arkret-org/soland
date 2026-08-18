@@ -257,7 +257,8 @@ fn batch_is_managed_agent_pcr_create(envelopes: &[Value]) -> bool {
 pub(in crate::routing) struct ValidatedEventEnvelope {
     pub(in crate::routing) event_id: EventId,
     pub(in crate::routing) actor_id: DidCoreId,
-    pub(in crate::routing) device_id: DeviceId,
+    /// Submitting device, absent for a deviceless service session.
+    pub(in crate::routing) device_id: Option<DeviceId>,
     pub(in crate::routing) actor_seq: u64,
     pub(in crate::routing) realm_id: RealmId,
     pub(in crate::routing) kind: String,
@@ -266,6 +267,14 @@ pub(in crate::routing) struct ValidatedEventEnvelope {
     pub(in crate::routing) canonical_digest: String,
     pub(in crate::routing) canonical_bytes: Vec<u8>,
     pub(in crate::routing) producer_signing_key: Option<arkret_wire::DidKey>,
+}
+
+impl ValidatedEventEnvelope {
+    /// The submitting device, or `""` for a deviceless service session — the
+    /// same empty-source spelling projection already fans out on.
+    pub(in crate::routing) fn device_id_str(&self) -> &str {
+        self.device_id.as_ref().map_or("", DeviceId::as_str)
+    }
 }
 
 #[derive(Debug)]
@@ -495,7 +504,7 @@ impl InternalEventAdmission {
             session_actor_id: actor_id.clone(),
             actor_id,
             kind: arkret_wire::EventKind::MessageCreate.as_str().to_owned(),
-            device_id: "mimi-provider-facade".to_owned(),
+            device_id: String::new(),
             binding: InternalEventBinding::MimiProvider {
                 binding_ref: binding_ref.into(),
             },
@@ -537,7 +546,7 @@ impl InternalEventAdmission {
             kind: arkret_wire::EventKind::SelfModerationReport
                 .as_str()
                 .to_owned(),
-            device_id: "moderation-report-service".to_owned(),
+            device_id: String::new(),
             binding: InternalEventBinding::MimiModerationReport {
                 reporter: reporter.into(),
                 target_ref: target_ref.into(),
@@ -557,7 +566,7 @@ impl InternalEventAdmission {
             session_actor_id: actor_id.clone(),
             actor_id,
             kind: kind.into(),
-            device_id: "applet-service".to_owned(),
+            device_id: String::new(),
             binding: InternalEventBinding::AppletFormal {
                 event_id: event_id.into(),
             },
@@ -2705,7 +2714,7 @@ pub(crate) async fn submit_federation_events(
         let device_id = events
             .first()
             .and_then(|event| event_string_field_from_value(event, "device_id"))
-            .unwrap_or_else(|| format!("federation:{source_trust_domain}"));
+            .unwrap_or_default();
         let session = SessionRecord {
             token_hash: format!("federation:{source_trust_domain}:{request_hash}"),
             actor: actor.clone(),
@@ -2901,8 +2910,8 @@ pub(crate) async fn submit_federation_events(
                 }
             }
         }
-        let device_id = event_string_field_from_value(&envelope, "device_id")
-            .unwrap_or_else(|| format!("federation:{source_trust_domain}"));
+        // Deviceless relayed submission, not a device named "federation:<domain>".
+        let device_id = event_string_field_from_value(&envelope, "device_id").unwrap_or_default();
         let session = SessionRecord {
             token_hash: format!("federation:{source_trust_domain}:{}", request_hash),
             actor: actor.clone(),
@@ -3232,7 +3241,8 @@ async fn submit_direct_conversation_federation(
             .get("device_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| "federation:direct-conversation".to_owned()),
+            // Deviceless relayed founding unit, not a device named after the lane.
+            .unwrap_or_default(),
         audience: state.service_id().clone(),
         session_public_key: None,
         agent_session: None,
@@ -3531,7 +3541,7 @@ mod internal_event_admission_tests {
     }
 
     fn mimi_session() -> SessionRecord {
-        internal_session("did:web:mimi.example", "mimi-provider-facade")
+        internal_session("did:web:mimi.example", "")
     }
 
     #[test]

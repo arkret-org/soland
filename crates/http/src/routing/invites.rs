@@ -2012,10 +2012,12 @@ mod invite_locator_security_tests {
             // is a full DID and belongs only where a complete DID is required
             // (verification methods, proof controllers).
             actor_id: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
-            device_id: arkret_wire::DeviceId::new(
-                "ak:device:01904100-0000-7000-8000-000000000404".to_owned(),
-            )
-            .unwrap(),
+            device_id: Some(
+                arkret_wire::DeviceId::new(
+                    "ak:device:01904100-0000-7000-8000-000000000404".to_owned(),
+                )
+                .unwrap(),
+            ),
             actor_seq: 7,
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
             kind: arkret_wire::EventKind::InviteCreate.as_str().to_owned(),

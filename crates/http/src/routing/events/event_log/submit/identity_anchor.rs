@@ -682,7 +682,7 @@ pub(super) async fn submit_identity_anchor_batch(
                 crate::routing::events::projection::project_accepted_operations_from_device(
                     state,
                     parsed.actor_id.as_str(),
-                    parsed.device_id.as_str(),
+                    parsed.device_id_str(),
                     &[operation],
                 )
                 .await;

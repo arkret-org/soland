@@ -272,6 +272,7 @@ async fn prepare_ghost_event(
             format!("applet ghost federation delivery intent unavailable: {error}"),
         )
     })?;
+    let device_id = parsed.device_id_str().to_owned();
     let command = soland_services::events::CommitAcceptedEventCommand {
         device_pairing_authorization: None,
         contact_projection: None,
@@ -314,7 +315,7 @@ async fn prepare_ghost_event(
         projected_cell_writes,
         projected_event,
         actor_id: parsed.actor_id.to_string(),
-        device_id: parsed.device_id.to_string(),
+        device_id: device_id.to_owned(),
     })
 }
 
@@ -355,7 +356,8 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
     let session = |actor: &str| SessionRecord {
         token_hash: "applet-ghost-provision".to_owned(),
         actor: actor.to_owned(),
-        device_id: "applet-service".to_owned(),
+        // Service session: an applet owns no device (see `applet_event_session`).
+        device_id: String::new(),
         audience: state.service_id().clone(),
         session_public_key: None,
         agent_session: None,

@@ -34,7 +34,7 @@ async fn sync_and_directory_share_demo_realm() {
         sync["realms"]
             .as_object()
             .unwrap()
-            .contains_key(DEMO_REALM_ID)
+            .contains_key(demo_realm_id())
     );
 
     let directory: Value = TestClient::post("http://server/_arkret/find/directory/search-realms")
@@ -701,17 +701,17 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     );
 
     let resolved: Value = TestClient::post("http://server/_arkret/find/directory/resolve-realm")
-        .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
+        .json(&serde_json::json!({"realm_id": demo_realm_id()}))
         .send(&app())
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resolved["realm_preview"]["realm_id"], DEMO_REALM_ID);
+    assert_eq!(resolved["realm_preview"]["realm_id"], demo_realm_id());
 
     let backfill: Value = TestClient::query("http://server/_arkret/self/events")
         .json(&serde_json::json!({
-            "realms": [DEMO_REALM_ID]
+            "realms": [demo_realm_id()]
         }))
         .send(&app())
         .await
@@ -734,7 +734,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .json(&serde_json::json!({
             "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "action": "ak.strand.read",
-            "resource": {"kind": "realm", "realm_id": DEMO_REALM_ID}
+            "resource": {"kind": "realm", "realm_id": demo_realm_id()}
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -748,13 +748,13 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         fixture_actor_core_id("did:web:alice.example").as_str()
     );
     assert_eq!(authz["policy_results"][0]["action"], "ak.strand.read");
-    assert_eq!(authz["policy_results"][0]["realm_id"], DEMO_REALM_ID);
+    assert_eq!(authz["policy_results"][0]["realm_id"], demo_realm_id());
     assert_eq!(authz["policy_results"][0]["cache"]["mode"], "in_memory");
 
     let ice: Value = TestClient::post("http://server/_arkret/self/rtc/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
+            "realm_id": demo_realm_id(),
             "call_id": "ak:call:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5",
             "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",

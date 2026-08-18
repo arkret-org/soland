@@ -19,7 +19,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         "ak.space.create",
         serde_json::json!({
             "object": {
-                "realm_id": DEMO_REALM_ID,
+                "realm_id": demo_realm_id(),
                 "kind": "list",
                 "title": "Roadmap",
                 "created_by": fixture_actor_core_id("did:web:alice.example"),
@@ -181,7 +181,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         "ak.strand.create",
         serde_json::json!({
             "object": {
-                "realm_id": DEMO_REALM_ID,
+                "realm_id": demo_realm_id(),
                 "metadata": { "title": "Launch strand" },
                 "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
@@ -300,7 +300,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         "ak.morph.create",
         serde_json::json!({
             "object": {
-                "realm_id": DEMO_REALM_ID,
+                "realm_id": demo_realm_id(),
                 "morph_kind": "task",
                 "metadata": { "title": "Backfill" },
                 "created_by": fixture_actor_core_id("did:web:alice.example"),
@@ -390,7 +390,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
         .test_persistence()
         .realm_meta()
         .put(
-            DEMO_REALM_ID,
+            demo_realm_id(),
             &RealmMetaRecord {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
@@ -428,7 +428,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
                     uuid::Uuid::now_v7()
                 ))
                 .unwrap(),
-                arkret_identifiers::RealmId::new(DEMO_REALM_ID).unwrap(),
+                arkret_identifiers::RealmId::new(demo_realm_id()).unwrap(),
                 arkret_wire::EventKind::RealmPolicyBundle.as_str(),
                 serde_json::json!({
                     "policy_revision": 1,
@@ -445,7 +445,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
         "ak.strand.create",
         serde_json::json!({
             "object": {
-                "realm_id": DEMO_REALM_ID,
+                "realm_id": demo_realm_id(),
                 "metadata": { "title": "Encrypted realm metadata title" },
                 "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
@@ -514,7 +514,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         "ak.strand.create",
         serde_json::json!({
             "object": {
-                "realm_id": DEMO_REALM_ID,
+                "realm_id": demo_realm_id(),
                 "metadata": { "title": "Implement login", "fields": { "status": "todo" } },
                 "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
@@ -600,7 +600,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         "ak.strand.create",
         serde_json::json!({
             "object": {
-                "realm_id": DEMO_REALM_ID,
+                "realm_id": demo_realm_id(),
                 "metadata": { "title": "SEV-2 checkout outage", "fields": { "status": "investigating" } },
                 "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
@@ -664,7 +664,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(first_transition["actor"], audit_actor.as_str());
     assert_eq!(first_transition["strand_id"], task_strand_id);
     assert_eq!(first_transition["incident_id"], task_strand_id);
-    assert_eq!(first_transition["realm_id"], DEMO_REALM_ID);
+    assert_eq!(first_transition["realm_id"], demo_realm_id());
     assert_eq!(first_transition["from"], "todo");
     assert_eq!(first_transition["to"], "in_progress");
     assert_eq!(
@@ -678,7 +678,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(second_transition["actor"], audit_actor.as_str());
     assert_eq!(second_transition["strand_id"], task_strand_id);
     assert_eq!(second_transition["incident_id"], task_strand_id);
-    assert_eq!(second_transition["realm_id"], DEMO_REALM_ID);
+    assert_eq!(second_transition["realm_id"], demo_realm_id());
     assert_eq!(second_transition["from"], "in_progress");
     assert_eq!(second_transition["to"], "done");
     assert_eq!(
@@ -704,7 +704,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         "ak.strand.create",
         serde_json::json!({
             "object": {
-                "realm_id": DEMO_REALM_ID,
+                "realm_id": demo_realm_id(),
                 "metadata": { "title": "Sensitive strand" },
                 "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
@@ -728,9 +728,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         "ak:event:AelSfWbyB8v5LgV4tW6Voo4vol9OLm5vk2JL25-09qH5",
         2,
         serde_json::json!({
-            "target_event_id": create_strand_event_id,
-            "object_ref": strand_id,
-            "by": "did:web:alice.example",
+            "target_ref": strand_id,
             "reason": "policy",
         }),
         vec![create_strand_event_id.as_str()],
@@ -753,7 +751,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         assert_eq!(
             strand.state.as_str(),
             "redacted",
-            "Strand MUST be in Redacted terminal state after ak.redaction with object_ref"
+            "Strand MUST be in Redacted terminal state after ak.redaction with target_ref"
         );
     }
 
@@ -762,8 +760,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         "ak:event:Af_iozNXHubayuuNSBTFtswzAG4pYMhCPxsig0BaqpcJ",
         3,
         serde_json::json!({
-            "target_event_id": create_strand_event_id,
-            "object_ref": strand_id,
+            "target_ref": strand_id,
         }),
         vec![redact1_event_id.as_str()],
     );
@@ -784,7 +781,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         "ak.morph.create",
         serde_json::json!({
             "object": {
-                "realm_id": DEMO_REALM_ID,
+                "realm_id": demo_realm_id(),
                 "morph_kind": "task",
                 "metadata": { "title": "Sensitive task" },
                 "created_by": fixture_actor_core_id("did:web:alice.example"),
@@ -808,8 +805,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         "ak:event:AWdTHwE9vmQuc2JFQa19-QCQN3SOZO0jtz0V_9XHBaEm",
         4,
         serde_json::json!({
-            "target_event_id": create_morph_event_id,
-            "object_ref": morph_id,
+            "target_ref": morph_id,
         }),
         vec![create_morph_event_id.as_str()],
     );
@@ -834,8 +830,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         "ak:event:AVkZqRN5bQRdfamwQE6j990HnY7y06adtMhPMaxVAAyV",
         5,
         serde_json::json!({
-            "target_event_id": create_morph_event_id,
-            "object_ref": morph_id,
+            "target_ref": morph_id,
         }),
         vec![morph_redact_event_id.as_str()],
     );
@@ -863,7 +858,7 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived() {
         "ak.strand.create",
         serde_json::json!({
             "object": {
-                "realm_id": DEMO_REALM_ID,
+                "realm_id": demo_realm_id(),
                 "metadata": { "title": "Launch strand" },
                 "created_by": fixture_actor_core_id("did:web:alice.example"),
             }

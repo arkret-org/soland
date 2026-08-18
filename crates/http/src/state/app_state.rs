@@ -245,23 +245,127 @@ pub struct AppStateRuntime {
     pub storage_mode: &'static str,
 }
 
-/// Realm identity derived from the canonical deterministic development
-/// genesis fixture. Keep this single source shared with integration fixtures;
-/// changing the genesis payload must update the derived identity atomically.
+/// Development service DID. Both the demo Realm's notary and its genesis
+/// `principal_server_id` are this deployment identity.
+pub const DEVELOPMENT_SERVICE_DID: &str =
+    "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
+/// Founding principal of the development demo Realm.
+pub const DEVELOPMENT_DEMO_SUBJECT_DID: &str = "did:web:alice.example";
+const DEVELOPMENT_DEMO_TRUST_DOMAIN: &str = "ak:trust_domain:soland.test";
+const DEVELOPMENT_DEMO_GENESIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
+const DEVELOPMENT_DEMO_GENESIS_CREATED_AT: &str = "2026-01-01T00:00:00Z";
+const DEVELOPMENT_DEMO_NOTARY_RECOVERY_MEMBER: &str = "ak:did_core:web:recovery.notary.example";
+const DEVELOPMENT_DEMO_NOTARY_RECOVERY_ORGANIZATION: &str =
+    "ak:did_core:web:recovery.organization.example";
+
+fn development_service_core_id() -> DidCoreId {
+    DidCoreId::from(
+        arkret_wire::project_full_id_to_core_id(
+            &DidFullId::new(DEVELOPMENT_SERVICE_DID.to_owned()).expect("development service DID"),
+        )
+        .expect("development service projection"),
+    )
+}
+
+/// Canonical `ak.realm.create` payload for a deterministic Realm genesis.
 ///
-/// This value is content-derived (`retype(genesis_event.event_id)`), so it moves
+/// `realm_genesis.notary` requires non-empty `recovery_members` and
+/// `recovery_controller_organizations`, and the reducer requires at least one
+/// recovery controller organization to differ from `controller_organization` —
+/// a single-organization recovery setup is exactly what that rule rejects.
+#[must_use]
+pub fn realm_genesis_payload(
+    subject: &str,
+    notary_actor_id: &DidCoreId,
+    trust_domain: &str,
+) -> Value {
+    let controller_organization = arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(subject.to_owned()).expect("Realm genesis controller DID"),
+    )
+    .expect("Realm genesis controller core id");
+    serde_json::json!({
+        "object": {
+            "schema": "ak.schema.realm_genesis.v1",
+            "purpose": "collaboration",
+            "genesis_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
+            "trust_domain": trust_domain,
+            "schema_refs": ["ak.schema.realm.v1"],
+            "encryption_profile": "none",
+            "security_class": "standard",
+            "notary_profile": "single_did",
+            "digest_algorithm": "sha256",
+            "capability_action_registry_digest":
+                arkret_policy::current_capability_action_registry_digest()
+                    .expect("capability action registry digest"),
+            "notary": {
+                "kind": "single_did",
+                "actor_id": notary_actor_id,
+                "recovery_members": [DEVELOPMENT_DEMO_NOTARY_RECOVERY_MEMBER],
+                "controller_organization": controller_organization,
+                "recovery_controller_organizations": [DEVELOPMENT_DEMO_NOTARY_RECOVERY_ORGANIZATION]
+            }
+        }
+    })
+}
+
+/// The development demo Realm's canonical genesis Event.
+///
+/// Every input is a development constant, so the Event — and therefore the Realm
+/// id it derives — is fully determined by this function plus the current
+/// `arkret-spec` artifacts.
+#[must_use]
+pub fn development_demo_genesis_event() -> arkret_wire::Event {
+    let created_at = chrono::DateTime::parse_from_rfc3339(DEVELOPMENT_DEMO_GENESIS_CREATED_AT)
+        .expect("development demo genesis timestamp")
+        .with_timezone(&chrono::Utc);
+    let service_id = development_service_core_id();
+    let payload: arkret_models_collaboration::events_payloads::RealmCreatePayload =
+        serde_json::from_value(realm_genesis_payload(
+            DEVELOPMENT_DEMO_SUBJECT_DID,
+            &service_id,
+            DEVELOPMENT_DEMO_TRUST_DOMAIN,
+        ))
+        .expect("development demo genesis payload");
+    arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::RealmCreate>::new(
+        arkret_wire::ScopeRef::RealmGenesis,
+        DidCoreId::from(
+            arkret_wire::project_full_id_to_core_id(
+                &DidFullId::new(DEVELOPMENT_DEMO_SUBJECT_DID.to_owned())
+                    .expect("development demo subject DID"),
+            )
+            .expect("development demo subject projection"),
+        ),
+        service_id,
+        payload,
+    )
+    .expect("development demo genesis draft")
+    .author(
+        0,
+        arkret_identifiers::Hlc::new(DEVELOPMENT_DEMO_GENESIS_HLC)
+            .expect("development demo genesis HLC"),
+        created_at,
+    )
+    .expect("development demo genesis Event")
+}
+
+/// Realm identity of the development demo Realm.
+///
+/// This is content-derived (`retype(genesis_event.event_id)`), so it moves
 /// whenever anything inside the genesis Event's canonical bytes moves — including
 /// an `arkret-spec` schema or registry change that has nothing to do with the demo
-/// data. A hard-coded copy therefore goes stale on its own; the durable fix is to
-/// derive it at startup from the same fixture the seeder submits.
-pub const DEVELOPMENT_DEMO_REALM_ID: &str = "ak:realm:AUOsgR6ZlDDdz8VpbbRCR_tPpgiVr_m6Wo9q6R6HevVT";
+/// data (the payload embeds `capability_action_registry_digest`). It is therefore
+/// **derived**, never copied: a hard-coded literal went stale three times.
+#[must_use]
+pub fn development_demo_realm_id() -> RealmId {
+    RealmId::from_event_id(&development_demo_genesis_event().event_id)
+}
 
 pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
     let mut realms = RealmDirectoryIndex::new();
     if config.seed_demo_data {
-        let demo_realm_id = DEVELOPMENT_DEMO_REALM_ID;
         let mut demo = RealmDirectoryEntry::new(
-            RealmId::new(demo_realm_id.to_owned()).expect("valid demo Realm id"),
+            development_demo_realm_id(),
             "Arkret Demo Realm",
             // Seeded locally, not projected from an Event.
             soland_services::events::DirectoryProvenance::LocalOnly,
@@ -2161,7 +2265,7 @@ mod membership_hydration_tests {
         store
             .mls_key_packages()
             .put(&MlsKeyPackageRow {
-                id: "ak:mls_keypackage:01".to_owned(),
+                id: "keypackage-01".to_owned(),
                 keypackage_ref: "sha256:ref".to_owned(),
                 keypackage_digest: "sha256:digest".to_owned(),
                 actor_id: "did:web:bob.example".to_owned(),
@@ -2189,7 +2293,7 @@ mod membership_hydration_tests {
         store
             .mls_key_packages()
             .put(&MlsKeyPackageRow {
-                id: "ak:mls_keypackage:retired".to_owned(),
+                id: "keypackage-retired".to_owned(),
                 keypackage_ref: "sha256:retired-ref".to_owned(),
                 keypackage_digest: "sha256:retired-digest".to_owned(),
                 actor_id: "did:web:bob.example".to_owned(),
@@ -2241,14 +2345,14 @@ mod membership_hydration_tests {
         // KeyPackage projection is rebuilt → the claim selector can find it.
         let kp = proj
             .mls_key_packages
-            .get("ak:mls_keypackage:01")
+            .get("keypackage-01")
             .expect("keypackage rehydrated");
         assert_eq!(kp.actor_id, "did:web:bob.example");
         assert!(kp.last_resort);
         assert!(kp.claimed_by.is_none());
         let retired = proj
             .mls_key_packages
-            .get("ak:mls_keypackage:retired")
+            .get("keypackage-retired")
             .expect("retired keypackage rehydrated");
         assert_eq!(retired.claimed_by.as_deref(), Some("retired"));
         assert!(retired.claimed_at.is_none());

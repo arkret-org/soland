@@ -94,6 +94,10 @@ fn derive_push_target_tag(
     Ok(URL_SAFE_NO_PAD.encode(tag))
 }
 
+/// The registration path composes this inline because it also needs the bare
+/// tag for `push_registration_id`. Only the derivation tests want the wire
+/// spelling on its own, so this carries their gate rather than an allow.
+#[cfg(test)]
 fn derive_push_target_id(
     root_key: &[u8; 32],
     recipient_service_id: &str,

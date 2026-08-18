@@ -59,27 +59,24 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "message revise",
             kind: arkret_wire::EventKind::MessageRevise,
-            payload: json!({"target_ref": "ak:event:ASVxAZxIUYM__aicHMtZdYI9scFpXAK99QLzn2_HB7oR", "content": {"kind": "ak.content.text", "body": "edited"}}),
+            payload: json!({"message_id": "ak:message:ASVxAZxIUYM__aicHMtZdYI9scFpXAK99QLzn2_HB7oR", "content": {"kind": "ak.content.text", "body": "edited"}}),
             valid: true,
         },
         OperationVector {
             name: "message redact",
             kind: arkret_wire::EventKind::MessageRedact,
-            payload: json!({"target_event_id": "ak:event:ASVxAZxIUYM__aicHMtZdYI9scFpXAK99QLzn2_HB7oR"}),
+            payload: json!({"message_id": "ak:message:ASVxAZxIUYM__aicHMtZdYI9scFpXAK99QLzn2_HB7oR"}),
             valid: true,
         },
         OperationVector {
             name: "generic redaction",
             kind: arkret_wire::EventKind::Redaction,
             // ak.redaction validates its payload against
-            // cross_object_redaction_payload (anyOf target_ref | event_id |
-            // target_event_id, with additionalProperties=false). Its target set
+            // cross_object_redaction_payload: target_ref is the single required
+            // target carrier, additionalProperties=false. Its target set
             // excludes Message: message_id is not a member and target_ref cannot
             // spell ak:message:, because Message reaches state=redacted only
             // through ak.message.redact (common-fields.md 5.1 Message exemption).
-            // The target pointer `redacts` is an event-ENVELOPE field
-            // (event-envelope.schema.json), not part of the operation payload, so
-            // the payload carries the target via target_ref.
             payload: json!({"target_ref": "ak:event:ASVxAZxIUYM__aicHMtZdYI9scFpXAK99QLzn2_HB7oR"}),
             valid: true,
         },
@@ -414,7 +411,13 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                     "ak.profile.applet_service.v1"
                 ],
                 "registration_epoch": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "webhook_auth": {"key_ref": "did:web:applet.example"},
+                // applet-package.schema.json#/$defs/webhook_auth is closed and
+                // requires kind + key_ref + accepted_signature_algorithms.
+                "webhook_auth": {
+                    "kind": "http_message_signature",
+                    "key_ref": "did:web:applet.example#server-key-1",
+                    "accepted_signature_algorithms": ["ed25519"]
+                },
                 "proof": {"signature": "c2ln"},
                 "created_at": "2026-05-20T00:00:00.000Z",
             }),
@@ -440,7 +443,13 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                     "ak.profile.applet_service.v1"
                 ],
                 "registration_epoch": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "webhook_auth": {"key_ref": "did:web:applet.example"},
+                // applet-package.schema.json#/$defs/webhook_auth is closed and
+                // requires kind + key_ref + accepted_signature_algorithms.
+                "webhook_auth": {
+                    "kind": "http_message_signature",
+                    "key_ref": "did:web:applet.example#server-key-1",
+                    "accepted_signature_algorithms": ["ed25519"]
+                },
                 "proof": {"signature": "c2ln"},
                 "created_at": "2026-05-20T00:00:00.000Z",
             }),

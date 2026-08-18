@@ -189,7 +189,7 @@ async fn seed_agent_session_with_scopes(state: &AppState, token: &str, scopes: &
                 scope_details: serde_json::json!({
                     "controller_id": "did:web:alice.example",
                     "resources": {
-                        "realm_refs": [DEMO_REALM_ID],
+                        "realm_refs": [demo_realm_id()],
                         "strand_refs": [],
                     },
                     "constraints": {
@@ -283,7 +283,8 @@ async fn agent_session_without_stream_scope_cannot_subscribe_events() {
     seed_agent_session_with_scopes(&state, token, &["ak.self.events.read.scan"]).await;
 
     let mut response = TestClient::get(format!(
-        "http://server/_arkret/self/events/subscribe?realms={DEMO_REALM_ID}&catchup=false&max_duration_ms=100",
+        "http://server/_arkret/self/events/subscribe?realms={}&catchup=false&max_duration_ms=100",
+        demo_realm_id(),
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state))
@@ -301,7 +302,7 @@ async fn agent_session_without_query_scope_cannot_scan_events() {
     seed_agent_session_with_scopes(&state, token, &["ak.self.events.stream.subscribe"]).await;
 
     let mut response = TestClient::query("http://server/_arkret/self/events")
-        .json(&serde_json::json!({"realms": [DEMO_REALM_ID]}))
+        .json(&serde_json::json!({"realms": [demo_realm_id()]}))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state))
         .await;
@@ -406,7 +407,8 @@ async fn memory_account_subscribe_cursor_handle_does_not_survive_app_state_rebui
 async fn events_describe_and_single_event_submit_work() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    authorize_test_plaintext_message_service(&state, "did:web:alice.example", DEMO_REALM_ID).await;
+    authorize_test_plaintext_message_service(&state, "did:web:alice.example", demo_realm_id())
+        .await;
     // `signed_event_envelope` authors a DataEvent whose `seal_ref` is the demo
     // Realm's basis Seal, so the genesis unit that Seal covers has to be
     // accepted before the submit (`event-auth-state-resolution.md` §4.3).
@@ -439,7 +441,7 @@ async fn events_describe_and_single_event_submit_work() {
         &state,
         &token,
         "did:web:alice.example",
-        DEMO_REALM_ID,
+        demo_realm_id(),
         &mut first,
     )
     .await;
@@ -506,7 +508,7 @@ async fn events_describe_and_single_event_submit_work() {
         fetched["event"]["proofs"][0]["event_digest"],
         first["proofs"][0]["event_digest"]
     );
-    assert_eq!(fetched["visibility"]["realm_id"], DEMO_REALM_ID);
+    assert_eq!(fetched["visibility"]["realm_id"], demo_realm_id());
 
     let mut second = signed_event_envelope(
         "ak:event:AanwG47_5YIVZhlCrSwi8avR_TKxfhlP_D8oZhAqjlMe",
@@ -517,7 +519,7 @@ async fn events_describe_and_single_event_submit_work() {
         &state,
         &token,
         "did:web:alice.example",
-        DEMO_REALM_ID,
+        demo_realm_id(),
         &mut second,
     )
     .await;
@@ -539,7 +541,7 @@ async fn events_describe_and_single_event_submit_work() {
     let artifact_kind_payload = serde_json::json!({
         "object": {
             "schema": "ak.schema.strand.v1",
-            "realm_id": DEMO_REALM_ID,
+            "realm_id": demo_realm_id(),
             "metadata": { "title": "Onboarding strand" },
             "stage": "draft",
             "tracks": {
@@ -557,7 +559,7 @@ async fn events_describe_and_single_event_submit_work() {
         "ak.strand.create",
         "did:web:alice.example",
         "01904100-0000-7000-8000-a11ce0000001",
-        DEMO_REALM_ID,
+        demo_realm_id(),
         2,
         Vec::new(),
         artifact_kind_payload,
@@ -566,7 +568,7 @@ async fn events_describe_and_single_event_submit_work() {
         &state,
         &token,
         "did:web:alice.example",
-        DEMO_REALM_ID,
+        demo_realm_id(),
         &mut artifact_kind_event,
     )
     .await;
@@ -697,7 +699,7 @@ async fn events_describe_and_single_event_submit_work() {
     let demo_frontier = frontier
         .realms
         .iter()
-        .find(|frontier| frontier.realm_id.as_str() == DEMO_REALM_ID)
+        .find(|frontier| frontier.realm_id.as_str() == demo_realm_id())
         .expect("actor aggregate includes demo Realm frontier");
     assert_eq!(demo_frontier.next_actor_seq, 11);
     assert_eq!(
@@ -1882,7 +1884,7 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
     // an empty filter, which would bypass this case.
     let mut changed_url =
         reqwest::Url::parse("http://server/_arkret/self/account/subscribe").unwrap();
-    let changed_filter = serde_json::json!({"realms": [DEMO_REALM_ID]}).to_string();
+    let changed_filter = serde_json::json!({"realms": [demo_realm_id()]}).to_string();
     changed_url.query_pairs_mut().extend_pairs([
         ("catchup", "true"),
         ("after", cursor),
@@ -2032,7 +2034,7 @@ async fn incremental_sync_waits_30_seconds_then_returns_frontier() {
     let baseline = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
     let cursor = baseline["cursor"].as_str().unwrap();
     assert!(
-        baseline["realms"][DEMO_REALM_ID].is_object(),
+        baseline["realms"][demo_realm_id()].is_object(),
         "full sync MUST include the realm baseline: {baseline}"
     );
 
@@ -2135,7 +2137,7 @@ async fn incremental_sync_emits_realm_with_new_timeline_event() {
 
     let message = persist_test_message(
         &state,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         "did:web:alice.example",
         "incremental wake-up",
     )
@@ -2147,7 +2149,7 @@ async fn incremental_sync_emits_realm_with_new_timeline_event() {
         &format!("catchup=true&after={cursor}"),
     )
     .await;
-    let timeline = delta["realms"][DEMO_REALM_ID]["timeline"]["events"]
+    let timeline = delta["realms"][demo_realm_id()]["timeline"]["events"]
         .as_array()
         .unwrap_or_else(|| panic!("realm should reappear with timeline events: {delta}"));
     assert!(
@@ -2172,18 +2174,18 @@ async fn account_subscribe_waits_for_broadcast_before_returning_incremental_batc
         tokio::time::sleep(Duration::from_millis(150)).await;
         let message = persist_test_message(
             &waker_state,
-            DEMO_REALM_ID,
+            demo_realm_id(),
             "did:web:alice.example",
             "wake up the stream",
         )
         .await;
         let _ = waker_state.test_publish_event_notification(EventNotification::event(
-            DEMO_REALM_ID.to_owned(),
+            demo_realm_id().to_owned(),
             message.event_id.clone(),
             serde_json::json!({
                 "kind": "ak.message.create",
                 "event_id": message.event_id,
-                "realm_id": DEMO_REALM_ID,
+                "realm_id": demo_realm_id(),
             }),
         ));
         message
@@ -2213,7 +2215,7 @@ async fn account_subscribe_waits_for_broadcast_before_returning_incremental_batc
         elapsed < Duration::from_secs(3),
         "broadcast should wake the long poll well before its 30s deadline: {elapsed:?}"
     );
-    let timeline = woken["realms"][DEMO_REALM_ID]["timeline"]["events"]
+    let timeline = woken["realms"][demo_realm_id()]["timeline"]["events"]
         .as_array()
         .unwrap_or_else(|| panic!("woken delta MUST include the realm: {woken}"));
     assert!(
@@ -2231,7 +2233,7 @@ async fn account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnost
     let actor_seq = 900_000;
     let left = persist_test_message_with_actor_seq(
         &state,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         "did:web:alice.example",
         "ordered-log left",
         actor_seq,
@@ -2239,7 +2241,7 @@ async fn account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnost
     .await;
     let right = persist_test_message_with_actor_seq(
         &state,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         "did:web:alice.example",
         "ordered-log right",
         actor_seq,
@@ -2247,7 +2249,7 @@ async fn account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnost
     .await;
     let normal = persist_test_message_with_actor_seq(
         &state,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         "did:web:alice.example",
         "ordered-log normal",
         actor_seq + 1,
@@ -2255,7 +2257,7 @@ async fn account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnost
     .await;
 
     let frame = account_subscribe_frame(state, Some(&alice), "catchup=true").await;
-    let timeline = &frame["realms"][DEMO_REALM_ID]["timeline"];
+    let timeline = &frame["realms"][demo_realm_id()]["timeline"];
     let event_ids = timeline["events"]
         .as_array()
         .unwrap()

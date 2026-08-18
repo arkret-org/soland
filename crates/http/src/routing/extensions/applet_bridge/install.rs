@@ -1009,7 +1009,7 @@ pub(super) fn approval_actions_for_install(approval: &AppletApprovalRequest) -> 
         .approve_actions
         .iter()
         .filter(|action| {
-            approval.ghost_actors_allowed
+            !matches!(approval.ghost_actor_mode, AppletGhostActorMode::Disallowed)
                 || action.as_str() != CapabilityActionId::APPLET_GHOST_PROVISION
         })
         .cloned()

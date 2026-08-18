@@ -9,6 +9,9 @@ const RELATION: &str = "ak:relation:AdGtCyltkLGkKlrj8jazJOSalIEWRmqDqr2ikq7IOWcL
 /// so the fixture pins the Event token instead of the object id.
 const RELATION_CREATE_EVENT: &str = "ak:event:AdGtCyltkLGkKlrj8jazJOSalIEWRmqDqr2ikq7IOWcL";
 const EVENT: &str = "ak:event:AUiaY2u0jL7j0v1YowBxmn8e4QEpBDWA7QtOlNdhtZ1N";
+// `ak.message.revise` addresses the Message through its single registered
+// carrier `payload.message_id`, which retypes the same create-Event token.
+const MESSAGE: &str = "ak:message:AUiaY2u0jL7j0v1YowBxmn8e4QEpBDWA7QtOlNdhtZ1N";
 
 fn space_create() -> Operation {
     make_operation(
@@ -164,7 +167,7 @@ fn message_revision_pending_replays_after_original_event() {
         arkret_wire::EventKind::MessageRevise,
         REALM,
         serde_json::json!({
-            "target_ref": EVENT,
+            "message_id": MESSAGE,
             "content": { "kind": "ak.content.text", "body": "revised" }
         }),
     );
@@ -172,7 +175,9 @@ fn message_revision_pending_replays_after_original_event() {
 
     assert!(matches!(
         state.apply(&revise, &hlc),
-        ProjectionEffect::PendingReplayQueued { ref target_ref, .. } if target_ref == EVENT
+        // The pending key is the payload's registered carrier, i.e. the typed
+        // Message id, not the create Event id.
+        ProjectionEffect::PendingReplayQueued { ref target_ref, .. } if target_ref == MESSAGE
     ));
 
     let create = make_operation(
@@ -203,7 +208,6 @@ fn object_redaction_pending_replays_after_object_create() {
         arkret_wire::EventKind::Redaction,
         REALM,
         serde_json::json!({
-            "target_event_id": EVENT,
             "target_ref": STRAND,
             "sender": "ak:did_core:web:alice.example"
         }),

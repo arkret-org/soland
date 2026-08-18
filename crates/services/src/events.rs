@@ -80,6 +80,8 @@ pub struct StrandProjectionRecord {
     pub tracks: BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
     pub title: String,
     pub summary: Option<String>,
+    /// Canonical content slot; exactly one of the two is present on an active
+    /// object and both are absent once `state=redacted` (common-fields.md 5.2).
     pub content: Option<Value>,
     pub encrypted_content: Option<Value>,
     pub state: String,
@@ -103,6 +105,10 @@ pub struct MorphProjectionRecord {
     pub schema_refs: Vec<String>,
     pub facets: BTreeMap<String, BTreeMap<String, Value>>,
     pub versions: Vec<soland_domain::reducer::DocumentVersionProjection>,
+    /// Canonical content slot; exactly one of the two is present on an active
+    /// object and both are absent once `state=redacted` (common-fields.md 5.2).
+    pub content: Option<serde_json::Value>,
+    pub encrypted_content: Option<serde_json::Value>,
     pub state: String,
     pub state_changed_at: Option<DateTime<Utc>>,
     pub created_by: String,
@@ -599,11 +605,9 @@ impl<'a> CanonicalCausalGraph<'a> {
         for (field, field_value) in object {
             if matches!(
                 field.as_str(),
-                "replies_to"
-                    | "revision_of"
-                    | "target_event_id"
-                    | "target_message_id"
-                    | "in_reply_to"
+                // Registered Message-target carriers: `message_redact_payload`
+                // and `message_revise_payload` both spell it `message_id`.
+                "message_id"
             ) || (field == "target_ref"
                 && field_value
                     .as_str()
@@ -2234,13 +2238,17 @@ mod tests {
             }),
         );
         let by_digest = causal_record(2, 2, &[], &[1], serde_json::json!({}));
+        // Replies are Relations, not a payload member: `replies_to` is not
+        // registered anywhere. The registered cross-object carrier is
+        // `target_ref`, which resolves as a predecessor edge when it names a
+        // Message or Event.
         let reply = causal_record(
             3,
             3,
             &[],
             &[],
             serde_json::json!({
-                "replies_to": "ak:message:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5"
+                "target_ref": "ak:message:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5"
             }),
         );
         let records = vec![first, by_digest, reply];

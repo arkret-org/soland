@@ -17,8 +17,7 @@
 //! The label is the fixed ASCII `scheme` value (verbatim bytes), followed by a
 //! single `0x00`, followed by the canonical JSON of **only** the seven
 //! authoritative fields. `scheme` / `issuer_kid` / `issued_at` are unsigned
-//! metadata and MUST NOT enter the signing input. `service_signature.sig` signs
-//! the identical bytes.
+//! metadata and MUST NOT enter the signing input.
 
 use std::collections::BTreeSet;
 

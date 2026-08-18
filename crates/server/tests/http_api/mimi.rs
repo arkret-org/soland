@@ -252,8 +252,8 @@ fn identifier_commitment(identifier: &str) -> String {
 async fn mimi_provider_facade_contracts_work() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    seed_test_realm_basis_seal(&state, DEMO_REALM_ID, state.service_full_id().as_str()).await;
-    add_test_realm_member(&state, DEMO_REALM_ID, MIMI_SOURCE_SERVICE_FULL_ID);
+    seed_test_realm_basis_seal(&state, demo_realm_id(), state.service_full_id().as_str()).await;
+    add_test_realm_member(&state, demo_realm_id(), MIMI_SOURCE_SERVICE_FULL_ID);
     let service = app_from_state(state.clone());
 
     let well_known: Value = TestClient::get("http://server/.well-known/mimi-protocol-directory")
@@ -298,7 +298,7 @@ async fn mimi_provider_facade_contracts_work() {
         "strand_id": MIMI_TEST_STRAND_ID,
         "device_id": MIMI_TEST_DEVICE_ID,
         "mimi_room_uri": mimi_room_uri("01JSMIMI"),
-        "realm_id": DEMO_REALM_ID,
+        "realm_id": demo_realm_id(),
         "mls_group_id": "mimi-group-01JSMIMI",
         "epoch": 1,
     });
@@ -334,7 +334,7 @@ async fn mimi_provider_facade_contracts_work() {
         &state,
         &token,
         room_id,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         group_id,
         "hub",
         "accepted",
@@ -422,7 +422,7 @@ async fn mimi_provider_facade_contracts_work() {
     assert_eq!(identifier["has_more"], false);
 
     let message_body = mimi_submit_body(
-        DEMO_REALM_ID,
+        demo_realm_id(),
         group_id,
         1,
         "did:web:alice.example",
@@ -475,8 +475,8 @@ async fn mimi_provider_facade_contracts_work() {
     let report_body = json!({
         "strand_id": MIMI_TEST_STRAND_ID,
         "mimi_room_uri": room_uri,
-        "realm_id": DEMO_REALM_ID,
-        "target_ref": DEMO_REALM_ID,
+        "realm_id": demo_realm_id(),
+        "target_ref": demo_realm_id(),
         "reporter": "did:web:alice.example",
         "abuse_reason_code": "spam",
     });
@@ -500,7 +500,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
-    let demo_realm = DEMO_REALM_ID;
+    let demo_realm = demo_realm_id();
     let custom_realm_id = soland_test_support::cba_basis::seed_event_derived_realm_genesis_event(
         &state,
         state.service_full_id().as_str(),
@@ -802,7 +802,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
-    let realm_id = DEMO_REALM_ID;
+    let realm_id = demo_realm_id();
     seed_test_realm_basis_seal(&state, realm_id, state.service_full_id().as_str()).await;
     add_test_realm_member(&state, realm_id, MIMI_SOURCE_SERVICE_FULL_ID);
     let room_id = "01JSMIMI-P75-POLICY";

@@ -32,10 +32,13 @@ const SDK_VALIDATED_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
 // `ak.agent.sidecar_projection.v1` is intentionally absent: the exchange
 // projection is a controller-device-local fold cache and never registers an
 // account-data key surface (zh/models/sidecar.md §7.2.4).
+// `ak.agent.participation.v1` is intentionally absent: per-scope Agent
+// participation selection is Account-Authority-owned storage addressed by
+// `(agent_id, target_scope)` through `ak.self.agent.participation.resource.*`,
+// not an account-data key (zh/models/private-objects.md §4.1).
 const AGENT_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
     AccountDataKey::AGENT_DRAFT_V1,
     AccountDataKey::AGENT_SIDECAR_VIEW_STATE_V1,
-    AccountDataKey::AGENT_PARTICIPATION_V1,
 ];
 
 const FORBIDDEN_PLAINTEXT_FIELDS: &[&str] = &[
@@ -163,7 +166,6 @@ pub(crate) fn validate_encrypted_account_data_key(
     if let Some(rest) = account_data_key
         .strip_prefix(AccountDataKey::AGENT_DRAFT_V1)
         .or_else(|| account_data_key.strip_prefix(AccountDataKey::AGENT_SIDECAR_VIEW_STATE_V1))
-        .or_else(|| account_data_key.strip_prefix(AccountDataKey::AGENT_PARTICIPATION_V1))
     {
         return validate_agent_private_key_tail(rest);
     }

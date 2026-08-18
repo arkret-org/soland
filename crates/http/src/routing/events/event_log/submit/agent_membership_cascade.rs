@@ -1267,7 +1267,7 @@ async fn submit_federated_cascade_after_transport_validation(
             .as_ref()
             .unwrap_or(&submission.controller_transition.event.actor_id)
             .to_string(),
-        device_id: "federation-agent-membership-cascade".to_owned(),
+        device_id: String::new(),
         audience: state.service_id().clone(),
         session_public_key: None,
         agent_session: None,

@@ -274,7 +274,7 @@ pub fn apply_keypackage_publish(
 /// Payload shape:
 /// ```json
 /// {
-///   "keypackage_id": "ak:mls_keypackage:<uuid>",
+///   "keypackage_id": "keypackage-<uuid>",
 ///   "group_id":      "mls-group-<uuid>"
 /// }
 /// ```
@@ -379,7 +379,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
 ///   "recipient_principal_id": "ak:did_core:web:bob.example",
 ///   "recipient_device_id":    "ak:device:<uuid>",
 ///   "ciphertext":             "<base64url(opaque MLS Welcome)>",
-///   "keypackage_ref":         "ak:mls_keypackage:<uuid>"
+///   "keypackage_ref":         "keypackage-<uuid>"
 /// }
 /// ```
 ///

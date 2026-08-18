@@ -41,7 +41,7 @@ fn authored_call_id() -> String {
         arkret_wire::EventKind::CallCreate.as_str(),
         WEBRTC_ALICE,
         WEBRTC_ALICE_DEVICE_A,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         actor_seq,
         vec![],
         serde_json::json!({
@@ -603,7 +603,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     // realm membership alone is insufficient.
     grant_call_capability(
         &state,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         "did:web:alice.example",
         arkret_wire::CapabilityActionId::CallJoin.as_str(),
     );
@@ -613,7 +613,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
         .body(canonical_request_body(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
+            "realm_id": demo_realm_id(),
             "call_id": session_id,
             "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -643,7 +643,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     );
     assert_eq!(
         token_response["participant_binding"]["realm_id"],
-        DEMO_REALM_ID
+        demo_realm_id()
     );
     assert_eq!(token_response["participant_binding"]["call_id"], session_id);
     assert_eq!(
@@ -654,21 +654,22 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         token_response["participant_binding"]["focus_id"],
         "arkret_native_blue"
     );
-    // `media-service-binding.md` §3 — service_signature is a typed {kid, sig}
-    // object, not a packed `<kid>:<alg>:<sig>` string.
+    // `media-service-binding.md` §3 — participant_binding.sig is the single
+    // issuer assertion over the seven-tuple signing input; there is no parallel
+    // service_signature covering the same bytes.
     assert_eq!(
-        token_response["service_signature"]["kid"],
+        token_response["participant_binding"]["issuer_kid"],
         test_media_issuer_kid()
     );
     assert!(
-        token_response["service_signature"]["sig"]
+        token_response["participant_binding"]["sig"]
             .as_str()
             .is_some_and(|sig| !sig.is_empty()),
-        "service_signature.sig must be a non-empty base64url detached signature"
+        "participant_binding.sig must be a non-empty base64url detached signature"
     );
     assert!(
-        token_response["service_signature"].as_str().is_none(),
-        "service_signature must be an object, not a string"
+        token_response.get("service_signature").is_none(),
+        "the outcome MUST NOT carry a redundant second signature over the same bytes"
     );
 
     // §3 — participant_identity is a random `ak:rtc_participant:<uuidv7>` SFU
@@ -746,7 +747,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
         .body(canonical_request_body(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
+            "realm_id": demo_realm_id(),
             "call_id": session_id,
             "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -778,7 +779,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
     // owners receive ordinary Realm-level capabilities by default.
     let actor = "did:web:bob.example";
     let device_id = "ak:device:01904100-0000-7000-8000-b0b000000003";
-    add_test_realm_member(&state, DEMO_REALM_ID, actor);
+    add_test_realm_member(&state, demo_realm_id(), actor);
     let token = dev_token_for_device(state.clone(), actor, device_id, "Bob Phone").await;
     // A fresh call id with no durable call cell and no ephemeral session.
     let call_id = authored_call_id();
@@ -788,7 +789,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
         .body(canonical_request_body(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
+            "realm_id": demo_realm_id(),
             "call_id": call_id,
             "actor_id": fixture_actor_core_id(actor),
             "device_id": device_id,
@@ -806,7 +807,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
     // though no signaling session or durable call cell exists.
     grant_call_capability(
         &state,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         actor,
         arkret_wire::CapabilityActionId::CallJoin.as_str(),
     );
@@ -814,7 +815,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
         .body(canonical_request_body(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
+            "realm_id": demo_realm_id(),
             "call_id": call_id,
             "actor_id": fixture_actor_core_id(actor),
             "device_id": device_id,
@@ -836,10 +837,10 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
     );
     assert_eq!(issued["participant_binding"]["call_id"], call_id);
     assert!(
-        issued["service_signature"]["sig"]
+        issued["participant_binding"]["sig"]
             .as_str()
             .is_some_and(|sig| !sig.is_empty()),
-        "the issued token MUST carry a detached service signature"
+        "the issued token MUST carry a detached participant-binding signature"
     );
 }
 
@@ -853,7 +854,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     // mismatch errors (not capability_denied) are what surfaces.
     grant_call_capability(
         &state,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         "did:web:alice.example",
         arkret_wire::CapabilityActionId::CallJoin.as_str(),
     );
@@ -867,7 +868,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
         .body(canonical_request_body(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
+            "realm_id": demo_realm_id(),
             "call_id": session_id,
             "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -896,7 +897,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
         .body(canonical_request_body(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
+            "realm_id": demo_realm_id(),
             "call_id": session_id,
             "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -929,7 +930,7 @@ async fn rtc_media_token_rejects_non_member_actor() {
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .add_header("content-type", "application/json", true)
         .body(canonical_request_body(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
+            "realm_id": demo_realm_id(),
             "call_id": session_id,
             "actor_id": fixture_actor_core_id("did:web:bob.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-b0b000000001",
@@ -961,7 +962,7 @@ async fn rtc_media_token_requires_call_join_capability() {
     // does not require an ephemeral session to exist before token exchange).
     let session_id = add_member_and_fresh_call(&state, bob);
     let exchange_body = serde_json::json!({
-        "realm_id": DEMO_REALM_ID,
+        "realm_id": demo_realm_id(),
         "call_id": session_id,
         "actor_id": fixture_actor_core_id(bob),
         "device_id": bob_device,
@@ -983,7 +984,7 @@ async fn rtc_media_token_requires_call_join_capability() {
     // oldest-membership default).
     grant_call_capability(
         &state,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         bob,
         arkret_wire::CapabilityActionId::CallJoin.as_str(),
     );
@@ -1061,7 +1062,7 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     // §6 — token exchange requires ak.call.join.
     grant_call_capability(
         &state,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         "did:web:alice.example",
         arkret_wire::CapabilityActionId::CallJoin.as_str(),
     );
@@ -1073,7 +1074,7 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
         .body(canonical_request_body(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
+            "realm_id": demo_realm_id(),
             "call_id": session_id,
             "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -1112,7 +1113,7 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     let room = claims["video"]["room"].as_str().unwrap();
     assert!(room.starts_with("ak_call_"));
     assert!(!room.contains(&session_id));
-    let room_material = format!("{DEMO_REALM_ID}\0{session_id}\0livekit_green");
+    let room_material = format!("{}\0{session_id}\0livekit_green", demo_realm_id());
     let expected_room = format!(
         "ak_call_{}",
         &hex::encode(Sha256::digest(room_material.as_bytes()))[..16]
@@ -1146,7 +1147,8 @@ async fn admin_realm_media_service_renders_projected_cell() {
     let token = dev_token(state.clone()).await;
 
     let media_service: Value = TestClient::get(format!(
-        "http://server/_soland/admin/realms/{DEMO_REALM_ID}/media-service"
+        "http://server/_soland/admin/realms/{}/media-service",
+        demo_realm_id()
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -1154,7 +1156,7 @@ async fn admin_realm_media_service_renders_projected_cell() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(media_service["realm_id"], DEMO_REALM_ID);
+    assert_eq!(media_service["realm_id"], demo_realm_id());
     assert_eq!(media_service["service_id"], TEST_MEDIA_SERVICE_ID);
     let foci = media_service["foci"].as_array().unwrap();
     assert_eq!(foci.len(), 2);
@@ -1195,13 +1197,13 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
     let bob_core = fixture_actor_core_id(bob);
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
-    add_test_realm_member(&state, DEMO_REALM_ID, bob);
+    add_test_realm_member(&state, demo_realm_id(), bob);
 
     let session_id = authored_call_id();
     // §6 — bob needs ak.call.join to exchange a token before the ban.
     grant_call_capability(
         &state,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         bob,
         arkret_wire::CapabilityActionId::CallJoin.as_str(),
     );
@@ -1212,7 +1214,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .add_header("content-type", "application/json", true)
         .body(canonical_request_body(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
+            "realm_id": demo_realm_id(),
             "call_id": session_id,
             "actor_id": bob_core,
             "device_id": bob_device,
@@ -1245,7 +1247,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .add_header("content-type", "application/json", true)
         .body(canonical_request_body(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
+            "realm_id": demo_realm_id(),
             "call_id": session_id,
             "actor_id": bob_core,
             "device_id": bob_device,
@@ -1286,7 +1288,7 @@ fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action
 /// `ak.call.join` + the durable ban set. This mirrors the inkson flow, which
 /// redeems a media token before writing its first `ak.call.state` event.
 fn add_member_and_fresh_call(state: &AppState, member: &str) -> String {
-    add_test_realm_member(state, DEMO_REALM_ID, member);
+    add_test_realm_member(state, demo_realm_id(), member);
     authored_call_id()
 }
 
@@ -1338,7 +1340,7 @@ fn install_media_service_epoch(state: &AppState, media_service: Value) {
         .lock()
         .realm_null_subject_cells
         .insert(
-            (DEMO_REALM_ID.to_owned(), cell_id.as_str().to_owned()),
+            (demo_realm_id().to_owned(), cell_id.as_str().to_owned()),
             CellState::Value(media_service),
         );
 }
@@ -1432,9 +1434,9 @@ fn call_signal_at(
     signing_key: &SigningKey,
 ) -> arkret_wire::SignalEnvelope {
     signed_signal_envelope(
-        DEMO_REALM_ID,
+        demo_realm_id(),
         arkret_wire::ScopeRef::Realm {
-            realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap(),
+            realm_id: RealmId::new(demo_realm_id().to_owned()).unwrap(),
         },
         actor,
         device_id,
@@ -1461,13 +1463,13 @@ const WEBRTC_BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b000000001"
 #[tokio::test]
 async fn call_signal_relays_to_other_realm_member_and_filters_self_device() {
     let state = soland_test_support::app_state(test_config());
-    add_test_realm_member(&state, DEMO_REALM_ID, WEBRTC_BOB);
+    add_test_realm_member(&state, demo_realm_id(), WEBRTC_BOB);
     let (alice_token, alice_key) =
         seed_signal_sender_device(&state, WEBRTC_ALICE, WEBRTC_ALICE_DEVICE_A, "Alice Desktop")
             .await;
     let (bob_token, _bob_key) =
         seed_signal_sender_device(&state, WEBRTC_BOB, WEBRTC_BOB_DEVICE, "Bob Phone").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_ALICE).await;
+    let seal_ref = seed_signal_basis_seal(&state, demo_realm_id(), WEBRTC_ALICE).await;
 
     let invite = call_signal(
         WEBRTC_ALICE,
@@ -1519,7 +1521,7 @@ async fn call_signal_reaches_same_actor_other_device() {
             .await;
     let (token_b, _key_b) =
         seed_signal_sender_device(&state, WEBRTC_ALICE, device_b, "Alice Laptop").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_ALICE).await;
+    let seal_ref = seed_signal_basis_seal(&state, demo_realm_id(), WEBRTC_ALICE).await;
 
     let invite = call_signal(
         WEBRTC_ALICE,
@@ -1559,13 +1561,13 @@ async fn call_signal_reaches_same_actor_other_device() {
 #[tokio::test]
 async fn call_signal_not_delivered_after_ttl_expiry() {
     let state = soland_test_support::app_state(test_config());
-    add_test_realm_member(&state, DEMO_REALM_ID, WEBRTC_BOB);
+    add_test_realm_member(&state, demo_realm_id(), WEBRTC_BOB);
     let (alice_token, alice_key) =
         seed_signal_sender_device(&state, WEBRTC_ALICE, WEBRTC_ALICE_DEVICE_A, "Alice Desktop")
             .await;
     let (bob_token, _bob_key) =
         seed_signal_sender_device(&state, WEBRTC_BOB, WEBRTC_BOB_DEVICE, "Bob Phone").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_ALICE).await;
+    let seal_ref = seed_signal_basis_seal(&state, demo_realm_id(), WEBRTC_ALICE).await;
 
     let invite = call_signal(
         WEBRTC_ALICE,
@@ -1585,7 +1587,7 @@ async fn call_signal_not_delivered_after_ttl_expiry() {
         state
             .test_persistence()
             .signal_relay()
-            .list_for_realm(DEMO_REALM_ID)
+            .list_for_realm(demo_realm_id())
             .await
             .unwrap()
             .len(),
@@ -1606,7 +1608,7 @@ async fn call_signal_not_delivered_after_ttl_expiry() {
         .test_persistence()
         .signal_relay()
         .append(soland_storage::SignalRelayRecord {
-            realm_id: DEMO_REALM_ID.to_owned(),
+            realm_id: demo_realm_id().to_owned(),
             scope_ref: expired.scope_ref.clone(),
             sender_actor_id: expired.sender_actor_id.as_str().to_owned(),
             sender_device_id: expired.sender_device_id.as_str().to_owned(),
@@ -1677,7 +1679,7 @@ async fn call_signal_from_a_non_member_is_denied_and_never_relayed() {
     let outsider_device = "ak:device:01904100-0000-7000-8000-b0b000000004";
     let (token, signing_key) =
         seed_signal_sender_device(&state, WEBRTC_BOB, outsider_device, "Bob Phone").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_BOB).await;
+    let seal_ref = seed_signal_basis_seal(&state, demo_realm_id(), WEBRTC_BOB).await;
 
     let denied = post_canonical_signal(
         state.clone(),
@@ -1698,7 +1700,7 @@ async fn call_signal_from_a_non_member_is_denied_and_never_relayed() {
         state
             .test_persistence()
             .signal_relay()
-            .list_for_realm(DEMO_REALM_ID)
+            .list_for_realm(demo_realm_id())
             .await
             .unwrap()
             .is_empty()
@@ -1716,13 +1718,13 @@ async fn call_signal_from_a_non_member_is_denied_and_never_relayed() {
 #[tokio::test]
 async fn call_signal_resubscribe_does_not_redeliver() {
     let state = soland_test_support::app_state(test_config());
-    add_test_realm_member(&state, DEMO_REALM_ID, WEBRTC_BOB);
+    add_test_realm_member(&state, demo_realm_id(), WEBRTC_BOB);
     let (alice_token, alice_key) =
         seed_signal_sender_device(&state, WEBRTC_ALICE, WEBRTC_ALICE_DEVICE_A, "Alice Desktop")
             .await;
     let (bob_token, _bob_key) =
         seed_signal_sender_device(&state, WEBRTC_BOB, WEBRTC_BOB_DEVICE, "Bob Phone").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_ALICE).await;
+    let seal_ref = seed_signal_basis_seal(&state, demo_realm_id(), WEBRTC_ALICE).await;
 
     let invite = call_signal(
         WEBRTC_ALICE,

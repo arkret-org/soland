@@ -182,10 +182,10 @@ fn pin_rejects_redacted_message_target() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::Redaction,
+            arkret_wire::EventKind::MessageRedact,
             REALM_ID,
             serde_json::json!({
-                "target_event_id": MESSAGE_EVENT_ID,
+                "message_id": MESSAGE_EVENT_ID.replace("ak:event:", "ak:message:"),
                 "sender": "ak:did_core:web:alice.example"
             }),
         ),

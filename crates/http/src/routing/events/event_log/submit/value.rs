@@ -1804,7 +1804,7 @@ pub(super) async fn submit_event_value_with_context(
             crate::routing::identity::agents::sidecar::validate_sidecar_mls_event_binding(
                 state,
                 parsed.actor_id.as_str(),
-                parsed.device_id.as_str(),
+                parsed.device_id_str(),
                 operation,
             )
             .await
@@ -2376,61 +2376,60 @@ pub(super) async fn submit_event_value_with_context(
     } else {
         None
     };
-    let local_device_revocation_gate = if !session.token_hash.starts_with("federation:")
-        && !parsed.device_id.as_str().is_empty()
-    {
-        let producer_principal_id = envelope
-            .get("executed_by")
-            .and_then(Value::as_str)
-            .unwrap_or(parsed.actor_id.as_str());
-        let selector =
+    let local_device_revocation_gate =
+        if !session.token_hash.starts_with("federation:") && parsed.device_id.is_some() {
+            let producer_principal_id = envelope
+                .get("executed_by")
+                .and_then(Value::as_str)
+                .unwrap_or(parsed.actor_id.as_str());
+            let selector =
             crate::routing::identity::device_generation::active_device_revocation_gate_selector(
                 state,
                 producer_principal_id,
-                parsed.device_id.as_str(),
+                parsed.device_id_str(),
             )
             .await
             .map_err(local_device_authorization_error)?;
-        let gate_status = state
-            .persistence()
-            .device_revocation_gate_status(&selector)
-            .await
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("Event author revocation gate unavailable: {error}"),
-                )
-            })?;
-        match gate_status {
-            soland_storage::DeviceRevocationGateStatus::Active => {}
-            soland_storage::DeviceRevocationGateStatus::Pending { .. } => {
-                return Err(SubmitOneError::new(
-                    StatusCode::CONFLICT,
-                    "device_revocation_pending",
-                    "Event author device has a pending revocation proposal",
-                ));
+            let gate_status = state
+                .persistence()
+                .device_revocation_gate_status(&selector)
+                .await
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("Event author revocation gate unavailable: {error}"),
+                    )
+                })?;
+            match gate_status {
+                soland_storage::DeviceRevocationGateStatus::Active => {}
+                soland_storage::DeviceRevocationGateStatus::Pending { .. } => {
+                    return Err(SubmitOneError::new(
+                        StatusCode::CONFLICT,
+                        "device_revocation_pending",
+                        "Event author device has a pending revocation proposal",
+                    ));
+                }
+                soland_storage::DeviceRevocationGateStatus::Revoked { .. } => {
+                    return Err(SubmitOneError::new(
+                        StatusCode::CONFLICT,
+                        "device_revoked",
+                        "Event author device generation is revoked",
+                    ));
+                }
+                soland_storage::DeviceRevocationGateStatus::AuthorityMismatch
+                | soland_storage::DeviceRevocationGateStatus::GenerationMismatch => {
+                    return Err(SubmitOneError::new(
+                        StatusCode::PRECONDITION_FAILED,
+                        "device_unauthorized",
+                        "Event author device generation no longer matches accepted authority state",
+                    ));
+                }
             }
-            soland_storage::DeviceRevocationGateStatus::Revoked { .. } => {
-                return Err(SubmitOneError::new(
-                    StatusCode::CONFLICT,
-                    "device_revoked",
-                    "Event author device generation is revoked",
-                ));
-            }
-            soland_storage::DeviceRevocationGateStatus::AuthorityMismatch
-            | soland_storage::DeviceRevocationGateStatus::GenerationMismatch => {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    "device_unauthorized",
-                    "Event author device generation no longer matches accepted authority state",
-                ));
-            }
-        }
-        Some(selector)
-    } else {
-        None
-    };
+            Some(selector)
+        } else {
+            None
+        };
     let (envelope, accepted_canonical_bytes) =
         accepted_event_envelope(state, session, envelope, &parsed, received_at).await?;
     envelope_for_bootstrap = envelope.clone();
@@ -2876,7 +2875,7 @@ pub(super) async fn submit_event_value_with_context(
         crate::routing::events::projection::project_accepted_canonical_event_from_device(
             state,
             parsed.actor_id.as_str(),
-            parsed.device_id.as_str(),
+            parsed.device_id_str(),
             &operation,
             &projected_cell_writes,
         )

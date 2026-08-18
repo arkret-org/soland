@@ -414,20 +414,16 @@ pub(super) async fn validate_message_edit_redact_window_policy(
     let realm_id = operation.realm_id.as_str();
 
     // Resolve the target Message's creation time.
+    // Each payload class registers exactly one target carrier:
+    // `message_redact_payload.message_id`, `cross_object_redaction_payload.target_ref`,
+    // `message_revise_payload.message_id`.
     let target_ref = if is_redact {
         operation
             .payload
-            .get("target_event_id")
-            .or_else(|| operation.payload.get("message_id"))
+            .get("message_id")
             .or_else(|| operation.payload.get("target_ref"))
-            .or_else(|| operation.payload.get("target"))
-            .or_else(|| operation.payload.get("redacts"))
     } else {
-        operation
-            .payload
-            .get("target_event_id")
-            .or_else(|| operation.payload.get("target_ref"))
-            .or_else(|| operation.payload.get("revision_of"))
+        operation.payload.get("message_id")
     }
     .and_then(Value::as_str)
     .filter(|value| !value.is_empty());

@@ -49,7 +49,7 @@ async fn set_demo_realm_visibility(
     let mut meta = state
         .test_persistence()
         .realm_meta()
-        .get(DEMO_REALM_ID)
+        .get(demo_realm_id())
         .await
         .unwrap()
         .unwrap_or_else(|| RealmMetaRecord {
@@ -91,7 +91,7 @@ async fn set_demo_realm_visibility(
     state
         .test_persistence()
         .realm_meta()
-        .put(DEMO_REALM_ID, &meta)
+        .put(demo_realm_id(), &meta)
         .await
         .unwrap();
 }
@@ -133,7 +133,7 @@ async fn submit_read_receipt_policy(
         token,
         ALICE,
         ALICE_DEVICE,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         "ak.realm.read_receipt_policy",
         serde_json::json!({
             "disclosure": disclosure,
@@ -217,7 +217,7 @@ fn legacy_plaintext_read_receipt_envelope(actor: &str, device_id: &str, event_id
     let expires_at = sent_at + chrono::Duration::seconds(30);
     let mut envelope = serde_json::json!({
         "kind": "ak.receipt.read",
-        "realm_id": DEMO_REALM_ID,
+        "realm_id": demo_realm_id(),
         "actor_id": actor,
         "device_id": device_id,
         "sent_at": arkret_canonical::format_timestamp_canonical(sent_at),
@@ -225,7 +225,7 @@ fn legacy_plaintext_read_receipt_envelope(actor: &str, device_id: &str, event_id
         "payload": {
             "receipt_kind": "read",
             "schema": arkret_wire::SchemaId::READ_RECEIPT_V1,
-            "realm_id": DEMO_REALM_ID,
+            "realm_id": demo_realm_id(),
             "actor_id": actor,
             "event_id": event_id,
             "read_scope": {"kind": "realm"},
@@ -291,13 +291,13 @@ fn server_visible_header(envelope: &arkret_wire::SignalEnvelope) -> Value {
 
 fn realm_scope() -> arkret_wire::ScopeRef {
     arkret_wire::ScopeRef::Realm {
-        realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap(),
+        realm_id: RealmId::new(demo_realm_id().to_owned()).unwrap(),
     }
 }
 
 fn circle_scope(circle_id: &str) -> arkret_wire::ScopeRef {
     arkret_wire::ScopeRef::Circle {
-        realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap(),
+        realm_id: RealmId::new(demo_realm_id().to_owned()).unwrap(),
         circle_id: arkret_identifiers::CircleId::new(circle_id.to_owned()).unwrap(),
     }
 }
@@ -312,7 +312,7 @@ fn bob_receipt_signal(
     signing_key: &SigningKey,
 ) -> arkret_wire::SignalEnvelope {
     signed_signal_envelope(
-        DEMO_REALM_ID,
+        demo_realm_id(),
         scope_ref,
         BOB,
         BOB_DEVICE,
@@ -330,7 +330,7 @@ async fn submit_alice_target_message(state: AppState, token: &str, body: &str) -
         state,
         token,
         ALICE,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         TARGET_STRAND_ID,
         serde_json::json!({"body": body}),
         false,
@@ -363,13 +363,13 @@ async fn submit_alice_target_message(state: AppState, token: &str, body: &str) -
 async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_target() {
     let state = soland_test_support::app_state(test_config());
     let alice_token = dev_token(state.clone()).await;
-    add_test_realm_member(&state, DEMO_REALM_ID, BOB);
-    add_test_realm_member(&state, DEMO_REALM_ID, CAROL);
+    add_test_realm_member(&state, demo_realm_id(), BOB);
+    add_test_realm_member(&state, demo_realm_id(), CAROL);
     let (bob_token, bob_key) =
         seed_signal_sender_device(&state, BOB, BOB_DEVICE, "Bob Desktop").await;
     let carol_token =
         verified_dev_token_for_device(state.clone(), CAROL, CAROL_DEVICE, "Carol Desktop").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, ALICE).await;
+    let seal_ref = seed_signal_basis_seal(&state, demo_realm_id(), ALICE).await;
     set_demo_realm_visibility(&state, "invite_only", "shared").await;
 
     let target_event_id =
@@ -394,7 +394,7 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
         state
             .test_persistence()
             .signal_relay()
-            .list_for_realm(DEMO_REALM_ID)
+            .list_for_realm(demo_realm_id())
             .await
             .unwrap()
             .is_empty(),
@@ -404,7 +404,7 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
     // (2) The receipt rides the Signal rail, narrowed to a Circle Alice is in
     // and Carol is not.
     let circle_id = "ak:circle:Aa5c9aKm3eqBBuZdfIQ4ORPvt45gtDefEZ3--7YrRKva";
-    seed_test_circle(&state, DEMO_REALM_ID, circle_id, &[ALICE, BOB]);
+    seed_test_circle(&state, demo_realm_id(), circle_id, &[ALICE, BOB]);
     let sent_at = chrono::Utc::now();
     let plaintext = read_receipt_plaintext(BOB, &target_event_id, 1);
     let receipt = bob_receipt_signal(
@@ -481,13 +481,13 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
 async fn read_receipt_fanout_stays_inside_the_realm_member_set_even_when_policy_is_public() {
     let state = soland_test_support::app_state(test_config());
     let alice_token = dev_token(state.clone()).await;
-    add_test_realm_member(&state, DEMO_REALM_ID, BOB);
+    add_test_realm_member(&state, demo_realm_id(), BOB);
     let (bob_token, bob_key) =
         seed_signal_sender_device(&state, BOB, BOB_DEVICE, "Bob Desktop").await;
     // Dave is deliberately not a member of the demo Realm.
     let dave_token =
         verified_dev_token_for_device(state.clone(), DAVE, DAVE_DEVICE, "Dave Desktop").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, ALICE).await;
+    let seal_ref = seed_signal_basis_seal(&state, demo_realm_id(), ALICE).await;
     set_demo_realm_visibility(&state, "public", "world_readable").await;
 
     let target_event_id =
@@ -572,10 +572,10 @@ async fn read_receipt_fanout_stays_inside_the_realm_member_set_even_when_policy_
 async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable() {
     let state = soland_test_support::app_state(test_config());
     let alice_token = dev_token(state.clone()).await;
-    add_test_realm_member(&state, DEMO_REALM_ID, BOB);
+    add_test_realm_member(&state, demo_realm_id(), BOB);
     let (bob_token, bob_key) =
         seed_signal_sender_device(&state, BOB, BOB_DEVICE, "Bob Desktop").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, ALICE).await;
+    let seal_ref = seed_signal_basis_seal(&state, demo_realm_id(), ALICE).await;
     set_demo_realm_visibility(&state, "invite_only", "shared").await;
 
     let target_event_id =
@@ -647,7 +647,7 @@ async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable() {
     let retained = state
         .test_persistence()
         .signal_relay()
-        .list_for_realm(DEMO_REALM_ID)
+        .list_for_realm(demo_realm_id())
         .await
         .unwrap();
     assert_eq!(
@@ -671,7 +671,7 @@ async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable() {
         state
             .test_persistence()
             .events()
-            .realm_events_newest_first(DEMO_REALM_ID)
+            .realm_events_newest_first(demo_realm_id())
             .await
             .unwrap()
             .iter()

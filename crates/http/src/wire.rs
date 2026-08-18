@@ -456,8 +456,7 @@ pub use arkret_models_collaboration::agent_operations::{
     AgentSidecarList, AgentSidecarView, AgentView,
 };
 pub use arkret_models_collaboration::objects::media::{
-    CallMediaParticipantBinding, CallMediaServiceSignature, CallMediaTokenExchangeOutcome,
-    CallMediaTokenExchangeRequestBody,
+    CallMediaParticipantBinding, CallMediaTokenExchangeOutcome, CallMediaTokenExchangeRequestBody,
 };
 pub use arkret_models_collaboration::sidecar_operations::{
     SidecarEnsureOutcome as AgentSidecarEnsureOutcome,

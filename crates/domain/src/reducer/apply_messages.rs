@@ -133,8 +133,6 @@ impl ProjectionState {
         let target_ref = operation
             .payload
             .get("message_id")
-            .or_else(|| operation.payload.get("target_ref"))
-            .or_else(|| operation.payload.get("revision_of"))
             .and_then(|v| v.as_str())
             .unwrap_or_default();
         let original_id = self
@@ -194,28 +192,34 @@ impl ProjectionState {
     /// Space containers are intentionally excluded: they have no Redacted
     /// terminal, and removal routes through `ak.space.tombstone` only.
     pub(crate) fn apply_redaction(&mut self, operation: &Operation) -> ProjectionEffect {
-        let target_ref = message_redaction_target_ref(&operation.payload).unwrap_or_default();
-        let target = self.redaction_key_for_message_target(&target_ref);
-        if target.is_empty() {
-            return ProjectionEffect::Ignored;
-        }
-
-        // Write the parallel cell + flag the historical entry without
-        // removing it. Attribution is the redaction Event's own actor; neither
-        // redaction payload class carries an actor-supplied override.
+        // Attribution is the redaction Event's own actor; neither redaction
+        // payload class carries an actor-supplied override.
         let by = operation.context.sender.to_string();
         let reason = redaction_human_reason(&operation.payload);
         let redaction_event_id = operation.context.event_id.to_string();
-        let cell = RedactionCellValue {
-            redacted_at: operation.created_at,
-            by: by.clone(),
-            reason: reason.clone(),
-            redaction_event_id: Some(redaction_event_id),
-        };
-        self.redaction_cells.insert(target.clone(), cell.clone());
-        self.redactions.insert(target.clone());
-        if let Some(msg) = self.messages.get_mut(&target) {
-            msg.redacted_at = Some(operation.created_at);
+
+        // The Message path and the cross-object path are separate targets, not
+        // a fallback chain: `ak.message.redact` carries `payload.message_id`,
+        // `ak.redaction` carries `payload.target_ref`, and only the former can
+        // resolve to a Message cell. Requiring a Message target before reaching
+        // the object branch would silently ignore every Strand / Morph
+        // redaction.
+        let message_target = message_redaction_target_ref(&operation.payload)
+            .map(|target_ref| self.redaction_key_for_message_target(&target_ref))
+            .filter(|target| !target.is_empty());
+        let target = message_target.clone().unwrap_or_default();
+        if let Some(target) = message_target {
+            let cell = RedactionCellValue {
+                redacted_at: operation.created_at,
+                by: by.clone(),
+                reason: reason.clone(),
+                redaction_event_id: Some(redaction_event_id),
+            };
+            self.redaction_cells.insert(target.clone(), cell);
+            self.redactions.insert(target.clone());
+            if let Some(msg) = self.messages.get_mut(&target) {
+                msg.redacted_at = Some(operation.created_at);
+            }
         }
 
         // Strand / Morph object-level redaction. If the payload's
@@ -228,6 +232,11 @@ impl ProjectionState {
             if let Some(strand) = self.strands.get_mut(&object_ref) {
                 strand.state = ObjectLifecycleState::Redacted;
                 strand.state_changed_at = Some(operation.created_at);
+                // common-fields.md 5.2: every registered content slot MUST be
+                // cleared in the same transition that writes state=redacted, so
+                // the post-state satisfies strand.schema.json's redacted branch
+                // without replaying the event stream. For a Strand that is the
+                // top-level Description pair *and* the Synthesis track's pair.
                 strand.content = None;
                 strand.encrypted_content = None;
                 if let Some(synthesis) = strand.tracks.get_mut("synthesis") {
@@ -244,6 +253,9 @@ impl ProjectionState {
             if let Some(morph) = self.morphs.get_mut(&object_ref) {
                 morph.state = ObjectLifecycleState::Redacted;
                 morph.state_changed_at = Some(operation.created_at);
+                // Same clearing obligation as the Strand branch above.
+                morph.content = None;
+                morph.encrypted_content = None;
                 morph.updated_by.clone_from(&updated_by);
                 morph.updated_at = Some(operation.created_at);
                 return ProjectionEffect::MorphLifecycle {

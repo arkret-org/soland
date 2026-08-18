@@ -433,6 +433,10 @@ struct MorphProjectionRow {
     facets: serde_json::Value,
     #[diesel(sql_type = Jsonb)]
     versions: serde_json::Value,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    content: Option<serde_json::Value>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    encrypted_content: Option<serde_json::Value>,
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -463,6 +467,8 @@ impl From<MorphProjectionRow> for MorphProjectionRecord {
             schema_refs: row.schema_refs,
             facets: row.facets,
             versions: row.versions,
+            content: row.content,
+            encrypted_content: row.encrypted_content,
             state: row.state,
             state_changed_at: row.state_changed_at,
             created_by: row.created_by,
@@ -475,8 +481,8 @@ impl From<MorphProjectionRow> for MorphProjectionRecord {
     }
 }
 const MORPH_PROJECTION_COLUMNS: &str = "id AS morph_id, realm_id, scope_circle_id, morph_kind, title, fields, \
-     schema_refs, facets, versions, state, state_changed_at, created_by_id AS created_by, created_at, updated_by_id AS updated_by, \
-     history_basis_seals, updated_at";
+     schema_refs, facets, versions, content, encrypted_content, state, state_changed_at, created_by_id AS created_by, \
+     created_at, updated_by_id AS updated_by, history_basis_seals, updated_at";
 #[async_trait]
 impl MorphProjectionStore for PgMorphProjectionStore {
     async fn get(&self, morph_id: &str) -> PersistenceResult<Option<MorphProjectionRecord>> {

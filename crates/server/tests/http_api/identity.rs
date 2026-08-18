@@ -258,7 +258,7 @@ async fn actor_profile_resolve_uses_one_failure_for_unknown_or_unavailable_actor
     let body: Value = TestClient::post("http://server/_arkret/self/actor-profiles/query")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
+            "realm_id": demo_realm_id(),
             "actor_ids": [fixture_actor_core_id("did:web:unknown.example")]
         }))
         .send(&app_from_state(state))

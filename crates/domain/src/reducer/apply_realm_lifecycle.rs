@@ -580,16 +580,37 @@ impl ProjectionState {
             return None;
         }
 
-        // A Direct Conversation create projects its creator as the first
-        // joined member. Permit this policy-free path only while that creator
-        // is still the Realm's sole joined member, never for later additions
-        // or rebinds.
+        // `contact-and-direct-conversation.md` §5.5 fixes the founding unit at
+        // four Events in wire order: `ak.realm.create`, the **other**
+        // participant's `ak.member.state{join}`, the main Strand create, then
+        // the founder's own `ak.member.state{join}`. `ak.realm.create` writes no
+        // member row, so the peer join lands with zero joined members and the
+        // founder's own join lands with exactly one.
+        //
+        // A member count alone cannot separate the founder's join from a third
+        // actor's — both see one joined member — so the founder is read from the
+        // immutable genesis notary instead. Everything outside those two Events
+        // falls through to the ordinary policy requirement.
         let joined_members = self
             .members
             .values()
             .filter(|member| member.realm_id == realm_id && member.state == "join")
             .count();
-        if joined_members != 1 {
+        let joining_actor = operation.payload.get("actor_id").and_then(Value::as_str);
+        let founder = self
+            .realm_genesis_cell_value(realm_id)
+            .and_then(|genesis| genesis.get("notary"))
+            .and_then(|notary| notary.get("actor_id"))
+            .and_then(Value::as_str);
+        // Both arms require a readable founder: without one the Realm cannot be
+        // shown to be inside its founding unit, and the policy-free path must
+        // not open just because the genesis notary could not be read.
+        let is_founding_unit_join = match (joined_members, joining_actor, founder) {
+            (0, Some(joining), Some(founder)) => joining != founder,
+            (1, Some(joining), Some(founder)) => joining == founder,
+            _ => false,
+        };
+        if !is_founding_unit_join {
             return None;
         }
 

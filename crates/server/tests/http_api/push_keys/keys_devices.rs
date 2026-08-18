@@ -760,7 +760,7 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
         "Bob Desktop",
     )
     .await;
-    add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
+    add_test_realm_member(&state, demo_realm_id(), "did:web:bob.example");
 
     let query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {bob}"), true)
@@ -836,9 +836,9 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban() {
     let carol_device = "ak:device:01904100-0000-7000-8000-ca2010000001";
     let carol_device_key = SigningKey::from_bytes(&[205u8; 32]);
     seed_verified_device_with_public_key(&state, carol, carol_device, &carol_device_key).await;
-    add_test_realm_member(&state, DEMO_REALM_ID, bob);
+    add_test_realm_member(&state, demo_realm_id(), bob);
 
-    let realm_id = RealmId::new(DEMO_REALM_ID.to_owned()).unwrap();
+    let realm_id = RealmId::new(demo_realm_id().to_owned()).unwrap();
     let bob_did = DidFullId::new(bob.to_owned()).unwrap();
     // Scoped rather than `drop`ed: the guard must be provably released before
     // the awaits further down, and a block says so to the reader and to
@@ -855,7 +855,7 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban() {
         .test_projection()
         .lock()
         .members
-        .get_mut(&(DEMO_REALM_ID.to_owned(), bob_core.to_string()))
+        .get_mut(&(demo_realm_id().to_owned(), bob_core.to_string()))
         .expect("Bob membership projection exists")
         .state = "ban".to_owned();
 
@@ -1224,8 +1224,8 @@ async fn revoked_device_blocks_encrypted_writes() {
     .await;
     let mut blocked_event = signed_message_event_envelope(
         "did:web:alice.example",
-        DEMO_REALM_ID,
-        DEMO_REALM_ID,
+        demo_realm_id(),
+        demo_realm_id(),
         encrypted_envelope("ak.message.v1", "blocked-ciphertext"),
         true,
     );
@@ -1233,7 +1233,7 @@ async fn revoked_device_blocks_encrypted_writes() {
         &state,
         &stale_session,
         "did:web:alice.example",
-        DEMO_REALM_ID,
+        demo_realm_id(),
         &mut blocked_event,
     )
     .await;

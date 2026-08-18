@@ -452,9 +452,37 @@ async fn mls_lifecycle_end_to_end() {
         .event_id
         .to_string();
 
+    // ── 0. the Realm has to exist before anything cites it ──────────────
+    //
+    // `peer_claim_policy_authorized`'s `RealmMembership` branch requires both
+    // requester and target to be a joined member (or the owner) of
+    // `intended_realm_id`. A KeyPackage claim naming a Realm the projection has
+    // never seen is not a claim into that Realm, so the bootstrap unit is
+    // submitted first rather than after the claim.
+    let mut create_resp = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {alice_token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(
+            arkret_canonical::canonical_json_bytes(&json!({
+                "events": realm_bootstrap
+                    .iter()
+                    .cloned()
+                    .map(arkret_wire::EventInitialSubmission::online)
+                    .collect::<Vec<_>>()
+            }))
+            .unwrap(),
+        )
+        .send(&app_from_state(state.clone()))
+        .await;
+    let create_status = create_resp.status_code;
+    if create_status != Some(StatusCode::OK) {
+        let error: Value = create_resp.take_json().await.unwrap_or(Value::Null);
+        panic!("Realm create failed with {create_status:?}: {error}");
+    }
+
     // ── 1. upload a KeyPackage (W1C: ak.self.keys.keypackages.upload.create) ──
-    let keypackage_id = "ak:mls_keypackage:t-01";
-    let keypackage_id_mismatch = "ak:mls_keypackage:t-02";
+    let keypackage_id = "keypackage-t-01";
+    let keypackage_id_mismatch = "keypackage-t-02";
     let uploaded_keypackage_ref = "ak:mls:keypackage:test-01";
     let mismatch_keypackage_ref = "ak:mls:keypackage:test-02";
     let keypackage_bytes = b"opaque-mls-keypackage";
@@ -579,7 +607,6 @@ async fn mls_lifecycle_end_to_end() {
     );
     let claims = claim_json["claims"].as_array().expect("claims array");
     assert_eq!(claims.len(), 1);
-    let self_claim_receipt = claim_json["claim_receipt"].clone();
     assert_eq!(claims[0]["keypackage_ref"], json!(uploaded_keypackage_ref));
     assert_eq!(claims[0]["keypackage_digest"], json!(keypackage_digest));
     assert_eq!(claims[0]["capabilities"], capabilities);
@@ -662,7 +689,36 @@ async fn mls_lifecycle_end_to_end() {
     project_authorized_principal_device(&state, bob_did, bob_device, &event_signing_key).await;
 
     let group_id = "mls-group-abc";
-    let lifecycle_keypackage_id = "ak:mls_keypackage:lifecycle-bob";
+    // `peer_claim_policy_authorized`'s `RealmMembership` branch requires the
+    // claim target to already be a joined Realm member. Realm membership
+    // (`ak.member.state`) and MLS group membership are separate: Bob joins the
+    // Realm first, and only then can Alice claim his KeyPackage to add him to
+    // the MLS group.
+    {
+        let now =
+            chrono::DateTime::<chrono::Utc>::from_timestamp_millis(Utc::now().timestamp_millis())
+                .unwrap();
+        state.test_projection().lock().members.insert(
+            (realm_id.to_owned(), bob_core.to_string()),
+            soland_domain::reducer::SolandMembershipState {
+                member: bob_core.to_string(),
+                realm_id: realm_id.to_owned(),
+                state: "join".to_owned(),
+                role: "member".to_owned(),
+                delivery_status: None,
+                recipient_service_id: None,
+                recipient_service_resolution: None,
+                membership_event_ref: None,
+                delivery_binding_frontier: None,
+                invited_at: None,
+                joined_at: now,
+                updated_at: now,
+                reason: None,
+            },
+        );
+    }
+
+    let lifecycle_keypackage_id = "keypackage-lifecycle-bob";
     let lifecycle_keypackage_ref = "ak:mls:keypackage:lifecycle-bob";
     let lifecycle_keypackage_bytes = b"opaque-lifecycle-keypackage";
     let lifecycle_keypackage_digest = arkret_canonical::sha256_digest(lifecycle_keypackage_bytes);
@@ -753,6 +809,10 @@ async fn mls_lifecycle_end_to_end() {
             .as_deref(),
         Some(group_id)
     );
+    // `mls_welcome_payload.claim_receipt` is required and is the
+    // destination-signed receipt for *this* Welcome's claim — Bob's, from the
+    // lifecycle claim below, not Alice's own self-claim above.
+    let lifecycle_claim_receipt = lifecycle_claim["claim_receipt"].clone();
     let claim_id = lifecycle_claim["claims"][0]["claim_id"]
         .as_str()
         .unwrap()
@@ -779,28 +839,6 @@ async fn mls_lifecycle_end_to_end() {
     let keypackage_ref = claimed_keypackage_ref;
     let welcome_ref =
         "ak:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888";
-
-    // ── 3a. Realm + MLS group genesis enter through canonical events ─
-    let mut create_resp = TestClient::post("http://server/_arkret/self/events")
-        .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .add_header("content-type", "application/json", true)
-        .body(
-            arkret_canonical::canonical_json_bytes(&json!({
-                "events": realm_bootstrap
-                    .iter()
-                    .cloned()
-                    .map(arkret_wire::EventInitialSubmission::online)
-                    .collect::<Vec<_>>()
-            }))
-            .unwrap(),
-        )
-        .send(&app_from_state(state.clone()))
-        .await;
-    let create_status = create_resp.status_code;
-    if create_status != Some(StatusCode::OK) {
-        let error: Value = create_resp.take_json().await.unwrap_or(Value::Null);
-        panic!("Realm create failed with {create_status:?}: {error}");
-    }
 
     // The bootstrapped Realm now has an accepted governance Seal. Every MLS
     // Control Move below cites it as its independent Event-admission
@@ -930,7 +968,7 @@ async fn mls_lifecycle_end_to_end() {
                 "device_authorize_event_id": claimed_device_authorize_event_id
             },
             "claim_envelope": claim_envelope,
-            "self_claim_receipt": self_claim_receipt,
+            "claim_receipt": lifecycle_claim_receipt,
             "welcome_ref": welcome_ref,
             "ciphertext": b64(b"opaque-mls-welcome"),
             "expires_at": "2100-01-01T00:00:00.000Z",

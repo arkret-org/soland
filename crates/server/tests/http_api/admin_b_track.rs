@@ -127,7 +127,7 @@ async fn admin_media_statistics_and_by_actor_are_derived_from_blobs() {
                 storage_key: "test-1".to_owned(),
                 media_type: "image/png".to_owned(),
                 filename: Some("one.png".to_owned()),
-                realm_id: Some(DEMO_REALM_ID.to_owned()),
+                realm_id: Some(demo_realm_id().to_owned()),
                 encryption: None,
                 legal_hold: false,
                 redacted: false,
@@ -150,7 +150,7 @@ async fn admin_media_statistics_and_by_actor_are_derived_from_blobs() {
                 storage_key: "test-2".to_owned(),
                 media_type: "text/plain".to_owned(),
                 filename: Some("two.txt".to_owned()),
-                realm_id: Some(DEMO_REALM_ID.to_owned()),
+                realm_id: Some(demo_realm_id().to_owned()),
                 encryption: Some(serde_json::json!({"encryption_algorithm": "test"})),
                 legal_hold: false,
                 redacted: false,
@@ -173,7 +173,7 @@ async fn admin_media_statistics_and_by_actor_are_derived_from_blobs() {
     assert_eq!(stats["total_size"], 192);
     assert_eq!(stats["encrypted_count"], 1);
     assert_eq!(stats["by_media_type"]["image/png"]["count"], 1);
-    assert_eq!(stats["by_realm"][DEMO_REALM_ID]["total_size"], 192);
+    assert_eq!(stats["by_realm"][demo_realm_id()]["total_size"], 192);
 
     let by_actor: Value = TestClient::get("http://server/_soland/admin/media/by-actor")
         .add_header("authorization", format!("Bearer {token}"), true)

@@ -841,6 +841,8 @@ pub async fn hydrate_projections_from_persistence(
                     schema_refs: serde_json::from_value(record.schema_refs).unwrap_or_default(),
                     facets: serde_json::from_value(record.facets).unwrap_or_default(),
                     versions: serde_json::from_value(record.versions).unwrap_or_default(),
+                    content: record.content,
+                    encrypted_content: record.encrypted_content,
                     state,
                     state_changed_at: record.state_changed_at,
                     created_by: record.created_by,

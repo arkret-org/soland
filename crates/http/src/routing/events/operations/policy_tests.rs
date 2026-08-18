@@ -1160,10 +1160,10 @@ async fn register_native_agent_membership_context(
         .lock()
         .apply(&authorize_projection, state.hlc());
     state.test_projection().lock().mls_key_packages.insert(
-        "ak:mls_keypackage:01904100-0000-7000-8000-0000000007d1".to_owned(),
+        "keypackage-01904100-0000-7000-8000-0000000007d1".to_owned(),
         soland_domain::reducer::MlsKeyPackage {
-            id: "ak:mls_keypackage:01904100-0000-7000-8000-0000000007d1".to_owned(),
-            keypackage_ref: "ak:mls_keypackage:01904100-0000-7000-8000-0000000007d1".to_owned(),
+            id: "keypackage-01904100-0000-7000-8000-0000000007d1".to_owned(),
+            keypackage_ref: "keypackage-01904100-0000-7000-8000-0000000007d1".to_owned(),
             keypackage_digest: format!("sha256:{}", "1".repeat(64)),
             actor_id: agent.to_owned(),
             device_id: device_id.to_owned(),

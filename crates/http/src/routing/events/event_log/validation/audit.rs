@@ -386,8 +386,9 @@ mod tests {
             )
             .unwrap(),
             actor_id: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
-            device_id: DeviceId::new("ak:device:01904100-0000-7000-8000-000000000002".to_owned())
-                .unwrap(),
+            device_id: Some(
+                DeviceId::new("ak:device:01904100-0000-7000-8000-000000000002".to_owned()).unwrap(),
+            ),
             actor_seq: 1,
             realm_id: RealmId::new(
                 "ak:realm:AdA2LFMgPUC2EAmzvOPY69_DX8_NLEXKyCwX9zR989nv".to_owned(),

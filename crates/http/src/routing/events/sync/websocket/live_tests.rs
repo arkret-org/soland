@@ -24,7 +24,12 @@ use crate::config::AppConfig;
 use crate::state::{AppState, EventNotification};
 
 const ORIGIN: &str = "https://client.example";
-const REALM_ID: &str = crate::state::DEVELOPMENT_DEMO_REALM_ID;
+/// Derived, never copied — see `state::development_demo_realm_id`.
+fn realm_id_str() -> &'static str {
+    static ID: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| crate::state::development_demo_realm_id().to_string());
+    &ID
+}
 const ALICE_DEVICE: &str = "ak:device:0196419b-0000-7000-8000-000000000001";
 const BOB_DEVICE: &str = "ak:device:0196419b-0000-7000-8000-000000000002";
 const INITIAL_GRANT: &str = "ak.session.grant.live-test.initial";
@@ -395,7 +400,7 @@ fn authenticate_frame(
 
 fn signal_record() -> soland_services::delivery::SignalRelayState {
     let sent_at = chrono::Utc::now();
-    let realm_id = arkret_identifiers::RealmId::new(REALM_ID.to_owned()).unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(realm_id_str().to_owned()).unwrap();
     let mut envelope = arkret_wire::SignalEnvelope {
         realm_id: realm_id.clone(),
         scope_ref: arkret_wire::ScopeRef::Realm { realm_id },
@@ -440,7 +445,7 @@ fn signal_record() -> soland_services::delivery::SignalRelayState {
     envelope.encrypted_payload.aad_digest = envelope.expected_aad_digest().unwrap();
     envelope.proof.envelope_digest = envelope.envelope_digest().unwrap();
     soland_services::delivery::SignalRelayState {
-        realm_id: REALM_ID.to_owned(),
+        realm_id: realm_id_str().to_owned(),
         scope_ref: envelope.scope_ref.clone(),
         sender_actor_id: envelope.sender_actor_id.as_str().to_owned(),
         sender_device_id: envelope.sender_device_id.as_str().to_owned(),
@@ -621,7 +626,7 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
             "events-1",
             &WebSocketOpenParameters::Events(WebSocketEventsOpenParameters {
                 realms: Some(vec![
-                    arkret_identifiers::RealmId::new(REALM_ID.to_owned()).unwrap(),
+                    arkret_identifiers::RealmId::new(realm_id_str().to_owned()).unwrap(),
                 ]),
                 actors: Some(vec![
                     arkret_identifiers::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
@@ -670,7 +675,7 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
         .expect("append live Signal");
     state
         .publish_event_notification(EventNotification::epoch_rotation(
-            REALM_ID.to_owned(),
+            realm_id_str().to_owned(),
             Some(serde_json::json!({"epoch": 6})),
             serde_json::json!({"epoch": 7}),
         ))

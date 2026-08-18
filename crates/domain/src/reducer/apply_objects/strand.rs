@@ -732,7 +732,18 @@ fn apply_strand_tracks_update_to_map(
         return Err("strand_tracks_update_requires_patch");
     }
     validate_strand_tracks(&tracks)?;
-    if strand_track_content_snapshot(current) != strand_track_content_snapshot(&tracks) {
+    // `ak.strand.tracks.update` configures tracks; content moves through the
+    // content-carrying events. Comparing the whole snapshot map would also
+    // reject adding or removing a track, which is exactly what this event is
+    // for — so compare content per track name over the union, with an absent
+    // track contributing no content. Adding a contentless track passes;
+    // adding, changing or dropping any content does not.
+    let before = strand_track_content_snapshot(current);
+    let after = strand_track_content_snapshot(&tracks);
+    let no_content = (None, None);
+    if before.keys().chain(after.keys()).any(|name| {
+        before.get(name).unwrap_or(&no_content) != after.get(name).unwrap_or(&no_content)
+    }) {
         return Err("strand_tracks_content_forbidden");
     }
     Ok(tracks)

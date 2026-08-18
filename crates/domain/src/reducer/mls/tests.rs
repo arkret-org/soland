@@ -79,7 +79,7 @@ fn governance_binding(previous_epoch: u64) -> Value {
 }
 
 fn welcome_payload(welcome_id: &str) -> Value {
-    let keypackage_ref = "ak:mls_keypackage:01";
+    let keypackage_ref = "keypackage-01";
     let keypackage_digest =
         "sha256:5555555555555555555555555555555555555555555555555555555555555555";
     json!({
@@ -192,7 +192,7 @@ fn keypackage_publish_then_claim_succeeds() {
         100,
         "ak.mls.keypackage",
         publish_payload(
-            "ak:mls_keypackage:01",
+            "keypackage-01",
             "ak:did_core:web:alice.example",
             "ak:device:alice-desktop",
             1_000_000,
@@ -202,12 +202,12 @@ fn keypackage_publish_then_claim_succeeds() {
     assert!(matches!(
         effect,
         ProjectionEffect::Mls(MlsEffect::KeyPackagePublished { ref keypackage_id, .. })
-            if keypackage_id == "ak:mls_keypackage:01"
+            if keypackage_id == "keypackage-01"
     ));
     assert!(
         state
             .mls_key_packages
-            .get("ak:mls_keypackage:01")
+            .get("keypackage-01")
             .unwrap()
             .claimed_by
             .is_none()
@@ -218,7 +218,7 @@ fn keypackage_publish_then_claim_succeeds() {
         "ak.mls.keypackage",
         json!({
             "action": "claim",
-            "keypackage_id": "ak:mls_keypackage:01",
+            "keypackage_id": "keypackage-01",
             "group_id": "mls-group-abc",
             "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }),
@@ -231,13 +231,13 @@ fn keypackage_publish_then_claim_succeeds() {
             claimed_at,
             ..
         }) => {
-            assert_eq!(keypackage_id, "ak:mls_keypackage:01");
+            assert_eq!(keypackage_id, "keypackage-01");
             assert_eq!(group_id, "mls-group-abc");
             assert_eq!(claimed_at, 200);
         }
         other => panic!("expected KeyPackageClaimed, got {other:?}"),
     }
-    let row = state.mls_key_packages.get("ak:mls_keypackage:01").unwrap();
+    let row = state.mls_key_packages.get("keypackage-01").unwrap();
     assert_eq!(row.claimed_by.as_deref(), Some("mls-group-abc"));
     assert_eq!(row.claimed_at, Some(200));
     assert_eq!(row.consumed_at, None);
@@ -250,7 +250,7 @@ fn keypackage_claim_twice_second_fails() {
         100,
         "ak.mls.keypackage",
         publish_payload(
-            "ak:mls_keypackage:02",
+            "keypackage-02",
             "ak:did_core:web:alice.example",
             "ak:device:alice-desktop",
             1_000_000,
@@ -264,7 +264,7 @@ fn keypackage_claim_twice_second_fails() {
         "ak.mls.keypackage",
         json!({
             "action": "claim",
-            "keypackage_id": "ak:mls_keypackage:02",
+            "keypackage_id": "keypackage-02",
             "group_id": "mls-group-first",
             "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }),
@@ -281,7 +281,7 @@ fn keypackage_claim_twice_second_fails() {
         "ak.mls.keypackage",
         json!({
             "action": "claim",
-            "keypackage_id": "ak:mls_keypackage:02",
+            "keypackage_id": "keypackage-02",
             "group_id": "mls-group-second",
             "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }),
@@ -294,7 +294,7 @@ fn keypackage_claim_twice_second_fails() {
         other => panic!("expected Rejected, got {other:?}"),
     }
     // First claim's group must still own the row — losers don't overwrite.
-    let row = state.mls_key_packages.get("ak:mls_keypackage:02").unwrap();
+    let row = state.mls_key_packages.get("keypackage-02").unwrap();
     assert_eq!(row.claimed_by.as_deref(), Some("mls-group-first"));
     assert_eq!(row.claimed_at, Some(200));
     assert_eq!(row.consumed_at, None);
@@ -307,7 +307,7 @@ fn keypackage_claim_same_group_renews_instead_of_conflicting() {
         100,
         "ak.mls.keypackage",
         publish_payload(
-            "ak:mls_keypackage:renew",
+            "keypackage-renew",
             "ak:did_core:web:alice.example",
             "ak:device:alice-desktop",
             1_000_000,
@@ -321,7 +321,7 @@ fn keypackage_claim_same_group_renews_instead_of_conflicting() {
             "ak.mls.keypackage",
             json!({
                 "action": "claim",
-                "keypackage_id": "ak:mls_keypackage:renew",
+                "keypackage_id": "keypackage-renew",
                 "group_id": "mls-group-same",
                 "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa",
                 "claim_expires_at_unix_ms": (at + 300) * 1000
@@ -341,10 +341,7 @@ fn keypackage_claim_same_group_renews_instead_of_conflicting() {
         e2,
         ProjectionEffect::Mls(MlsEffect::KeyPackageClaimed { .. })
     ));
-    let row = state
-        .mls_key_packages
-        .get("ak:mls_keypackage:renew")
-        .unwrap();
+    let row = state.mls_key_packages.get("keypackage-renew").unwrap();
     assert_eq!(row.claimed_by.as_deref(), Some("mls-group-same"));
     assert_eq!(row.claimed_at, Some(600));
     assert_eq!(row.claim_expires_at_unix_ms, Some(900_000));
@@ -355,7 +352,7 @@ fn keypackage_claim_same_group_renews_instead_of_conflicting() {
         "ak.mls.keypackage",
         json!({
             "action": "claim",
-            "keypackage_id": "ak:mls_keypackage:renew",
+            "keypackage_id": "keypackage-renew",
             "group_id": "mls-group-other",
             "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }),
@@ -372,7 +369,7 @@ fn keypackage_claim_same_group_renews_instead_of_conflicting() {
 fn last_resort_keypackage_reuses_within_realm_only() {
     let mut state = ProjectionState::default();
     let mut payload = publish_payload(
-        "ak:mls_keypackage:last-resort",
+        "keypackage-last-resort",
         "ak:did_core:web:alice.example",
         "ak:device:alice-desktop",
         1_000_000,
@@ -387,7 +384,7 @@ fn last_resort_keypackage_reuses_within_realm_only() {
             "ak.mls.keypackage",
             json!({
                 "action": "claim",
-                "keypackage_id": "ak:mls_keypackage:last-resort",
+                "keypackage_id": "keypackage-last-resort",
                 "group_id": group_id,
                 "intended_realm_id": "ak:realm:alpha",
                 "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
@@ -404,7 +401,7 @@ fn last_resort_keypackage_reuses_within_realm_only() {
 
     let row = state
         .mls_key_packages
-        .get("ak:mls_keypackage:last-resort")
+        .get("keypackage-last-resort")
         .unwrap();
     assert!(row.claimed_by.is_none());
     assert!(row.consumed_at.is_none());
@@ -415,7 +412,7 @@ fn last_resort_keypackage_reuses_within_realm_only() {
         "ak.mls.keypackage",
         json!({
             "action": "claim",
-            "keypackage_id": "ak:mls_keypackage:last-resort",
+            "keypackage_id": "keypackage-last-resort",
             "group_id": "mls-group-other",
             "intended_realm_id": "ak:realm:beta",
             "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
@@ -433,7 +430,7 @@ fn last_resort_keypackage_reuses_within_realm_only() {
 fn revoked_last_resort_keypackage_cannot_be_reused() {
     let mut state = ProjectionState::default();
     let mut payload = publish_payload(
-        "ak:mls_keypackage:revoked-last-resort",
+        "keypackage-revoked-last-resort",
         "ak:did_core:web:alice.example",
         "ak:device:alice-desktop",
         1_000_000,
@@ -443,7 +440,7 @@ fn revoked_last_resort_keypackage_cannot_be_reused() {
     let _ = apply_keypackage_publish(&mut state, &publish);
     state
         .mls_key_packages
-        .get_mut("ak:mls_keypackage:revoked-last-resort")
+        .get_mut("keypackage-revoked-last-resort")
         .unwrap()
         .claimed_by = Some("revoked".to_owned());
 
@@ -452,7 +449,7 @@ fn revoked_last_resort_keypackage_cannot_be_reused() {
         "ak.mls.keypackage",
         json!({
             "action": "claim",
-            "keypackage_id": "ak:mls_keypackage:revoked-last-resort",
+            "keypackage_id": "keypackage-revoked-last-resort",
             "group_id": "mls-group-first",
             "intended_realm_id": "ak:realm:alpha",
             "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
@@ -473,7 +470,7 @@ fn keypackage_claim_rejects_mismatched_device_authorization() {
         100,
         "ak.mls.keypackage",
         publish_payload(
-            "ak:mls_keypackage:03",
+            "keypackage-03",
             "ak:did_core:web:alice.example",
             "ak:device:alice-desktop",
             1_000_000,
@@ -486,7 +483,7 @@ fn keypackage_claim_rejects_mismatched_device_authorization() {
         "ak.mls.keypackage",
         json!({
             "action": "claim",
-            "keypackage_id": "ak:mls_keypackage:03",
+            "keypackage_id": "keypackage-03",
             "group_id": "mls-group-abc",
             "device_authorize_event_id": "ak:event:Af7kHhjQt9bXM9MVmV6uu7VNZY1P_sjoIUGS2rxLV8Qt"
         }),
@@ -498,7 +495,7 @@ fn keypackage_claim_rejects_mismatched_device_authorization() {
         }
         other => panic!("expected Rejected, got {other:?}"),
     }
-    let row = state.mls_key_packages.get("ak:mls_keypackage:03").unwrap();
+    let row = state.mls_key_packages.get("keypackage-03").unwrap();
     assert!(row.claimed_by.is_none());
     assert_eq!(
         row.device_authorize_event_id.as_deref(),
@@ -692,7 +689,7 @@ fn welcome_enqueue_decodes_schema_ciphertext_base64_to_raw_welcome_bytes() {
     let key = MlsWelcomeQueueKey::new("ak:did_core:web:bob.example", "ak:device:bob-phone");
     let queue = state.mls_welcomes.get(&key).unwrap();
     assert_eq!(queue[0].welcome_bytes, raw_welcome);
-    assert_eq!(queue[0].key_package_id, "ak:mls_keypackage:01");
+    assert_eq!(queue[0].key_package_id, "keypackage-01");
 }
 
 #[test]

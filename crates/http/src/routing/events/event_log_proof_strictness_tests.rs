@@ -674,6 +674,8 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
                     schema_refs: Vec::new(),
                     facets: BTreeMap::new(),
                     versions: Vec::new(),
+                    content: None,
+                    encrypted_content: None,
                     state: soland_domain::reducer::ObjectLifecycleState::Active,
                     state_changed_at: None,
                     created_by: member.to_owned(),
@@ -2002,6 +2004,15 @@ fn data_event_object_with_refs(
             "did": DATA_EVENT_ACTOR,
             "key_id": "device:01904100-0000-7000-8000-a11ce0000001",
             "key_epoch": 1
+        },
+        // A DataEvent carries a payload, and `data_event_constraint_context`
+        // resolves the field/track authorization context from it. A
+        // payload-less fixture is not a DataEvent any receiver would see, and
+        // it fails before reaching the capability resolution these tests are
+        // about.
+        "payload": {
+            "strand_id": DATA_EVENT_STRAND,
+            "track_name": arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION
         }
     })
     .as_object()

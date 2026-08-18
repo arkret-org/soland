@@ -170,7 +170,9 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
     let session = soland_services::identity::SessionIdentityState {
         token_hash: "moderation-report-service".to_owned(),
         actor: state.service_id().clone(),
-        device_id: "moderation-report-service".to_owned(),
+        // Service session: this internal admission authenticates a service
+        // identity, which owns no device (see `envelope_core`).
+        device_id: String::new(),
         audience: state.service_id().clone(),
         session_public_key: None,
         agent_session: None,

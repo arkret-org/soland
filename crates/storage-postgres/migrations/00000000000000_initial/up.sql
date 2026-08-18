@@ -1695,6 +1695,13 @@ CREATE TABLE public.projection_strands (
     updated_by_id text,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
+    -- common-fields.md 5.2: an active object carries exactly one content slot,
+    -- and a redacted one carries neither. Enforcing it here makes the invariant
+    -- checkable from the row alone instead of by replaying the event stream.
+    CONSTRAINT projection_strands_content_slot_check CHECK (
+        (state = 'redacted' AND content IS NULL AND encrypted_content IS NULL)
+        OR (state <> 'redacted' AND NOT (content IS NOT NULL AND encrypted_content IS NOT NULL))
+    ),
     CONSTRAINT projection_strands_state_check CHECK ((state = ANY (ARRAY['active'::text, 'archived'::text, 'redacted'::text])))
 );
 
@@ -1725,9 +1732,16 @@ CREATE TABLE public.projection_morphs (
     schema_refs jsonb DEFAULT '[]'::jsonb NOT NULL,
     facets jsonb DEFAULT '[]'::jsonb NOT NULL,
     versions jsonb DEFAULT '[]'::jsonb NOT NULL,
+    content jsonb,
+    encrypted_content jsonb,
     scope_circle_id bytea CHECK (octet_length(scope_circle_id) = 33),
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
+    -- Same content-slot invariant as projection_strands.
+    CONSTRAINT projection_morphs_content_slot_check CHECK (
+        (state = 'redacted' AND content IS NULL AND encrypted_content IS NULL)
+        OR (state <> 'redacted' AND NOT (content IS NOT NULL AND encrypted_content IS NOT NULL))
+    ),
     CONSTRAINT projection_morphs_state_check CHECK ((state = ANY (ARRAY['active'::text, 'archived'::text, 'redacted'::text])))
 );
 

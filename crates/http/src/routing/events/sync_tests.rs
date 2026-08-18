@@ -1891,7 +1891,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
         5,
         arkret_wire::EventKind::MessageRevise,
         json!({
-            "target_ref": message_id,
+            "message_id": message_id,
             "content": {"kind": "ak.content.text", "body": "edited"}
         }),
         ROSTER_ACTOR,
@@ -1959,7 +1959,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
         arkret_wire::EventKind::MessageRevise,
         json!({
             "event_id": revision_event_id,
-            "target_ref": message_id,
+            "message_id": message_id,
             "realm_id": ROSTER_REALM,
             "strand_id": strand_id,
             "thread_id": strand_id,

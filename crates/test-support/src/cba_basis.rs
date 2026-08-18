@@ -44,8 +44,6 @@ pub const FIXTURE_MLS_GROUP_ID: &str = "fixtureMlsGroup01";
 /// The recovery notary a fixture Realm names, and the organization controlling
 /// it. The organization is deliberately not the Realm creator's: `single_did`
 /// recovery diversity is only satisfied when they differ.
-const FIXTURE_NOTARY_RECOVERY_MEMBER: &str = "ak:did_core:web:recovery.notary.example";
-const FIXTURE_NOTARY_RECOVERY_ORGANIZATION: &str = "ak:did_core:web:recovery.organization.example";
 
 /// One fixture Realm's accepted authorization basis for one subject.
 pub type RealmBasis = soland_services::conformance_basis::ConformanceRealmBasis;
@@ -342,17 +340,10 @@ pub async fn seed_realm_basis(
 /// `ak.component.realm.reducer_profile.v1` for every later Event in the Realm.
 /// The object carries no `id`: the Realm id is derived from the Event.
 ///
-/// This is shared rather than restated per fixture because a partial payload
-/// does not fail as "this fixture is incomplete" — it fails as a 400 on the
-/// genesis submit, several layers away from whatever the test was about.
-///
-/// The `single_did` notary carries real recovery evidence: `realm.schema.json`
-/// requires `recovery_members` and `recovery_controller_organizations` to be
-/// non-empty, and the reducer requires at least one recovery controller
-/// organization to differ from `controller_organization` — a single-organization
-/// recovery setup is exactly what that rule rejects. A fixture that seeded
-/// empty arrays only got away with it because it wrote straight to persistence
-/// and never met the schema.
+/// Delegates to `soland_http::state::realm_genesis_payload` so fixtures and the
+/// development demo Realm cannot drift apart: the demo Realm id is
+/// `retype(genesis.event_id)`, and a second copy of the payload here would move
+/// that id out from under production.
 #[must_use]
 pub fn realm_genesis_payload(
     subject: &str,
@@ -361,36 +352,9 @@ pub fn realm_genesis_payload(
     trust_domain: &str,
     _created_at: chrono::DateTime<chrono::Utc>,
 ) -> serde_json::Value {
-    let controller_organization = arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(subject.to_owned()).expect("fixture controller DID"),
-    )
-    .expect("fixture controller core id");
     let notary_actor_id = arkret_identifiers::DidCoreId::new(notary_actor_id.to_owned())
         .expect("fixture notary core id");
-    serde_json::json!({
-        "object": {
-            "schema": "ak.schema.realm_genesis.v1",
-            "purpose": "collaboration",
-            "genesis_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
-            "trust_domain": trust_domain,
-            "schema_refs": ["ak.schema.realm.v1"],
-            "encryption_profile": "none",
-            "security_class": "standard",
-            "notary_profile": "single_did",
-            "digest_algorithm": "sha256",
-            "capability_action_registry_digest":
-                arkret_policy::current_capability_action_registry_digest()
-                    .expect("fixture capability action registry digest"),
-            "notary": {
-                "kind": "single_did",
-                "actor_id": notary_actor_id,
-                "recovery_members": [FIXTURE_NOTARY_RECOVERY_MEMBER],
-                "controller_organization": controller_organization,
-                "recovery_controller_organizations": [FIXTURE_NOTARY_RECOVERY_ORGANIZATION]
-            }
-        }
-    })
+    soland_http::state::realm_genesis_payload(subject, &notary_actor_id, trust_domain)
 }
 
 /// Store the Realm's canonical `ak.realm.create`.

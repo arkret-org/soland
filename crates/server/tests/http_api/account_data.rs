@@ -112,7 +112,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
         verified_dev_token_for_device(state.clone(), "did:web:bob.example", BOB_DEVICE, "Bob")
             .await;
 
-    let realm_id = DEMO_REALM_ID;
+    let realm_id = demo_realm_id();
     let key = format!("ak.contacts.realm.{realm_id}");
     let remark = account_data_encrypted_value(
         "did:web:alice.example",
@@ -126,7 +126,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
         &alice,
         "did:web:alice.example",
         ALICE_DEVICE,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         arkret_wire::EventKind::AccountDataSet.as_str(),
         serde_json::json!({
             "key": key.as_str(),
@@ -163,7 +163,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
         &alice,
         "did:web:alice.example",
         ALICE_DEVICE,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         arkret_wire::EventKind::AccountDataSet.as_str(),
         serde_json::json!({
             "key": key.as_str(),
@@ -211,7 +211,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
         &alice,
         "did:web:alice.example",
         ALICE_DEVICE,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         arkret_wire::EventKind::AccountDataSet.as_str(),
         serde_json::json!({
             "key": key.as_str(),
@@ -267,7 +267,7 @@ async fn encrypted_account_data_requires_standard_envelope_metadata() {
         &alice,
         "did:web:alice.example",
         ALICE_DEVICE,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         arkret_wire::EventKind::AccountDataSet.as_str(),
         serde_json::json!({
             "key": key,
@@ -297,7 +297,7 @@ async fn encrypted_account_data_requires_standard_envelope_metadata() {
         &alice,
         "did:web:alice.example",
         ALICE_DEVICE,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         arkret_wire::EventKind::AccountDataSet.as_str(),
         serde_json::json!({
             "key": key,
@@ -377,14 +377,14 @@ async fn encrypted_realm_remark_rejects_plaintext_carrier() {
         "Alice",
     )
     .await;
-    let key = format!("ak.contacts.realm.{DEMO_REALM_ID}");
+    let key = format!("ak.contacts.realm.{}", demo_realm_id());
 
     let rejected = submit_actor_private_event(
         state.clone(),
         &alice,
         "did:web:alice.example",
         ALICE_DEVICE,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         arkret_wire::EventKind::AccountDataSet.as_str(),
         serde_json::json!({
             "key": key,
@@ -410,10 +410,10 @@ async fn account_data_requires_auth() {
     let event = signed_actor_private_event_envelope(
         "did:web:alice.example",
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        DEMO_REALM_ID,
+        demo_realm_id(),
         arkret_wire::EventKind::AccountDataSet.as_str(),
         serde_json::json!({
-            "key": format!("ak.contacts.realm.{DEMO_REALM_ID}"),
+            "key": format!("ak.contacts.realm.{}", demo_realm_id()),
             "expected_revision": 0,
             "holder_id": fixture_actor_core_id("did:web:alice.example"),
             "body": {"local_name": "x"},

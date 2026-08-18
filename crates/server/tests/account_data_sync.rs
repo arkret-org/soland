@@ -493,7 +493,20 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         "Alice Phone",
     )
     .await;
-    let account_data_key = "client.complement_probe.scalar";
+    // `account-data.md` §4 / §5.4 make `account-data-key-registry.json` the whole
+    // key space, and all 23 registered patterns are `storage=encrypted_account_data`.
+    // There is no unregistered plaintext key to probe with; this exercise uses a
+    // registered principal-private key and the encrypted carrier it declares.
+    let account_data_key = "ak.dnd_schedule";
+    let first_value = encrypted_account_data_value(
+        &actor_core,
+        account_data_key,
+        &json!({ "version": 1, "label": "first" }),
+    );
+    let second_value =
+        encrypted_account_data_value(&actor_core, account_data_key, &json!("second"));
+    let stale_value =
+        encrypted_account_data_value(&actor_core, account_data_key, &json!("stale retry"));
 
     let (first_status, first) = put_account_data(
         state.clone(),
@@ -502,11 +515,11 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         "ak:device:01904100-0000-7000-8000-a11ce0000011",
         account_data_key,
         0,
-        json!({ "version": 1, "label": "first" }),
+        first_value.clone(),
     )
     .await;
     assert_eq!(first_status, StatusCode::CREATED, "first PUT: {first}");
-    assert_eq!(first["content"]["version"], 1);
+    assert_eq!(first["content"], first_value);
 
     let (second_status, second) = put_account_data(
         state.clone(),
@@ -515,11 +528,11 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         "ak:device:01904100-0000-7000-8000-a11ce0000011",
         account_data_key,
         first["revision"].as_u64().unwrap(),
-        json!("second"),
+        second_value.clone(),
     )
     .await;
     assert_eq!(second_status, StatusCode::OK, "second PUT: {second}");
-    assert_eq!(second["content"], "second");
+    assert_eq!(second["content"], second_value);
 
     let (stale_status, stale) = put_account_data(
         state.clone(),
@@ -528,7 +541,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         "ak:device:01904100-0000-7000-8000-a11ce0000011",
         account_data_key,
         first["revision"].as_u64().unwrap(),
-        json!("stale retry"),
+        stale_value,
     )
     .await;
     assert_eq!(stale_status, StatusCode::CONFLICT, "{stale}");
@@ -543,7 +556,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     );
     assert_eq!(
         stale["error"]["details"]["current_entry"]["content"],
-        "second"
+        second_value
     );
 
     let phone_sync = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
@@ -556,20 +569,26 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     assert_eq!(event["actor_id"].as_str(), Some(actor_core.as_str()));
     assert_eq!(event["payload"]["holder_id"], actor_core.as_str());
     assert_eq!(event["payload"]["expected_revision"], 1);
-    assert_eq!(event["payload"]["body"], "second");
+    assert_eq!(event["payload"]["body"], second_value);
     assert!(
         event["proofs"]
             .as_array()
             .is_some_and(|proofs| !proofs.is_empty())
     );
-    assert!(!event.to_string().contains("first"));
+    assert!(
+        !event.to_string().contains(
+            first_value["ciphertext"]
+                .as_str()
+                .expect("sealed first value carries ciphertext")
+        )
+    );
     serde_json::from_value::<arkret_wire::Event>(event.clone())
         .expect("sync account_data entry is a typed canonical Event");
 
     let rebuilt_sync = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
     assert_eq!(
         account_data_entry(&rebuilt_sync, account_data_key).map(|entry| &entry["payload"]["body"]),
-        Some(&json!("second")),
+        Some(&second_value),
         "initial baseline must come from the durable Event store"
     );
 

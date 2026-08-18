@@ -367,6 +367,25 @@ async fn validate_event_envelope_with_ingress(
     }
 
     let is_applet_delegated = object.get("applet_id").is_some();
+    // `applet-integration.md` §11 scopes the delegated-agent field triple to the
+    // Event whose "envelope signature is issued by an applet / delegated agent
+    // key while actor_id points at a native principal DID (i.e. actor_id != the
+    // signing key's DID)". An applet service signing as itself — the
+    // `ak.identity.accountability_grant` of §9.1 has `actor_id=service_id` — is
+    // not delegated, and §10.1 requires that Event to carry no `executed_by`.
+    // Triggering on `applet_id` alone would demand `executed_by` on exactly the
+    // Event the provisioning binding forbids it on. The registration gate
+    // (installed, unrevoked, bound to this Realm) still runs either way.
+    let producer_signs_as_actor = object
+        .get("proofs")
+        .and_then(Value::as_array)
+        .and_then(|proofs| proofs.first())
+        .and_then(Value::as_object)
+        .and_then(|proof| event_string_field(proof, &["verification_method"]))
+        .and_then(|vm| vm.rsplit_once('#').map(|(did, _)| did.to_owned()))
+        .and_then(|did| arkret_wire::DidFullId::new(did).ok())
+        .and_then(|did| arkret_wire::project_full_id_to_core_id(&did).ok())
+        .is_some_and(|signer| signer.as_str() == actor_id.as_str());
     // The closed applet provisioning adapter has already verified the installed
     // registration, ghost namespace and provision request before constructing
     // this exact signed Event. Its first formal profile Event is authorized by
@@ -379,6 +398,7 @@ async fn validate_event_envelope_with_ingress(
             &kind,
             actor_id.as_str(),
             realm_id.as_str(),
+            !producer_signs_as_actor,
         )
         .await?;
     }
@@ -762,16 +782,23 @@ async fn validate_event_envelope_with_ingress(
         object,
         realm_bootstrap_contexts,
     )?;
-    let device_id = DeviceId::new(
-        event_string_field(object, &["device_id"]).unwrap_or_else(|| session.device_id.clone()),
-    )
-    .map_err(|_| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "param_invalid",
-            "device_id must be a typed DeviceId",
-        )
-    })?;
+    // The submitting device is request context, not an Event field:
+    // `event-envelope.schema.json` declares no `device_id` and closes the object.
+    // A service session (applet bridge, federation source signature) authenticates
+    // a service identity, which owns no device — that session carries no device id
+    // and the Event is projected with no source device. A session that does name a
+    // device still has to name a typed one.
+    let device_id = if session.device_id.is_empty() {
+        None
+    } else {
+        Some(DeviceId::new(session.device_id.clone()).map_err(|_| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "param_invalid",
+                "device_id must be a typed DeviceId",
+            )
+        })?)
+    };
 
     Ok(ValidatedEventEnvelope {
         event_id,

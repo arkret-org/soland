@@ -289,7 +289,7 @@ pub struct KeyPackageLifetime {
 /// bind reuse to a single Realm.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsKeyPackage {
-    /// Canonical `ak:mls_keypackage:<uuid>` identifier.
+    /// Canonical `keypackage-<uuid>` identifier.
     pub id: String,
     pub keypackage_ref: String,
     pub keypackage_digest: String,
@@ -554,9 +554,14 @@ pub struct StrandProjection {
     pub tracks: BTreeMap<String, StrandTrack>,
     pub title: String,
     pub summary: Option<String>,
-    /// Strand Description (`Strand.content`). Distinct from Synthesis content.
+    /// Strand Description (`Strand.content`), distinct from Synthesis content.
+    /// Exactly one of `content` / `encrypted_content` is present on an `active`
+    /// object and **both MUST be absent once `state=redacted`**
+    /// (`models/common-fields.md` §5.2) — that absence is what makes "the
+    /// content really was cleared" verifiable from a single materialized object
+    /// instead of by replaying the event stream.
     pub content: Option<Value>,
-    /// Encrypted Strand Description (`Strand.encrypted_content`).
+    /// E2EE counterpart of `content`; mutually exclusive with it.
     pub encrypted_content: Option<Value>,
     pub fields: BTreeMap<String, Value>,
     pub state: ObjectLifecycleState,
@@ -715,6 +720,14 @@ pub struct MorphProjection {
     pub schema_refs: Vec<String>,
     pub facets: BTreeMap<String, BTreeMap<String, Value>>,
     pub versions: Vec<DocumentVersionProjection>,
+    /// Canonical content slot (`models/common-fields.md` §5.2). Exactly one of
+    /// `content` / `encrypted_content` is present on an `active` object, and
+    /// **both MUST be absent once `state=redacted`** — that absence is what
+    /// makes "the content really was cleared" verifiable from a single
+    /// materialized object instead of by replaying the event stream.
+    pub content: Option<Value>,
+    /// E2EE counterpart of `content`; mutually exclusive with it.
+    pub encrypted_content: Option<Value>,
     pub state: ObjectLifecycleState,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,

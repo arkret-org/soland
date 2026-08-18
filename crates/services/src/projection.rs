@@ -2641,6 +2641,8 @@ fn morph_write_through_record(
         schema_refs: row.schema_refs.clone(),
         facets: row.facets.clone(),
         versions: row.versions.clone(),
+        content: row.content.clone(),
+        encrypted_content: row.encrypted_content.clone(),
         state: row.state.as_str().to_owned(),
         state_changed_at: row.state_changed_at,
         created_by: row.created_by.clone(),

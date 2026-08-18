@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn redaction_human_reason_reads_the_single_registered_member() {
     let payload = serde_json::json!({
-        "target_event_id": "ak:event:AYTeR35PxnHtaUMXFLoHqGA1yiou3pai07-tzQyViJnt",
+        "message_id": "ak:message:AYTeR35PxnHtaUMXFLoHqGA1yiou3pai07-tzQyViJnt",
         "reason": "machine policy"
     });
 
@@ -15,7 +15,7 @@ fn redaction_human_reason_reads_the_single_registered_member() {
     // Both redaction payload classes are closed and register only `reason`,
     // so no alternative spelling is wire-reachable.
     let unregistered = serde_json::json!({
-        "target_event_id": "ak:event:AYTeR35PxnHtaUMXFLoHqGA1yiou3pai07-tzQyViJnt",
+        "message_id": "ak:message:AYTeR35PxnHtaUMXFLoHqGA1yiou3pai07-tzQyViJnt",
         "human_reason": "moderator request"
     });
     assert_eq!(redaction_human_reason(&unregistered), None);
@@ -69,7 +69,7 @@ fn redaction_hides_message() {
             arkret_wire::EventKind::MessageRedact,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
-                "target_event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
+                "message_id": "ak:message:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
                 "sender": "ak:did_core:web:alice",
                 "reason": "wrong room"
             }),
@@ -132,7 +132,7 @@ fn mal14_tombstone_visible_to_author() {
             arkret_wire::EventKind::MessageRedact,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
-                "target_event_id": event_id,
+                "message_id": message_id_from_event_id(event_id),
                 "sender": "ak:did_core:web:alice",
                 "reason": "policy:auto",
             }),
@@ -159,7 +159,7 @@ fn mal14_tombstone_hidden_from_members() {
             arkret_wire::EventKind::MessageRedact,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
-                "target_event_id": event_id,
+                "message_id": message_id_from_event_id(event_id),
                 "sender": "ak:did_core:web:alice",
             }),
         ),
@@ -187,7 +187,7 @@ fn mal14_late_arriving_redaction_still_takes_effect() {
             arkret_wire::EventKind::MessageRedact,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
-                "target_event_id": event_id,
+                "message_id": message_id_from_event_id(event_id),
                 "sender": "ak:did_core:web:alice",
                 "reason": "late",
             }),
@@ -324,7 +324,7 @@ fn message_revise_creates_chain() {
         arkret_wire::EventKind::MessageRevise,
         "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
         serde_json::json!({
-            "target_ref": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
+            "message_id": "ak:message:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
             "content": {"kind": "ak.content.text", "body": "revised"}
         }),
     );
@@ -372,7 +372,7 @@ fn message_revise_resolves_schema_message_id_and_preserves_event_id() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": revision_event_id,
-                "target_ref": message_id,
+                "message_id": message_id,
                 "content": {"kind": "ak.content.text", "body": "revised"}
             }),
         ),
@@ -471,7 +471,7 @@ fn redaction_by_message_id_hides_latest_revision() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": revision_event_id,
-                "target_ref": message_id,
+                "message_id": message_id,
                 "content": {"kind": "ak.content.text", "body": "revised"}
             }),
         ),

@@ -33,28 +33,33 @@ pub(crate) fn message_event_id_from_ref(value: &str) -> String {
         .unwrap_or_else(|| value.to_owned())
 }
 
+/// Redaction target of either registered redaction payload class.
+///
+/// `message_redact_payload` registers exactly one target carrier
+/// (`message_id`) and `cross_object_redaction_payload` registers exactly one
+/// (`target_ref`); the two member names are disjoint, so reading both is a
+/// per-kind lookup, not a fallback chain over alternative spellings of the
+/// same target.
 pub fn message_redaction_target_ref(payload: &Value) -> Option<String> {
-    ["target_event_id", "message_id", "target_ref", "event_id"]
-        .into_iter()
-        .find_map(|field| {
-            payload
-                .get(field)
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .and_then(|value| {
-                    // A redaction target is a canonical Event or Message id;
-                    // both are 44-char Event tokens, so the kind prefix alone
-                    // never establishes that the payload names one.
-                    if arkret_identifiers::EventId::new(value).is_ok()
-                        || arkret_identifiers::MessageId::new(value).is_ok()
-                    {
-                        Some(value.to_owned())
-                    } else {
-                        None
-                    }
-                })
-        })
+    ["message_id", "target_ref"].into_iter().find_map(|field| {
+        payload
+            .get(field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|value| {
+                // A redaction target is a canonical Event or Message id;
+                // both are 44-char Event tokens, so the kind prefix alone
+                // never establishes that the payload names one.
+                if arkret_identifiers::EventId::new(value).is_ok()
+                    || arkret_identifiers::MessageId::new(value).is_ok()
+                {
+                    Some(value.to_owned())
+                } else {
+                    None
+                }
+            })
+    })
 }
 
 pub fn message_id_from_event_id(value: &str) -> String {
@@ -235,9 +240,9 @@ pub(crate) fn read_scope_key(scope: &ReadScopeWire) -> String {
 
 /// Extract the typed-id object reference from a `ak.redaction` event
 /// payload, used by both the reducer (`apply_redaction`) and the preflight
-/// (`check_redaction_target_transition`). Returns `None` for redactions
-/// that only carry a `target_event_id` (message redaction path), or when no
-/// recognised object-ref field is present.
+/// (`check_redaction_target_transition`). Returns `None` for the Message
+/// redaction path (`ak.message.redact` carries `message_id`, not
+/// `target_ref`).
 pub(crate) fn redaction_object_ref(operation: &Operation) -> Option<String> {
     operation
         .payload

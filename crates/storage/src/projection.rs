@@ -122,6 +122,8 @@ pub struct StrandProjectionRecord {
     pub tracks: BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
     pub title: String,
     pub summary: Option<String>,
+    /// Canonical content slot; exactly one of the two is present on an active
+    /// object and both are absent once `state=redacted` (common-fields.md 5.2).
     pub content: Option<serde_json::Value>,
     pub encrypted_content: Option<serde_json::Value>,
     /// One of `active` / `archived` / `deleted` / `redacted` per spec.
@@ -147,6 +149,10 @@ pub struct MorphProjectionRecord {
     pub schema_refs: serde_json::Value,
     pub facets: serde_json::Value,
     pub versions: serde_json::Value,
+    /// Canonical content slot; exactly one of the two is present on an active
+    /// object and both are absent once `state=redacted` (common-fields.md 5.2).
+    pub content: Option<serde_json::Value>,
+    pub encrypted_content: Option<serde_json::Value>,
     pub state: String,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,

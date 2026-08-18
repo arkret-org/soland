@@ -1582,7 +1582,7 @@ mod tests {
             2,
             arkret_identifiers::Hlc::new("019041000000-0001-00000000").unwrap(),
             json!({
-                "target_ref": message_id,
+                "message_id": message_id,
                 "strand_id": strand_id,
                 "track_name": "discussion",
                 "content": {"kind": "ak.content.text", "body": "revised secret that must not leak"}
@@ -1616,7 +1616,7 @@ mod tests {
         });
         let revised_payload = json!({
             "event_id": revise_event_id,
-            "target_ref": message_id,
+            "message_id": message_id,
             "realm_id": TEST_REALM,
             "strand_id": strand_id,
             "track_name": "discussion",

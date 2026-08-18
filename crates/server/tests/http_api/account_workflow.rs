@@ -237,29 +237,41 @@ async fn account_viewer_returns_device_summaries() {
     assert!(devices[0].get("authorized_at").is_some());
 }
 
+/// `account-lifecycle.md` §3 gives `erasure_pending` exactly one command: an
+/// Account Authority-signed `AccountStatusRecord` replicated through
+/// `POST /_arkret/peer/account-status`. There is deliberately no self-service
+/// erase endpoint, and `parse_account_lifecycle_target_state` rejects the state
+/// on the operator lifecycle route. What this test owns is the *gate*: once the
+/// replica holds `erasure_pending`, every `/_arkret/self/*` read MUST answer
+/// `401 account_erased` rather than a generic `unauthenticated`.
 #[tokio::test]
-async fn account_erasure_projects_erasure_pending_state() {
+async fn erasure_pending_account_refuses_self_reads_with_account_erased() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    let actor = fixture_actor_core_id("did:web:alice.example");
 
-    let mut erased_response = TestClient::post("http://server/_soland/self/account/erase")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await;
-    let erased_status = erased_response.status_code.expect("account erase status");
-    let erased: Value = erased_response.take_json().await.unwrap();
+    state
+        .test_persistence()
+        .account_lifecycle()
+        .put(
+            actor.as_str(),
+            &soland_storage::AccountLifecycleRecord {
+                state: "erasure_pending".to_owned(),
+                reason: Some("account_authority_erasure_record".to_owned()),
+                changed_by: Some(state.service_id().clone()),
+                changed_at: chrono::Utc::now(),
+            },
+        )
+        .await
+        .expect("seed the replicated erasure_pending account status");
+    // The lifecycle lookup is a memory cache over this replica; rebuilding it
+    // from durable state is the same path a restart takes.
+    state
+        .hydrate()
+        .await
+        .expect("rebuild the lifecycle cache from the durable replica");
     assert_eq!(
-        erased_status,
-        StatusCode::OK,
-        "account erase response: {erased}"
-    );
-
-    assert_eq!(
-        erased["state"], "erasure_pending",
-        "account erase response: {erased}"
-    );
-    assert_eq!(
-        state.account_lifecycle_state(fixture_actor_core_id("did:web:alice.example").as_str()),
+        state.account_lifecycle_state(actor.as_str()),
         "erasure_pending"
     );
 

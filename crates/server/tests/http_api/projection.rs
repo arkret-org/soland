@@ -12,7 +12,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
-    let realm_id = DEMO_REALM_ID;
+    let realm_id = demo_realm_id();
     // ── auth required ──────────────────────────────────────────────────
     let unauth = TestClient::get(format!(
         "http://server/_arkret/self/realms/{realm_id}/spaces"
@@ -138,7 +138,7 @@ async fn projection_strands_endpoint_reports_lifecycle_state() {
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
-    let realm_id = DEMO_REALM_ID;
+    let realm_id = demo_realm_id();
     let board_space_id = "ak:space:AVGlCsZA7qED4Oetfq2bCHssiEOshSrFXp7N2ozFnGNE";
     let list_space_id = "ak:space:ARLoPxFc4GPO50Iyec6Jgmc44pLU7zoS5J_ON1ilo5TL";
 
@@ -220,7 +220,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
-    let realm_id = DEMO_REALM_ID;
+    let realm_id = demo_realm_id();
     let create_event = signed_morph_event(
         "ak:event:AbLufeiJbhmgUZnOn6cv9IGg8IV6Ad_Z4jl-DO49vFNw",
         1,
@@ -412,6 +412,8 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
                     schema_refs: Vec::new(),
                     facets: Default::default(),
                     versions: Vec::new(),
+                    content: None,
+                    encrypted_content: None,
                     state: soland_domain::reducer::ObjectLifecycleState::Active,
                     state_changed_at: None,
                     created_by: fixture_actor_core_id("did:web:alice.example").to_string(),
@@ -467,7 +469,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
-    let realm_id = DEMO_REALM_ID;
+    let realm_id = demo_realm_id();
     let relation_event_id = "ak:event:AcFfzgdHkT6eFkto1gjLaKniVuMXx9sD0GKQwk8BXykz";
 
     let initial_body = serde_json::json!({
@@ -691,7 +693,7 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
-    let realm_id = DEMO_REALM_ID;
+    let realm_id = demo_realm_id();
     let morph_id = "ak:morph:AZSXE5WVNu8KIIPUpTYq1ZlfJVUrbrezmj3lKVks2d0N";
     let same_target_ref = "ak:strand:AQPqQQ86Xu0oki28I-vHxUaqNx9y9BGncx-7heOYTZwg";
     let lazy_target_ref = "ak:strand:Ac6u1DKNseulQmYSXes-UrvL-zM0RBPYlUadifIq6wSs";
@@ -796,6 +798,8 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
                 schema_refs: Vec::new(),
                 facets: Default::default(),
                 versions: Vec::new(),
+                content: None,
+                encrypted_content: None,
                 state: soland_domain::reducer::ObjectLifecycleState::Active,
                 state_changed_at: None,
                 created_by: fixture_actor_core_id("did:web:alice.example").to_string(),
@@ -890,7 +894,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
-    let realm_id = DEMO_REALM_ID;
+    let realm_id = demo_realm_id();
     // Create + tombstone a Space container.
     let create_space = signed_space_event(
         "ak:event:AVwC-xute0mcjLNt1it-wqD5SraAbhf7KsUjT_Tv9grH",
@@ -1003,8 +1007,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
         "ak:event:ASbsF6NRXo3Daa7ewI4CDLCLWwaSq3z9if2gB1drYnFu",
         4,
         serde_json::json!({
-            "target_event_id": create_strand_event_id,
-            "object_ref": strand_id,
+            "target_ref": strand_id,
         }),
         vec![create_strand_event_id.as_str()],
     );
@@ -1071,7 +1074,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         "ak.space.create",
         serde_json::json!({
             "object": {
-                "realm_id": DEMO_REALM_ID,
+                "realm_id": demo_realm_id(),
                 "kind": "list",
                 "title": "Persistent Space",
                 "created_by": fixture_actor_core_id("did:web:alice.example"),
@@ -1123,7 +1126,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let by_space = state
         .test_persistence()
         .space_container_projections()
-        .list_for_realm(DEMO_REALM_ID)
+        .list_for_realm(demo_realm_id())
         .await
         .unwrap();
     assert!(
@@ -1151,7 +1154,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         "ak.strand.create",
         serde_json::json!({
             "object": {
-                "realm_id": DEMO_REALM_ID,
+                "realm_id": demo_realm_id(),
                 "metadata": { "title": "Persistent Strand" },
                 "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
@@ -1183,8 +1186,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         "ak:event:ASJ1A-Nm-TdJt8UpH49Yoyt1AbJZDV088rk_6hKn2Ica",
         4,
         serde_json::json!({
-            "target_event_id": create_strand_event_id,
-            "object_ref": strand_id,
+            "target_ref": strand_id,
         }),
         vec![create_strand_event_id.as_str()],
     );
@@ -1207,7 +1209,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         .expect("strand projection MUST still exist after redaction");
     assert_eq!(
         strand_row.state, "redacted",
-        "ak.redaction with object_ref MUST flip strand projection in persistence too"
+        "ak.redaction with target_ref MUST flip strand projection in persistence too"
     );
 
     // Morph: create + archive → persistence has state=archived.
@@ -1217,7 +1219,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         "ak.morph.create",
         serde_json::json!({
             "object": {
-                "realm_id": DEMO_REALM_ID,
+                "realm_id": demo_realm_id(),
                 "morph_kind": "task",
                 "metadata": { "title": "Persistent Morph" },
                 "created_by": fixture_actor_core_id("did:web:alice.example"),

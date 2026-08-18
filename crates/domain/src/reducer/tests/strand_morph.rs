@@ -557,6 +557,130 @@ fn strand_position_events_queue_unknown_strand() {
 /// `ak.redaction` carrying `target_ref: ak:strand:...` flips the
 /// StrandProjection state to Redacted (terminal) per spec
 /// common-fields.md §5.1.
+/// `common-fields.md` §5.2: an active Strand carries exactly one content slot,
+/// and `state=redacted` MUST clear both in the same transition. Materializing
+/// the slot is what makes that verifiable from the projection alone; before
+/// this the slot was never written, so the invariant held only vacuously.
+#[test]
+fn strand_content_slot_is_materialized_and_cleared_by_redaction() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+
+    state.apply(
+        &make_operation(
+            arkret_wire::EventKind::StrandCreate,
+            realm_id,
+            serde_json::json!({
+                "object": {
+                    "realm_id": realm_id,
+                    "title": "Synthesis with a body",
+                    "content": {"kind": "ak.content.text", "body": "the synthesis body"},
+                    "created_by": "ak:did_core:web:alice.example",
+                }
+            }),
+        ),
+        &hlc,
+    );
+
+    // The Strand id is derived from the create Event, so read it back rather
+    // than assuming the payload-supplied value.
+    let strand_id = state
+        .strands
+        .keys()
+        .next()
+        .expect("create materialized a Strand")
+        .clone();
+    let created = &state.strands[&strand_id];
+    assert_eq!(created.state, ObjectLifecycleState::Active);
+    assert_eq!(
+        created.content.as_ref().and_then(|c| c.get("body")),
+        Some(&serde_json::json!("the synthesis body")),
+        "an active Strand MUST materialize the plaintext content slot"
+    );
+    assert!(
+        created.encrypted_content.is_none(),
+        "the two content slots are mutually exclusive"
+    );
+
+    state.apply(
+        &make_operation(
+            arkret_wire::EventKind::Redaction,
+            realm_id,
+            serde_json::json!({
+                "target_ref": strand_id,
+                "sender": "ak:did_core:web:alice.example",
+                "reason": "policy violation",
+            }),
+        ),
+        &hlc,
+    );
+
+    let redacted = &state.strands[&strand_id];
+    assert_eq!(redacted.state, ObjectLifecycleState::Redacted);
+    assert!(
+        redacted.content.is_none() && redacted.encrypted_content.is_none(),
+        "state=redacted MUST clear both content slots in the same transition"
+    );
+}
+
+/// Same invariant on the E2EE side and on Morph: `encrypted_content` is the
+/// only slot present while active, and redaction clears it.
+#[test]
+fn morph_encrypted_content_slot_is_materialized_and_cleared_by_redaction() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+
+    state.apply(
+        &make_operation(
+            arkret_wire::EventKind::MorphCreate,
+            realm_id,
+            serde_json::json!({
+                "object": {
+                    "realm_id": realm_id,
+                    "morph_kind": "task",
+                    "encrypted_content": {"scheme": "mls_rfc9420", "ciphertext": "Y2lwaGVy"},
+                    "created_by": "ak:did_core:web:alice.example",
+                }
+            }),
+        ),
+        &hlc,
+    );
+
+    let morph_id = state
+        .morphs
+        .keys()
+        .next()
+        .expect("create materialized a Morph")
+        .clone();
+    let created = &state.morphs[&morph_id];
+    assert_eq!(created.state, ObjectLifecycleState::Active);
+    assert!(
+        created.encrypted_content.is_some() && created.content.is_none(),
+        "an active E2EE Morph MUST materialize exactly the encrypted slot"
+    );
+
+    state.apply(
+        &make_operation(
+            arkret_wire::EventKind::Redaction,
+            realm_id,
+            serde_json::json!({
+                "target_ref": morph_id,
+                "sender": "ak:did_core:web:alice.example",
+            }),
+        ),
+        &hlc,
+    );
+
+    let redacted = &state.morphs[&morph_id];
+    assert_eq!(redacted.state, ObjectLifecycleState::Redacted);
+    assert!(
+        redacted.content.is_none() && redacted.encrypted_content.is_none(),
+        "state=redacted MUST clear both content slots in the same transition"
+    );
+}
+
 #[test]
 fn redaction_with_strand_target_ref_flips_to_redacted() {
     let mut state = ProjectionState::new();
@@ -592,7 +716,6 @@ fn redaction_with_strand_target_ref_flips_to_redacted() {
             arkret_wire::EventKind::Redaction,
             realm_id,
             serde_json::json!({
-                "target_event_id": "ak:event:AZpcyCdqige1P-5w7zjYU5ugeAn8qSwSCpFRU9CRz2SA",
                 "target_ref": strand_id,
                 "sender": "ak:did_core:web:alice.example",
                 "reason": "policy violation",
@@ -650,7 +773,6 @@ fn redaction_with_morph_target_ref_flips_to_redacted() {
             arkret_wire::EventKind::Redaction,
             realm_id,
             serde_json::json!({
-                "target_event_id": "ak:event:AUYmiWygi5zNhCFs6fat_lSDpnktIttb8rT9AIwOHC5i",
                 "target_ref": morph_id,
                 "sender": "ak:did_core:web:alice.example",
             }),
@@ -698,7 +820,6 @@ fn redaction_preflight_rejects_against_already_terminal() {
             arkret_wire::EventKind::Redaction,
             realm_id,
             serde_json::json!({
-                "target_event_id": "ak:event:AUjlgn4nYH_fSr1KSG7RGczLy67WEbCUAwgZxRWSWeVV",
                 "target_ref": strand_id,
             }),
         ),
@@ -714,7 +835,6 @@ fn redaction_preflight_rejects_against_already_terminal() {
         arkret_wire::EventKind::Redaction,
         realm_id,
         serde_json::json!({
-            "target_event_id": "ak:event:AcJZwpHoLnl8gt3a7i-eGe5eXRORCzvRNhbunn_arfUk",
             "target_ref": strand_id,
         }),
     );
@@ -745,7 +865,6 @@ fn redaction_preflight_rejects_against_already_terminal() {
             arkret_wire::EventKind::Redaction,
             realm_id,
             serde_json::json!({
-                "target_event_id": "ak:event:AUoKFAblyZ8FTmGILTwrp8-QvuGeSJ3_9PJ0uQl4S6Da",
                 "target_ref": morph_id,
             }),
         ),
@@ -755,7 +874,6 @@ fn redaction_preflight_rejects_against_already_terminal() {
         arkret_wire::EventKind::Redaction,
         realm_id,
         serde_json::json!({
-            "target_event_id": "ak:event:AWOSoyRcAABZT-emSL_OMbFhcDghvn0yier07wSAVfmk",
             "target_ref": morph_id,
         }),
     );
@@ -1029,17 +1147,16 @@ fn redaction_preflight_tolerates_unknown_object_or_message_path() {
         arkret_wire::EventKind::Redaction,
         realm_id,
         serde_json::json!({
-            "target_event_id": "ak:event:Ab9oE_tzbcCqFJMmwLq9c6rt2grDdJgQy1JXeT9W5nH-",
             "target_ref": "ak:strand:nope-not-here",
         }),
     );
     assert_eq!(state.check_redaction_target_transition(&unknown), Ok(()));
-    // Missing target_ref (message redaction path).
+    // Message redaction path: ak.message.redact carries message_id, never target_ref.
     let message_redact = make_operation(
-        arkret_wire::EventKind::Redaction,
+        arkret_wire::EventKind::MessageRedact,
         realm_id,
         serde_json::json!({
-            "target_event_id": "ak:event:Ac0LRpyxnIykXaDwQskZnvwSYer8TAeFhe0YNbbfj1Ec",
+            "message_id": "ak:message:Ac0LRpyxnIykXaDwQskZnvwSYer8TAeFhe0YNbbfj1Ec",
         }),
     );
     assert_eq!(

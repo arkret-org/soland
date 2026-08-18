@@ -42,8 +42,7 @@ use super::{now, realm_has_member, sha256_hex, validate_device_id};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
-    CallMediaParticipantBinding, CallMediaServiceSignature, CallMediaTokenExchangeOutcome,
-    CallMediaTokenExchangeRequestBody,
+    CallMediaParticipantBinding, CallMediaTokenExchangeOutcome, CallMediaTokenExchangeRequestBody,
 };
 
 /// Spec-canonical RTC media surface. Mounted under the `self` trust segment by
@@ -363,8 +362,8 @@ fn sign_ice_config_outcome(
 //     `foci_preferred[]` signal.
 //   - Token TTL ≤ `MEDIA_TOKEN_TTL_MAX_SECS` (600s); default `MEDIA_TOKEN_TTL_SHOULD_SECS` (300s)
 //     (MEDIA-1).
-//   - `service_signature.kid` / `participant_binding.issuer_kid` resolves to the current
-//     `ak.realm.media_service.service_id` epoch → `token_issuer_unauthorised` (MEDIA-1).
+//   - `participant_binding.issuer_kid` resolves to the current `ak.realm.media_service.service_id`
+//     epoch → `token_issuer_unauthorised` (MEDIA-1).
 
 /// The `foci[].focus_kind` values this deployment can actually issue a token for.
 ///
@@ -747,17 +746,6 @@ async fn handle_rtc_token(
     .map_err(|error| AppError::internal(format!("participant binding signing input: {error}")))?;
     participant_binding.sig = URL_SAFE_NO_PAD.encode(signing_key.sign(&signing_input).to_bytes());
 
-    // `media-service-binding.md` §3 — the detached service signature is a typed
-    // `{kid, sig}` object over the **same** `signing_input` (same label + same
-    // seven-field tuple), committing the issuer identity of the whole token
-    // exchange response. `kid` is the realm media-service anchor (the focus
-    // issuer_kid); `sig` is the base64url detached Ed25519 signature.
-    let service_sig = signing_key.sign(&signing_input);
-    let service_signature = CallMediaServiceSignature {
-        kid: issuer_kid.clone(),
-        sig: URL_SAFE_NO_PAD.encode(service_sig.to_bytes()),
-    };
-
     let connect_url = issued_token.connect_url;
 
     json_ok(CallMediaTokenExchangeOutcome {
@@ -768,7 +756,6 @@ async fn handle_rtc_token(
         participant_identity,
         participant_binding,
         expires_at,
-        service_signature,
     })
 }
 

@@ -36,7 +36,7 @@ async fn seed_peer_delivery_binding(state: &AppState) {
     // check under test is ever reached.
     seed_test_realm_basis_seal_for_principal_server(
         state,
-        TEST_REALM_ID,
+        test_realm_id(),
         "did:web:alice.example",
         PEER_SOURCE_ID,
     )
@@ -44,10 +44,10 @@ async fn seed_peer_delivery_binding(state: &AppState) {
     let now = Utc::now();
     let alice = fixture_actor_core_id("did:web:alice.example").to_string();
     state.test_projection().lock().members.insert(
-        (TEST_REALM_ID.to_owned(), alice.clone()),
+        (test_realm_id().to_owned(), alice.clone()),
         soland_domain::reducer::SolandMembershipState {
             member: alice,
-            realm_id: TEST_REALM_ID.to_owned(),
+            realm_id: test_realm_id().to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
             delivery_status: Some("routable".to_owned()),
@@ -66,10 +66,10 @@ async fn seed_peer_delivery_binding(state: &AppState) {
     // on that frontier so the inbound destination is current while Alice is
     // hosted by the authenticated remote Principal Server.
     state.test_projection().lock().members.insert(
-        (TEST_REALM_ID.to_owned(), "did:web:bob.example".to_owned()),
+        (test_realm_id().to_owned(), "did:web:bob.example".to_owned()),
         soland_domain::reducer::SolandMembershipState {
             member: "did:web:bob.example".to_owned(),
-            realm_id: TEST_REALM_ID.to_owned(),
+            realm_id: test_realm_id().to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
             delivery_status: Some("routable".to_owned()),
@@ -89,7 +89,7 @@ async fn signed_event_after_current_alice_frontier(state: &AppState, fixture_lab
     let actor_records = state
         .test_persistence()
         .events()
-        .realm_events_newest_first(TEST_REALM_ID)
+        .realm_events_newest_first(test_realm_id())
         .await
         .expect("demo Realm actor frontier")
         .into_iter()
@@ -109,7 +109,9 @@ async fn signed_event_after_current_alice_frontier(state: &AppState, fixture_lab
 }
 const SERVICE_ID: &str = "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x";
 const DESTINATION_TRUST_DOMAIN: &str = "ak:trust_domain:soland.local";
-const TEST_REALM_ID: &str = DEMO_REALM_ID;
+fn test_realm_id() -> &'static str {
+    demo_realm_id()
+}
 const TEST_CIRCLE_ID: &str = "ak:circle:ATOTi3sw4NO_6LjlHGedSYTeT3Leu2J3Tb49M1gn9cFN";
 
 fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -> Value {
@@ -270,7 +272,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
 
     let read_body = serde_json::json!({
         "filters": {"kind": "ak.message.create"},
-        "realms": [TEST_REALM_ID]
+        "realms": [test_realm_id()]
     });
     let query_target = "http://server/_arkret/peer/events";
     let mut query = TestClient::query(query_target).json(&read_body);
@@ -308,7 +310,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
     assert!(!page["has_more"].as_bool().unwrap_or(false), "{page:?}");
 
     let frontier_target = "http://server/_arkret/peer/events/frontier";
-    let frontier_body = serde_json::json!({"realm_id": TEST_REALM_ID});
+    let frontier_body = serde_json::json!({"realm_id": test_realm_id()});
     let mut frontier = TestClient::query(frontier_target).json(&frontier_body);
     for (name, value) in signed_federation_query_headers(
         PEER_SOURCE_DID,
@@ -327,7 +329,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
         Some(StatusCode::OK),
         "peer frontier response: {frontier}"
     );
-    assert_eq!(frontier["realm_id"], TEST_REALM_ID, "{frontier}");
+    assert_eq!(frontier["realm_id"], test_realm_id(), "{frontier}");
     assert!(
         frontier["heads"]
             .as_array()
@@ -508,7 +510,7 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
     }
 
     let frontier_target = "http://server/_arkret/peer/events/frontier";
-    let frontier_body = serde_json::json!({"realm_id": TEST_REALM_ID});
+    let frontier_body = serde_json::json!({"realm_id": test_realm_id()});
     let mut frontier = TestClient::query(frontier_target).json(&frontier_body);
     for (name, value) in signed_federation_query_headers(
         PEER_SOURCE_DID,
@@ -596,7 +598,8 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
     // encryption-and-audit.md §2: this fixture submits plaintext, so the
     // Realm must explicitly authorize the receiving service to see it. This
     // keeps the assertion focused on foreign-domain member relay acceptance.
-    authorize_test_plaintext_message_service(&state, "did:web:alice.example", TEST_REALM_ID).await;
+    authorize_test_plaintext_message_service(&state, "did:web:alice.example", test_realm_id())
+        .await;
     // `did:web:alice.example` is seeded into the demo Realm's membership
     // index; the source domain is `remote.example` (mismatched home), so
     // acceptance exercises the membership-index path.
@@ -692,7 +695,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     // Event member at all in v1 — it exists only on object read projections.
     event["scope_ref"] = serde_json::json!({
         "kind": "circle",
-        "realm_id": TEST_REALM_ID,
+        "realm_id": test_realm_id(),
         "circle_id": TEST_CIRCLE_ID
     });
     event["created_at"] = serde_json::json!(arkret_canonical::format_timestamp_canonical(
@@ -704,7 +707,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     let query_target = "http://server/_arkret/peer/events";
     let query_body = serde_json::json!({
         "filters": {"kind": "ak.message.create"},
-        "realms": [TEST_REALM_ID]
+        "realms": [test_realm_id()]
     });
     let mut query = TestClient::query(query_target).json(&query_body);
     for (name, value) in signed_federation_query_headers(
@@ -733,7 +736,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     // scoped to exactly one Realm, so a body without it is not a resolve
     // request at all.
     let resolve_body = serde_json::json!({
-        "realm_id": TEST_REALM_ID,
+        "realm_id": test_realm_id(),
         "event_ids": [hidden_event_id],
         "include_payload": true
     });
@@ -1005,13 +1008,13 @@ fn peer_submit_body(event: &Value) -> Value {
     let basis_seal = test_cited_basis_seal(&typed_event);
     let binding_payload = serde_json::json!({
         "domain": "ak.peer.events.command.submit.service_binding.v1",
-        "realm_id": TEST_REALM_ID,
+        "realm_id": test_realm_id(),
         "event_id": &event_id,
         "canonical_digest": &event_digest,
     });
     let body = arkret_models_collaboration::event_sync::EventsSubmitFederationBatchRequestBody {
         service_binding_ref: arkret_models_collaboration::event_sync::FederationServiceBindingRef {
-            realm_id: arkret_identifiers::RealmId::new(TEST_REALM_ID.to_owned()).unwrap(),
+            realm_id: arkret_identifiers::RealmId::new(test_realm_id().to_owned()).unwrap(),
             realm_policy_digest: arkret_identifiers::Hash::new(sha256_json(&binding_payload))
                 .unwrap(),
             membership_frontier: vec![arkret_wire::EventId::new(event_id).unwrap()],
@@ -1063,7 +1066,7 @@ async fn seed_peer_read_authorization(state: &AppState, source_service_id: &str,
     let mut meta = state
         .test_persistence()
         .realm_meta()
-        .get(TEST_REALM_ID)
+        .get(test_realm_id())
         .await
         .unwrap()
         .unwrap_or_else(|| RealmMetaRecord {
@@ -1095,7 +1098,7 @@ async fn seed_peer_read_authorization(state: &AppState, source_service_id: &str,
     state
         .test_persistence()
         .realm_meta()
-        .put(TEST_REALM_ID, &meta)
+        .put(test_realm_id(), &meta)
         .await
         .unwrap();
     put_event_record(
@@ -1171,7 +1174,7 @@ fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
         "claim_envelope": {
             "keypackage_ref": keypackage_ref,
             "keypackage_digest": keypackage_digest,
-            "intended_realm_id": TEST_REALM_ID,
+            "intended_realm_id": test_realm_id(),
             "claim_id": claim_id,
             "requester_actor_id": "did:web:alice.example",
             "requester_device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -1196,10 +1199,10 @@ fn mls_governance_binding(group_id: &str) -> Value {
     serde_json::json!({
         "binding_version": 1,
         "encoding_profile": "cbor-deterministic-rfc8949-v1",
-        "realm_id": TEST_REALM_ID,
+        "realm_id": test_realm_id(),
         "effective_scope": {
             "kind": "realm",
-            "realm_id": TEST_REALM_ID
+            "realm_id": test_realm_id()
         },
         "mls_group_id": group_id,
         "previous_epoch": 0,
@@ -1226,7 +1229,7 @@ fn event_envelope(
         kind,
         actor_id,
         "01904100-0000-7000-8000-a11ce0000001",
-        TEST_REALM_ID,
+        test_realm_id(),
         actor_seq,
         Vec::new(),
         payload,
@@ -1238,7 +1241,7 @@ async fn put_event_record(state: &AppState, event: Value, received_at: DateTime<
     // is event-derived; the persistence fixture still needs that resolved key.
     let realm_id = event["realm_id"]
         .as_str()
-        .unwrap_or(TEST_REALM_ID)
+        .unwrap_or(test_realm_id())
         .to_owned();
     let event: arkret_wire::Event =
         serde_json::from_value(event).expect("federation fixture is a typed Event");
@@ -1263,7 +1266,7 @@ fn install_test_circle(state: &AppState, circle_id: &str, members: &[&str]) {
         circle_id.to_owned(),
         CircleProjection {
             circle_id: circle_id.to_owned(),
-            realm_id: TEST_REALM_ID.to_owned(),
+            realm_id: test_realm_id().to_owned(),
             profile_ref: None,
             title: "Need to know".to_owned(),
             summary: None,

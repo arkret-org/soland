@@ -215,7 +215,7 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: 
     let signing_key = test_ephemeral_device_signing_key(BOB_DID, BOB_DEVICE);
     let _authorize_event_id =
         project_authorized_device(&state, BOB_DID, BOB_DEVICE, &signing_key).await;
-    let keypackage_id = format!("ak:mls_keypackage:direct-{suffix}");
+    let keypackage_id = format!("keypackage-direct-{suffix}");
     let keypackage_ref = format!("ak:mls:keypackage:direct-{suffix}");
     let keypackage_bytes = format!("opaque-direct-keypackage-{suffix}");
     // Canonical SDK KeyPackage capability set (ARKRET_MLS_KEY_PACKAGE_CAPABILITIES);
@@ -274,7 +274,7 @@ async fn seed_remote_claim_prerequisites(
         arkret_wire::EventKind::ConsentGrant.as_str(),
         BOB_DID,
         BOB_DEVICE,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         9_003,
         vec![],
         serde_json::json!({

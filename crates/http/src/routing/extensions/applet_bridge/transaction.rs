@@ -139,7 +139,10 @@ fn applet_event_session(state: &AppState, event: &Event) -> SessionRecord {
     SessionRecord {
         token_hash: "applet-transaction-source-signature".to_owned(),
         actor: event.actor_id.to_string(),
-        device_id: "applet-transaction".to_owned(),
+        // An applet service is not a device. This session authenticates the
+        // source service signature, so it names no device rather than a
+        // literal that no device directory can resolve.
+        device_id: String::new(),
         audience: state.service_id().clone(),
         session_public_key: None,
         agent_session: None,

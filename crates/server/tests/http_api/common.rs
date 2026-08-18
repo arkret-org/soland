@@ -33,7 +33,13 @@ pub(crate) use soland_storage::{
 pub(crate) use soland_storage_postgres::Db;
 pub(crate) use soland_test_support::AppStateTestExt;
 
-pub(crate) const DEMO_REALM_ID: &str = soland_http::state::DEVELOPMENT_DEMO_REALM_ID;
+/// Derived, never copied: the demo Realm id is `retype(genesis.event_id)` and
+/// moves with any `arkret-spec` change that touches the genesis payload.
+pub(crate) fn demo_realm_id() -> &'static str {
+    static ID: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| soland_http::state::development_demo_realm_id().to_string());
+    &ID
+}
 /// Fixed REST-style TURN shared secret installed by `test_config()` so the
 /// derived TURN credential is deterministic in assertions. Mirrors
 /// `SOLAND_TURN_SHARED_SECRET`.
@@ -1104,7 +1110,7 @@ pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: V
         "ak.message.create",
         "did:web:alice.example",
         "01904100-0000-7000-8000-a11ce0000001",
-        DEMO_REALM_ID,
+        demo_realm_id(),
         actor_seq,
         prev_refs,
         payload,
@@ -1986,7 +1992,7 @@ pub(crate) async fn seed_test_realm_basis_seal(
     // fixture, whose creator is fixed independently of whichever subject a
     // test grants capabilities to. Reusing `subject` here silently authored a
     // different genesis Event whenever a server or Bob grant was requested.
-    let genesis_subject = if realm_id == DEMO_REALM_ID {
+    let genesis_subject = if realm_id == demo_realm_id() {
         "did:web:alice.example"
     } else {
         subject
@@ -2005,11 +2011,11 @@ pub(crate) async fn seed_test_realm_basis_seal(
 /// materialize the demo Realm's first canonical Seal must not call this — see
 /// [`test_realm_uncovered_basis_seal`].
 pub(crate) async fn seed_demo_realm_basis(state: &AppState) -> arkret_wire::SealId {
-    let seal_id = seed_test_realm_basis_seal(state, DEMO_REALM_ID, "did:web:alice.example").await;
+    let seal_id = seed_test_realm_basis_seal(state, demo_realm_id(), "did:web:alice.example").await;
     let frontier_event_id = state
         .test_persistence()
         .events()
-        .realm_events_newest_first(DEMO_REALM_ID)
+        .realm_events_newest_first(demo_realm_id())
         .await
         .expect("demo Realm bootstrap frontier")
         .into_iter()
@@ -2388,7 +2394,7 @@ pub(crate) fn signed_space_event(
         kind,
         "did:web:alice.example",
         "01904100-0000-7000-8000-a11ce0000001",
-        DEMO_REALM_ID,
+        demo_realm_id(),
         actor_seq,
         prev_refs,
         payload,
@@ -2408,7 +2414,7 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
             .or_insert_with(|| Value::String("ak.schema.space.v1".to_owned()));
         space
             .entry("realm_id".to_owned())
-            .or_insert_with(|| Value::String(DEMO_REALM_ID.to_owned()));
+            .or_insert_with(|| Value::String(demo_realm_id().to_owned()));
         space
             .entry("created_at".to_owned())
             .or_insert_with(|| Value::String("2026-05-17T00:00:00.000Z".to_owned()));
@@ -2494,7 +2500,7 @@ pub(crate) fn signed_strand_event(
         kind,
         "did:web:alice.example",
         "01904100-0000-7000-8000-a11ce0000001",
-        DEMO_REALM_ID,
+        demo_realm_id(),
         actor_seq,
         prev_refs,
         payload,
@@ -2514,7 +2520,7 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
             .or_insert_with(|| Value::String("ak.schema.strand.v1".to_owned()));
         strand
             .entry("realm_id".to_owned())
-            .or_insert_with(|| Value::String(DEMO_REALM_ID.to_owned()));
+            .or_insert_with(|| Value::String(demo_realm_id().to_owned()));
         strand
             .entry("created_at".to_owned())
             .or_insert_with(|| Value::String("2026-05-17T00:00:00.000Z".to_owned()));
@@ -2572,7 +2578,7 @@ pub(crate) fn signed_morph_event(
         kind,
         "did:web:alice.example",
         "01904100-0000-7000-8000-a11ce0000001",
-        DEMO_REALM_ID,
+        demo_realm_id(),
         actor_seq,
         prev_refs,
         payload,
@@ -2592,7 +2598,7 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
             .or_insert_with(|| Value::String("ak.schema.morph.v1".to_owned()));
         morph
             .entry("realm_id".to_owned())
-            .or_insert_with(|| Value::String(DEMO_REALM_ID.to_owned()));
+            .or_insert_with(|| Value::String(demo_realm_id().to_owned()));
         morph
             .entry("created_at".to_owned())
             .or_insert_with(|| Value::String("2026-05-17T00:00:00.000Z".to_owned()));
@@ -2672,7 +2678,7 @@ pub(crate) fn signed_relation_event(
         "ak.relation.create",
         "did:web:alice.example",
         "01904100-0000-7000-8000-a11ce0000001",
-        DEMO_REALM_ID,
+        demo_realm_id(),
         actor_seq,
         prev_refs,
         payload,
@@ -2696,7 +2702,7 @@ fn typed_relation_create_payload(payload: Value) -> Value {
     let relation = arkret_models_collaboration::objects::relation::Relation {
         schema: arkret_wire::SchemaId::RELATION_V1.to_owned(),
         id: None,
-        realm_id: arkret_wire::RealmId::new(DEMO_REALM_ID.to_owned()).expect("fixture realm id"),
+        realm_id: arkret_wire::RealmId::new(demo_realm_id().to_owned()).expect("fixture realm id"),
         scope_circle_id: None,
         effective_scope: None,
         relation_kind: arkret_wire::RelationKind::from_wire(&kind),
@@ -2776,7 +2782,7 @@ pub(crate) fn signed_redaction_event(
         "ak.redaction",
         "did:web:alice.example",
         "01904100-0000-7000-8000-a11ce0000001",
-        DEMO_REALM_ID,
+        demo_realm_id(),
         actor_seq,
         prev_refs,
         payload,

@@ -24,9 +24,9 @@ fn alice_signal(
     signing_key: &SigningKey,
 ) -> arkret_wire::SignalEnvelope {
     signed_signal_envelope(
-        DEMO_REALM_ID,
+        demo_realm_id(),
         arkret_wire::ScopeRef::Realm {
-            realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap(),
+            realm_id: RealmId::new(demo_realm_id().to_owned()).unwrap(),
         },
         ALICE,
         ALICE_DEVICE,
@@ -44,7 +44,7 @@ fn alice_signal(
 async fn signal_test_context(state: &AppState) -> (String, SigningKey, arkret_wire::SealId) {
     let (token, signing_key) =
         seed_signal_sender_device(state, ALICE, ALICE_DEVICE, "Alice Desktop").await;
-    let seal_ref = seed_signal_basis_seal(state, DEMO_REALM_ID, ALICE).await;
+    let seal_ref = seed_signal_basis_seal(state, demo_realm_id(), ALICE).await;
     (token, signing_key, seal_ref)
 }
 
@@ -80,7 +80,7 @@ async fn signal_requires_active_authorized_device_signature() {
         state
             .test_persistence()
             .signal_relay()
-            .list_for_realm(DEMO_REALM_ID)
+            .list_for_realm(demo_realm_id())
             .await
             .unwrap()
             .is_empty(),
@@ -338,7 +338,7 @@ async fn signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body() 
         .add_header("content-type", "application/json", true)
         .body(canonical_body(&serde_json::json!({
             "kind": "ak.presence",
-            "realm_id": DEMO_REALM_ID,
+            "realm_id": demo_realm_id(),
             "actor_id": ALICE,
             "device_id": ALICE_DEVICE,
             "payload": {"state": "dnd", "status_message": "In a meeting"}
@@ -360,7 +360,7 @@ async fn signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body() 
             .await
             .unwrap();
     assert!(outcome.accepted);
-    assert_eq!(outcome.realm_id.as_str(), DEMO_REALM_ID);
+    assert_eq!(outcome.realm_id.as_str(), demo_realm_id());
     assert_eq!(
         outcome.envelope_digest,
         envelope.envelope_digest().unwrap(),
@@ -382,7 +382,7 @@ async fn signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body() 
         state
             .test_persistence()
             .signal_relay()
-            .list_for_realm(DEMO_REALM_ID)
+            .list_for_realm(demo_realm_id())
             .await
             .unwrap()
             .len(),
@@ -436,7 +436,7 @@ async fn push_profile_and_moderation_contracts_work() {
         &token,
         "did:web:alice.example",
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        DEMO_REALM_ID,
+        demo_realm_id(),
         "ak.account_data.set",
         serde_json::json!({
             "key": "ak.push_rules",
@@ -504,7 +504,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let actor_records = state
         .test_persistence()
         .events()
-        .realm_events_newest_first(DEMO_REALM_ID)
+        .realm_events_newest_first(demo_realm_id())
         .await
         .unwrap()
         .into_iter()
@@ -525,12 +525,12 @@ async fn push_profile_and_moderation_contracts_work() {
         arkret_wire::EventKind::SelfModerationReport.as_str(),
         ALICE,
         ALICE_DEVICE,
-        DEMO_REALM_ID,
+        demo_realm_id(),
         actor_seq + 1,
         prev_refs,
         serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
-            "target_ref": DEMO_REALM_ID,
+            "realm_id": demo_realm_id(),
+            "target_ref": demo_realm_id(),
             "report_reason_code": "spam",
             "reporter": reporter,
             "provenance": "self"
@@ -556,7 +556,7 @@ async fn push_profile_and_moderation_contracts_work() {
         state
             .test_persistence()
             .events()
-            .realm_events_newest_first(DEMO_REALM_ID)
+            .realm_events_newest_first(demo_realm_id())
             .await
             .unwrap()
             .iter()
@@ -641,7 +641,7 @@ async fn presence_visibility_account_data_requires_encrypted_content_and_never_g
         state
             .test_persistence()
             .signal_relay()
-            .list_for_realm(DEMO_REALM_ID)
+            .list_for_realm(demo_realm_id())
             .await
             .unwrap()
             .len(),
@@ -665,15 +665,15 @@ async fn signal_send_rejects_a_circle_scope_the_sender_has_not_joined() {
     let (token, signing_key, seal_ref) = signal_test_context(&state).await;
     let circle_id = "ak:circle:AbKyOtwLpbgxFjQKemj8jLsHIcHewEJYmageMo-mkx7R";
     // The Circle exists in the parent Realm but Alice is not a member of it.
-    seed_test_circle(&state, DEMO_REALM_ID, circle_id, &["did:web:bob.example"]);
+    seed_test_circle(&state, demo_realm_id(), circle_id, &["did:web:bob.example"]);
 
     let denied = post_signal(
         state.clone(),
         &token,
         &signed_signal_envelope(
-            DEMO_REALM_ID,
+            demo_realm_id(),
             arkret_wire::ScopeRef::Circle {
-                realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap(),
+                realm_id: RealmId::new(demo_realm_id().to_owned()).unwrap(),
                 circle_id: arkret_identifiers::CircleId::new(circle_id.to_owned()).unwrap(),
             },
             ALICE,
@@ -692,7 +692,7 @@ async fn signal_send_rejects_a_circle_scope_the_sender_has_not_joined() {
         state
             .test_persistence()
             .signal_relay()
-            .list_for_realm(DEMO_REALM_ID)
+            .list_for_realm(demo_realm_id())
             .await
             .unwrap()
             .is_empty(),
@@ -717,7 +717,7 @@ async fn signal_send_accepts_the_realm_scope_for_a_joined_member() {
     let relayed = state
         .test_persistence()
         .signal_relay()
-        .list_for_realm(DEMO_REALM_ID)
+        .list_for_realm(demo_realm_id())
         .await
         .unwrap();
     assert_eq!(relayed.len(), 1);
@@ -725,7 +725,7 @@ async fn signal_send_accepts_the_realm_scope_for_a_joined_member() {
     assert_eq!(
         relayed[0].scope_ref,
         arkret_wire::ScopeRef::Realm {
-            realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap()
+            realm_id: RealmId::new(demo_realm_id().to_owned()).unwrap()
         }
     );
     assert_eq!(
@@ -765,7 +765,7 @@ async fn signal_send_wakes_the_live_stream_carrying_only_the_signal_class() {
         .await
         .expect("an admitted Signal must wake the live stream")
         .expect("event broadcast stays open");
-    assert_eq!(notification.realm_id, DEMO_REALM_ID);
+    assert_eq!(notification.realm_id, demo_realm_id());
     match notification.kind {
         EventNotificationKind::Signal { signal_class } => {
             assert_eq!(signal_class, arkret_wire::SignalClass::Session);
@@ -784,7 +784,7 @@ async fn signal_send_wakes_the_live_stream_carrying_only_the_signal_class() {
 #[tokio::test]
 async fn signal_is_delivered_once_per_subscriber_device_and_never_self_echoed() {
     let state = soland_test_support::app_state(test_config());
-    add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
+    add_test_realm_member(&state, demo_realm_id(), "did:web:bob.example");
     let (alice_token, alice_key, seal_ref) = signal_test_context(&state).await;
     let bob_token = verified_dev_token_for_device(
         state.clone(),
@@ -822,7 +822,7 @@ async fn signal_is_delivered_once_per_subscriber_device_and_never_self_echoed() 
         state
             .test_persistence()
             .events()
-            .realm_events_newest_first(DEMO_REALM_ID)
+            .realm_events_newest_first(demo_realm_id())
             .await
             .unwrap()
             .iter()
@@ -847,18 +847,18 @@ async fn signal_moderation_class_requires_the_moderation_action() {
     let state = soland_test_support::app_state(test_config());
     let bob = "did:web:bob.example";
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000005";
-    add_test_realm_member(&state, DEMO_REALM_ID, bob);
+    add_test_realm_member(&state, demo_realm_id(), bob);
     let (token, signing_key) =
         seed_signal_sender_device(&state, bob, bob_device, "Bob Phone").await;
     // Keep Alice as the authority-root controller. Bob is only a member until
     // the explicit call-moderation grant below is installed.
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, ALICE).await;
+    let seal_ref = seed_signal_basis_seal(&state, demo_realm_id(), ALICE).await;
 
     let moderation = |class| {
         signed_signal_envelope(
-            DEMO_REALM_ID,
+            demo_realm_id(),
             arkret_wire::ScopeRef::Realm {
-                realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap(),
+                realm_id: RealmId::new(demo_realm_id().to_owned()).unwrap(),
             },
             bob,
             bob_device,
@@ -884,7 +884,7 @@ async fn signal_moderation_class_requires_the_moderation_action() {
         state
             .test_persistence()
             .signal_relay()
-            .list_for_realm(DEMO_REALM_ID)
+            .list_for_realm(demo_realm_id())
             .await
             .unwrap()
             .is_empty()
@@ -902,10 +902,10 @@ async fn signal_moderation_class_requires_the_moderation_action() {
 
     let mut grant = soland_http::authz::install_projected_grant(
         state.test_authz(),
-        DEMO_REALM_ID.to_owned(),
+        demo_realm_id().to_owned(),
         fixture_actor_core_id(bob).to_string(),
         fixture_actor_core_id(bob).to_string(),
-        DEMO_REALM_ID.to_owned(),
+        demo_realm_id().to_owned(),
         vec![arkret_wire::CapabilityActionId::CALL_MODERATE.to_owned()],
         vec![],
     );
@@ -930,7 +930,7 @@ async fn public_read_receipt_policy_rejected_for_world_readable_realm_without_op
         .test_persistence()
         .realm_meta()
         .put(
-            DEMO_REALM_ID,
+            demo_realm_id(),
             &RealmMetaRecord {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
@@ -959,7 +959,7 @@ async fn public_read_receipt_policy_rejected_for_world_readable_realm_without_op
         &token,
         "did:web:alice.example",
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        DEMO_REALM_ID,
+        demo_realm_id(),
         "ak.realm.read_receipt_policy",
         serde_json::json!({
             "disclosure": "optional",
@@ -995,8 +995,8 @@ async fn signal_fanout_is_filtered_by_signed_scope_only() {
     let state = soland_test_support::app_state(test_config());
     let bob = "did:web:bob.example";
     let carol = "did:web:carol.example";
-    add_test_realm_member(&state, DEMO_REALM_ID, bob);
-    add_test_realm_member(&state, DEMO_REALM_ID, carol);
+    add_test_realm_member(&state, demo_realm_id(), bob);
+    add_test_realm_member(&state, demo_realm_id(), carol);
     let (alice_token, alice_key, seal_ref) = signal_test_context(&state).await;
     // Bob and Carol only receive here, so they need a session and Realm
     // membership but no Signal signing key of their own.
@@ -1022,7 +1022,7 @@ async fn signal_fanout_is_filtered_by_signed_scope_only() {
         &bob_token,
         bob,
         "ak:device:01904100-0000-7000-8000-b0b000000001",
-        DEMO_REALM_ID,
+        demo_realm_id(),
         "ak.account_data.set",
         serde_json::json!({
             "key": "ak.account.blocklist",
@@ -1050,14 +1050,14 @@ async fn signal_fanout_is_filtered_by_signed_scope_only() {
 
     // Alice and Bob share a Circle; Carol does not.
     let circle_id = "ak:circle:AfCTSVBDc4fkPpvjN8PIuTeDXjkUZrniW8KdpconEUVE";
-    seed_test_circle(&state, DEMO_REALM_ID, circle_id, &[ALICE, bob]);
+    seed_test_circle(&state, demo_realm_id(), circle_id, &[ALICE, bob]);
     let accepted = post_signal(
         state.clone(),
         &alice_token,
         &signed_signal_envelope(
-            DEMO_REALM_ID,
+            demo_realm_id(),
             arkret_wire::ScopeRef::Circle {
-                realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap(),
+                realm_id: RealmId::new(demo_realm_id().to_owned()).unwrap(),
                 circle_id: arkret_identifiers::CircleId::new(circle_id.to_owned()).unwrap(),
             },
             ALICE,
@@ -1106,11 +1106,11 @@ async fn signal_envelope_structural_contract_is_enforced() {
     let state = soland_test_support::app_state(test_config());
     let (token, signing_key, seal_ref) = signal_test_context(&state).await;
     let realm_scope = || arkret_wire::ScopeRef::Realm {
-        realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap(),
+        realm_id: RealmId::new(demo_realm_id().to_owned()).unwrap(),
     };
     let envelope = |class, ttl_seconds| {
         signed_signal_envelope(
-            DEMO_REALM_ID,
+            demo_realm_id(),
             realm_scope(),
             ALICE,
             ALICE_DEVICE,
@@ -1194,7 +1194,7 @@ async fn signal_envelope_structural_contract_is_enforced() {
     // §3(2) — an unknown Seal basis leaves nothing to evaluate eligibility
     // against.
     let unknown_seal = signed_signal_envelope(
-        DEMO_REALM_ID,
+        demo_realm_id(),
         realm_scope(),
         ALICE,
         ALICE_DEVICE,
@@ -1217,7 +1217,7 @@ async fn signal_envelope_structural_contract_is_enforced() {
     let relayed = state
         .test_persistence()
         .signal_relay()
-        .list_for_realm(DEMO_REALM_ID)
+        .list_for_realm(demo_realm_id())
         .await
         .unwrap();
     assert_eq!(relayed.len(), 1);

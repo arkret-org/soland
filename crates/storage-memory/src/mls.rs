@@ -19,10 +19,6 @@ pub(crate) struct MemoryMlsKeyPackageStore {
     revocations: Option<std::sync::Arc<Mutex<crate::MemoryDeviceRevocationState>>>,
 }
 impl MemoryMlsKeyPackageStore {
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
     pub(crate) fn with_revocations(
         revocations: std::sync::Arc<Mutex<crate::MemoryDeviceRevocationState>>,
     ) -> Self {
@@ -583,7 +579,7 @@ mod tests {
 
     #[tokio::test]
     async fn keypackage_lookup_by_wire_ref_resolves_internal_row_id() {
-        let store = MemoryMlsKeyPackageStore::new();
+        let store = MemoryMlsKeyPackageStore::default();
         let record = keypackage("kp-internal-id", false);
         let keypackage_ref = record.keypackage_ref.clone();
         store.put(&record).await.unwrap();
@@ -600,7 +596,7 @@ mod tests {
 
     #[tokio::test]
     async fn peer_claim_idempotency_key_allows_only_one_atomic_keypackage_transition() {
-        let store = MemoryMlsKeyPackageStore::new();
+        let store = MemoryMlsKeyPackageStore::default();
         store.put(&keypackage("kp-1", false)).await.unwrap();
         store.put(&keypackage("kp-2", false)).await.unwrap();
         let first_ledger = ledger("kp-1");
@@ -658,7 +654,7 @@ mod tests {
 
     #[tokio::test]
     async fn peer_claim_never_claims_last_resort_keypackage() {
-        let store = MemoryMlsKeyPackageStore::new();
+        let store = MemoryMlsKeyPackageStore::default();
         store.put(&keypackage("last-resort", true)).await.unwrap();
         let ledger = ledger("last-resort");
         let result = store
@@ -691,7 +687,7 @@ mod tests {
 
     #[tokio::test]
     async fn last_resort_claim_audit_is_immutable_without_claiming_the_reusable_package() {
-        let store = MemoryMlsKeyPackageStore::new();
+        let store = MemoryMlsKeyPackageStore::default();
         store
             .put(&keypackage("last-resort-audit", true))
             .await
@@ -751,7 +747,7 @@ mod tests {
 
     #[tokio::test]
     async fn expired_peer_claim_is_revoked_but_consumed_claim_remains_terminally_consumed() {
-        let store = MemoryMlsKeyPackageStore::new();
+        let store = MemoryMlsKeyPackageStore::default();
         store.put(&keypackage("kp-expired", false)).await.unwrap();
         store.put(&keypackage("kp-consumed", false)).await.unwrap();
 
