@@ -51,6 +51,37 @@
 | `admin::seal` | `SealPruneDiagnostics` | local contract | Soland | 部署本地历史存储 GC；未命中 spec wire 类型 |
 | `admin::seal` | `MultisigPendingEntry` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
 | `admin::seal` | `MultisigPendingOutcome` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
+| `admin::collection` | `RealmClass` | local contract | Soland、Sodmin | `/_soland/admin` Realm 行内分类封闭枚举；未命中 spec wire 类型 |
+| `admin::collection` | `AdminRealmItem` | local contract | Soland、Sodmin | `GET /_soland/admin/{resource}`（realms）与 `/_soland/admin/realms/{realm_id}` 详情投影；字段复用 SDK 类型，整体未命中 spec wire 类型 |
+| `admin::collection` | `AdminRealmMemberItem` | local contract | Soland | `GET /_soland/admin/realms/{realm_id}/members` 成员行投影；Sodmin 未消费该端点；未命中 spec wire 类型 |
+| `admin::collection` | `SpaceHealth` | local contract | Soland、Sodmin | Space 容器生命周期封闭枚举；未命中 spec wire 类型 |
+| `admin::collection` | `AdminSpaceRow` | local contract | Soland、Sodmin | `/_soland/admin/spaces` 集合行投影；未命中 spec wire 类型 |
+| `admin::collection` | `AdminFederationOperation` | local contract | Soland、Sodmin | `/_soland/admin/federation` 联邦操作行投影；字段复用 SDK 类型，整体未命中 spec wire 类型 |
+| `admin::collection` | `AdminMediaRow` | local contract | Soland、Sodmin | `/_soland/admin/media` 集合行投影；未命中 spec wire 类型 |
+| `admin::media` | `AdminMediaBucket` | local contract | Soland、Sodmin | `/_soland/admin/media/statistics` 聚合分桶；Sodmin 经 `AdminMediaStatistics` 内嵌字段消费；未命中 spec wire 类型 |
+| `admin::media` | `AdminMediaByActorRow` | local contract | Soland、Sodmin | `/_soland/admin/media/{statistics,by-actor}` 按上传者聚合行；Sodmin 经 `AdminMediaStatistics`/`AdminMediaByActorList` 内嵌消费；未命中 spec wire 类型 |
+| `admin::media` | `AdminMediaStatistics` | local contract | Soland、Sodmin | `GET /_soland/admin/media/statistics` 响应；未命中 spec wire 类型 |
+| `admin::media` | `AdminMediaByActorList` | local contract | Soland、Sodmin | `GET /_soland/admin/media/by-actor` 列表 envelope；未命中 spec wire 类型 |
+| `admin::media` | `AdminMediaServiceFocus` | local contract | Soland、Sodmin | 字段集对齐 spec `event-payload.schema.json` `$defs/media_service_focus`；作为 Realm media_service 管理投影内嵌，非独立 spec wire 类型 |
+| `admin::media` | `AdminRealmMediaService` | local contract | Soland、Sodmin | `GET /_soland/admin/realms/{realm_id}/media-service` 只读投影；未命中 spec wire 类型 |
+| `admin::policy` | `PolicyEffect` | SDK re-export | Soland、Sodmin | 直接复用 `arkret-wire` 的规范枚举（spec `governance-objects.md` `default_effect` / `policy.schema.json` `$defs/policy_effect` 四值闭集 `allow`/`deny`/`quarantine`/`require_review`），不在本 crate 重复定义；注意与 decision 五值集（`PolicyCheckOutcome.decision`，SDK `AuthzDecision`，`soft_deny`/`hard_deny` 替代 `deny`）是两个不同枚举 |
+| `admin::policy` | `AdminPolicyPayload` | local contract | Soland、Sodmin | `/_soland/self/policies` 文档决策体；未命中 spec wire 类型 |
+| `admin::policy` | `AdminPolicyDocument` | local contract | Soland、Sodmin | `GET /_soland/self/policies` 文档投影；未命中 spec wire 类型 |
+| `admin::policy` | `AdminPolicyDocumentPage` | local contract | Soland、Sodmin | `GET /_soland/self/policies` 分页 envelope；未命中 spec wire 类型 |
+| `admin::policy` | `UpsertPolicyDocumentRequestBody` | local contract | Soland、Sodmin | `POST /_soland/self/policies` 部署本地管理命令；未命中 spec wire 类型 |
+| `admin::server` | `AdminServerInfo` | local contract | Soland、Sodmin | `GET /_soland/admin/server/info` 节点信息投影；未命中 spec wire 类型 |
+| `admin::server` | `AdminServerStats` | local contract | Soland、Sodmin | `GET /_soland/admin/server/stats` 计数快照；未命中 spec wire 类型 |
+| `admin::server` | `AdminServerStatusCounts` | local contract | Soland、Sodmin | Sodmin 经 `AdminServerStatus.counts` 内嵌字段消费；未命中 spec wire 类型 |
+| `admin::server` | `AdminServerStatus` | local contract | Soland、Sodmin | `GET /_soland/admin/server/status` 可达性探针响应；未命中 spec wire 类型 |
+| `admin::service_routes` | `AdminServiceRouteSummary` | local contract | Soland、Sodmin | `GET /_soland/admin/service-routes` 列表行；Sodmin 经 `AdminServiceRouteList` 内嵌消费；字段复用 SDK 类型，整体未命中 spec wire 类型 |
+| `admin::service_routes` | `AdminServiceRouteList` | local contract | Soland、Sodmin | `GET /_soland/admin/service-routes` 列表 envelope；未命中 spec wire 类型 |
+| `admin::service_routes` | `AdminServiceRouteFloor` | local contract | Soland、Sodmin | Sodmin 经 `AdminServiceRouteDetail.floor` 内嵌字段消费；未命中 spec wire 类型 |
+| `admin::service_routes` | `AdminServiceRouteCurrentRecord` | local contract | Soland、Sodmin | Sodmin 经 `AdminServiceRouteDetail.current_record` 内嵌字段消费；未命中 spec wire 类型 |
+| `admin::service_routes` | `AdminServiceRouteCache` | local contract | Soland、Sodmin | Sodmin 经 `AdminServiceRouteDetail.cache` 内嵌字段消费；未命中 spec wire 类型 |
+| `admin::service_routes` | `AdminServiceRouteNotice` | local contract | Soland、Sodmin | Sodmin 经 `AdminServiceRouteDetail.notices` 内嵌字段消费；未命中 spec wire 类型 |
+| `admin::service_routes` | `AdminServiceRouteAck` | local contract | Soland、Sodmin | Sodmin 经 `AdminServiceRouteDetail.acks` 内嵌字段消费；未命中 spec wire 类型 |
+| `admin::service_routes` | `AdminServiceRouteQuarantine` | local contract | Soland、Sodmin | Sodmin 经 `AdminServiceRouteDetail.quarantine` 内嵌字段消费；未命中 spec wire 类型 |
+| `admin::service_routes` | `AdminServiceRouteDetail` | local contract | Soland、Sodmin | `GET /_soland/admin/service-routes/{service_id}/{service_kind}` 详情投影；字段复用 SDK 类型，整体未命中 spec wire 类型 |
 
 若以后出现同名或等价的规范类型，必须先在 `arkret-rust-sdk` 实现，并用规范固定样例做
 canonical JSON 字节对比，再从本表和 `soland-contracts` 删除相应本地契约。

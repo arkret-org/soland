@@ -45,7 +45,7 @@ async fn policy_check_and_validation_work() {
             "scope": demo_realm_id(),
             "subject_ref": "did:web:alice.example",
             "policy_kind": "message.send",
-            "effect": "hard_deny"
+            "effect": "deny"
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -60,7 +60,7 @@ async fn policy_check_and_validation_work() {
             "scope": demo_realm_id(),
             "subject_ref": "did:web:alice.example",
             "policy_kind": "message.send",
-            "effect": "hard_deny",
+            "effect": "deny",
             "actions": ["message.send"],
             // policy_resource_matches compares `resource.kind` against the
             // request `source.service_kind`; scope by `realm_id` only so the
@@ -74,7 +74,7 @@ async fn policy_check_and_validation_work() {
         .await
         .unwrap();
     let policy_id = policy_document["policy_id"].as_str().unwrap().to_owned();
-    assert_eq!(policy_document["payload"]["effect"], "hard_deny");
+    assert_eq!(policy_document["payload"]["effect"], "deny");
 
     let policies: Value = TestClient::get("http://server/_soland/self/policies")
         .add_header("authorization", format!("Bearer {token}"), true)

@@ -8,58 +8,31 @@
 //! runtime with nothing failing to compile. One definition removes that
 //! whole class of drift.
 //!
-//! `effect` is a closed set on the wire — `access-control.md` and
-//! `service-operation-dtos.schema.json#PolicyCheckOutcome.decision` register
-//! exactly five decisions — so it is typed here rather than validated after
-//! the fact.
+//! `effect` is a closed set on the wire — spec `governance-objects.md`
+//! (`Policy.default_effect` / `PolicyRule.effect`) and
+//! `policy.schema.json#/$defs/policy_effect` register exactly four rule
+//! effects (`allow`, `deny`, `quarantine`, `require_review`), and that type
+//! lives in the SDK (`arkret_wire::PolicyEffect`). The five-value set with
+//! `soft_deny` / `hard_deny` instead of `deny` is the Policy Server
+//! *decision* enum (`service-operation-dtos.schema.json`
+//! `PolicyCheckOutcome.decision`, SDK `arkret_wire::AuthzDecision`), not a
+//! valid rule effect — the two closed sets must not be conflated.
 
+pub use arkret_wire::PolicyEffect;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The v1 policy decision set. A bare `deny` is not a valid wire decision —
-/// callers MUST choose `soft_deny` or `hard_deny`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum PolicyEffect {
-    Allow,
-    SoftDeny,
-    HardDeny,
-    RequireReview,
-    Quarantine,
-}
-
-impl PolicyEffect {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Allow => "allow",
-            Self::SoftDeny => "soft_deny",
-            Self::HardDeny => "hard_deny",
-            Self::RequireReview => "require_review",
-            Self::Quarantine => "quarantine",
-        }
-    }
-
-    pub fn from_wire(value: &str) -> Option<Self> {
-        match value {
-            "allow" => Some(Self::Allow),
-            "soft_deny" => Some(Self::SoftDeny),
-            "hard_deny" => Some(Self::HardDeny),
-            "require_review" => Some(Self::RequireReview),
-            "quarantine" => Some(Self::Quarantine),
-            _ => None,
-        }
-    }
-}
-
-/// The stored decision body. The shape does not vary with `policy_kind` —
+/// The stored policy payload. The shape does not vary with `policy_kind` —
 /// every document carries these four members — so it is a struct, not a
 /// `policy_kind`-keyed `Value`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AdminPolicyPayload {
+    /// Spec four-value `policy_effect` closed set; the SDK type carries no
+    /// OpenAPI schema, so the field documents as a string here.
+    #[cfg_attr(feature = "openapi", salvo(schema(value_type = String)))]
     pub effect: PolicyEffect,
     #[serde(default)]
     pub actions: Vec<String>,
@@ -111,6 +84,9 @@ pub struct UpsertPolicyDocumentRequestBody {
     pub scope: String,
     pub subject_ref: String,
     pub policy_kind: String,
+    /// Spec four-value `policy_effect` closed set; see [`AdminPolicyPayload`]
+    /// for why the OpenAPI schema degrades to a plain string.
+    #[cfg_attr(feature = "openapi", salvo(schema(value_type = String)))]
     pub effect: PolicyEffect,
     #[serde(default)]
     pub actions: Vec<String>,

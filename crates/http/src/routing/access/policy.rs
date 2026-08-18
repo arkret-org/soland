@@ -766,14 +766,17 @@ fn any_nonempty_string_field(object: &serde_json::Map<String, Value>, fields: &[
 }
 
 fn policy_effect_decision(value: &str) -> Option<AuthzDecision> {
-    // The stored payload carries the effect as a string; the accepted set is
-    // the one the request body is typed against, spelled once in the contract.
-    match PolicyEffect::from_wire(value)? {
+    // The stored payload carries the rule effect as a string; the accepted
+    // set is the spec four-value `policy_effect` closed set, spelled once in
+    // the SDK type's serde impl. A `deny` rule effect rejects the event, so
+    // it surfaces as the `hard_deny` decision (`policy-server.md`:
+    // `hard_deny` MAY cause the event to be rejected).
+    let effect: PolicyEffect = serde_json::from_value(Value::String(value.to_owned())).ok()?;
+    match effect {
         PolicyEffect::Allow => Some(AuthzDecision::Allow),
-        PolicyEffect::SoftDeny => Some(AuthzDecision::SoftDeny),
-        PolicyEffect::HardDeny => Some(AuthzDecision::HardDeny),
-        PolicyEffect::RequireReview => Some(AuthzDecision::RequireReview),
+        PolicyEffect::Deny => Some(AuthzDecision::HardDeny),
         PolicyEffect::Quarantine => Some(AuthzDecision::Quarantine),
+        PolicyEffect::RequireReview => Some(AuthzDecision::RequireReview),
     }
 }
 
