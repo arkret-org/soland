@@ -265,6 +265,53 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
 }
 
 #[tokio::test]
+async fn device_only_subject_does_not_publish_an_unbound_synthetic_handle() {
+    let mut config = test_config();
+    config.public_base_url = "https://local.host".to_owned();
+    let state = soland_test_support::app_state(config);
+    let subject = fixture_actor_core_id("did:web:device-only.example");
+    let device_id = "ak:device:01904100-0000-7000-8000-00000000d001";
+    let now = chrono::Utc::now();
+    let device = soland_storage::DeviceInventoryRecord {
+        actor: subject.to_string(),
+        device_id: device_id.to_owned(),
+        display_name: Some("Device only".to_owned()),
+        verification_state: "unverified".to_owned(),
+        payload: serde_json::json!({
+            "device_id": device_id,
+            "display_name": "Device only",
+            "verification": "unverified"
+        }),
+        created_at: now,
+        updated_at: now,
+        revoked_at: None,
+    };
+    state
+        .test_persistence()
+        .devices()
+        .put(&device)
+        .await
+        .unwrap();
+
+    let mut response =
+        TestClient::post("http://server/_arkret/find/directory/list-handles-for-subject")
+            .json(&serde_json::json!({
+                "subject": subject,
+                "intent": "display",
+                "limit": 10
+            }))
+            .send(&app_from_state(state))
+            .await;
+
+    assert_eq!(response.status_code.unwrap().as_u16(), 200);
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(body["subject"], subject.as_str());
+    assert!(body["claims"].as_array().unwrap().is_empty());
+    assert!(body["primary_handle"].is_null());
+    assert_eq!(body["has_more"], false);
+}
+
+#[tokio::test]
 async fn directory_resolve_handle_invite_accepts_canonical_handles_without_contact() {
     let mut config = test_config();
     config.public_base_url = "https://local.host".to_owned();

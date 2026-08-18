@@ -596,16 +596,24 @@ async fn require_local_handle_binding(
     canonical_handle: &str,
     localpart: &str,
 ) -> Result<(), AppError> {
+    if local_handle_binding_matches(state, did, localpart).await? {
+        Ok(())
+    } else {
+        Err(handle_unverified_error(canonical_handle))
+    }
+}
+
+async fn local_handle_binding_matches(
+    state: &AppState,
+    did: &str,
+    localpart: &str,
+) -> Result<bool, AppError> {
     let owner = state
         .identities()
         .localpart_owner(localpart)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    if owner.is_some_and(|record| record.account_did == did) {
-        Ok(())
-    } else {
-        Err(handle_unverified_error(canonical_handle))
-    }
+    Ok(owner.is_some_and(|record| record.account_did == did))
 }
 
 fn handle_unverified_error(canonical_handle: &str) -> AppError {
@@ -798,8 +806,14 @@ pub(super) async fn list_handles_for_subject(
                 .map(RealmId::as_str)
                 .or_else(|| body.requester.as_ref().map(DidCoreId::as_str))
                 .unwrap_or(state.service_id().as_str());
-            generated_claim =
-                Some(signed_handle_claim(state, handle, &subject, audience, false).await?);
+            let default_domain = service_handle_domain(state);
+            if let Some(lookup) = handle_lookup(handle, &default_domain)
+                && lookup.authority == default_domain
+                && local_handle_binding_matches(state, &subject, &lookup.localpart).await?
+            {
+                generated_claim =
+                    Some(signed_handle_claim(state, handle, &subject, audience, false).await?);
+            }
         }
         break;
     }
