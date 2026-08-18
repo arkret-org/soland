@@ -1900,6 +1900,12 @@ pub struct AgentSessionState {
 pub struct SessionGrantAuthorizationState {
     pub grant_id: arkret_identifiers::SessionGrantId,
     pub issuer: String,
+    /// Scopes the Account Authority bound into the presented grant. They are
+    /// the only wire-visible statement about what the grant was authorized
+    /// for, so deployment policies that gate a high-risk self-service action
+    /// on a step-up authentication (`account-lifecycle.md` §8.1) read them
+    /// here rather than re-deriving authentication strength locally.
+    pub scopes: Vec<String>,
     pub credential_class: arkret_models_identity::session_credential::SessionGrantCredentialClass,
     pub holder_binding: arkret_models_identity::session_credential::SessionGrantHolderBinding,
     pub device_binding:

@@ -3,6 +3,7 @@
 //! Surfaces:
 //! - `POST /_arkret/gate/account/register` — create the account record
 //! - `GET  /_arkret/self/account/viewer` — return the authenticated principal's account
+//! - `POST /_arkret/self/account/erasure-requests` — record a self-initiated erasure intent
 //! - `POST /_arkret/self/contacts/request` — open a pending contact relationship
 //! - `POST /_arkret/self/contacts/respond` — accept or reject a pending request
 //! - `GET  /_arkret/self/contacts` — list contacts visible to the actor
@@ -211,6 +212,7 @@ pub(crate) use social::{
     validate_request_receipt_cryptography, verify_contact_service_signature,
     verify_contact_service_signature_bytes,
 };
+mod erasure_request;
 pub(crate) mod lifecycle;
 pub(in crate::routing) mod repair;
 // Re-export the lifecycle surface used by sibling routing modules.
@@ -234,7 +236,14 @@ pub(super) fn protocol_router() -> Router {
                 // spec `events_sync` surface group (core tier) binds
                 // `ak.self.account.command.update_profile` to POST /_arkret/self/account/profile;
                 // describe advertises it, so it MUST resolve on the protocol surface.
-                .push(Router::with_path("profile").post(update_profile)),
+                .push(Router::with_path("profile").post(update_profile))
+                // `ak.self.account.command.request_erasure` — the only client
+                // entry point for self-initiated account erasure
+                // (`account-lifecycle.md` §8.1), in the same core surface group.
+                .push(
+                    Router::with_path("erasure-requests")
+                        .post(erasure_request::request_erasure),
+                ),
         )
         .push(contact_routes())
         .push(direct_conversation_routes())

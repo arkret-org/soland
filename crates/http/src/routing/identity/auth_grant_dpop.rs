@@ -544,6 +544,7 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
         session_grant: Some(SessionGrantAuthorizationState {
             grant_id: grant.id.clone(),
             issuer: grant.issuer.clone(),
+            scopes: grant.scopes.clone(),
             credential_class: grant.credential_class,
             holder_binding: grant.holder_binding.clone(),
             device_binding: grant.device_binding.clone(),
@@ -672,6 +673,7 @@ pub(crate) fn session_from_verified_grant(
     let grant_context = SessionGrantAuthorizationState {
         grant_id: grant.id.clone(),
         issuer: grant.issuer.clone(),
+        scopes: grant.scopes.clone(),
         credential_class: grant.credential_class,
         holder_binding: grant.holder_binding.clone(),
         device_binding: grant.device_binding.clone(),
