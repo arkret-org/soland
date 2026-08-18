@@ -1391,7 +1391,7 @@ mod tests {
     fn token_media_permissions_gate_screen_after_mute_adjustment() {
         let focus = MediaProviderConfig {
             provider: MediaProviderKind::ArkretNative,
-            focus_id: "ak:focus:arkret_native:test".to_owned(),
+            focus_id: "arkret_native_test".to_owned(),
             token_endpoint: "https://media.example/_arkret/self/rtc/token".to_owned(),
             connect_url: "https://media.example".to_owned(),
         };

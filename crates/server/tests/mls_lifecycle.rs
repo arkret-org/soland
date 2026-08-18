@@ -562,7 +562,7 @@ async fn mls_lifecycle_end_to_end() {
         &["ak.mls.profile.full"],
         b"claim-nonce-01-unique",
         claim_expires_at,
-        "ak:mls_group:abc",
+        "mls-group-abc",
     );
     let claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
@@ -601,7 +601,7 @@ async fn mls_lifecycle_end_to_end() {
         &["ak.mls.profile.full"],
         b"claim-nonce-same-group",
         claim_expires_at,
-        "ak:mls_group:abc",
+        "mls-group-abc",
     );
     let same_group_claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
@@ -632,7 +632,7 @@ async fn mls_lifecycle_end_to_end() {
         &["ak.mls.profile.full"],
         b"claim-nonce-02-unique",
         claim_expires_at,
-        "ak:mls_group:second",
+        "mls-group-second",
     );
     let rejected_claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
@@ -661,7 +661,7 @@ async fn mls_lifecycle_end_to_end() {
     let bob_token = dev_token(state.clone(), bob_did, bob_device, "Bob").await;
     project_authorized_principal_device(&state, bob_did, bob_device, &event_signing_key).await;
 
-    let group_id = "ak:mls_group:abc";
+    let group_id = "mls-group-abc";
     let lifecycle_keypackage_id = "ak:mls_keypackage:lifecycle-bob";
     let lifecycle_keypackage_ref = "ak:mls:keypackage:lifecycle-bob";
     let lifecycle_keypackage_bytes = b"opaque-lifecycle-keypackage";

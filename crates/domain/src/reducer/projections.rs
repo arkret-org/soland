@@ -104,7 +104,6 @@ pub struct InviteProjection {
     pub inviter: String,
     pub invitee: Option<String>,
     pub third_party_invite: Option<Value>,
-    pub join_rule_snapshot: Value,
     pub state: String,
     pub expires_at: chrono::DateTime<chrono::Utc>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -415,7 +414,7 @@ impl MlsCommitEpochKey {
 /// "mls_epoch_skew" }`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsCommitEpoch {
-    /// MLS group id (`ak:mls_group:<...>`).
+    /// MLS group id (`mls-group-<...>`).
     pub group_id: String,
     /// Tagged Arkret application scope that this MLS group is bound to.
     pub effective_scope: Value,

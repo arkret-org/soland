@@ -732,6 +732,10 @@ pub(crate) async fn seed_test_realm(
         arkret_models_identity::canonical_service_current_record_path(&recipient_service_id)
     );
 
+    // The private invite delivery token is transport material, not part of the
+    // Invite object (`governance-objects.md` §5.3), so it is returned to the
+    // caller here instead of being read back out of an invite read model.
+    let mut seeded_invite_tokens: Vec<String> = Vec::new();
     for invitee in invitees {
         let invitee_core = arkret_wire::project_full_id_to_core_id(
             &DidFullId::new((*invitee).to_owned()).expect("fixture invitee full DID"),
@@ -772,8 +776,7 @@ pub(crate) async fn seed_test_realm(
                 })),
                 introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
                 third_party_invite: None,
-                join_rule_snapshot: None,
-                invite_token,
+                invite_token: invite_token.clone(),
                 status: "pending".to_owned(),
                 claim_nonces: std::collections::BTreeMap::new(),
                 expires_at: None,
@@ -782,6 +785,7 @@ pub(crate) async fn seed_test_realm(
             })
             .await
             .unwrap();
+        seeded_invite_tokens.push(invite_token);
     }
 
     serde_json::json!({
@@ -790,7 +794,8 @@ pub(crate) async fn seed_test_realm(
         "owner_id": owner,
         "members": [{"did": owner}],
         "seal_basis": seal_basis,
-        "deleted": false
+        "deleted": false,
+        "seeded_invite_tokens": seeded_invite_tokens
     })
 }
 

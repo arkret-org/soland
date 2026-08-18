@@ -73,22 +73,22 @@ mod tests {
     #[test]
     fn mls_group_id_reads_only_the_canonical_field() {
         assert_eq!(
-            mls_group_id(&json!({"mls_group_id": "ak:mls_group:g1"})),
-            Some("ak:mls_group:g1")
+            mls_group_id(&json!({"mls_group_id": "mls-group-g1"})),
+            Some("mls-group-g1")
         );
         // `group_id` belongs to `encrypted-envelope.schema.json`, never to an
         // MLS event payload.
-        assert_eq!(mls_group_id(&json!({"group_id": "ak:mls_group:g1"})), None);
+        assert_eq!(mls_group_id(&json!({"group_id": "mls-group-g1"})), None);
     }
 
     #[test]
     fn governance_binding_reads_only_the_canonical_field() {
-        let canonical = json!({"governance_binding": {"mls_group_id": "ak:mls_group:g1"}});
+        let canonical = json!({"governance_binding": {"mls_group_id": "mls-group-g1"}});
         assert_eq!(
             governance_binding(&canonical).and_then(|b| b.get("mls_group_id")),
-            Some(&json!("ak:mls_group:g1"))
+            Some(&json!("mls-group-g1"))
         );
-        let legacy = json!({"mls_governance_binding": {"mls_group_id": "ak:mls_group:g1"}});
+        let legacy = json!({"mls_governance_binding": {"mls_group_id": "mls-group-g1"}});
         assert!(governance_binding(&legacy).is_none());
     }
 

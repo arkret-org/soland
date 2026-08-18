@@ -75,7 +75,7 @@ fn governance_binding_for_scope(
 }
 
 fn governance_binding(previous_epoch: u64) -> Value {
-    governance_binding_for_scope(previous_epoch, "ak:mls_group:abc", realm_scope())
+    governance_binding_for_scope(previous_epoch, "mls-group-abc", realm_scope())
 }
 
 fn welcome_payload(welcome_id: &str) -> Value {
@@ -84,7 +84,7 @@ fn welcome_payload(welcome_id: &str) -> Value {
         "sha256:5555555555555555555555555555555555555555555555555555555555555555";
     json!({
         "welcome_ref": welcome_id,
-        "mls_group_id": "ak:mls_group:abc",
+        "mls_group_id": "mls-group-abc",
         "epoch": 1,
         "commit_ref": "ak:event:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
         "recipient_principal_id": "ak:did_core:web:bob.example",
@@ -163,7 +163,7 @@ fn initialize_genesis(state: &mut ProjectionState) -> String {
     let genesis = op_at(
         499,
         "ak.mls.genesis",
-        genesis_payload("ak:mls_group:abc", realm_scope()),
+        genesis_payload("mls-group-abc", realm_scope()),
     );
     let effect = apply_group_genesis(state, &genesis);
     assert!(matches!(
@@ -219,7 +219,7 @@ fn keypackage_publish_then_claim_succeeds() {
         json!({
             "action": "claim",
             "keypackage_id": "ak:mls_keypackage:01",
-            "group_id": "ak:mls_group:abc",
+            "group_id": "mls-group-abc",
             "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }),
     );
@@ -232,13 +232,13 @@ fn keypackage_publish_then_claim_succeeds() {
             ..
         }) => {
             assert_eq!(keypackage_id, "ak:mls_keypackage:01");
-            assert_eq!(group_id, "ak:mls_group:abc");
+            assert_eq!(group_id, "mls-group-abc");
             assert_eq!(claimed_at, 200);
         }
         other => panic!("expected KeyPackageClaimed, got {other:?}"),
     }
     let row = state.mls_key_packages.get("ak:mls_keypackage:01").unwrap();
-    assert_eq!(row.claimed_by.as_deref(), Some("ak:mls_group:abc"));
+    assert_eq!(row.claimed_by.as_deref(), Some("mls-group-abc"));
     assert_eq!(row.claimed_at, Some(200));
     assert_eq!(row.consumed_at, None);
 }
@@ -265,7 +265,7 @@ fn keypackage_claim_twice_second_fails() {
         json!({
             "action": "claim",
             "keypackage_id": "ak:mls_keypackage:02",
-            "group_id": "ak:mls_group:first",
+            "group_id": "mls-group-first",
             "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }),
     );
@@ -282,7 +282,7 @@ fn keypackage_claim_twice_second_fails() {
         json!({
             "action": "claim",
             "keypackage_id": "ak:mls_keypackage:02",
-            "group_id": "ak:mls_group:second",
+            "group_id": "mls-group-second",
             "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }),
     );
@@ -295,7 +295,7 @@ fn keypackage_claim_twice_second_fails() {
     }
     // First claim's group must still own the row — losers don't overwrite.
     let row = state.mls_key_packages.get("ak:mls_keypackage:02").unwrap();
-    assert_eq!(row.claimed_by.as_deref(), Some("ak:mls_group:first"));
+    assert_eq!(row.claimed_by.as_deref(), Some("mls-group-first"));
     assert_eq!(row.claimed_at, Some(200));
     assert_eq!(row.consumed_at, None);
 }
@@ -322,7 +322,7 @@ fn keypackage_claim_same_group_renews_instead_of_conflicting() {
             json!({
                 "action": "claim",
                 "keypackage_id": "ak:mls_keypackage:renew",
-                "group_id": "ak:mls_group:same",
+                "group_id": "mls-group-same",
                 "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa",
                 "claim_expires_at_unix_ms": (at + 300) * 1000
             }),
@@ -345,7 +345,7 @@ fn keypackage_claim_same_group_renews_instead_of_conflicting() {
         .mls_key_packages
         .get("ak:mls_keypackage:renew")
         .unwrap();
-    assert_eq!(row.claimed_by.as_deref(), Some("ak:mls_group:same"));
+    assert_eq!(row.claimed_by.as_deref(), Some("mls-group-same"));
     assert_eq!(row.claimed_at, Some(600));
     assert_eq!(row.claim_expires_at_unix_ms, Some(900_000));
 
@@ -356,7 +356,7 @@ fn keypackage_claim_same_group_renews_instead_of_conflicting() {
         json!({
             "action": "claim",
             "keypackage_id": "ak:mls_keypackage:renew",
-            "group_id": "ak:mls_group:other",
+            "group_id": "mls-group-other",
             "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }),
     );
@@ -381,7 +381,7 @@ fn last_resort_keypackage_reuses_within_realm_only() {
     let publish = op_at(100, "ak.mls.keypackage", payload);
     let _ = apply_keypackage_publish(&mut state, &publish);
 
-    for group_id in ["ak:mls_group:first", "ak:mls_group:second"] {
+    for group_id in ["mls-group-first", "mls-group-second"] {
         let claim = op_at(
             200,
             "ak.mls.keypackage",
@@ -416,7 +416,7 @@ fn last_resort_keypackage_reuses_within_realm_only() {
         json!({
             "action": "claim",
             "keypackage_id": "ak:mls_keypackage:last-resort",
-            "group_id": "ak:mls_group:other",
+            "group_id": "mls-group-other",
             "intended_realm_id": "ak:realm:beta",
             "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }),
@@ -453,7 +453,7 @@ fn revoked_last_resort_keypackage_cannot_be_reused() {
         json!({
             "action": "claim",
             "keypackage_id": "ak:mls_keypackage:revoked-last-resort",
-            "group_id": "ak:mls_group:first",
+            "group_id": "mls-group-first",
             "intended_realm_id": "ak:realm:alpha",
             "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }),
@@ -487,7 +487,7 @@ fn keypackage_claim_rejects_mismatched_device_authorization() {
         json!({
             "action": "claim",
             "keypackage_id": "ak:mls_keypackage:03",
-            "group_id": "ak:mls_group:abc",
+            "group_id": "mls-group-abc",
             "device_authorize_event_id": "ak:event:Af7kHhjQt9bXM9MVmV6uu7VNZY1P_sjoIUGS2rxLV8Qt"
         }),
     );
@@ -737,7 +737,7 @@ fn commit_epoch_in_order_succeeds() {
         500,
         "ak.mls.commit",
         json!({
-            "mls_group_id": "ak:mls_group:abc",
+            "mls_group_id": "mls-group-abc",
             "base_epoch": 0,
             "next_epoch": 1,
             "sender": "ak:did_core:web:alice.example",
@@ -763,7 +763,7 @@ fn commit_epoch_in_order_succeeds() {
         501,
         "ak.mls.commit",
         json!({
-            "mls_group_id": "ak:mls_group:abc",
+            "mls_group_id": "mls-group-abc",
             "base_epoch": 1,
             "next_epoch": 2,
             "sender": "ak:did_core:web:alice.example",
@@ -779,10 +779,10 @@ fn commit_epoch_in_order_succeeds() {
     assert_eq!(
         state
             .mls_commit_epochs
-            .get(&mls_epoch_key(&realm_scope(), "ak:mls_group:abc").unwrap())
+            .get(&mls_epoch_key(&realm_scope(), "mls-group-abc").unwrap())
             .unwrap(),
         &MlsCommitEpoch {
-            group_id: "ak:mls_group:abc".to_owned(),
+            group_id: "mls-group-abc".to_owned(),
             effective_scope: realm_scope(),
             epoch: 2,
             leader_actor_id: "ak:did_core:web:alice.example".to_owned(),
@@ -807,7 +807,7 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
     state.pending_mls_removals.push(MlsRemoveObligation {
         realm_id: "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1".to_owned(),
         circle_id: None,
-        mls_group_ref: Some("ak:mls_group:abc".to_owned()),
+        mls_group_ref: Some("mls-group-abc".to_owned()),
         actor_id: "ak:did_core:web:alice.example".to_owned(),
         device_id: Some("ak:device:lost".to_owned()),
         membership_frontier: vec![revoke_event.to_owned()],
@@ -822,7 +822,7 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
                 "ak.mls.proposal",
                 json!({
                     "event_id": proposal_ref,
-                    "mls_group_id": "ak:mls_group:abc",
+                    "mls_group_id": "mls-group-abc",
                     "base_epoch": 0,
                     "proposal_type": "remove",
                     "proposal_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -839,7 +839,7 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
             501,
             "ak.mls.commit",
             json!({
-                "mls_group_id": "ak:mls_group:abc",
+                "mls_group_id": "mls-group-abc",
                 "base_epoch": 0,
                 "next_epoch": 1,
                 "sender": "ak:did_core:web:alice.example",
@@ -856,7 +856,7 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
     assert!(state.pending_mls_removals.is_empty());
     let row = state
         .mls_commit_epochs
-        .get(&mls_epoch_key(&realm_scope(), "ak:mls_group:abc").unwrap())
+        .get(&mls_epoch_key(&realm_scope(), "mls-group-abc").unwrap())
         .unwrap();
     assert_eq!(row.epoch, 1);
 }
@@ -880,7 +880,7 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
         state.pending_mls_removals.push(MlsRemoveObligation {
             realm_id: "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1".to_owned(),
             circle_id: None,
-            mls_group_ref: Some("ak:mls_group:abc".to_owned()),
+            mls_group_ref: Some("mls-group-abc".to_owned()),
             actor_id: target.to_owned(),
             device_id: None,
             membership_frontier: vec![frontier.to_owned()],
@@ -895,7 +895,7 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
                     "ak.mls.proposal",
                     json!({
                         "event_id": proposal_ref,
-                        "mls_group_id": "ak:mls_group:abc",
+                        "mls_group_id": "mls-group-abc",
                         "base_epoch": 0,
                         "proposal_type": "remove",
                         "proposal_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -912,7 +912,7 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
             501,
             "ak.mls.commit",
             json!({
-                "mls_group_id": "ak:mls_group:abc",
+                "mls_group_id": "mls-group-abc",
                 "base_epoch": 0,
                 "next_epoch": 1,
                 "sender": "ak:did_core:web:alice.example",
@@ -943,7 +943,7 @@ fn schema_exact_commit_without_a_payload_committer_is_accepted() {
         500,
         "ak.mls.commit",
         json!({
-            "mls_group_id": "ak:mls_group:abc",
+            "mls_group_id": "mls-group-abc",
             "base_epoch": 0,
             "base_epoch_ref": "ak:event:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
             "proposal_refs": [],
@@ -961,7 +961,7 @@ fn schema_exact_commit_without_a_payload_committer_is_accepted() {
     ));
     let row = state
         .mls_commit_epochs
-        .get(&mls_epoch_key(&realm_scope(), "ak:mls_group:abc").unwrap())
+        .get(&mls_epoch_key(&realm_scope(), "mls-group-abc").unwrap())
         .expect("epoch row advanced");
     assert_eq!(row.epoch, 1);
     assert_eq!(row.leader_actor_id, committer);
@@ -976,7 +976,7 @@ fn commit_epoch_requires_effective_genesis() {
             500,
             "ak.mls.commit",
             json!({
-                "mls_group_id": "ak:mls_group:abc",
+                "mls_group_id": "mls-group-abc",
                 "base_epoch": 0,
                 "next_epoch": 1,
                 "sender": "ak:did_core:web:alice.example",
@@ -999,12 +999,12 @@ fn same_group_id_is_independent_across_effective_scopes() {
     let realm_genesis = op_at(
         500,
         "ak.mls.genesis",
-        genesis_payload("ak:mls_group:abc", realm_scope.clone()),
+        genesis_payload("mls-group-abc", realm_scope.clone()),
     );
     let circle_genesis = op_at(
         501,
         "ak.mls.genesis",
-        genesis_payload("ak:mls_group:abc", circle_scope.clone()),
+        genesis_payload("mls-group-abc", circle_scope.clone()),
     );
     assert!(matches!(
         apply_group_genesis(&mut state, &realm_genesis),
@@ -1019,14 +1019,14 @@ fn same_group_id_is_independent_across_effective_scopes() {
         502,
         "ak.mls.commit",
         json!({
-            "mls_group_id": "ak:mls_group:abc",
+            "mls_group_id": "mls-group-abc",
             "base_epoch": 0,
             "next_epoch": 1,
             "sender": "ak:did_core:web:alice.example",
             "commit_bytes_b64": b64(b"realm-commit"),
             "governance_binding": governance_binding_for_scope(
                 0,
-                "ak:mls_group:abc",
+                "mls-group-abc",
                 realm_scope.clone()
             ),
         }),
@@ -1039,7 +1039,7 @@ fn same_group_id_is_independent_across_effective_scopes() {
     assert_eq!(
         state
             .mls_commit_epochs
-            .get(&mls_epoch_key(&realm_scope, "ak:mls_group:abc").unwrap())
+            .get(&mls_epoch_key(&realm_scope, "mls-group-abc").unwrap())
             .unwrap()
             .epoch,
         1
@@ -1047,7 +1047,7 @@ fn same_group_id_is_independent_across_effective_scopes() {
     assert_eq!(
         state
             .mls_commit_epochs
-            .get(&mls_epoch_key(&circle_scope, "ak:mls_group:abc").unwrap())
+            .get(&mls_epoch_key(&circle_scope, "mls-group-abc").unwrap())
             .unwrap()
             .epoch,
         0
@@ -1066,7 +1066,7 @@ fn commit_future_epoch_rejected() {
             602,
             "ak.mls.commit",
             json!({
-                "mls_group_id": "ak:mls_group:abc",
+                "mls_group_id": "mls-group-abc",
                 "base_epoch": 5,
                 "next_epoch": 6,
                 "sender": "ak:did_core:web:alice.example",
@@ -1081,7 +1081,7 @@ fn commit_future_epoch_rejected() {
     assert_eq!(
         state
             .mls_commit_epochs
-            .get(&mls_epoch_key(&realm_scope(), "ak:mls_group:abc").unwrap())
+            .get(&mls_epoch_key(&realm_scope(), "mls-group-abc").unwrap())
             .unwrap()
             .epoch,
         0
@@ -1090,7 +1090,7 @@ fn commit_future_epoch_rejected() {
 
 fn commit_op(secs: i64, label: &[u8], extra: Value) -> Operation {
     let mut payload = json!({
-        "mls_group_id": "ak:mls_group:abc",
+        "mls_group_id": "mls-group-abc",
         "base_epoch": 0,
         "next_epoch": 1,
         "sender": "ak:did_core:web:alice.example",
@@ -1129,7 +1129,7 @@ fn commit_rejects_retired_binding_fields() {
     assert_eq!(
         state
             .mls_commit_epochs
-            .get(&mls_epoch_key(&realm_scope(), "ak:mls_group:abc").unwrap())
+            .get(&mls_epoch_key(&realm_scope(), "mls-group-abc").unwrap())
             .unwrap()
             .epoch,
         0
@@ -1140,7 +1140,7 @@ fn commit_rejects_retired_binding_fields() {
 fn concurrent_commits_contend_then_resolve() {
     let mut state = ProjectionState::default();
     initialize_genesis(&mut state);
-    let epoch_key = mls_epoch_key(&realm_scope(), "ak:mls_group:abc").unwrap();
+    let epoch_key = mls_epoch_key(&realm_scope(), "mls-group-abc").unwrap();
 
     // First commit at base epoch 0 lands → epoch 1.
     assert!(matches!(

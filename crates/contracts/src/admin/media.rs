@@ -147,7 +147,7 @@ mod tests {
     fn provider_issuance_fields_are_rejected() {
         assert!(
             serde_json::from_value::<AdminMediaServiceFocus>(serde_json::json!({
-                "focus_id": "ak:focus:livekit:green",
+                "focus_id": "livekit_green",
                 "focus_kind": "livekit",
                 "token_endpoint": "https://media.example/_arkret/self/rtc/token",
                 "connect_url": "wss://media.example/livekit",

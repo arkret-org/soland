@@ -730,7 +730,6 @@ async fn persist_private_invite_projection(
         invite_delivery_target,
         introduction_evidence_digest,
         third_party_invite: None,
-        join_rule_snapshot: payload.get("join_rule_snapshot").cloned(),
         invite_token: crate::routing::generate_invite_token(
             &invite_id,
             validated.realm_id.as_str(),

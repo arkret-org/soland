@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 
 use arkret_models_collaboration::direct_conversation_repair::{
     DirectConversationRepairEnqueueStatus, DirectConversationRepairRecipientTarget,
-    DirectConversationRepairRelayRequest,
+    DirectConversationRepairRelayRequest, MemberRepairHumanTarget, MemberRepairNativeAgentTarget,
+    member_repair_human_target_snapshot_digest, member_repair_native_agent_target_snapshot_digest,
 };
 use arkret_models_collaboration::sync_frames::account_sync::DeviceMessageSender;
 use chrono::{DateTime, Utc};
@@ -20,8 +21,6 @@ use super::*;
 const SOURCE_INTENT_PREFIX: &str = "direct-conversation-repair-intent:";
 const SOURCE_OUTCOME_PREFIX: &str = "direct-conversation-repair-outcome:";
 const TARGET_REQUEST_DOMAIN: &[u8] = b"ak.member-repair-target-request-v1\n";
-const HUMAN_SNAPSHOT_DOMAIN: &[u8] = b"ak.member-repair-target-snapshot-human-v1\n";
-const AGENT_SNAPSHOT_DOMAIN: &[u8] = b"ak.member-repair-target-snapshot-agent-v1\n";
 const MESSAGE_ID_DOMAIN: &[u8] = b"ak.member-repair-message-id-v1\n";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -781,15 +780,26 @@ async fn accept_agent_relay(
             ));
         }
     };
-    let target_snapshot_digest = domain_hash(
-        AGENT_SNAPSHOT_DOMAIN,
-        &json!({
-            "agent_id": record.agent_id,
-            "verification_method": record.verification_method,
-            "authorized_event_ref": record.authorized_event_ref,
-            "device_message_id": record.message_id,
-        }),
-    )?;
+    // `contact-and-direct-conversation.md` §8.2.1: the Native Agent snapshot
+    // transcript is the closed recipient endpoint triple plus the frozen
+    // device_message_id, built by the one SDK helper so producer and verifier
+    // cannot drift on member names.
+    let target_snapshot_digest =
+        member_repair_native_agent_target_snapshot_digest(&MemberRepairNativeAgentTarget {
+            recipient_agent_id: DidCoreId::new(record.agent_id.clone())
+                .map_err(|error| AppError::internal(error.to_string()))?,
+            recipient_agent_verification_method: arkret_wire::DidUrl::new(
+                record.verification_method.clone(),
+            )
+            .map_err(|error| AppError::internal(error.to_string()))?,
+            recipient_agent_key_authorize_event_id: arkret_wire::EventId::new(
+                record.authorized_event_ref.clone(),
+            )
+            .map_err(|error| AppError::internal(error.to_string()))?,
+            device_message_id: arkret_wire::DeviceMessageId::new(record.message_id.clone())
+                .map_err(|error| AppError::internal(error.to_string()))?,
+        })
+        .map_err(|error| AppError::internal(error.to_string()))?;
     Ok(DirectConversationRepairEnqueueOutcome {
         request_id: request.request_id.clone(),
         request_digest: Hash::new(request_digest.to_owned())
@@ -856,13 +866,16 @@ fn target_outcome_from_markers(
     let transcript = markers
         .iter()
         .map(|marker| {
-            json!({
-                "recipient_device_id": marker.recipient_device_id,
-                "device_message_id": marker.message_id,
+            Ok(MemberRepairHumanTarget {
+                recipient_device_id: arkret_wire::DeviceId::new(marker.recipient_device_id.clone())
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+                device_message_id: arkret_wire::DeviceMessageId::new(marker.message_id.clone())
+                    .map_err(|error| AppError::internal(error.to_string()))?,
             })
         })
-        .collect::<Vec<_>>();
-    let snapshot_digest = domain_hash(HUMAN_SNAPSHOT_DOMAIN, &transcript)?;
+        .collect::<Result<Vec<_>, AppError>>()?;
+    let snapshot_digest = member_repair_human_target_snapshot_digest(&transcript)
+        .map_err(|error| AppError::internal(error.to_string()))?;
     Ok(DirectConversationRepairEnqueueOutcome {
         request_id: request.request_id.clone(),
         request_digest: Hash::new(request_digest.to_owned())

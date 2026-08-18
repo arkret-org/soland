@@ -267,7 +267,6 @@ async fn seed_pending_invite(
             })),
             introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
             third_party_invite: None,
-            join_rule_snapshot: Some(json!({"join_rule": "invite"})),
             invite_token: new_prefixed_uuid7("ak:invite-token:"),
             status: "pending".to_owned(),
             claim_nonces: std::collections::BTreeMap::new(),

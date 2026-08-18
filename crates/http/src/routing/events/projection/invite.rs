@@ -517,9 +517,6 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
         .map(|value| value.with_timezone(&chrono::Utc))
         .unwrap_or(operation.created_at);
-    let join_rule_snapshot = invite_value_field(payload, invite, "join_rule_snapshot")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({"join_rule": "invite"}));
     let invites = state.realm_invites();
     if matches!(invites.get(&invite_id).await, Ok(Some(_))) {
         return;
@@ -538,7 +535,6 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
         invite_delivery_target: None,
         introduction_evidence_digest: None,
         third_party_invite,
-        join_rule_snapshot: Some(join_rule_snapshot),
         invite_token: String::new(),
         status,
         claim_nonces: std::collections::BTreeMap::new(),
@@ -780,7 +776,6 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
         invite_delivery_target,
         introduction_evidence_digest,
         third_party_invite: None,
-        join_rule_snapshot: None,
         invite_token,
         // The accepted create always initializes the reducer lifecycle at
         // `pending`. A private delivery target is routing metadata, not a
@@ -1172,7 +1167,6 @@ mod tests {
                         "token_commitment": format!("sha256:{}", "a".repeat(64))
                     })
                 }),
-                join_rule_snapshot: None,
                 invite_token: "private-token".to_owned(),
                 status: "pending".to_owned(),
                 claim_nonces: BTreeMap::new(),
@@ -1372,7 +1366,6 @@ mod tests {
                 invite_delivery_target: Some(delivery_target.clone()),
                 introduction_evidence_digest: Some(evidence_digest.clone()),
                 third_party_invite: None,
-                join_rule_snapshot: Some(json!({"private_delivery": true})),
                 invite_token: "private-token".to_owned(),
                 status: "pending".to_owned(),
                 claim_nonces: BTreeMap::new(),
@@ -1428,10 +1421,9 @@ mod tests {
         );
         let retained = state.realm_invites().get(invite_id).await.unwrap().unwrap();
         assert_eq!(
-            retained.join_rule_snapshot,
-            Some(json!({"private_delivery": true}))
+            retained.invite_token, "private-token",
+            "private delivery material stays out of the Invite object"
         );
-        assert_eq!(retained.invite_token, "private-token");
     }
 
     #[tokio::test]
@@ -1458,7 +1450,6 @@ mod tests {
                 invite_delivery_target: None,
                 introduction_evidence_digest: None,
                 third_party_invite: None,
-                join_rule_snapshot: None,
                 invite_token: "private-token".to_owned(),
                 status: "pending".to_owned(),
                 claim_nonces: BTreeMap::new(),

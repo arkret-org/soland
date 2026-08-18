@@ -1817,7 +1817,6 @@ CREATE TABLE public.realm_invites (
     invite_delivery_target jsonb,
     introduction_evidence_digest text,
     third_party_invite jsonb,
-    join_rule_snapshot jsonb,
     invite_token text NOT NULL,
     status text NOT NULL,
     claim_nonces jsonb DEFAULT '{}'::jsonb NOT NULL,

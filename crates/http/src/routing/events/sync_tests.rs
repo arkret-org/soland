@@ -703,7 +703,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
         sender: Some(ROSTER_ACTOR.to_owned()),
         payload: json!({
             "realm_id": ROSTER_REALM,
-            "mls_group_id": "ak:mls_group:01904100-0000-7000-8000-0000000000e1"
+            "mls_group_id": "mls-group-01904100-0000-7000-8000-0000000000e1"
         }),
         created_at,
         received_at,

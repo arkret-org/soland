@@ -307,20 +307,46 @@ fn validate_patch_map_paths(
     Ok(())
 }
 
+/// Which object kind an object-patch Event kind writes, when the kind names one.
+///
+/// This is payload knowledge - which object family the Event patches - and
+/// deliberately NOT a copy of any reducer-managed path list: the paths stay in
+/// `arkret_wire::patch::reducer_managed_patch_reason`, whose canonical source is
+/// `registry/reducer-managed-path-registry.json`. Knowing the kind is what lets
+/// the registered per-kind carve-outs through; the object-agnostic superset has
+/// none, so it refuses the `ak.view.update` patch that `views.md` 3.1 defines as
+/// the only way to tombstone a shared View.
+pub(crate) fn patched_object_kind(kind: &arkret_wire::EventKind) -> Option<&'static str> {
+    match kind {
+        arkret_wire::EventKind::ProfileUpdate => Some("actor_profile"),
+        arkret_wire::EventKind::CircleUpdate => Some("circle"),
+        arkret_wire::EventKind::MorphUpdate => Some("morph"),
+        arkret_wire::EventKind::RelationUpdate => Some("relation"),
+        arkret_wire::EventKind::SpaceUpdate => Some("space"),
+        arkret_wire::EventKind::StrandUpdate | arkret_wire::EventKind::StrandTracksUpdate => {
+            Some("strand")
+        }
+        arkret_wire::EventKind::ViewUpdate => Some("view"),
+        _ => None,
+    }
+}
+
 pub(crate) fn validate_operation_patch_semantics(
+    kind: &arkret_wire::EventKind,
     operation: &Operation,
 ) -> Result<(), &'static str> {
     let Some(patch) = operation.payload.get("patch").and_then(Value::as_object) else {
         return Ok(());
     };
-    validate_patch_semantic_safety(patch)
+    validate_patch_semantic_safety(patch, patched_object_kind(kind))
 }
 
 pub(crate) fn validate_patch_semantic_safety(
     patch: &serde_json::Map<String, Value>,
+    object_kind: Option<&str>,
 ) -> Result<(), &'static str> {
     for (path, value) in patch {
-        if patch_path_targets_reducer_managed(path) {
+        if patch_path_targets_reducer_managed(path, object_kind) {
             return Err(arkret_wire::ReasonCode::PATCH_PATH_REDUCER_MANAGED);
         }
         if patch_op_removes_value(value) && patch_path_targets_redactable_unset(path) {
@@ -331,24 +357,28 @@ pub(crate) fn validate_patch_semantic_safety(
 }
 
 /// Whether a patch path addresses a field the generic update surface does not
-/// own.
+/// own, decided against the registered set of `object_kind` when it is known.
 ///
 /// The path set is the canonical projection of
-/// `registry/reducer-managed-path-registry.json`; this module never spells its
-/// own list. This admission hop dispatches on the operation alone and has no
-/// object kind, so it applies the conservative object-agnostic superset
-/// (`event-and-patch.md` §4.2.5); a hop that knows the object kind decides with
-/// `arkret_wire::patch::reducer_managed_patch_reason` instead.
-fn patch_path_targets_reducer_managed(path: &str) -> bool {
+/// `registry/reducer-managed-path-registry.json` and is owned by
+/// `arkret_wire::patch::reducer_managed_patch_reason`; this module never spells
+/// its own list. `None` means the object kind was not proven, so the
+/// conservative object-agnostic superset applies and no registered carve-out is
+/// honoured (`event-and-patch.md` 4.2.5).
+fn patch_path_targets_reducer_managed(path: &str, object_kind: Option<&str>) -> bool {
     let root = patch_segment_head(path.split('.').next().unwrap_or_default());
     let field = if root == Some("object") {
         patch_segment_head(path.split('.').nth(1).unwrap_or_default())
     } else {
         root
     };
-    field.is_some_and(|field| {
-        arkret_wire::generated::REDUCER_MANAGED_ANY_OBJECT_PATCH_PATHS.contains(&field)
-    })
+    let Some(field) = field else {
+        return false;
+    };
+    if let Some(object_kind) = object_kind {
+        return arkret_wire::patch::reducer_managed_patch_reason(object_kind, field).is_some();
+    }
+    arkret_wire::generated::REDUCER_MANAGED_ANY_OBJECT_PATCH_PATHS.contains(&field)
 }
 
 /// Whether a patch path addresses a registered redactable content-carrier slot.

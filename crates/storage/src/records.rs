@@ -307,7 +307,6 @@ pub struct RealmInviteRecord {
     pub invite_delivery_target: Option<Value>,
     pub introduction_evidence_digest: Option<String>,
     pub third_party_invite: Option<Value>,
-    pub join_rule_snapshot: Option<Value>,
     pub invite_token: String,
     pub status: String,
     pub claim_nonces: BTreeMap<String, String>,

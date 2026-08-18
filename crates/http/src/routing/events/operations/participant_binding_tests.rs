@@ -13,7 +13,7 @@ use super::*;
 
 const REALM_ID: &str = "ak:realm:AWBLVNs9HeoGO5lSMOgHAujzyX_u-d_6wfDWF_3lEM2J";
 const CALL_ID: &str = "ak:call:Aa5NVuAPR6HTlIsZAgPhBnb3iRqz7fRvyOkiCWbdOaLa";
-const FOCUS_ID: &str = "ak:focus:arkret_native:green";
+const FOCUS_ID: &str = "arkret_native_green";
 const ACTOR_ID: &str = "ak:did_core:webvh:z6mkalice";
 const DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 const ISSUER_KID: &str = "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#media-2026-06";

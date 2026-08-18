@@ -71,11 +71,15 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "generic redaction",
             kind: arkret_wire::EventKind::Redaction,
-            // ak.redaction validates its payload against message_redact_payload
-            // (anyOf message_id | target_ref | event_id | target_event_id, with
-            // additionalProperties=false). The target pointer `redacts` is an
-            // event-ENVELOPE field (event-envelope.schema.json), not part of the
-            // operation payload, so the payload carries the target via target_ref.
+            // ak.redaction validates its payload against
+            // cross_object_redaction_payload (anyOf target_ref | event_id |
+            // target_event_id, with additionalProperties=false). Its target set
+            // excludes Message: message_id is not a member and target_ref cannot
+            // spell ak:message:, because Message reaches state=redacted only
+            // through ak.message.redact (common-fields.md 5.1 Message exemption).
+            // The target pointer `redacts` is an event-ENVELOPE field
+            // (event-envelope.schema.json), not part of the operation payload, so
+            // the payload carries the target via target_ref.
             payload: json!({"target_ref": "ak:event:ASVxAZxIUYM__aicHMtZdYI9scFpXAK99QLzn2_HB7oR"}),
             valid: true,
         },

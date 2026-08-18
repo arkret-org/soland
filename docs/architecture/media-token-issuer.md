@@ -45,13 +45,13 @@ Each focus in a realm's `ak.realm.media_service.foci[]` advertises a
 canonical `focus_id` of the form:
 
 ```text
-ak:focus:<backend>:<region>:<instance-disambiguator>
+<backend>:<region>:<instance-disambiguator>
 ```
 
 Examples:
 
-- `ak:focus:livekit:eu-west-1` — a LiveKit pool in eu-west-1.
-- `ak:focus:mediasoup:us-east-2:b` — a second Mediasoup pool in us-east-2.
+- `livekit_eu-west-1` — a LiveKit pool in eu-west-1.
+- `mediasoup_us-east-2:b` — a second Mediasoup pool in us-east-2.
 
 Derivation rules:
 
@@ -79,7 +79,7 @@ the realm's `ak.realm.media_service.foci[]` set, returning `focus_mismatch`.
   "issuer_kid": "ak.media-issuer/example/2026-05",
   "realm_id": "ak:realm:...",
   "call_id": "ak:call:...",
-  "focus_id": "ak:focus:livekit:eu-west-1",
+  "focus_id": "livekit_eu-west-1",
   "actor_id": "did:webvh:...",
   "device_id": "ak:device:...",
   "participant_identity": "ak:participant:<realm>:<actor>:<device>:<call>",

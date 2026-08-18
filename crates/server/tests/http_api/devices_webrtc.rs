@@ -617,7 +617,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
             "call_id": session_id,
             "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "ak:focus:arkret_native:blue"
+            "focus_id": "arkret_native_blue"
         })))
         .send(&app_from_state(state.clone()))
         .await
@@ -632,7 +632,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     // Spec `CallMediaTokenExchangeOutcome` required fields: focus_id + backend_kind
     // identify the chosen focus and its backend protocol; `todos` is not a
     // schema field and must not appear.
-    assert_eq!(token_response["focus_id"], "ak:focus:arkret_native:blue");
+    assert_eq!(token_response["focus_id"], "arkret_native_blue");
     assert_eq!(token_response["backend_kind"], "arkret_native");
     assert!(token_response.get("todos").is_none());
     // §3 — the signing key is this deployment's configuration, not a cell
@@ -652,7 +652,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     );
     assert_eq!(
         token_response["participant_binding"]["focus_id"],
-        "ak:focus:arkret_native:blue"
+        "arkret_native_blue"
     );
     // `media-service-binding.md` §3 — service_signature is a typed {kid, sig}
     // object, not a packed `<kid>:<alg>:<sig>` string.
@@ -730,7 +730,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     );
     let backend_payload = &backend_token["payload"];
     assert_eq!(backend_payload["call_id"], session_id);
-    assert_eq!(backend_payload["focus_id"], "ak:focus:arkret_native:blue");
+    assert_eq!(backend_payload["focus_id"], "arkret_native_blue");
     assert_eq!(
         backend_payload["participant_identity"],
         participant_identity
@@ -750,7 +750,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
             "call_id": session_id,
             "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "ak:focus:arkret_native:blue"
+            "focus_id": "arkret_native_blue"
         })))
         .send(&app_from_state(state))
         .await
@@ -792,7 +792,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
             "call_id": call_id,
             "actor_id": fixture_actor_core_id(actor),
             "device_id": device_id,
-            "focus_id": "ak:focus:livekit:green"
+            "focus_id": "livekit_green"
         })))
         .send(&app_from_state(state.clone()))
         .await;
@@ -818,14 +818,14 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
             "call_id": call_id,
             "actor_id": fixture_actor_core_id(actor),
             "device_id": device_id,
-            "focus_id": "ak:focus:livekit:green"
+            "focus_id": "livekit_green"
         })))
         .send(&app_from_state(state))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(issued["focus_id"], "ak:focus:livekit:green");
+    assert_eq!(issued["focus_id"], "livekit_green");
     assert_eq!(issued["connect_url"], "wss://media.example/livekit");
     assert!(
         issued["participant_identity"]
@@ -864,7 +864,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     seed_call_state(
         &state,
         &session_id,
-        Some("ak:focus:arkret_native:blue"),
+        Some("arkret_native_blue"),
         vec![],
     );
 
@@ -876,7 +876,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
             "call_id": session_id,
             "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "ak:focus:livekit:green"
+            "focus_id": "livekit_green"
         })))
         .send(&app_from_state(state.clone()))
         .await;
@@ -890,7 +890,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
         serde_json::json!({
             "service_id": "ak:did_core:webvh:z6mkrogueexampleservice",
             "foci": [{
-                "focus_id": "ak:focus:arkret_native:blue",
+                "focus_id": "arkret_native_blue",
                 "focus_kind": "arkret_native",
                 "token_endpoint": "http://server/_arkret/self/rtc/token",
                 "connect_url": "wss://media.example/arkret-native"
@@ -905,7 +905,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
             "call_id": session_id,
             "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "ak:focus:arkret_native:blue"
+            "focus_id": "arkret_native_blue"
         })))
         .send(&app_from_state(state))
         .await;
@@ -938,7 +938,7 @@ async fn rtc_media_token_rejects_non_member_actor() {
             "call_id": session_id,
             "actor_id": fixture_actor_core_id("did:web:bob.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-b0b000000001",
-            "focus_id": "ak:focus:livekit:green"
+            "focus_id": "livekit_green"
         })))
         .send(&app_from_state(state))
         .await;
@@ -953,7 +953,7 @@ async fn rtc_media_token_requires_call_join_capability() {
     // does NOT hold ak.call.join is denied; granting the capability lets the
     // exchange proceed.
     // Use the LiveKit-configured deployment so the oldest-membership default
-    // focus (`ak:focus:livekit:green`) can mint a real token once join is held.
+    // focus (`livekit_green`) can mint a real token once join is held.
     let state = soland_test_support::app_state(livekit_test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     // Bootstrap alice (realm owner) so DEMO_REALM exists, then add bob as a
@@ -970,7 +970,7 @@ async fn rtc_media_token_requires_call_join_capability() {
         "call_id": session_id,
         "actor_id": fixture_actor_core_id(bob),
         "device_id": bob_device,
-        "focus_id": "ak:focus:livekit:green"
+        "focus_id": "livekit_green"
     });
 
     // No ak.call.join → capability_denied even though bob is a member+participant.
@@ -1001,7 +1001,7 @@ async fn rtc_media_token_requires_call_join_capability() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(granted["focus_id"], "ak:focus:livekit:green");
+    assert_eq!(granted["focus_id"], "livekit_green");
     assert!(
         granted["participant_identity"]
             .as_str()
@@ -1082,7 +1082,7 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
             "call_id": session_id,
             "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "ak:focus:livekit:green",
+            "focus_id": "livekit_green",
             "desired_media": {"audio": true, "video": true, "screen": false}
         })))
         .send(&app_from_state(state.clone()))
@@ -1117,7 +1117,7 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     let room = claims["video"]["room"].as_str().unwrap();
     assert!(room.starts_with("ak_call_"));
     assert!(!room.contains(&session_id));
-    let room_material = format!("{DEMO_REALM_ID}\0{session_id}\0ak:focus:livekit:green");
+    let room_material = format!("{DEMO_REALM_ID}\0{session_id}\0livekit_green");
     let expected_room = format!(
         "ak_call_{}",
         &hex::encode(Sha256::digest(room_material.as_bytes()))[..16]
@@ -1165,7 +1165,7 @@ async fn admin_realm_media_service_renders_projected_cell() {
     assert_eq!(foci.len(), 2);
     let livekit = foci
         .iter()
-        .find(|focus| focus["focus_id"] == "ak:focus:livekit:green")
+        .find(|focus| focus["focus_id"] == "livekit_green")
         .expect("livekit focus renders");
     // `token_endpoint` / `connect_url` are normative required fields, so the
     // operator view shows them verbatim rather than falling back to a dash.
@@ -1221,14 +1221,14 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
             "call_id": session_id,
             "actor_id": bob_core,
             "device_id": bob_device,
-            "focus_id": "ak:focus:livekit:green"
+            "focus_id": "livekit_green"
         })))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(pre_ban["focus_id"], "ak:focus:livekit:green");
+    assert_eq!(pre_ban["focus_id"], "livekit_green");
 
     // A moderator actor-wide-bans bob: the durable call moderation OR-Set
     // carries a `ban` value with no `device_id`. Seed that effective cell
@@ -1254,7 +1254,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
             "call_id": session_id,
             "actor_id": bob_core,
             "device_id": bob_device,
-            "focus_id": "ak:focus:livekit:green"
+            "focus_id": "livekit_green"
         })))
         .send(&app_from_state(state))
         .await;
@@ -1372,13 +1372,13 @@ fn good_media_service_epoch() -> Value {
         "service_id": TEST_MEDIA_SERVICE_ID,
         "foci": [
             {
-                "focus_id": "ak:focus:livekit:green",
+                "focus_id": "livekit_green",
                 "focus_kind": "livekit",
                 "token_endpoint": "http://server/_arkret/self/rtc/token",
                 "connect_url": "wss://media.example/livekit"
             },
             {
-                "focus_id": "ak:focus:arkret_native:blue",
+                "focus_id": "arkret_native_blue",
                 "focus_kind": "arkret_native",
                 "token_endpoint": "http://server/_arkret/self/rtc/token",
                 "connect_url": "wss://media.example/arkret-native"

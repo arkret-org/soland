@@ -182,9 +182,10 @@ impl ProjectionState {
     /// projection layer at read time consults the redaction cell and
     /// replaces the payload with a tombstone.
     ///
-    /// Un-redaction: an `apply_redaction` call whose payload sets
-    /// `redaction_value: null` (or the equivalent `unredact: true` flag)
-    /// resets the cas-register and removes the tombstone.
+    /// `redacted` is an irreversible terminal (spec common-fields.md section
+    /// 5.1) and the cell family is an `or_set` add, so there is no
+    /// un-redaction path: neither payload class registers a field that could
+    /// request one.
     ///
     /// When the payload's `target_ref` names a `ak:strand:` or
     /// `ak:morph:` typed-id, the redaction
@@ -199,42 +200,19 @@ impl ProjectionState {
             return ProjectionEffect::Ignored;
         }
 
-        // Cas-register set-null path: clears the parallel cell and removes
-        // the tombstone. The original MessageState stays intact. Object-ref
-        // redactions don't have an un-redact path (terminal state by spec).
-        let unredact = operation
-            .payload
-            .get("redaction_value")
-            .map(|v| v.is_null())
-            .or_else(|| operation.payload.get("unredact").and_then(|v| v.as_bool()))
-            .unwrap_or(false);
-        if unredact {
-            self.redaction_cells.insert(target.clone(), None);
-            self.redactions.remove(&target);
-            if let Some(msg) = self.messages.get_mut(&target) {
-                msg.redacted_at = None;
-            }
-            return ProjectionEffect::MessageRedacted { event_id: target };
-        }
-
-        // Standard redact path: write the parallel cell + flag the
-        // historical entry without removing it.
-        let by = operation
-            .payload
-            .get("by")
-            .or_else(|| operation.payload.get("redacted_by"))
-            .and_then(|v| v.as_str())
-            .map_or_else(|| operation.context.sender.to_string(), ToOwned::to_owned);
+        // Write the parallel cell + flag the historical entry without
+        // removing it. Attribution is the redaction Event's own actor; neither
+        // redaction payload class carries an actor-supplied override.
+        let by = operation.context.sender.to_string();
         let reason = redaction_human_reason(&operation.payload);
         let redaction_event_id = operation.context.event_id.to_string();
         let cell = RedactionCellValue {
             redacted_at: operation.created_at,
-            by,
+            by: by.clone(),
             reason: reason.clone(),
             redaction_event_id: Some(redaction_event_id),
         };
-        self.redaction_cells
-            .insert(target.clone(), Some(cell.clone()));
+        self.redaction_cells.insert(target.clone(), cell.clone());
         self.redactions.insert(target.clone());
         if let Some(msg) = self.messages.get_mut(&target) {
             msg.redacted_at = Some(operation.created_at);
@@ -245,15 +223,7 @@ impl ProjectionState {
         // state. State-machine guard against terminal source is policed
         // by `check_redaction_target_transition` preflight; by the time
         // the reducer runs here, the source state is known-permissible.
-        let updated_by = operation
-            .payload
-            .get("by")
-            .or_else(|| operation.payload.get("redacted_by"))
-            .and_then(|v| v.as_str())
-            .map_or_else(
-                || Some(operation.context.sender.to_string()),
-                |value| Some(value.to_owned()),
-            );
+        let updated_by = Some(by);
         if let Some(object_ref) = redaction_object_ref(operation) {
             if let Some(strand) = self.strands.get_mut(&object_ref) {
                 strand.state = ObjectLifecycleState::Redacted;
@@ -655,12 +625,7 @@ impl ProjectionState {
             if self.pin_target_is_blocked_by_moderation(target_ref) {
                 return None;
             }
-            if self
-                .redaction_cells
-                .get(&message.event_id)
-                .and_then(|cell| cell.as_ref())
-                .is_some()
-            {
+            if self.redaction_cells.contains_key(&message.event_id) {
                 return None;
             }
             return Some(PinEffectiveScope {

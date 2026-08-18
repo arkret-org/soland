@@ -1143,16 +1143,16 @@ mod tests {
     fn mls_event_group_ref_reads_only_mls_group_id() {
         let canonical = std::collections::BTreeMap::from([(
             "mls_group_id".to_owned(),
-            json!("ak:mls_group:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml"),
+            json!("mls-group-AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml"),
         )]);
         assert_eq!(
             mls_event_group_ref(&canonical).as_deref(),
-            Some("ak:mls_group:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml")
+            Some("mls-group-AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml")
         );
 
         let legacy = std::collections::BTreeMap::from([(
             "group_id".to_owned(),
-            json!("ak:mls_group:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml"),
+            json!("mls-group-AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml"),
         )]);
         assert!(mls_event_group_ref(&legacy).is_none());
     }

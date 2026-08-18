@@ -638,7 +638,7 @@ geo-distributed pools):
   "media_service": {
     "foci": [
       {
-        "focus_id": "ak:focus:livekit:eu-west-1",
+        "focus_id": "livekit_eu-west-1",
         "backend": "livekit",
         "connect_url": "https://sfu.eu-west-1.example.org",
         "issuer_kid": "ak.media-issuer/example/2026-05"

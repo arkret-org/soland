@@ -182,7 +182,7 @@ impl ProjectionState {
         }
         let patch = operation.payload.get("patch").and_then(|v| v.as_object());
         if let Some(patch) = patch {
-            if let Err(reason) = validate_patch_semantic_safety(patch) {
+            if let Err(reason) = validate_patch_semantic_safety(patch, Some("strand")) {
                 return ProjectionEffect::Rejected {
                     reason: reason.to_owned(),
                 };

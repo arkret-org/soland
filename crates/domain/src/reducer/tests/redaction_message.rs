@@ -1,17 +1,24 @@
 use super::*;
 
 #[test]
-fn redaction_human_reason_prefers_explicit_field() {
+fn redaction_human_reason_reads_the_single_registered_member() {
     let payload = serde_json::json!({
         "target_event_id": "ak:event:AYTeR35PxnHtaUMXFLoHqGA1yiou3pai07-tzQyViJnt",
-        "reason": "machine policy",
-        "human_reason": "moderator request"
+        "reason": "machine policy"
     });
 
     assert_eq!(
         redaction_human_reason(&payload).as_deref(),
-        Some("moderator request")
+        Some("machine policy")
     );
+
+    // Both redaction payload classes are closed and register only `reason`,
+    // so no alternative spelling is wire-reachable.
+    let unregistered = serde_json::json!({
+        "target_event_id": "ak:event:AYTeR35PxnHtaUMXFLoHqGA1yiou3pai07-tzQyViJnt",
+        "human_reason": "moderator request"
+    });
+    assert_eq!(redaction_human_reason(&unregistered), None);
 }
 
 #[test]
@@ -63,7 +70,7 @@ fn redaction_hides_message() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
-                "by": "ak:did_core:web:alice",
+                "sender": "ak:did_core:web:alice",
                 "reason": "wrong room"
             }),
         ),
@@ -91,7 +98,6 @@ fn redaction_hides_message() {
         .redaction_cells
         .get("ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R")
         .cloned()
-        .unwrap()
         .unwrap();
     assert_eq!(cell.by, "ak:did_core:web:alice");
     assert_eq!(cell.reason.as_deref(), Some("wrong room"));
@@ -127,9 +133,8 @@ fn mal14_tombstone_visible_to_author() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_event_id": event_id,
-                "by": "ak:did_core:web:alice",
+                "sender": "ak:did_core:web:alice",
                 "reason": "policy:auto",
-                "human_reason": "rethink",
             }),
         ),
         &hlc,
@@ -140,7 +145,7 @@ fn mal14_tombstone_visible_to_author() {
     // Tombstone metadata is also present.
     let r = view.redaction.unwrap();
     assert_eq!(r.by, "ak:did_core:web:alice");
-    assert_eq!(r.reason.as_deref(), Some("rethink"));
+    assert_eq!(r.reason.as_deref(), Some("policy:auto"));
 }
 
 #[test]
@@ -155,7 +160,7 @@ fn mal14_tombstone_hidden_from_members() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_event_id": event_id,
-                "by": "ak:did_core:web:alice",
+                "sender": "ak:did_core:web:alice",
             }),
         ),
         &hlc,
@@ -163,49 +168,6 @@ fn mal14_tombstone_hidden_from_members() {
     let view = state.projected_message(event_id, false).unwrap();
     assert!(view.content.is_none(), "non-author should see tombstone");
     assert!(view.redaction.is_some());
-}
-
-#[test]
-fn mal14_unredaction_clears_cell_and_index() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("test");
-    let event_id = "ak:event:AViQpp7Hdb367Fjsw1SI_B0MoIcCLeMT4hP2sjx5ILUG";
-    redact_make_message(&mut state, &hlc, event_id);
-    // Redact.
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::MessageRedact,
-            "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
-            serde_json::json!({
-                "target_event_id": event_id,
-                "by": "ak:did_core:web:alice",
-            }),
-        ),
-        &hlc,
-    );
-    assert!(state.redactions.contains(event_id));
-    // Un-redact via cas-register set null.
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::MessageRedact,
-            "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
-            serde_json::json!({
-                "target_event_id": event_id,
-                "redaction_value": serde_json::Value::Null,
-            }),
-        ),
-        &hlc,
-    );
-    assert!(
-        !state.redactions.contains(event_id),
-        "un-redaction must clear the flat tombstone index"
-    );
-    let cell = state.redaction_cells.get(event_id).unwrap();
-    assert!(cell.is_none(), "parallel cell must be set to null");
-    // Un-redacted message renders content for everyone again.
-    let view_member = state.projected_message(event_id, false).unwrap();
-    assert!(view_member.content.is_some());
-    assert!(view_member.redaction.is_none());
 }
 
 #[test]
@@ -226,7 +188,7 @@ fn mal14_late_arriving_redaction_still_takes_effect() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_event_id": event_id,
-                "by": "ak:did_core:web:alice",
+                "sender": "ak:did_core:web:alice",
                 "reason": "late",
             }),
         ),
@@ -459,7 +421,7 @@ fn redaction_accepts_schema_message_id_target() {
             serde_json::json!({
                 "event_id": redaction_event_id,
                 "message_id": message_id,
-                "by": "ak:did_core:web:alice",
+                "sender": "ak:did_core:web:alice",
                 "reason": "wrong room"
             }),
         ),
@@ -522,7 +484,7 @@ fn redaction_by_message_id_hides_latest_revision() {
             serde_json::json!({
                 "event_id": "ak:event:AaviAQUPcXQA_m9RNFUvox0-znrutEvE8BkTgEoWNTJx",
                 "message_id": message_id,
-                "by": "ak:did_core:web:alice",
+                "sender": "ak:did_core:web:alice",
                 "reason": "wrong room"
             }),
         ),

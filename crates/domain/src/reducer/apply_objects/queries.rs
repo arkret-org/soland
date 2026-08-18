@@ -72,7 +72,6 @@ impl ProjectionState {
                     .as_deref()
                     .and_then(|original_id| self.redaction_cells.get(original_id))
             })
-            .and_then(|cell| cell.as_ref())
     }
 }
 

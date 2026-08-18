@@ -10,8 +10,6 @@
 //! projection. Dynamic, signed, or obligation-bearing decisions are served by
 //! `/_arkret/self/policy/check`.
 
-use std::collections::BTreeMap;
-
 use arkret_identifiers::{GrantId, Hash, InviteId, RealmId};
 use arkret_models_collaboration::governance::authorization::{AuthzInviteList, GrantList};
 use arkret_models_collaboration::governance::grant_constraint::{
@@ -763,26 +761,6 @@ fn invite_record_to_sdk(
         third_party_invite: invite
             .third_party_invite
             .and_then(|value| serde_json::from_value(value).ok()),
-        join_rule_snapshot: invite
-            .join_rule_snapshot
-            .and_then(|value| {
-                value.as_object().map(|object| {
-                    object
-                        .iter()
-                        .map(|(key, value)| (key.clone(), value.clone()))
-                        .collect()
-                })
-            })
-            .unwrap_or_else(|| {
-                BTreeMap::from([
-                    ("join_rule".to_owned(), json!("invite")),
-                    ("invite_token".to_owned(), json!(invite.invite_token)),
-                    (
-                        "introduction_evidence_digest".to_owned(),
-                        json!(invite.introduction_evidence_digest),
-                    ),
-                ])
-            }),
         capability_grant_refs: Vec::new(),
         expires_at,
         state: invite_state_from_record(&invite.status),

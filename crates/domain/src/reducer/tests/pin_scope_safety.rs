@@ -186,7 +186,7 @@ fn pin_rejects_redacted_message_target() {
             REALM_ID,
             serde_json::json!({
                 "target_event_id": MESSAGE_EVENT_ID,
-                "by": "ak:did_core:web:alice.example"
+                "sender": "ak:did_core:web:alice.example"
             }),
         ),
         &hlc,

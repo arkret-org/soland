@@ -205,7 +205,7 @@ fn object_redaction_pending_replays_after_object_create() {
         serde_json::json!({
             "target_event_id": EVENT,
             "target_ref": STRAND,
-            "by": "ak:did_core:web:alice.example"
+            "sender": "ak:did_core:web:alice.example"
         }),
     );
 

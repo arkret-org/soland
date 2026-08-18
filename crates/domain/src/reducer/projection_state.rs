@@ -91,7 +91,7 @@ pub struct ProjectionState {
     /// left intact so the ordered-log historical entry id is preserved;
     /// the projection layer consults this map at read time and replaces
     /// the payload with the tombstone.
-    pub redaction_cells: BTreeMap<String, Option<RedactionCellValue>>,
+    pub redaction_cells: BTreeMap<String, RedactionCellValue>,
     /// Accepted projection operations whose local target is not materialized
     /// yet. Backfill/snapshot/create arrival drains this queue and replays the
     /// operations instead of losing them as accepted no-ops.

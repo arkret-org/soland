@@ -155,7 +155,7 @@ fn realm_leave_cascades_to_circle_history_membership() {
 #[test]
 fn realm_leave_enqueues_realm_default_mls_remove_obligation() {
     let (mut state, hlc, base) = seed_state("joined");
-    let group_id = "ak:mls_group:01904100-0000-7000-8000-dddddddddddd";
+    let group_id = "mls-group-01904100-0000-7000-8000-dddddddddddd";
     let effective_scope = serde_json::json!({
         "kind": "realm",
         "realm_id": REALM,

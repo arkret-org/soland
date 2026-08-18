@@ -39,7 +39,7 @@ pub fn validate_operation_semantics(
         // typed-shape reason rather than the generic SDK schema error.
         validate_typed_payload_shapes(&kind, operation)?;
         validate_moderation_report_provenance(state, &kind, operation)?;
-        validate_operation_patch_semantics(operation)?;
+        validate_operation_patch_semantics(&kind, operation)?;
         validate_reaction_target_kind(&kind, operation)?;
         validate_operation_payload_schema(&kind, operation)?;
         if kind == arkret_wire::EventKind::KeyBackupActiveSeries {

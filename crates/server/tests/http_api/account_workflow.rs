@@ -886,10 +886,17 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         state.service_id().as_str()
     );
     assert_eq!(
-        bob_invites["invites"][0]["join_rule_snapshot"]["introduction_evidence_digest"],
+        bob_invites["invites"][0]["introduction_evidence_digest"],
         format!("sha256:{}", "1".repeat(64))
     );
-    let invite_token = bob_invites["invites"][0]["join_rule_snapshot"]["invite_token"]
+    // The private delivery token is transport material and MUST NOT be surfaced
+    // through the Invite read model (`governance-objects.md` §5.3), so the test
+    // takes it from the seeding helper that minted it.
+    assert!(
+        bob_invites["invites"][0].get("invite_token").is_none(),
+        "invite read model must not surface the private delivery token: {bob_invites}"
+    );
+    let invite_token = invite_realm["seeded_invite_tokens"][0]
         .as_str()
         .unwrap()
         .to_owned();

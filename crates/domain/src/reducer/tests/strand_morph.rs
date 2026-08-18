@@ -468,7 +468,7 @@ fn redaction_with_strand_target_ref_flips_to_redacted() {
             serde_json::json!({
                 "target_event_id": "ak:event:AZpcyCdqige1P-5w7zjYU5ugeAn8qSwSCpFRU9CRz2SA",
                 "target_ref": strand_id,
-                "by": "ak:did_core:web:alice.example",
+                "sender": "ak:did_core:web:alice.example",
                 "reason": "policy violation",
             }),
         ),

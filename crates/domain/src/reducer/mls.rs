@@ -275,7 +275,7 @@ pub fn apply_keypackage_publish(
 /// ```json
 /// {
 ///   "keypackage_id": "ak:mls_keypackage:<uuid>",
-///   "group_id":      "ak:mls_group:<uuid>"
+///   "group_id":      "mls-group-<uuid>"
 /// }
 /// ```
 ///
@@ -375,7 +375,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
 /// ```json
 /// {
 ///   "welcome_ref":            "ak:mls_welcome:<uuid>",
-///   "mls_group_id":           "ak:mls_group:<uuid>",
+///   "mls_group_id":           "mls-group-<uuid>",
 ///   "recipient_principal_id": "ak:did_core:web:bob.example",
 ///   "recipient_device_id":    "ak:device:<uuid>",
 ///   "ciphertext":             "<base64url(opaque MLS Welcome)>",
@@ -614,7 +614,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
 /// closed object):
 /// ```json
 /// {
-///   "mls_group_id":     "ak:mls_group:<uuid>",
+///   "mls_group_id":     "mls-group-<uuid>",
 ///   "base_epoch":       <u64>,
 ///   "base_epoch_ref":   "ak:event:<token>",
 ///   "proposal_refs":    ["ak:event:<token>"],

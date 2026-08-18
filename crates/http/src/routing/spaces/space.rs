@@ -1328,7 +1328,6 @@ mod tests {
                 invite_delivery_target: None,
                 introduction_evidence_digest: None,
                 third_party_invite: None,
-                join_rule_snapshot: None,
                 invite_token: "private-token".to_owned(),
                 status: "pending".to_owned(),
                 claim_nonces: Default::default(),

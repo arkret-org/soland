@@ -343,7 +343,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
             "target_principal_id": target,
             "requester": requester,
             "intended_realm_id": realm_id,
-            "mls_group_id": "ak:mls_group:0196419b-0000-7000-8000-000000000296",
+            "mls_group_id": "mls-group-0196419b-0000-7000-8000-000000000296",
             "claim_purpose": "direct_conversation",
             "required_capabilities": ["ak.content.v1"],
             "claim_nonce": claim_nonce,

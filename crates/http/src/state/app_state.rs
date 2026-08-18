@@ -248,7 +248,13 @@ pub struct AppStateRuntime {
 /// Realm identity derived from the canonical deterministic development
 /// genesis fixture. Keep this single source shared with integration fixtures;
 /// changing the genesis payload must update the derived identity atomically.
-pub const DEVELOPMENT_DEMO_REALM_ID: &str = "ak:realm:ASDJh1a6wjwTKbZmepxQWwIYMSht_GCvmOA4orilzkK2";
+///
+/// This value is content-derived (`retype(genesis_event.event_id)`), so it moves
+/// whenever anything inside the genesis Event's canonical bytes moves — including
+/// an `arkret-spec` schema or registry change that has nothing to do with the demo
+/// data. A hard-coded copy therefore goes stale on its own; the durable fix is to
+/// derive it at startup from the same fixture the seeder submits.
+pub const DEVELOPMENT_DEMO_REALM_ID: &str = "ak:realm:AUOsgR6ZlDDdz8VpbbRCR_tPpgiVr_m6Wo9q6R6HevVT";
 
 pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
     let mut realms = RealmDirectoryIndex::new();
@@ -2149,7 +2155,7 @@ mod membership_hydration_tests {
         use soland_storage::MlsKeyPackageRow;
 
         let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
-        let group_id = "ak:mls_group:019f0dd3-aaaa";
+        let group_id = "mls-group-019f0dd3-aaaa";
         let store = SolandMemoryPersistenceStore::new();
 
         store

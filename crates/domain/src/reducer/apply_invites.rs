@@ -1,7 +1,11 @@
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::*;
 
+/// Membership role a 3PID claim lands with. The Invite object registers no
+/// role member; elevated capability arrives separately through
+/// `capability_grant_refs` after accept (`governance-objects.md` §5.3).
+const INVITE_MEMBER_ROLE: &str = "member";
 const INVITE_STATE_PENDING: &str = "pending";
 const INVITE_STATE_CLAIMED: &str = "claimed";
 
@@ -51,8 +55,6 @@ impl ProjectionState {
         if expires_at <= admission_time || created_at > admission_time {
             return rejected("expired_invite_token");
         }
-        let join_rule_snapshot = json!({"join_rule": "invite"});
-
         if let Some(existing) = self.invites.get(&invite_id) {
             return ProjectionEffect::InviteStateChanged {
                 invite_id: existing.invite_id.clone(),
@@ -84,7 +86,6 @@ impl ProjectionState {
             inviter,
             invitee: None,
             third_party_invite: Some(third_party_invite.clone()),
-            join_rule_snapshot,
             state: INVITE_STATE_PENDING.to_owned(),
             expires_at,
             created_at,
@@ -186,7 +187,16 @@ impl ProjectionState {
         if expected_token_commitment != token_commitment {
             return rejected("not_found");
         }
-        if let Err(reason) = validate_claim_join_rule(&invite.join_rule_snapshot) {
+        // third-party-invites.md 3PID claim is only in v1 base scope for
+        // `invite` / `restricted` Realms. The authority is the Realm's own
+        // effective default_join_rule, not a copy materialized on the Invite:
+        // governance-objects.md 5.3 makes the create Event's CBA basis the
+        // admission basis and forbids a materialized snapshot.
+        if let Err(reason) = validate_claim_join_rule(
+            self.realm_join_rules
+                .get(&invite.realm_id)
+                .map(String::as_str),
+        ) {
             return rejected(reason);
         }
         if let Err(reason) = validate_binding_proof(
@@ -227,7 +237,7 @@ impl ProjectionState {
                 member: subject_id.clone(),
                 realm_id: invite.realm_id.clone(),
                 state: "invite".to_owned(),
-                role: role_from_join_rule_snapshot(&invite.join_rule_snapshot),
+                role: INVITE_MEMBER_ROLE.to_owned(),
                 delivery_status: None,
                 recipient_service_id: None,
                 recipient_service_resolution: None,
@@ -327,15 +337,14 @@ fn token_commitment_for_third_party(third_party_invite: &Value) -> Option<&str> 
         .filter(|value| !value.is_empty())
 }
 
-fn validate_claim_join_rule(snapshot: &Value) -> Result<(), &'static str> {
-    let rule = snapshot
-        .get("join_rule")
-        .or_else(|| snapshot.get("default_join_rule"))
-        .and_then(Value::as_str)
-        .unwrap_or("invite");
-    match rule {
+/// `third-party-invites.md`: v1 base conformance carries a 3PID claim into
+/// `ak.invite.create` only on `invite` / `restricted` Realms. `knock_restricted`
+/// needs a declared candidate profile, so it is rejected here with
+/// `unsupported_join_rule`. An unset Realm rule means no `ak.realm.join_rule`
+/// state has been accepted yet, which is the `invite` default.
+fn validate_claim_join_rule(realm_join_rule: Option<&str>) -> Result<(), &'static str> {
+    match realm_join_rule.unwrap_or("invite") {
         "invite" | "restricted" => Ok(()),
-        "knock_restricted" => Err("unsupported_join_rule"),
         _ => Err("unsupported_join_rule"),
     }
 }
@@ -490,14 +499,4 @@ fn cleanup_third_party_projection(invite: &mut InviteProjection) {
             object.remove(key);
         }
     }
-}
-
-fn role_from_join_rule_snapshot(snapshot: &Value) -> String {
-    snapshot
-        .get("role")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("member")
-        .to_owned()
 }

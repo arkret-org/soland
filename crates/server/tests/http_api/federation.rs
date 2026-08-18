@@ -1149,7 +1149,7 @@ fn circle_member_event(event_id: &str, member_did: &str, sender: &str, seq: u64)
 }
 
 fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
-    let group_id = "ak:mls_group:peer-dm";
+    let group_id = "mls-group-peer-dm";
     let keypackage_ref = "sha256:5555555555555555555555555555555555555555555555555555555555555555";
     let keypackage_digest =
         "sha256:5555555555555555555555555555555555555555555555555555555555555555";

@@ -579,7 +579,7 @@ impl ProjectionState {
             let relation_id = relation_update_target_id(&operation.payload).unwrap_or_default();
             let patch = relation_update_patch(&operation.payload);
             if let Some(patch) = patch {
-                validate_patch_semantic_safety(patch)?;
+                validate_patch_semantic_safety(patch, Some("relation"))?;
                 // A patch that names a derived kind is a direct write even when
                 // the target Relation has not been observed locally yet, so
                 // this decision must not wait for the pre-state lookup.

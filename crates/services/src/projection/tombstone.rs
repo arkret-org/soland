@@ -378,12 +378,12 @@ mod tests {
         );
         projection.redaction_cells.insert(
             event_id.to_owned(),
-            Some(RedactionCellValue {
+            RedactionCellValue {
                 redacted_at: now,
                 by: "did:web:alice.example".to_owned(),
                 reason: Some("policy".to_owned()),
                 redaction_event_id: None,
-            }),
+            },
         );
         let mut event = ProjectionEventRecord {
             event_id: "ak:operation:01904100-0000-7000-8000-0000000000a3".to_owned(),

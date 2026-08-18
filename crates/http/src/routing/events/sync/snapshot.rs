@@ -1204,8 +1204,8 @@ async fn account_data_events(
             continue;
         };
         let holder_id = event.payload.get("holder_id").and_then(Value::as_str);
-        let holder_authored =
-            record.actor_id == session.actor && holder_id.is_none_or(|holder_id| holder_id == session.actor);
+        let holder_authored = record.actor_id == session.actor
+            && holder_id.is_none_or(|holder_id| holder_id == session.actor);
         let local_service_authored =
             record.actor_id == *state.service_id() && holder_id == Some(session.actor.as_str());
         if !holder_authored && !local_service_authored {
