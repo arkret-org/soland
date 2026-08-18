@@ -101,6 +101,8 @@ DROP TABLE IF EXISTS websocket_auth_replay_ledger CASCADE;
 DROP TABLE IF EXISTS idempotency_keys CASCADE;
 DROP TABLE IF EXISTS control_proposal_authority_acks CASCADE;
 DROP TABLE IF EXISTS service_identity_registrations CASCADE;
+DROP TABLE IF EXISTS service_route_handover_notices CASCADE;
+DROP TABLE IF EXISTS service_route_handover_plans CASCADE;
 DROP TABLE IF EXISTS service_route_cache CASCADE;
 DROP TABLE IF EXISTS service_resolution_fork_quarantine CASCADE;
 DROP TABLE IF EXISTS service_resolution_mirror_ledger CASCADE;

@@ -2179,6 +2179,69 @@ CREATE TABLE public.service_route_cache (
 );
 CREATE INDEX service_route_cache_expiry_idx ON public.service_route_cache (cache_expires_at);
 
+-- Owner-side state for this deployment's own planned route handovers. This is
+-- the mirror image of the tables above: there the deployment verifies remote
+-- route material, here it is the target and records what it issued. Restart
+-- must never lose a pending publication, an ACK barrier, or a cancellation.
+CREATE TABLE public.service_route_handover_plans (
+    service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
+    service_kind text NOT NULL,
+    handover_id text NOT NULL,
+    basis_record_sequence bigint NOT NULL CHECK (basis_record_sequence >= 0),
+    basis_record_digest text NOT NULL,
+    candidate_base_url text NOT NULL,
+    candidate_record_url text NOT NULL,
+    not_before timestamptz NOT NULL,
+    cutover_at timestamptz NOT NULL,
+    grace_until timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+    lifecycle_state text NOT NULL,
+    active_notice_revision integer CHECK (active_notice_revision >= 0),
+    active_notice_digest text,
+    last_error text,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY (service_id, service_kind, handover_id),
+    CONSTRAINT service_route_handover_plans_window_check CHECK (
+        not_before <= cutover_at
+        AND cutover_at < grace_until
+        AND grace_until <= expires_at
+    ),
+    CONSTRAINT service_route_handover_plans_active_notice_shape_check CHECK (
+        (active_notice_revision IS NULL) = (active_notice_digest IS NULL)
+    )
+);
+
+-- A service runs at most one unfinished handover at a time. A quarantined or
+-- failed-but-unresolved plan still occupies the slot, so a second migration
+-- cannot start underneath a live one.
+CREATE UNIQUE INDEX service_route_handover_plans_single_active
+    ON public.service_route_handover_plans (service_id, service_kind)
+    WHERE lifecycle_state NOT IN ('completed', 'cancelled', 'failed');
+
+-- Append-only transcript of the exact signed notice bytes, proof included. A
+-- revision is written once; the same revision with different bytes conflicts
+-- with zero overwrite.
+CREATE TABLE public.service_route_handover_notices (
+    service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
+    service_kind text NOT NULL,
+    handover_id text NOT NULL,
+    notice_revision integer NOT NULL CHECK (notice_revision >= 0),
+    notice_digest text NOT NULL,
+    previous_notice_digest text,
+    notice_state text NOT NULL,
+    notice jsonb NOT NULL,
+    issued_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+    PRIMARY KEY (service_id, service_kind, handover_id, notice_revision),
+    CONSTRAINT service_route_handover_notices_chain_check CHECK (
+        (notice_revision = 0) = (previous_notice_digest IS NULL)
+    ),
+    FOREIGN KEY (service_id, service_kind, handover_id)
+        REFERENCES public.service_route_handover_plans (service_id, service_kind, handover_id)
+        ON DELETE CASCADE
+);
+
 CREATE TABLE public.service_identity_registrations (
     service_kind text NOT NULL,
     public_base text NOT NULL,

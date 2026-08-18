@@ -5,12 +5,12 @@ use soland_storage::contract_tests::{
     assert_device_message_snapshot_guard_contract, assert_event_commit_unit_of_work_contract,
     assert_federation_outbox_store_contract, assert_idempotency_store_contract,
     assert_last_resort_claim_ledger_contract, assert_mimi_consent_correlation_store_contract,
-    assert_mls_keypackage_retirement_contract,
+    assert_mls_keypackage_retirement_contract, assert_service_route_handover_plan_store_contract,
 };
 use soland_storage::{
     AccountDataCasResult, AccountDataRecord, EventProjectionStoreRegistry,
     FederationGovernanceStoreRegistry, IdentityStoreRegistry, MlsAgentStoreRegistry,
-    SyncStoreRegistry,
+    ResolutionStoreRegistry, SyncStoreRegistry,
 };
 use soland_storage_memory::SolandMemoryPersistenceStore;
 
@@ -108,6 +108,15 @@ async fn memory_adapter_satisfies_mls_keypackage_retirement_contract() {
 async fn memory_adapter_satisfies_last_resort_claim_ledger_contract() {
     let store = SolandMemoryPersistenceStore::new();
     assert_last_resort_claim_ledger_contract(store.mls_key_packages(), "memory-last-resort").await;
+}
+
+#[tokio::test]
+async fn memory_adapter_satisfies_service_route_handover_plan_contract() {
+    let store = SolandMemoryPersistenceStore::new();
+    let service_id =
+        arkret_wire::DidCoreId::new("ak:did_core:webvh:zCXaWSDv1afiBoxDX5sVBU5an").unwrap();
+    assert_service_route_handover_plan_store_contract(store.service_route_plans(), &service_id)
+        .await;
 }
 
 fn account_data_record(

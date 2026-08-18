@@ -4,22 +4,30 @@
 //! mirror ACK ledger, notice state, or fork quarantine. This surface never
 //! resolves a route and never publishes protocol authority.
 
+use arkret_wire::ErrorCode;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use salvo::oapi::extract::{PathParam, QueryParam};
+use chrono::Utc;
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use soland_contracts::admin::{
     AdminServiceRouteAck, AdminServiceRouteCache, AdminServiceRouteCurrentRecord,
-    AdminServiceRouteDetail, AdminServiceRouteFloor, AdminServiceRouteList,
-    AdminServiceRouteNotice, AdminServiceRouteQuarantine, AdminServiceRouteSummary,
+    AdminServiceRouteDetail, AdminServiceRouteFloor, AdminServiceRouteHandoverCancelBody,
+    AdminServiceRouteHandoverDetail, AdminServiceRouteHandoverList,
+    AdminServiceRouteHandoverPlanBody, AdminServiceRouteHandoverRevision,
+    AdminServiceRouteHandoverSummary, AdminServiceRouteList, AdminServiceRouteNotice,
+    AdminServiceRouteQuarantine, AdminServiceRouteSummary,
 };
 use soland_http::error::AppError;
-use soland_storage::ServiceRouteStoredKey;
+use soland_services::service_route_handover::{HandoverPlanRequest, ServiceRouteHandoverPlanner};
+use soland_storage::{
+    ServiceRouteHandoverNoticeRecord, ServiceRouteHandoverPlan, ServiceRouteStoredKey,
+};
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
-use crate::state::AppState;
+use crate::state::{AppState, AppStateCurrentResolution, AppStateNoticeSigner};
 use crate::{JsonResult, json_ok};
 
 const DETAIL_LIMIT: usize = 100;
@@ -32,8 +40,21 @@ struct RouteCursor {
 }
 
 pub(super) fn router() -> Router {
+    // `handovers` is registered ahead of the `{service_id}/{service_kind}`
+    // wildcard so the concrete segment wins; the wildcard would otherwise
+    // swallow `/handovers/{handover_id}`.
     Router::with_path("service-routes")
         .get(admin_list_service_routes)
+        .push(
+            Router::with_path("handovers")
+                .get(admin_list_service_route_handovers)
+                .post(admin_plan_service_route_handover),
+        )
+        .push(Router::with_path("handovers/{handover_id}").get(admin_get_service_route_handover))
+        .push(
+            Router::with_path("handovers/{handover_id}/cancel")
+                .post(admin_cancel_service_route_handover),
+        )
         .push(Router::with_path("{service_id}/{service_kind}").get(admin_get_service_route))
 }
 
@@ -347,6 +368,302 @@ async fn admin_get_service_route(
     )
     .await;
     json_ok(detail)
+}
+
+const HANDOVER_LIMIT: usize = 64;
+const HANDOVER_REVISION_LIMIT: usize = 64;
+
+/// Build the owner-side planner for this deployment.
+///
+/// The planner is stateless — everything durable lives in its store — so it is
+/// assembled per request rather than held on `AppState`, which keeps the
+/// signing port out of the shared state graph.
+fn handover_planner(state: &AppState) -> Result<ServiceRouteHandoverPlanner, AppError> {
+    let (service_id, _) = crate::routing::system::service_resolution::service_ids(state)?;
+    Ok(ServiceRouteHandoverPlanner::new(
+        std::sync::Arc::new(state.persistence().clone()),
+        std::sync::Arc::new(AppStateNoticeSigner::new(state.clone())),
+        std::sync::Arc::new(AppStateCurrentResolution::new(state.clone())),
+        service_id,
+        "principal_server",
+        !state.config().development_mode,
+    ))
+}
+
+fn handover_summary(plan: &ServiceRouteHandoverPlan) -> AdminServiceRouteHandoverSummary {
+    AdminServiceRouteHandoverSummary {
+        service_id: plan.service_id.clone(),
+        service_kind: plan.service_kind.clone(),
+        handover_id: plan.handover_id.clone(),
+        basis_record_sequence: plan.basis_record_sequence,
+        basis_record_digest: plan.basis_record_digest.as_str().to_owned(),
+        candidate_base_url: plan.candidate_base_url.clone(),
+        candidate_record_url: plan.candidate_record_url.clone(),
+        not_before: plan.not_before,
+        cutover_at: plan.cutover_at,
+        grace_until: plan.grace_until,
+        expires_at: plan.expires_at,
+        lifecycle_state: plan.state.as_str().to_owned(),
+        active_notice_revision: plan.active_notice_revision,
+        active_notice_digest: plan
+            .active_notice_digest
+            .as_ref()
+            .map(|digest| digest.as_str().to_owned()),
+        last_error: plan.last_error.clone(),
+        created_at: plan.created_at,
+        updated_at: plan.updated_at,
+    }
+}
+
+fn handover_revision(
+    record: &ServiceRouteHandoverNoticeRecord,
+) -> AdminServiceRouteHandoverRevision {
+    AdminServiceRouteHandoverRevision {
+        notice_revision: record.notice_revision,
+        notice_digest: record.notice_digest.as_str().to_owned(),
+        previous_notice_digest: record
+            .previous_notice_digest
+            .as_ref()
+            .map(|digest| digest.as_str().to_owned()),
+        state: match record.state {
+            arkret_models_identity::ServiceRouteHandoverState::Scheduled => "scheduled",
+            arkret_models_identity::ServiceRouteHandoverState::Cancelled => "cancelled",
+        }
+        .to_owned(),
+        issued_at: record.issued_at,
+        expires_at: record.expires_at,
+    }
+}
+
+/// Map a planner failure onto its wire code.
+///
+/// `ServiceError::Conflict` carries a registered conflict code; guessing from
+/// the diagnostic text is exactly what that registry exists to prevent.
+fn handover_error(error: soland_services::ServiceError) -> AppError {
+    use soland_storage::ConflictCode;
+    match error.conflict_code() {
+        Some(ConflictCode::CasConflict) => {
+            AppError::new(ErrorCode::CasConflict, error.detail().to_owned())
+        }
+        Some(ConflictCode::DuplicateConflict) => {
+            AppError::new(ErrorCode::DuplicateConflict, error.detail().to_owned())
+        }
+        Some(ConflictCode::FailedPrecondition) => {
+            AppError::new(ErrorCode::FailedPrecondition, error.detail().to_owned())
+        }
+        _ => match error {
+            soland_services::ServiceError::NotFound(detail) => AppError::not_found(detail),
+            soland_services::ServiceError::SchemaViolation(detail) => {
+                AppError::param_invalid(detail)
+            }
+            other => AppError::internal(other.to_string()),
+        },
+    }
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.service_routes.handover.list",
+    tags("soland_admin")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.admin.service_routes.handover.list")
+)]
+async fn admin_list_service_route_handovers(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AdminServiceRouteHandoverList> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = require_admin_principal(state, aa.authenticated_session(state, req).await?)?;
+    let planner = handover_planner(state)?;
+    let mut plans = planner
+        .list_plans(HANDOVER_LIMIT + 1)
+        .await
+        .map_err(handover_error)?;
+    let truncated = plans.len() > HANDOVER_LIMIT;
+    plans.truncate(HANDOVER_LIMIT);
+    let handovers: Vec<_> = plans.iter().map(handover_summary).collect();
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "admin.service_routes.handover.list",
+        json!({"returned": handovers.len(), "truncated": truncated}),
+        "accepted",
+    )
+    .await;
+    json_ok(AdminServiceRouteHandoverList {
+        handovers,
+        handovers_truncated: truncated,
+        observed_at: Utc::now(),
+    })
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.service_routes.handover.get",
+    tags("soland_admin")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.admin.service_routes.handover.get")
+)]
+async fn admin_get_service_route_handover(
+    aa: AuthArgs,
+    handover_id: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AdminServiceRouteHandoverDetail> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = require_admin_principal(state, aa.authenticated_session(state, req).await?)?;
+    let handover_id = handover_id.into_inner();
+    let planner = handover_planner(state)?;
+    let Some((plan, mut revisions)) = planner
+        .plan_detail(&handover_id, HANDOVER_REVISION_LIMIT + 1)
+        .await
+        .map_err(handover_error)?
+    else {
+        return Err(AppError::not_found("service route handover plan not found"));
+    };
+    let truncated = revisions.len() > HANDOVER_REVISION_LIMIT;
+    revisions.truncate(HANDOVER_REVISION_LIMIT);
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "admin.service_routes.handover.get",
+        json!({"handover_id": handover_id, "lifecycle_state": plan.state.as_str()}),
+        "accepted",
+    )
+    .await;
+    json_ok(AdminServiceRouteHandoverDetail {
+        plan: handover_summary(&plan),
+        revisions: revisions.iter().map(handover_revision).collect(),
+        revisions_truncated: truncated,
+        observed_at: Utc::now(),
+    })
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.service_routes.handover.plan",
+    tags("soland_admin")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.admin.service_routes.handover.plan")
+)]
+async fn admin_plan_service_route_handover(
+    aa: AuthArgs,
+    body: JsonBody<AdminServiceRouteHandoverPlanBody>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AdminServiceRouteHandoverDetail> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = require_admin_principal(state, aa.authenticated_session(state, req).await?)?;
+    super::require_admin_scope(
+        state,
+        req,
+        &session,
+        arkret_models_identity::admin_grant::admin_scopes::SERVICE_ROUTE_HANDOVER,
+    )
+    .await?;
+    let body = body.into_inner();
+    let planner = handover_planner(state)?;
+    let planned = planner
+        .plan(
+            HandoverPlanRequest {
+                handover_id: body.handover_id.clone(),
+                candidate_base_url: body.candidate_base_url,
+                not_before: body.not_before,
+                cutover_at: body.cutover_at,
+                grace_until: body.grace_until,
+                expires_at: body.expires_at,
+            },
+            Utc::now(),
+        )
+        .await
+        .map_err(handover_error)?;
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "admin.service_routes.handover.plan",
+        json!({
+            "handover_id": planned.plan.handover_id,
+            "basis_record_sequence": planned.plan.basis_record_sequence,
+            "notice_revision": planned.notice.notice.notice_revision,
+        }),
+        "accepted",
+    )
+    .await;
+    json_ok(handover_detail_response(state, &planner, &planned.plan.handover_id).await?)
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.service_routes.handover.cancel",
+    tags("soland_admin")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.admin.service_routes.handover.cancel")
+)]
+async fn admin_cancel_service_route_handover(
+    aa: AuthArgs,
+    handover_id: PathParam<String>,
+    body: JsonBody<AdminServiceRouteHandoverCancelBody>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AdminServiceRouteHandoverDetail> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = require_admin_principal(state, aa.authenticated_session(state, req).await?)?;
+    super::require_admin_scope(
+        state,
+        req,
+        &session,
+        arkret_models_identity::admin_grant::admin_scopes::SERVICE_ROUTE_HANDOVER,
+    )
+    .await?;
+    let handover_id = handover_id.into_inner();
+    let expected = arkret_wire::Hash::new(body.into_inner().expected_previous_notice_digest)
+        .map_err(|_| AppError::param_invalid("expected_previous_notice_digest is not a digest"))?;
+    let planner = handover_planner(state)?;
+    let cancelled = planner
+        .cancel(&handover_id, &expected, Utc::now())
+        .await
+        .map_err(handover_error)?;
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "admin.service_routes.handover.cancel",
+        json!({
+            "handover_id": handover_id,
+            "notice_revision": cancelled.notice.notice.notice_revision,
+        }),
+        "accepted",
+    )
+    .await;
+    json_ok(handover_detail_response(state, &planner, &handover_id).await?)
+}
+
+async fn handover_detail_response(
+    _state: &AppState,
+    planner: &ServiceRouteHandoverPlanner,
+    handover_id: &str,
+) -> Result<AdminServiceRouteHandoverDetail, AppError> {
+    let Some((plan, mut revisions)) = planner
+        .plan_detail(handover_id, HANDOVER_REVISION_LIMIT + 1)
+        .await
+        .map_err(handover_error)?
+    else {
+        return Err(AppError::internal(
+            "the service route handover plan disappeared after a successful write",
+        ));
+    };
+    let truncated = revisions.len() > HANDOVER_REVISION_LIMIT;
+    revisions.truncate(HANDOVER_REVISION_LIMIT);
+    Ok(AdminServiceRouteHandoverDetail {
+        plan: handover_summary(&plan),
+        revisions: revisions.iter().map(handover_revision).collect(),
+        revisions_truncated: truncated,
+        observed_at: Utc::now(),
+    })
 }
 
 #[cfg(test)]

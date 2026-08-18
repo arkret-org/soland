@@ -29,21 +29,21 @@ use super::{
     MemoryPushDeviceStore, MemoryRealmInviteStore, MemoryRealmMetaStore,
     MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore,
     MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
-    MemorySecurityTransactionStore, MemoryServiceIdentityStore, MemoryServiceRouteStore,
-    MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
-    MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
-    MemoryStrandWatchProjectionStore, MemorySyncCursorStore, MemoryWebsocketAuthStore,
-    MemoryWebvhStore, MessageStore, MimiConsentCorrelationStore, MlsCommitStore,
-    MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
+    MemorySecurityTransactionStore, MemoryServiceIdentityStore,
+    MemoryServiceRouteHandoverPlanStore, MemoryServiceRouteStore, MemorySessionStore,
+    MemorySidecarStore, MemorySignalRelayStore, MemorySpaceContainerProjectionStore,
+    MemoryStrandProjectionStore, MemoryStrandWatchProjectionStore, MemorySyncCursorStore,
+    MemoryWebsocketAuthStore, MemoryWebvhStore, MessageStore, MimiConsentCorrelationStore,
+    MlsCommitStore, MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
     MultisigPendingStore, Mutex, NotificationStore, OneTimeKeyStore, OrganizationPolicyStore,
     OrganizationRegistrationStore, OrganizationStore, PersistenceStore, PolicyDocumentStore,
     PrincipalResolutionStore, ProjectionEventStore, PublicationEvidenceStore, PushBridgeCacheStore,
     PushDeviceStore, RealmInviteStore, RealmMetaRecord, RealmMetaStore,
     RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyStore,
     RecoverySessionStore, RetentionPolicyStore, RetentionTombstoneStore, SecurityTransactionStore,
-    ServiceIdentityStore, ServiceRouteStore, SessionStore, SidecarStore, SignalRelayStore,
-    SpaceContainerProjectionStore, StrandProjectionStore, StrandWatchProjectionStore,
-    SyncCursorStore, WebsocketAuthStore, WebvhStore,
+    ServiceIdentityStore, ServiceRouteHandoverPlanStore, ServiceRouteStore, SessionStore,
+    SidecarStore, SignalRelayStore, SpaceContainerProjectionStore, StrandProjectionStore,
+    StrandWatchProjectionStore, SyncCursorStore, WebsocketAuthStore, WebvhStore,
 };
 #[cfg(feature = "fault-injection")]
 use crate::FaultInjector;
@@ -95,6 +95,7 @@ pub struct SolandMemoryPersistenceStore {
     service_identity: MemoryServiceIdentityStore,
     principal_resolutions: MemoryPrincipalResolutionStore,
     service_routes: MemoryServiceRouteStore,
+    service_route_plans: MemoryServiceRouteHandoverPlanStore,
     realm_invites: MemoryRealmInviteStore,
     pub(crate) events: MemoryEventStore,
     pub(crate) projection_events: MemoryProjectionEventStore,
@@ -203,6 +204,7 @@ impl SolandMemoryPersistenceStore {
             service_identity: MemoryServiceIdentityStore::new(),
             principal_resolutions: MemoryPrincipalResolutionStore::new(),
             service_routes: MemoryServiceRouteStore::new(),
+            service_route_plans: MemoryServiceRouteHandoverPlanStore::new(),
             realm_invites: MemoryRealmInviteStore::new(),
             events,
             projection_events,
@@ -643,6 +645,10 @@ impl soland_storage::ResolutionStoreRegistry for SolandMemoryPersistenceStore {
 
     fn service_routes(&self) -> &dyn ServiceRouteStore {
         &self.service_routes
+    }
+
+    fn service_route_plans(&self) -> &dyn ServiceRouteHandoverPlanStore {
+        &self.service_route_plans
     }
 }
 

@@ -8,6 +8,7 @@ mod app_state;
 mod member_identity;
 mod notification;
 mod service_route_fetcher;
+mod service_route_handover_signer;
 
 pub use app_state::{
     AppState, AppStateRuntime, ConnectionDrain, DEVELOPMENT_DEMO_SUBJECT_DID,
@@ -23,4 +24,5 @@ pub use notification::{
     EventBroadcast, EventNotification, EventNotificationKind, EventNotificationRelay, Mutex,
 };
 pub(crate) use service_route_fetcher::VerifiedBindingRouteFetcher;
+pub(crate) use service_route_handover_signer::{AppStateCurrentResolution, AppStateNoticeSigner};
 pub use soland_services::events::{RealmDirectoryEntry, RealmDirectoryIndex, RealmDirectoryQuery};

@@ -1353,6 +1353,43 @@ diesel::table! {
 }
 
 diesel::table! {
+    service_route_handover_plans (service_id, service_kind, handover_id) {
+        service_id -> Text,
+        service_kind -> Text,
+        handover_id -> Text,
+        basis_record_sequence -> BigInt,
+        basis_record_digest -> Text,
+        candidate_base_url -> Text,
+        candidate_record_url -> Text,
+        not_before -> Timestamptz,
+        cutover_at -> Timestamptz,
+        grace_until -> Timestamptz,
+        expires_at -> Timestamptz,
+        lifecycle_state -> Text,
+        active_notice_revision -> Nullable<Integer>,
+        active_notice_digest -> Nullable<Text>,
+        last_error -> Nullable<Text>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    service_route_handover_notices (service_id, service_kind, handover_id, notice_revision) {
+        service_id -> Text,
+        service_kind -> Text,
+        handover_id -> Text,
+        notice_revision -> Integer,
+        notice_digest -> Text,
+        previous_notice_digest -> Nullable<Text>,
+        notice_state -> Text,
+        notice -> Jsonb,
+        issued_at -> Timestamptz,
+        expires_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     service_identity_registrations (service_kind, public_base) {
         service_kind -> Text,
         public_base -> Text,
@@ -1589,6 +1626,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     service_resolution_last_seen_floors,
     service_resolution_mirror_ledger,
     service_route_cache,
+    service_route_handover_notices,
+    service_route_handover_plans,
     service_route_notice_states,
     sessions,
     publication_evidence,

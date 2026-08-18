@@ -5,6 +5,7 @@ use soland_storage::contract_tests::{
     assert_federation_outbox_store_contract, assert_idempotency_store_contract,
     assert_last_resort_claim_ledger_contract, assert_mimi_consent_correlation_store_contract,
     assert_mls_keypackage_retirement_contract, assert_organization_registration_store_contract,
+    assert_service_route_handover_plan_store_contract,
 };
 use soland_storage::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, MlsKeyPackageStore,
@@ -15,7 +16,7 @@ use soland_storage_postgres::{
     PgDeviceInventoryStore, PgDeviceMessageStore, PgEventCommitUnitOfWork, PgEventStore,
     PgFederationOutboxStore, PgIdempotencyStore, PgInviteReceivePolicyStore,
     PgMimiConsentCorrelationStore, PgMlsKeyPackageStore, PgOrganizationRegistrationStore, PgPool,
-    PgProjectionEventStore,
+    PgProjectionEventStore, PgServiceRouteHandoverPlanStore,
 };
 
 #[tokio::test]
@@ -28,6 +29,23 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically_when_configu
     let messages = PgDeviceMessageStore { pool };
     let namespace = format!("postgres-repair-snapshot-{}", uuid::Uuid::now_v7());
     assert_device_message_snapshot_guard_contract(&inventory, &messages, &namespace).await;
+}
+
+#[tokio::test]
+async fn postgres_adapter_satisfies_service_route_handover_plan_contract_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let store = PgServiceRouteHandoverPlanStore { pool };
+    // The plan slot is keyed by service id, so each run needs its own core to
+    // stay independent of whatever a previous case left behind.
+    let service_id = arkret_wire::DidCoreId::new(format!(
+        "ak:did_core:webvh:z{}",
+        uuid::Uuid::now_v7().simple()
+    ))
+    .unwrap();
+    assert_service_route_handover_plan_store_contract(&store, &service_id).await;
 }
 
 static TEST_POOL: tokio::sync::OnceCell<Option<PgPool>> = tokio::sync::OnceCell::const_new();

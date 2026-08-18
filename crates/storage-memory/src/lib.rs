@@ -56,19 +56,22 @@ pub(crate) use soland_storage::{
     RetentionPolicyRecord, RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore,
     SIGNAL_RELAY_MAX_PER_REALM, SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
     SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, ServiceIdentityStore,
-    ServiceRegistrationCommitOutcome, ServiceRouteStore, SessionRecord, SessionStore, SidecarStore,
-    SignalRelayRecord, SignalRelayStore, SpaceContainerProjectionRecord,
-    SpaceContainerProjectionStore, StrandProjectionRecord, StrandProjectionStore,
-    StrandWatchProjectionRecord, StrandWatchProjectionStore, SyncCursorRecord, SyncCursorStore,
-    WebsocketAuthStore, WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore,
-    agent_participation_record_key, apply_agent_provisioning_abandonment,
-    apply_agent_provisioning_abandonment_challenge, device_message_expires_at,
-    document_declares_registration_key, ensure_device_message_id, evaluate_drift,
-    event_position_cmp, fresh_device_message_ack_token, frontier_exchange_failure_record,
-    frontier_exchange_success_record, identity_anchor_slot_conflicts, mls_epoch_key,
-    peer_page_record_after_cursor, peer_page_record_matches, receipt_covers_event,
-    record_is_peer_authz_state_record, recovery_active_policy_locked, registration_as_existing,
-    registrations_match, remove_third_party_active_material, stage_identity_anchor_events,
+    ServiceRegistrationCommitOutcome, ServiceRouteHandoverNoticeCommit,
+    ServiceRouteHandoverNoticeRecord, ServiceRouteHandoverPlan, ServiceRouteHandoverPlanState,
+    ServiceRouteHandoverPlanStore, ServiceRouteHandoverPlanWrite, ServiceRouteStore, SessionRecord,
+    SessionStore, SidecarStore, SignalRelayRecord, SignalRelayStore,
+    SpaceContainerProjectionRecord, SpaceContainerProjectionStore, StrandProjectionRecord,
+    StrandProjectionStore, StrandWatchProjectionRecord, StrandWatchProjectionStore,
+    SyncCursorRecord, SyncCursorStore, WebsocketAuthStore, WebvhDocumentRecord,
+    WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore, agent_participation_record_key,
+    apply_agent_provisioning_abandonment, apply_agent_provisioning_abandonment_challenge,
+    device_message_expires_at, document_declares_registration_key, ensure_device_message_id,
+    evaluate_drift, event_position_cmp, fresh_device_message_ack_token,
+    frontier_exchange_failure_record, frontier_exchange_success_record,
+    identity_anchor_slot_conflicts, mls_epoch_key, peer_page_record_after_cursor,
+    peer_page_record_matches, receipt_covers_event, record_is_peer_authz_state_record,
+    recovery_active_policy_locked, registration_as_existing, registrations_match,
+    remove_third_party_active_material, stage_identity_anchor_events,
     valid_new_service_registration_records, validate_backup_erase_progress_initial,
     validate_backup_erase_progress_update, validate_security_transaction_update,
     webvh_freshness_on_put,
@@ -110,6 +113,7 @@ mod realm_invites;
 mod recovery;
 mod service_identity;
 mod service_route;
+mod service_route_plan;
 mod sessions;
 mod sidecars;
 mod signal;
@@ -176,6 +180,7 @@ pub(crate) use recovery::{
 };
 pub(crate) use service_identity::MemoryServiceIdentityStore;
 pub use service_route::MemoryServiceRouteStore;
+pub use service_route_plan::MemoryServiceRouteHandoverPlanStore;
 pub(crate) use sessions::MemorySessionStore;
 pub(crate) use sidecars::MemorySidecarStore;
 pub(crate) use signal::MemorySignalRelayStore;

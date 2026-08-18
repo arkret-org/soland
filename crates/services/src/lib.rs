@@ -26,6 +26,7 @@ pub mod projection;
 pub mod protocol_artifacts;
 pub mod runtime_guards;
 pub mod service_route;
+pub mod service_route_handover;
 pub mod sync;
 
 #[derive(Debug, thiserror::Error)]
