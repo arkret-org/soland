@@ -861,12 +861,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     // Commit `session_focus = arkret_native:blue` into the durable focus cell
     // (§4.1 write-once). A token request naming a different focus MUST be
     // rejected with `focus_mismatch`.
-    seed_call_state(
-        &state,
-        &session_id,
-        Some("arkret_native_blue"),
-        vec![],
-    );
+    seed_call_state(&state, &session_id, Some("arkret_native_blue"), vec![]);
 
     let mut focus_mismatch = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)

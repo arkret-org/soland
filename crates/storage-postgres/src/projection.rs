@@ -252,6 +252,10 @@ struct StrandProjectionRow {
     title: String,
     #[diesel(sql_type = Nullable<Text>)]
     summary: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    content: Option<Value>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    encrypted_content: Option<Value>,
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -279,6 +283,8 @@ impl From<StrandProjectionRow> for StrandProjectionRecord {
             tracks: serde_json::from_value(row.tracks).unwrap_or_default(),
             title: row.title,
             summary: row.summary,
+            content: row.content,
+            encrypted_content: row.encrypted_content,
             state: row.state,
             state_changed_at: row.state_changed_at,
             created_by: row.created_by,
@@ -290,7 +296,7 @@ impl From<StrandProjectionRow> for StrandProjectionRecord {
         }
     }
 }
-const STRAND_PROJECTION_COLUMNS: &str = "id AS strand_id, realm_id, scope_circle_id, tracks, title, summary, state, \
+const STRAND_PROJECTION_COLUMNS: &str = "id AS strand_id, realm_id, scope_circle_id, tracks, title, summary, content, encrypted_content, state, \
      state_changed_at, created_by_id AS created_by, created_at, history_basis_seals, updated_by_id AS updated_by, updated_at";
 #[async_trait]
 impl StrandProjectionStore for PgStrandProjectionStore {
@@ -318,15 +324,17 @@ impl StrandProjectionStore for PgStrandProjectionStore {
             .unwrap_or_else(|_| Value::Object(Default::default()));
         sql_query(
             "INSERT INTO projection_strands \
-             (id, realm_id, scope_circle_id, tracks, title, summary, state, state_changed_at, \
+             (id, realm_id, scope_circle_id, tracks, title, summary, content, encrypted_content, state, state_changed_at, \
               created_by_id, created_at, history_basis_seals, updated_by_id, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 scope_circle_id = EXCLUDED.scope_circle_id, \
                 tracks = EXCLUDED.tracks, \
                 title = EXCLUDED.title, \
                 summary = EXCLUDED.summary, \
+                content = EXCLUDED.content, \
+                encrypted_content = EXCLUDED.encrypted_content, \
                 state = EXCLUDED.state, \
                 state_changed_at = EXCLUDED.state_changed_at, \
                 history_basis_seals = EXCLUDED.history_basis_seals, \
@@ -344,6 +352,8 @@ impl StrandProjectionStore for PgStrandProjectionStore {
         .bind::<Jsonb, _>(&tracks)
         .bind::<Text, _>(&record.title)
         .bind::<Nullable<Text>, _>(&record.summary)
+        .bind::<Nullable<Jsonb>, _>(&record.content)
+        .bind::<Nullable<Jsonb>, _>(&record.encrypted_content)
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
         .bind::<Text, _>(&record.created_by)

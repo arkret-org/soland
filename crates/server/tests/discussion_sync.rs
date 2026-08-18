@@ -446,11 +446,14 @@ fn install_projected_strand_scope(
             strand_id: strand_id.to_owned(),
             realm_id: realm_id.to_owned(),
             tracks: std::collections::BTreeMap::from([(
-                arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
-                arkret_models_collaboration::objects::profiles::StrandTrackConfig::discussion_primary(),
+                arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION
+                    .to_owned(),
+                arkret_models_collaboration::objects::profiles::StrandTrack::discussion_primary(),
             )]),
             title: "Confidential discussion".to_owned(),
             summary: None,
+            content: None,
+            encrypted_content: None,
             fields: Default::default(),
             state: ObjectLifecycleState::Active,
             state_changed_at: None,

@@ -13,7 +13,9 @@ use super::{
     SqlUuid, Text, Timestamptz, Uuid, Value, async_trait, identity_anchor_slot_conflicts, ids,
     pg_conn, sql_query,
 };
-use crate::federation::{FederationOutboxRow, OUTBOX_COLUMNS, insert_federation_outbox_row};
+use crate::federation::{
+    FederationOutboxRow, insert_federation_outbox_row, qualified_outbox_columns,
+};
 pub struct PgEventStore {
     pub pool: PgPool,
 }
@@ -796,8 +798,9 @@ impl EventStore for PgEventStore {
         let event_id = ids::parse_event_id(event_id).ok_or_else(|| {
             PersistenceError::SchemaViolation(format!("malformed canonical Event id: {event_id:?}"))
         })?;
+        let outbox_columns = qualified_outbox_columns("outbox");
         let rows = sql_query(format!(
-            "SELECT {OUTBOX_COLUMNS} FROM federation_outbox outbox \
+            "SELECT {outbox_columns} FROM federation_outbox outbox \
              JOIN event_federation_outbox link ON link.outbox_id = outbox.id \
              JOIN canonical_events event ON event.pk = link.event_pk \
              WHERE event.id = $1 ORDER BY outbox.created_at ASC, outbox.id ASC"

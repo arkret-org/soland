@@ -73,13 +73,15 @@ pub use soland_storage::{
     CircleMemberProjectionRecord, CircleProjectionRecord, StrandWatchProjectionRecord,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct StrandProjectionRecord {
     pub strand_id: String,
     pub realm_id: String,
-    pub tracks: BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrackConfig>,
+    pub tracks: BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
     pub title: String,
     pub summary: Option<String>,
+    pub content: Option<Value>,
+    pub encrypted_content: Option<Value>,
     pub state: String,
     pub state_changed_at: Option<DateTime<Utc>>,
     pub created_by: String,

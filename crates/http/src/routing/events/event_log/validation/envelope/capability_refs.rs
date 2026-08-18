@@ -96,6 +96,13 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
             "DataEvent derives no data-plane write from its registered reducer contract",
         ));
     }
+    let access = data_event_constraint_context(kind, object).ok_or_else(|| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "DataEvent patch does not expose a canonical field/track authorization context",
+        )
+    })?;
 
     let state_at_ref = data_event_state_at_seal_ref(state, &realm, &seal_id)?;
     let historical_grants = data_event_grants_from_state_at_ref(&state_at_ref);
@@ -209,10 +216,9 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 ),
             ));
         }
-        if derived_cells
-            .iter()
-            .any(|cell| !grant_covers_data_event_effect(state, stored, kind, realm_id, cell))
-        {
+        if derived_cells.iter().any(|cell| {
+            !grant_covers_data_event_effect(state, stored, kind, realm_id, cell, &access)
+        }) {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "authorization_ref_scope",
@@ -311,10 +317,26 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     ) || (declared_admission == Some("conditional")
         && kind == arkret_wire::event_kind_str::SELF_MODERATION_REPORT);
     if !realm_authority_root_authorized && !independently_admitted {
+        // Restrictive effects are global across every effective grant whose
+        // action/resource selector matches this operation. A second broad
+        // allow grant must not bleach a field-scoped deny, quarantine, or
+        // review requirement from another matching grant.
+        if derived_cells.iter().any(|cell| {
+            effective_by_id.values().any(|grant| {
+                grant_matches_data_event_effect(state, grant, kind, realm_id, cell)
+                    && grant_has_matching_restrictive_constraint(grant, &access)
+            })
+        }) {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "a matching capability constraint restricts this DataEvent",
+            ));
+        }
         for cell in derived_cells {
-            let covering_grant = effective_by_id
-                .values()
-                .find(|grant| grant_covers_data_event_effect(state, grant, kind, realm_id, cell));
+            let covering_grant = effective_by_id.values().find(|grant| {
+                grant_covers_data_event_effect(state, grant, kind, realm_id, cell, &access)
+            });
             let Some(covering_grant) = covering_grant else {
                 return Err(event_validation_error(
                     StatusCode::FORBIDDEN,
@@ -654,6 +676,18 @@ pub(super) fn grant_covers_data_event_effect(
     action: &str,
     realm_id: &str,
     cell: &str,
+    access: &DataEventConstraintContext,
+) -> bool {
+    grant_matches_data_event_effect(state, grant, action, realm_id, cell)
+        && grant_constraints_cover_data_event(grant, action, access)
+}
+
+fn grant_matches_data_event_effect(
+    state: &AppState,
+    grant: &crate::authz::Grant,
+    action: &str,
+    realm_id: &str,
+    cell: &str,
 ) -> bool {
     grant.actions.iter().any(|candidate| {
         candidate == action
@@ -664,6 +698,295 @@ pub(super) fn grant_covers_data_event_effect(
     }) && effect_resource_candidates(state, cell, realm_id)
         .iter()
         .any(|resource| crate::authz::resource_matches(&grant.resource, resource))
+}
+
+/// Receiver-derived authorization inputs for constraint evaluation.  Patch
+/// fields come from the signed payload, never from producer-supplied effects.
+/// A base Strand field has no track; only `tracks.<name>.*` contributes a
+/// track target.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct DataEventConstraintContext {
+    write_fields: Vec<String>,
+    strand_id: Option<String>,
+    strand_tracks: Vec<String>,
+}
+
+fn data_event_constraint_context(
+    kind: &str,
+    object: &serde_json::Map<String, Value>,
+) -> Option<DataEventConstraintContext> {
+    let payload = object.get("payload")?.as_object()?;
+    let mut write_fields = payload
+        .get("patch")
+        .and_then(Value::as_object)
+        .map(|patch| patch.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    write_fields.sort();
+    write_fields.dedup();
+
+    let strand_id = payload
+        .get("target_ref")
+        .or_else(|| payload.get("strand_id"))
+        .and_then(Value::as_str)
+        .filter(|target| target.starts_with("ak:strand:"))
+        .map(str::to_owned);
+    let mut strand_tracks = Vec::new();
+    for field in &write_fields {
+        let mut segments = field.split('.');
+        if segments.next() == Some("tracks") {
+            let track = segments.next()?;
+            if track.is_empty() {
+                return None;
+            }
+            strand_tracks.push(track.to_owned());
+        }
+    }
+    strand_tracks.sort();
+    strand_tracks.dedup();
+
+    // Every action registered as field-scoped must expose a non-empty patch
+    // write set.  Otherwise accepting it would turn a required constraint
+    // into an empty-subset bypass.
+    if action_requires_constraint(kind, "allowed_write_fields") && write_fields.is_empty() {
+        return None;
+    }
+
+    Some(DataEventConstraintContext {
+        write_fields,
+        strand_id,
+        strand_tracks,
+    })
+}
+
+fn action_requires_constraint(action: &str, required: &str) -> bool {
+    arkret_schema::capability_action(action)
+        .is_some_and(|descriptor| descriptor.required_constraints.contains(&required))
+}
+
+fn grant_constraints_cover_data_event(
+    grant: &crate::authz::Grant,
+    action: &str,
+    access: &DataEventConstraintContext,
+) -> bool {
+    use crate::authz::{Constraint, GrantDecisionVerdict};
+
+    let mut has_allowed_write_fields = false;
+    for constraint in &grant.constraints {
+        match constraint {
+            Constraint::Decision { decision } => {
+                if !matches!(decision, GrantDecisionVerdict::Allow) {
+                    return false;
+                }
+            }
+            Constraint::FieldAccess {
+                effect,
+                allowed_write_fields,
+                denied_write_fields,
+                condition,
+                ..
+            } => {
+                // Named conditions require verified object state that this
+                // admission context does not yet carry, so they fail closed.
+                if condition.is_some() {
+                    return false;
+                }
+                match effect {
+                    GrantDecisionVerdict::Allow => {
+                        if !allowed_write_fields.is_empty() {
+                            has_allowed_write_fields = true;
+                        }
+                        if access.write_fields.iter().any(|field| {
+                            denied_write_fields.iter().any(|denied| denied == field)
+                                || (!allowed_write_fields.is_empty()
+                                    && !allowed_write_fields.iter().any(|allowed| allowed == field))
+                        }) {
+                            return false;
+                        }
+                    }
+                    GrantDecisionVerdict::Deny
+                    | GrantDecisionVerdict::Quarantine
+                    | GrantDecisionVerdict::RequireReview => {
+                        if field_access_restrictive_effect_matches(
+                            *effect,
+                            allowed_write_fields,
+                            denied_write_fields,
+                            access,
+                        ) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            Constraint::ScopeLimitation {
+                effect,
+                allowed_strand_ids,
+                denied_strand_ids,
+                allowed_tracks,
+                denied_tracks,
+                ..
+            } => match effect {
+                GrantDecisionVerdict::Allow => {
+                    if !scope_limitation_allows(
+                        allowed_strand_ids,
+                        denied_strand_ids,
+                        allowed_tracks,
+                        denied_tracks,
+                        access,
+                    ) {
+                        return false;
+                    }
+                }
+                GrantDecisionVerdict::Deny
+                | GrantDecisionVerdict::Quarantine
+                | GrantDecisionVerdict::RequireReview => {
+                    if scope_limitation_restrictive_effect_matches(
+                        *effect,
+                        allowed_strand_ids,
+                        denied_strand_ids,
+                        allowed_tracks,
+                        denied_tracks,
+                        access,
+                    ) {
+                        return false;
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
+
+    !action_requires_constraint(action, "allowed_write_fields") || has_allowed_write_fields
+}
+
+fn grant_has_matching_restrictive_constraint(
+    grant: &crate::authz::Grant,
+    access: &DataEventConstraintContext,
+) -> bool {
+    use crate::authz::{Constraint, GrantDecisionVerdict};
+
+    grant.constraints.iter().any(|constraint| match constraint {
+        Constraint::Decision { decision } => !matches!(decision, GrantDecisionVerdict::Allow),
+        Constraint::FieldAccess {
+            effect,
+            allowed_write_fields,
+            denied_write_fields,
+            condition,
+            ..
+        } => {
+            if condition.is_some() {
+                // This operation context cannot prove the named condition.
+                // An indeterminate allow only makes this grant unsatisfied;
+                // it must not globally block a separate satisfied grant.
+                // Indeterminate restrictive effects still fail closed.
+                return !matches!(effect, GrantDecisionVerdict::Allow);
+            }
+            field_access_restrictive_effect_matches(
+                *effect,
+                allowed_write_fields,
+                denied_write_fields,
+                access,
+            )
+        }
+        Constraint::ScopeLimitation {
+            effect,
+            allowed_strand_ids,
+            denied_strand_ids,
+            allowed_tracks,
+            denied_tracks,
+            ..
+        } => scope_limitation_restrictive_effect_matches(
+            *effect,
+            allowed_strand_ids,
+            denied_strand_ids,
+            allowed_tracks,
+            denied_tracks,
+            access,
+        ),
+        _ => false,
+    })
+}
+
+fn field_access_restrictive_effect_matches(
+    effect: crate::authz::GrantDecisionVerdict,
+    allowed_write_fields: &[String],
+    denied_write_fields: &[String],
+    access: &DataEventConstraintContext,
+) -> bool {
+    use crate::authz::GrantDecisionVerdict;
+
+    match effect {
+        GrantDecisionVerdict::Allow => false,
+        GrantDecisionVerdict::Deny => access
+            .write_fields
+            .iter()
+            .any(|field| denied_write_fields.iter().any(|denied| denied == field)),
+        GrantDecisionVerdict::Quarantine | GrantDecisionVerdict::RequireReview => {
+            access.write_fields.iter().all(|field| {
+                !denied_write_fields.iter().any(|denied| denied == field)
+                    && (allowed_write_fields.is_empty()
+                        || allowed_write_fields.iter().any(|allowed| allowed == field))
+            })
+        }
+    }
+}
+
+fn scope_limitation_allows(
+    allowed_strand_ids: &[String],
+    denied_strand_ids: &[String],
+    allowed_tracks: &[String],
+    denied_tracks: &[String],
+    access: &DataEventConstraintContext,
+) -> bool {
+    if let Some(strand_id) = access.strand_id.as_deref()
+        && (denied_strand_ids.iter().any(|denied| denied == strand_id)
+            || (!allowed_strand_ids.is_empty()
+                && !allowed_strand_ids
+                    .iter()
+                    .any(|allowed| allowed == strand_id)))
+    {
+        return false;
+    }
+    // An empty track set means a base Strand operation. In particular,
+    // Description `content` is not reclassified as synthesis.
+    !access.strand_tracks.iter().any(|track| {
+        denied_tracks.iter().any(|denied| denied == track)
+            || (!allowed_tracks.is_empty()
+                && !allowed_tracks.iter().any(|allowed| allowed == track))
+    })
+}
+
+fn scope_limitation_restrictive_effect_matches(
+    effect: crate::authz::GrantDecisionVerdict,
+    allowed_strand_ids: &[String],
+    denied_strand_ids: &[String],
+    allowed_tracks: &[String],
+    denied_tracks: &[String],
+    access: &DataEventConstraintContext,
+) -> bool {
+    use crate::authz::GrantDecisionVerdict;
+
+    match effect {
+        GrantDecisionVerdict::Allow => false,
+        GrantDecisionVerdict::Deny => {
+            access
+                .strand_id
+                .as_deref()
+                .is_some_and(|strand_id| denied_strand_ids.iter().any(|denied| denied == strand_id))
+                || access
+                    .strand_tracks
+                    .iter()
+                    .any(|track| denied_tracks.iter().any(|denied| denied == track))
+        }
+        GrantDecisionVerdict::Quarantine | GrantDecisionVerdict::RequireReview => {
+            scope_limitation_allows(
+                allowed_strand_ids,
+                denied_strand_ids,
+                allowed_tracks,
+                denied_tracks,
+                access,
+            )
+        }
+    }
 }
 
 pub(super) fn effect_resource_candidates(
@@ -706,5 +1029,198 @@ pub(super) fn append_authz_resource_candidates(
                 resources.push(candidate.to_owned());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod constraint_tests {
+    use super::*;
+    use crate::authz::{Constraint, GrantDecisionVerdict, projected_grant_fixture};
+
+    const REALM: &str = "ak:realm:AX-N4k3nJ3KKtkbL-adKMKRyKUlTWlwhxQVvjmvEBEVB";
+    const STRAND: &str = "ak:strand:AT3ARBdH1FM6GjXK9ulTx-YMvQOXys39dlUzZV6KyID9";
+
+    fn grant(constraints: Vec<Constraint>) -> crate::authz::Grant {
+        projected_grant_fixture(
+            REALM.to_owned(),
+            "ak:did_core:web:issuer.example".to_owned(),
+            "ak:did_core:web:writer.example".to_owned(),
+            STRAND.to_owned(),
+            vec![arkret_wire::CapabilityActionId::STRAND_UPDATE.to_owned()],
+            constraints,
+        )
+    }
+
+    fn field_access(fields: &[&str]) -> Constraint {
+        Constraint::FieldAccess {
+            effect: GrantDecisionVerdict::Allow,
+            allowed_write_fields: fields.iter().map(|field| (*field).to_owned()).collect(),
+            denied_write_fields: Vec::new(),
+            allowed_read_fields: Vec::new(),
+            denied_read_fields: Vec::new(),
+            condition: None,
+        }
+    }
+
+    fn access(field: &str) -> DataEventConstraintContext {
+        DataEventConstraintContext {
+            write_fields: vec![field.to_owned()],
+            strand_id: Some(STRAND.to_owned()),
+            strand_tracks: field
+                .strip_prefix("tracks.")
+                .and_then(|suffix| suffix.split('.').next())
+                .map(|track| vec![track.to_owned()])
+                .unwrap_or_default(),
+        }
+    }
+
+    #[test]
+    fn signed_strand_patch_derives_description_and_synthesis_as_distinct_targets() {
+        let description = serde_json::json!({
+            "payload": {
+                "target_ref": STRAND,
+                "patch": { "content": { "$op": "unset" } }
+            }
+        });
+        let description = data_event_constraint_context(
+            arkret_wire::CapabilityActionId::STRAND_UPDATE,
+            description.as_object().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(description.write_fields, ["content"]);
+        assert!(description.strand_tracks.is_empty());
+
+        let synthesis = serde_json::json!({
+            "payload": {
+                "target_ref": STRAND,
+                "patch": {
+                    "tracks.synthesis.encrypted_content": { "$op": "unset" }
+                }
+            }
+        });
+        let synthesis = data_event_constraint_context(
+            arkret_wire::CapabilityActionId::STRAND_UPDATE,
+            synthesis.as_object().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            synthesis.write_fields,
+            ["tracks.synthesis.encrypted_content"]
+        );
+        assert_eq!(synthesis.strand_tracks, ["synthesis"]);
+    }
+
+    #[test]
+    fn description_and_synthesis_write_grants_are_bidirectionally_isolated() {
+        let description = grant(vec![field_access(&["content", "encrypted_content"])]);
+        assert!(grant_constraints_cover_data_event(
+            &description,
+            arkret_wire::CapabilityActionId::STRAND_UPDATE,
+            &access("content"),
+        ));
+        assert!(!grant_constraints_cover_data_event(
+            &description,
+            arkret_wire::CapabilityActionId::STRAND_UPDATE,
+            &access("tracks.synthesis.content"),
+        ));
+
+        let synthesis = grant(vec![field_access(&[
+            "tracks.synthesis.content",
+            "tracks.synthesis.encrypted_content",
+        ])]);
+        assert!(grant_constraints_cover_data_event(
+            &synthesis,
+            arkret_wire::CapabilityActionId::STRAND_UPDATE,
+            &access("tracks.synthesis.content"),
+        ));
+        assert!(!grant_constraints_cover_data_event(
+            &synthesis,
+            arkret_wire::CapabilityActionId::STRAND_UPDATE,
+            &access("content"),
+        ));
+    }
+
+    #[test]
+    fn allowed_tracks_applies_only_to_track_targeted_paths() {
+        let grant = grant(vec![
+            field_access(&["content", "tracks.synthesis.content"]),
+            Constraint::ScopeLimitation {
+                effect: GrantDecisionVerdict::Allow,
+                allowed_strand_ids: Vec::new(),
+                denied_strand_ids: Vec::new(),
+                allowed_tracks: vec!["synthesis".to_owned()],
+                denied_tracks: Vec::new(),
+                allowed_circle_ids: Default::default(),
+                allowed_session_ids: Default::default(),
+            },
+        ]);
+        assert!(grant_constraints_cover_data_event(
+            &grant,
+            arkret_wire::CapabilityActionId::STRAND_UPDATE,
+            &access("content"),
+        ));
+        assert!(grant_constraints_cover_data_event(
+            &grant,
+            arkret_wire::CapabilityActionId::STRAND_UPDATE,
+            &access("tracks.synthesis.content"),
+        ));
+        assert!(!grant_constraints_cover_data_event(
+            &grant,
+            arkret_wire::CapabilityActionId::STRAND_UPDATE,
+            &access("tracks.discussion.metadata.topic"),
+        ));
+    }
+
+    #[test]
+    fn matching_deny_grant_cannot_be_bleached_by_a_separate_allow_grant() {
+        let description_access = access("content");
+        let allow = grant(vec![field_access(&["content"])]);
+        let deny = grant(vec![Constraint::FieldAccess {
+            effect: GrantDecisionVerdict::Deny,
+            allowed_write_fields: Vec::new(),
+            denied_write_fields: vec!["content".to_owned()],
+            allowed_read_fields: Vec::new(),
+            denied_read_fields: Vec::new(),
+            condition: None,
+        }]);
+
+        assert!(grant_constraints_cover_data_event(
+            &allow,
+            arkret_wire::CapabilityActionId::STRAND_UPDATE,
+            &description_access,
+        ));
+        assert!(grant_has_matching_restrictive_constraint(
+            &deny,
+            &description_access,
+        ));
+
+        let synthesis_access = access("tracks.synthesis.content");
+        assert!(!grant_has_matching_restrictive_constraint(
+            &deny,
+            &synthesis_access,
+        ));
+    }
+
+    #[test]
+    fn indeterminate_allow_is_per_grant_not_a_global_restriction() {
+        let description_access = access("content");
+        let conditional_allow = grant(vec![Constraint::FieldAccess {
+            effect: GrantDecisionVerdict::Allow,
+            allowed_write_fields: vec!["content".to_owned()],
+            denied_write_fields: Vec::new(),
+            allowed_read_fields: Vec::new(),
+            denied_read_fields: Vec::new(),
+            condition: Some(serde_json::json!({"field": "metadata.fields.review_status"})),
+        }]);
+
+        assert!(!grant_constraints_cover_data_event(
+            &conditional_allow,
+            arkret_wire::CapabilityActionId::STRAND_UPDATE,
+            &description_access,
+        ));
+        assert!(!grant_has_matching_restrictive_constraint(
+            &conditional_allow,
+            &description_access,
+        ));
     }
 }

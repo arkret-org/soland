@@ -757,6 +757,41 @@ fn evaluate_constraint(
                 None
             }
         }
+        Constraint::FieldAccess { .. } => {
+            // These constraints require operation-derived dotted paths and
+            // track targets. DataEvent admission evaluates them against the
+            // signed payload in `capability_refs`; this resource-only helper
+            // has no safe context from which to do so.
+            None
+        }
+        Constraint::ScopeLimitation {
+            allowed_strand_ids,
+            denied_strand_ids,
+            allowed_circle_ids,
+            allowed_session_ids,
+            ..
+        } => {
+            if resource.starts_with("ak:strand:")
+                && (denied_strand_ids.iter().any(|id| id == resource)
+                    || (!allowed_strand_ids.is_empty()
+                        && !allowed_strand_ids.iter().any(|id| id == resource)))
+            {
+                return Some("scope_limitation does not allow the target Strand".to_owned());
+            }
+            if resource.starts_with("ak:circle:")
+                && (allowed_circle_ids.is_empty()
+                    || !allowed_circle_ids.iter().any(|id| id.as_ref() == resource))
+            {
+                return Some("scope_limitation does not allow the target Circle".to_owned());
+            }
+            if !allowed_session_ids.is_empty()
+                && !resource.starts_with("ak:")
+                && !allowed_session_ids.iter().any(|id| id == resource)
+            {
+                return Some("scope_limitation does not allow the target session".to_owned());
+            }
+            None
+        }
         Constraint::Decision { .. } => {
             // Decision constraints are evaluated separately via
             // `decision_from_constraint`; treat as satisfied here so they

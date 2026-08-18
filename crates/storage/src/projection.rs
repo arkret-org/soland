@@ -115,13 +115,15 @@ pub struct SpaceContainerProjectionRecord {
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct StrandProjectionRecord {
     pub strand_id: String,
     pub realm_id: String,
-    pub tracks: BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrackConfig>,
+    pub tracks: BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
     pub title: String,
     pub summary: Option<String>,
+    pub content: Option<serde_json::Value>,
+    pub encrypted_content: Option<serde_json::Value>,
     /// One of `active` / `archived` / `deleted` / `redacted` per spec.
     pub state: String,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,

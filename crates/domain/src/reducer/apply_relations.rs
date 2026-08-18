@@ -982,6 +982,8 @@ mod cross_realm_relation_tests {
             tracks: crate::reducer::projections::default_strand_tracks(),
             title: String::new(),
             summary: None,
+            content: None,
+            encrypted_content: None,
             fields: Default::default(),
             state: ObjectLifecycleState::Active,
             state_changed_at: None,

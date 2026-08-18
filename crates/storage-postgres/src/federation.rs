@@ -16,6 +16,19 @@ pub(crate) const OUTBOX_COLUMNS: &str = "id, peer_id AS peer_did, peer_url, endp
      last_error_code, last_response_excerpt, lease_owner, lease_token, lease_expires_at, \
      policy_version, supersedes_outbox_id, created_at, completed_at";
 
+/// Qualify the shared outbox projection when it is used in a JOIN.
+///
+/// PostgreSQL correctly rejects bare `id`, `state`, and timestamp columns once
+/// the canonical Event/link tables join the outbox. Keeping the aliases here
+/// also prevents the standalone and joined row decoders from drifting.
+pub(crate) fn qualified_outbox_columns(alias: &str) -> String {
+    OUTBOX_COLUMNS
+        .split(',')
+        .map(|column| format!("{alias}.{}", column.trim()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 const DEAD_LETTER_COLUMNS: &str = "id, outbox_id, peer_id AS peer_did, endpoint, idempotency_key, last_http_status, attempts, \
      response_excerpt, reason, failed_at, requeued_outbox_id, requeued_by, requeue_reason, \
      requeue_request_digest, requeued_at";
@@ -1053,5 +1066,23 @@ impl From<FederationOutboxDeadLetterRow> for FederationOutboxDeadLetterRecord {
             requeue_request_digest: row.requeue_request_digest,
             requeued_at: row.requeued_at,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn joined_outbox_projection_qualifies_every_source_column() {
+        let columns = qualified_outbox_columns("outbox");
+
+        assert!(columns.starts_with("outbox.id, outbox.peer_id AS peer_did"));
+        assert!(columns.contains(", outbox.state,"));
+        assert!(columns.ends_with("outbox.completed_at"));
+        assert_eq!(
+            columns.split(',').count(),
+            OUTBOX_COLUMNS.split(',').count()
+        );
     }
 }

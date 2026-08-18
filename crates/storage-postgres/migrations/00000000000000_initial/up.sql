@@ -1686,6 +1686,8 @@ CREATE TABLE public.projection_strands (
     tracks jsonb DEFAULT '{"synthesis": {}}'::jsonb NOT NULL,
     title text NOT NULL,
     summary text,
+    content jsonb,
+    encrypted_content jsonb,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
     created_by_id text NOT NULL,

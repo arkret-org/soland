@@ -711,6 +711,8 @@ pub async fn hydrate_projections_from_persistence(
                     tracks: record.tracks,
                     title: record.title,
                     summary: record.summary,
+                    content: record.content,
+                    encrypted_content: record.encrypted_content,
                     fields: Default::default(),
                     state,
                     state_changed_at: record.state_changed_at,

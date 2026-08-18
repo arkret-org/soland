@@ -58,6 +58,16 @@ impl ProjectionState {
                 };
             }
         };
+        if object.get("content").is_some() && object.get("encrypted_content").is_some() {
+            return ProjectionEffect::Rejected {
+                reason: "strand_description_content_conflict".to_owned(),
+            };
+        }
+        if let Err(reason) = validate_track_content_surfaces(&tracks) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         // AKP-0007: intra-Realm discussion boundaries are expressed via
         // `scope_circle_id` (Circle); when present, validate the Circle is in
         // this Realm and active.
@@ -109,6 +119,8 @@ impl ProjectionState {
             tracks,
             title,
             summary,
+            content: object.get("content").cloned(),
+            encrypted_content: object.get("encrypted_content").cloned(),
             fields,
             state: ObjectLifecycleState::Active,
             state_changed_at: None,
@@ -151,7 +163,8 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `ak.strand.update` — patch title / summary on an existing Strand.
+    /// Apply `ak.strand.update` to an existing Strand, including the independent
+    /// top-level Description and nested Synthesis content surfaces.
     /// Spec common-fields.md §5.1: update on non-active object MUST fail
     /// with `strand_not_active`. Unknown Strand is queued for pending replay.
     pub(crate) fn apply_strand_update(
@@ -199,12 +212,27 @@ impl ProjectionState {
                     reason: "schema_violation".to_owned(),
                 };
             }
+            // Freeze and patch the complete pre-update Strand before mutating
+            // individual metadata fields below. Otherwise an `$op: unset`
+            // for title/summary would be replayed against an already-mutated
+            // document and could fail spuriously.
+            let narrative_post = match apply_strand_narrative_patch(strand, patch) {
+                Ok(post) => post,
+                Err(reason) => {
+                    return ProjectionEffect::Rejected {
+                        reason: reason.to_owned(),
+                    };
+                }
+            };
             if let Some(title) = patch_metadata_string_value(patch, "title") {
                 strand.title = title.unwrap_or_default();
             }
             if let Some(summary) = patch_metadata_string_value(patch, "summary") {
                 strand.summary = summary;
             }
+            strand.content = narrative_post.content;
+            strand.encrypted_content = narrative_post.encrypted_content;
+            strand.tracks = narrative_post.tracks;
             // Only a patch that actually changes the calendar subtree is a
             // schedule revision. A title-only update leaves the frontier alone,
             // so previously authored RSVP bases stay current instead of being
@@ -514,17 +542,145 @@ impl ProjectionState {
     }
 }
 
+struct StrandNarrativePost {
+    content: Option<Value>,
+    encrypted_content: Option<Value>,
+    tracks: BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
+}
+
+/// Apply an `ak.strand.update` against one complete frozen Strand document so
+/// dotted Synthesis paths cannot be mistaken for the top-level Description.
+fn apply_strand_narrative_patch(
+    strand: &StrandProjection,
+    patch: &serde_json::Map<String, Value>,
+) -> Result<StrandNarrativePost, &'static str> {
+    let mut metadata = serde_json::Map::new();
+    metadata.insert("title".to_owned(), Value::String(strand.title.clone()));
+    if let Some(summary) = &strand.summary {
+        metadata.insert("summary".to_owned(), Value::String(summary.clone()));
+    }
+    metadata.insert(
+        "fields".to_owned(),
+        serde_json::to_value(&strand.fields).map_err(|_| "strand_projection_invalid")?,
+    );
+    let mut pre = serde_json::Map::new();
+    pre.insert("metadata".to_owned(), Value::Object(metadata));
+    pre.insert(
+        "tracks".to_owned(),
+        serde_json::to_value(&strand.tracks).map_err(|_| "strand_projection_invalid")?,
+    );
+    if let Some(content) = &strand.content {
+        pre.insert("content".to_owned(), content.clone());
+    }
+    if let Some(encrypted_content) = &strand.encrypted_content {
+        pre.insert("encrypted_content".to_owned(), encrypted_content.clone());
+    }
+
+    let typed_patch =
+        serde_json::from_value::<arkret_wire::patch::Patch>(Value::Object(patch.clone()))
+            .map_err(|_| "strand_patch_invalid")?;
+    let post = typed_patch
+        .apply(&Value::Object(pre))
+        .map_err(|_| "strand_patch_invalid")?;
+    let post_object = post.as_object().ok_or("strand_projection_invalid")?;
+    let content = post_object.get("content").cloned();
+    let encrypted_content = post_object.get("encrypted_content").cloned();
+    if content.is_some() && encrypted_content.is_some() {
+        return Err("strand_description_content_conflict");
+    }
+    let tracks = serde_json::from_value::<
+        BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
+    >(
+        post_object
+            .get("tracks")
+            .cloned()
+            .ok_or("strand_tracks_empty")?,
+    )
+    .map_err(|_| "strand_tracks_invalid")?;
+    validate_strand_tracks(&tracks)?;
+    validate_track_content_surfaces(&tracks)?;
+
+    let before_synthesis = strand_track_content_snapshot_for(&strand.tracks, "synthesis");
+    let after_synthesis = strand_track_content_snapshot_for(&tracks, "synthesis");
+    if before_synthesis != after_synthesis {
+        let before_active = strand
+            .tracks
+            .get("synthesis")
+            .is_none_or(|track| track.enabled.unwrap_or(true));
+        let after_active = tracks
+            .get("synthesis")
+            .is_none_or(|track| track.enabled.unwrap_or(true));
+        if !before_active || !after_active {
+            return Err("track_disabled");
+        }
+    }
+
+    Ok(StrandNarrativePost {
+        content,
+        encrypted_content,
+        tracks,
+    })
+}
+
+fn validate_track_content_surfaces(
+    tracks: &BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
+) -> Result<(), &'static str> {
+    for (track_name, track) in tracks {
+        if track.content.is_some() && track.encrypted_content.is_some() {
+            return Err("strand_track_content_conflict");
+        }
+        if track_name == "discussion"
+            && (track.content.is_some() || track.encrypted_content.is_some())
+        {
+            return Err("discussion_content_forbidden");
+        }
+    }
+    Ok(())
+}
+
+fn strand_track_content_snapshot_for(
+    tracks: &BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
+    track_name: &str,
+) -> (Option<Value>, Option<Value>) {
+    tracks.get(track_name).map_or((None, None), |track| {
+        (
+            track
+                .content
+                .as_ref()
+                .and_then(|value| serde_json::to_value(value).ok()),
+            track
+                .encrypted_content
+                .as_ref()
+                .and_then(|value| serde_json::to_value(value).ok()),
+        )
+    })
+}
+
+fn strand_track_content_snapshot(
+    tracks: &BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
+) -> BTreeMap<String, (Option<Value>, Option<Value>)> {
+    tracks
+        .keys()
+        .map(|name| {
+            (
+                name.clone(),
+                strand_track_content_snapshot_for(tracks, name),
+            )
+        })
+        .collect()
+}
+
 fn strand_tracks_from_object(
     object: &serde_json::Map<String, Value>,
 ) -> Result<
-    BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrackConfig>,
+    BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
     &'static str,
 > {
     let Some(tracks_value) = object.get("tracks") else {
         return Ok(crate::reducer::projections::default_strand_tracks());
     };
     let tracks = serde_json::from_value::<
-        BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrackConfig>,
+        BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
     >(tracks_value.clone())
     .map_err(|_| "strand_tracks_invalid")?;
     validate_strand_tracks(&tracks)?;
@@ -535,10 +691,10 @@ fn strand_tracks_from_object(
 }
 
 fn apply_strand_tracks_update_to_map(
-    current: &BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrackConfig>,
+    current: &BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
     payload: &Value,
 ) -> Result<
-    BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrackConfig>,
+    BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
     &'static str,
 > {
     let mut tracks = current.clone();
@@ -576,26 +732,26 @@ fn apply_strand_tracks_update_to_map(
         return Err("strand_tracks_update_requires_patch");
     }
     validate_strand_tracks(&tracks)?;
+    if strand_track_content_snapshot(current) != strand_track_content_snapshot(&tracks) {
+        return Err("strand_tracks_content_forbidden");
+    }
     Ok(tracks)
 }
 
 fn parse_track_update_map(
     value: &Value,
 ) -> Result<
-    BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrackConfig>,
+    BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
     &'static str,
 > {
     serde_json::from_value::<
-        BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrackConfig>,
+        BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
     >(value.clone())
     .map_err(|_| "strand_tracks_invalid")
 }
 
 fn apply_whole_track_patch(
-    tracks: &mut BTreeMap<
-        String,
-        arkret_models_collaboration::objects::profiles::StrandTrackConfig,
-    >,
+    tracks: &mut BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
     track_id: &str,
     patch_value: &Value,
 ) -> Result<(), &'static str> {
@@ -605,7 +761,7 @@ fn apply_whole_track_patch(
     match patch {
         TrackPatchOperation::Set(value) => {
             let track = serde_json::from_value::<
-                arkret_models_collaboration::objects::profiles::StrandTrackConfig,
+                arkret_models_collaboration::objects::profiles::StrandTrack,
             >(value.clone())
             .map_err(|_| "strand_tracks_invalid")?;
             tracks.insert(track_id.to_owned(), track);
@@ -618,10 +774,7 @@ fn apply_whole_track_patch(
 }
 
 fn apply_track_field_patch(
-    tracks: &mut BTreeMap<
-        String,
-        arkret_models_collaboration::objects::profiles::StrandTrackConfig,
-    >,
+    tracks: &mut BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
     track_id: &str,
     field: &str,
     patch_value: &Value,
@@ -638,24 +791,28 @@ fn apply_track_field_patch(
     let Some(track_object) = track_value.as_object_mut() else {
         return Err("strand_tracks_invalid");
     };
+    if matches!(field, "content" | "encrypted_content") {
+        return Err("strand_tracks_content_forbidden");
+    }
+    if !matches!(
+        field,
+        "enabled" | "is_primary" | "profile" | "template" | "metadata"
+    ) {
+        return Err("strand_tracks_patch_invalid");
+    }
     match patch {
         TrackPatchOperation::Set(value) => {
-            if !matches!(
-                field,
-                "enabled" | "is_primary" | "profile" | "template" | "metadata"
-            ) {
-                return Err("strand_tracks_patch_invalid");
-            }
             track_object.insert(field.to_owned(), value.clone());
         }
         TrackPatchOperation::Remove => {
             track_object.remove(field);
         }
     }
-    let track = serde_json::from_value::<
-        arkret_models_collaboration::objects::profiles::StrandTrackConfig,
-    >(track_value)
-    .map_err(|_| "strand_tracks_invalid")?;
+    let track =
+        serde_json::from_value::<arkret_models_collaboration::objects::profiles::StrandTrack>(
+            track_value,
+        )
+        .map_err(|_| "strand_tracks_invalid")?;
     tracks.insert(track_id.to_owned(), track);
     Ok(())
 }
@@ -683,7 +840,7 @@ fn parse_patch_operation(value: &Value) -> Result<TrackPatchOperation<'_>, &'sta
 }
 
 fn validate_strand_tracks(
-    tracks: &BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrackConfig>,
+    tracks: &BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
 ) -> Result<(), &'static str> {
     for track_id in tracks.keys() {
         arkret_models_collaboration::objects::profiles::validate_strand_track_name(track_id)
@@ -695,8 +852,8 @@ fn validate_strand_tracks(
 }
 
 fn validate_primary_track_transition(
-    previous: &BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrackConfig>,
-    next: &BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrackConfig>,
+    previous: &BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
+    next: &BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
 ) -> Result<(), &'static str> {
     arkret_models_collaboration::objects::profiles::validate_primary_track_transition(
         previous, next, None,

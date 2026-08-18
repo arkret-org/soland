@@ -140,25 +140,10 @@ fn engine_resources_from_body(body: &Value, realm_id: &str) -> Vec<String> {
     resources
 }
 
-fn engine_constraints_from_body(body: &Value) -> Vec<crate::capability::Constraint> {
+fn engine_constraints_from_body(body: &Value) -> Option<Vec<crate::capability::Constraint>> {
     value_array_field(body, "constraints")
         .into_iter()
-        .filter_map(|constraint| {
-            serde_json::from_value(constraint.clone()).ok().or_else(|| {
-                let mut canonical = constraint.as_object()?.clone();
-                if canonical.get("constraint_kind").and_then(Value::as_str)
-                    != Some("scope_limitation")
-                    || !canonical.contains_key("allowed_circle_ids")
-                {
-                    return None;
-                }
-                canonical.insert(
-                    "constraint_kind".to_owned(),
-                    Value::String("allowed_circle_ids".to_owned()),
-                );
-                serde_json::from_value(Value::Object(canonical)).ok()
-            })
-        })
+        .map(|constraint| serde_json::from_value(constraint.clone()).ok())
         .collect()
 }
 
@@ -206,7 +191,7 @@ pub fn engine_grant_from_cell_body(
         .get("capability_action_registry_digest")
         .and_then(Value::as_str)
         .and_then(|value| arkret_identifiers::Hash::new(value.to_owned()).ok());
-    let constraints = engine_constraints_from_body(body);
+    let constraints = engine_constraints_from_body(body)?;
     let created_at = body
         .get("issued_at")
         .and_then(Value::as_str)
@@ -315,7 +300,7 @@ mod cba_capability_cell_tests {
     use arkret_state::lattice::CellState;
     use serde_json::{Value, json};
 
-    use super::engine_grant_from_capability_cell_state;
+    use super::{engine_grant_from_capability_cell_state, engine_grant_from_cell_body};
 
     #[test]
     fn engine_grant_reads_registry_projected_wrapper() {
@@ -363,6 +348,49 @@ mod cba_capability_cell_tests {
                 .iter()
                 .any(|action| action == "ak.realm.admin")
         );
+    }
+
+    #[test]
+    fn engine_grant_retains_field_and_track_constraints_without_alias_conversion() {
+        let body = json!({
+            "realm_id": "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic",
+            "issuer": "ak:did_core:web:owner.example",
+            "issuer_principal_server_id": "ak:did_core:web:owner.example",
+            "subject": "ak:did_core:web:writer.example",
+            "subject_principal_server_id": "ak:did_core:web:writer.example",
+            "actions": ["ak.strand.update"],
+            "resources": [{
+                "kind": "strand",
+                "realm_id": "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic",
+                "strand_id": "ak:strand:AT3ARBdH1FM6GjXK9ulTx-YMvQOXys39dlUzZV6KyID9"
+            }],
+            "constraints": [{
+                "constraint_kind": "field_access",
+                "effect": "allow",
+                "allowed_write_fields": ["tracks.synthesis.content"]
+            }, {
+                "constraint_kind": "scope_limitation",
+                "effect": "allow",
+                "allowed_tracks": ["synthesis"]
+            }]
+        });
+        let grant = engine_grant_from_cell_body(
+            "ak:grant:AVrFZlvgUn-7TZ-JmuAqj5zeywh7lJ6SQmpb3MNF95Q7",
+            &body,
+            false,
+        )
+        .expect("canonical constraints must project directly");
+
+        assert!(matches!(
+            &grant.constraints[0],
+            crate::capability::Constraint::FieldAccess { allowed_write_fields, .. }
+                if allowed_write_fields == &["tracks.synthesis.content"]
+        ));
+        assert!(matches!(
+            &grant.constraints[1],
+            crate::capability::Constraint::ScopeLimitation { allowed_tracks, .. }
+                if allowed_tracks == &["synthesis"]
+        ));
     }
 }
 

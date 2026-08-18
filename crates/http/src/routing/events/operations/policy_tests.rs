@@ -859,6 +859,8 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
                 tracks: Default::default(),
                 title: "Scoped".to_owned(),
                 summary: None,
+                content: None,
+                encrypted_content: None,
                 fields: Default::default(),
                 state: soland_domain::reducer::ObjectLifecycleState::Active,
                 state_changed_at: None,

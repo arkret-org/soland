@@ -585,6 +585,49 @@ fn wire_constraint_from_authz_constraint(
             wire.period = Some(period);
             Ok(wire)
         }
+        Constraint::FieldAccess {
+            effect,
+            allowed_write_fields,
+            denied_write_fields,
+            allowed_read_fields,
+            denied_read_fields,
+            condition,
+        } => {
+            let mut wire = WireGrantConstraint::new(
+                WireGrantConstraintKind::FieldAccess,
+                wire_effect_from_decision(effect),
+            );
+            wire.allowed_write_fields = allowed_write_fields;
+            wire.denied_write_fields = denied_write_fields;
+            wire.allowed_read_fields = allowed_read_fields;
+            wire.denied_read_fields = denied_read_fields;
+            wire.condition = condition
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|error| AppError::internal(error.to_string()))?;
+            Ok(wire)
+        }
+        Constraint::ScopeLimitation {
+            effect,
+            allowed_strand_ids,
+            denied_strand_ids,
+            allowed_tracks,
+            denied_tracks,
+            allowed_circle_ids,
+            allowed_session_ids,
+        } => {
+            let mut wire = WireGrantConstraint::new(
+                WireGrantConstraintKind::ScopeLimitation,
+                wire_effect_from_decision(effect),
+            );
+            wire.allowed_strand_ids = allowed_strand_ids;
+            wire.denied_strand_ids = denied_strand_ids;
+            wire.allowed_tracks = allowed_tracks;
+            wire.denied_tracks = denied_tracks;
+            wire.allowed_circle_ids = allowed_circle_ids.into_iter().collect();
+            wire.allowed_session_ids = allowed_session_ids.into_iter().collect();
+            Ok(wire)
+        }
         Constraint::AuthorityControl {
             max_authority_depth,
             authority_regrant_allowed,

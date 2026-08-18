@@ -975,8 +975,8 @@ fn self_principal_pcr_control_shape_rejection(event: &Event) -> Option<&'static 
     {
         return Some("event has no non-empty Seal basis");
     }
-    if event.proofs.len() != 1 {
-        return Some("event does not carry exactly one proof");
+    if sole_self_principal_pcr_producer_proof(&event.proofs).is_none() {
+        return Some("event does not carry exactly one producer proof");
     }
     if self_principal_pcr_device_id(event).is_none() {
         return Some("event proof is not actor#ak:device:<id>");
@@ -985,10 +985,7 @@ fn self_principal_pcr_control_shape_rejection(event: &Event) -> Option<&'static 
 }
 
 fn self_principal_pcr_device_id(event: &Event) -> Option<String> {
-    let (controller, fragment) = event
-        .proofs
-        .first()?
-        .as_producer()?
+    let (controller, fragment) = sole_self_principal_pcr_producer_proof(&event.proofs)?
         .verification_method
         .as_str()
         .rsplit_once('#')?;
@@ -999,6 +996,22 @@ fn self_principal_pcr_device_id(event: &Event) -> Option<String> {
         .filter(|fragment| fragment.starts_with("ak:device:"))
         .filter(|fragment| fragment.len() > "ak:device:".len())
         .map(ToOwned::to_owned)
+}
+
+/// Select the one proof that can author an Ack-less self-PCR Control Move.
+///
+/// A freshly submitted Event contains only this producer proof. Once admitted,
+/// the canonical envelope also contains the Principal Server admission proof
+/// required for federation. Revalidation must ignore that transport-origin
+/// attestation without ever accepting two producer authorities.
+fn sole_self_principal_pcr_producer_proof(
+    proofs: &[arkret_wire::EventProof],
+) -> Option<&arkret_wire::ProducerEventProof> {
+    let mut producers = proofs
+        .iter()
+        .filter_map(arkret_wire::EventProof::as_producer);
+    let producer = producers.next()?;
+    producers.next().is_none().then_some(producer)
 }
 
 /// Return the first failed authority condition for an Ack-less self-PCR Move.
@@ -3117,6 +3130,65 @@ mod local_device_authorization_tests {
     use soland_services::ServiceError;
 
     use super::*;
+
+    fn producer_proof() -> arkret_wire::ProducerEventProof {
+        arkret_wire::ProducerEventProof {
+            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+            verification_method: arkret_wire::DidUrl::new(
+                "did:webvh:QmTest:local.host:webvh:principal#ak:device:019f0000-0000-7000-8000-000000000001",
+            )
+            .unwrap(),
+            event_digest: arkret_wire::Hash::new(format!("sha256:{}", "11".repeat(32)))
+                .unwrap(),
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-08-18T00:00:00Z")
+                .unwrap()
+                .to_utc(),
+            domain: None,
+            audience: None,
+            proof_purpose: None,
+            jws: "producer-signature".to_owned(),
+        }
+    }
+
+    fn admission_proof(
+        producer: &arkret_wire::ProducerEventProof,
+    ) -> arkret_wire::PrincipalServerAdmissionProof {
+        arkret_wire::PrincipalServerAdmissionProof {
+            kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+            verification_method: arkret_wire::DidUrl::new(
+                "did:webvh:QmService:local.host:webvh:service#notary-key",
+            )
+            .unwrap(),
+            event_digest: producer.event_digest.clone(),
+            producer_proof_digest: arkret_wire::Hash::new(format!("sha256:{}", "22".repeat(32)))
+                .unwrap(),
+            producer_verification_method: producer.verification_method.clone(),
+            producer_signing_key: arkret_wire::DidKey::new(
+                "did:key:z6MkvLM6yK9N3Z1GYikAQLnhdjZoFQv4u4sRZNzgmwLkYsXx",
+            )
+            .unwrap(),
+            accepted_at: producer.created_at,
+            jws: "admission-signature".to_owned(),
+        }
+    }
+
+    #[test]
+    fn accepted_self_pcr_event_keeps_one_producer_authority() {
+        let producer = producer_proof();
+        let proofs = vec![
+            arkret_wire::EventProof::Producer(producer.clone()),
+            arkret_wire::EventProof::PrincipalServerAdmission(admission_proof(&producer)),
+        ];
+
+        assert_eq!(
+            sole_self_principal_pcr_producer_proof(&proofs),
+            Some(&producer)
+        );
+
+        let mut ambiguous = proofs;
+        ambiguous.push(arkret_wire::EventProof::Producer(producer));
+        assert!(sole_self_principal_pcr_producer_proof(&ambiguous).is_none());
+    }
 
     /// Canonical negative on the local write surface: the device has no
     /// accepted, current, verified authorization, so the submit fails closed

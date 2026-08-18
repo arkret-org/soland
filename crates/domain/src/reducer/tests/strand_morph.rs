@@ -159,6 +159,126 @@ fn strand_lifecycle_preflight_tolerates_unknown_strand() {
     );
 }
 
+#[test]
+fn strand_description_and_synthesis_are_projected_and_updated_independently() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+    let strand_id = "ak:strand:AbMObYvbipIn0nz_nVS0khLjwBPnTUlKZMk5TJ0w4k6A";
+
+    let content = |body: &str| {
+        serde_json::json!({
+            "kind": "ak.content.text",
+            "body": body,
+        })
+    };
+    let create = make_operation(
+        arkret_wire::EventKind::StrandCreate,
+        realm_id,
+        serde_json::json!({
+            "object": {
+                "id": strand_id,
+                "realm_id": realm_id,
+                "metadata": {
+                    "title": "Independent narrative surfaces",
+                    "summary": "remove me"
+                },
+                "content": content("Description v1"),
+                "tracks": {
+                    "synthesis": {
+                        "content": content("Synthesis v1")
+                    },
+                    "discussion": {
+                        "profile": "discussion"
+                    }
+                },
+                "created_by": "ak:did_core:web:alice.example"
+            }
+        }),
+    );
+    assert!(matches!(
+        state.apply(&create, &hlc),
+        ProjectionEffect::StrandLifecycle { .. }
+    ));
+    assert_eq!(
+        state.strands[strand_id].content,
+        Some(content("Description v1"))
+    );
+    assert_eq!(
+        serde_json::to_value(
+            state.strands[strand_id].tracks["synthesis"]
+                .content
+                .as_ref()
+                .unwrap()
+        )
+        .unwrap(),
+        content("Synthesis v1")
+    );
+
+    let update_description = make_operation(
+        arkret_wire::EventKind::StrandUpdate,
+        realm_id,
+        serde_json::json!({
+            "target_ref": strand_id,
+            "patch": {
+                "content": {"$op": "set", "value": content("Description v2")},
+                "metadata.summary": {"$op": "unset"}
+            }
+        }),
+    );
+    assert!(matches!(
+        state.apply(&update_description, &hlc),
+        ProjectionEffect::StrandLifecycle { .. }
+    ));
+    assert_eq!(state.strands[strand_id].summary, None);
+    assert_eq!(
+        state.strands[strand_id].content,
+        Some(content("Description v2"))
+    );
+    assert_eq!(
+        serde_json::to_value(
+            state.strands[strand_id].tracks["synthesis"]
+                .content
+                .as_ref()
+                .unwrap()
+        )
+        .unwrap(),
+        content("Synthesis v1")
+    );
+
+    let update_synthesis = make_operation(
+        arkret_wire::EventKind::StrandUpdate,
+        realm_id,
+        serde_json::json!({
+            "target_ref": strand_id,
+            "patch": {
+                "tracks.synthesis.content": {
+                    "$op": "set",
+                    "value": content("Synthesis v2")
+                }
+            }
+        }),
+    );
+    assert!(matches!(
+        state.apply(&update_synthesis, &hlc),
+        ProjectionEffect::StrandLifecycle { .. }
+    ));
+    assert_eq!(
+        state.strands[strand_id].content,
+        Some(content("Description v2"))
+    );
+    assert_eq!(
+        serde_json::to_value(
+            state.strands[strand_id].tracks["synthesis"]
+                .content
+                .as_ref()
+                .unwrap()
+        )
+        .unwrap(),
+        content("Synthesis v2")
+    );
+}
+
 // ── Morph lifecycle state-machine tests ──
 
 #[test]
@@ -452,7 +572,13 @@ fn redaction_with_strand_target_ref_flips_to_redacted() {
                 "object": {
                     "id": strand_id,
                     "realm_id": realm_id,
-                    "title": "Sensitive strand",
+                    "metadata": {"title": "Sensitive strand"},
+                    "content": {"kind": "ak.content.text", "body": "Description"},
+                    "tracks": {
+                        "synthesis": {
+                            "content": {"kind": "ak.content.text", "body": "Synthesis"}
+                        }
+                    },
                     "created_by": "ak:did_core:web:alice.example",
                 }
             }),
@@ -484,6 +610,13 @@ fn redaction_with_strand_target_ref_flips_to_redacted() {
     assert_eq!(
         state.strands[strand_id].state,
         ObjectLifecycleState::Redacted
+    );
+    assert_eq!(state.strands[strand_id].content, None);
+    assert_eq!(state.strands[strand_id].encrypted_content, None);
+    assert_eq!(state.strands[strand_id].tracks["synthesis"].content, None);
+    assert_eq!(
+        state.strands[strand_id].tracks["synthesis"].encrypted_content,
+        None
     );
     assert!(state.strands[strand_id].state.is_terminal());
 }
@@ -747,6 +880,66 @@ fn strand_tracks_update_projects_discussion_enabled_state() {
             .get(arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION)
             .and_then(|track| track.enabled),
         Some(false)
+    );
+}
+
+#[test]
+fn strand_tracks_update_cannot_change_synthesis_content() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+    let strand_id = "ak:strand:AQgceAHiTo7wM8zIQpQoEaHte0KDL0zzIWHJWEJPsLth";
+
+    state.apply(
+        &make_operation(
+            arkret_wire::EventKind::StrandCreate,
+            realm_id,
+            serde_json::json!({
+                "object": {
+                    "id": strand_id,
+                    "realm_id": realm_id,
+                    "metadata": {"title": "Protected Synthesis"},
+                    "tracks": {
+                        "synthesis": {
+                            "content": {"kind": "ak.content.text", "body": "Before"}
+                        }
+                    },
+                    "created_by": "ak:did_core:web:alice.example"
+                }
+            }),
+        ),
+        &hlc,
+    );
+
+    let tracks_update = make_operation(
+        arkret_wire::EventKind::StrandTracksUpdate,
+        realm_id,
+        serde_json::json!({
+            "target_ref": strand_id,
+            "patch": {
+                "tracks.synthesis.content": {
+                    "$op": "set",
+                    "value": {"kind": "ak.content.text", "body": "After"}
+                }
+            }
+        }),
+    );
+    assert_eq!(
+        state.check_strand_tracks_transition(&tracks_update),
+        Err("strand_tracks_content_forbidden")
+    );
+    assert!(matches!(
+        state.apply(&tracks_update, &hlc),
+        ProjectionEffect::Rejected { reason }
+            if reason == "strand_tracks_content_forbidden"
+    ));
+    assert_eq!(
+        state.strands[strand_id].tracks["synthesis"]
+            .content
+            .as_ref()
+            .unwrap()
+            .body,
+        "Before"
     );
 }
 

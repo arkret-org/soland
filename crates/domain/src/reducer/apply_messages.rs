@@ -228,6 +228,12 @@ impl ProjectionState {
             if let Some(strand) = self.strands.get_mut(&object_ref) {
                 strand.state = ObjectLifecycleState::Redacted;
                 strand.state_changed_at = Some(operation.created_at);
+                strand.content = None;
+                strand.encrypted_content = None;
+                if let Some(synthesis) = strand.tracks.get_mut("synthesis") {
+                    synthesis.content = None;
+                    synthesis.encrypted_content = None;
+                }
                 strand.updated_by.clone_from(&updated_by);
                 strand.updated_at = Some(operation.created_at);
                 return ProjectionEffect::StrandLifecycle {

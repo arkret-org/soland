@@ -1191,8 +1191,15 @@ struct StrandProjectionView {
         serialize_with = "arkret_canonical::serde_helpers::serialize_optional_canonical_timestamp"
     )]
     state_changed_at: Option<DateTime<Utc>>,
+    /// Track map. Synthesis narrative lives only at
+    /// `tracks.synthesis.content` / `encrypted_content`.
+    tracks: Value,
     title: String,
     summary: Option<String>,
+    /// Strand Description, distinct from Synthesis.
+    content: Option<Value>,
+    /// Encrypted Strand Description, mutually exclusive with `content`.
+    encrypted_content: Option<Value>,
     fields: BTreeMap<String, Value>,
     /// Profile activation axis. Its calendar entry and the
     /// `metadata.fields.calendar` subtree co-occur in both directions.
@@ -1361,8 +1368,11 @@ async fn get_strand_projection(
         realm_id: strand.realm_id,
         state: projection_object_state(strand.state),
         state_changed_at: strand.state_changed_at,
+        tracks: serde_json::to_value(&strand.tracks).unwrap_or_else(|_| serde_json::json!({})),
         title: strand.title,
         summary: strand.summary,
+        content: strand.content,
+        encrypted_content: strand.encrypted_content,
         fields: strand.fields,
         schema_refs: strand.schema_refs,
         schedule_revision_heads: strand.schedule_revision_heads,

@@ -735,6 +735,8 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
             tracks: Default::default(),
             title: title.to_owned(),
             summary: None,
+            content: None,
+            encrypted_content: None,
             fields: Default::default(),
             state: soland_domain::reducer::ObjectLifecycleState::Active,
             state_changed_at: None,

@@ -552,11 +552,15 @@ async fn circle_scoped_reaction_requires_circle_membership() {
                 strand_id: strand_id.to_owned(),
                 realm_id: realm_id.to_owned(),
                 tracks: std::collections::BTreeMap::from([(
-                    arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
-                    arkret_models_collaboration::objects::profiles::StrandTrackConfig::discussion_primary(),
+                    arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION
+                        .to_owned(),
+                    arkret_models_collaboration::objects::profiles::StrandTrack::discussion_primary(
+                    ),
                 )]),
                 title: String::new(),
                 summary: None,
+                content: None,
+                encrypted_content: None,
                 fields: std::collections::BTreeMap::new(),
                 state: soland_domain::reducer::ObjectLifecycleState::Active,
                 state_changed_at: None,

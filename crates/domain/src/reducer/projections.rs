@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_models_collaboration::objects::profiles::StrandTrackConfig;
+use arkret_models_collaboration::objects::profiles::StrandTrack;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -545,15 +545,19 @@ impl SpaceContainerLifecycleState {
 }
 
 /// Server-side Strand state cache. Mirrors `projection_strands` table.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct StrandProjection {
     pub strand_id: String,
     pub realm_id: String,
-    /// Active Strand track definitions. Track entries are display/timeline
-    /// configuration only; access still derives from `scope_circle_id`.
-    pub tracks: BTreeMap<String, StrandTrackConfig>,
+    /// Strand track entries. The `synthesis` entry may carry its own narrative
+    /// content; `discussion` remains configuration for the Message timeline.
+    pub tracks: BTreeMap<String, StrandTrack>,
     pub title: String,
     pub summary: Option<String>,
+    /// Strand Description (`Strand.content`). Distinct from Synthesis content.
+    pub content: Option<Value>,
+    /// Encrypted Strand Description (`Strand.encrypted_content`).
+    pub encrypted_content: Option<Value>,
     pub fields: BTreeMap<String, Value>,
     pub state: ObjectLifecycleState,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -581,10 +585,10 @@ pub struct StrandProjection {
     pub schedule_revision_heads: Vec<String>,
 }
 
-pub(crate) fn default_strand_tracks() -> BTreeMap<String, StrandTrackConfig> {
+pub(crate) fn default_strand_tracks() -> BTreeMap<String, StrandTrack> {
     BTreeMap::from([(
         arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_SYNTHESIS.to_owned(),
-        StrandTrackConfig::synthesis(),
+        StrandTrack::synthesis(),
     )])
 }
 
