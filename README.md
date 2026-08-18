@@ -67,9 +67,8 @@ Operator-visible highlights:
 
 Spec rounds 2+3 (2026-05-20) introduced wire-breaking changes that the
 operator must address at boot — see
-[`CHANGELOG.md`](CHANGELOG.md) `[Unreleased]` and
-[`../arkret-spec/CHANGELOG.md`](../arkret-spec/CHANGELOG.md) for the
-normative source. The key operational hooks:
+[`CHANGELOG.md`](CHANGELOG.md) `[Unreleased]` and the `arkret-spec`
+`spec/v1/zh/` normative source. The key operational hooks:
 
 - **`SOLAND_TRUST_DOMAIN`** — required `ak:trust_domain:<scope>` value
   (defaults to a value derived from the configured `service_id`) and binds
@@ -85,8 +84,8 @@ normative source. The key operational hooks:
 
 ## Quick start
 
-soland depends on the `arkret` crate at `../arkret-rust-sdk/crates/sdk`.
-Clone both repos side by side:
+soland depends on the `arkret-*` crates under `../arkret-rust-sdk/crates/`
+via path dependencies. Clone both repos side by side:
 
 ```bash
 git clone https://github.com/arkret-org/arkret-rust-sdk.git
@@ -239,7 +238,7 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_KEYSTORE_MASTER_KEY` / `_FILE` | unset | Base64-encoded, random 32-byte master key for `encrypted_file`; custody and backup must be separate from `SOLAND_KEYSTORE_PATH` |
 | `SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED` | `true` | Enable soland's built-in `did:webvh` provider for coauth registration |
 | `SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER` | unset | Shared bearer token coauth must present to write embedded `did:webvh` registrations |
-| `SOLAND_EXTERNAL_WEBVH_PROVIDER_URL` | unset | Optional external `did:webvh` provider, such as a standalone StarID service |
+| `SOLAND_EXTERNAL_WEBVH_PROVIDER_URL` | unset | Optional external `did:webvh` provider; any standalone registrar implementing the `did:webvh` provider surface |
 | `SOLAND_EXTERNAL_WEBVH_REGISTRATION_BEARER` / `_FILE` | unset | When set with the external Provider URL, stores Soland's own service identity there (class A); no first-provisioning flag or configured DID is used |
 | `SOLAND_DEFAULT_WEBVH_PROVIDER_ID` | unset | Optional coauth default provider id: `soland.embedded` or `external.webvh` |
 | `SOLAND_ACCOUNT_AUTHORITY_URL` | unset | Public Account Authority URL advertised at `/_arkret/describe.auth_metadata.account_authority` |
@@ -354,11 +353,9 @@ SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=local-soland-webvh-registration
 ```
 
 Those bearer values must match coauth's
-`arkret.principal_servers[]` entry for `https://local.host/`. If coauth
-is still using an old local file with a `contrix:` section, rename that
-section to `arkret:` before restarting it; otherwise coauth will reject
-soland's introspection call and browser sign-in will end with
-`unauthenticated: invalid bearer token`.
+`arkret.principal_servers[]` entry for `https://local.host/`; otherwise
+coauth will reject soland's introspection call and browser sign-in will end
+with `unauthenticated: invalid bearer token`.
 
 Run `just init-dev` once before starting this encrypted-file configuration;
 subsequent runs validate and retain the existing local master key.
@@ -445,10 +442,10 @@ Workspace layout (the CI checkout assumes the same):
 ```
 arkret/
 ├── arkret-rust-sdk/       # https://github.com/arkret-org/arkret-rust-sdk
-│   └── crates/sdk
+│   └── crates/
 └── soland/                 # this repo
-    ├── src/
-    ├── tests/
+    ├── crates/
+    ├── xtask/
     └── Cargo.toml
 ```
 
@@ -458,9 +455,10 @@ just check
 just test
 ```
 
-The OpenAPI namespace test (`soland_admin_openapi_uses_product_namespace` in
-`crates/server/tests/http_api/openapi.rs`) locks the product operation-id surface at the
-framework level; `crates/server/tests/http_api/` covers protocol behaviors.
+The OpenAPI tests in `crates/server/tests/http_api/openapi.rs`
+(`served_openapi_is_generated_from_the_router`,
+`artifact_only_path_is_not_treated_as_a_registered_route`) lock the served
+operation-id surface to the live router; `crates/server/tests/http_api/` covers protocol behaviors.
 
 ## Status & roadmap
 

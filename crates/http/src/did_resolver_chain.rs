@@ -5,8 +5,8 @@
 //! Priority order (first resolver that `supports()` a DID wins):
 //!
 //! 1. [`LocalIdentityResolver`] — resolves DID documents stored in soland's durable identity store.
-//!    This is what makes the embedded `did:webvh` provider usable without an external StarID/webvh
-//!    service.
+//!    This is what makes the embedded `did:webvh` provider usable without an external `did:webvh`
+//!    provider service.
 //! 2. [`DidWebvhResolver`] — inserted when the external provider boot probe succeeds. The SDK
 //!    resolver is cache-oriented; actual external fetching still belongs to a provider-specific
 //!    client.
@@ -929,14 +929,14 @@ mod tests {
         // service_id + trust_domain + supported_operations.
         let describe = json!({
             "service_kind": "identity_registry",
-            "service_id": "ak:did_core:web:starid.example",
+            "service_id": "ak:did_core:web:webvh-provider.example",
             "trust_domain": "ak:trust_domain:example.net",
             "development_mode": false,
             "supported_operations": ["ak.server.read.describe"]
         });
         validate_webvh_provider_describe(
             &describe,
-            Some("ak:did_core:web:starid.example"),
+            Some("ak:did_core:web:webvh-provider.example"),
             Some("ak:trust_domain:example.net"),
         )
         .expect("valid canonical identity_registry describe should pass");
@@ -946,14 +946,14 @@ mod tests {
     fn provider_describe_trust_handshake_rejects_mismatch_and_dev() {
         let mut describe = json!({
             "service_kind": "identity_registry",
-            "service_id": "ak:did_core:web:starid.example",
+            "service_id": "ak:did_core:web:webvh-provider.example",
             "trust_domain": "ak:trust_domain:example.net",
             "development_mode": false,
             "supported_operations": ["ak.server.read.describe"]
         });
         let err = validate_webvh_provider_describe(
             &describe,
-            Some("ak:did_core:web:starid.example"),
+            Some("ak:did_core:web:webvh-provider.example"),
             Some("ak:trust_domain:other.example"),
         )
         .expect_err("trust-domain mismatch must fail closed");
@@ -962,7 +962,7 @@ mod tests {
         describe["development_mode"] = json!(true);
         let err = validate_webvh_provider_describe(
             &describe,
-            Some("ak:did_core:web:starid.example"),
+            Some("ak:did_core:web:webvh-provider.example"),
             Some("ak:trust_domain:example.net"),
         )
         .expect_err("development-mode provider must fail closed");

@@ -1,9 +1,9 @@
 # Deploying soland
 
 Production guidance for running soland as a single-process Arkret v1 reference
-server. soland is pre-1.0 — review [_todos.md](_todos.md) for the open scaffold
-endpoints (push outbound, MIMI provider directory and directory discovery)
-before serving real users.
+server. soland is pre-1.0 — the push outbound bridge, the MIMI provider
+directory and most of the directory surface are still scaffold endpoints that
+return placeholder shapes. Review them before serving real users.
 
 ## Prerequisites
 
@@ -583,19 +583,12 @@ backup/restore of the already-bound key. They do not rotate identity material.
 
 ### AKP-0007 (Circle primitive) — migration & sizing notes
 
-- **Migrations**: the Circle rollout adds three new diesel migrations that
-  run automatically on startup —
-  `20260526000000_drop_discussion_realm_ref`,
-  `20260526010000_add_circles`, and
-  `20260526020000_add_scope_circle_id`. The first is a defensive
-  `DROP COLUMN IF EXISTS` for vendor forks that persisted the removed
-  cross-Realm discussion routing column; the next two land the
-  `projection_circles` / `projection_circle_members` mirror tables and the
-  `scope_circle_id` / `default_scope_circle_id` / `child_scope_policy` /
-  `effective_scope` columns on the Strand / Morph / Space / Events mirrors.
-  All three are forward-only in spirit — the down migrations are provided
-  for diesel symmetry but reintroducing `discussion_realm_ref` after the
-  AKP-0007 cutover would conflict with the v1 typed scope model.
+- **Schema**: the `projection_circles` / `projection_circle_members` mirror
+  tables and the `scope_circle_id` / `default_scope_circle_id` /
+  `child_scope_policy` / `effective_scope` columns on the Strand / Morph /
+  Space / Events mirrors are part of the squashed
+  `00000000000000_initial` migration; there is no separate Circle upgrade
+  step.
 - **Disk sizing**: `effective_scope` adds one nullable `TEXT` column per
   projected Event. A complete `ak:circle:<44-char event token>` value is 54
   bytes on the wire; PostgreSQL's short `TEXT` header and tuple alignment put
@@ -615,10 +608,9 @@ backup/restore of the already-bound key. They do not rotate identity material.
 - **OpenTelemetry**: OTLP trace export is disabled unless the binary is built
   with `--features otel` and `SOLAND_OTEL_EXPORTER=otlp` is set.
 - **Scaffold endpoints**: push outbound bridge, the MIMI provider directory,
-  and most of the directory surface return placeholder shapes. See `_todos.md`
-  Streams D / E / F for the production rollout.
-- **Pre-1.0 schema drift**: protocol field renames listed in `_todos.md` Q2/Q3
-  may require client updates between releases.
+  and most of the directory surface return placeholder shapes.
+- **Pre-1.0 schema drift**: protocol field renames may require client updates
+  between releases.
 
 ## Pre-1.0 schema initialization
 
@@ -648,23 +640,8 @@ geo-distributed pools):
 }
 ```
 
-Migration `20260520_realm_media_service_foci.sql` ensures each
-`realm_media_service.payload` JSONB row has a non-empty `foci[]` array.
-
-Validation post-migration:
-
-```sql
-SELECT realm_id,
-       payload ? 'foci' AS has_foci,
-       jsonb_array_length(payload->'foci') AS focus_count
-FROM   realm_media_service
-ORDER  BY realm_id
-LIMIT  20;
-```
-
-Realms with `has_foci = false` after the migration ran indicate either an
-empty `media_service` row or a row outside the canonical shape — capture
-the row and escalate; do not delete.
+A `media_service` cell without a non-empty `foci[]` array is outside the
+canonical shape — capture the row and escalate; do not delete.
 
 ### ICE / TURN vs. media-service foci — two distinct config layers
 
@@ -702,26 +679,8 @@ write path: a terminal recovery receipt is accepted only as the signed final
 artifact of its `RecoveryTransaction`, and exact replay is served from that
 transaction's durable first outcome.
 
-### Agent FSM cell upgrade
+### Agent FSM cell
 
-The agent FSM is owned by a cell (`ak.component.agent_state.v1`). Pre-R3
-deployments don't carry that cell. Migration
-`20260523_agent_fsm_cell_upgrade.sql`:
-
-1. Iterates the existing `agent_principals` projection.
-2. For each row, inserts a synthetic `ak.self.agent.command.provision`-equivalent state
-   marker into the cell store with state = `Active` and source =
-   `migration:r3`.
-3. Sets `lattice = fsm, bottom = reject` on the cell metadata.
-
-Migration is safe to re-run: it uses `ON CONFLICT (agent_id) DO
-NOTHING`. Verify:
-
-```sql
-SELECT state, COUNT(*) FROM agent_state_cell GROUP BY state;
-```
-
-Expected post-migration: every existing agent principal has a row in
-`Active`. After the migration, agent operations `pause`, `resume`, and
-`deactivate` (POST /agents/{id}/deactivate — the historical `/revoke`
-alias is gone) transition the FSM.
+The agent FSM is owned by a cell (`ak.component.agent_state.v1`) with
+`lattice = fsm, bottom = reject`. Agent operations `pause`, `resume` and
+`deactivate` (`POST /agents/{id}/deactivate`) transition it.

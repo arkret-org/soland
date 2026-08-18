@@ -53,6 +53,7 @@ use ed25519_dalek::Signer as _;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_domain::reducer::mls::KeyPackageTrustBinding;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::{
@@ -92,84 +93,64 @@ fn welcome_recipient_device_id(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct KeyPackageTrustBinding {
-    device_authorize_event_id: Option<String>,
-    agent_key_authorize_event_id: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 enum KeyPackageTrustSelector {
     Principal(KeyPackageTrustBinding),
     PerDevice(BTreeMap<String, KeyPackageTrustBinding>),
 }
 
-impl KeyPackageTrustBinding {
-    fn device_authorize(device_authorize_event_id: String) -> Self {
-        Self {
-            device_authorize_event_id: Some(device_authorize_event_id),
-            agent_key_authorize_event_id: None,
-        }
-    }
+/// Lift the reducer's exactly-one-of validation into this layer's error type.
+/// The reducer owns the rule and the `claim_generation_mismatch` reason code;
+/// only the operator-facing message differs per call site.
+fn trust_binding_from_parts(
+    device_authorize_event_id: Option<String>,
+    agent_key_authorize_event_id: Option<String>,
+    message: &'static str,
+) -> Result<KeyPackageTrustBinding, AppError> {
+    KeyPackageTrustBinding::from_parts(device_authorize_event_id, agent_key_authorize_event_id)
+        .map_err(|reason_code| {
+            AppError::new(ErrorCode::FailedPrecondition, message).with_wire_code(reason_code)
+        })
+}
 
-    fn agent_key_authorize(agent_key_authorize_event_id: String) -> Self {
-        Self {
-            device_authorize_event_id: None,
-            agent_key_authorize_event_id: Some(agent_key_authorize_event_id),
-        }
-    }
+fn trust_binding_from_keypackage(
+    kp: &MlsKeyPackageRow,
+) -> Result<KeyPackageTrustBinding, AppError> {
+    trust_binding_from_parts(
+        kp.device_authorize_event_id.clone(),
+        kp.agent_key_authorize_event_id.clone(),
+        "KeyPackage trust binding is invalid",
+    )
+}
 
-    fn from_keypackage(kp: &MlsKeyPackageRow) -> Result<Self, AppError> {
-        Self::from_parts(
-            kp.device_authorize_event_id.clone(),
-            kp.agent_key_authorize_event_id.clone(),
-            "KeyPackage trust binding is invalid",
-        )
-    }
+fn trust_binding_from_row(row: &MlsKeyPackageRow) -> Result<KeyPackageTrustBinding, AppError> {
+    trust_binding_from_parts(
+        row.device_authorize_event_id.clone(),
+        row.agent_key_authorize_event_id.clone(),
+        "KeyPackage claim is missing a valid trust binding",
+    )
+}
 
-    fn from_row(row: &MlsKeyPackageRow) -> Result<Self, AppError> {
-        Self::from_parts(
-            row.device_authorize_event_id.clone(),
-            row.agent_key_authorize_event_id.clone(),
-            "KeyPackage claim is missing a valid trust binding",
-        )
-    }
-
-    fn from_parts(
-        device_authorize_event_id: Option<String>,
-        agent_key_authorize_event_id: Option<String>,
-        message: &'static str,
-    ) -> Result<Self, AppError> {
-        match (device_authorize_event_id, agent_key_authorize_event_id) {
-            (Some(event_id), None) if !event_id.trim().is_empty() => {
-                Ok(Self::device_authorize(event_id))
-            }
-            (None, Some(event_id)) if !event_id.trim().is_empty() => {
-                Ok(Self::agent_key_authorize(event_id))
-            }
-            _ => Err(AppError::new(ErrorCode::FailedPrecondition, message)
-                .with_wire_code("claim_generation_mismatch")),
-        }
-    }
-
-    fn matches_keypackage(&self, kp: &MlsKeyPackageRow) -> bool {
-        kp.device_authorize_event_id == self.device_authorize_event_id
-            && kp.agent_key_authorize_event_id == self.agent_key_authorize_event_id
-    }
+fn trust_binding_matches_keypackage(
+    binding: &KeyPackageTrustBinding,
+    kp: &MlsKeyPackageRow,
+) -> bool {
+    kp.device_authorize_event_id == binding.device_authorize_event_id
+        && kp.agent_key_authorize_event_id == binding.agent_key_authorize_event_id
 }
 
 impl KeyPackageTrustSelector {
     fn matches_keypackage(&self, kp: &MlsKeyPackageRow) -> bool {
         match self {
-            Self::Principal(binding) => binding.matches_keypackage(kp),
+            Self::Principal(binding) => trust_binding_matches_keypackage(binding, kp),
             Self::PerDevice(bindings) => bindings
                 .get(kp.device_id.as_str())
-                .is_some_and(|binding| binding.matches_keypackage(kp)),
+                .is_some_and(|binding| trust_binding_matches_keypackage(binding, kp)),
         }
     }
 }
 
 /// Mount the `/keys/keypackages/*` sub-router. Mounted under
-/// `/_arkret/self` from `routing::mod::api_v1_router`.
+/// `/_arkret/self` from `routing::mod::arkret_protocol_router`.
 ///
 /// Spec-canonical paths (see
 /// `arkret-service-api.openapi.yaml §/keys/keypackages/*`):
@@ -620,7 +601,7 @@ async fn claim_keypackage_at_destination(
                 (
                     keypackage.created_at,
                     keypackage.id.clone(),
-                    KeyPackageTrustBinding::from_keypackage(keypackage),
+                    trust_binding_from_keypackage(keypackage),
                 )
             })
             .collect::<Vec<_>>();
@@ -3348,7 +3329,7 @@ async fn keypackage_claim_record(
     record: &MlsKeyPackageRow,
     claim_nonce: &str,
 ) -> Result<KeyPackageClaimRecord, AppError> {
-    let trust_binding = KeyPackageTrustBinding::from_row(record)?;
+    let trust_binding = trust_binding_from_row(record)?;
     let principal_id = arkret_wire::DidCoreId::new(record.actor_id.clone())
         .map_err(|error| AppError::internal(format!("invalid principal_id: {error}")))?;
     let device_id = arkret_wire::DeviceId::new(record.device_id.clone())
@@ -3435,15 +3416,14 @@ mod trust_binding_tests {
     #[test]
     fn native_agent_binding_is_an_exclusive_branch() {
         let event_id = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
-        let binding =
-            KeyPackageTrustBinding::from_parts(None, Some(event_id.to_owned()), "invalid").unwrap();
+        let binding = trust_binding_from_parts(None, Some(event_id.to_owned()), "invalid").unwrap();
         assert_eq!(
             binding.agent_key_authorize_event_id.as_deref(),
             Some(event_id)
         );
-        assert!(KeyPackageTrustBinding::from_parts(None, None, "invalid").is_err());
+        assert!(trust_binding_from_parts(None, None, "invalid").is_err());
         assert!(
-            KeyPackageTrustBinding::from_parts(
+            trust_binding_from_parts(
                 Some(event_id.to_owned()),
                 Some(event_id.to_owned()),
                 "invalid"

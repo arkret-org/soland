@@ -7,9 +7,16 @@ use soland_storage::*;
 use crate::*;
 
 /// PostgreSQL-backed persistence store for durable projections with shipped Pg
-/// tables. Stores without a Pg implementation still delegate to the embedded
-/// memory fallback, but contact, consent-cell, invite-receive-policy, and
-/// direct-conversation binding accessors are wired to Pg stores.
+/// tables.
+///
+/// Four accessors still have no Pg implementation and delegate to the
+/// `fallback` store: `realm_meta`, `messages`, `device_keys` and
+/// `one_time_keys`. `PgPersistenceStore::new` is always constructed with a
+/// process-local `SolandMemoryPersistenceStore`, so those four data planes are
+/// neither durable across restart nor shared across replicas. This is an
+/// unfinished Pg port, not a compatibility bridge: no Pg tables and no
+/// `impl RealmMetaStore/MessageStore/DeviceKeyStore/OneTimeKeyStore` for
+/// Postgres exist anywhere in this crate.
 pub struct PgPersistenceStore {
     event_commits: PgEventCommitUnitOfWork,
     agent_membership_cascades: PgAgentMembershipCascadeStore,

@@ -84,7 +84,7 @@ fn assert_required_migrated_operations(root: &Value) {
         "ak.self.events.read.scan",
         "ak.self.snapshot.read.manifest_head",
         "ak.self.blob.command.presign",
-        "mimi_protocol_directory",
+        "org.arkret.soland.interop.mimi.protocol_directory",
         "org.arkret.soland.well_known.arkret",
     ] {
         assert!(

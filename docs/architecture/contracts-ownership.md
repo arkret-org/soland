@@ -53,7 +53,6 @@
 | `admin::seal` | `MultisigPendingOutcome` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
 | `admin::collection` | `RealmClass` | local contract | Soland、Sodmin | `/_soland/admin` Realm 行内分类封闭枚举；未命中 spec wire 类型 |
 | `admin::collection` | `AdminRealmItem` | local contract | Soland、Sodmin | `GET /_soland/admin/{resource}`（realms）与 `/_soland/admin/realms/{realm_id}` 详情投影；字段复用 SDK 类型，整体未命中 spec wire 类型 |
-| `admin::collection` | `AdminRealmMemberItem` | local contract | Soland | `GET /_soland/admin/realms/{realm_id}/members` 成员行投影；Sodmin 未消费该端点；未命中 spec wire 类型 |
 | `admin::collection` | `SpaceHealth` | local contract | Soland、Sodmin | Space 容器生命周期封闭枚举；未命中 spec wire 类型 |
 | `admin::collection` | `AdminSpaceRow` | local contract | Soland、Sodmin | `/_soland/admin/spaces` 集合行投影；未命中 spec wire 类型 |
 | `admin::collection` | `AdminFederationOperation` | local contract | Soland、Sodmin | `/_soland/admin/federation` 联邦操作行投影；字段复用 SDK 类型，整体未命中 spec wire 类型 |

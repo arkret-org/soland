@@ -24,8 +24,7 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use soland_contracts::admin::{
-    AdminFederationOperation, AdminMediaRow, AdminRealmItem, AdminRealmMemberItem, AdminSpaceRow,
-    RealmClass, SpaceHealth,
+    AdminFederationOperation, AdminMediaRow, AdminRealmItem, AdminSpaceRow, RealmClass, SpaceHealth,
 };
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
@@ -246,20 +245,6 @@ pub(super) async fn admin_get_realm(
     json_ok(admin_get_realm_item(state, &realm_id).await?)
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.admin.realm.members",
-    tags("soland_admin")
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realm.members"))]
-pub(super) async fn admin_list_realm_members(
-    realm_id: PathParam<String>,
-    depot: &mut Depot,
-) -> JsonResult<Vec<AdminRealmMemberItem>> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let realm_id = realm_id.into_inner();
-    json_ok(admin_realm_member_items(state, &realm_id).await?)
-}
-
 async fn admin_realm_items(state: &AppState) -> Vec<Value> {
     let meta: BTreeMap<String, _> = state
         .realms()
@@ -307,47 +292,6 @@ pub(super) async fn admin_get_realm_item(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     Ok(admin_realm_item_value(state, realm, realm_meta).await)
-}
-
-pub(super) async fn admin_realm_member_items(
-    state: &AppState,
-    realm_id: &str,
-) -> Result<Vec<AdminRealmMemberItem>, AppError> {
-    let realm_id_value = RealmId::new(realm_id.to_owned())
-        .map_err(|error| AppError::param_invalid(format!("invalid realm_id: {error}")))?;
-    let members = {
-        let realms = state.realm_directory().snapshot();
-        realms.get(&realm_id_value).map(|realm| {
-            realm
-                .members
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        })
-    }
-    .ok_or_else(|| AppError::not_found("realm not found"))?;
-    let realm_meta = state
-        .realms()
-        .realm_metadata(realm_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let owner = realm_meta.as_ref().map(|meta| meta.owner.as_str());
-    let joined_at = realm_meta
-        .as_ref()
-        .map(|meta| arkret_canonical::format_timestamp_canonical(meta.created_at));
-    Ok(members
-        .into_iter()
-        .map(|actor_id| AdminRealmMemberItem {
-            role: if owner == Some(actor_id.as_str()) {
-                "owner".to_owned()
-            } else {
-                "member".to_owned()
-            },
-            actor_id,
-            membership: "join".to_owned(),
-            joined_at: joined_at.clone(),
-        })
-        .collect())
 }
 
 async fn admin_realm_item_value(

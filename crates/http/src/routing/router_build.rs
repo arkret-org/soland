@@ -152,7 +152,7 @@ fn mount_application_routes(router: Router, conformance_harness_enabled: bool) -
                 .push(Router::with_path("admin").push(extensions::admin_router()))
                 .push(soland_local_router()),
         )
-        .push(api_v1_router(conformance_harness_enabled))
+        .push(arkret_protocol_router(conformance_harness_enabled))
 }
 
 /// Protocol surface, mounted under the negative-space root `/_arkret/...`.
@@ -167,7 +167,7 @@ fn mount_application_routes(router: Router, conformance_harness_enabled: bool) -
 /// Each module's `router()` declares its own trust segment in the paths it
 /// pushes (e.g. `events::router()` returns `self/events/...`), so the parent
 /// here only supplies the shared `_arkret` root.
-fn api_v1_router(conformance_harness_enabled: bool) -> Router {
+fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
     let mut router = Router::with_path("_arkret")
         .hoop(wait_for_sync_token)
         // `/_arkret/describe` (root meta). Integration describe is mounted
@@ -296,7 +296,7 @@ fn soland_local_router() -> Router {
         )
         // `/_soland/find/directory/*` mirror retired — directory
         // discovery is served only from the canonical `/_arkret/find/...`
-        // protocol tree (see `api_v1_router`).
+        // protocol tree (see `arkret_protocol_router`).
         .push(Router::with_path("peer").push(federation::router()))
         .push(interop::local_router())
         .push(extensions::local_router())

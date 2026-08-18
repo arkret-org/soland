@@ -1258,10 +1258,56 @@ fn parse_lifetime(v: Option<&Value>) -> Result<KeyPackageLifetime, &'static str>
     })
 }
 
+/// Exactly-one-of trust binding carried by every KeyPackage publication and
+/// claim: either an `ak.device.authorize` Event id or an
+/// `ak.agent.key.authorize` Event id, never both and never neither.
+///
+/// Owned here because the reducer validates it off the wire payload and the
+/// `/keys/keypackages/*` routing layer validates the same shape off the stored
+/// row; both surfaces must enforce one closed set and one
+/// `claim_generation_mismatch` reason code.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct KeyPackageTrustBinding {
-    device_authorize_event_id: Option<String>,
-    agent_key_authorize_event_id: Option<String>,
+pub struct KeyPackageTrustBinding {
+    pub device_authorize_event_id: Option<String>,
+    pub agent_key_authorize_event_id: Option<String>,
+}
+
+impl KeyPackageTrustBinding {
+    pub fn device_authorize(device_authorize_event_id: String) -> Self {
+        Self {
+            device_authorize_event_id: Some(device_authorize_event_id),
+            agent_key_authorize_event_id: None,
+        }
+    }
+
+    pub fn agent_key_authorize(agent_key_authorize_event_id: String) -> Self {
+        Self {
+            device_authorize_event_id: None,
+            agent_key_authorize_event_id: Some(agent_key_authorize_event_id),
+        }
+    }
+
+    /// Enforce the exactly-one-of rule. Absent, empty and whitespace-only ids
+    /// all count as absent; accepted ids are stored trimmed so the reducer and
+    /// the routing layer compare identical bytes.
+    pub fn from_parts(
+        device_authorize_event_id: Option<String>,
+        agent_key_authorize_event_id: Option<String>,
+    ) -> Result<Self, &'static str> {
+        let device_authorize_event_id = non_empty_trimmed(device_authorize_event_id);
+        let agent_key_authorize_event_id = non_empty_trimmed(agent_key_authorize_event_id);
+        match (device_authorize_event_id, agent_key_authorize_event_id) {
+            (Some(event_id), None) => Ok(Self::device_authorize(event_id)),
+            (None, Some(event_id)) => Ok(Self::agent_key_authorize(event_id)),
+            _ => Err(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH),
+        }
+    }
+}
+
+fn non_empty_trimmed(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1279,29 +1325,16 @@ fn keypackage_claim_trust_binding(payload: &Value) -> Result<KeyPackageTrustBind
 fn keypackage_claim_trust_binding_object(
     object: &Map<String, Value>,
 ) -> Result<KeyPackageTrustBinding, &'static str> {
-    let device_authorize_event_id = object
-        .get("device_authorize_event_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let agent_key_authorize_event_id = object
-        .get("agent_key_authorize_event_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    match (device_authorize_event_id, agent_key_authorize_event_id) {
-        (Some(device_authorize_event_id), None) => Ok(KeyPackageTrustBinding {
-            device_authorize_event_id: Some(device_authorize_event_id),
-            agent_key_authorize_event_id: None,
-        }),
-        (None, Some(agent_key_authorize_event_id)) => Ok(KeyPackageTrustBinding {
-            device_authorize_event_id: None,
-            agent_key_authorize_event_id: Some(agent_key_authorize_event_id),
-        }),
-        _ => Err(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH),
-    }
+    KeyPackageTrustBinding::from_parts(
+        object
+            .get("device_authorize_event_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        object
+            .get("agent_key_authorize_event_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    )
 }
 
 fn welcome_requester_signature_binding(

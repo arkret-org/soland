@@ -84,12 +84,12 @@ security intent.
 
 ## Operator references
 
-- `src/routing/federation/outbox.rs` — dispatcher loop, lease claim,
+- `crates/http/src/routing/federation/outbox.rs` — dispatcher loop, lease claim,
   transport-retry vs semantic-resubmission classification, dead-letter
   ledger entry.
-- `src/routing/federation/outbox_operator.rs` — list / inspect / requeue,
+- `crates/http/src/routing/federation/outbox_operator.rs` — list / inspect / requeue,
   driven by the `soland-federation-outbox` binary.
-- `src/routing/federation/federation.rs` — receive-side header
+- `crates/http/src/routing/federation/federation/mod.rs` — receive-side header
   verification, idempotency cache, trust-domain guard.
 - `docs/architecture.md` §2 — outbox enqueue / dispatch pipeline.
 - DEPLOYMENT.md §10 — production hardening checklist (includes shared

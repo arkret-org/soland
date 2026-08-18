@@ -142,10 +142,6 @@ pub fn admin_router() -> Router {
             Router::with_path("realms/{realm_id}").get(collection::admin_get_realm),
         )
         .push(
-            Router::with_path("realms/{realm_id}/members")
-                .get(collection::admin_list_realm_members),
-        )
-        .push(
             Router::with_path("realms/{realm_id}/links")
                 .get(crate::routing::realms::admin_list_realm_links),
         )

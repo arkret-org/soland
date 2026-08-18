@@ -94,17 +94,6 @@ pub struct AdminRealmItem {
     pub updated_at: Option<DateTime<Utc>>,
 }
 
-/// One member row of `GET /_soland/admin/realms/{realm_id}/members`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-#[serde(deny_unknown_fields)]
-pub struct AdminRealmMemberItem {
-    pub actor_id: String,
-    pub membership: String,
-    pub role: String,
-    pub joined_at: Option<String>,
-}
-
 /// Lifecycle state of a Space container, mirroring the reducer's
 /// `SpaceContainerLifecycleState`. Closed set; unknown wire values fail
 /// deserialization.

@@ -130,8 +130,8 @@ pub(super) fn did_webvh_descriptor(state: &AppState) -> Value {
             "base_url": url,
             // STA-07-002 — advertise the canonical generic server-describe
             // endpoint (operation_id ak.server.read.describe) the resolver
-            // freshness probe now targets, not the retired starid
-            // `<URL>/describe`.
+            // freshness probe targets. Provider-specific `<URL>/describe`
+            // shapes are not probed.
             "describe_url": format!(
                 "{}{}",
                 url.trim_end_matches('/'),

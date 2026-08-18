@@ -304,8 +304,8 @@ pub struct AppConfig {
     /// registration must be restricted to the trusted registration service
     /// (normally coauth).
     pub embedded_webvh_registration_bearer: Option<String>,
-    /// Optional external `did:webvh` provider URL. This can point at StarID or
-    /// any compatible provider. It records admin intent and is surfaced in
+    /// Optional external `did:webvh` provider URL. This can point at any
+    /// compatible provider. It records admin intent and is surfaced in
     /// `/identity/describe` even when the boot probe fails.
     pub external_webvh_provider_url: Option<String>,
     /// Registration credential for using the configured external WebVH

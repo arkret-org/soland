@@ -416,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn soland_adapter_accepts_standard_starid_compatible_witness_documents() {
+    fn soland_adapter_accepts_standard_did_webvh_witness_documents() {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../tests/fixtures/did-webvh-witness-official.json"
         ))

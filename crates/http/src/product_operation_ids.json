@@ -41,7 +41,6 @@
   "org.arkret.soland.admin.realm_organization.query.list",
   "org.arkret.soland.admin.realm.create",
   "org.arkret.soland.admin.realm.get",
-  "org.arkret.soland.admin.realm.members",
   "org.arkret.soland.admin.realms.bottom.list",
   "org.arkret.soland.admin.realms.bottom.repair",
   "org.arkret.soland.admin.realms.delivery_binding_policy.get",

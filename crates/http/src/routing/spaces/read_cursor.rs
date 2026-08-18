@@ -5,7 +5,7 @@
 //! Mounted on the protocol surface at `/_arkret/self/read-cursors*`.
 
 use arkret_models_collaboration::objects::read_receipts::{
-    ReadCursor, ReadCursorAdvanceRequestBody, ReadCursorList, ReadCursorPosition, ReadMarkerOutcome,
+    ReadCursor, ReadCursorAdvanceRequestBody, ReadCursorList, ReadMarkerOutcome,
 };
 use arkret_models_collaboration::sync_frames::account_sync::{
     ActorPrivateDeviceUpdate, ActorPrivateReadCursorUpdate,

@@ -189,9 +189,9 @@ GRANT INSERT ON projection_audit TO soland;
 
 ## Escalation pointers
 
-- `_todos.md` Streams D / E / F for in-flight scaffold work.
 - `CHANGELOG.md` `[Unreleased]` for the most recent wire deltas.
-- `tests/` and `src/**#[cfg(test)]` for behavior-focused regression coverage.
+- `crates/*/tests/` and `crates/**/src/**#[cfg(test)]` for behavior-focused
+  regression coverage.
 
 ---
 

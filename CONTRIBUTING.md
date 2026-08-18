@@ -27,17 +27,17 @@ both repositories side by side; reproduce the same layout locally:
 ```
 arkret/
 ├── arkret-rust-sdk/
-│   └── crates/sdk
+│   └── crates/
 └── soland/                # this repo
-    ├── src/
-    ├── tests/
+    ├── crates/
+    ├── xtask/
     └── Cargo.toml
 ```
 
-The Cargo `path = "../arkret-rust-sdk/crates/sdk"` reference assumes this
-layout. If you check out into a different structure, override the dependency
-locally with a `[patch.crates-io]` entry in `~/.cargo/config.toml` rather than
-editing `Cargo.toml`.
+The `arkret-*` Cargo `path = "../arkret-rust-sdk/crates/<name>"` references
+assume this layout. If you check out into a different structure, override the
+dependencies locally with a `[patch.crates-io]` entry in
+`~/.cargo/config.toml` rather than editing `Cargo.toml`.
 
 ## Toolchain
 
@@ -61,30 +61,34 @@ editing `Cargo.toml`.
 
 3. Open a PR; CI runs `Rust`, `Docker`, `Typos`, and `Supply chain` (cargo-deny)
    workflows. All must be green before review.
-4. Reference the corresponding `_todos.md` ID in the PR description (e.g. `F2`,
-   `Sec-1`). New audit findings should be added to `_todos.md` in the same PR.
+4. Describe the change and its verification in the PR description.
 
 ## Coding conventions
 
 - Match the `.rustfmt.toml` style — `cargo fmt` enforces it.
-- Avoid `unsafe` outside `src/main.rs` (the env propagation is the only
-  approved exception today; see the comment).
+- No `unsafe` anywhere in the workspace; there is currently no approved
+  exception.
 - Prefer typed errors via `crate::error::ErrorCode` over hand-typed strings;
   this is the F3 migration path.
 - Keep handlers as `#[endpoint]` (Salvo OpenAPI variant). When you add a new
-  route, mount it in [`src/lib.rs`](src/lib.rs) and ensure
-  `arkret_openapi_spec_contains_facet_projection_contracts` still passes.
+  route, mount it in
+  [`crates/http/src/routing/router_build.rs`](crates/http/src/routing/router_build.rs)
+  and, for a `/_soland/*` path, record it in
+  [`noncanonical-route-inventory.jsonl`](noncanonical-route-inventory.jsonl)
+  so `noncanonical_route_boundary` still passes.
 - Don't introduce new `serde_json::Value` blobs at the wire boundary if a
   typed `wire::*` shape would do — the OpenAPI doc improves alongside this.
 
 ## Tests
 
-- Unit tests live next to the code (`src/<module>.rs::tests`).
-- HTTP integration tests live in the `tests/http_api/` integration-test
-  binary, split into per-domain modules with `main.rs` as the entry point.
-- The OpenAPI doc test (`arkret_openapi_spec_contains_facet_projection_contracts`)
-  is load-bearing — adding or removing routes that the test enumerates needs
-  a corresponding update.
+- Unit tests live next to the code (`crates/<crate>/src/<module>.rs::tests`).
+- HTTP integration tests live in the `crates/server/tests/http_api/`
+  integration-test binary, split into per-domain modules with `main.rs` as the
+  entry point.
+- `crates/http/tests/noncanonical_route_boundary.rs` is load-bearing — adding
+  or removing a `/_soland/*` route needs a matching
+  `noncanonical-route-inventory.jsonl` update, including the metadata
+  `current_private_path_count`.
 
 ## Reporting bugs
 

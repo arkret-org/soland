@@ -26,7 +26,7 @@
 //! the same `404 unrecognized_endpoint` as any unknown path and MUST NOT enter
 //! business logic.
 //!
-//! That gate is realised structurally: [`crate::routing::api_v1_router`] only
+//! That gate is realised structurally: [`crate::routing::arkret_protocol_router`] only
 //! mounts [`router`] under `/_arkret/_conformance` when
 //! [`conformance_harness_enabled`] is true. When development mode is disabled the segment
 //! is genuinely unknown and falls through to `api_not_found`
@@ -56,7 +56,7 @@ use soland_http::error::{AppError, ErrorCode};
 use crate::config::AppConfig;
 
 /// Boot-time snapshot of whether the conformance harness is active,
-/// set once when [`crate::routing::api_v1_router`] decides whether to mount
+/// set once when [`crate::routing::arkret_protocol_router`] decides whether to mount
 /// the namespace. Lets the defense-in-depth [`ensure_enabled`] handler guard
 /// agree with the structural mount decision without re-reading config.
 static HARNESS_ENABLED: OnceLock<bool> = OnceLock::new();
@@ -92,7 +92,7 @@ pub fn conformance_harness_enabled(config: &AppConfig) -> bool {
 
 /// Handler guard (defense in depth): short-circuit to `404 not_found` when the
 /// conformance harness is not active. The structural mount in
-/// `api_v1_router` is the primary gate; this guard ensures a handler reached by
+/// `arkret_protocol_router` is the primary gate; this guard ensures a handler reached by
 /// any future mount path still fails closed in production.
 pub(crate) fn ensure_enabled() -> Result<(), AppError> {
     if HARNESS_ENABLED.get().copied().unwrap_or(false) {
