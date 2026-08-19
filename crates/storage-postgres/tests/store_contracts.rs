@@ -228,8 +228,9 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
                 envelope,
                 received_at: now,
             },
-            control_proposal_ack: Some(ack),
-            self_principal_pcr_device_authorized: false,
+            control_proposal_ingress: Some(
+                arkret_state::state::store::ControlProposalIngress::AckRequired(ack),
+            ),
             device_revocation_transition: None,
             device_revocation_gate: None,
             projections: Vec::new(),
@@ -384,8 +385,8 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     assert_eq!(projections, 0, "unsealed projection must be withdrawn");
     sql_query(
         "INSERT INTO state_control_events \
-         (event_digest, realm_id, event_json, sealed_by, sealed_at) \
-         VALUES ($1, $2, '{}'::jsonb, 'ak:seal:test', $3)",
+         (event_digest, realm_id, event_json, ingress_class, sealed_by, sealed_at) \
+         VALUES ($1, $2, '{}'::jsonb, '{\"class\":\"ack_required\"}'::jsonb, 'ak:seal:test', $3)",
     )
     .bind::<Text, _>(&canonical_digest)
     .bind::<Text, _>(&realm_id)
@@ -434,8 +435,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
                     device_pairing_authorization: None,
                     contact_projection: None,
                     event: prefix,
-                    control_proposal_ack: None,
-                    self_principal_pcr_device_authorized: false,
+                    control_proposal_ingress: None,
                     device_revocation_transition: None,
                     device_revocation_gate: None,
                     projections: Vec::new(),
@@ -446,8 +446,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
                     device_pairing_authorization: None,
                     contact_projection: None,
                     event: incoming,
-                    control_proposal_ack: None,
-                    self_principal_pcr_device_authorized: false,
+                    control_proposal_ingress: None,
                     device_revocation_transition: None,
                     device_revocation_gate: None,
                     projections: Vec::new(),

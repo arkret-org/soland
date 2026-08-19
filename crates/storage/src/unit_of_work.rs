@@ -32,17 +32,21 @@ pub struct EventCommitRequest {
     /// boundary as the canonical Event and its reducer projection.
     pub device_pairing_authorization: Option<DevicePairingAuthorizationCommit>,
     pub contact_projection: Option<ContactProjectionCommit>,
-    pub control_proposal_ack: Option<arkret_wire::ControlProposalAck>,
+    /// Durable ingress classification of an accepted Control Move
+    /// (`event-auth-state-resolution.md` §7.2): `Some` iff the Event enters the
+    /// pending-control log. The class and its payload are inseparable, so an
+    /// Ack-required Move without its Ack is unrepresentable at this boundary.
+    /// In the Ack-less class the Event proof itself is the proposal authority
+    /// because this is an authority-authored Control Move in a self-principal
+    /// PCR; such a Move deliberately carries no independent Control Proposal
+    /// Ack, but still enters the canonical pending-control log for
+    /// successor-Seal finality.
+    pub control_proposal_ingress: Option<arkret_state::state::store::ControlProposalIngress>,
     /// Reducer-derived target for an accepted `ak.device.revoke`. The target
     /// and canonical Ack commit in the same transaction as the Event.
     pub device_revocation_transition: Option<DeviceRevocationTransition>,
     /// Exact author-device generation rechecked inside the Event transaction.
     pub device_revocation_gate: Option<DeviceRevocationGateSelector>,
-    /// The Event proof itself is the proposal authority because this is an
-    /// authority-authored Control Move in a self-principal PCR. Such a Move
-    /// deliberately carries no independent Control Proposal Ack, but still
-    /// enters the canonical pending-control log for successor-Seal finality.
-    pub self_principal_pcr_device_authorized: bool,
     pub projections: Vec<ProjectionEventRecord>,
     pub idempotency: Option<IdempotencyRecord>,
     pub outbox: Vec<FederationOutboxRecord>,

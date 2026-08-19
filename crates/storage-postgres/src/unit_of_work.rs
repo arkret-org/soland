@@ -690,57 +690,64 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     )
                     .into());
                 }
-                let control_proposal_ack = if request.self_principal_pcr_device_authorized {
-                    if typed_event.kind == arkret_wire::EventKind::DeviceRevoke
-                        || request.control_proposal_ack.is_some()
-                        || !soland_storage::has_self_principal_pcr_device_authorized_shape(
-                            &typed_event,
-                        )
-                    {
-                        return Err(PersistenceError::Conflict(
-                            "schema_violation: invalid self-principal PCR device-authorized Control Move"
-                                .to_owned(),
-                        )
-                        .into());
-                    }
-                    None
-                } else {
-                    Some(request
-                        .control_proposal_ack
-                        .as_ref()
-                        .map(|ack| {
-                        if ack.proposal_digest.as_str() != event_digest
-                            || ack.realm_id != typed_event.realm_id
+                let ingress = request.control_proposal_ingress.as_ref().ok_or_else(|| {
+                    PersistenceError::Conflict(
+                        "schema_violation: accepted Control Move is missing its durable ingress classification"
+                            .to_owned(),
+                    )
+                })?;
+                let control_proposal_ack = match ingress {
+                    arkret_state::state::store::ControlProposalIngress::AcklessSelfPrincipal(
+                        _,
+                    ) => {
+                        if typed_event.kind == arkret_wire::EventKind::DeviceRevoke
+                            || !soland_storage::has_self_principal_pcr_device_authorized_shape(
+                                &typed_event,
+                            )
                         {
                             return Err(PersistenceError::Conflict(
-                                "schema_violation: Control Proposal Ack does not bind Control Move"
+                                "schema_violation: invalid self-principal PCR device-authorized Control Move"
                                     .to_owned(),
-                            ));
+                            )
+                            .into());
                         }
-                        serde_json::to_value(ack).map_err(|error| {
-                            PersistenceError::Internal(format!(
-                                "Control Proposal Ack encoding failed: {error}"
-                            ))
+                        None
+                    }
+                    arkret_state::state::store::ControlProposalIngress::AckRequired(ack) => {
+                        Some({
+                            if ack.proposal_digest.as_str() != event_digest
+                                || ack.realm_id != typed_event.realm_id
+                            {
+                                return Err(PersistenceError::Conflict(
+                                    "schema_violation: Control Proposal Ack does not bind Control Move"
+                                        .to_owned(),
+                                )
+                                .into());
+                            }
+                            serde_json::to_value(ack).map_err(|error| {
+                                PersistenceError::Internal(format!(
+                                    "Control Proposal Ack encoding failed: {error}"
+                                ))
+                            })?
                         })
-                        })
-                        .transpose()?
-                        .ok_or_else(|| {
-                        PersistenceError::Conflict(
-                            "schema_violation: accepted Control Move is missing Control Proposal Ack"
-                                .to_owned(),
-                        )
-                        })?)
+                    }
                 };
+                let ingress_class = serde_json::to_value(ingress.class()).map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "Control Move ingress class encoding failed: {error}"
+                    ))
+                })?;
                 sql_query(
                     "INSERT INTO state_control_events \
-                     (event_digest, realm_id, event_json, control_proposal_ack) \
-                     VALUES ($1, $2, $3, $4) \
+                     (event_digest, realm_id, event_json, control_proposal_ack, ingress_class) \
+                     VALUES ($1, $2, $3, $4, $5) \
                      ON CONFLICT (event_digest) DO UPDATE SET \
                        control_proposal_ack = COALESCE( \
                          state_control_events.control_proposal_ack, EXCLUDED.control_proposal_ack \
                        ) \
                      WHERE state_control_events.realm_id = EXCLUDED.realm_id \
                        AND state_control_events.event_json = EXCLUDED.event_json \
+                       AND state_control_events.ingress_class = EXCLUDED.ingress_class \
                        AND (state_control_events.control_proposal_ack IS NULL \
                          OR EXCLUDED.control_proposal_ack IS NULL \
                          OR state_control_events.control_proposal_ack = EXCLUDED.control_proposal_ack)",
@@ -749,13 +756,14 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 .bind::<Text, _>(typed_event.realm_id.as_str())
                 .bind::<Jsonb, _>(&request.event.envelope)
                 .bind::<Nullable<Jsonb>, _>(control_proposal_ack.as_ref())
+                .bind::<Jsonb, _>(&ingress_class)
                 .execute(conn)
                 .await
                 .map_err(PersistenceError::database)
                 .and_then(|affected| {
                     if affected == 0 {
                         Err(PersistenceError::Conflict(
-                            "duplicate_conflict: pending Control Move has different canonical bytes or Control Proposal Ack"
+                            "duplicate_conflict: pending Control Move has different canonical bytes, ingress class or Control Proposal Ack"
                                 .to_owned(),
                         ))
                     } else {
@@ -771,7 +779,10 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     })?;
                     if transition.proposal_event_id != request.event.event_id
                         || transition.proposal_digest != request.event.canonical_digest
-                        || request.control_proposal_ack.as_ref()
+                        || request
+                            .control_proposal_ingress
+                            .as_ref()
+                            .and_then(arkret_state::state::store::ControlProposalIngress::ack)
                             != Some(&transition.control_proposal_ack)
                     {
                         return Err(PersistenceError::Conflict(
@@ -789,8 +800,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     )
                     .into());
                 }
-            } else if request.control_proposal_ack.is_some()
-                || request.self_principal_pcr_device_authorized
+            } else if request.control_proposal_ingress.is_some()
                 || request.device_revocation_transition.is_some()
             {
                 return Err(PersistenceError::Conflict(

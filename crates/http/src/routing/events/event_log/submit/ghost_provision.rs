@@ -1,5 +1,7 @@
 //! Closed, caller-signed Applet Ghost provisioning Event aggregate.
 
+use arkret_state::state::store::ControlProposalIngress;
+
 use super::*;
 
 struct PreparedGhostEvent {
@@ -294,10 +296,9 @@ async fn prepare_ghost_event(
             envelope,
             received_at,
         },
-        control_proposal_ack,
+        control_proposal_ingress: control_proposal_ack.map(ControlProposalIngress::AckRequired),
         device_revocation_transition: None,
         device_revocation_gate: None,
-        self_principal_pcr_device_authorized: false,
         projections: projected_event
             .iter()
             .map(|event| soland_services::events::ProjectedEvent {
