@@ -9,6 +9,7 @@ use arkret_models_collaboration::governance::accountability::{
     AccountabilityGrantPayload, AccountabilityScopeKind,
 };
 use arkret_models_collaboration::governance::invite_addressing::PrincipalLocatorDisplayHint;
+use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 use arkret_models_collaboration::objects::read_receipts::ReadCursorCausalRelation;
 use arkret_models_crypto::MlsGovernanceBindingPayload;
 use arkret_wire::{EventBatchReceipt, ScopeRef};
@@ -1993,7 +1994,7 @@ pub struct RealmInviteState {
     pub invitee: Option<String>,
     pub invite_delivery_target: Option<Value>,
     pub introduction_evidence_digest: Option<String>,
-    pub third_party_invite: Option<Value>,
+    pub third_party_invite: Option<ThirdPartyInvite>,
     pub invite_token: String,
     pub status: String,
     pub claim_nonces: BTreeMap<String, String>,

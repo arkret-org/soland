@@ -284,6 +284,71 @@ async fn erasure_pending_account_refuses_self_reads_with_account_erased() {
     assert_eq!(viewer_body["error"]["code"], "account_erased");
 }
 
+/// `account-lifecycle.md` §3: an already-issued session on a
+/// `soft_logged_out` account MUST fail with `401 soft_logged_out` on
+/// `/_arkret/self/*`. The same matrix keeps `suspended` sessions valid —
+/// suspension refuses only new grant issuance — so this test also pins that
+/// difference to stop a future "complete the list" edit from rejecting
+/// suspended sessions too.
+#[tokio::test]
+async fn soft_logged_out_account_refuses_self_reads_while_suspended_stays_valid() {
+    let state = soland_test_support::app_state(test_config());
+    let token = dev_token(state.clone()).await;
+    let actor = fixture_actor_core_id("did:web:alice.example");
+
+    let seed_state = |status: &str| {
+        let state = state.clone();
+        let actor = actor.clone();
+        let status = status.to_owned();
+        async move {
+            state
+                .test_persistence()
+                .account_lifecycle()
+                .put(
+                    actor.as_str(),
+                    &soland_storage::AccountLifecycleRecord {
+                        state: status,
+                        reason: Some("account_authority_status_record".to_owned()),
+                        changed_by: Some(state.service_id().clone()),
+                        changed_at: chrono::Utc::now(),
+                    },
+                )
+                .await
+                .expect("seed the replicated account status");
+            // The lifecycle lookup is a memory cache over this replica;
+            // rebuilding it from durable state is the same path a restart
+            // takes.
+            state
+                .hydrate()
+                .await
+                .expect("rebuild the lifecycle cache from the durable replica");
+        }
+    };
+
+    seed_state("soft_logged_out").await;
+    assert_eq!(
+        state.account_lifecycle_state(actor.as_str()),
+        "soft_logged_out"
+    );
+    let mut viewer = TestClient::get("http://server/_arkret/self/account/viewer")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(viewer.status_code.unwrap().as_u16(), 401);
+    let viewer_body: Value = viewer.take_json().await.unwrap();
+    assert_eq!(viewer_body["error"]["code"], "soft_logged_out");
+
+    seed_state("suspended").await;
+    assert_eq!(state.account_lifecycle_state(actor.as_str()), "suspended");
+    let mut viewer = TestClient::get("http://server/_arkret/self/account/viewer")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(viewer.status_code.unwrap().as_u16(), 200);
+    let viewer_body: Value = viewer.take_json().await.unwrap();
+    assert_eq!(viewer_body["state"], "suspended");
+}
+
 #[tokio::test]
 async fn repeated_account_projection_is_idempotent_and_me_reads_state() {
     let state = soland_test_support::app_state(test_config());
@@ -420,13 +485,20 @@ async fn account_lifecycle_errors_surface_specific_codes() {
         "ak:device:01904100-0000-7000-8000-da4e00000004",
     )
     .await;
-    let deactivate: Value = TestClient::post("http://server/_soland/self/account/deactivate")
-        .add_header("authorization", format!("Bearer {dave}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    // account-lifecycle.md §3/§10: there is no self-service deactivate
+    // operation; deactivation is initiated through the admin surface.
+    let dave_core = fixture_actor_core_id("did:web:dave.example");
+    let deactivate: Value = TestClient::post(format!(
+        "http://server/_soland/admin/accounts/{}/deactivate",
+        dave_core.as_str()
+    ))
+    .add_header("authorization", format!("Bearer {admin}"), true)
+    .json(&serde_json::json!({"reason": "user_request"}))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
     assert_eq!(deactivate["state"], "deactivated");
 
     let mut deactivated_me = TestClient::get("http://server/_soland/self/account/me")
@@ -437,7 +509,6 @@ async fn account_lifecycle_errors_surface_specific_codes() {
     let deactivated_me_body: Value = deactivated_me.take_json().await.unwrap();
     assert_eq!(deactivated_me_body["error"]["code"], "account_deactivated");
 
-    let dave_core = fixture_actor_core_id("did:web:dave.example");
     let mut deactivated_login = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": dave_core,
@@ -698,8 +769,26 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
     );
 }
 
-#[tokio::test]
-async fn account_contacts_and_realm_lifecycle_workflow() {
+// The contact commit leg polls the full Event admission state machine, whose
+// debug-codegen stack frame exceeds the default 2 MiB test-thread stack on
+// Windows. Run the body on a dedicated thread with headroom instead.
+#[test]
+fn account_contacts_and_realm_lifecycle_workflow() {
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build the workflow test runtime")
+                .block_on(account_contacts_and_realm_lifecycle_workflow_body())
+        })
+        .expect("spawn the workflow test thread")
+        .join()
+        .expect("workflow test thread panicked");
+}
+
+async fn account_contacts_and_realm_lifecycle_workflow_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let alice_core = fixture_actor_core_id("did:web:alice.example");

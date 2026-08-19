@@ -538,7 +538,7 @@ async fn project_accepted_operations_inner(
         // plaintext Ed25519 proof verification has already run at event
         // ingest, and unsupported proof forms fail closed there.
         if kinds::canonical_kind(operation) == arkret_wire::EventKind::MemberIdentityUpdate {
-            project_member_identity_update(state, operation);
+            project_member_identity_update(state, operation).await;
         }
         // Cache ak.realm.read_receipt_policy state into ProjectionState so the
         // parent/child policy-combination validators hit a BTreeMap lookup

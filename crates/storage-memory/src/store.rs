@@ -20,21 +20,22 @@ use super::{
     MemoryFederationFrontierExchangeStore, MemoryFederationOperationsStore,
     MemoryFederationOutboxStore, MemoryHandleReleaseStore, MemoryIdempotencyStore,
     MemoryInviteLocatorStore, MemoryInviteReceivePolicyStore, MemoryJoinApplicationStore,
-    MemoryKeyBackupStore, MemoryMessageStore, MemoryMimiConsentCorrelationStore,
-    MemoryMlsCommitStore, MemoryMlsKeyPackageStore, MemoryMlsWelcomeStore, MemoryModerationStore,
-    MemoryMorphProjectionStore, MemoryMultisigPendingStore, MemoryNotificationStore,
-    MemoryOneTimeKeyStore, MemoryOrganizationPolicyStore, MemoryOrganizationRegistrationStore,
-    MemoryOrganizationStore, MemoryPolicyDocumentStore, MemoryPrincipalResolutionStore,
-    MemoryProjectionEventStore, MemoryPublicationEvidenceStore, MemoryPushBridgeCacheStore,
-    MemoryPushDeviceStore, MemoryRealmInviteStore, MemoryRealmMetaStore,
-    MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore,
-    MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
-    MemorySecurityTransactionStore, MemoryServiceIdentityStore,
-    MemoryServiceRouteHandoverPlanStore, MemoryServiceRouteStore, MemorySessionStore,
-    MemorySidecarStore, MemorySignalRelayStore, MemorySpaceContainerProjectionStore,
-    MemoryStrandProjectionStore, MemoryStrandWatchProjectionStore, MemorySyncCursorStore,
-    MemoryWebsocketAuthStore, MemoryWebvhStore, MessageStore, MimiConsentCorrelationStore,
-    MlsCommitStore, MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
+    MemoryKeyBackupStore, MemoryMemberIdentityStore, MemoryMessageStore,
+    MemoryMimiConsentCorrelationStore, MemoryMlsCommitStore, MemoryMlsKeyPackageStore,
+    MemoryMlsWelcomeStore, MemoryModerationStore, MemoryMorphProjectionStore,
+    MemoryMultisigPendingStore, MemoryNotificationStore, MemoryOneTimeKeyStore,
+    MemoryOrganizationPolicyStore, MemoryOrganizationRegistrationStore, MemoryOrganizationStore,
+    MemoryPolicyDocumentStore, MemoryPrincipalResolutionStore, MemoryProjectionEventStore,
+    MemoryPublicationEvidenceStore, MemoryPushBridgeCacheStore, MemoryPushDeviceStore,
+    MemoryRealmInviteStore, MemoryRealmMetaStore, MemoryRealmOrganizationStatementStore,
+    MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore, MemoryRecoverySessionStore,
+    MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore, MemorySecurityTransactionStore,
+    MemoryServiceIdentityStore, MemoryServiceRouteHandoverPlanStore, MemoryServiceRouteStore,
+    MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
+    MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
+    MemoryStrandWatchProjectionStore, MemorySyncCursorStore, MemoryWebsocketAuthStore,
+    MemoryWebvhStore, MessageStore, MimiConsentCorrelationStore, MlsCommitStore,
+    MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
     MultisigPendingStore, Mutex, NotificationStore, OneTimeKeyStore, OrganizationPolicyStore,
     OrganizationRegistrationStore, OrganizationStore, PersistenceStore, PolicyDocumentStore,
     PrincipalResolutionStore, ProjectionEventStore, PublicationEvidenceStore, PushBridgeCacheStore,
@@ -66,6 +67,7 @@ pub struct SolandMemoryPersistenceStore {
     mimi_consent_correlations: MemoryMimiConsentCorrelationStore,
     realm_meta: MemoryRealmMetaStore,
     messages: MemoryMessageStore,
+    member_identity: MemoryMemberIdentityStore,
     blobs: MemoryBlobStore,
     devices: MemoryDeviceInventoryStore,
     pub(crate) device_pairings: MemoryDevicePairingStore,
@@ -166,6 +168,7 @@ impl SolandMemoryPersistenceStore {
             mimi_consent_correlations: MemoryMimiConsentCorrelationStore::new(),
             realm_meta: MemoryRealmMetaStore::new(),
             messages: MemoryMessageStore::new(),
+            member_identity: MemoryMemberIdentityStore::new(),
             blobs: MemoryBlobStore::new(),
             devices,
             device_pairings: MemoryDevicePairingStore::new(),
@@ -372,6 +375,10 @@ impl soland_storage::IdentityStoreRegistry for SolandMemoryPersistenceStore {
 
     fn messages(&self) -> &dyn MessageStore {
         &self.messages
+    }
+
+    fn member_identity(&self) -> &dyn soland_storage::MemberIdentityStore {
+        &self.member_identity
     }
 
     fn blobs(&self) -> &dyn BlobStore {

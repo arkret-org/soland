@@ -354,7 +354,7 @@ async fn fetch_remote_handle_from_peer(
     if let Some(claim) = outcome.handle_claim.as_ref()
         && let Ok(envelope) = serde_json::to_value(claim)
     {
-        let _ = state.cache_handle_claim(envelope);
+        let _ = state.cache_handle_claim(envelope).await;
     }
     Ok(Some(outcome))
 }
@@ -727,7 +727,7 @@ pub(super) async fn signed_handle_claim(
         .validate()
         .map_err(|err| AppError::internal(format!("handle claim validation failed: {err}")))?;
     if cache && let Ok(envelope) = serde_json::to_value(&claim) {
-        let _ = state.cache_handle_claim(envelope);
+        let _ = state.cache_handle_claim(envelope).await;
     }
     Ok(claim)
 }

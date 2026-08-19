@@ -1,4 +1,6 @@
-use super::{PersistenceResult, RealmInviteRecord, Utc, Value, async_trait};
+use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
+
+use super::{PersistenceResult, RealmInviteRecord, Utc, async_trait};
 /// realm invite tokens.
 #[async_trait]
 pub trait RealmInviteStore: Send + Sync {
@@ -13,25 +15,18 @@ pub trait RealmInviteStore: Send + Sync {
 }
 #[doc(hidden)]
 pub fn remove_third_party_active_material(
-    third_party_invite: &mut Option<Value>,
+    third_party_invite: &mut Option<ThirdPartyInvite>,
     remove_commitment: bool,
 ) {
     let Some(value) = third_party_invite.as_mut() else {
         return;
     };
-    let Some(object) = value.as_object_mut() else {
-        return;
-    };
-    for key in [
-        "token_salt",
-        "token_salt_id",
-        "lookup_table_ref",
-        "pepper",
-        "pepper_id",
-    ] {
-        object.remove(key);
-    }
+    // The closed `ThirdPartyInvite` schema never admits `token_salt` /
+    // `pepper` members; only the registered handles can be present.
+    value.token_salt_id = None;
+    value.lookup_table_ref = None;
+    value.pepper_id = None;
     if remove_commitment {
-        object.remove("token_commitment");
+        value.token_commitment = None;
     }
 }

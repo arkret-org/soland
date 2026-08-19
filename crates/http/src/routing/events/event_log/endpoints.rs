@@ -1,17 +1,20 @@
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+use arkret_state::state::store::ControlProposalIngressClass;
 
 use super::*;
 
 #[path = "control_proposal_decisions.rs"]
 mod control_proposal_decisions;
 
-/// Resolve governance health with the one Ack-less authority class proven
-/// against current accepted state.
+/// Resolve governance health with the one Ack-less authority class replayed
+/// from its durable ingress classification.
 ///
-/// Persistence deliberately records Ack-less Human PCR controls as ordinary
-/// canonical pending rows. The generic projection service cannot resolve
-/// device generations, so the HTTP boundary supplies exact revalidated Event
-/// digests; every other missing-Ack row remains a fail-closed store error.
+/// Persistence records Ack-less Human PCR controls as pending rows carrying
+/// the `AcklessSelfPrincipal` classification captured at first admission. The
+/// generic projection service cannot resolve device authorization records, so
+/// the HTTP boundary replays that stored classification against its stable
+/// references and supplies exact revalidated Event digests; every other
+/// missing-Ack row remains a fail-closed store error.
 pub(crate) async fn frontier_control_governance_health(
     state: &AppState,
     realm_id: &RealmId,
@@ -37,27 +40,37 @@ pub(crate) async fn frontier_control_governance_health(
         })?;
     let mut ackless_authorized = std::collections::BTreeSet::new();
     let mut ackless_rejections = Vec::new();
-    for event in pending
+    for (event, ingress_class) in pending
         .iter()
         .filter(|record| record.control_proposal_ack.is_none())
-        .map(|record| &record.event)
+        .map(|record| (&record.event, &record.ingress_class))
         .chain(
             sealed
                 .iter()
                 .filter(|record| record.control_proposal_ack.is_none())
-                .map(|record| &record.event),
+                .map(|record| (&record.event, &record.ingress_class)),
         )
     {
         let digest = arkret_state::state::control_event_digest(event).map_err(|error| {
             AppError::internal(format!("Ack-less Control Move digest invalid: {error}"))
         })?;
-        let rejection = super::submit::self_principal_pcr_control_authority_rejection(state, event)
-            .await
-            .map_err(|error| {
-                AppError::internal(format!(
-                    "Ack-less Control Move authority unavailable: {error}"
-                ))
-            })?;
+        let rejection = match ingress_class {
+            // An Ack-required row without its Ack is the impossible durable
+            // state the ingress invariant forbids; surface it as a diagnostic
+            // instead of guessing a class from the Event shape.
+            ControlProposalIngressClass::AckRequired => Some(
+                "Control Move was classified Ack-required at ingress but stored without its Ack",
+            ),
+            ControlProposalIngressClass::AcklessSelfPrincipal(class) => {
+                super::submit::replay_ackless_self_principal_ingress(state, event, class)
+                    .await
+                    .map_err(|error| {
+                        AppError::internal(format!(
+                            "Ack-less Control Move authority unavailable: {error}"
+                        ))
+                    })?
+            }
+        };
         match rejection {
             None => {
                 ackless_authorized.insert(digest);

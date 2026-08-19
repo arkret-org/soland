@@ -140,11 +140,12 @@ fn invite_claim_converts_third_party_invite_to_claimed_invite() {
         .expect("third_party_invite");
     assert_eq!(
         third_party_invite
-            .get("token_commitment")
-            .and_then(Value::as_str),
+            .token_commitment
+            .as_ref()
+            .map(|h| h.as_str()),
         Some(TOKEN_COMMITMENT)
     );
-    assert!(third_party_invite.get("token_salt_id").is_none());
+    assert!(third_party_invite.token_salt_id.is_none());
     let member = state
         .member(REALM, SUBJECT)
         .expect("claimed subject should have an invite membership proposal");
@@ -379,14 +380,10 @@ fn expired_claim_is_rejected_without_mutating_the_pending_invite() {
         .expect("third_party_invite remains");
     assert_eq!(
         third_party_invite
-            .get("token_commitment")
-            .and_then(Value::as_str),
+            .token_commitment
+            .as_ref()
+            .map(|h| h.as_str()),
         Some(TOKEN_COMMITMENT)
     );
-    assert_eq!(
-        third_party_invite
-            .get("token_salt_id")
-            .and_then(Value::as_str),
-        Some("salt-1")
-    );
+    assert_eq!(third_party_invite.token_salt_id.as_deref(), Some("salt-1"));
 }

@@ -1108,8 +1108,8 @@ fn canonical_value_digest(value: &Value) -> String {
 // canonical `ak:event:` id (threaded through `ProjectionContext`) so the
 // effective-set / replaces / R3.2 digests live in the same id space as a
 // spec-compliant client, whose `replaces[].event_id` is a `ak:event:` id.
-#[test]
-fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces() {
+#[tokio::test]
+async fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces() {
     use crate::routing::events::projection::project_member_identity_update;
 
     let state = test_state();
@@ -1145,7 +1145,7 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
         }),
         created_at,
     );
-    project_member_identity_update(&state, &first_op);
+    project_member_identity_update(&state, &first_op).await;
 
     {
         let snapshot = state.member_identity_snapshot(realm, actor).unwrap();
@@ -1175,7 +1175,7 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
         }),
         created_at + ChronoDuration::milliseconds(1),
     );
-    project_member_identity_update(&state, &second_op);
+    project_member_identity_update(&state, &second_op).await;
 
     let snapshot = state.member_identity_snapshot(realm, actor).unwrap();
     // The `ak:event:` replaces edge drops the predecessor: only the second

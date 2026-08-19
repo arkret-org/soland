@@ -543,6 +543,10 @@ CREATE TABLE public.state_control_events (
     realm_id text NOT NULL,
     event_json jsonb NOT NULL,
     control_proposal_ack jsonb,
+    -- Durable ingress classification (`event-auth-state-resolution.md` §7.2):
+    -- `{"class":"ack_required"}` or `{"class":"ackless_self_principal", ...}`
+    -- carrying the stable references first admission was proven against.
+    ingress_class jsonb NOT NULL,
     proposal_decisions jsonb DEFAULT '[]'::jsonb NOT NULL,
     decision_overdue boolean DEFAULT false NOT NULL,
     sealed_by text,
@@ -2305,4 +2309,101 @@ CREATE TABLE public.direct_conversation_founding_equivocations (
     idempotency_key text NOT NULL,
     observed_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT direct_conversation_founding_equivocations_trust_domain_check CHECK ((trust_domain_id ~ '^ak:trust_domain:[a-z0-9][-a-z0-9._:]{0,127}$'))
+);
+
+-- Durable Realm metadata projection: owner, lifecycle, visibility and the
+-- effective Realm policy surfaces. Routing writes through on accepted Realm
+-- lifecycle/policy operations and startup hydration reads it back; without
+-- this table a restart strands Realm ownership and lawful controller-issued
+-- Agent grants fail `grant_exceeds_issuer_authority`.
+CREATE TABLE public.realm_meta (
+    realm_id text PRIMARY KEY,
+    owner text NOT NULL,
+    deleted boolean NOT NULL DEFAULT false,
+    discoverability text NOT NULL,
+    history_visibility text NOT NULL,
+    history_sharing_policy jsonb,
+    history_sharing_policy_digest text,
+    preview_policy jsonb,
+    preview_policy_digest text,
+    asset_privacy_policy jsonb,
+    asset_privacy_policy_digest text,
+    encryption_profile text,
+    plaintext_visible_services jsonb NOT NULL DEFAULT '[]'::jsonb,
+    plaintext_visible_service_classes jsonb NOT NULL DEFAULT '{}'::jsonb,
+    minimal_metadata_realm boolean NOT NULL DEFAULT false,
+    aad_visibility_ceiling text NOT NULL DEFAULT 'hidden',
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT realm_meta_history_visibility_check CHECK ((history_visibility = ANY (ARRAY['world_readable'::text, 'shared'::text, 'invited'::text, 'joined'::text, 'restricted'::text]))),
+    CONSTRAINT realm_meta_aad_visibility_ceiling_check CHECK ((aad_visibility_ceiling = ANY (ARRAY['hidden'::text, 'routing_digest'::text, 'opaque_id'::text])))
+);
+
+-- Durable message projection: keyed by the canonical Event id so replayed
+-- projections dedup idempotently (`ON CONFLICT DO NOTHING` on write).
+CREATE TABLE public.messages (
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    event_id text NOT NULL,
+    message_id text NOT NULL,
+    realm_id text NOT NULL,
+    sender text NOT NULL,
+    thread_id text NOT NULL,
+    content jsonb NOT NULL,
+    encrypted boolean NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT messages_event_id_key UNIQUE (event_id)
+);
+
+CREATE INDEX messages_realm_idx ON public.messages USING btree (realm_id, pk DESC);
+
+CREATE INDEX messages_thread_idx ON public.messages USING btree (thread_id, pk);
+
+-- Device key bundles uploaded via keys/upload (`identity/keys.rs`).
+CREATE TABLE public.device_keys (
+    actor_id text NOT NULL,
+    device_id text NOT NULL,
+    payload jsonb NOT NULL,
+    updated_at timestamp with time zone NOT NULL DEFAULT now(),
+    PRIMARY KEY (actor_id, device_id)
+);
+
+-- One-time prekey pool. `put` replaces the whole (actor, device) pool;
+-- `claim` atomically pops the highest-`position` row.
+CREATE TABLE public.one_time_keys (
+    actor_id text NOT NULL,
+    device_id text NOT NULL,
+    position integer NOT NULL,
+    key jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    PRIMARY KEY (actor_id, device_id, position)
+);
+
+-- MID-1..6: accepted `ak.member.identity.update` events, stored verbatim.
+-- Startup hydration rebuilds the in-memory effective-set registry from these
+-- rows so the R3.2 digests and roster projection survive restart.
+CREATE TABLE public.member_identity_events (
+    event_id text PRIMARY KEY,
+    realm_id text NOT NULL,
+    actor_id text NOT NULL,
+    segment text NOT NULL,
+    payload_digest text NOT NULL,
+    replaces jsonb NOT NULL DEFAULT '[]'::jsonb,
+    raw_event jsonb NOT NULL
+);
+
+CREATE INDEX member_identity_events_subject_idx ON public.member_identity_events USING btree (realm_id, actor_id, segment);
+
+-- Local handle-claim evidence cache behind the member identity registry.
+CREATE TABLE public.member_identity_handle_claims (
+    digest text NOT NULL,
+    subject_id text NOT NULL,
+    issuer text NOT NULL,
+    issuer_service_id text,
+    audience text,
+    binding_state text NOT NULL,
+    visibility text,
+    expires_at timestamp with time zone,
+    revoked boolean NOT NULL DEFAULT false,
+    envelope jsonb NOT NULL,
+    PRIMARY KEY (subject_id, digest)
 );

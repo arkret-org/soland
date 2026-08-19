@@ -1,3 +1,5 @@
+use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
+
 use super::{
     Binary, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
     QueryableByName, RealmInviteRecord, RealmInviteStore, RunQueryDsl, Text, Timestamptz, Utc,
@@ -22,7 +24,6 @@ struct RealmInviteRow {
     introduction_evidence_digest: Option<String>,
     #[diesel(sql_type = Nullable<Jsonb>)]
     third_party_invite: Option<Value>,
-    #[diesel(sql_type = Nullable<Jsonb>)]
     #[diesel(sql_type = Text)]
     invite_token: String,
     #[diesel(sql_type = Text)]
@@ -36,30 +37,43 @@ struct RealmInviteRow {
     #[diesel(sql_type = Nullable<Timestamptz>)]
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
-impl From<RealmInviteRow> for RealmInviteRecord {
-    fn from(row: RealmInviteRow) -> Self {
-        Self {
+impl RealmInviteRow {
+    /// JSONB adapter boundary: `third_party_invite` is the only column still
+    /// stored as raw JSON; it decodes into the authoritative
+    /// `ThirdPartyInvite` here. A stored value that fails the closed schema is
+    /// data corruption and must fail closed, never fall back to a raw `Value`.
+    fn try_into_record(self) -> PersistenceResult<RealmInviteRecord> {
+        let third_party_invite = self
+            .third_party_invite
+            .map(|value| {
+                serde_json::from_value::<ThirdPartyInvite>(value).map_err(|error| {
+                    PersistenceError::Database(format!(
+                        "realm_invites.third_party_invite fails the closed ThirdPartyInvite schema: {error}"
+                    ))
+                })
+            })
+            .transpose()?;
+        Ok(RealmInviteRecord {
             invite_id: {
-                let token: [u8; ids::EVENT_ID_BYTES] = row
-                    .id
-                    .as_slice()
-                    .try_into()
-                    .expect("realm_invites.id must be 33 bytes");
+                let token: [u8; ids::EVENT_ID_BYTES] =
+                    self.id.as_slice().try_into().map_err(|_| {
+                        PersistenceError::Database("realm_invites.id must be 33 bytes".to_owned())
+                    })?;
                 ids::format_event_token("invite", &token)
             },
-            realm_id: row.realm_id,
-            inviter: row.inviter,
-            invitee: row.invitee,
-            invite_delivery_target: row.invite_delivery_target,
-            introduction_evidence_digest: row.introduction_evidence_digest,
-            third_party_invite: row.third_party_invite,
-            invite_token: row.invite_token,
-            status: row.status,
-            claim_nonces: serde_json::from_value(row.claim_nonces).unwrap_or_default(),
-            expires_at: row.expires_at,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-        }
+            realm_id: self.realm_id,
+            inviter: self.inviter,
+            invitee: self.invitee,
+            invite_delivery_target: self.invite_delivery_target,
+            introduction_evidence_digest: self.introduction_evidence_digest,
+            third_party_invite,
+            invite_token: self.invite_token,
+            status: self.status,
+            claim_nonces: serde_json::from_value(self.claim_nonces).unwrap_or_default(),
+            expires_at: self.expires_at,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        })
     }
 }
 #[async_trait]
@@ -78,8 +92,9 @@ impl RealmInviteStore for PgRealmInviteStore {
         .get_result::<RealmInviteRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(RealmInviteRecord::from))
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?
+        .map(RealmInviteRow::try_into_record)
+        .transpose()
     }
 
     async fn put(&self, record: RealmInviteRecord) -> PersistenceResult<()> {
@@ -89,6 +104,16 @@ impl RealmInviteStore for PgRealmInviteStore {
         let invite_id_token =
             ids::event_token_part_or_schema_violation(&record.invite_id, "invite")?.to_vec();
         crate::realm_identity::ensure_realm_pk(&mut conn, &record.realm_id).await?;
+        let third_party_invite = record
+            .third_party_invite
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| {
+                PersistenceError::Database(format!(
+                    "realm_invites.third_party_invite failed to serialize: {error}"
+                ))
+            })?;
         sql_query(
             "INSERT INTO realm_invites \
              (id, realm_id, inviter_id, invitee_id, invite_delivery_target, introduction_evidence_digest, third_party_invite, invite_token, status, claim_nonces, expires_at, created_at, updated_at) \
@@ -112,7 +137,7 @@ impl RealmInviteStore for PgRealmInviteStore {
         .bind::<Nullable<Text>, _>(&record.invitee)
         .bind::<Nullable<Jsonb>, _>(&record.invite_delivery_target)
         .bind::<Nullable<Text>, _>(&record.introduction_evidence_digest)
-        .bind::<Nullable<Jsonb>, _>(&record.third_party_invite)
+        .bind::<Nullable<Jsonb>, _>(&third_party_invite)
         .bind::<Text, _>(&record.invite_token)
         .bind::<Text, _>(&record.status)
         .bind::<Jsonb, _>(serde_json::to_value(&record.claim_nonces).unwrap_or_default())
@@ -147,8 +172,9 @@ impl RealmInviteStore for PgRealmInviteStore {
         .get_result::<RealmInviteRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(RealmInviteRecord::from))
-        .map_err(PersistenceError::database)?;
+        .map_err(PersistenceError::database)?
+        .map(RealmInviteRow::try_into_record)
+        .transpose()?;
         if consumed.is_some() {
             return Ok(consumed);
         }
@@ -183,7 +209,125 @@ impl RealmInviteStore for PgRealmInviteStore {
         )
         .load::<RealmInviteRow>(&mut *conn)
         .await
-        .map(|rows| rows.into_iter().map(RealmInviteRecord::from).collect())
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?
+        .into_iter()
+        .map(RealmInviteRow::try_into_record)
+        .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInviteOobKind;
+
+    use super::*;
+
+    fn row_with_third_party_invite(third_party_invite: Option<Value>) -> RealmInviteRow {
+        RealmInviteRow {
+            id: vec![0u8; ids::EVENT_ID_BYTES],
+            realm_id: "ak:realm:test".to_owned(),
+            inviter: "ak:did_core:web:alice.example".to_owned(),
+            invitee: None,
+            invite_delivery_target: None,
+            introduction_evidence_digest: None,
+            third_party_invite,
+            invite_token: String::new(),
+            status: "pending".to_owned(),
+            claim_nonces: serde_json::json!({}),
+            expires_at: None,
+            created_at: chrono::DateTime::default(),
+            updated_at: None,
+        }
+    }
+
+    fn offline_token_invite() -> ThirdPartyInvite {
+        ThirdPartyInvite {
+            oob_code_kind: ThirdPartyInviteOobKind::OfflineToken,
+            display_name_hint: None,
+            token_commitment: Some(
+                arkret_identifiers::Hash::new(format!("sha256:{}", "a".repeat(64)))
+                    .expect("valid hash literal"),
+            ),
+            token_salt_id: Some("salt-1".to_owned()),
+            token_entropy_bits: Some(128),
+            lookup_table_ref: None,
+            pepper_id: None,
+            max_claims: 1,
+            verification_service_id: arkret_identifiers::DidCoreId::new(
+                "ak:did_core:web:verify.example".to_owned(),
+            )
+            .expect("valid DID core id literal"),
+            verification_public_key: "did:web:verify.example#invite-key".to_owned(),
+        }
+    }
+
+    fn lookup_invite() -> ThirdPartyInvite {
+        ThirdPartyInvite {
+            oob_code_kind: ThirdPartyInviteOobKind::Lookup,
+            display_name_hint: Some("e-mail".to_owned()),
+            token_commitment: None,
+            token_salt_id: None,
+            token_entropy_bits: None,
+            lookup_table_ref: Some("lookup-table-7".to_owned()),
+            pepper_id: Some("pepper-3".to_owned()),
+            max_claims: 1,
+            verification_service_id: arkret_identifiers::DidCoreId::new(
+                "ak:did_core:web:verify.example".to_owned(),
+            )
+            .expect("valid DID core id literal"),
+            verification_public_key: "did:web:verify.example#invite-key".to_owned(),
+        }
+    }
+
+    #[test]
+    fn jsonb_adapter_round_trips_offline_token_mode() {
+        let invite = offline_token_invite();
+        let jsonb = serde_json::to_value(&invite).expect("ThirdPartyInvite serializes");
+        let record = row_with_third_party_invite(Some(jsonb))
+            .try_into_record()
+            .expect("valid stored value decodes");
+        assert_eq!(record.third_party_invite, Some(invite));
+    }
+
+    #[test]
+    fn jsonb_adapter_round_trips_lookup_mode() {
+        let invite = lookup_invite();
+        let jsonb = serde_json::to_value(&invite).expect("ThirdPartyInvite serializes");
+        let record = row_with_third_party_invite(Some(jsonb))
+            .try_into_record()
+            .expect("valid stored value decodes");
+        assert_eq!(record.third_party_invite, Some(invite));
+    }
+
+    #[test]
+    fn jsonb_adapter_fails_closed_on_corrupt_stored_value() {
+        for corrupt in [
+            // Unknown member: the closed schema admits no extension keys.
+            serde_json::json!({
+                "oob_code_kind": "offline_token",
+                "token_commitment": format!("sha256:{}", "a".repeat(64)),
+                "token_salt_id": "salt-1",
+                "token_entropy_bits": 128,
+                "verification_service_id": "ak:did_core:web:verify.example",
+                "verification_public_key": "did:web:verify.example#invite-key",
+                "token": "plaintext-secret"
+            }),
+            // Missing the required discriminator.
+            serde_json::json!({
+                "token_commitment": format!("sha256:{}", "a".repeat(64)),
+                "verification_service_id": "ak:did_core:web:verify.example",
+                "verification_public_key": "did:web:verify.example#invite-key"
+            }),
+            // Not an object at all.
+            serde_json::json!("legacy-string"),
+        ] {
+            let error = row_with_third_party_invite(Some(corrupt))
+                .try_into_record()
+                .expect_err("corrupt stored third_party_invite must fail closed");
+            assert!(
+                matches!(error, PersistenceError::Database(_)),
+                "corrupt stored value must surface as a persistence error, got {error}"
+            );
+        }
     }
 }

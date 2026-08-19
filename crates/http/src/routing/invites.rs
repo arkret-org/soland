@@ -64,6 +64,14 @@ const INVITE_LOCATOR_CACHE_CONTROL: &str = "private, no-store";
 const INVITE_QUARANTINE_TTL_DAYS: i64 = 30;
 const MAX_INVITE_QUARANTINE_ENTRIES: usize = 200;
 const INVITE_QUARANTINE_ORIGIN_DEVICE: &str = "server:invite_quarantine";
+/// Actor-private account-data cell that carries a delivered invite's private
+/// delivery material (the invite token) to the invitee's devices. The Invite
+/// read model never carries it (governance-objects.md §5.3), so this
+/// holder-private carrier is the only wire path that does.
+const INVITE_DELIVERY_ACCOUNT_DATA_KEY: &str = "ak.account.invite_delivery";
+const MAX_INVITE_DELIVERY_ENTRIES: usize = 200;
+const INVITE_DELIVERY_ORIGIN_DEVICE: &str = "server:invite_delivery";
+const INVITE_DELIVERY_CAS_ATTEMPTS: usize = 3;
 
 pub(crate) fn peer_router() -> Router {
     Router::new().push(Router::with_path("invites").post(peer_invites_submit))
@@ -399,7 +407,7 @@ async fn receive_private_invite_delivery(
         });
     }
 
-    let (event_id, event_canonical_digest, duplicate) = match projection {
+    let (event_id, event_canonical_digest, duplicate, realm_id) = match projection {
         InvitePrivateProjection::FromDeliveredEvent { session } => {
             let validated = super::events::event_log::validate_private_invite_envelope(
                 state,
@@ -423,14 +431,25 @@ async fn receive_private_invite_delivery(
                 validated.event_id.to_string(),
                 validated.canonical_digest,
                 duplicate,
+                validated.realm_id.to_string(),
             )
         }
         InvitePrivateProjection::AlreadyAcceptedLocally { record } => (
             record.event_id.clone(),
             record.canonical_digest.clone(),
             false,
+            record.realm_id.clone().ok_or_else(|| {
+                AppError::internal("accepted ak.invite.create carries no realm_id")
+            })?,
         ),
     };
+
+    // §7 — the notify branch owes the invitee's devices the private delivery
+    // material itself: the invite token is transport material, never an Invite
+    // read-model field (governance-objects.md §5.3), so it travels on the
+    // actor-private account-data carrier instead.
+    let credential_delivered =
+        deliver_invite_credential(state, &subject, &inviter, body, &realm_id).await?;
 
     let status = if duplicate { "duplicate" } else { "accepted" };
     super::append_audit_log(
@@ -448,6 +467,7 @@ async fn receive_private_invite_delivery(
             "request_canonical_digest": canonical_digest(body)?,
             "event_canonical_digest": event_canonical_digest,
             "projection": "holder_private_invite",
+            "credential_delivered": credential_delivered,
         }),
         status,
     )
@@ -769,6 +789,177 @@ async fn persist_private_invite_projection(
         .await
         .map_err(|error| AppError::internal(format!("private invite projection: {error}")))?;
     Ok(false)
+}
+
+/// Spec invite-addressing.md §7 — hand a notified invite's private delivery
+/// material to the invitee's devices.
+///
+/// The invite token is transport material: `governance-objects.md` §5.3
+/// forbids materializing it on the Invite object, so the authz Invite read
+/// model never carries it. The holder-private carrier is the actor-private
+/// account-data cell `ak.account.invite_delivery` — the same carrier family
+/// `consent-model.md` §6.1.1 defines for the quarantine inbox — persisted as a
+/// bounded CAS register so late devices can read it back, and fanned out to
+/// every device as an `ak.account_data.update`.
+///
+/// The token itself is derived with the same inputs the invite projection
+/// used, so this never has to read the invite row back: the local dispatch
+/// branch runs before the reducer projection is guaranteed visible, and a
+/// deterministic derivation cannot race it.
+async fn deliver_invite_credential(
+    state: &AppState,
+    subject: &str,
+    inviter: &str,
+    body: &Value,
+    realm_id: &str,
+) -> Result<bool, AppError> {
+    let subject_exists = state
+        .identities()
+        .account(subject)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .is_some();
+    if !subject_exists {
+        // No local account means no devices to reach; the invite row itself is
+        // already persisted, so this delivery stays `accepted`.
+        return Ok(false);
+    }
+    let event = body
+        .get("invite_event")
+        .and_then(Value::as_object)
+        .ok_or_else(|| super::events::peer::schema_violation("invite_event must be an object"))?;
+    let payload = event
+        .get("payload")
+        .and_then(Value::as_object)
+        .ok_or_else(|| super::events::peer::schema_violation("invite_event.payload is required"))?;
+    // event-payload.schema.json `invite_create_payload`: the Invite id is
+    // derived from the create Event's id and MUST NOT be carried in the
+    // genesis payload, so derive it here instead of reading
+    // `payload.invite_id`.
+    let invite_id = event
+        .get("event_id")
+        .and_then(Value::as_str)
+        .and_then(|value| arkret_identifiers::EventId::new(value.to_owned()).ok())
+        .map(|event_id| arkret_identifiers::InviteId::from_event_id(&event_id).to_string())
+        .ok_or_else(|| {
+            super::events::peer::schema_violation("invite_event.event_id must be an Event id")
+        })?;
+    let created_at = event
+        .get("created_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .ok_or_else(|| {
+            super::events::peer::schema_violation(
+                "invite_event.created_at must be an RFC 3339 timestamp",
+            )
+        })?;
+    let expires_at = payload
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .map(|value| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .map(|parsed| parsed.with_timezone(&chrono::Utc))
+                .map_err(|_| {
+                    super::events::peer::schema_violation(
+                        "invite_event.payload.expires_at must be an RFC 3339 timestamp",
+                    )
+                })
+        })
+        .transpose()?
+        .unwrap_or_else(|| created_at + Duration::days(7));
+    let invite_token = crate::routing::generate_invite_token(&invite_id, realm_id, subject);
+
+    let received_at = now();
+    let account_data = state.account_data();
+    let mut attempt = 0;
+    let record = loop {
+        let existing = account_data
+            .entry(subject, INVITE_DELIVERY_ACCOUNT_DATA_KEY)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        let mut entries = existing
+            .as_ref()
+            .and_then(|record| record.payload.get("entries"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        entries.retain(|candidate| {
+            invite_delivery_entry_active(candidate, received_at)
+                && candidate
+                    .get("invite_id")
+                    .and_then(Value::as_str)
+                    .is_none_or(|existing_id| existing_id != invite_id.as_str())
+        });
+        entries.push(json!({
+            "invite_id": invite_id,
+            "realm_id": realm_id,
+            "inviter": inviter,
+            "invite_token": invite_token,
+            "received_at": received_at,
+            "expires_at": expires_at,
+        }));
+        if entries.len() > MAX_INVITE_DELIVERY_ENTRIES {
+            let excess = entries.len() - MAX_INVITE_DELIVERY_ENTRIES;
+            entries.drain(0..excess);
+        }
+        let payload = json!({
+            "schema": INVITE_DELIVERY_ACCOUNT_DATA_KEY,
+            "entries": entries,
+            "updated_at": received_at,
+        });
+        let record = AccountDataState {
+            actor_id: subject.to_owned(),
+            account_data_key: INVITE_DELIVERY_ACCOUNT_DATA_KEY.to_owned(),
+            revision: existing.as_ref().map_or(1, |record| record.revision + 1),
+            payload,
+            tombstone: false,
+            updated_at: received_at,
+        };
+        let expected_revision = existing.as_ref().map_or(0, |record| record.revision);
+        match account_data
+            .compare_and_set(record, expected_revision)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+        {
+            AccountDataCasOutcome::Applied(record) => break record,
+            AccountDataCasOutcome::Conflict(_) => {
+                attempt += 1;
+                if attempt >= INVITE_DELIVERY_CAS_ATTEMPTS {
+                    return Err(AppError::new(
+                        ErrorCode::CasConflict,
+                        "invite delivery account data changed concurrently",
+                    ));
+                }
+            }
+        }
+    };
+    fanout_actor_private_update(
+        state,
+        subject,
+        ActorPrivateDeviceUpdate::AccountData {
+            sender_device_id: INVITE_DELIVERY_ORIGIN_DEVICE.to_owned(),
+            content: ActorPrivateAccountDataUpdate {
+                operation: ActorPrivateAccountDataOperation::Put,
+                account_data_key: INVITE_DELIVERY_ACCOUNT_DATA_KEY.to_owned(),
+                revision: record.revision,
+                content: Some(record.payload.clone()),
+                updated_at: record.updated_at,
+            },
+            created_at: record.updated_at,
+        },
+    )
+    .await;
+    Ok(true)
+}
+
+fn invite_delivery_entry_active(entry: &Value, at: chrono::DateTime<chrono::Utc>) -> bool {
+    entry
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc) > at)
+        .unwrap_or(false)
 }
 
 #[endpoint(
@@ -1972,6 +2163,62 @@ mod invite_locator_security_tests {
         assert_eq!(
             disclosed_outcome_for_action(DisclosureLevel::Outcome, &InviteReceiveAction::Drop),
             Some(DisclosedOutcome::Blocked)
+        );
+    }
+
+    #[test]
+    fn invite_delivery_entry_activity_follows_expiry() {
+        let at = chrono::DateTime::parse_from_rfc3339("2026-08-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert!(invite_delivery_entry_active(
+            &json!({"expires_at": "2026-08-05T10:00:00.000Z"}),
+            at
+        ));
+        assert!(!invite_delivery_entry_active(
+            &json!({"expires_at": "2026-07-05T10:00:00.000Z"}),
+            at
+        ));
+        assert!(!invite_delivery_entry_active(&json!({}), at));
+    }
+
+    #[tokio::test]
+    async fn invite_credential_delivery_skips_a_subject_without_local_account() {
+        let state = AppState::new(
+            crate::config::AppConfig {
+                seed_demo_data: false,
+                ..crate::config::AppConfig::test_default()
+            },
+            soland_storage_postgres::Db { pool: None },
+        );
+        let body = json!({
+            "invite_event": {
+                "created_at": "2026-07-29T10:00:00.000Z",
+                "payload": {
+                    "invite_id": "ak:invite:AZYDg8DDhw3K_txXc2FaKw9baWMbenl1vvUcRFfpjp3K",
+                    "expires_at": "2026-08-05T10:00:00.000Z"
+                }
+            }
+        });
+        assert!(
+            !deliver_invite_credential(
+                &state,
+                "did:web:carol.example",
+                "ak:did_core:web:alice.example",
+                &body,
+                "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W",
+            )
+            .await
+            .expect("unknown subject skips the credential write")
+        );
+        assert!(
+            state
+                .account_data()
+                .entry("did:web:carol.example", INVITE_DELIVERY_ACCOUNT_DATA_KEY)
+                .await
+                .expect("account data lookup")
+                .is_none(),
+            "no credential cell may be written for an unknown subject"
         );
     }
 

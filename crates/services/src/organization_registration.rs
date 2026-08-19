@@ -2522,9 +2522,8 @@ mod tests {
         let Some(pool) = database.pool else {
             return;
         };
-        let fallback: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
         run_embedded_fixture(Arc::new(soland_storage_postgres::PgPersistenceStore::new(
-            pool, fallback,
+            pool,
         )))
         .await;
     }

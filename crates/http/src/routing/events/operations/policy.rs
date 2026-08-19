@@ -190,12 +190,40 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
     validate_operation_policy_common(state, operations, has_plaintext_service_binding, false).await
 }
 
-pub(crate) async fn validate_operation_policy_for_agent_membership_cascade(
+/// Validate one Operation of a submit batch against policy.
+///
+/// Per-Event admission commits each batch member before admitting the next,
+/// so re-running the per-operation gates on not-yet-committed siblings would
+/// judge them against a state their own in-batch predecessors have not
+/// landed. Only the batch-aware validators (history_visibility ×
+/// content_scheme, restricted history sharing, read-receipt combinations,
+/// accountability profile) receive the full sibling slice; every other gate
+/// sees exactly the Operation being admitted.
+pub(crate) async fn validate_single_operation_policy_in_batch(
     state: &AppState,
-    operations: &[Operation],
+    operation: &Operation,
+    batch: &[Operation],
     has_plaintext_service_binding: bool,
 ) -> Result<(), &'static str> {
-    validate_operation_policy_common(state, operations, has_plaintext_service_binding, true).await
+    validate_one_operation_policy(
+        state,
+        operation,
+        batch,
+        has_plaintext_service_binding,
+        false,
+    )
+    .await
+}
+
+/// The agent-membership-cascade half of [`validate_single_operation_policy_in_batch`].
+pub(crate) async fn validate_single_operation_policy_for_agent_membership_cascade(
+    state: &AppState,
+    operation: &Operation,
+    batch: &[Operation],
+    has_plaintext_service_binding: bool,
+) -> Result<(), &'static str> {
+    validate_one_operation_policy(state, operation, batch, has_plaintext_service_binding, true)
+        .await
 }
 
 async fn validate_operation_policy_common(
@@ -205,6 +233,26 @@ async fn validate_operation_policy_common(
     agent_membership_cascade: bool,
 ) -> Result<(), &'static str> {
     for operation in operations {
+        validate_one_operation_policy(
+            state,
+            operation,
+            operations,
+            has_plaintext_service_binding,
+            agent_membership_cascade,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn validate_one_operation_policy(
+    state: &AppState,
+    operation: &Operation,
+    operations: &[Operation],
+    has_plaintext_service_binding: bool,
+    agent_membership_cascade: bool,
+) -> Result<(), &'static str> {
+    {
         validate_realm_lifecycle_write_gate(state, operation)?;
         let cleanup_transition = agent_membership_cascade_cleanup_transition(operation);
         if cleanup_transition && !agent_membership_cascade {

@@ -1,3 +1,5 @@
+use arkret_state::state::store::{AcklessSelfPrincipalIngress, ControlProposalIngress};
+
 use super::*;
 
 pub(super) struct PreparedAgentMembershipEvent {
@@ -8,6 +10,95 @@ pub(super) struct PreparedAgentMembershipEvent {
     pub(super) projected_event: soland_services::events::ProjectedEvent,
     pub(super) actor_id: String,
     pub(super) ingress_receipts: Vec<arkret_wire::IngressReceipt>,
+}
+
+/// The named admission context of one Event submit.
+///
+/// Everything here participates in admission judgement. Commit-only data
+/// (idempotency records, contact projections, extra deliveries) is not
+/// admission context; it travels inside [`SubmitMode::Commit`] so a
+/// prepare-only admission cannot silently carry commit effects.
+pub(super) struct SubmitEventContext<'a> {
+    pub(super) realm_bootstrap_contexts: &'a [RealmBootstrapBatchContext],
+    /// The pre-derived Operations of the whole submit batch this Event
+    /// belongs to (`sdk_projection::projection_operation_from_envelope`).
+    /// Empty outside a batch surface, where the lane falls back to the
+    /// Event's own Operation. Batch-aware policy validators scan this slice
+    /// for sibling writes (`operations::policy_extra`).
+    pub(super) batch_operations: &'a [arkret_event_draft::ProjectedEventOperation],
+    pub(super) internal_admission: Option<&'a InternalEventAdmission>,
+    pub(super) authorization_lease: Option<&'a arkret_wire::AuthorizationLease>,
+    pub(super) control_proposal_ack: Option<&'a arkret_wire::ControlProposalAck>,
+    pub(super) membership_compensation_evidence:
+        Option<&'a arkret_wire::MembershipCompensationSubmissionEvidence>,
+}
+
+impl SubmitEventContext<'_> {
+    /// The ordinary single-Event context: no bootstrap batch, no internal
+    /// admission substitution, no publication evidence.
+    pub(super) fn empty() -> Self {
+        Self {
+            realm_bootstrap_contexts: &[],
+            batch_operations: &[],
+            internal_admission: None,
+            authorization_lease: None,
+            control_proposal_ack: None,
+            membership_compensation_evidence: None,
+        }
+    }
+}
+
+/// Marker that the atomic `pair_device` admission gate verified this
+/// submission.
+///
+/// The gate is what entitles an `ak.device.authorize` Event to declare the
+/// `accepted_device` authorization binding, so the marker doubles as the
+/// admission input for that payload class. The paired commit authorization is
+/// commit data: it is present exactly when the pair request named a
+/// `device_pairing_request_id` to close out.
+pub(in crate::routing) struct DevicePairingAdmission {
+    pub(in crate::routing) commit_authorization:
+        Option<soland_services::events::CommitDevicePairingAuthorization>,
+}
+
+/// The one idempotency record a commit may persist. Two idempotency sources
+/// on one commit were only ever a caller bug; the enum makes that state
+/// unrepresentable instead of a runtime rejection.
+pub(super) enum SubmitCommitIdempotency {
+    /// A submit-surface idempotency key; the lane materializes the stored
+    /// response from the accepted outcome.
+    CommitKey(EventCommitIdempotency),
+    /// A fully built response record from a two-phase commit surface.
+    Prepared(soland_services::events::IdempotentResponse),
+}
+
+/// Commit-only data for an immediate commit. None of it participates in
+/// admission judgement; it lands on the commit command / response.
+pub(super) struct SubmitCommitOptions<'a> {
+    pub(super) idempotency: Option<SubmitCommitIdempotency>,
+    pub(super) device_pairing: Option<&'a DevicePairingAdmission>,
+    pub(super) contact_projection: Option<&'a soland_services::events::CommitContactProjection>,
+    pub(super) additional_deliveries: &'a [soland_services::events::FederationDelivery],
+}
+
+impl SubmitCommitOptions<'_> {
+    pub(super) fn none() -> Self {
+        Self {
+            idempotency: None,
+            device_pairing: None,
+            contact_projection: None,
+            additional_deliveries: &[],
+        }
+    }
+}
+
+/// Whether the admitted Event commits now or is staged for the agent
+/// membership cascade. The two modes are mutually exclusive by construction:
+/// a staged preparation has no commit options and therefore cannot write
+/// commit-only state.
+pub(super) enum SubmitMode<'a> {
+    Commit(SubmitCommitOptions<'a>),
+    PrepareAgentMembership(&'a mut Option<PreparedAgentMembershipEvent>),
 }
 
 /// Classify a failed origin-selector derivation on the origin Principal
@@ -87,7 +178,7 @@ pub(super) fn typed_event_to_canonical_value(envelope: Event) -> Result<Value, S
 pub(super) async fn derive_submit_cell_writes(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
-    envelope: &Value,
+    event: &Event,
 ) -> Result<
     (
         Vec<arkret_wire::cba::ProjectedCellWrite>,
@@ -99,15 +190,8 @@ pub(super) async fn derive_submit_cell_writes(
     if !descriptor.is_some_and(|descriptor| descriptor.reducer_input) {
         return Ok((Vec::new(), arkret_schema::FrozenPreState::new()));
     }
-    let event = serde_json::from_value::<Event>(envelope.clone()).map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            format!("reducer input is not a valid Event Envelope: {error}"),
-        )
-    })?;
     let frozen_pre_state =
-        crate::routing::events::projection::freeze_invite_cancel_pre_state(state, &event)
+        crate::routing::events::projection::freeze_invite_cancel_pre_state(state, event)
             .await
             .map_err(|reason| {
                 SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason)
@@ -115,7 +199,7 @@ pub(super) async fn derive_submit_cell_writes(
     let projected = if parsed.kind == arkret_wire::EventKind::InviteCancel.as_str() {
         state
             .projections()
-            .project_cell_writes_with_pre_state(&event, &frozen_pre_state)
+            .project_cell_writes_with_pre_state(event, &frozen_pre_state)
             .map_err(|error| {
                 let reason = error.reason_code();
                 let status = if matches!(
@@ -135,7 +219,7 @@ pub(super) async fn derive_submit_cell_writes(
     } else {
         state
             .projections()
-            .project_cell_writes(&event)
+            .project_cell_writes(event)
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::BAD_REQUEST,
@@ -263,18 +347,11 @@ pub(in crate::routing) async fn submit_event_value(
         state,
         session,
         envelope,
-        &bootstrap_contexts,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        &[],
-        None,
-        None,
+        SubmitEventContext {
+            realm_bootstrap_contexts: &bootstrap_contexts,
+            ..SubmitEventContext::empty()
+        },
+        SubmitMode::Commit(SubmitCommitOptions::none()),
     )
     .await
 }
@@ -324,11 +401,7 @@ pub(in crate::routing) async fn submit_initial_event_submission(
         state,
         session,
         submission,
-        None,
-        false,
-        None,
-        Vec::new(),
-        None,
+        SubmitCommitOptions::none(),
     ))
     .await
 }
@@ -337,19 +410,19 @@ pub(in crate::routing) async fn submit_initial_event_submission_with_device_pair
     state: &AppState,
     session: &SessionRecord,
     submission: arkret_wire::EventInitialSubmission,
-    device_pairing_authorization: Option<soland_services::events::CommitDevicePairingAuthorization>,
-    device_pairing_gate_verified: bool,
+    device_pairing: DevicePairingAdmission,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    submit_initial_event_submission_with_commit_extensions(
+    // Same Box::pin boundary as `submit_initial_event_submission`: the
+    // admission state machine future must not inline into its caller.
+    Box::pin(submit_initial_event_submission_with_commit_extensions(
         state,
         session,
         submission,
-        device_pairing_authorization,
-        device_pairing_gate_verified,
-        None,
-        Vec::new(),
-        None,
-    )
+        SubmitCommitOptions {
+            device_pairing: Some(&device_pairing),
+            ..SubmitCommitOptions::none()
+        },
+    ))
     .await
 }
 
@@ -361,16 +434,19 @@ pub(in crate::routing) async fn submit_initial_event_submission_with_contact_pro
     deliveries: Vec<soland_services::events::FederationDelivery>,
     idempotency: soland_services::events::IdempotentResponse,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    submit_initial_event_submission_with_commit_extensions(
+    // Same Box::pin boundary as `submit_initial_event_submission`: the
+    // admission state machine future must not inline into its caller.
+    Box::pin(submit_initial_event_submission_with_commit_extensions(
         state,
         session,
         submission,
-        None,
-        false,
-        Some(contact_projection),
-        deliveries,
-        Some(idempotency),
-    )
+        SubmitCommitOptions {
+            idempotency: Some(SubmitCommitIdempotency::Prepared(idempotency)),
+            device_pairing: None,
+            contact_projection: Some(&contact_projection),
+            additional_deliveries: &deliveries,
+        },
+    ))
     .await
 }
 
@@ -378,11 +454,7 @@ async fn submit_initial_event_submission_with_commit_extensions(
     state: &AppState,
     session: &SessionRecord,
     submission: arkret_wire::EventInitialSubmission,
-    device_pairing_authorization: Option<soland_services::events::CommitDevicePairingAuthorization>,
-    device_pairing_gate_verified: bool,
-    contact_projection: Option<soland_services::events::CommitContactProjection>,
-    additional_deliveries: Vec<soland_services::events::FederationDelivery>,
-    additional_idempotency: Option<soland_services::events::IdempotentResponse>,
+    commit_options: SubmitCommitOptions<'_>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let submit_context = if submission.event.kind == arkret_wire::EventKind::RealmCreate {
         arkret_wire::EventSubmitContext::AnchorUnit
@@ -407,10 +479,10 @@ async fn submit_initial_event_submission_with_commit_extensions(
         == Some(arkret_wire::EventKind::RealmCreate.as_str())
         && !batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope))
     {
-        if device_pairing_authorization.is_some()
-            || contact_projection.is_some()
-            || !additional_deliveries.is_empty()
-            || additional_idempotency.is_some()
+        if commit_options.idempotency.is_some()
+            || commit_options.device_pairing.is_some()
+            || commit_options.contact_projection.is_some()
+            || !commit_options.additional_deliveries.is_empty()
         {
             return Err(SubmitOneError::new(
                 StatusCode::BAD_REQUEST,
@@ -438,18 +510,14 @@ async fn submit_initial_event_submission_with_commit_extensions(
         state,
         session,
         envelope,
-        &bootstrap_contexts,
-        None,
-        None,
-        authorization_lease.as_ref(),
-        control_proposal_ack.as_ref(),
-        membership_compensation_evidence.as_ref(),
-        device_pairing_authorization.as_ref(),
-        device_pairing_gate_verified,
-        contact_projection.as_ref(),
-        &additional_deliveries,
-        additional_idempotency.as_ref(),
-        None,
+        SubmitEventContext {
+            realm_bootstrap_contexts: &bootstrap_contexts,
+            authorization_lease: authorization_lease.as_ref(),
+            control_proposal_ack: control_proposal_ack.as_ref(),
+            membership_compensation_evidence: membership_compensation_evidence.as_ref(),
+            ..SubmitEventContext::empty()
+        },
+        SubmitMode::Commit(commit_options),
     )
     .await
 }
@@ -497,18 +565,13 @@ pub(super) async fn prepare_agent_membership_initial_event(
         state,
         session,
         envelope,
-        &[],
-        None,
-        Some(&admission),
-        authorization_lease.as_ref(),
-        control_proposal_ack.as_ref(),
-        None,
-        None,
-        false,
-        None,
-        &[],
-        None,
-        Some(&mut prepared),
+        SubmitEventContext {
+            internal_admission: Some(&admission),
+            authorization_lease: authorization_lease.as_ref(),
+            control_proposal_ack: control_proposal_ack.as_ref(),
+            ..SubmitEventContext::empty()
+        },
+        SubmitMode::PrepareAgentMembership(&mut prepared),
     )
     .await?;
     prepared.ok_or_else(|| {
@@ -546,18 +609,12 @@ pub(super) async fn prepare_agent_membership_federated_event(
         state,
         session,
         envelope,
-        &[],
-        None,
-        Some(admission),
-        None,
-        submission.control_proposal_ack.as_ref(),
-        None,
-        None,
-        false,
-        None,
-        &[],
-        None,
-        Some(&mut prepared),
+        SubmitEventContext {
+            internal_admission: Some(admission),
+            control_proposal_ack: submission.control_proposal_ack.as_ref(),
+            ..SubmitEventContext::empty()
+        },
+        SubmitMode::PrepareAgentMembership(&mut prepared),
     )
     .await?;
     prepared.ok_or_else(|| {
@@ -582,18 +639,11 @@ pub(in crate::routing) async fn submit_mimi_event_value(
         state,
         session,
         envelope,
-        &[],
-        None,
-        Some(&admission),
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        &[],
-        None,
-        None,
+        SubmitEventContext {
+            internal_admission: Some(&admission),
+            ..SubmitEventContext::empty()
+        },
+        SubmitMode::Commit(SubmitCommitOptions::none()),
     )
     .await
 }
@@ -623,18 +673,11 @@ pub(in crate::routing) async fn submit_account_data_event_value(
         state,
         session,
         envelope,
-        &[],
-        None,
-        Some(&admission),
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        &[],
-        None,
-        None,
+        SubmitEventContext {
+            internal_admission: Some(&admission),
+            ..SubmitEventContext::empty()
+        },
+        SubmitMode::Commit(SubmitCommitOptions::none()),
     )
     .await
 }
@@ -657,18 +700,11 @@ pub(in crate::routing) async fn submit_mimi_moderation_report_event_value(
         state,
         session,
         envelope,
-        &[],
-        None,
-        Some(&admission),
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        &[],
-        None,
-        None,
+        SubmitEventContext {
+            internal_admission: Some(&admission),
+            ..SubmitEventContext::empty()
+        },
+        SubmitMode::Commit(SubmitCommitOptions::none()),
     )
     .await
 }
@@ -696,18 +732,11 @@ pub(in crate::routing) async fn submit_event_value_with_idempotency(
         state,
         session,
         envelope,
-        &[],
-        Some(idempotency),
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        &[],
-        None,
-        None,
+        SubmitEventContext::empty(),
+        SubmitMode::Commit(SubmitCommitOptions {
+            idempotency: Some(SubmitCommitIdempotency::CommitKey(idempotency)),
+            ..SubmitCommitOptions::none()
+        }),
     )
     .await
 }
@@ -1014,21 +1043,38 @@ fn sole_self_principal_pcr_producer_proof(
     producers.next().is_none().then_some(producer)
 }
 
-/// Return the first failed authority condition for an Ack-less self-PCR Move.
-/// `None` is the only authorized result. The stable reasons make revalidation
-/// drift observable without weakening any admission condition.
-pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_authority_rejection(
+/// The ingress authority judgement for a candidate Ack-less self-principal
+/// PCR Control Move.
+///
+/// `Authorized` carries the durable ingress classification
+/// (`event-auth-state-resolution.md` §7.2): the stable references this first
+/// admission was proven against, persisted on the pending row so reads replay
+/// the historical basis instead of re-judging it. `Rejected` keeps the first
+/// failed condition as a stable reason so classifier drift stays observable
+/// without weakening any admission condition.
+pub(in crate::routing::events::event_log) enum SelfPrincipalPcrAuthority {
+    Authorized(AcklessSelfPrincipalIngress),
+    Rejected(&'static str),
+}
+
+/// Classify the ingress authority of a candidate Ack-less self-principal PCR
+/// Control Move against current accepted state. This is the first-admission
+/// judgement; reads replay the stored classification instead
+/// (`replay_ackless_self_principal_ingress`).
+pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_authority(
     state: &AppState,
     event: &Event,
-) -> Result<Option<&'static str>, String> {
+) -> Result<SelfPrincipalPcrAuthority, String> {
     if let Some(reason) = self_principal_pcr_control_shape_rejection(event) {
-        return Ok(Some(reason));
+        return Ok(SelfPrincipalPcrAuthority::Rejected(reason));
     }
     let snapshot = state.projections().snapshot();
     if !snapshot
         .realm_is_principal_control_for_actor(event.realm_id.as_str(), event.actor_id.as_str())
     {
-        return Ok(Some("event Realm is not the actor's accepted PCR"));
+        return Ok(SelfPrincipalPcrAuthority::Rejected(
+            "event Realm is not the actor's accepted PCR",
+        ));
     }
     debug_assert!(self_principal_pcr_control_shape_rejection(event).is_none());
     let principal_control_profile_declared = snapshot
@@ -1040,7 +1086,9 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
     // revalidated for frontier/federation reads, so it is not an authority
     // source for this security decision.
     if !principal_control_profile_declared {
-        return Ok(Some("Realm genesis does not declare the Human PCR profile"));
+        return Ok(SelfPrincipalPcrAuthority::Rejected(
+            "Realm genesis does not declare the Human PCR profile",
+        ));
     }
 
     let realm_id = RealmId::new(event.realm_id.to_string())
@@ -1052,35 +1100,47 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
         .current_notary_profile_for_events(state, &realm_id, &[])
         .map_err(|error| format!("self-principal PCR authority is unavailable: {error}"))?
     else {
-        return Ok(Some("Realm has no current accepted notary"));
+        return Ok(SelfPrincipalPcrAuthority::Rejected(
+            "Realm has no current accepted notary",
+        ));
     };
     if !matches!(
         notary,
         arkret_wire::notary::NotaryValue::SingleDid { ref actor_id, .. }
             if actor_id == &event.actor_id
     ) {
-        return Ok(Some("current notary is not single_did == principal"));
+        return Ok(SelfPrincipalPcrAuthority::Rejected(
+            "current notary is not single_did == principal",
+        ));
     }
 
     let Some(device_id) = self_principal_pcr_device_id(event) else {
-        return Ok(Some("event proof device id is malformed"));
+        return Ok(SelfPrincipalPcrAuthority::Rejected(
+            "event proof device id is malformed",
+        ));
     };
     let Some(device) = state
         .identities()
         .find_device(soland_services::identity::FindDeviceQuery {
             actor_id: event.actor_id.to_string(),
-            device_id,
+            device_id: device_id.clone(),
         })
         .await
         .map_err(|error| format!("self-principal PCR device lookup failed: {error}"))?
     else {
-        return Ok(Some("event proof device has no accepted device row"));
+        return Ok(SelfPrincipalPcrAuthority::Rejected(
+            "event proof device has no accepted device row",
+        ));
     };
     if device.verification_state != "verified" {
-        return Ok(Some("event proof device is not verified"));
+        return Ok(SelfPrincipalPcrAuthority::Rejected(
+            "event proof device is not verified",
+        ));
     }
     if device.revoked_at.is_some() {
-        return Ok(Some("event proof device is revoked"));
+        return Ok(SelfPrincipalPcrAuthority::Rejected(
+            "event proof device is revoked",
+        ));
     }
     let Some(generation) = crate::routing::identity::device_generation::current_device_generation(
         state,
@@ -1089,12 +1149,16 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
     .await
     .map_err(|error| format!("self-principal PCR device generation is unavailable: {error}"))?
     else {
-        return Ok(Some("principal has no current device generation"));
+        return Ok(SelfPrincipalPcrAuthority::Rejected(
+            "principal has no current device generation",
+        ));
     };
     if generation.status
         != crate::routing::identity::device_generation::DeviceGenerationStatus::Active
     {
-        return Ok(Some("current device generation is not active"));
+        return Ok(SelfPrincipalPcrAuthority::Rejected(
+            "current device generation is not active",
+        ));
     }
     if device
         .payload
@@ -1102,10 +1166,19 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
         .and_then(Value::as_u64)
         != Some(generation.current_ref)
     {
-        return Ok(Some(
+        return Ok(SelfPrincipalPcrAuthority::Rejected(
             "event proof device is not bound to the current device generation",
         ));
     }
+    let Some(device_authorize_event_id) = device
+        .payload
+        .get("device_authorize_event_id")
+        .and_then(Value::as_str)
+    else {
+        return Ok(SelfPrincipalPcrAuthority::Rejected(
+            "event proof device has no recorded authorize Event",
+        ));
+    };
 
     let basis = event
         .seal_basis
@@ -1118,38 +1191,125 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
             .map_err(|error| format!("self-principal PCR Seal basis is unavailable: {error}"))?
             .is_none()
         {
+            return Ok(SelfPrincipalPcrAuthority::Rejected(
+                "event Seal basis is no longer accepted",
+            ));
+        }
+    }
+    let seal_basis_digest = arkret_wire::canonical::canonical_sha256(basis)
+        .map_err(|error| format!("self-principal PCR Seal basis digest failed: {error}"))?;
+    Ok(SelfPrincipalPcrAuthority::Authorized(
+        AcklessSelfPrincipalIngress {
+            device_id,
+            device_authorize_event_id: device_authorize_event_id.to_owned(),
+            device_generation_ref: generation.current_ref,
+            seal_basis_digest,
+        },
+    ))
+}
+
+/// Replay the durable ingress classification of a stored Ack-less
+/// self-principal PCR Move against its stable references.
+///
+/// Unlike [`self_principal_pcr_control_authority`] this never re-judges first
+/// admission against read-time current device generations or notary policy:
+/// it verifies that the stored classification still binds the canonical Event
+/// (sole producer device fragment, signed Seal basis digest) and that the
+/// evidence the classification references stays reachable (accepted basis
+/// Seals, the device authorization row, the canonical authorize Event).
+pub(in crate::routing::events::event_log) async fn replay_ackless_self_principal_ingress(
+    state: &AppState,
+    event: &Event,
+    class: &AcklessSelfPrincipalIngress,
+) -> Result<Option<&'static str>, String> {
+    if let Some(reason) = self_principal_pcr_control_shape_rejection(event) {
+        return Ok(Some(reason));
+    }
+    if self_principal_pcr_device_id(event).as_deref() != Some(class.device_id.as_str()) {
+        return Ok(Some(
+            "event proof device does not match the stored ingress classification",
+        ));
+    }
+    let basis = event
+        .seal_basis
+        .as_ref()
+        .expect("the persistence-side shape guard requires a non-empty Seal basis");
+    let basis_digest = arkret_wire::canonical::canonical_sha256(basis)
+        .map_err(|error| format!("Ack-less ingress Seal basis digest failed: {error}"))?;
+    if basis_digest != class.seal_basis_digest {
+        return Ok(Some(
+            "event Seal basis does not match the stored ingress classification",
+        ));
+    }
+    for leaf in &basis.leaves {
+        if state
+            .projections()
+            .seal_by_id(leaf)
+            .map_err(|error| format!("Ack-less ingress Seal basis is unavailable: {error}"))?
+            .is_none()
+        {
             return Ok(Some("event Seal basis is no longer accepted"));
         }
     }
+    let Some(device) = state
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
+            actor_id: event.actor_id.to_string(),
+            device_id: class.device_id.clone(),
+        })
+        .await
+        .map_err(|error| format!("Ack-less ingress device lookup failed: {error}"))?
+    else {
+        return Ok(Some(
+            "classified device authorization is no longer retained",
+        ));
+    };
+    if device
+        .payload
+        .get("device_authorize_event_id")
+        .and_then(Value::as_str)
+        != Some(class.device_authorize_event_id.as_str())
+    {
+        return Ok(Some(
+            "classified device authorization no longer names the recorded authorize Event",
+        ));
+    }
+    if device
+        .payload
+        .get("authorized_generation_ref")
+        .and_then(Value::as_u64)
+        != Some(class.device_generation_ref)
+    {
+        return Ok(Some(
+            "classified device authorization no longer binds the recorded device generation",
+        ));
+    }
+    let authorize_reachable = state
+        .event_queries()
+        .canonical_event(&class.device_authorize_event_id)
+        .await
+        .map_err(|error| format!("Ack-less ingress authorize Event lookup failed: {error}"))?
+        .is_some();
+    if !authorize_reachable {
+        return Ok(Some(
+            "classified device authorize Event is no longer canonical",
+        ));
+    }
     Ok(None)
-}
-
-pub(in crate::routing::events::event_log) async fn is_authority_authored_self_principal_pcr_control_move(
-    state: &AppState,
-    event: &Event,
-) -> Result<bool, String> {
-    Ok(self_principal_pcr_control_authority_rejection(state, event)
-        .await?
-        .is_none())
 }
 
 pub(super) async fn accepted_event_envelope(
     state: &AppState,
     session: &SessionRecord,
     envelope: Value,
+    event: Event,
     parsed: &ValidatedEventEnvelope,
     accepted_at: chrono::DateTime<chrono::Utc>,
-) -> Result<(Value, Vec<u8>), SubmitOneError> {
+) -> Result<(Event, Value, Vec<u8>), SubmitOneError> {
     if session.token_hash.starts_with("federation:") {
-        return Ok((envelope, parsed.canonical_bytes.clone()));
+        return Ok((event, envelope, parsed.canonical_bytes.clone()));
     }
-    let mut event = serde_json::from_value::<arkret_wire::Event>(envelope).map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            error.to_string(),
-        )
-    })?;
+    let mut event = event;
     if event.principal_server_id.as_str() != state.service_id() {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
@@ -1244,26 +1404,18 @@ pub(super) async fn accepted_event_envelope(
                 error.to_string(),
             )
         })?;
-    let envelope = typed_event_to_canonical_value(event)?;
-    Ok((envelope, canonical_bytes))
+    let envelope = typed_event_to_canonical_value(event.clone())?;
+    Ok((event, envelope, canonical_bytes))
 }
 
 pub(super) fn validate_origin_submission_shape(
     state: &AppState,
     session: &SessionRecord,
-    envelope: &Value,
+    event: &Event,
 ) -> Result<(), SubmitOneError> {
     if session.token_hash.starts_with("federation:") {
         return Ok(());
     }
-    let event =
-        serde_json::from_value::<arkret_wire::Event>(envelope.clone()).map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                error.to_string(),
-            )
-        })?;
     if event.principal_server_id.as_str() != state.service_id() {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
@@ -1284,11 +1436,8 @@ pub(super) fn validate_origin_submission_shape(
     Ok(())
 }
 
-pub(super) fn exact_producer_retry(existing_bytes: &[u8], submitted: &Value) -> bool {
+pub(super) fn exact_producer_retry(existing_bytes: &[u8], submitted: &Event) -> bool {
     let Ok(mut existing) = serde_json::from_slice::<arkret_wire::Event>(existing_bytes) else {
-        return false;
-    };
-    let Ok(submitted) = serde_json::from_value::<arkret_wire::Event>(submitted.clone()) else {
         return false;
     };
     if !matches!(
@@ -1304,30 +1453,20 @@ pub(super) fn exact_producer_retry(existing_bytes: &[u8], submitted: &Value) -> 
         return false;
     }
     existing.proofs.truncate(1);
-    existing == submitted
+    existing == *submitted
 }
 
 pub(super) async fn submit_event_value_with_context(
     state: &AppState,
     session: &SessionRecord,
     envelope: Value,
-    realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
-    commit_idempotency: Option<EventCommitIdempotency>,
-    internal_admission: Option<&InternalEventAdmission>,
-    authorization_lease: Option<&arkret_wire::AuthorizationLease>,
-    submitted_control_proposal_ack: Option<&arkret_wire::ControlProposalAck>,
-    membership_compensation_evidence: Option<
-        &arkret_wire::MembershipCompensationSubmissionEvidence,
-    >,
-    device_pairing_authorization: Option<
-        &soland_services::events::CommitDevicePairingAuthorization,
-    >,
-    device_pairing_gate_verified: bool,
-    contact_projection: Option<&soland_services::events::CommitContactProjection>,
-    additional_deliveries: &[soland_services::events::FederationDelivery],
-    additional_idempotency: Option<&soland_services::events::IdempotentResponse>,
-    deferred_agent_membership: Option<&mut Option<PreparedAgentMembershipEvent>>,
+    context: SubmitEventContext<'_>,
+    mode: SubmitMode<'_>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    let (commit_options, mut deferred_agent_membership) = match mode {
+        SubmitMode::Commit(options) => (Some(options), None),
+        SubmitMode::PrepareAgentMembership(slot) => (None, Some(slot)),
+    };
     let preparing_agent_membership = deferred_agent_membership.is_some();
     if event_string_field_from_value(&envelope, "kind").as_deref()
         == Some(arkret_wire::EventKind::DeviceAuthorize.as_str())
@@ -1336,16 +1475,17 @@ pub(super) async fn submit_event_value_with_context(
             .get("payload")
             .and_then(|payload| payload.get("authorization_binding_kind"))
             .and_then(Value::as_str);
-        if binding_kind == Some("accepted_device") && !device_pairing_gate_verified {
+        let pairing_gate_verified = commit_options
+            .as_ref()
+            .is_some_and(|options| options.device_pairing.is_some());
+        if binding_kind == Some("accepted_device") && !pairing_gate_verified {
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,
                 "failed_precondition",
                 "accepted-device authorization requires the atomic pair_device admission gate",
             ));
         }
-        if (device_pairing_authorization.is_some() || device_pairing_gate_verified)
-            && binding_kind != Some("accepted_device")
-        {
+        if pairing_gate_verified && binding_kind != Some("accepted_device") {
             return Err(SubmitOneError::new(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
@@ -1355,7 +1495,7 @@ pub(super) async fn submit_event_value_with_context(
     }
     let managed_agent_pcr_genesis =
         batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope));
-    if managed_agent_pcr_genesis && submitted_control_proposal_ack.is_none() {
+    if managed_agent_pcr_genesis && context.control_proposal_ack.is_none() {
         return Err(SubmitOneError::new(
             StatusCode::PRECONDITION_FAILED,
             "failed_precondition",
@@ -1384,10 +1524,10 @@ pub(super) async fn submit_event_value_with_context(
         Vec::new()
     };
     let realm_bootstrap_contexts =
-        if managed_agent_pcr_genesis && realm_bootstrap_contexts.is_empty() {
+        if managed_agent_pcr_genesis && context.realm_bootstrap_contexts.is_empty() {
             managed_bootstrap_contexts.as_slice()
         } else {
-            realm_bootstrap_contexts
+            context.realm_bootstrap_contexts
         };
     let raw_bytes = serde_json::to_vec(&envelope).map_err(|_| {
         SubmitOneError::new(
@@ -1409,10 +1549,20 @@ pub(super) async fn submit_event_value_with_context(
         session,
         &envelope,
         realm_bootstrap_contexts,
-        internal_admission,
+        context.internal_admission,
     )
     .await?;
-    validate_origin_submission_shape(state, session, &envelope)?;
+    // The shared validator already decoded the envelope as a typed Event; the
+    // admission lane below keeps it typed instead of re-deriving fields
+    // through JSON pointer reads.
+    let submitted_event = serde_json::from_value::<Event>(envelope.clone()).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("validated Event envelope does not decode: {error}"),
+        )
+    })?;
+    validate_origin_submission_shape(state, session, &submitted_event)?;
     // Ordinary Events never declare a reducer profile. The receiver resolves
     // it from the Realm's authoritative singleton. The current registry has
     // one profile and no upgrade edges, so the projected singleton is also the
@@ -1455,11 +1605,12 @@ pub(super) async fn submit_event_value_with_context(
             format!("Realm reducer profile {profile} is not implemented"),
         ));
     }
-    let has_internal_plaintext_service_binding = internal_admission.is_some_and(|admission| {
-        envelope
-            .as_object()
-            .is_some_and(|object| admission.matches(session, object))
-    });
+    let has_internal_plaintext_service_binding =
+        context.internal_admission.is_some_and(|admission| {
+            envelope
+                .as_object()
+                .is_some_and(|object| admission.matches(session, object))
+        });
     let _agent_membership_cascade_guard = if parsed.kind
         == arkret_wire::EventKind::MemberState.as_str()
         && !preparing_agent_membership
@@ -1500,27 +1651,26 @@ pub(super) async fn submit_event_value_with_context(
         };
     let received_at = now();
     let mut envelope_for_bootstrap = envelope.clone();
-    let control_event_for_proposal =
-        serde_json::from_value::<arkret_wire::Event>(envelope_for_bootstrap.clone())
-            .ok()
-            .filter(|event| {
-                event.kind.is_reducer_input()
-                    && event.seal_ref.is_none()
-                    && event.auth_context.is_none()
-            });
-    let self_principal_pcr_device_authorized = if let Some(event) = control_event_for_proposal
+    let control_event_for_proposal = Some(submitted_event.clone()).filter(|event| {
+        event.kind.is_reducer_input() && event.seal_ref.is_none() && event.auth_context.is_none()
+    });
+    let ackless_self_principal_ingress = if let Some(event) = control_event_for_proposal
         .as_ref()
         .filter(|event| event.kind != arkret_wire::EventKind::DeviceRevoke)
     {
-        is_authority_authored_self_principal_pcr_control_move(state, event)
+        match self_principal_pcr_control_authority(state, event)
             .await
             .map_err(|error| {
                 SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
-            })?
+            })? {
+            SelfPrincipalPcrAuthority::Authorized(class) => Some(class),
+            SelfPrincipalPcrAuthority::Rejected(_) => None,
+        }
     } else {
-        false
+        None
     };
-    if self_principal_pcr_device_authorized && submitted_control_proposal_ack.is_some() {
+    let self_principal_pcr_device_authorized = ackless_self_principal_ingress.is_some();
+    if self_principal_pcr_device_authorized && context.control_proposal_ack.is_some() {
         return Err(SubmitOneError::new(
             StatusCode::PRECONDITION_FAILED,
             "failed_precondition",
@@ -1532,7 +1682,7 @@ pub(super) async fn submit_event_value_with_context(
     // check, so an idempotent retry returns the stored receipt rather than a
     // re-stamped one. It is deliberately independent of whether the Event
     // later passes the reducer: a receipt proves arrival, nothing more.
-    let ingress_receipt = match authorization_lease {
+    let ingress_receipt = match context.authorization_lease {
         Some(lease) => {
             Some(mint_and_store_ingress_receipt(state, &parsed, lease, received_at).await?)
         }
@@ -1556,7 +1706,7 @@ pub(super) async fn submit_event_value_with_context(
         })?;
     if let Some(existing) = existing {
         if existing.canonical_bytes == parsed.canonical_bytes
-            || exact_producer_retry(&existing.canonical_bytes, &envelope)
+            || exact_producer_retry(&existing.canonical_bytes, &submitted_event)
         {
             let frontier = super::super::endpoints::load_realm_actor_frontier(
                 state,
@@ -1596,7 +1746,7 @@ pub(super) async fn submit_event_value_with_context(
                     state,
                     &existing,
                     &digest,
-                    submitted_control_proposal_ack,
+                    context.control_proposal_ack,
                 )
                 .await?;
                 response.outcome.control_proposal_acks.push(ack);
@@ -1773,7 +1923,7 @@ pub(super) async fn submit_event_value_with_context(
     // that are not reducer inputs declare no contract and project nothing —
     // the same guard `enforce_registered_cell_contract` uses at admission.
     let (projected_cell_writes, frozen_pre_state) =
-        derive_submit_cell_writes(state, &parsed, &envelope).await?;
+        derive_submit_cell_writes(state, &parsed, &submitted_event).await?;
     // Active-series pointer versions are a per-(actor,class) CAS. Keep the
     // semantic preflight, canonical Event+projection commit, and live reducer
     // application in one admission lane so two concurrent vN successors
@@ -1865,17 +2015,29 @@ pub(super) async fn submit_event_value_with_context(
                 reason,
             ));
         }
-        let policy_result = if deferred_agent_membership.is_some() {
-            crate::routing::events::operations::validate_operation_policy_for_agent_membership_cascade(
+        // Policy validation always sees the whole submit batch, so facet
+        // writes can cross-check sibling scheme/profile values instead of
+        // only the projection (`operations::policy_extra`). Outside a batch
+        // surface the lane sees the Event's own Operation alone.
+        let policy_operations: &[arkret_event_draft::ProjectedEventOperation] =
+            if context.batch_operations.is_empty() {
+                std::slice::from_ref(operation)
+            } else {
+                context.batch_operations
+            };
+        let policy_result = if preparing_agent_membership {
+            crate::routing::events::operations::validate_single_operation_policy_for_agent_membership_cascade(
                 state,
-                std::slice::from_ref(operation),
+                operation,
+                policy_operations,
                 has_internal_plaintext_service_binding,
             )
             .await
         } else {
-            validate_operation_policy_with_plaintext_service_binding(
+            crate::routing::events::operations::validate_single_operation_policy_in_batch(
                 state,
-                std::slice::from_ref(operation),
+                operation,
+                policy_operations,
                 has_internal_plaintext_service_binding,
             )
             .await
@@ -1902,20 +2064,18 @@ pub(super) async fn submit_event_value_with_context(
                 reason,
             ));
         }
-        let envelope_object = envelope.as_object().ok_or_else(|| {
-            SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                "validated Event envelope is not an object",
-            )
-        })?;
+        // The typed decode above proves the validated envelope is a JSON
+        // object, so this deref cannot fail.
+        let envelope_object = envelope
+            .as_object()
+            .expect("validated Event envelope decoded as a JSON object");
         if let Some(reason) = preflight_mls_welcome_claim_signature_reject(
             state,
             session,
             envelope_object,
             parsed.actor_id.as_str(),
             operation,
-            internal_admission,
+            context.internal_admission,
         )
         .await
         {
@@ -2247,7 +2407,7 @@ pub(super) async fn submit_event_value_with_context(
                     format!("Control Proposal policy is unavailable: {error}"),
                 )
             })?;
-            if let Some(ack) = submitted_control_proposal_ack {
+            if let Some(ack) = context.control_proposal_ack {
                 let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
                 let (_, authority_set_ref) = worker
                     .current_notary_profile_for_events(
@@ -2290,7 +2450,8 @@ pub(super) async fn submit_event_value_with_context(
                     })?;
                 Some(ack.clone())
             } else if event.seal_basis.is_none() {
-                let bootstrap_authority = authorization_lease
+                let bootstrap_authority = context
+                    .authorization_lease
                     .map(|lease| &lease.authority_set_ref)
                     .ok_or_else(|| {
                         SubmitOneError::new(
@@ -2430,22 +2591,19 @@ pub(super) async fn submit_event_value_with_context(
         } else {
             None
         };
-    let (envelope, accepted_canonical_bytes) =
-        accepted_event_envelope(state, session, envelope, &parsed, received_at).await?;
+    let (accepted_event, envelope, accepted_canonical_bytes) = accepted_event_envelope(
+        state,
+        session,
+        envelope,
+        submitted_event,
+        &parsed,
+        received_at,
+    )
+    .await?;
     envelope_for_bootstrap = envelope.clone();
-    let accepted_control_event_for_proposal = if control_event_for_proposal.is_some() {
-        Some(
-            serde_json::from_value::<Event>(envelope_for_bootstrap.clone()).map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("accepted Control Move cannot be decoded: {error}"),
-                )
-            })?,
-        )
-    } else {
-        None
-    };
+    let accepted_control_event_for_proposal = control_event_for_proposal
+        .is_some()
+        .then(|| accepted_event.clone());
     let projected_event = projection_operation.as_ref().map(|operation| {
         crate::routing::events::projection::projection_event_from_operation(
             operation,
@@ -2466,7 +2624,7 @@ pub(super) async fn submit_event_value_with_context(
             // This path stores its ingress receipt up front
             // (`mint_and_store_ingress_receipt`), so nothing is pending.
             &[],
-            membership_compensation_evidence,
+            context.membership_compensation_evidence,
         )
         .await
         .map_err(|error| {
@@ -2477,7 +2635,9 @@ pub(super) async fn submit_event_value_with_context(
             )
         })?
     };
-    outbox.extend_from_slice(additional_deliveries);
+    if let Some(options) = commit_options.as_ref() {
+        outbox.extend_from_slice(options.additional_deliveries);
+    }
     let next_actor_seq = parsed.actor_seq.checked_add(1).ok_or_else(|| {
         SubmitOneError::new(
             StatusCode::CONFLICT,
@@ -2515,7 +2675,7 @@ pub(super) async fn submit_event_value_with_context(
             format!("post-submit frontier unavailable: {error}"),
         )
     })?;
-    let mut accepted_response = if deferred_agent_membership.is_some() {
+    let mut accepted_response = if preparing_agent_membership {
         SubmittedEventOutcome {
             event_id: parsed.event_id.to_string(),
             duplicate: false,
@@ -2546,13 +2706,6 @@ pub(super) async fn submit_event_value_with_context(
             .push(ack.clone());
     }
     apply_delivery_summary_from_intents(&mut accepted_response, &outbox);
-    if commit_idempotency.is_some() && additional_idempotency.is_some() {
-        return Err(SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "Event commit cannot carry two idempotency outcomes",
-        ));
-    }
     let device_revocation_transition =
         if let Some(target_device_id) = device_revoke_target_device_id.as_deref() {
             let control_proposal_ack = control_proposal_ack.clone().ok_or_else(|| {
@@ -2594,8 +2747,13 @@ pub(super) async fn submit_event_value_with_context(
             None
         };
     let command = soland_services::events::CommitAcceptedEventCommand {
-        device_pairing_authorization: device_pairing_authorization.cloned(),
-        contact_projection: contact_projection.cloned(),
+        device_pairing_authorization: commit_options
+            .as_ref()
+            .and_then(|options| options.device_pairing)
+            .and_then(|admission| admission.commit_authorization.clone()),
+        contact_projection: commit_options
+            .as_ref()
+            .and_then(|options| options.contact_projection.cloned()),
         event: soland_services::events::AcceptedEvent {
             event_id: parsed.event_id.to_string(),
             actor_id: parsed.actor_id.to_string(),
@@ -2626,30 +2784,31 @@ pub(super) async fn submit_event_value_with_context(
                 received_at: event.received_at,
             })
             .collect(),
-        idempotency: additional_idempotency.cloned().or_else(|| {
-            commit_idempotency.map(|record| {
-                let created_at = now();
-                soland_services::events::IdempotentResponse {
-                    principal_id: record.principal_id,
-                    key: record.key,
-                    service_id: record.service_id,
-                    request_hash: record.request_hash,
-                    status: StatusCode::OK.as_u16() as i32,
-                    body: serde_json::to_value(&accepted_response.outcome)
-                        .unwrap_or_else(|_| json!({"status": "accepted"})),
-                    created_at,
-                    expires_at: created_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS),
+        idempotency: commit_options
+            .as_ref()
+            .and_then(|options| options.idempotency.as_ref())
+            .map(|source| match source {
+                SubmitCommitIdempotency::Prepared(record) => record.clone(),
+                SubmitCommitIdempotency::CommitKey(record) => {
+                    let created_at = now();
+                    soland_services::events::IdempotentResponse {
+                        principal_id: record.principal_id.clone(),
+                        key: record.key.clone(),
+                        service_id: record.service_id.clone(),
+                        request_hash: record.request_hash.clone(),
+                        status: StatusCode::OK.as_u16() as i32,
+                        body: serde_json::to_value(&accepted_response.outcome)
+                            .unwrap_or_else(|_| json!({"status": "accepted"})),
+                        created_at,
+                        expires_at: created_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS),
+                    }
                 }
-            })
-        }),
+            }),
         deliveries: outbox,
     };
     if let Some(slot) = deferred_agent_membership {
         if parsed.kind != arkret_wire::EventKind::MemberState.as_str()
-            || command.device_pairing_authorization.is_some()
-            || command.contact_projection.is_some()
             || command.device_revocation_transition.is_some()
-            || command.idempotency.is_some()
         {
             return Err(SubmitOneError::new(
                 StatusCode::BAD_REQUEST,
@@ -2815,7 +2974,7 @@ pub(super) async fn submit_event_value_with_context(
                             state,
                             &existing,
                             &digest,
-                            submitted_control_proposal_ack,
+                            context.control_proposal_ack,
                         )
                         .await?;
                         response.outcome.control_proposal_acks.push(ack);
@@ -2856,12 +3015,32 @@ pub(super) async fn submit_event_value_with_context(
         ));
     }
     if let Some(control_event) = accepted_control_event_for_proposal.as_ref() {
-        // Device-authorized self-principal PCR moves do not enter the external
-        // proposal/decision rail. They remain canonical pending controls, with
-        // a nullable Ack, until the same authority signs a successor Seal.
+        // The durable pending row carries the ingress classification
+        // (`event-auth-state-resolution.md` §7.2): device-authorized
+        // self-principal PCR moves stay outside the external
+        // proposal/decision rail as `AcklessSelfPrincipal` rows until the
+        // same authority signs a successor Seal; every other Control Move
+        // binds its canonical Ack as `AckRequired`. The two unreachable arms
+        // are excluded above: the Ackless class rejects a submitted Ack at
+        // admission, and the Ack-required class always mints or verifies one
+        // before this point.
+        let ingress = match (
+            ackless_self_principal_ingress,
+            control_proposal_ack.as_ref(),
+        ) {
+            (Some(class), None) => ControlProposalIngress::AcklessSelfPrincipal(class),
+            (None, Some(ack)) => ControlProposalIngress::AckRequired(ack.clone()),
+            (Some(_), Some(_)) | (None, None) => {
+                return Err(SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "accepted Control Move violates its durable ingress classification",
+                ));
+            }
+        };
         state
             .projections()
-            .put_pending_control_event(control_event, control_proposal_ack.as_ref())
+            .put_pending_control_event(control_event, &ingress)
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -2885,14 +3064,6 @@ pub(super) async fn submit_event_value_with_context(
     if parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
         || parsed.kind == arkret_wire::EventKind::IdentityResolutionUpdate.as_str()
     {
-        let accepted_event = serde_json::from_value::<Event>(envelope_for_bootstrap.clone())
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("accepted principal resolution Event is invalid: {error}"),
-                )
-            })?;
         if let Err(error) = persist_principal_resolution_projection(state, &accepted_event).await {
             // This index is rebuildable from canonical Events. The Event is
             // already committed, so never misreport it as rejected; surface

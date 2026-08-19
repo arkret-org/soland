@@ -566,11 +566,12 @@ pub async fn hlc_merge(body: JsonBody<HlcMergeVectorRequest>) -> JsonResult<HlcM
     let body = body.into_inner();
     let vector = body.vector_id.as_str();
     if vector.contains("logical_overflow") {
+        // error-code-registry.json binds `hlc_logical_overflow` to 503; the
+        // registry-derived status renders verbatim, no handler-side override.
         return Err(AppError::new(
             ErrorCode::HlcLogicalOverflow,
             "vector requests logical-counter overflow reject",
-        )
-        .with_status(StatusCode::UNPROCESSABLE_ENTITY));
+        ));
     }
     let clocks: Vec<(String, String, Value)> = body
         .clocks

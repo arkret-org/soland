@@ -1,7 +1,5 @@
 //! PostgreSQL-backed implementation of [`PersistenceStore`].
 
-use std::sync::Arc;
-
 use soland_storage::*;
 
 use crate::*;
@@ -9,14 +7,10 @@ use crate::*;
 /// PostgreSQL-backed persistence store for durable projections with shipped Pg
 /// tables.
 ///
-/// Four accessors still have no Pg implementation and delegate to the
-/// `fallback` store: `realm_meta`, `messages`, `device_keys` and
-/// `one_time_keys`. `PgPersistenceStore::new` is always constructed with a
-/// process-local `SolandMemoryPersistenceStore`, so those four data planes are
-/// neither durable across restart nor shared across replicas. This is an
-/// unfinished Pg port, not a compatibility bridge: no Pg tables and no
-/// `impl RealmMetaStore/MessageStore/DeviceKeyStore/OneTimeKeyStore` for
-/// Postgres exist anywhere in this crate.
+/// Every registry accessor is backed by a durable Pg table, including the
+/// realm meta, message, device key, one-time key and member-identity planes;
+/// nothing delegates to a process-local memory store, so all planes survive
+/// restart and are shared across replicas.
 pub struct PgPersistenceStore {
     event_commits: PgEventCommitUnitOfWork,
     agent_membership_cascades: PgAgentMembershipCascadeStore,
@@ -33,6 +27,8 @@ pub struct PgPersistenceStore {
     join_applications: PgJoinApplicationStore,
     consent_cells: PgConsentCellStore,
     mimi_consent_correlations: PgMimiConsentCorrelationStore,
+    realm_meta: PgRealmMetaStore,
+    messages: PgMessageStore,
     blobs: PgBlobStore,
     devices: PgDeviceInventoryStore,
     device_pairings: PgDevicePairingStore,
@@ -75,6 +71,9 @@ pub struct PgPersistenceStore {
     projection_events: PgProjectionEventStore,
     applets: PgAppletStore,
     device_messages: PgDeviceMessageStore,
+    device_keys: PgDeviceKeyStore,
+    one_time_keys: PgOneTimeKeyStore,
+    member_identity: PgMemberIdentityStore,
     mls_key_packages: PgMlsKeyPackageStore,
     mls_welcomes: PgMlsWelcomeStore,
     mls_commits: PgMlsCommitStore,
@@ -86,11 +85,10 @@ pub struct PgPersistenceStore {
     idempotency_keys: PgIdempotencyStore,
     websocket_auth: PgWebsocketAuthStore,
     control_proposal_authority_acks: PgControlProposalAuthorityAckStore,
-    fallback: Arc<dyn PersistenceStore>,
 }
 
 impl PgPersistenceStore {
-    pub fn new(pool: PgPool, fallback: Arc<dyn PersistenceStore>) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self {
             event_commits: PgEventCommitUnitOfWork::new(pool.clone()),
             agent_membership_cascades: PgAgentMembershipCascadeStore { pool: pool.clone() },
@@ -107,6 +105,8 @@ impl PgPersistenceStore {
             join_applications: PgJoinApplicationStore { pool: pool.clone() },
             consent_cells: PgConsentCellStore { pool: pool.clone() },
             mimi_consent_correlations: PgMimiConsentCorrelationStore { pool: pool.clone() },
+            realm_meta: PgRealmMetaStore { pool: pool.clone() },
+            messages: PgMessageStore { pool: pool.clone() },
             blobs: PgBlobStore { pool: pool.clone() },
             devices: PgDeviceInventoryStore { pool: pool.clone() },
             device_pairings: PgDevicePairingStore { pool: pool.clone() },
@@ -149,6 +149,9 @@ impl PgPersistenceStore {
             projection_events: PgProjectionEventStore { pool: pool.clone() },
             applets: PgAppletStore { pool: pool.clone() },
             device_messages: PgDeviceMessageStore { pool: pool.clone() },
+            device_keys: PgDeviceKeyStore { pool: pool.clone() },
+            one_time_keys: PgOneTimeKeyStore { pool: pool.clone() },
+            member_identity: PgMemberIdentityStore { pool: pool.clone() },
             mls_key_packages: PgMlsKeyPackageStore { pool: pool.clone() },
             mls_welcomes: PgMlsWelcomeStore { pool: pool.clone() },
             mls_commits: PgMlsCommitStore { pool: pool.clone() },
@@ -162,7 +165,6 @@ impl PgPersistenceStore {
                 pool: pool.clone(),
             },
             notifications: PgNotificationStore { pool },
-            fallback,
         }
     }
 }
@@ -230,11 +232,15 @@ impl IdentityStoreRegistry for PgPersistenceStore {
     }
 
     fn realm_meta(&self) -> &dyn RealmMetaStore {
-        self.fallback.realm_meta()
+        &self.realm_meta
     }
 
     fn messages(&self) -> &dyn MessageStore {
-        self.fallback.messages()
+        &self.messages
+    }
+
+    fn member_identity(&self) -> &dyn MemberIdentityStore {
+        &self.member_identity
     }
 
     fn blobs(&self) -> &dyn BlobStore {
@@ -413,11 +419,11 @@ impl EventProjectionStoreRegistry for PgPersistenceStore {
     }
 
     fn device_keys(&self) -> &dyn DeviceKeyStore {
-        self.fallback.device_keys()
+        &self.device_keys
     }
 
     fn one_time_keys(&self) -> &dyn OneTimeKeyStore {
-        self.fallback.one_time_keys()
+        &self.one_time_keys
     }
 
     fn key_backups(&self) -> &dyn KeyBackupStore {

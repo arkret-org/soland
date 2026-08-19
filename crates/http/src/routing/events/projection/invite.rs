@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{DidCoreId, RealmId};
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
+use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 use arkret_wire::PlaintextDataClassKind;
 use serde_json::Value;
 use soland_services::events::RealmInviteState as RealmInviteRecord;
@@ -504,12 +505,24 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
         tracing::warn!(invite_id = %invite_id, "ak.invite.third_party missing inviter");
         return;
     };
-    let Some(third_party_invite) =
+    let Some(third_party_invite_value) =
         invite_value_field(payload, invite, "third_party_invite").cloned()
     else {
         tracing::warn!(invite_id = %invite_id, "ak.invite.third_party missing third_party_invite");
         return;
     };
+    let third_party_invite =
+        match serde_json::from_value::<ThirdPartyInvite>(third_party_invite_value) {
+            Ok(third_party_invite) => third_party_invite,
+            Err(error) => {
+                tracing::warn!(
+                    invite_id = %invite_id,
+                    %error,
+                    "ak.invite.third_party third_party_invite fails the closed schema"
+                );
+                return;
+            }
+        };
     let expires_at = invite_string_field(payload, invite, "expires_at", "expires_at")
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
         .map(|value| value.with_timezone(&chrono::Utc));
@@ -872,35 +885,29 @@ fn string_field(payload: &serde_json::Map<String, Value>, field: &str) -> Option
         .map(ToOwned::to_owned)
 }
 
-fn third_party_token_commitment(third_party_invite: &Value) -> Option<&str> {
+fn third_party_token_commitment(third_party_invite: &ThirdPartyInvite) -> Option<&str> {
     third_party_invite
-        .get("token_commitment")
-        .and_then(Value::as_str)
+        .token_commitment
+        .as_ref()
+        .map(arkret_identifiers::Hash::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
 }
 
 fn remove_third_party_active_material(
-    third_party_invite: &mut Option<Value>,
+    third_party_invite: &mut Option<ThirdPartyInvite>,
     remove_commitment: bool,
 ) {
     let Some(value) = third_party_invite.as_mut() else {
         return;
     };
-    let Some(object) = value.as_object_mut() else {
-        return;
-    };
-    for key in [
-        "token_salt",
-        "token_salt_id",
-        "lookup_table_ref",
-        "pepper",
-        "pepper_id",
-    ] {
-        object.remove(key);
-    }
+    // The closed `ThirdPartyInvite` schema never admits `token_salt` /
+    // `pepper` members; only the registered handles can be present.
+    value.token_salt_id = None;
+    value.lookup_table_ref = None;
+    value.pepper_id = None;
     if remove_commitment {
-        object.remove("token_commitment");
+        value.token_commitment = None;
     }
 }
 
@@ -935,8 +942,7 @@ fn claim_binding_matches(
     if record
         .third_party_invite
         .as_ref()
-        .and_then(|third_party| third_party.get("verification_service_id"))
-        .and_then(Value::as_str)
+        .map(|third_party| third_party.verification_service_id.as_str())
         != Some(service_id)
     {
         return false;
@@ -1161,11 +1167,24 @@ mod tests {
                     })
                 }),
                 introduction_evidence_digest: None,
-                third_party_invite: third_party.then(|| {
-                    json!({
-                        "kind": "email",
-                        "token_commitment": format!("sha256:{}", "a".repeat(64))
-                    })
+                third_party_invite: third_party.then(|| ThirdPartyInvite {
+                    oob_code_kind:
+                        arkret_models_collaboration::governance::third_party_invite::ThirdPartyInviteOobKind::OfflineToken,
+                    display_name_hint: None,
+                    token_commitment: Some(
+                        arkret_identifiers::Hash::new(format!("sha256:{}", "a".repeat(64)))
+                            .unwrap(),
+                    ),
+                    token_salt_id: Some("salt-1".to_owned()),
+                    token_entropy_bits: Some(128),
+                    lookup_table_ref: None,
+                    pepper_id: None,
+                    max_claims: 1,
+                    verification_service_id: DidCoreId::new(
+                        "ak:did_core:web:verify.example".to_owned(),
+                    )
+                    .unwrap(),
+                    verification_public_key: "did:web:verify.example#invite-key".to_owned(),
                 }),
                 invite_token: "private-token".to_owned(),
                 status: "pending".to_owned(),

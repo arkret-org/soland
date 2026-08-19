@@ -32,11 +32,12 @@ pub(crate) use soland_storage::{
     FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
     FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState,
     FederationOutboxStateDepth, FederationOutboxStore, FederationOutboxTransition,
-    HandleReleaseStore, IdempotencyRecord, IdempotencyStore, IdentityAnchorAccountSlot,
-    IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot,
-    InviteLocatorInsertOutcome, InviteLocatorRecord, InviteLocatorRotateMutation,
-    InviteLocatorStore, InviteReceivePolicyStore, IssueAgentProvisioningAbandonmentChallenge,
-    KeyBackupDeleteChallengeRecord, KeyBackupStore, MessageRecord, MessageStore,
+    HandleClaimEvidenceRecord, HandleReleaseStore, IdempotencyRecord, IdempotencyStore,
+    IdentityAnchorAccountSlot, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
+    IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome, InviteLocatorRecord,
+    InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
+    IssueAgentProvisioningAbandonmentChallenge, KeyBackupDeleteChallengeRecord, KeyBackupStore,
+    MemberIdentityEventRecord, MemberIdentityStore, MessageRecord, MessageStore,
     MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsCommitEpochAdvance,
     MlsCommitEpochRecord, MlsCommitEpochStoreKey, MlsCommitGenesis, MlsCommitStore,
     MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore,
@@ -99,6 +100,7 @@ mod idempotency;
 mod invite_locators;
 mod join_applications;
 mod key_backup;
+mod member_identity;
 mod mls;
 mod moderation;
 mod multisig;
@@ -160,6 +162,7 @@ pub(crate) use idempotency::MemoryIdempotencyStore;
 pub(crate) use invite_locators::MemoryInviteLocatorStore;
 pub(crate) use join_applications::MemoryJoinApplicationStore;
 pub(crate) use key_backup::MemoryKeyBackupStore;
+pub(crate) use member_identity::MemoryMemberIdentityStore;
 pub(crate) use mls::{MemoryMlsCommitStore, MemoryMlsKeyPackageStore, MemoryMlsWelcomeStore};
 pub(crate) use moderation::MemoryModerationStore;
 pub(crate) use multisig::MemoryMultisigPendingStore;

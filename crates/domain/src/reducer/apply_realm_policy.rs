@@ -229,6 +229,31 @@ impl ProjectionState {
                 reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
             };
         }
+        // `encryption-and-audit.md` §2.10 — the linkage is a reducer
+        // invariant, not only an admission preflight: a history_visibility
+        // facet landing on an MLS-backed Realm is rejected unless the
+        // effective content scheme at this point in the unit is
+        // history-capable. The create has already projected its genesis cell
+        // (it is always the unit head), and a policy_bundle earlier in wire
+        // order has already projected its cell, so both reads see the
+        // effective pre-write combination.
+        if kind == arkret_wire::EventKind::RealmHistoryVisibility
+            && self.realm_encryption_profile(&realm_cell_key.0).as_deref() == Some("mls_rfc9420")
+        {
+            let history_visibility = value
+                .get("value")
+                .and_then(Value::as_str)
+                .or_else(|| value.as_str())
+                .unwrap_or("joined");
+            if let Err(reason) = arkret_models_collaboration::governance::history_visibility::validate_history_visibility_content_scheme_values(
+                history_visibility,
+                self.realm_content_scheme(&realm_cell_key.0).as_deref(),
+            ) {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
+        }
         if kind == arkret_wire::EventKind::RealmJoinRule {
             // `realm_join_rule_payload` is `{"value": <enum>}` and the
             // registered projection sets the cell to that whole object, so the

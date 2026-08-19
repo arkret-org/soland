@@ -104,8 +104,8 @@ pub(super) async fn submit_realm_bootstrap_batch(
     };
     let contexts = std::slice::from_ref(&context);
     let mut validated = Vec::with_capacity(envelopes.len());
-    for (index, envelope) in envelopes.iter().enumerate() {
-        super::value::validate_origin_submission_shape(state, session, envelope)?;
+    for (index, (envelope, typed)) in envelopes.iter().zip(&typed_events).enumerate() {
+        super::value::validate_origin_submission_shape(state, session, typed)?;
         validated.push(
             validate_event_envelope_with_context(
                 state,
@@ -202,21 +202,12 @@ pub(super) async fn submit_realm_bootstrap_batch(
     let projected_operations = operations
         .iter()
         .cloned()
-        .zip(envelopes.iter())
-        .map(|(operation, envelope)| {
-            let event = serde_json::from_value::<arkret_wire::Event>(envelope.clone()).map_err(
-                |error| {
-                    SubmitOneError::new(
-                        StatusCode::BAD_REQUEST,
-                        "schema_violation",
-                        format!("Realm bootstrap Event is not a canonical Event: {error}"),
-                    )
-                },
-            )?;
+        .zip(&typed_events)
+        .map(|(operation, event)| {
             // The Realm does not exist yet, so there is no
             // `ak.component.realm.digest_suite.v1` cell to read: genesis
             // projects under the protocol baseline suite.
-            let cell_writes = genesis_cell_write_projector(&event).map_err(|error| {
+            let cell_writes = genesis_cell_write_projector(event).map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::BAD_REQUEST,
                     "reducer_projection_failed",
@@ -243,6 +234,19 @@ pub(super) async fn submit_realm_bootstrap_batch(
         .projections()
         .stage_realm_bootstrap(&projected_operations, context.direct_conversation_founding)
         .map_err(|error| {
+            // `encryption-and-audit.md` §2.10 — the history_visibility ×
+            // content_scheme linkage reason is the wire reason verbatim,
+            // matching the single-Event admission path
+            // (`operation_policy_reason_code`).
+            if error.reason
+                == arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+            {
+                return SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    "failed_precondition",
+                    error.reason,
+                );
+            }
             let code = match error.reason.as_str() {
                 reason @ ("realm_authority_root_missing" | "realm_authority_root_conflict") => {
                     reason
@@ -278,26 +282,21 @@ pub(super) async fn submit_realm_bootstrap_batch(
         )
     })?;
     let mut accepted_envelopes = Vec::with_capacity(envelopes.len());
-    for (envelope, parsed) in envelopes.iter().cloned().zip(&validated) {
-        accepted_envelopes.push(
-            super::value::accepted_event_envelope(state, session, envelope, parsed, received_at)
-                .await?
-                .0,
-        );
+    let mut accepted_typed_events = Vec::with_capacity(envelopes.len());
+    for ((envelope, typed), parsed) in envelopes.iter().cloned().zip(&typed_events).zip(&validated)
+    {
+        let (accepted_typed, accepted_envelope, _) = super::value::accepted_event_envelope(
+            state,
+            session,
+            envelope,
+            typed.clone(),
+            parsed,
+            received_at,
+        )
+        .await?;
+        accepted_envelopes.push(accepted_envelope);
+        accepted_typed_events.push(accepted_typed);
     }
-    let accepted_typed_events = accepted_envelopes
-        .iter()
-        .cloned()
-        .map(|envelope| {
-            serde_json::from_value::<arkret_wire::Event>(envelope).map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("accepted Realm bootstrap Event cannot be decoded: {error}"),
-                )
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
     let records = validated
         .iter()
         .zip(accepted_envelopes.iter().cloned())

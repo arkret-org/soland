@@ -468,6 +468,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    device_keys (actor_id, device_id) {
+        actor_id -> Text,
+        device_id -> Text,
+        payload -> Jsonb,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     device_revocation_linearization_heads (principal_id, principal_server_id, device_id, target_device_authorize_event_id, target_device_generation_ref) {
         principal_id -> Text,
         principal_server_id -> Text,
@@ -745,6 +754,47 @@ diesel::table! {
 }
 
 diesel::table! {
+    member_identity_events (event_id) {
+        event_id -> Text,
+        realm_id -> Text,
+        actor_id -> Text,
+        segment -> Text,
+        payload_digest -> Text,
+        replaces -> Jsonb,
+        raw_event -> Jsonb,
+    }
+}
+
+diesel::table! {
+    member_identity_handle_claims (subject_id, digest) {
+        digest -> Text,
+        subject_id -> Text,
+        issuer -> Text,
+        issuer_service_id -> Nullable<Text>,
+        audience -> Nullable<Text>,
+        binding_state -> Text,
+        visibility -> Nullable<Text>,
+        expires_at -> Nullable<Timestamptz>,
+        revoked -> Bool,
+        envelope -> Jsonb,
+    }
+}
+
+diesel::table! {
+    messages (pk) {
+        pk -> Int8,
+        event_id -> Text,
+        message_id -> Text,
+        realm_id -> Text,
+        sender -> Text,
+        thread_id -> Text,
+        content -> Jsonb,
+        encrypted -> Bool,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     mls_commits (id) {
         id -> Uuid,
         effective_scope_kind -> Text,
@@ -866,9 +916,17 @@ diesel::table! {
         projection_action -> Nullable<Text>,
         projection_data -> Nullable<Jsonb>,
         projection_position -> Int8,
-        read_at -> Nullable<Timestamptz>,
-        created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    one_time_keys (actor_id, device_id, position) {
+        actor_id -> Text,
+        device_id -> Text,
+        position -> Int4,
+        key -> Jsonb,
+        created_at -> Timestamptz,
     }
 }
 
@@ -1110,6 +1168,29 @@ diesel::table! {
         expires_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    realm_meta (realm_id) {
+        realm_id -> Text,
+        owner -> Text,
+        deleted -> Bool,
+        discoverability -> Text,
+        history_visibility -> Text,
+        history_sharing_policy -> Nullable<Jsonb>,
+        history_sharing_policy_digest -> Nullable<Text>,
+        preview_policy -> Nullable<Jsonb>,
+        preview_policy_digest -> Nullable<Text>,
+        asset_privacy_policy -> Nullable<Jsonb>,
+        asset_privacy_policy_digest -> Nullable<Text>,
+        encryption_profile -> Nullable<Text>,
+        plaintext_visible_services -> Jsonb,
+        plaintext_visible_service_classes -> Jsonb,
+        minimal_metadata_realm -> Bool,
+        aad_visibility_ceiling -> Text,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
     }
 }
 
@@ -1571,6 +1652,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     device_revocation_linearization_heads,
     device_revocation_targets,
     devices,
+    device_keys,
     event_batch_receipts,
     event_batch_receipt_events,
     event_collision_variants,
@@ -1586,6 +1668,9 @@ diesel::allow_tables_to_appear_in_same_query!(
     join_application_idempotency,
     join_applications,
     key_backups,
+    member_identity_events,
+    member_identity_handle_claims,
+    messages,
     mls_commits,
     mls_key_packages,
     mls_welcomes,
@@ -1593,6 +1678,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     moderation_reports,
     multisig_pending,
     notifications,
+    one_time_keys,
     organization_policies,
     organizations,
     peer_keypackage_claims,
@@ -1609,6 +1695,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     push_bridge_cache,
     push_devices,
     realm_invites,
+    realm_meta,
     realm_organizations,
     realm_owning_organizations,
     recovery_policies,

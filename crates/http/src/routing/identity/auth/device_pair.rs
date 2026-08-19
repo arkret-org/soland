@@ -225,8 +225,9 @@ async fn authorize_account_device_pair(
             state,
             session,
             body.authorize_event.clone(),
-            pairing_commit,
-            true,
+            crate::routing::events::event_log::DevicePairingAdmission {
+                commit_authorization: pairing_commit,
+            },
         )
         .await
         .map_err(|error| {

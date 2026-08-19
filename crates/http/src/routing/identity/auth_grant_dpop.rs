@@ -473,9 +473,13 @@ fn session_binding_from_introspection(
         verification_method,
     } = &grant.holder_binding
     {
-        if agent_id != &grant.subject || grant.device_id.as_ref() != Some(device_id) {
+        // The wire DTO closes agent grants to the self-contained typed holder
+        // binding: top-level `device_id`/`device_binding` are the human-device
+        // shape and MUST be absent, so the binding itself is the only device
+        // authority to check.
+        if agent_id != &grant.subject {
             return Err(unauthenticated(
-                "agent holder binding does not match introspected subject/device",
+                "agent holder binding does not match the introspected subject",
             ));
         }
         return Ok((
@@ -880,12 +884,15 @@ mod tests {
     #[test]
     fn agent_holder_binding_materializes_closed_authorization_context() {
         let mut grant = test_introspection_grant();
-        let device_id = grant.device_id.clone().unwrap();
+        // Wire-valid agent grants carry no top-level human device metadata;
+        // the typed holder binding is self-contained.
+        grant.device_id = None;
+        grant.device_binding = None;
         grant.subject = DidCoreId::new("ak:did_core:web:agent.example").unwrap();
         grant.scopes = vec!["ak.self.events.read.scan".to_owned()];
         grant.holder_binding = SessionGrantHolderBinding::AgentRuntime {
             agent_id: DidCoreId::new("ak:did_core:web:agent.example").unwrap(),
-            device_id,
+            device_id: DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap(),
             agent_key_authorization_ref: arkret_identifiers::EventId::new(
                 "ak:event:AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
             )

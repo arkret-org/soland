@@ -56,7 +56,7 @@ impl ProjectionState {
         let relation_id =
             arkret_identifiers::RelationId::from_event_id(&operation.context.event_id).to_string();
         let relation_kind = relation
-            .get("kind")
+            .get("relation_kind")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_owned();
@@ -509,7 +509,7 @@ impl ProjectionState {
         }
         let relation = relation_create_object(&operation.payload);
         let relation_kind = relation
-            .get("kind")
+            .get("relation_kind")
             .and_then(Value::as_str)
             .unwrap_or_default();
         let relation_realm = operation.realm_id.as_str();
@@ -559,7 +559,7 @@ impl ProjectionState {
         if kind == arkret_wire::EventKind::RelationCreate {
             let relation = relation_create_object(&operation.payload);
             let relation_kind = relation
-                .get("kind")
+                .get("relation_kind")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             Self::check_relation_direct_write(
@@ -1010,7 +1010,7 @@ mod cross_realm_relation_tests {
             .unwrap(),
             arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
             arkret_wire::EventKind::RelationCreate.as_str(),
-            json!({"relation": {"kind": relation_kind, "from_ref": from, "to_ref": to}}),
+            json!({"relation": {"relation_kind": relation_kind, "from_ref": from, "to_ref": to}}),
         )
     }
 
@@ -1044,7 +1044,7 @@ mod cross_realm_relation_tests {
             arkret_wire::EventKind::RelationCreate.as_str(),
             json!({
                 "relation": {
-                    "kind": relation_kind,
+                    "relation_kind": relation_kind,
                     "from_ref": from,
                     "to_ref": to
                 },
@@ -1473,7 +1473,7 @@ mod cross_realm_relation_tests {
             arkret_wire::EventKind::RelationCreate.as_str(),
             json!({
                 "relation": {
-                    "kind": "contains",
+                    "relation_kind": "contains",
                     "from_ref": STRAND_A,
                     "to_ref": STRAND_A2,
                     "scope_circle_id": CIRCLE_A

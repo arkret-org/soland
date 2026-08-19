@@ -1,7 +1,11 @@
-//! Account lifecycle handlers: deactivate / erase + erasure-receipt
-//! and state-change audit helpers. Split out of `account.rs` (SOL-07-002) as a
-//! cohesive unit; external paths preserved via `pub(crate) use` re-export in
-//! the parent module.
+//! Account lifecycle state transitions, deactivation fanout and
+//! erasure-execution / erasure-receipt helpers. Split out of `account.rs`
+//! (SOL-07-002) as a cohesive unit; external paths preserved via
+//! `pub(crate) use` re-export in the parent module. There is deliberately no
+//! self-service deactivate route: operation-registry has no
+//! `ak.self.account.*deactivate*` operation, and account-lifecycle.md §10
+//! assigns deactivation initiation to the admin/support surface
+//! (`/_soland/admin/accounts/{did}/deactivate`).
 
 use arkret_models_collaboration::events_payloads::event_wire::ErasureTrigger;
 use arkret_models_collaboration::governance::erasure::{
@@ -203,7 +207,8 @@ async fn run_account_deactivation_fanout(
     let (to_device_messages_dropped, push_routes_revoked) =
         purge_delivery_state_for_actor(state, did).await?;
     let keypackages_retired = retire_actor_keypackages(state, did).await?;
-    let identity_link_cache_invalidated = state.invalidate_cached_handle_claims_for_subject(did);
+    let identity_link_cache_invalidated =
+        state.invalidate_cached_handle_claims_for_subject(did).await;
     let capability_cache_invalidated = state
         .authorization()
         .mark_projected_grants_revoked_for_subject(did, Some(state.service_id()));
@@ -457,65 +462,6 @@ pub(crate) fn deactivation_peer_service_targets_for_actor(
             })
         })
         .collect()
-}
-
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.account.deactivate",
-    tags("identity")
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.deactivate"))]
-pub(super) async fn deactivate_account(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AccountDeactivateOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
-    return Err(AppError::new(
-        soland_http::error::ErrorCode::FailedPrecondition,
-        "hard erasure must be initiated by an accepted erasure_pending AccountStatusRecord",
-    ));
-    #[allow(unreachable_code)]
-    let session = _session;
-    let actor = session.actor.clone();
-    let change = set_account_lifecycle_state(
-        state,
-        &actor,
-        "deactivated",
-        &actor,
-        Some("user_deactivate".to_owned()),
-    )
-    .await?;
-    json_ok(AccountDeactivateOutcome {
-        did: change.did,
-        previous_state: change.previous_state,
-        state: change.state,
-        deactivated_at: arkret_canonical::format_timestamp_canonical(change.changed_at),
-        sessions_revoked: change.sessions_revoked,
-        devices_revoked: change.devices_revoked,
-        applet_delegated_sessions_revoked: change.applet_delegated_sessions_revoked,
-        keypackages_retired: change.keypackages_retired,
-        push_routes_revoked: change.push_routes_revoked,
-        to_device_messages_dropped: change.to_device_messages_dropped,
-        identity_link_cache_invalidated: change.identity_link_cache_invalidated,
-        capability_cache_invalidated: change.capability_cache_invalidated,
-    })
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct AccountDeactivateOutcome {
-    pub did: String,
-    pub previous_state: String,
-    pub state: String,
-    pub deactivated_at: String,
-    pub sessions_revoked: usize,
-    pub devices_revoked: usize,
-    pub applet_delegated_sessions_revoked: usize,
-    pub keypackages_retired: usize,
-    pub push_routes_revoked: usize,
-    pub to_device_messages_dropped: usize,
-    pub identity_link_cache_invalidated: usize,
-    pub capability_cache_invalidated: usize,
 }
 
 fn deterministic_erasure_receipt_id(

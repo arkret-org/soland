@@ -1,6 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
+pub use soland_storage::{
+    HandleClaimEvidenceRecord, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
+    MemberIdentitySubjectKey,
+};
 
 /// R3.1/R3.2 (arkret-spec @ b56cab1) — Realm-scoped MemberIdentity event
 /// registry. Stores every accepted `ak.member.identity.update` event by
@@ -15,8 +19,14 @@ use serde_json::Value;
 /// (`sync::roster_members_for_realm`) reads the resulting snapshot to
 /// emit `MemberRosterEntry`.
 ///
-/// Storage is in-memory for now; durable persistence (alongside the
-/// other event-log surfaces) lands when the MID schema migration ships.
+/// This registry is the synchronous in-memory projection surface; the
+/// durable copy lives in the `member_identity_events` /
+/// `member_identity_handle_claims` Pg tables behind
+/// [`soland_storage::MemberIdentityStore`]. Writers
+/// (`AppState::record_member_identity_update` / `cache_handle_claim` /
+/// `invalidate_cached_handle_claims_for_subject`) persist through that store
+/// before touching this registry, and `AppState::hydrate` rebuilds the
+/// registry from it on startup so restart loses nothing.
 /// Plaintext Ed25519 `MemberIdentityProof` verification runs on the
 /// event-ingest path before records reach this registry. Encrypted
 /// carriers and non-Ed25519 proof algorithms are currently refused
@@ -36,63 +46,11 @@ pub struct MemberIdentityRegistry {
     handle_claims_by_subject: BTreeMap<String, Vec<HandleClaimEvidenceRecord>>,
 }
 
-/// Cell subject key for [`MemberIdentityRegistry`]. Mirrors the
-/// composite `(payload.realm_id, payload.actor_id, payload.segment)` cell
-/// subject from `event-kind-registry.json`.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct MemberIdentitySubjectKey {
-    pub realm_id: String,
-    pub actor_id: String,
-    pub segment: String,
-}
-
-/// One stored `ak.member.identity.update` event.
-#[derive(Clone, Debug)]
-pub struct MemberIdentityEventRecord {
-    pub event_id: String,
-    pub subject: MemberIdentitySubjectKey,
-    /// SHA-256 over RFC 8785 JCS canonical JSON of the full
-    /// `payload.identity_payload` carrier object (the value goes into
-    /// any subsequent event's `payload.replaces[].payload_digest`).
-    pub payload_digest: String,
-    /// `payload.replaces[]` references as observed on the wire. The
-    /// reducer keeps the raw list so the effective-set filter can match
-    /// each edge's `payload_digest` against the referenced event's stored
-    /// `payload_digest` at projection time (mismatched / cross-subject
-    /// references are dropped as no-op edges per MID-2).
-    pub replaces: Vec<MemberIdentityReplacementEdge>,
-    /// Original Event envelope as received. MID-5: soland MUST store the
-    /// envelope verbatim; no query-time re-encryption, no projection
-    /// rewrite.
-    pub raw_event: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct HandleClaimEvidenceRecord {
-    pub digest: String,
-    pub subject_id: String,
-    pub issuer: String,
-    pub issuer_service_id: Option<String>,
-    pub audience: Option<String>,
-    pub binding_state: String,
-    pub visibility: Option<String>,
-    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub revoked: bool,
-    pub envelope: Value,
-}
-
 #[derive(Clone, Debug)]
 pub struct HandleClaimDigestInput {
     pub claim_digest: String,
     pub binding_state: String,
     pub expires_at: Option<String>,
-}
-
-/// One replacement edge resolved from `payload.replaces[]`.
-#[derive(Clone, Debug)]
-pub struct MemberIdentityReplacementEdge {
-    pub event_id: String,
-    pub payload_digest: String,
 }
 
 pub type EffectiveIdentityEntry = arkret_models_identity::EffectiveIdentityEntry;
@@ -145,66 +103,21 @@ impl MemberIdentityRegistry {
         self.events.insert(event_id, record);
     }
 
-    /// Insert one canonical signed handle-claim envelope into the local
-    /// evidence cache. The digest is always SHA-256 over RFC 8785 canonical
-    /// JSON of the full envelope as stored, including proofs/signatures.
-    pub fn upsert_handle_claim_envelope(&mut self, envelope: Value) -> Option<String> {
-        let subject_id = envelope.get("subject")?.as_str()?.to_owned();
-        let issuer = envelope.get("issuer")?.as_str()?.to_owned();
-        let digest = canonical_digest(&envelope, "", subject_id.as_str(), "handle_claim_digest")?;
-        let binding_state = envelope
-            .get("binding_state")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_owned();
-        let audience = envelope
-            .get("audience")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let issuer_service_id = envelope
-            .get("issuer_service_id")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let visibility = envelope
-            .get("visibility")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let expires_at = envelope
-            .get("expires_at")
-            .and_then(Value::as_str)
-            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-            .map(|value| value.with_timezone(&chrono::Utc));
-        let revoked = envelope
-            .get("revoked")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-            || envelope.get("revoked_at").is_some()
-            || binding_state == "revoked";
-        let record = HandleClaimEvidenceRecord {
-            digest: digest.clone(),
-            subject_id: subject_id.clone(),
-            issuer,
-            issuer_service_id,
-            audience,
-            binding_state,
-            visibility,
-            expires_at,
-            revoked,
-            envelope,
-        };
-        let bucket = self.handle_claims_by_subject.entry(subject_id).or_default();
-        if let Some(existing) = bucket.iter_mut().find(|existing| existing.digest == digest) {
+    /// Insert one already-digested claim record. The durable write-through
+    /// path and startup hydration both land here.
+    pub fn restore_handle_claim(&mut self, record: HandleClaimEvidenceRecord) {
+        let bucket = self
+            .handle_claims_by_subject
+            .entry(record.subject_id.clone())
+            .or_default();
+        if let Some(existing) = bucket
+            .iter_mut()
+            .find(|existing| existing.digest == record.digest)
+        {
             *existing = record;
         } else {
             bucket.push(record);
             bucket.sort_by(|a, b| a.digest.cmp(&b.digest));
-        }
-        Some(digest)
-    }
-
-    pub fn upsert_handle_claims_from_identity_payload(&mut self, identity_payload: &Value) {
-        for claim in handle_claim_envelopes_in_identity_payload(identity_payload) {
-            let _ = self.upsert_handle_claim_envelope(claim.clone());
         }
     }
 
@@ -224,9 +137,10 @@ impl MemberIdentityRegistry {
 
     /// Snapshot every locally-cached handle-claim evidence record keyed by
     /// claim `subject`. Drives the operator handles admin surface
-    /// (`GET /_soland/admin/handles`); the durable handle CRDT projection
-    /// is not yet wired, so this local evidence cache is the authoritative
-    /// read source until it lands.
+    /// (`GET /_soland/admin/handles`). The cache is durable through the
+    /// `MemberIdentityStore` write-through; the directory-side handle CRDT
+    /// projection is still not wired, so this evidence cache remains the
+    /// authoritative read source until it lands.
     pub fn snapshot_handle_claims(
         &self,
     ) -> std::collections::BTreeMap<String, Vec<HandleClaimEvidenceRecord>> {
@@ -384,7 +298,58 @@ impl MemberIdentityRegistry {
     }
 }
 
-fn handle_claim_envelopes_in_identity_payload(identity_payload: &Value) -> Vec<&Value> {
+/// Build the storable evidence record for one canonical signed handle-claim
+/// envelope. The digest is always SHA-256 over RFC 8785 canonical JSON of the
+/// full envelope as stored, including proofs/signatures.
+pub(crate) fn handle_claim_record_from_envelope(
+    envelope: &Value,
+) -> Option<HandleClaimEvidenceRecord> {
+    let subject_id = envelope.get("subject")?.as_str()?.to_owned();
+    let issuer = envelope.get("issuer")?.as_str()?.to_owned();
+    let digest = canonical_digest(envelope, "", subject_id.as_str(), "handle_claim_digest")?;
+    let binding_state = envelope
+        .get("binding_state")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_owned();
+    let audience = envelope
+        .get("audience")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let issuer_service_id = envelope
+        .get("issuer_service_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let visibility = envelope
+        .get("visibility")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let expires_at = envelope
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc));
+    let revoked = envelope
+        .get("revoked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || envelope.get("revoked_at").is_some()
+        || binding_state == "revoked";
+    Some(HandleClaimEvidenceRecord {
+        digest,
+        subject_id,
+        issuer,
+        issuer_service_id,
+        audience,
+        binding_state,
+        visibility,
+        expires_at,
+        revoked,
+        envelope: envelope.clone(),
+    })
+}
+
+pub(crate) fn handle_claim_envelopes_in_identity_payload(identity_payload: &Value) -> Vec<&Value> {
     let mut out = Vec::new();
     if let Some(claims) = identity_payload
         .get("handle_claims")

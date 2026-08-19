@@ -36,6 +36,14 @@ async fn prepare_ghost_event(
     let parsed =
         validate_event_envelope_with_context(state, session, &envelope, &[], Some(admission))
             .await?;
+    let typed =
+        serde_json::from_value::<arkret_wire::Event>(envelope.clone()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("ghost provisioning Event envelope is invalid: {error}"),
+            )
+        })?;
     let service = state.event_queries();
     if let Some(existing) = service
         .canonical_event(parsed.event_id.as_str())
@@ -130,7 +138,7 @@ async fn prepare_ghost_event(
     let mut operation = projection_operation_from_event(&parsed, &envelope);
     // The reducer preflight below reads the receiver's own registry-derived
     // writes; v1 has no producer `effects[]` to take them from.
-    let (projected_cell_writes, _) = derive_submit_cell_writes(state, &parsed, &envelope).await?;
+    let (projected_cell_writes, _) = derive_submit_cell_writes(state, &parsed, &typed).await?;
     if let Some(operation) = operation.as_ref() {
         let mut aggregate_operations = preceding_operations.to_vec();
         aggregate_operations.push(operation.clone());
@@ -172,9 +180,7 @@ async fn prepare_ghost_event(
     if let Some(operation) = operation.as_mut() {
         stamp_projection_operation_received_at(operation, received_at);
     }
-    let control_event_for_proposal = serde_json::from_value::<arkret_wire::Event>(envelope.clone())
-        .ok()
-        .filter(|event| event.seal_basis.is_some());
+    let control_event_for_proposal = Some(typed.clone()).filter(|event| event.seal_basis.is_some());
     let control_proposal_ack = if let Some(event) = control_event_for_proposal.as_ref() {
         let realm_id = parsed.realm_id.clone();
         let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());

@@ -9,7 +9,7 @@
 
 use arkret_identifiers::{EventId, Hash, RealmId};
 use arkret_models_collaboration::events_payloads::moderation::{
-    FrankingProof, FrankingProofEventTimeAnchor,
+    FrankingProof, FrankingProofEventTimeAnchor, ModerationReportPayload,
 };
 use arkret_wire::{EventKind, ScopeRef};
 use salvo::oapi::endpoint;
@@ -31,25 +31,14 @@ pub(super) fn protocol_router() -> Router {
 
 pub(crate) async fn persist_mimi_facade_moderation_report_event(
     state: &AppState,
-    realm_id: &str,
-    reporter: &str,
-    target_ref: &str,
-    payload: Value,
+    payload: ModerationReportPayload,
 ) -> Result<String, AppError> {
-    if payload.get("realm_id").and_then(Value::as_str) != Some(realm_id)
-        || payload.get("reporter").and_then(Value::as_str) != Some(reporter)
-        || payload.get("target_ref").and_then(Value::as_str) != Some(target_ref)
-    {
-        return Err(AppError::internal(
-            "moderation Event payload disagrees with its admission binding",
-        ));
-    }
     let service_event_lock = crate::routing::events::event_log::service_event_authoring_lock();
     let _service_event_guard = service_event_lock.lock().await;
     let service_actor = state.service_id().as_str();
     let records = state
         .event_queries()
-        .canonical_events_for_realm_actor(realm_id, service_actor)
+        .canonical_events_for_realm_actor(payload.realm_id.as_str(), service_actor)
         .await
         .map_err(|error| {
             AppError::internal(format!("moderation Event frontier lookup failed: {error}"))
@@ -67,8 +56,7 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
         })
         .transpose()?
         .unwrap_or(0);
-    let realm_id = RealmId::new(realm_id.to_owned())
-        .map_err(|error| AppError::internal(format!("moderation Realm id invalid: {error}")))?;
+    let realm_id = payload.realm_id.clone();
     let service_did = state.service_resolution_commitment().full_id.clone();
     let service_actor_id = arkret_wire::DidCoreId::from(
         arkret_wire::project_full_id_to_core_id(&service_did).map_err(|error| {
@@ -78,10 +66,7 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
     let created_at = now();
     let hlc = arkret_identifiers::Hlc::new(state.hlc().now())
         .map_err(|error| AppError::internal(format!("moderation HLC invalid: {error}")))?;
-    let typed_payload: arkret_models_collaboration::events_payloads::moderation::ModerationReportPayload =
-        serde_json::from_value(payload).map_err(|error| {
-            AppError::internal(format!("moderation Event payload invalid: {error}"))
-        })?;
+    let typed_payload = payload;
     typed_payload
         .validate_provenance(&service_actor_id)
         .map_err(AppError::param_invalid)?;
@@ -102,6 +87,8 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
             .unwrap_or_else(|| arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             });
+    let reporter = typed_payload.reporter.as_str().to_owned();
+    let target_ref = typed_payload.target_ref.clone();
     let mut event =
         arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::SelfModerationReport>::new(
             event_scope,
@@ -189,8 +176,8 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
         &session,
         envelope,
         realm_id.as_str(),
-        reporter,
-        target_ref,
+        &reporter,
+        &target_ref,
     )
     .await
     .map_err(|error| {

@@ -801,9 +801,7 @@ fn invite_record_to_sdk(
             .map_err(|error| AppError::internal(error.to_string()))?,
         invite_delivery_target,
         introduction_evidence_digest,
-        third_party_invite: invite
-            .third_party_invite
-            .and_then(|value| serde_json::from_value(value).ok()),
+        third_party_invite: invite.third_party_invite,
         capability_grant_refs: Vec::new(),
         expires_at,
         state: invite_state_from_record(&invite.status),

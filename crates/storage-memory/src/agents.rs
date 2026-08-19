@@ -110,11 +110,6 @@ pub(crate) struct MemoryAgentStore {
 }
 impl MemoryAgentStore {
     #[cfg(not(feature = "fault-injection"))]
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
-    #[cfg(not(feature = "fault-injection"))]
     pub(crate) fn with_events(
         events: Arc<Mutex<std::collections::BTreeMap<String, CanonicalEventRecord>>>,
     ) -> Self {

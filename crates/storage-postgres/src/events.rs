@@ -7,11 +7,11 @@ use super::{
     DeviceInventoryRecord, DirectConversationFoundingCommitOutcome,
     DirectConversationFoundingSlotRecord, EventBatchReceipt, EventStore, ExistsRow,
     FederationOutboxRecord, IdentityAnchorAccountSlot, IdentityAnchorCommitOutcome,
-    IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, Jsonb, MaxSeqRow, Nullable,
-    OptionalExtension, PeerEventsPageQuery, PersistenceError, PersistenceResult, PgPool,
-    PgTransactionError, PublicationEvidenceRecord, QueryableByName, RealmEventStats, RunQueryDsl,
-    SqlUuid, Text, Timestamptz, Uuid, Value, async_trait, identity_anchor_slot_conflicts, ids,
-    pg_conn, sql_query,
+    IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, Jsonb, MaxSeqRow, MessageRecord,
+    MessageStore, Nullable, OptionalExtension, PeerEventsPageQuery, PersistenceError,
+    PersistenceResult, PgPool, PgTransactionError, PublicationEvidenceRecord, QueryableByName,
+    RealmEventStats, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid, Value, async_trait,
+    identity_anchor_slot_conflicts, ids, pg_conn, sql_query,
 };
 use crate::federation::{
     FederationOutboxRow, insert_federation_outbox_row, qualified_outbox_columns,
@@ -1558,5 +1558,148 @@ mod identity_anchor_receipt_tests {
     fn reanchor_conflict_cannot_attach_control_proposal_acks() {
         assert!(identity_anchor_receipt_cardinality_is_valid(2, 0, true));
         assert!(!identity_anchor_receipt_cardinality_is_valid(2, 2, true));
+    }
+}
+
+const MESSAGE_COLUMNS: &str =
+    "event_id, message_id, realm_id, sender, thread_id, content, encrypted, created_at";
+
+/// PostgreSQL-backed message projection. Keyed by the canonical Event id so
+/// replayed projection writes dedup idempotently.
+pub struct PgMessageStore {
+    pub pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct MessageRow {
+    #[diesel(sql_type = Text)]
+    event_id: String,
+    #[diesel(sql_type = Text)]
+    message_id: String,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    sender: String,
+    #[diesel(sql_type = Text)]
+    thread_id: String,
+    #[diesel(sql_type = Jsonb)]
+    content: Value,
+    #[diesel(sql_type = Bool)]
+    encrypted: bool,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<MessageRow> for MessageRecord {
+    fn from(row: MessageRow) -> Self {
+        Self {
+            event_id: row.event_id,
+            message_id: row.message_id,
+            realm_id: row.realm_id,
+            sender: row.sender,
+            thread_id: row.thread_id,
+            content: row.content,
+            encrypted: row.encrypted,
+            created_at: row.created_at,
+        }
+    }
+}
+
+#[async_trait]
+impl MessageStore for PgMessageStore {
+    async fn get(&self, event_id: &str) -> PersistenceResult<Option<MessageRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(&format!(
+            "SELECT {MESSAGE_COLUMNS} FROM messages WHERE event_id = $1"
+        ))
+        .bind::<Text, _>(event_id)
+        .get_result::<MessageRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(MessageRecord::from))
+        .map_err(PersistenceError::database)
+    }
+
+    async fn put(&self, record: &MessageRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        // The projection layer dedups on the canonical Event id before
+        // writing; DO NOTHING keeps a replayed projection idempotent instead
+        // of failing on the uniqueness constraint.
+        sql_query(
+            "INSERT INTO messages \
+             (event_id, message_id, realm_id, sender, thread_id, content, encrypted, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (event_id) DO NOTHING",
+        )
+        .bind::<Text, _>(&record.event_id)
+        .bind::<Text, _>(&record.message_id)
+        .bind::<Text, _>(&record.realm_id)
+        .bind::<Text, _>(&record.sender)
+        .bind::<Text, _>(&record.thread_id)
+        .bind::<Jsonb, _>(&record.content)
+        .bind::<Bool, _>(record.encrypted)
+        .bind::<Timestamptz, _>(record.created_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::database)
+    }
+
+    async fn list_for_realm(
+        &self,
+        realm_id: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<MessageRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(&format!(
+            "SELECT {MESSAGE_COLUMNS} FROM messages WHERE realm_id = $1 \
+             ORDER BY created_at DESC, pk DESC LIMIT $2"
+        ))
+        .bind::<Text, _>(realm_id)
+        .bind::<BigInt, _>(limit as i64)
+        .load::<MessageRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(MessageRecord::from).collect())
+        .map_err(PersistenceError::database)
+    }
+
+    async fn list_for_thread(
+        &self,
+        thread_id: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<MessageRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        // Chronological order (oldest first) so thread readers get a natural
+        // conversation timeline; the caller decides whether to reverse.
+        sql_query(&format!(
+            "SELECT {MESSAGE_COLUMNS} FROM messages WHERE thread_id = $1 \
+             ORDER BY created_at ASC, pk ASC LIMIT $2"
+        ))
+        .bind::<Text, _>(thread_id)
+        .bind::<BigInt, _>(limit as i64)
+        .load::<MessageRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(MessageRecord::from).collect())
+        .map_err(PersistenceError::database)
+    }
+
+    async fn delete(&self, event_id: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("DELETE FROM messages WHERE event_id = $1")
+            .bind::<Text, _>(event_id)
+            .execute(&mut *conn)
+            .await
+            .map(|_| ())
+            .map_err(PersistenceError::database)
     }
 }

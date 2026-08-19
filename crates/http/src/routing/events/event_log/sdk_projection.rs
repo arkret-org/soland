@@ -164,6 +164,24 @@ pub(in crate::routing) fn projection_operation_from_event(
     projection_operation_from_wire(&parsed.kind, parsed.event_id.as_str(), envelope)
 }
 
+/// Pre-derive the batch-visible Operation for one not-yet-validated submit
+/// envelope.
+///
+/// The sibling-policy scan (`operations::policy_extra`) is defined over the
+/// whole submit batch, but per-Event admission only materializes its own
+/// Operation after envelope validation. Batch surfaces run the same
+/// Event -> Operation contract on each raw envelope up front so the lane can
+/// hand the full sibling set to those validators. An envelope that cannot map
+/// yet is simply absent from the scan and fails its own admission on its
+/// turn, so this never widens what a single Event may pass.
+pub(in crate::routing) fn projection_operation_from_envelope(
+    envelope: &Value,
+) -> Option<Operation> {
+    let kind = envelope.get("kind").and_then(Value::as_str)?;
+    let event_id = envelope.get("event_id").and_then(Value::as_str)?;
+    projection_operation_from_wire(kind, event_id, envelope)
+}
+
 /// The single Event -> `Operation` mapper.
 ///
 /// It is deliberately a function of the accepted wire envelope alone. The

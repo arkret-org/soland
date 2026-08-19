@@ -331,7 +331,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
 /// ingest before projection; encrypted carriers and non-Ed25519 proof
 /// algorithms are refused fail-closed instead of being shape-accepted.
 /// Reducer-shape validation IS real per MID-2.
-pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
+pub async fn project_member_identity_update(state: &AppState, operation: &Operation) {
     use crate::state::{
         MemberIdentityEventRecord, MemberIdentityReplacementEdge, MemberIdentitySubjectKey,
     };
@@ -458,5 +458,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
         replaces,
         raw_event,
     };
-    state.record_member_identity_update(record, identity_payload);
+    state
+        .record_member_identity_update(record, identity_payload)
+        .await;
 }

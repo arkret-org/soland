@@ -1202,6 +1202,28 @@ impl ProjectionState {
         } else {
             None
         };
+        // `encryption-and-audit.md` §2.10 — the history_visibility ×
+        // content_scheme linkage MUST hold on every write surface, genesis
+        // included. The create object declares all three inputs itself, so the
+        // effective combination is evaluated straight from the signed payload
+        // before any state mutation.
+        if kind == arkret_wire::EventKind::RealmCreate
+            && let Some(object) = payload_object
+            && object.get("encryption_profile").and_then(Value::as_str) == Some("mls_rfc9420")
+        {
+            let history_visibility = object
+                .get("history_visibility")
+                .and_then(Value::as_str)
+                .unwrap_or("joined");
+            if let Err(reason) = arkret_models_collaboration::governance::history_visibility::validate_history_visibility_content_scheme_values(
+                history_visibility,
+                object.get("content_scheme").and_then(Value::as_str),
+            ) {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
+        }
         let creator = if kind == arkret_wire::EventKind::RealmCreate {
             registered_authority_root_write(self.projected_cell_writes()).and_then(|value| {
                 value

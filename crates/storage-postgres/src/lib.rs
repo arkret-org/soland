@@ -26,7 +26,7 @@ pub(crate) use soland_storage::{
     ConsentCellStore, ContactRecord, ContactStore, ContactVerifiedMirrorRecord,
     ContactVerifiedMirrorStore, ControlProposalAuthorityAckRecord,
     ControlProposalAuthorityAckStore, ControlProposalDecisionCommitOutcome, CursorRevocation,
-    DeviceInventoryRecord, DeviceInventoryStore, DeviceMessageBatchCommitOutcome,
+    DeviceInventoryRecord, DeviceInventoryStore, DeviceKeyStore, DeviceMessageBatchCommitOutcome,
     DeviceMessageBatchInspection, DeviceMessageBatchRecord, DeviceMessageIntentRecord,
     DeviceMessageRecord, DeviceMessageStore, DevicePairingRecord, DevicePairingStore,
     DeviceRevocationCleanupIntent, DeviceRevocationGateLinearization,
@@ -39,24 +39,27 @@ pub(crate) use soland_storage::{
     FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
     FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState,
     FederationOutboxStateDepth, FederationOutboxStore, FederationOutboxTransition,
-    HandleReleaseStore, IdempotencyRecord, IdempotencyStore, IdentityAnchorAccountSlot,
-    IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot,
-    InviteLocatorInsertOutcome, InviteLocatorRecord, InviteLocatorRotateMutation,
-    InviteLocatorStore, InviteReceivePolicyStore, IssueAgentProvisioningAbandonmentChallenge,
-    JoinApplicationCommand, JoinApplicationCommandOutcome, JoinApplicationMutation,
-    JoinApplicationRecord, JoinApplicationStore, KeyBackupDeleteChallengeRecord, KeyBackupStore,
-    MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsCommitEpochAdvance,
+    HandleClaimEvidenceRecord, HandleReleaseStore, IdempotencyRecord, IdempotencyStore,
+    IdentityAnchorAccountSlot, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
+    IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome, InviteLocatorRecord,
+    InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
+    IssueAgentProvisioningAbandonmentChallenge, JoinApplicationCommand,
+    JoinApplicationCommandOutcome, JoinApplicationMutation, JoinApplicationRecord,
+    JoinApplicationStore, KeyBackupDeleteChallengeRecord, KeyBackupStore,
+    MemberIdentityEventRecord, MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord,
+    MessageStore, MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsCommitEpochAdvance,
     MlsCommitEpochRecord, MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim,
     MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord,
     MlsWelcomeStore, ModerationStore, MorphProjectionRecord, MorphProjectionStore,
-    MultisigPendingRecord, MultisigPendingStore, NotificationStore, OrganizationPolicyRecord,
-    OrganizationPolicyStore, OrganizationRecord, OrganizationStore, OutboundPushBridgeCacheRecord,
-    PeerEventsPageQuery, PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult,
-    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, PersistenceError,
-    PersistenceResult, PolicyDocumentRecord, PolicyDocumentStore, ProjectionEventAppendOutcome,
-    ProjectionEventRecord, ProjectionEventStore, PublicationEvidenceRecord,
-    PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore, RealmEventStats,
-    RealmInviteRecord, RealmInviteStore, RealmOrganizationStatementRecord,
+    MultisigPendingRecord, MultisigPendingStore, NotificationStore, OneTimeKeyStore,
+    OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord, OrganizationStore,
+    OutboundPushBridgeCacheRecord, PeerEventsPageQuery, PeerKeyPackageClaimAttempt,
+    PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
+    PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult,
+    PolicyDocumentRecord, PolicyDocumentStore, ProjectionEventAppendOutcome, ProjectionEventRecord,
+    ProjectionEventStore, PublicationEvidenceRecord, PublicationEvidenceStore,
+    PushBridgeCacheStore, PushDeviceStore, RealmEventStats, RealmInviteRecord, RealmInviteStore,
+    RealmMetaRecord, RealmMetaStore, RealmOrganizationStatementRecord,
     RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyRecord,
     RecoveryPolicyStore, RecoverySessionRecord, RecoverySessionStore, RetentionPolicyRecord,
     RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore,
@@ -111,6 +114,7 @@ mod idempotency;
 mod invite_locators;
 mod join_applications;
 mod key_backup;
+mod member_identity;
 mod mls;
 mod moderation;
 mod multisig;
@@ -160,6 +164,7 @@ pub use idempotency::*;
 pub use invite_locators::*;
 pub use join_applications::*;
 pub use key_backup::*;
+pub use member_identity::*;
 pub use mls::*;
 pub use moderation::*;
 pub use multisig::*;

@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
+use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 use arkret_models_collaboration::objects::profiles::StrandTrack;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
 use serde::{Deserialize, Serialize};
@@ -103,7 +104,7 @@ pub struct InviteProjection {
     pub realm_id: String,
     pub inviter: String,
     pub invitee: Option<String>,
-    pub third_party_invite: Option<Value>,
+    pub third_party_invite: Option<ThirdPartyInvite>,
     pub state: String,
     pub expires_at: chrono::DateTime<chrono::Utc>,
     pub created_at: chrono::DateTime<chrono::Utc>,

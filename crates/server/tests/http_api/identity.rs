@@ -134,7 +134,18 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
 
     state
         .test_projections()
-        .test_mark_control_event_sealed(&genesis, &basis_seal)
+        .test_mark_control_event_sealed(
+            &genesis,
+            &basis_seal,
+            &arkret_state::state::store::ControlProposalIngress::AcklessSelfPrincipal(
+                arkret_state::state::store::AcklessSelfPrincipalIngress {
+                    device_id: "ak:device:fixture".to_owned(),
+                    device_authorize_event_id: "ak:event:fixture".to_owned(),
+                    device_generation_ref: 1,
+                    seal_basis_digest: "sha256:fixture".to_owned(),
+                },
+            ),
+        )
         .unwrap();
 
     let create_digest = arkret_wire::Hash::new(genesis.event_digest().unwrap()).unwrap();
@@ -844,9 +855,11 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
     );
     assert_eq!(resolved["key_log_head"], registered["key_log_head"]);
     assert_eq!(resolved["method_evidence"]["kind"], "did_webvh");
+    // The register outcome carries the accepted log verbatim; the webvh
+    // version id's authoritative location is the head entry's `versionId`.
     assert_eq!(
         resolved["method_evidence"]["version_id"],
-        registered["version_id"]
+        registered["did_log"][0]["versionId"]
     );
     assert_eq!(
         resolved["method_evidence"]["log_head_digest"],

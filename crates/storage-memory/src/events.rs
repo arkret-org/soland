@@ -29,6 +29,11 @@ impl MessageStore for MemoryMessageStore {
 
     async fn put(&self, record: &MessageRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock();
+        // Replayed projection writes dedup idempotently on the Event id,
+        // mirroring the Pg `ON CONFLICT (event_id) DO NOTHING`.
+        if data.iter().any(|m| m.event_id == record.event_id) {
+            return Ok(());
+        }
         data.push(record.clone());
         Ok(())
     }
@@ -39,14 +44,24 @@ impl MessageStore for MemoryMessageStore {
         limit: usize,
     ) -> PersistenceResult<Vec<MessageRecord>> {
         let data = self.data.lock();
-        let messages: Vec<_> = data
+        // Newest first, mirroring the Pg `created_at DESC, pk DESC` ordering
+        // (insertion position stands in for `pk`).
+        let mut messages: Vec<_> = data
             .iter()
-            .filter(|m| m.realm_id == realm_id)
-            .rev()
-            .take(limit)
-            .cloned()
+            .enumerate()
+            .filter(|(_, m)| m.realm_id == realm_id)
             .collect();
-        Ok(messages)
+        messages.sort_by(|(left_pos, left), (right_pos, right)| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| right_pos.cmp(left_pos))
+        });
+        Ok(messages
+            .into_iter()
+            .take(limit)
+            .map(|(_, m)| m.clone())
+            .collect())
     }
 
     async fn list_for_thread(
@@ -57,13 +72,21 @@ impl MessageStore for MemoryMessageStore {
         let data = self.data.lock();
         // Return in chronological order (oldest first) so thread readers get a
         // natural conversation timeline. The caller decides whether to reverse.
-        let messages: Vec<_> = data
+        let mut messages: Vec<_> = data
             .iter()
-            .filter(|m| m.thread_id == thread_id)
-            .take(limit)
-            .cloned()
+            .enumerate()
+            .filter(|(_, m)| m.thread_id == thread_id)
             .collect();
-        Ok(messages)
+        messages.sort_by(|(left_pos, left), (right_pos, right)| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left_pos.cmp(right_pos))
+        });
+        Ok(messages
+            .into_iter()
+            .take(limit)
+            .map(|(_, m)| m.clone())
+            .collect())
     }
 
     async fn delete(&self, event_id: &str) -> PersistenceResult<()> {

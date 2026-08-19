@@ -1,3 +1,6 @@
+use arkret_models_collaboration::events_payloads::moderation::{
+    ModerationReportPayload, ModerationReportProvenance,
+};
 use salvo::oapi::endpoint;
 
 use super::*;
@@ -1082,31 +1085,52 @@ pub(super) async fn mimi_report_abuse(
             )
         })
         .unwrap_or("other");
-    let mut event_fields = serde_json::Map::new();
-    event_fields.insert("realm_id".to_owned(), json!(realm_id));
-    event_fields.insert("effective_scope".to_owned(), safety.effective_scope);
-    event_fields.insert("target_ref".to_owned(), json!(target_ref));
-    event_fields.insert("report_reason_code".to_owned(), json!(canonical_reason));
-    event_fields.insert("reporter".to_owned(), json!(reporter));
-    event_fields.insert("provenance".to_owned(), json!("mimi_facade"));
-    event_fields.insert("source_provider".to_owned(), json!(source_provider));
-    if let Some(description) = body.get("description").cloned() {
-        event_fields.insert("description".to_owned(), description);
-    }
-    if let Some(evidence_package) = safety.evidence_package {
-        event_fields.insert("evidence_package".to_owned(), evidence_package);
-    }
-    if let Some(franking_proof) = safety.franking_proof {
-        event_fields.insert("franking_proof".to_owned(), franking_proof);
-    }
-    let report_event_id = persist_mimi_facade_moderation_report_event(
-        state,
-        &realm_id,
-        reporter,
-        target_ref,
-        Value::Object(event_fields.clone()),
-    )
-    .await?;
+    let description =
+        body.get("description")
+            .map(|value| {
+                value.as_str().map(str::to_owned).ok_or_else(|| {
+                    AppError::param_invalid("mimi report description must be a string")
+                })
+            })
+            .transpose()?;
+    let effective_scope = serde_json::from_value(safety.effective_scope).map_err(|error| {
+        AppError::param_invalid(format!("mimi report effective_scope invalid: {error}"))
+    })?;
+    let evidence_package = safety
+        .evidence_package
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| {
+            AppError::param_invalid(format!("mimi report evidence_package invalid: {error}"))
+        })?;
+    let franking_proof = safety
+        .franking_proof
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| {
+            AppError::param_invalid(format!("mimi report franking_proof invalid: {error}"))
+        })?;
+    let payload =
+        ModerationReportPayload {
+            realm_id: arkret_wire::RealmId::new(realm_id.clone()).map_err(|error| {
+                AppError::param_invalid(format!("mimi report realm_id invalid: {error}"))
+            })?,
+            effective_scope,
+            target_ref: target_ref.to_owned(),
+            report_reason_code: canonical_reason.to_owned(),
+            description,
+            reporter: arkret_wire::DidCoreId::new(reporter.to_owned()).map_err(|error| {
+                AppError::param_invalid(format!("mimi report reporter invalid: {error}"))
+            })?,
+            provenance: Some(ModerationReportProvenance::MimiFacade),
+            source_provider: Some(arkret_wire::DidCoreId::new(source_provider).map_err(
+                |error| AppError::internal(format!("MIMI source provider id invalid: {error}")),
+            )?),
+            evidence_refs: None,
+            evidence_package,
+            franking_proof,
+        };
+    let report_event_id = persist_mimi_facade_moderation_report_event(state, payload).await?;
 
     // `report` is Event-derived: the id is the accepted
     // `ak.self.moderation.report` Event token retyped, so it exists only after

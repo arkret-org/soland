@@ -170,26 +170,21 @@ pub(super) fn rejected_invite_claim_string_field(
 }
 
 pub(super) fn remove_rejected_claim_active_material(
-    third_party_invite: &mut Option<Value>,
+    third_party_invite: &mut Option<
+        arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite,
+    >,
     remove_commitment: bool,
 ) {
     let Some(value) = third_party_invite.as_mut() else {
         return;
     };
-    let Some(object) = value.as_object_mut() else {
-        return;
-    };
-    for key in [
-        "token_salt",
-        "token_salt_id",
-        "lookup_table_ref",
-        "pepper",
-        "pepper_id",
-    ] {
-        object.remove(key);
-    }
+    // The closed `ThirdPartyInvite` schema never admits `token_salt` /
+    // `pepper` members; only the registered handles can be present.
+    value.token_salt_id = None;
+    value.lookup_table_ref = None;
+    value.pepper_id = None;
     if remove_commitment {
-        object.remove("token_commitment");
+        value.token_commitment = None;
     }
 }
 
@@ -303,9 +298,10 @@ async fn federation_submissions(
             // Human PCR. This class is intentionally federated without an Ack;
             // receivers run the same accepted-state admission check and still
             // require the successor Seal before applying the Move.
-            if super::value::is_authority_authored_self_principal_pcr_control_move(state, event)
-                .await?
-            {
+            if matches!(
+                super::value::self_principal_pcr_control_authority(state, event).await?,
+                super::value::SelfPrincipalPcrAuthority::Authorized(_)
+            ) {
                 None
             } else {
                 let proposal_digest =

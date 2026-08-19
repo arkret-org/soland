@@ -5,6 +5,7 @@ use std::sync::Arc;
 use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
+use arkret_state::state::store::ControlProposalIngress;
 use arkret_state::state::{
     CellRegistry, CellStore, ControlEventStore, ControlProposalSnapshot, PendingControlEventRecord,
     SealStore, SealedControlEventRecord, StoreError, StoreResult, compute_state_root,
@@ -173,6 +174,8 @@ struct SealedControlEventRow {
     proposal_decisions: Value,
     #[diesel(sql_type = Bool)]
     decision_overdue: bool,
+    #[diesel(sql_type = Jsonb)]
+    ingress_class: Value,
 }
 
 #[derive(QueryableByName)]
@@ -183,6 +186,8 @@ struct PendingControlEventRow {
     control_proposal_ack: Option<Value>,
     #[diesel(sql_type = Jsonb)]
     proposal_decisions: Value,
+    #[diesel(sql_type = Jsonb)]
+    ingress_class: Value,
 }
 
 #[derive(QueryableByName)]
@@ -547,10 +552,10 @@ fn seal_predecessor_refs_json(seal: &Seal) -> Value {
 }
 
 impl ControlEventStore for PgControlEventStore {
-    fn put_pending_with_ack(
+    fn put_pending_with_ingress(
         &self,
         event: &Event,
-        control_proposal_ack: Option<&ControlProposalAck>,
+        ingress: &ControlProposalIngress,
     ) -> StoreResult<()> {
         let pool = self.pool.clone();
         let value = serde_json::to_value(event).map_err(serde_to_store)?;
@@ -561,6 +566,7 @@ impl ControlEventStore for PgControlEventStore {
             .as_str()
             .to_owned();
         let realm_id = event.realm_id.as_str().to_owned();
+        let control_proposal_ack = ingress.ack();
         if let Some(ack) = control_proposal_ack
             && (ack.proposal_digest.as_str() != digest || ack.realm_id != event.realm_id)
         {
@@ -576,18 +582,20 @@ impl ControlEventStore for PgControlEventStore {
             .map(serde_json::to_value)
             .transpose()
             .map_err(serde_to_store)?;
+        let ingress_class = serde_json::to_value(ingress.class()).map_err(serde_to_store)?;
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             let affected = sql_query(
                 "INSERT INTO state_control_events \
-                 (event_digest, realm_id, event_json, control_proposal_ack) \
-                 VALUES ($1, $2, $3, $4) \
+                 (event_digest, realm_id, event_json, control_proposal_ack, ingress_class) \
+                 VALUES ($1, $2, $3, $4, $5) \
                  ON CONFLICT (event_digest) DO UPDATE SET \
                    control_proposal_ack = COALESCE( \
                      state_control_events.control_proposal_ack, EXCLUDED.control_proposal_ack \
                    ) \
                  WHERE state_control_events.realm_id = EXCLUDED.realm_id \
                    AND state_control_events.event_json = EXCLUDED.event_json \
+                   AND state_control_events.ingress_class = EXCLUDED.ingress_class \
                    AND (state_control_events.control_proposal_ack IS NULL \
                      OR EXCLUDED.control_proposal_ack IS NULL \
                      OR state_control_events.control_proposal_ack = EXCLUDED.control_proposal_ack)",
@@ -596,12 +604,13 @@ impl ControlEventStore for PgControlEventStore {
             .bind::<Text, _>(&realm_id)
             .bind::<Jsonb, _>(&value)
             .bind::<Nullable<Jsonb>, _>(control_proposal_ack.as_ref())
+            .bind::<Jsonb, _>(&ingress_class)
             .execute(&mut *conn)
             .await
             .map_err(diesel_to_store)?;
             if affected == 0 {
                 return Err(StoreError::Conflict(
-                    "pending Control Move already has different canonical bytes or Control Proposal Ack"
+                    "pending Control Move already has different canonical bytes, ingress class or Control Proposal Ack"
                         .to_owned(),
                 ));
             }
@@ -804,7 +813,7 @@ impl ControlEventStore for PgControlEventStore {
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
-                "SELECT event_json, control_proposal_ack, proposal_decisions \
+                "SELECT event_json, control_proposal_ack, proposal_decisions, ingress_class \
                  FROM state_control_events \
                  WHERE realm_id = $1 AND sealed_by IS NULL \
                    AND NOT (proposal_decisions @> '[{\"kind\":\"signed_reject\"}]'::jsonb) \
@@ -824,6 +833,8 @@ impl ControlEventStore for PgControlEventStore {
                             .map(|value| serde_json::from_value(value).map_err(serde_to_store))
                             .transpose()?,
                         decisions: serde_json::from_value(row.proposal_decisions)
+                            .map_err(serde_to_store)?,
+                        ingress_class: serde_json::from_value(row.ingress_class)
                             .map_err(serde_to_store)?,
                     })
                 })
@@ -911,7 +922,7 @@ impl ControlEventStore for PgControlEventStore {
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
-                "SELECT event_json, sealed_by, control_proposal_ack, proposal_decisions, decision_overdue \
+                "SELECT event_json, sealed_by, control_proposal_ack, proposal_decisions, decision_overdue, ingress_class \
                  FROM state_control_events \
                  WHERE realm_id = $1 \
                    AND sealed_by IS NOT NULL \
@@ -946,6 +957,8 @@ impl ControlEventStore for PgControlEventStore {
                         decisions: serde_json::from_value(row.proposal_decisions)
                             .map_err(serde_to_store)?,
                         decision_overdue: row.decision_overdue,
+                        ingress_class: serde_json::from_value(row.ingress_class)
+                            .map_err(serde_to_store)?,
                     })
                 })
                 .collect()
@@ -963,7 +976,7 @@ impl ControlEventStore for PgControlEventStore {
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
-                "SELECT event_json, sealed_by, control_proposal_ack, proposal_decisions, decision_overdue \
+                "SELECT event_json, sealed_by, control_proposal_ack, proposal_decisions, decision_overdue, ingress_class \
                  FROM state_control_events \
                  WHERE realm_id = $1 AND sealed_by IS NOT NULL AND decision_overdue \
                  ORDER BY sealed_at ASC, event_digest ASC LIMIT $2",
@@ -986,6 +999,8 @@ impl ControlEventStore for PgControlEventStore {
                         decisions: serde_json::from_value(row.proposal_decisions)
                             .map_err(serde_to_store)?,
                         decision_overdue: row.decision_overdue,
+                        ingress_class: serde_json::from_value(row.ingress_class)
+                            .map_err(serde_to_store)?,
                     })
                 })
                 .collect()
@@ -1962,6 +1977,7 @@ mod event_seal_commit_tests {
     use arkret_identifiers::Hlc;
     use arkret_state::SealStore;
     use arkret_state::lattice::CellState;
+    use arkret_state::state::store::{AcklessSelfPrincipalIngress, ControlProposalIngress};
     use arkret_wire::{LatticeOpType, NotarySig, PayloadSignature, SealKind};
     use chrono::Utc;
     use serde_json::json;
@@ -2160,11 +2176,17 @@ mod event_seal_commit_tests {
                 .unwrap();
         let left = competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'a', 1);
         let right = competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'b', 2);
+        let ackless = ControlProposalIngress::AcklessSelfPrincipal(AcklessSelfPrincipalIngress {
+            device_id: "ak:device:fixture".to_owned(),
+            device_authorize_event_id: "ak:event:fixture".to_owned(),
+            device_generation_ref: 1,
+            seal_basis_digest: "sha256:fixture".to_owned(),
+        });
         control_event_store
-            .put_pending_with_ack(&left.3, None)
+            .put_pending_with_ingress(&left.3, &ackless)
             .unwrap();
         control_event_store
-            .put_pending_with_ack(&right.3, None)
+            .put_pending_with_ingress(&right.3, &ackless)
             .unwrap();
         let barrier = Arc::new(Barrier::new(3));
         let spawn = |candidate: (

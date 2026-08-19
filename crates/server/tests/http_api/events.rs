@@ -163,66 +163,441 @@ async fn fetch_chunked_mls_governance_proof(
     (chunks, materialized)
 }
 
-fn test_session_credential_hash(token: &str, audience: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(audience.as_bytes());
-    hasher.update(b":");
-    hasher.update(token.as_bytes());
-    format!("sha256:{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
+// ── Agent SessionGrant + DPoP fixture ────────────────────────────────────────
+//
+// A managed-Agent session is only ever admitted as a typed SessionGrant
+// presented together with a DPoP proof (`enforce_agent_session_authority`), so
+// a locally seeded bearer SessionRecord can no longer stand in for one. The
+// fixture below runs the real prepare/commit provisioning ceremony over HTTP,
+// then writes the runtime-key activation through the storage port: the public
+// pairing ceremony is currently not executable end-to-end
+// (`verify_principal_authorized_jws_ed25519_async` is an unconditional stub,
+// and `submit_agent_runtime_key_request` compares a full DID against a core
+// id). Every binding digest and the controller-proof JWS are still produced by
+// the real SDK functions, so the chain under test — introspection, DPoP
+// binding, Agent authority enforcement, scope gate — stays fully real.
+
+/// A presented Agent SessionGrant: the bearer JWT plus the holder (DPoP) key
+/// the introspected grant's `cnf_jkt` is bound to.
+struct AgentGrantPresentation {
+    grant_jwt: String,
+    holder_key: SigningKey,
 }
 
-async fn seed_agent_session_with_scopes(state: &AppState, token: &str, scopes: &[&str]) {
-    let actor = "did:web:agent.example";
-    let device_id = "ak:device:0196419b-0000-7000-8000-000000000001";
-    let now = chrono::Utc::now();
-    state
-        .test_persistence()
-        .sessions()
-        .put(&soland_storage::SessionRecord {
-            token_hash: test_session_credential_hash(token, state.service_id()),
-            actor: actor.to_owned(),
-            device_id: device_id.to_owned(),
-            audience: state.service_id().clone(),
-            session_public_key: Some("{}".to_owned()),
-            agent_session: Some(soland_storage::AgentSessionRecord {
-                granted_scope: scopes.iter().map(|scope| (*scope).to_owned()).collect(),
-                scope_details: serde_json::json!({
-                    "controller_id": "did:web:alice.example",
-                    "resources": {
-                        "realm_refs": [demo_realm_id()],
-                        "strand_refs": [],
-                    },
-                    "constraints": {
-                        "allowed_tracks": [],
-                        "allowed_data_labels": [],
-                        "allowed_endpoints": [],
-                    },
-                    "capability_grant_refs": [],
-                    "policy_refs": [],
-                }),
-                freshness_state: arkret_wire::FreshnessState::Fresh,
-            }),
-            expires_at: now + chrono::Duration::minutes(5),
-            created_at: now,
-            revoked_at: None,
-        })
+/// Build the `Authorization`/`DPoP` header pair for one request. `htu` is the
+/// configured origin plus the bare path — the query string is excluded, exactly
+/// as the server's verifier reconstructs it.
+fn agent_grant_headers(
+    presentation: &AgentGrantPresentation,
+    method: &str,
+    path: &str,
+) -> (String, String) {
+    let proof = arkret_signatures::dpop::build_dpop_proof(
+        &arkret_signatures::dpop::DpopProofRequest::new(method, format!("http://server{path}"))
+            .access_token(presentation.grant_jwt.clone()),
+        &presentation.holder_key,
+    )
+    .expect("DPoP proof builds");
+    (
+        format!("Bearer {}", presentation.grant_jwt),
+        proof.header_value,
+    )
+}
+
+/// Read one HTTP request (headers + Content-Length body) off a mock
+/// introspection connection.
+async fn read_introspection_request(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+
+    let mut request = Vec::new();
+    let mut header_end = None;
+    let mut content_length = 0;
+    loop {
+        let mut chunk = [0_u8; 2048];
+        let read = stream.read(&mut chunk).await.expect("read introspection");
+        assert!(read > 0, "introspection request ended early");
+        request.extend_from_slice(&chunk[..read]);
+        if header_end.is_none()
+            && let Some(index) = request.windows(4).position(|part| part == b"\r\n\r\n")
+        {
+            let end = index + 4;
+            let headers = String::from_utf8_lossy(&request[..end]);
+            content_length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            header_end = Some(end);
+        }
+        if header_end.is_some_and(|end| request.len() >= end + content_length) {
+            return request;
+        }
+    }
+}
+
+/// Provision a managed Agent through the real ceremony, activate its runtime
+/// key through the storage port, and stand up a session-grant introspection
+/// mock that vouches for a grant scoped to exactly `granted_scopes`.
+async fn seed_agent_grant_session(
+    slug: &str,
+    granted_scopes: &[&str],
+) -> (AppState, AgentGrantPresentation) {
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
-        .unwrap();
-    state
+        .expect("introspection mock binds");
+    let mut config = test_config();
+    config.session_grant_introspection_url = Some(format!(
+        "http://{}/_arkret/admin/session-grants/introspect",
+        listener.local_addr().expect("mock address")
+    ));
+    config.session_grant_introspection_bearer = Some(format!("introspection-bearer-{slug}"));
+    let state = soland_test_support::app_state(config);
+
+    let controller = "did:web:alice.example";
+    let controller_token = format!("agent-grant-controller-{slug}");
+    super::agents::seed_controller_session(&state, &controller_token, controller).await;
+    super::agents::seed_agent_provision_prerequisites(&state, controller).await;
+    let controller_authority =
+        super::agents::seed_active_controller_device_generation(&state, controller).await;
+    let (status, body) = super::agents::provision_agent_with_sdk_events(
+        &state,
+        &controller_token,
+        controller,
+        &controller_authority,
+        slug,
+        serde_json::json!({
+            "actions": [
+                "ak.self.events.stream.subscribe",
+                "ak.self.events.read.scan",
+                "ak.self.events.command.submit"
+            ],
+            "resources": [
+                {"kind": "operation", "operation": "ak.self.events.stream.subscribe"},
+                {"kind": "operation", "operation": "ak.self.events.read.scan"},
+                {"kind": "operation", "operation": "ak.self.events.command.submit"}
+            ],
+            "constraints": []
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "Agent provisioning failed: {body}"
+    );
+    let provisioned = serde_json::from_value::<
+        arkret_models_collaboration::agent_operations::AgentProvisionOutcome,
+    >(body)
+    .expect("typed provision outcome");
+    let arkret_models_collaboration::agent_operations::AgentProvisionOutcome::Complete { outcome } =
+        provisioned
+    else {
+        panic!("Agent provisioning must complete");
+    };
+    let record = state
         .test_persistence()
-        .devices()
-        .put(&soland_storage::DeviceInventoryRecord {
-            actor: actor.to_owned(),
-            device_id: device_id.to_owned(),
-            display_name: Some("Agent Session".to_owned()),
-            verification_state: "verified".to_owned(),
-            payload: serde_json::json!({}),
-            created_at: now,
-            updated_at: now,
-            revoked_at: None,
-        })
+        .agents()
+        .get(outcome.agent_id.as_str())
         .await
+        .unwrap()
+        .expect("provisioned Agent record");
+    assert_eq!(
+        record.state,
+        arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
+    );
+    let pairing_code = outcome
+        .pairing_code
+        .clone()
+        .expect("development provisioning returns the pairing code");
+
+    // Runtime-key request material, exactly as the runtime would build it from
+    // the pairing bootstrap (SDK builder, real proof of possession).
+    let runtime_seed: [u8; 32] =
+        Sha256::digest(format!("agent-runtime-key-{slug}").as_bytes()).into();
+    let runtime_key = SigningKey::from_bytes(&runtime_seed);
+    let endpoint_device_id =
+        arkret_identifiers::DeviceId::new(new_prefixed_uuid7("ak:device:")).unwrap();
+    let request = arkret_signatures::agent::RuntimeKeyRequestBuilder::new(
+        &runtime_key,
+        arkret_models_collaboration::agent_operations::AgentPairingBootstrap {
+            arkret_base_url: "http://server".to_owned(),
+            service_id: arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
+            agent_id: outcome.agent_id.clone(),
+            pairing_request_id: outcome.pairing_request_id.clone(),
+            pairing_code: pairing_code.clone(),
+            pairing_expires_at: outcome.expires_at,
+        },
+        &outcome.full_id,
+        endpoint_device_id.clone(),
+    )
+    .build_approval_request()
+    .expect("runtime key approval request builds");
+    let verification_method = request.body.verification_method.clone();
+    let attestation_digest =
+        arkret_signatures::agent::agent_runtime_attestation_digest(None).unwrap();
+    let binding_digest = arkret_signatures::agent::agent_runtime_key_binding_digest_from_digests(
+        &outcome.agent_id,
+        outcome.pairing_request_id.as_str(),
+        verification_method.as_str(),
+        &request.runtime_request_public_key_digest,
+        &attestation_digest,
+    )
+    .unwrap();
+    let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .unwrap();
+
+    // 1/3 — the runtime's approval request, as `submit_agent_runtime_key_request`
+    // would persist it.
+    let approval = soland_storage::AgentRuntimeApprovalWrite {
+        agent_id: outcome.agent_id.to_string(),
+        pairing_request_id: outcome.pairing_request_id.clone(),
+        approval_request_id: arkret_wire::OpaqueLocalId::new(format!(
+            "agent_runtime_approval:{}",
+            uuid::Uuid::now_v7()
+        ))
+        .unwrap(),
+        approval_notification_id: new_prefixed_uuid7("ak:notification:"),
+        approval_requested_at: now,
+        controller_account_id: new_prefixed_uuid7("ak:account:"),
+        recipient_service_id: state.service_id().clone(),
+        runtime_key_binding_digest: binding_digest.as_str().to_owned(),
+        runtime_public_key_digest: request
+            .runtime_request_public_key_digest
+            .as_str()
+            .to_owned(),
+        runtime_attestation_digest: attestation_digest.as_str().to_owned(),
+        runtime_key_request:
+            arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection {
+                pairing_request_id: request.body.pairing_request_id.clone(),
+                agent_id: request.body.agent_id.clone(),
+                verification_method: verification_method.clone(),
+                public_key: request.body.public_key.clone(),
+                proof_of_possession: request.body.proof_of_possession.clone(),
+                runtime_attestation: request.body.runtime_attestation.clone(),
+            },
+    };
+    assert!(
+        state
+            .test_persistence()
+            .agents()
+            .put_runtime_approval_if_compatible(&approval)
+            .await
+            .unwrap()
+            .is_some(),
+        "runtime approval write must be compatible with the provisioned record"
+    );
+
+    // 2/3 — the controller's signing-key binding, with a real detached JWS over
+    // the exact transcript the pairing endpoint would verify.
+    let authorize_event_id = arkret_identifiers::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        Sha256::digest(format!("agent-key-authorize-{slug}").as_bytes()).into(),
+    );
+    let controller_core = fixture_actor_core_id(controller);
+    let public_key = arkret_models_identity::agent_signer_evidence::AgentSigningPublicKey {
+        kty: arkret_wire::NonEmptyString::new("OKP").unwrap(),
+        algorithm: arkret_wire::NonEmptyString::new("Ed25519").unwrap(),
+        key: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+            runtime_key.verifying_key().to_bytes(),
+        ))
+        .unwrap(),
+    };
+    let public_key_digest =
+        arkret_signatures::agent_evidence::agent_signing_public_key_digest(&public_key).unwrap();
+    let mut signing_key_binding =
+        arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding {
+            core: arkret_models_identity::agent_signer_evidence::AgentSigningKeyBindingCore {
+                schema: arkret_wire::NonEmptyString::new(
+                    arkret_wire::SchemaId::AGENT_SIGNING_KEY_BINDING_V1,
+                )
+                .unwrap(),
+                agent_id: outcome.agent_id.clone(),
+                agent_key_id: arkret_wire::NonEmptyString::new("agent-runtime-key").unwrap(),
+                verification_method: verification_method.clone(),
+                public_key,
+                public_key_digest: public_key_digest.clone(),
+                issued_at: now,
+                expires_at: None,
+                controller_id: controller_core.clone(),
+            },
+            agent_key_authorize_event_id: authorize_event_id.clone(),
+            controller_proof: arkret_models_identity::agent_signer_evidence::AgentControllerProof {
+                kind: arkret_wire::NonEmptyString::new("detached_jws").unwrap(),
+                verification_method: arkret_wire::DidUrl::new(format!(
+                    "{controller}#{}",
+                    super::agents::CONTROLLER_DEVICE_ID
+                ))
+                .unwrap(),
+                jws: arkret_wire::NonEmptyString::new("pending").unwrap(),
+            },
+        };
+    let controller_proof_bytes =
+        arkret_signatures::agent_evidence::agent_signing_key_binding_signing_bytes(
+            &signing_key_binding,
+        )
         .unwrap();
+    signing_key_binding.controller_proof.jws = arkret_wire::NonEmptyString::new(
+        arkret_signatures::jws::sign_jws_ed25519(
+            &controller_proof_bytes,
+            &SigningKey::from_bytes(&super::agents::CONTROLLER_DEVICE_SIGNING_SEED),
+        )
+        .expect("controller proof JWS signs"),
+    )
+    .unwrap();
+    let paired_request_digest =
+        arkret_models_collaboration::agent_operations::agent_key_pairing_request_binding_digest(
+            arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY,
+            &controller_core,
+            &outcome.agent_id,
+            &outcome.pairing_request_id,
+            &pairing_code,
+            outcome.expires_at,
+            &arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
+            &binding_digest,
+            &request.body.proof_of_possession,
+        )
+        .unwrap();
+    let intent = soland_storage::AgentPairingCommitIntent {
+        agent_id: outcome.agent_id.to_string(),
+        approval_request_id: approval.approval_request_id.clone(),
+        runtime_key_binding_digest: binding_digest.as_str().to_owned(),
+        pairing_request_id: outcome.pairing_request_id.clone(),
+        request_digest: paired_request_digest.as_str().to_owned(),
+        authorize_event_id: authorize_event_id.as_str().to_owned(),
+        signing_key_binding: signing_key_binding.clone(),
+    };
+    assert!(
+        state
+            .test_persistence()
+            .agents()
+            .put_pairing_commit_intent_if_compatible(&intent)
+            .await
+            .unwrap()
+            .is_some(),
+        "pairing commit intent must be accepted"
+    );
+
+    // 3/3 — activation, mirroring the reconciliation the pairing endpoint
+    // performs once the authorize Event is accepted.
+    let activation = soland_storage::AgentRuntimeActivation {
+        agent_id: outcome.agent_id.to_string(),
+        approval_request_id: approval.approval_request_id.clone(),
+        runtime_key_binding_digest: binding_digest.as_str().to_owned(),
+        pairing_request_id: outcome.pairing_request_id.clone(),
+        paired_request_digest: paired_request_digest.as_str().to_owned(),
+        authorized_event_ref: authorize_event_id.as_str().to_owned(),
+        authorized_verification_method: verification_method.as_str().to_owned(),
+        authorized_public_key_digest: public_key_digest.as_str().to_owned(),
+        authorized_signing_key_binding: signing_key_binding,
+        authorized_at: now,
+    };
+    assert!(
+        state
+            .test_persistence()
+            .agents()
+            .activate_runtime_if_current(&activation)
+            .await
+            .unwrap(),
+        "runtime activation must match the pending intent"
+    );
+
+    // The Account Authority introspection mock: vouches for a SessionGrant
+    // bound to the runtime key (`cnf.jkt`) and scoped to `granted_scopes`.
+    let holder_jwk =
+        arkret_signatures::JsonWebKey::from_ed25519_verifying_key(&runtime_key.verifying_key());
+    let cnf_jkt = arkret_signatures::dpop::dpop_jwk_thumbprint(&holder_jwk).unwrap();
+    let session_public_key = format!(
+        "{{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"{}\"}}",
+        arkret_canonical::base64url_encode(runtime_key.verifying_key().to_bytes())
+    );
+    let grant_jwt = {
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"Ed25519","typ":"JWT"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(
+            serde_json::json!({
+                "kind": arkret_models_identity::SESSION_GRANT_CREDENTIAL_KIND,
+                "jti": format!("urn:uuid:{}", uuid::Uuid::now_v7()),
+            })
+            .to_string(),
+        );
+        let signature = runtime_key.sign(format!("{header}.{payload}").as_bytes());
+        format!(
+            "{header}.{payload}.{}",
+            URL_SAFE_NO_PAD.encode(signature.to_bytes())
+        )
+    };
+    let outcome_json = serde_json::json!({
+        "active": true,
+        "status": "active",
+        "proof_required": false,
+        "one_time_use_consumed": false,
+        "grant": {
+            "id": arkret_identifiers::SessionGrantId::from_issuance_digest(
+                Sha256::digest(format!("agent-session-grant-{slug}").as_bytes()).into(),
+            )
+            .as_str(),
+            "issuer": "ak:did_core:web:coauth.local",
+            "subject": outcome.agent_id.as_str(),
+            "service_account_id": format!("agent-{slug}"),
+            "audience": state.service_id(),
+            "scopes": granted_scopes,
+            "expires_at": (chrono::Utc::now() + chrono::Duration::minutes(5))
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "revocation_ref": format!("ak:session:{}", uuid::Uuid::now_v7().simple()),
+            "session_public_key": session_public_key,
+            "cnf_jkt": cnf_jkt,
+            "credential_class": "standard",
+            "holder_binding": {
+                "kind": "agent_runtime",
+                "agent_id": outcome.agent_id.as_str(),
+                "device_id": endpoint_device_id.as_str(),
+                "agent_key_authorization_ref": authorize_event_id.as_str(),
+                "verification_method": verification_method.as_str(),
+            }
+        }
+    });
+    serde_json::from_value::<
+        arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectOutcome,
+    >(outcome_json.clone())
+    .expect("mock outcome matches the SDK introspection DTO");
+    let response_body = serde_json::to_vec(&outcome_json).expect("serialize introspection");
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let response_body = response_body.clone();
+            tokio::spawn(async move {
+                let _ = read_introspection_request(&mut stream).await;
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    response_body.len()
+                );
+                stream
+                    .write_all(headers.as_bytes())
+                    .await
+                    .expect("write introspection headers");
+                stream
+                    .write_all(&response_body)
+                    .await
+                    .expect("write introspection body");
+            });
+        }
+    });
+
+    (
+        state,
+        AgentGrantPresentation {
+            grant_jwt,
+            holder_key: runtime_key,
+        },
+    )
 }
 
 fn assert_agent_scope_denied(body: &Value, scope: &str) {
@@ -278,17 +653,32 @@ async fn account_subscribe_first_frame_with_status(
 
 #[tokio::test]
 async fn agent_session_without_stream_scope_cannot_subscribe_events() {
-    let state = soland_test_support::app_state(test_config());
-    let token = "agent-local-session-stream";
-    seed_agent_session_with_scopes(&state, token, &["ak.self.events.read.scan"]).await;
-
-    let mut response = TestClient::get(format!(
+    let (state, presentation) =
+        seed_agent_grant_session("scope-denied-stream", &["ak.self.events.read.scan"]).await;
+    let subscribe_url = format!(
         "http://server/_arkret/self/events/subscribe?realms={}&catchup=false&max_duration_ms=100",
-        demo_realm_id(),
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state))
-    .await;
+        demo_realm_id()
+    );
+
+    // A SessionGrant presented without its DPoP proof is not authenticated at
+    // all, which keeps the 403 below attributable to the missing scope alone.
+    let unauthenticated = TestClient::get(subscribe_url.clone())
+        .add_header(
+            "authorization",
+            format!("Bearer {}", presentation.grant_jwt),
+            true,
+        )
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
+
+    let (authorization, dpop) =
+        agent_grant_headers(&presentation, "GET", "/_arkret/self/events/subscribe");
+    let mut response = TestClient::get(subscribe_url)
+        .add_header("authorization", authorization, true)
+        .add_header("dpop", dpop, true)
+        .send(&app_from_state(state))
+        .await;
 
     assert_eq!(response.status_code.unwrap(), StatusCode::FORBIDDEN);
     let body: Value = response.take_json().await.unwrap();
@@ -297,13 +687,26 @@ async fn agent_session_without_stream_scope_cannot_subscribe_events() {
 
 #[tokio::test]
 async fn agent_session_without_query_scope_cannot_scan_events() {
-    let state = soland_test_support::app_state(test_config());
-    let token = "agent-local-session-query";
-    seed_agent_session_with_scopes(&state, token, &["ak.self.events.stream.subscribe"]).await;
+    let (state, presentation) =
+        seed_agent_grant_session("scope-denied-query", &["ak.self.events.stream.subscribe"]).await;
 
+    // Same 401 discriminator as the subscribe test: grant without DPoP.
+    let unauthenticated = TestClient::query("http://server/_arkret/self/events")
+        .json(&serde_json::json!({"realms": [demo_realm_id()]}))
+        .add_header(
+            "authorization",
+            format!("Bearer {}", presentation.grant_jwt),
+            true,
+        )
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
+
+    let (authorization, dpop) = agent_grant_headers(&presentation, "QUERY", "/_arkret/self/events");
     let mut response = TestClient::query("http://server/_arkret/self/events")
         .json(&serde_json::json!({"realms": [demo_realm_id()]}))
-        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("authorization", authorization, true)
+        .add_header("dpop", dpop, true)
         .send(&app_from_state(state))
         .await;
 
@@ -314,17 +717,30 @@ async fn agent_session_without_query_scope_cannot_scan_events() {
 
 #[tokio::test]
 async fn agent_session_without_submit_scope_cannot_submit_events() {
-    let state = soland_test_support::app_state(test_config());
-    let token = "agent-local-session-submit";
-    seed_agent_session_with_scopes(&state, token, &["ak.self.events.read.scan"]).await;
+    let (state, presentation) =
+        seed_agent_grant_session("scope-denied-submit", &["ak.self.events.read.scan"]).await;
     let event = signed_event_envelope(
         "ak:event:AfepkcDJ52VnnpuZZLL_gaOAp8uRP2_whpmBukWi9roZ",
         0,
         Vec::new(),
     );
 
+    // Same 401 discriminator as the subscribe test: grant without DPoP.
+    let unauthenticated = TestClient::post("http://server/_arkret/self/events")
+        .add_header(
+            "authorization",
+            format!("Bearer {}", presentation.grant_jwt),
+            true,
+        )
+        .json(&event)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
+
+    let (authorization, dpop) = agent_grant_headers(&presentation, "POST", "/_arkret/self/events");
     let mut response = TestClient::post("http://server/_arkret/self/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("authorization", authorization, true)
+        .add_header("dpop", dpop, true)
         .json(&event)
         .send(&app_from_state(state))
         .await;

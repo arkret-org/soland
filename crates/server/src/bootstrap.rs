@@ -68,12 +68,7 @@ pub async fn resolve_and_build_persistence(
 ) -> anyhow::Result<ServiceIdentityBootstrap> {
     let persistence = db.pool.as_ref().map_or_else(
         || PersistenceHandle::new(Arc::new(SolandMemoryPersistenceStore::new())),
-        |pool| {
-            PersistenceHandle::new(Arc::new(PgPersistenceStore::new(
-                pool.clone(),
-                Arc::new(SolandMemoryPersistenceStore::new()),
-            )))
-        },
+        |pool| PersistenceHandle::new(Arc::new(PgPersistenceStore::new(pool.clone()))),
     );
     let key_store: Option<Arc<dyn KeyStore>> = if let Some(key_store) = config
         .key_store

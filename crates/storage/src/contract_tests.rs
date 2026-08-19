@@ -19,20 +19,23 @@ use super::{
     AccountStatusReplicaAppend, AccountStatusReplicaConflictKind, AccountStatusReplicaStore,
     CanonicalEventRecord, ContactProjectionCommit, ContactRecord, ContactStore,
     ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore, DeviceInventoryRecord,
-    DeviceInventoryStore, DeviceMessageBatchCommitOutcome, DeviceMessageBatchItemRecord,
-    DeviceMessageBatchRecord, DeviceMessageRecord, DeviceMessageStore,
-    DeviceMessageTargetSnapshotGuard, DevicePairingAuthorizationCommit, DevicePairingRecord,
-    DevicePairingStore, DeviceRevocationGateSelector, EventCommitRequest, EventCommitUnitOfWork,
-    EventStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord, FederationOutboxOutcome,
-    FederationOutboxPolicyResolution, FederationOutboxRecord, FederationOutboxRequeue,
-    FederationOutboxState, FederationOutboxStore, FederationOutboxTransition, IdempotencyRecord,
-    IdempotencyStore, InviteReceivePolicyStore, MimiConsentCorrelationRecord,
-    MimiConsentCorrelationStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
-    MlsKeyPackageStore, OrganizationRegistrationEnsureCommit,
-    OrganizationRegistrationLifecycleCommit, OrganizationRegistrationRefreshCommit,
-    OrganizationRegistrationStore, OrganizationRegistrationTerminalReason,
-    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, ProjectionEventRecord,
-    ProjectionEventStore, RealmFanoutAuthorityWitness, RealmFanoutBinding,
+    DeviceInventoryStore, DeviceKeyStore, DeviceMessageBatchCommitOutcome,
+    DeviceMessageBatchItemRecord, DeviceMessageBatchRecord, DeviceMessageRecord,
+    DeviceMessageStore, DeviceMessageTargetSnapshotGuard, DevicePairingAuthorizationCommit,
+    DevicePairingRecord, DevicePairingStore, DeviceRevocationGateSelector, EventCommitRequest,
+    EventCommitUnitOfWork, EventStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
+    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
+    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
+    FederationOutboxTransition, HandleClaimEvidenceRecord, IdempotencyRecord, IdempotencyStore,
+    InviteReceivePolicyStore, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
+    MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord, MessageStore,
+    MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsKeyPackageClaim,
+    MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, OneTimeKeyStore,
+    OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
+    OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
+    OrganizationRegistrationTerminalReason, PeerKeyPackageClaimLedgerRecord,
+    PeerKeyPackageClaimLedgerWriteResult, ProjectionEventRecord, ProjectionEventStore,
+    RealmFanoutAuthorityWitness, RealmFanoutBinding, RealmMetaRecord, RealmMetaStore,
     ServiceRouteHandoverNoticeCommit, ServiceRouteHandoverNoticeRecord, ServiceRouteHandoverPlan,
     ServiceRouteHandoverPlanState, ServiceRouteHandoverPlanStore, ServiceRouteHandoverPlanWrite,
 };
@@ -3203,4 +3206,352 @@ fn handover_notice_record(
         issued_at,
         expires_at,
     }
+}
+
+pub async fn assert_realm_meta_store_contract(store: &dyn RealmMetaStore, namespace: &str) {
+    let now = database_timestamp_now();
+    let realm_id = format!("ak:realm:{namespace}");
+    let record = RealmMetaRecord {
+        owner: format!("did:web:{namespace}-owner.example"),
+        deleted: false,
+        discoverability: "public".to_owned(),
+        history_visibility: "shared".to_owned(),
+        history_sharing_policy: Some(serde_json::json!({"rule": "members"})),
+        history_sharing_policy_digest: Some(format!("sha256:{}", "1".repeat(64))),
+        preview_policy: Some(serde_json::json!({"enabled": true})),
+        preview_policy_digest: Some(format!("sha256:{}", "2".repeat(64))),
+        asset_privacy_policy: Some(serde_json::json!({"presign": "members"})),
+        asset_privacy_policy_digest: Some(format!("sha256:{}", "3".repeat(64))),
+        encryption_profile: Some("mls_rfc9420".to_owned()),
+        plaintext_visible_services: std::collections::BTreeSet::from([
+            "ak:service:directory".to_owned()
+        ]),
+        plaintext_visible_service_classes: std::collections::BTreeMap::from([(
+            "ak:service:directory".to_owned(),
+            std::collections::BTreeSet::from([arkret_wire::PlaintextDataClassKind::HistoryPreview]),
+        )]),
+        minimal_metadata_realm: true,
+        aad_visibility_ceiling: arkret_models_crypto::EncryptedEnvelopeAadVisibility::RoutingDigest,
+        created_at: now,
+        updated_at: now,
+    };
+    store
+        .put(&realm_id, &record)
+        .await
+        .expect("write realm meta");
+    assert_eq!(
+        store.get(&realm_id).await.expect("read realm meta"),
+        Some(record.clone()),
+        "realm meta must round-trip every field"
+    );
+    assert!(
+        store
+            .list()
+            .await
+            .expect("list realm meta")
+            .iter()
+            .any(|(id, meta)| id == &realm_id && meta == &record)
+    );
+
+    let mut updated = record.clone();
+    updated.owner = format!("did:web:{namespace}-successor.example");
+    updated.updated_at = now + Duration::seconds(1);
+    store
+        .put(&realm_id, &updated)
+        .await
+        .expect("overwrite realm meta");
+    assert_eq!(
+        store.get(&realm_id).await.expect("read updated realm meta"),
+        Some(updated),
+        "realm meta put must upsert in place"
+    );
+
+    store.delete(&realm_id).await.expect("delete realm meta");
+    assert_eq!(
+        store.get(&realm_id).await.expect("read deleted realm meta"),
+        None
+    );
+}
+
+pub async fn assert_message_store_contract(store: &dyn MessageStore, namespace: &str) {
+    let now = database_timestamp_now();
+    let realm_id = format!("ak:realm:{namespace}");
+    let thread_id = format!("ak:strand:{namespace}");
+    let first = MessageRecord {
+        event_id: format!("ak:event:{namespace}-first"),
+        message_id: format!("ak:message:{namespace}-first"),
+        realm_id: realm_id.clone(),
+        sender: format!("did:web:{namespace}-alice.example"),
+        thread_id: thread_id.clone(),
+        content: serde_json::json!({"body": "first"}),
+        encrypted: false,
+        created_at: now,
+    };
+    let second = MessageRecord {
+        event_id: format!("ak:event:{namespace}-second"),
+        message_id: format!("ak:message:{namespace}-second"),
+        realm_id: realm_id.clone(),
+        sender: format!("did:web:{namespace}-bob.example"),
+        thread_id: thread_id.clone(),
+        content: serde_json::json!({"body": "second"}),
+        encrypted: true,
+        created_at: now + Duration::seconds(1),
+    };
+    store.put(&first).await.expect("write first message");
+    store.put(&second).await.expect("write second message");
+    // Replayed projection writes must dedup idempotently, not double-store.
+    store.put(&first).await.expect("replay first message");
+    assert_eq!(
+        store
+            .get(&first.event_id)
+            .await
+            .expect("read first message"),
+        Some(first.clone())
+    );
+    assert_eq!(
+        store
+            .list_for_realm(&realm_id, 100)
+            .await
+            .expect("list realm messages"),
+        vec![second.clone(), first.clone()],
+        "realm listing is newest first"
+    );
+    assert_eq!(
+        store
+            .list_for_realm(&realm_id, 1)
+            .await
+            .expect("list realm messages with limit"),
+        vec![second.clone()]
+    );
+    assert_eq!(
+        store
+            .list_for_thread(&thread_id, 100)
+            .await
+            .expect("list thread messages"),
+        vec![first.clone(), second.clone()],
+        "thread listing is chronological"
+    );
+
+    store
+        .delete(&first.event_id)
+        .await
+        .expect("delete first message");
+    assert_eq!(
+        store
+            .get(&first.event_id)
+            .await
+            .expect("read deleted message"),
+        None
+    );
+    assert_eq!(
+        store
+            .list_for_realm(&realm_id, 100)
+            .await
+            .expect("list realm messages after delete"),
+        vec![second]
+    );
+}
+
+pub async fn assert_device_key_store_contract(store: &dyn DeviceKeyStore, namespace: &str) {
+    let actor = format!("did:web:{namespace}.example");
+    let device_id = format!("ak:device:{namespace}");
+    let bundle = serde_json::json!({
+        "device_id": device_id,
+        "one_time_keys": {"curve25519:aaa": {"key": "aaa"}},
+        "fallback_keys": {},
+    });
+    store
+        .put(actor.clone(), device_id.clone(), bundle.clone())
+        .await
+        .expect("write device key bundle");
+    assert_eq!(
+        store
+            .get(&actor, &device_id)
+            .await
+            .expect("read device key bundle"),
+        Some(bundle)
+    );
+    assert_eq!(
+        store
+            .get(&actor, &format!("ak:device:{namespace}-missing"))
+            .await
+            .expect("read missing device key bundle"),
+        None
+    );
+
+    let rotated = serde_json::json!({"device_id": device_id, "rotated": true});
+    store
+        .put(actor.clone(), device_id.clone(), rotated.clone())
+        .await
+        .expect("overwrite device key bundle");
+    assert_eq!(
+        store
+            .get(&actor, &device_id)
+            .await
+            .expect("read rotated device key bundle"),
+        Some(rotated),
+        "bundle upload must upsert in place"
+    );
+}
+
+pub async fn assert_one_time_key_store_contract(store: &dyn OneTimeKeyStore, namespace: &str) {
+    let actor = format!("did:web:{namespace}.example");
+    let device_id = format!("ak:device:{namespace}");
+    let key_a = serde_json::json!({"key_id": format!("curve25519:{namespace}-a"), "key": "a"});
+    let key_b = serde_json::json!({"key_id": format!("curve25519:{namespace}-b"), "key": "b"});
+    store
+        .put(
+            actor.clone(),
+            device_id.clone(),
+            vec![key_a.clone(), key_b.clone()],
+        )
+        .await
+        .expect("seed one-time key pool");
+    assert_eq!(
+        store
+            .claim(&actor, &device_id)
+            .await
+            .expect("claim first key"),
+        Some(key_b),
+        "claim pops the most recently pooled key exactly once"
+    );
+    assert_eq!(
+        store
+            .claim(&actor, &device_id)
+            .await
+            .expect("claim second key"),
+        Some(key_a)
+    );
+    assert_eq!(
+        store
+            .claim(&actor, &device_id)
+            .await
+            .expect("claim drained pool"),
+        None,
+        "a drained pool stays drained"
+    );
+
+    let key_c = serde_json::json!({"key_id": format!("curve25519:{namespace}-c"), "key": "c"});
+    store
+        .put(actor.clone(), device_id.clone(), vec![key_c.clone()])
+        .await
+        .expect("replace one-time key pool");
+    assert_eq!(
+        store
+            .claim(&actor, &device_id)
+            .await
+            .expect("claim replaced key"),
+        Some(key_c),
+        "put replaces the pool left by earlier claims"
+    );
+    assert_eq!(
+        store
+            .claim(&actor, &device_id)
+            .await
+            .expect("claim drained again"),
+        None
+    );
+}
+
+pub async fn assert_member_identity_store_contract(
+    store: &dyn MemberIdentityStore,
+    namespace: &str,
+) {
+    let subject = MemberIdentitySubjectKey {
+        realm_id: format!("ak:realm:{namespace}"),
+        actor_id: format!("did:web:{namespace}.example"),
+        segment: "member_identity".to_owned(),
+    };
+    let first = MemberIdentityEventRecord {
+        event_id: format!("ak:event:{namespace}-first"),
+        subject: subject.clone(),
+        payload_digest: format!("sha256:{}", "a".repeat(64)),
+        replaces: Vec::new(),
+        raw_event: serde_json::json!({"event_id": format!("ak:event:{namespace}-first")}),
+    };
+    let second = MemberIdentityEventRecord {
+        event_id: format!("ak:event:{namespace}-second"),
+        subject: subject.clone(),
+        payload_digest: format!("sha256:{}", "b".repeat(64)),
+        replaces: vec![MemberIdentityReplacementEdge {
+            event_id: first.event_id.clone(),
+            payload_digest: first.payload_digest.clone(),
+        }],
+        raw_event: serde_json::json!({"event_id": format!("ak:event:{namespace}-second")}),
+    };
+    store
+        .put_event(&first)
+        .await
+        .expect("write first identity event");
+    store
+        .put_event(&second)
+        .await
+        .expect("write second identity event");
+    // Replay re-projection must be idempotent.
+    store
+        .put_event(&first)
+        .await
+        .expect("replay first identity event");
+    let events = store
+        .snapshot_events()
+        .await
+        .expect("snapshot identity events");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.subject == subject)
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![first.clone(), second.clone()],
+        "snapshot returns every stored event once, in event_id order"
+    );
+
+    let claim = HandleClaimEvidenceRecord {
+        digest: format!("sha256:{}", "c".repeat(64)),
+        subject_id: format!("did:web:{namespace}.example"),
+        issuer: format!("did:web:{namespace}-issuer.example"),
+        issuer_service_id: Some(format!("did:web:{namespace}-issuer.example")),
+        audience: Some("ak:service:directory".to_owned()),
+        binding_state: "bound".to_owned(),
+        visibility: Some("public".to_owned()),
+        expires_at: Some(database_timestamp_now() + Duration::hours(1)),
+        revoked: false,
+        envelope: serde_json::json!({"subject": format!("did:web:{namespace}.example")}),
+    };
+    store
+        .put_handle_claim(&claim)
+        .await
+        .expect("cache handle claim");
+    let mut revoked = claim.clone();
+    revoked.revoked = true;
+    store
+        .put_handle_claim(&revoked)
+        .await
+        .expect("upsert revoked handle claim");
+    assert_eq!(
+        store
+            .snapshot_handle_claims()
+            .await
+            .expect("snapshot handle claims")
+            .into_iter()
+            .filter(|row| row.subject_id == claim.subject_id)
+            .collect::<Vec<_>>(),
+        vec![revoked],
+        "claim upsert replaces the row under the same digest"
+    );
+    assert_eq!(
+        store
+            .delete_handle_claims_for_subject(&claim.subject_id)
+            .await
+            .expect("invalidate handle claims"),
+        1
+    );
+    assert!(
+        store
+            .snapshot_handle_claims()
+            .await
+            .expect("snapshot handle claims after invalidate")
+            .iter()
+            .all(|row| row.subject_id != claim.subject_id)
+    );
 }

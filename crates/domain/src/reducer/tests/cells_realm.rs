@@ -1566,6 +1566,127 @@ fn bootstrap_policy_bundle_uses_registered_value_without_projection_metadata() {
     ));
 }
 
+// ── encryption-and-audit.md §2.10 — history_visibility × content_scheme
+// linkage as a reducer invariant on the facet and genesis write paths ──
+
+fn install_mls_genesis_cell(state: &mut ProjectionState, realm_id: &str) {
+    state.realm_null_subject_cells.insert(
+        (
+            realm_id.to_owned(),
+            arkret_wire::REALM_GENESIS_CELL.to_owned(),
+        ),
+        CellState::Value(serde_json::json!({ "encryption_profile": "mls_rfc9420" })),
+    );
+}
+
+#[test]
+fn bootstrap_history_visibility_facet_rejects_prejoin_history_without_capable_scheme() {
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+    let mut state = ProjectionState::new();
+    install_mls_genesis_cell(&mut state, realm_id);
+    let payload = serde_json::json!({ "value": "world_readable" });
+    let (_, writes) = projected_cell_writes(
+        arkret_wire::EventKind::RealmHistoryVisibility,
+        realm_id,
+        &payload,
+    );
+    let operation = make_operation(
+        arkret_wire::EventKind::RealmHistoryVisibility,
+        realm_id,
+        payload,
+    );
+
+    assert!(matches!(
+        state.apply_validated_realm_bootstrap_facet(&operation, &writes),
+        ProjectionEffect::Rejected { ref reason }
+            if reason == arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+    ));
+    assert!(
+        state.realm_history_visibility(realm_id).is_none(),
+        "a rejected facet must not register its cell"
+    );
+}
+
+#[test]
+fn bootstrap_history_visibility_facet_accepts_prejoin_history_with_exporter_scheme() {
+    let realm_id = "ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksgW";
+    let mut state = ProjectionState::new();
+    install_mls_genesis_cell(&mut state, realm_id);
+    // A policy_bundle earlier in wire order has already projected the
+    // history-capable scheme.
+    state.realm_policy_bundle_cells.insert(
+        realm_id.to_owned(),
+        CellState::Value(serde_json::json!({
+            "policy_revision": 1,
+            "content_scheme": "mls_exporter_aead_v1"
+        })),
+    );
+    let payload = serde_json::json!({ "value": "world_readable" });
+    let (_, writes) = projected_cell_writes(
+        arkret_wire::EventKind::RealmHistoryVisibility,
+        realm_id,
+        &payload,
+    );
+    let operation = make_operation(
+        arkret_wire::EventKind::RealmHistoryVisibility,
+        realm_id,
+        payload,
+    );
+
+    assert!(matches!(
+        state.apply_validated_realm_bootstrap_facet(&operation, &writes),
+        ProjectionEffect::RealmBootstrapFacetProjected { .. }
+    ));
+    assert_eq!(
+        state.realm_history_visibility(realm_id).as_deref(),
+        Some("world_readable")
+    );
+}
+
+#[test]
+fn realm_create_rejects_prejoin_history_without_capable_scheme() {
+    let realm_id = "ak:realm:AcCjaDaAwSr00p03dwj9Gz2Aeq-1E2F2dAXTHFzPSdbQ";
+    let payload = serde_json::json!({
+        "object": {
+            "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
+            "encryption_profile": "mls_rfc9420",
+            "history_visibility": "world_readable"
+        }
+    });
+    let operation = make_operation(arkret_wire::EventKind::RealmCreate, realm_id, payload);
+
+    let mut state = ProjectionState::new();
+    assert!(matches!(
+        state.apply(&operation, &ServerHlc::new("test")),
+        ProjectionEffect::Rejected { ref reason }
+            if reason == arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+    ));
+
+    // The same genesis object on a non-MLS Realm is outside the linkage.
+    let plaintext_payload = serde_json::json!({
+        "object": {
+            "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
+            "encryption_profile": "none",
+            "history_visibility": "world_readable"
+        }
+    });
+    let plaintext_operation = make_operation(
+        arkret_wire::EventKind::RealmCreate,
+        realm_id,
+        plaintext_payload,
+    );
+    let mut state = ProjectionState::new();
+    let effect = state.apply(&plaintext_operation, &ServerHlc::new("test"));
+    assert!(
+        !matches!(
+            &effect,
+            ProjectionEffect::Rejected { reason }
+                if reason == arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+        ),
+        "non-MLS genesis must not trip the scheme linkage: {effect:?}"
+    );
+}
+
 #[test]
 fn policy_bundle_validates_control_proposal_timing_as_one_component() {
     let realm_id = "ak:realm:AdxEgvRaqkzAG9iN9YT9pxaGx7skfMnQEhVi79_pvlJs";

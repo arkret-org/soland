@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{BlobRef, Hash};
+use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 use arkret_models_collaboration::objects::blob::BlobVisibility;
 use arkret_models_crypto::{
     DeviceGenerationStatus, RecoveryIdentityModel, RecoveryPublicationAuthorityContext,
@@ -306,7 +307,7 @@ pub struct RealmInviteRecord {
     pub invitee: Option<String>,
     pub invite_delivery_target: Option<Value>,
     pub introduction_evidence_digest: Option<String>,
-    pub third_party_invite: Option<Value>,
+    pub third_party_invite: Option<ThirdPartyInvite>,
     pub invite_token: String,
     pub status: String,
     pub claim_nonces: BTreeMap<String, String>,
@@ -315,7 +316,7 @@ pub struct RealmInviteRecord {
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RealmMetaRecord {
     pub owner: String,
     pub deleted: bool,
@@ -379,7 +380,7 @@ impl RealmMetaRecord {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MessageRecord {
     pub event_id: String,
     pub message_id: String,

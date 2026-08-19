@@ -262,17 +262,8 @@ fn fixture_sealed_state_root(
 
 pub(crate) fn app_state_for_postgres(config: AppConfig, db: Db) -> AppState {
     let pool = db.pool.clone().expect("postgres test requires a pool");
-    let fallback: std::sync::Arc<dyn soland_storage::PersistenceStore> = if config.seed_demo_data {
-        std::sync::Arc::new(
-            soland_storage_memory::SolandMemoryPersistenceStore::new_with_demo_data(),
-        )
-    } else {
-        std::sync::Arc::new(soland_storage_memory::SolandMemoryPersistenceStore::new())
-    };
     let persistence_store: std::sync::Arc<dyn soland_storage::PersistenceStore> =
-        std::sync::Arc::new(soland_storage_postgres::PgPersistenceStore::new(
-            pool, fallback,
-        ));
+        std::sync::Arc::new(soland_storage_postgres::PgPersistenceStore::new(pool));
     let persistence =
         soland_services::persistence::PersistenceHandle::from_shared(persistence_store.clone());
     let identity = soland_test_support::fixture_service_identity(&config);

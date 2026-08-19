@@ -1,11 +1,12 @@
 use super::{
     AsyncConnection, BTreeMap, BTreeSet, BigInt, Bool, DeviceInventoryRecord, DeviceInventoryStore,
-    DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchRecord,
-    DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
-    DeviceRevocationGateSelector, DeviceRevocationGateStatus, Jsonb, MaxSeqRow, Nullable,
-    OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
-    QueryableByName, RunQueryDsl, SqlUuid, Text, Timestamptz, Utc, Uuid, Value, async_trait,
-    ensure_device_message_id, fresh_device_message_ack_token, pg_conn, sql_query,
+    DeviceKeyStore, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
+    DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
+    DeviceRevocationGateSelector, DeviceRevocationGateStatus, Integer, JsonPayloadRow, Jsonb,
+    MaxSeqRow, Nullable, OneTimeKeyStore, OptionalExtension, PersistenceError, PersistenceResult,
+    PgPool, PgTransactionError, QueryableByName, RunQueryDsl, SqlUuid, Text, Timestamptz, Utc,
+    Uuid, Value, async_trait, ensure_device_message_id, fresh_device_message_ack_token, pg_conn,
+    sql_query,
 };
 pub struct PgDeviceMessageStore {
     pub pool: PgPool,
@@ -757,5 +758,116 @@ impl From<DeviceRow> for DeviceInventoryRecord {
             updated_at: row.updated_at,
             revoked_at: row.revoked_at,
         }
+    }
+}
+
+/// PostgreSQL-backed device key bundle store (`keys/upload`).
+pub struct PgDeviceKeyStore {
+    pub pool: PgPool,
+}
+
+#[async_trait]
+impl DeviceKeyStore for PgDeviceKeyStore {
+    async fn put(&self, actor: String, device_id: String, payload: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "INSERT INTO device_keys (actor_id, device_id, payload, updated_at) \
+             VALUES ($1, $2, $3, now()) \
+             ON CONFLICT (actor_id, device_id) DO UPDATE SET \
+                payload = EXCLUDED.payload, \
+                updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&actor)
+        .bind::<Text, _>(&device_id)
+        .bind::<Jsonb, _>(&payload)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::database)
+    }
+
+    async fn get(&self, actor: &str, device_id: &str) -> PersistenceResult<Option<Value>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("SELECT payload FROM device_keys WHERE actor_id = $1 AND device_id = $2")
+            .bind::<Text, _>(actor)
+            .bind::<Text, _>(device_id)
+            .get_result::<JsonPayloadRow>(&mut *conn)
+            .await
+            .optional()
+            .map(|row| row.map(|row| row.payload))
+            .map_err(PersistenceError::database)
+    }
+}
+
+/// PostgreSQL-backed one-time prekey pool. `put` replaces the whole
+/// (actor, device) pool; `claim` atomically pops the highest-`position` row.
+pub struct PgOneTimeKeyStore {
+    pub pool: PgPool,
+}
+
+#[async_trait]
+impl OneTimeKeyStore for PgOneTimeKeyStore {
+    async fn put(
+        &self,
+        actor: String,
+        device_id: String,
+        keys: Vec<Value>,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            sql_query("DELETE FROM one_time_keys WHERE actor_id = $1 AND device_id = $2")
+                .bind::<Text, _>(&actor)
+                .bind::<Text, _>(&device_id)
+                .execute(conn)
+                .await?;
+            for (position, key) in keys.iter().enumerate() {
+                sql_query(
+                    "INSERT INTO one_time_keys (actor_id, device_id, position, key) \
+                     VALUES ($1, $2, $3, $4)",
+                )
+                .bind::<Text, _>(&actor)
+                .bind::<Text, _>(&device_id)
+                .bind::<Integer, _>(position as i32)
+                .bind::<Jsonb, _>(key)
+                .execute(conn)
+                .await?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn claim(&self, actor: &str, device_id: &str) -> PersistenceResult<Option<Value>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        // Atomic pop: the row-locking subquery serializes concurrent claims so
+        // each pooled key is handed out exactly once, and the DELETE returns
+        // the claimed key in the same statement.
+        sql_query(
+            "DELETE FROM one_time_keys \
+             WHERE (actor_id, device_id, position) = ( \
+                 SELECT actor_id, device_id, position FROM one_time_keys \
+                 WHERE actor_id = $1 AND device_id = $2 \
+                 ORDER BY position DESC \
+                 LIMIT 1 \
+                 FOR UPDATE \
+             ) \
+             RETURNING key AS payload",
+        )
+        .bind::<Text, _>(actor)
+        .bind::<Text, _>(device_id)
+        .get_result::<JsonPayloadRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(|row| row.payload))
+        .map_err(PersistenceError::database)
     }
 }

@@ -1006,12 +1006,8 @@ async fn pg_restart(routes: &[VerifiedPeerRoute]) -> Option<AppState> {
     .expect("postgres migrations should run");
     let pool = db.pool.clone().expect("postgres test requires a pool");
     let config = outbox_test_config();
-    let fallback: std::sync::Arc<dyn soland_storage::PersistenceStore> =
-        std::sync::Arc::new(soland_storage_memory::SolandMemoryPersistenceStore::new());
     let persistence_store: std::sync::Arc<dyn soland_storage::PersistenceStore> =
-        std::sync::Arc::new(soland_storage_postgres::PgPersistenceStore::new(
-            pool, fallback,
-        ));
+        std::sync::Arc::new(soland_storage_postgres::PgPersistenceStore::new(pool));
     let persistence =
         soland_services::persistence::PersistenceHandle::from_shared(persistence_store.clone());
     let identity = soland_test_support::fixture_service_identity(&config);

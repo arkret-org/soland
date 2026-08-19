@@ -21,6 +21,24 @@ pub const FIXTURE_NOTARY_VERIFICATION_METHOD: &str = "did:web:alice.example#fixt
 const FIXTURE_BASIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
 const CONFORMANCE_FIXTURE_ID_DOMAIN: &str = "soland:conformance:realm-basis:";
 
+/// The patch paths the fixture field-scoped grant authorizes.
+///
+/// The registry marks `ak.strand.update` / `ak.morph.update` with
+/// `required_constraints = ["allowed_write_fields"]`, and `capabilities.md`
+/// forbids expanding such grants into unconstrained all-field writes. The
+/// fixture grant therefore names the surface the fixtures actually patch: the
+/// base Strand/Morph containers (`metadata`, `content`, `fields`) plus the
+/// Description/Synthesis paths `capabilities.md` keeps mutually
+/// non-implying.
+const FIXTURE_FIELD_SCOPED_WRITE_FIELDS: [&str; 6] = [
+    "content",
+    "encrypted_content",
+    "fields",
+    "metadata",
+    "tracks.synthesis.content",
+    "tracks.synthesis.encrypted_content",
+];
+
 /// Explicit inputs that distinguish one synthetic Realm basis from another.
 pub struct RealmBasisFixtureOptions<'a> {
     pub principal_server_id: &'a str,
@@ -176,6 +194,37 @@ pub fn build_realm_basis(
         .filter(|action| !OWNER_BOOTSTRAP_GRANT_ACTIONS.contains(&action.as_str()))
         .cloned()
         .collect::<Vec<_>>();
+    // Field-scoped actions (registry `required_constraints` names
+    // `allowed_write_fields`, e.g. `ak.strand.update` / `ak.morph.update`)
+    // MUST NOT ride the unconstrained content grant: the admission gate
+    // refuses an unconstrained grant as their cover, and an allow-listed
+    // `field_access` constraint on the shared grant would narrow every other
+    // action it carries. They get a dedicated grant instead.
+    let (field_scoped_actions, plain_content_actions): (Vec<String>, Vec<String>) =
+        explicit_content_actions
+            .iter()
+            .cloned()
+            .partition(|action| {
+                arkret_schema::capability_action(action).is_some_and(|descriptor| {
+                    descriptor
+                        .required_constraints
+                        .contains(&"allowed_write_fields")
+                })
+            });
+    let field_scoped_move = fixture_move_id(
+        fixture_id_domain,
+        realm_id,
+        subject,
+        data_plane_actions,
+        "field-scoped-grant",
+    )?;
+    let field_scoped_grant_id = fixture_grant_id(
+        fixture_id_domain,
+        realm_id,
+        subject,
+        data_plane_actions,
+        "field-scoped-grant",
+    );
     let genesis = serde_json::json!({"digest_algorithm": "sha256"});
     let reducer_profile = Value::String(arkret_wire::CORE_REDUCER_PROFILE.to_owned());
     let mut ops = Vec::new();
@@ -277,6 +326,7 @@ pub fn build_realm_basis(
         subject,
         principal_server_id,
         &owner_actions,
+        None,
     )?;
     ops.push((
         capability_grant_cell(&owner_grant_id)?,
@@ -290,13 +340,14 @@ pub fn build_realm_basis(
         grant_id: owner_grant_id,
         body: owner_grant_body,
     });
-    if !explicit_content_actions.is_empty() {
+    if !plain_content_actions.is_empty() {
         let content_grant_body = grant_body(
             &content_grant_id,
             realm_id,
             subject,
             principal_server_id,
-            &explicit_content_actions,
+            &plain_content_actions,
+            None,
         )?;
         ops.push((
             capability_grant_cell(&content_grant_id)?,
@@ -309,6 +360,32 @@ pub fn build_realm_basis(
         grants.push(ConformanceGrant {
             grant_id: content_grant_id,
             body: content_grant_body,
+        });
+    }
+    if !field_scoped_actions.is_empty() {
+        let field_scoped_grant_body = grant_body(
+            &field_scoped_grant_id,
+            realm_id,
+            subject,
+            principal_server_id,
+            &field_scoped_actions,
+            Some(serde_json::json!([{
+                "constraint_kind": "field_access",
+                "effect": "allow",
+                "allowed_write_fields": FIXTURE_FIELD_SCOPED_WRITE_FIELDS,
+            }])),
+        )?;
+        ops.push((
+            capability_grant_cell(&field_scoped_grant_id)?,
+            issued_op(
+                &issuer,
+                &field_scoped_move,
+                or_set_add(field_scoped_move.as_str(), field_scoped_grant_body.clone()),
+            ),
+        ));
+        grants.push(ConformanceGrant {
+            grant_id: field_scoped_grant_id,
+            body: field_scoped_grant_body,
         });
     }
 
@@ -324,8 +401,11 @@ pub fn build_realm_basis(
         authority_root_move.clone(),
         owner_move.clone(),
     ];
-    if !explicit_content_actions.is_empty() {
+    if !plain_content_actions.is_empty() {
         delta.push(content_move.clone());
+    }
+    if !field_scoped_actions.is_empty() {
+        delta.push(field_scoped_move.clone());
     }
     if notary_authority.is_some() {
         delta.push(notary_move);
@@ -453,8 +533,9 @@ fn grant_body(
     subject: &str,
     principal_server_id: &str,
     actions: &[String],
+    constraints: Option<Value>,
 ) -> Result<Value, String> {
-    Ok(serde_json::json!({
+    let mut body = serde_json::json!({
         "grant_id": grant_id,
         "schema": arkret_wire::SchemaId::CAPABILITY_V1,
         "realm_id": realm_id,
@@ -480,7 +561,11 @@ fn grant_body(
             "match_scope": "realm_wide"
         }],
         "issued_at": "2026-01-01T00:00:00.000Z"
-    }))
+    });
+    if let Some(constraints) = constraints {
+        body["constraints"] = constraints;
+    }
+    Ok(body)
 }
 
 #[cfg(test)]
@@ -551,6 +636,7 @@ mod tests {
             subject,
             "ak:did_core:web:principal-server.example",
             std::slice::from_ref(&action),
+            None,
         )
         .expect("canonical conformance grant");
 
@@ -577,5 +663,64 @@ mod tests {
             .expect("content grant must enter the effective capability set");
         assert_eq!(grant.subject, subject);
         assert_eq!(grant.actions, vec![action]);
+    }
+
+    #[test]
+    fn field_scoped_actions_get_a_dedicated_constrained_grant() {
+        let realm_id = "ak:realm:AZvHex1PY66SV1ktwvanY5DTtObiifOGrVl1LHL80p-_";
+        let subject = "ak:did_core:web:fixture.example";
+        let actions = vec![
+            "ak.strand.create".to_owned(),
+            "ak.strand.update".to_owned(),
+            "ak.morph.update".to_owned(),
+        ];
+        let basis = build_realm_basis(
+            realm_id,
+            subject,
+            RealmBasisFixtureOptions {
+                principal_server_id: "ak:did_core:web:principal-server.example",
+                notary_authority: Some("ak:did_core:web:notary.example"),
+                data_plane_actions: &actions,
+                fixture_id_domain: "soland:test:field-scoped:",
+            },
+        )
+        .expect("shared basis with field-scoped actions");
+
+        assert_eq!(basis.grants.len(), 3);
+        let plain = basis
+            .grants
+            .iter()
+            .find(|grant| grant.body["actions"] == json!(["ak.strand.create"]))
+            .expect("unconstrained content grant");
+        assert!(plain.body.get("constraints").is_none());
+        let field_scoped = basis
+            .grants
+            .iter()
+            .find(|grant| grant.body["actions"] == json!(["ak.strand.update", "ak.morph.update"]))
+            .expect("field-scoped content grant");
+        let constraint = &field_scoped.body["constraints"][0];
+        assert_eq!(constraint["constraint_kind"], "field_access");
+        assert_eq!(constraint["effect"], "allow");
+        assert!(
+            constraint["allowed_write_fields"]
+                .as_array()
+                .expect("allowed_write_fields list")
+                .contains(&json!("metadata"))
+        );
+
+        // The constrained grant must parse into the engine projection with its
+        // `field_access` constraint intact, or the admission gate would never
+        // see it as cover.
+        let state = CellState::Value(json!([{"value": field_scoped.body}]));
+        let grant = engine_grant_from_capability_cell_state(&field_scoped.grant_id, &state)
+            .expect("field-scoped grant must enter the effective capability set");
+        assert!(grant.constraints.iter().any(|constraint| matches!(
+            constraint,
+            arkret_policy::authz::authority::GrantConstraint::FieldAccess {
+                effect: arkret_policy::authz::authority::GrantDecisionVerdict::Allow,
+                allowed_write_fields,
+                ..
+            } if !allowed_write_fields.is_empty()
+        )));
     }
 }

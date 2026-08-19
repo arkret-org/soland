@@ -475,7 +475,8 @@ async fn to_device_capacity_eviction_sets_lost_watermark() {
     let alice_token = dev_token(state.clone()).await;
     let bob = "did:web:bob.example";
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
-    let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
+    let bob_token =
+        verified_dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
 
     for seq in 1..=3 {
         let mut device_targets = serde_json::Map::new();

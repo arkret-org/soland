@@ -430,7 +430,13 @@ fn document_projection_document(
     document.insert("fields".to_owned(), json!(morph.fields));
     document.insert("body".to_owned(), body);
     document.insert("schema_refs".to_owned(), json!(morph.schema_refs));
-    document.insert("facets".to_owned(), json!(morph.facets));
+    // The stored projection indexes facet parameters by facet name; the
+    // document view schema (`view.schema.json` document_morph_projection) is
+    // the ordered facet-name list.
+    document.insert(
+        "facets".to_owned(),
+        json!(morph.facets.keys().collect::<Vec<_>>()),
+    );
     document.insert(
         "created_by".to_owned(),
         Value::String(morph.created_by.clone()),

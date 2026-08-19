@@ -226,8 +226,10 @@ pub struct AppState {
     /// dispatch (`apply_member_identity_update`) and the sync roster
     /// projection (`SYNC-MEM-1..3`) both go through this. See
     /// [`MemberIdentityRegistry`] above for storage and effective-set
-    /// semantics; durable persistence lands when the MID schema migration
-    /// ships. Plaintext Ed25519 MemberIdentity proofs are verified on
+    /// semantics; writers persist through the durable
+    /// [`soland_storage::MemberIdentityStore`] first and startup hydration
+    /// rebuilds this registry from it. Plaintext Ed25519 MemberIdentity
+    /// proofs are verified on
     /// event ingest; encrypted/non-Ed25519 proof forms are refused
     /// fail-closed. Reducer-shape validation (digest binding, segment
     /// whitelist) IS real per MID-2.
@@ -464,7 +466,7 @@ mod test_construction {
             };
             let persistence = db.pool.as_ref().map_or_else(
                 || fallback.clone(),
-                |pool| Arc::new(PgPersistenceStore::new(pool.clone(), fallback.clone())),
+                |pool| Arc::new(PgPersistenceStore::new(pool.clone())),
             );
             Self::new_with_persistence(config, db, persistence)
         }
@@ -1482,6 +1484,45 @@ impl AppState {
         // the application service.
         self.consents.hydrate_runtime().await?;
 
+        // MID-1..6 — rebuild the in-memory member-identity registry from the
+        // durable store so a restart does not reset the R3.2 effective-set
+        // digests (`expected_state_digest` guard) or the roster projection.
+        {
+            let store = self.persistence.member_identity_store();
+            match (
+                store.snapshot_events().await,
+                store.snapshot_handle_claims().await,
+            ) {
+                (Ok(events), Ok(claims)) => {
+                    let mut registry = super::member_identity::MemberIdentityRegistry::new();
+                    let event_count = events.len();
+                    let claim_count = claims.len();
+                    for event in events {
+                        registry.insert(event);
+                    }
+                    for claim in claims {
+                        registry.restore_handle_claim(claim);
+                    }
+                    *self.member_identity.lock() = registry;
+                    if event_count > 0 || claim_count > 0 {
+                        tracing::info!(
+                            event_count,
+                            claim_count,
+                            "hydrated member identity registry from persistence store"
+                        );
+                    }
+                }
+                (events, claims) => {
+                    if let Err(error) = events {
+                        tracing::warn!(%error, "failed to hydrate member identity events");
+                    }
+                    if let Err(error) = claims {
+                        tracing::warn!(%error, "failed to hydrate member identity handle claims");
+                    }
+                }
+            }
+        }
+
         // `ak.component.direct_conversation.binding.v1` is an or_set, so fold
         // order carries no meaning: every accepted endorsement is a compatible
         // add and nothing supersedes anything (`contact-and-direct-conversation.md`
@@ -1559,20 +1600,58 @@ impl AppState {
             .current_state_digest_for_actor(realm_id, actor_id)
     }
 
-    pub(crate) fn record_member_identity_update(
+    /// MID-2..6 — persist the accepted `ak.member.identity.update` event (and
+    /// the handle-claim envelopes its payload carries) through the durable
+    /// store, then update the in-memory registry projection. The durable
+    /// write runs first so a crash mid-projection loses at worst the
+    /// in-memory view that hydration rebuilds on startup.
+    pub(crate) async fn record_member_identity_update(
         &self,
         record: super::MemberIdentityEventRecord,
         identity_payload: &Value,
     ) {
+        let store = self.persistence.member_identity_store();
+        if let Err(error) = store.put_event(&record).await {
+            tracing::error!(
+                %error,
+                event_id = %record.event_id,
+                "failed to persist member identity event"
+            );
+        }
+        let claim_records: Vec<super::HandleClaimEvidenceRecord> =
+            super::member_identity::handle_claim_envelopes_in_identity_payload(identity_payload)
+                .into_iter()
+                .filter_map(super::member_identity::handle_claim_record_from_envelope)
+                .collect();
+        for claim in &claim_records {
+            if let Err(error) = store.put_handle_claim(claim).await {
+                tracing::error!(
+                    %error,
+                    digest = %claim.digest,
+                    "failed to persist handle claim evidence"
+                );
+            }
+        }
         let mut registry = self.member_identity.lock();
         registry.insert(record);
-        registry.upsert_handle_claims_from_identity_payload(identity_payload);
+        for claim in claim_records {
+            registry.restore_handle_claim(claim);
+        }
     }
 
-    pub(crate) fn cache_handle_claim(&self, envelope: Value) -> Option<String> {
-        self.member_identity
-            .lock()
-            .upsert_handle_claim_envelope(envelope)
+    pub(crate) async fn cache_handle_claim(&self, envelope: Value) -> Option<String> {
+        let record = super::member_identity::handle_claim_record_from_envelope(&envelope)?;
+        let digest = record.digest.clone();
+        if let Err(error) = self
+            .persistence
+            .member_identity_store()
+            .put_handle_claim(&record)
+            .await
+        {
+            tracing::error!(%error, %digest, "failed to persist handle claim evidence");
+        }
+        self.member_identity.lock().restore_handle_claim(record);
+        Some(digest)
     }
 
     pub(crate) fn cached_handle_claims_for_subject(
@@ -1584,7 +1663,18 @@ impl AppState {
             .handle_claims_for_subject(subject_id)
     }
 
-    pub(crate) fn invalidate_cached_handle_claims_for_subject(&self, subject_id: &str) -> usize {
+    pub(crate) async fn invalidate_cached_handle_claims_for_subject(
+        &self,
+        subject_id: &str,
+    ) -> usize {
+        if let Err(error) = self
+            .persistence
+            .member_identity_store()
+            .delete_handle_claims_for_subject(subject_id)
+            .await
+        {
+            tracing::error!(%error, %subject_id, "failed to persist handle claim invalidation");
+        }
         self.member_identity
             .lock()
             .invalidate_handle_claims_for_subject(subject_id)
@@ -1599,7 +1689,10 @@ impl AppState {
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_cache_handle_claim(&self, envelope: Value) -> Option<String> {
-        self.cache_handle_claim(envelope)
+        let record = super::member_identity::handle_claim_record_from_envelope(&envelope)?;
+        let digest = record.digest.clone();
+        self.member_identity.lock().restore_handle_claim(record);
+        Some(digest)
     }
 
     pub fn next_to_device_position(&self) -> i64 {

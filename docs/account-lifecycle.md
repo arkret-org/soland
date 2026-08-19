@@ -12,7 +12,7 @@ contract, and the GDPR erasure cascade.
 | `active`       | default                                 | normal session issuance       |
 | `locked`       | `set_account_lifecycle_record`           | 403 `account_locked`          |
 | `suspended`    | `set_account_lifecycle_record`           | 403 `account_suspended`       |
-| `deactivated`  | `POST /_arkret/local/account/deactivate`      | 403 `account_deactivated`     |
+| `deactivated`  | `POST /_soland/admin/accounts/{did}/deactivate` | 403 `account_deactivated`     |
 | `erased`       | `POST /_arkret/local/account/erase`           | 401 `account_erased`          |
 
 Lifecycle records are durable through `AccountLifecycleStore`. The identity

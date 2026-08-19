@@ -153,7 +153,7 @@ fn accepted_authorization_binds_authority_tuple(
         && event_device_id == Some(device_id)
 }
 
-fn verified_device_authorization_binding(
+pub(crate) fn verified_device_authorization_binding(
     device: &soland_services::identity::DeviceIdentity,
 ) -> Result<Option<(arkret_identifiers::EventId, u64)>, ServiceError> {
     if device.verification_state != "verified" || device.revoked_at.is_some() {

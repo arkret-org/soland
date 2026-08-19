@@ -1535,6 +1535,14 @@ async fn submit_event_batch_outcome_with_leases(
         });
     }
 
+    // Batch-aware policy validators (`operations::policy_extra`) scan sibling
+    // Operations, so derive the whole batch's Operations once up front instead
+    // of letting each Event's admission lane see only its own.
+    let batch_operations: Vec<arkret_event_draft::ProjectedEventOperation> = envelopes
+        .iter()
+        .filter_map(projection_operation_from_envelope)
+        .collect();
+
     for (index, envelope) in envelopes.into_iter().enumerate() {
         let id = event_string_field_from_value(&envelope, "event_id")
             .unwrap_or_else(|| "unknown".to_owned());
@@ -1545,24 +1553,21 @@ async fn submit_event_batch_outcome_with_leases(
             state,
             session,
             envelope.clone(),
-            &realm_bootstrap_contexts,
-            None,
-            None,
-            authorization_leases
-                .and_then(|leases| leases.get(index))
-                .and_then(Option::as_ref),
-            control_proposal_acks
-                .and_then(|acks| acks.get(index))
-                .and_then(Option::as_ref),
-            membership_compensation_evidence
-                .and_then(|evidence| evidence.get(index))
-                .and_then(Option::as_ref),
-            None,
-            false,
-            None,
-            &[],
-            None,
-            None,
+            SubmitEventContext {
+                realm_bootstrap_contexts: &realm_bootstrap_contexts,
+                batch_operations: &batch_operations,
+                authorization_lease: authorization_leases
+                    .and_then(|leases| leases.get(index))
+                    .and_then(Option::as_ref),
+                control_proposal_ack: control_proposal_acks
+                    .and_then(|acks| acks.get(index))
+                    .and_then(Option::as_ref),
+                membership_compensation_evidence: membership_compensation_evidence
+                    .and_then(|evidence| evidence.get(index))
+                    .and_then(Option::as_ref),
+                ..SubmitEventContext::empty()
+            },
+            SubmitMode::Commit(SubmitCommitOptions::none()),
         )
         .await
         {
@@ -2888,15 +2893,17 @@ pub(crate) async fn submit_federation_events(
             {
                 Ok(()) => {}
                 Err("peer_claim_welcome_pending") => {
+                    let missing_event_ids = submissions
+                        .iter()
+                        .find(|submission| submission.event.event_id.as_str() == id)
+                        .map(|submission| submission.event.prev_refs.clone())
+                        .unwrap_or_default();
                     let mut item = rejected_item(
                         id,
                         ReasonCode::DependencyMissing,
                         Some("the Welcome peer claim ledger entry is not available yet".to_owned()),
                     );
-                    item.missing_event_ids =
-                        serde_json::from_value::<arkret_wire::Event>(envelope.clone())
-                            .map(|event| event.prev_refs)
-                            .unwrap_or_default();
+                    item.missing_event_ids = missing_event_ids;
                     rejected.push(item);
                     continue;
                 }
@@ -2944,6 +2951,16 @@ pub(crate) async fn submit_federation_events(
         .await
         {
             tracing::debug!(%error, event_id = %id, "federation Seal prerequisite is unavailable");
+            let missing_seal_refs = if error.code == ErrorCode::DependencyMissing {
+                submissions
+                    .iter()
+                    .find(|submission| submission.event.event_id.as_str() == id)
+                    .and_then(|submission| submission.event.seal_ref.clone())
+                    .into_iter()
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let mut item = rejected_item(
                 id,
                 if error.code == ErrorCode::DependencyMissing {
@@ -2953,15 +2970,7 @@ pub(crate) async fn submit_federation_events(
                 },
                 Some(error.message.to_string()),
             );
-            item.missing_seal_refs = if error.code == ErrorCode::DependencyMissing {
-                serde_json::from_value::<arkret_wire::Event>(envelope.clone())
-                    .ok()
-                    .and_then(|event| event.seal_ref)
-                    .into_iter()
-                    .collect()
-            } else {
-                Vec::new()
-            };
+            item.missing_seal_refs = missing_seal_refs;
             rejected.push(item);
             continue;
         }
@@ -2969,24 +2978,19 @@ pub(crate) async fn submit_federation_events(
             state,
             &session,
             envelope.clone(),
-            &[],
-            None,
-            Some(&admission),
-            // No lease is handed to the local minting path: this Event was
-            // already receipted by its origin ingress, and the transported
-            // evidence is stored verbatim below instead.
-            None,
-            inbound_control_proposal_acks.get(&id),
-            submissions
-                .iter()
-                .find(|submission| submission.event.event_id.as_str() == id)
-                .and_then(|submission| submission.membership_compensation_evidence.as_ref()),
-            None,
-            false,
-            None,
-            &[],
-            None,
-            None,
+            SubmitEventContext {
+                internal_admission: Some(&admission),
+                // No lease is handed to the local minting path: this Event was
+                // already receipted by its origin ingress, and the transported
+                // evidence is stored verbatim below instead.
+                control_proposal_ack: inbound_control_proposal_acks.get(&id),
+                membership_compensation_evidence: submissions
+                    .iter()
+                    .find(|submission| submission.event.event_id.as_str() == id)
+                    .and_then(|submission| submission.membership_compensation_evidence.as_ref()),
+                ..SubmitEventContext::empty()
+            },
+            SubmitMode::Commit(SubmitCommitOptions::none()),
         )
         .await
         {
@@ -3001,15 +3005,17 @@ pub(crate) async fn submit_federation_events(
             }
             Err(error) => {
                 if error.code == "dependency_missing" {
+                    let missing_event_ids = submissions
+                        .iter()
+                        .find(|submission| submission.event.event_id.as_str() == id)
+                        .map(|submission| submission.event.prev_refs.clone())
+                        .unwrap_or_default();
                     let mut item = rejected_item(
                         id,
                         ReasonCode::DependencyMissing,
                         Some("a predecessor Event has not arrived yet".to_owned()),
                     );
-                    item.missing_event_ids =
-                        serde_json::from_value::<arkret_wire::Event>(envelope.clone())
-                            .map(|event| event.prev_refs)
-                            .unwrap_or_default();
+                    item.missing_event_ids = missing_event_ids;
                     rejected.push(item);
                     continue;
                 }
@@ -3376,14 +3382,14 @@ use outcome::*;
 use post_commit::*;
 use preflight::*;
 use value::*;
-pub(in crate::routing::events::event_log) use value::{
-    self_principal_pcr_control_authority_rejection, submit_event_value_with_idempotency,
-};
 pub(in crate::routing) use value::{
-    submit_account_data_event_value, submit_event_value, submit_initial_event_submission,
-    submit_initial_event_submission_with_contact_projection,
+    DevicePairingAdmission, submit_account_data_event_value, submit_event_value,
+    submit_initial_event_submission, submit_initial_event_submission_with_contact_projection,
     submit_initial_event_submission_with_device_pairing, submit_mimi_event_value,
     submit_mimi_moderation_report_event_value,
+};
+pub(in crate::routing::events::event_log) use value::{
+    replay_ackless_self_principal_ingress, submit_event_value_with_idempotency,
 };
 // `submit_one_error_to_app_error` is defined in this module, so it needs no
 // re-export here; `event_log.rs` names it directly.

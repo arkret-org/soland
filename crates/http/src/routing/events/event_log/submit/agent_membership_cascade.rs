@@ -230,7 +230,7 @@ async fn exact_existing_event(
         )
     })?;
     if existing.canonical_bytes != submitted_bytes
-        && !exact_producer_retry(&existing.canonical_bytes, &submitted)
+        && !exact_producer_retry(&existing.canonical_bytes, event)
     {
         return Err(cascade_error(
             StatusCode::CONFLICT,
@@ -496,12 +496,20 @@ async fn finalize_prepared_batch(
             )
         })?;
     for event in prepared {
+        // The cascade prepares internally-admitted `ak.member.state` Events,
+        // which are never the Ack-less self-principal PCR class: the submit
+        // lane therefore minted or verified a canonical Ack during
+        // preparation, and its absence here is an invariant violation.
+        let control_proposal_ack = event.command.control_proposal_ack.clone().ok_or_else(|| {
+            cascade_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "cascade-prepared Control Move is missing its Control Proposal Ack",
+            )
+        })?;
         state
             .projections()
-            .put_pending_control_event(
-                &event.control_event,
-                event.command.control_proposal_ack.as_ref(),
-            )
+            .put_pending_control_event_with_ack(&event.control_event, &control_proposal_ack)
             .map_err(|error| {
                 cascade_error(
                     StatusCode::INTERNAL_SERVER_ERROR,

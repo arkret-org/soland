@@ -3,10 +3,10 @@ use super::{
     CircleProjectionStore, Jsonb, MorphProjectionRecord, MorphProjectionStore, Nullable,
     OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
     ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore, QueryableByName,
-    RunQueryDsl, SpaceContainerProjectionRecord, SpaceContainerProjectionStore, SqlUuid,
-    StrandProjectionRecord, StrandProjectionStore, StrandWatchProjectionRecord,
-    StrandWatchProjectionStore, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn,
-    sql_query,
+    RealmMetaRecord, RealmMetaStore, RunQueryDsl, SpaceContainerProjectionRecord,
+    SpaceContainerProjectionStore, SqlUuid, StrandProjectionRecord, StrandProjectionStore,
+    StrandWatchProjectionRecord, StrandWatchProjectionStore, Text, Timestamptz, Uuid, Value,
+    async_trait, ids, pg_conn, sql_query,
 };
 
 /// Space, Strand, Morph and Circle are Event-derived kinds: their protocol id is
@@ -1228,5 +1228,207 @@ impl StrandWatchProjectionStore for PgStrandWatchProjectionStore {
                 .collect()
         })
         .map_err(PersistenceError::database)
+    }
+}
+
+const REALM_META_COLUMNS: &str = "realm_id, owner, deleted, discoverability, history_visibility, \
+     history_sharing_policy, history_sharing_policy_digest, preview_policy, preview_policy_digest, \
+     asset_privacy_policy, asset_privacy_policy_digest, encryption_profile, \
+     plaintext_visible_services, plaintext_visible_service_classes, minimal_metadata_realm, \
+     aad_visibility_ceiling, created_at, updated_at";
+
+pub struct PgRealmMetaStore {
+    pub pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct RealmMetaRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    owner: String,
+    #[diesel(sql_type = Bool)]
+    deleted: bool,
+    #[diesel(sql_type = Text)]
+    discoverability: String,
+    #[diesel(sql_type = Text)]
+    history_visibility: String,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    history_sharing_policy: Option<Value>,
+    #[diesel(sql_type = Nullable<Text>)]
+    history_sharing_policy_digest: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    preview_policy: Option<Value>,
+    #[diesel(sql_type = Nullable<Text>)]
+    preview_policy_digest: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    asset_privacy_policy: Option<Value>,
+    #[diesel(sql_type = Nullable<Text>)]
+    asset_privacy_policy_digest: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    encryption_profile: Option<String>,
+    #[diesel(sql_type = Jsonb)]
+    plaintext_visible_services: Value,
+    #[diesel(sql_type = Jsonb)]
+    plaintext_visible_service_classes: Value,
+    #[diesel(sql_type = Bool)]
+    minimal_metadata_realm: bool,
+    #[diesel(sql_type = Text)]
+    aad_visibility_ceiling: String,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<RealmMetaRow> for RealmMetaRecord {
+    fn from(row: RealmMetaRow) -> Self {
+        Self {
+            owner: row.owner,
+            deleted: row.deleted,
+            discoverability: row.discoverability,
+            history_visibility: row.history_visibility,
+            history_sharing_policy: row.history_sharing_policy,
+            history_sharing_policy_digest: row.history_sharing_policy_digest,
+            preview_policy: row.preview_policy,
+            preview_policy_digest: row.preview_policy_digest,
+            asset_privacy_policy: row.asset_privacy_policy,
+            asset_privacy_policy_digest: row.asset_privacy_policy_digest,
+            encryption_profile: row.encryption_profile,
+            plaintext_visible_services: serde_json::from_value(row.plaintext_visible_services)
+                .unwrap_or_default(),
+            plaintext_visible_service_classes: serde_json::from_value(
+                row.plaintext_visible_service_classes,
+            )
+            .unwrap_or_default(),
+            minimal_metadata_realm: row.minimal_metadata_realm,
+            aad_visibility_ceiling: serde_json::from_value(Value::String(
+                row.aad_visibility_ceiling,
+            ))
+            .unwrap_or_default(),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+#[async_trait]
+impl RealmMetaStore for PgRealmMetaStore {
+    async fn get(&self, realm_id: &str) -> PersistenceResult<Option<RealmMetaRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(&format!(
+            "SELECT {REALM_META_COLUMNS} FROM realm_meta WHERE realm_id = $1"
+        ))
+        .bind::<Text, _>(realm_id)
+        .get_result::<RealmMetaRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(RealmMetaRecord::from))
+        .map_err(PersistenceError::database)
+    }
+
+    async fn put(&self, realm_id: &str, record: &RealmMetaRecord) -> PersistenceResult<()> {
+        let plaintext_visible_services = serde_json::to_value(&record.plaintext_visible_services)
+            .map_err(|error| {
+            PersistenceError::Internal(format!("cannot encode plaintext_visible_services: {error}"))
+        })?;
+        let plaintext_visible_service_classes =
+            serde_json::to_value(&record.plaintext_visible_service_classes).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "cannot encode plaintext_visible_service_classes: {error}"
+                ))
+            })?;
+        let aad_visibility_ceiling = serde_json::to_value(record.aad_visibility_ceiling)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .ok_or_else(|| {
+                PersistenceError::Internal("cannot encode aad_visibility_ceiling".to_owned())
+            })?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "INSERT INTO realm_meta \
+             (realm_id, owner, deleted, discoverability, history_visibility, \
+              history_sharing_policy, history_sharing_policy_digest, preview_policy, \
+              preview_policy_digest, asset_privacy_policy, asset_privacy_policy_digest, \
+              encryption_profile, plaintext_visible_services, plaintext_visible_service_classes, \
+              minimal_metadata_realm, aad_visibility_ceiling, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
+             ON CONFLICT (realm_id) DO UPDATE SET \
+                owner = EXCLUDED.owner, \
+                deleted = EXCLUDED.deleted, \
+                discoverability = EXCLUDED.discoverability, \
+                history_visibility = EXCLUDED.history_visibility, \
+                history_sharing_policy = EXCLUDED.history_sharing_policy, \
+                history_sharing_policy_digest = EXCLUDED.history_sharing_policy_digest, \
+                preview_policy = EXCLUDED.preview_policy, \
+                preview_policy_digest = EXCLUDED.preview_policy_digest, \
+                asset_privacy_policy = EXCLUDED.asset_privacy_policy, \
+                asset_privacy_policy_digest = EXCLUDED.asset_privacy_policy_digest, \
+                encryption_profile = EXCLUDED.encryption_profile, \
+                plaintext_visible_services = EXCLUDED.plaintext_visible_services, \
+                plaintext_visible_service_classes = EXCLUDED.plaintext_visible_service_classes, \
+                minimal_metadata_realm = EXCLUDED.minimal_metadata_realm, \
+                aad_visibility_ceiling = EXCLUDED.aad_visibility_ceiling, \
+                created_at = EXCLUDED.created_at, \
+                updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(realm_id)
+        .bind::<Text, _>(&record.owner)
+        .bind::<Bool, _>(record.deleted)
+        .bind::<Text, _>(&record.discoverability)
+        .bind::<Text, _>(&record.history_visibility)
+        .bind::<Nullable<Jsonb>, _>(&record.history_sharing_policy)
+        .bind::<Nullable<Text>, _>(&record.history_sharing_policy_digest)
+        .bind::<Nullable<Jsonb>, _>(&record.preview_policy)
+        .bind::<Nullable<Text>, _>(&record.preview_policy_digest)
+        .bind::<Nullable<Jsonb>, _>(&record.asset_privacy_policy)
+        .bind::<Nullable<Text>, _>(&record.asset_privacy_policy_digest)
+        .bind::<Nullable<Text>, _>(&record.encryption_profile)
+        .bind::<Jsonb, _>(&plaintext_visible_services)
+        .bind::<Jsonb, _>(&plaintext_visible_service_classes)
+        .bind::<Bool, _>(record.minimal_metadata_realm)
+        .bind::<Text, _>(&aad_visibility_ceiling)
+        .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::database)
+    }
+
+    async fn list(&self) -> PersistenceResult<Vec<(String, RealmMetaRecord)>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(&format!(
+            "SELECT {REALM_META_COLUMNS} FROM realm_meta ORDER BY realm_id"
+        ))
+        .load::<RealmMetaRow>(&mut *conn)
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| {
+                    let realm_id = row.realm_id.clone();
+                    (realm_id, RealmMetaRecord::from(row))
+                })
+                .collect()
+        })
+        .map_err(PersistenceError::database)
+    }
+
+    async fn delete(&self, realm_id: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("DELETE FROM realm_meta WHERE realm_id = $1")
+            .bind::<Text, _>(realm_id)
+            .execute(&mut *conn)
+            .await
+            .map(|_| ())
+            .map_err(PersistenceError::database)
     }
 }

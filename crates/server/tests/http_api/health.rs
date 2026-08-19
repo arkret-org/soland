@@ -77,12 +77,6 @@ async fn health_and_describe_work() {
             .iter()
             .any(|profile| profile == "ak.reducer.core.v1")
     );
-    assert!(
-        describe["supported_schema_profiles"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
     // Every advertised reducer profile has to be one the Spec registers.
     let reducer_profiles = describe["supported_reducer_profiles"].as_array().unwrap();
     assert!(!reducer_profiles.is_empty());

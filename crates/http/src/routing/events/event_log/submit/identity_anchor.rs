@@ -27,13 +27,10 @@ pub(super) fn batch_contains_identity_anchor(envelopes: &[Value]) -> bool {
     })
 }
 
-fn event_digests(envelopes: &[Value]) -> Result<Vec<String>, anyhow::Error> {
-    envelopes
+fn event_digests(events: &[&arkret_wire::Event]) -> Result<Vec<String>, anyhow::Error> {
+    events
         .iter()
-        .map(|envelope| {
-            let event = serde_json::from_value::<arkret_wire::Event>(envelope.clone())?;
-            Ok(event.event_digest()?)
-        })
+        .map(|event| Ok(event.event_digest()?))
         .collect()
 }
 
@@ -174,7 +171,7 @@ pub(super) async fn submit_identity_anchor_batch(
     };
 
     let first_contexts = identity_anchor_head_context.as_slice();
-    super::value::validate_origin_submission_shape(state, session, &envelopes[0])?;
+    super::value::validate_origin_submission_shape(state, session, &typed_create)?;
     let first =
         validate_event_envelope_with_context(state, session, &envelopes[0], first_contexts, None)
             .await?;
@@ -207,7 +204,7 @@ pub(super) async fn submit_identity_anchor_batch(
         is_bootstrap,
     )?;
     let second_contexts = std::slice::from_ref(&identity_anchor_context);
-    super::value::validate_origin_submission_shape(state, session, &envelopes[1])?;
+    super::value::validate_origin_submission_shape(state, session, &typed_authorize)?;
     let second =
         validate_event_envelope_with_context(state, session, &envelopes[1], second_contexts, None)
             .await?;
@@ -219,7 +216,7 @@ pub(super) async fn submit_identity_anchor_batch(
         .collect::<Vec<_>>();
     if let Some(mut outcome) = identical_historical_retry(state, &retry_candidates).await? {
         if authorization_leases.is_some_and(|leases| leases.iter().any(Option::is_some)) {
-            let digests = event_digests(&envelopes).map_err(|error| {
+            let digests = event_digests(&[&typed_create, &typed_authorize]).map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::BAD_REQUEST,
                     "schema_violation",
@@ -305,18 +302,7 @@ pub(super) async fn submit_identity_anchor_batch(
         Vec::new()
     };
     let mut reanchor_conflict = !conflict_evidence.is_empty();
-    let typed_control_events = envelopes
-        .iter()
-        .cloned()
-        .map(serde_json::from_value::<arkret_wire::Event>)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("accepted identity anchor is not canonical Event wire: {error}"),
-            )
-        })?;
+    let typed_control_events = vec![typed_create.clone(), typed_authorize.clone()];
     let control_proposal_acks = if reanchor_conflict {
         Vec::new()
     } else if is_bootstrap {
@@ -441,26 +427,27 @@ pub(super) async fn submit_identity_anchor_batch(
         .iter()
         .map(|record| record.ingress_receipt.clone())
         .collect::<Vec<_>>();
-    let accepted_envelopes = vec![
+    let (accepted_create_event, accepted_create_envelope, _) =
         super::value::accepted_event_envelope(
             state,
             session,
             envelopes[0].clone(),
+            typed_create.clone(),
             &first,
             received_at,
         )
-        .await?
-        .0,
+        .await?;
+    let (accepted_authorize_event, accepted_authorize_envelope, _) =
         super::value::accepted_event_envelope(
             state,
             session,
             envelopes[1].clone(),
+            typed_authorize.clone(),
             &second,
             received_at,
         )
-        .await?
-        .0,
-    ];
+        .await?;
+    let accepted_envelopes = vec![accepted_create_envelope, accepted_authorize_envelope];
     let records = vec![
         canonical_record(&first, accepted_envelopes[0].clone(), received_at),
         canonical_record(&second, accepted_envelopes[1].clone(), received_at),
@@ -641,20 +628,8 @@ pub(super) async fn submit_identity_anchor_batch(
     }
 
     if !reanchor_conflict {
-        let accepted_control_events = accepted_envelopes
-            .iter()
-            .cloned()
-            .map(|envelope| {
-                serde_json::from_value::<Event>(envelope).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("accepted identity anchor Event cannot be decoded: {error}"),
-                    )
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        for event in &accepted_control_events {
+        let accepted_control_events = [&accepted_create_event, &accepted_authorize_event];
+        for event in accepted_control_events {
             let digest = event.event_digest().map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -662,12 +637,23 @@ pub(super) async fn submit_identity_anchor_batch(
                     format!("accepted identity anchor digest failed: {error}"),
                 )
             })?;
+            // A committed anchor unit minted exactly one Ack per Control
+            // Move above; a miss here means the durable Event+Ack+pending
+            // atomicity is already broken, so fail instead of writing an
+            // Ack-less pending row.
             let ack = control_proposal_acks
                 .iter()
-                .find(|ack| ack.proposal_digest.as_str() == digest);
+                .find(|ack| ack.proposal_digest.as_str() == digest)
+                .ok_or_else(|| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        "accepted identity anchor is missing its minted Control Proposal Ack",
+                    )
+                })?;
             state
                 .projections()
-                .put_pending_control_event(event, ack)
+                .put_pending_control_event_with_ack(event, ack)
                 .map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -689,15 +675,9 @@ pub(super) async fn submit_identity_anchor_batch(
             }
         }
         if is_bootstrap {
-            let create =
-                serde_json::from_value::<Event>(envelopes[0].clone()).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("accepted PCR genesis Event is invalid: {error}"),
-                    )
-                })?;
-            if let Err(error) = persist_principal_resolution_projection(state, &create).await {
+            if let Err(error) =
+                persist_principal_resolution_projection(state, &accepted_create_event).await
+            {
                 tracing::error!(%error, event_id = %first.event_id, "principal genesis resolution read-index update failed");
             }
         }
@@ -978,7 +958,7 @@ pub(super) async fn identical_historical_retry(
     if existing.iter().zip(candidates).all(|(record, candidate)| {
         record.as_ref().is_some_and(|record| {
             record.canonical_bytes == candidate.canonical_bytes
-                || serde_json::from_slice::<Value>(&candidate.canonical_bytes).is_ok_and(
+                || serde_json::from_slice::<Event>(&candidate.canonical_bytes).is_ok_and(
                     |submitted| {
                         super::value::exact_producer_retry(&record.canonical_bytes, &submitted)
                     },
@@ -1030,7 +1010,13 @@ pub(super) async fn identical_historical_retry(
             } else {
                 None
             };
-            let ack = indexed_ack.or(durable_ack);
+            let ack = indexed_ack.or(durable_ack).ok_or_else(|| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "stored identity anchor is missing its durable Control Proposal Ack",
+                )
+            })?;
             let event = serde_json::from_value::<arkret_wire::Event>(record.envelope.clone())
                 .map_err(|error| {
                     SubmitOneError::new(
@@ -1041,7 +1027,7 @@ pub(super) async fn identical_historical_retry(
                 })?;
             state
                 .projections()
-                .put_pending_control_event(&event, ack.as_ref())
+                .put_pending_control_event_with_ack(&event, &ack)
                 .map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -1049,9 +1035,7 @@ pub(super) async fn identical_historical_retry(
                         format!("accepted identity anchor pending index recovery failed: {error}"),
                     )
                 })?;
-            if let Some(ack) = ack {
-                outcome.control_proposal_acks.push(ack);
-            }
+            outcome.control_proposal_acks.push(ack);
         }
         state.wake_control_seal_coordinator();
         return Ok(Some(outcome));
@@ -2379,6 +2363,48 @@ mod tests {
         assert_eq!(heads, expected_heads);
     }
 
+    fn anchor_ack(record: &CanonicalEventRecord) -> arkret_wire::ControlProposalAck {
+        let realm_id = arkret_identifiers::RealmId::new(
+            record
+                .realm_id
+                .clone()
+                .expect("anchor fixture is realm-scoped"),
+        )
+        .unwrap();
+        let proposal_digest = Hash::new(record.canonical_digest.clone()).unwrap();
+        let received_at = record.received_at;
+        let mut member = arkret_wire::ControlProposalAuthorityAck {
+            realm_id: realm_id.clone(),
+            proposal_digest: proposal_digest.clone(),
+            received_at,
+            decision_due_at: received_at + chrono::Duration::seconds(30),
+            absolute_due_at: received_at + chrono::Duration::seconds(90),
+            authority_set_ref: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
+            signature: arkret_wire::PayloadSignature {
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:webvh:z6mkfixture:notary.example#k1",
+                )
+                .unwrap(),
+                payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+                created_at: received_at,
+                jws: "e30..c2ln".to_owned(),
+                extra: Default::default(),
+            },
+        };
+        member.signature.payload_digest = member.authority_ack_digest().unwrap();
+        arkret_wire::ControlProposalAck {
+            kind: arkret_wire::ControlProposalAckKind::SignedAck,
+            realm_id,
+            proposal_digest,
+            received_at,
+            decision_due_at: member.decision_due_at,
+            absolute_due_at: member.absolute_due_at,
+            defer_count: 0,
+            authority_set_ref: member.authority_set_ref.clone(),
+            authority_acks: vec![member],
+        }
+    }
+
     #[tokio::test]
     async fn identical_retry_restores_ack_free_pending_anchor_index() {
         let state = AppState::new(
@@ -2409,14 +2435,23 @@ mod tests {
         );
         let reanchor_id = reanchor.event_id.clone();
         let authorize_id = authorize.event_id.clone();
+        // An accepted anchor unit commits Event+Ack atomically, so the
+        // fixture stores both through the same atomic entry the submit path
+        // uses; a bare canonical Event without its durable Ack is the broken
+        // state the retry restore must fail closed on.
         state
             .event_queries()
-            .store_canonical_event(reanchor.clone())
-            .await
-            .unwrap();
-        state
-            .event_queries()
-            .store_canonical_event(authorize.clone())
+            .store_identity_anchor_batch(
+                vec![reanchor.clone(), authorize.clone()],
+                vec![anchor_ack(&reanchor), anchor_ack(&authorize)],
+                None,
+                None,
+                None,
+                None,
+                None,
+                Vec::new(),
+                Vec::new(),
+            )
             .await
             .unwrap();
         let later = sdk_test_envelope(

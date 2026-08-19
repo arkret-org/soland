@@ -54,10 +54,17 @@ pub(crate) fn account_existing_session_error(
     state: &AppState,
     actor: &str,
 ) -> Option<(StatusCode, &'static str, &'static str)> {
-    // account-lifecycle.md §3: locked, deactivated, and erasure_pending
-    // invalidate existing session grants. Preserve the lifecycle-specific code
-    // instead of collapsing to generic unauthenticated.
+    // account-lifecycle.md §3: soft_logged_out, locked, deactivated, and
+    // erasure_pending invalidate existing session grants. Preserve the
+    // lifecycle-specific code instead of collapsing to generic
+    // unauthenticated. `suspended` deliberately stays valid here: §3 only
+    // refuses new grant issuance for it.
     match state.account_lifecycle_state(actor).as_str() {
+        "soft_logged_out" => Some((
+            StatusCode::UNAUTHORIZED,
+            ErrorCode::SoftLoggedOut.as_str(),
+            "account session is logged out",
+        )),
         "locked" => Some((
             StatusCode::UNAUTHORIZED,
             ErrorCode::AccountLocked.as_str(),
@@ -310,6 +317,104 @@ mod tests {
                 .get("device_public_key")
                 .and_then(serde_json::Value::as_str),
             Some("z6Mkexample")
+        );
+    }
+
+    /// `device-lifecycle.md` §5: a session login is never a device
+    /// authorization authority. A device with no prior accepted
+    /// `ak.device.authorize` — whether the account has no devices at all or
+    /// only other devices — stays `unverified` and gains no authorization
+    /// binding.
+    #[test]
+    fn session_login_keeps_new_device_unverified() {
+        let seen_at = now();
+        let actor = "did:example:alice";
+        let other = DeviceIdentity {
+            actor_id: actor.to_owned(),
+            device_id: "ak:device:01904100-0000-7000-8000-000000000002".to_owned(),
+            display_name: Some("Existing".to_owned()),
+            verification_state: "verified".to_owned(),
+            payload: json!({
+                "device_id": "ak:device:01904100-0000-7000-8000-000000000002",
+                "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa",
+                "authorized_generation_ref": 1
+            }),
+            created_at: seen_at,
+            updated_at: seen_at,
+            revoked_at: None,
+        };
+        let new_device_id = "ak:device:01904100-0000-7000-8000-000000000003";
+
+        let absent = session_device_inventory_record(&[], actor, new_device_id, None, seen_at);
+        assert_eq!(absent.verification_state, "unverified");
+        assert!(
+            absent.payload.get("device_authorize_event_id").is_none(),
+            "login must not mint an authorization binding"
+        );
+
+        let alongside_verified = session_device_inventory_record(
+            std::slice::from_ref(&other),
+            actor,
+            new_device_id,
+            None,
+            seen_at,
+        );
+        assert_eq!(alongside_verified.verification_state, "unverified");
+        assert!(
+            alongside_verified
+                .payload
+                .get("device_authorize_event_id")
+                .is_none()
+        );
+    }
+
+    /// A corrupted projection row — `verified` without its accepted
+    /// `device_authorize_event_id` — is a `device-lifecycle.md` §5 projection
+    /// integrity failure. Login must neither repair, downgrade nor overwrite
+    /// it, and the revocation gate consuming that row MUST fail closed with a
+    /// schema violation rather than treating the row as authorized.
+    #[test]
+    fn session_login_does_not_repair_corrupted_verified_device_row() {
+        let created_at = now() - Duration::hours(1);
+        let seen_at = now();
+        let corrupted = DeviceIdentity {
+            actor_id: "did:example:alice".to_owned(),
+            device_id: "ak:device:01904100-0000-7000-8000-000000000004".to_owned(),
+            display_name: Some("Corrupted".to_owned()),
+            verification_state: "verified".to_owned(),
+            payload: json!({
+                "device_id": "ak:device:01904100-0000-7000-8000-000000000004",
+                "device_public_key": "z6Mkcorrupted"
+            }),
+            created_at,
+            updated_at: created_at,
+            revoked_at: None,
+        };
+
+        let refreshed = session_device_inventory_record(
+            std::slice::from_ref(&corrupted),
+            &corrupted.actor_id,
+            &corrupted.device_id,
+            None,
+            seen_at,
+        );
+
+        assert_eq!(refreshed.verification_state, "verified");
+        assert!(refreshed.payload.get("device_authorize_event_id").is_none());
+        assert_eq!(
+            refreshed
+                .payload
+                .get("device_public_key")
+                .and_then(serde_json::Value::as_str),
+            Some("z6Mkcorrupted")
+        );
+        let gate =
+            crate::routing::identity::device_generation::verified_device_authorization_binding(
+                &refreshed,
+            );
+        assert!(
+            matches!(gate, Err(soland_services::ServiceError::SchemaViolation(_))),
+            "gate must fail closed on the corrupted row: {gate:?}"
         );
     }
 }

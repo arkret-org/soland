@@ -681,6 +681,14 @@ impl PersistenceHandle {
         Self { persistence }
     }
 
+    /// Durable member-identity registry store (accepted
+    /// `ak.member.identity.update` events plus the local handle-claim evidence
+    /// cache). `AppState` writes accepted projections through to this store
+    /// and rebuilds its in-memory registry from it during startup hydration.
+    pub fn member_identity_store(&self) -> &dyn soland_storage::MemberIdentityStore {
+        self.persistence.member_identity()
+    }
+
     pub fn event_services(&self) -> PersistenceEventServices {
         build_persistence_event_services(self.persistence.clone())
     }

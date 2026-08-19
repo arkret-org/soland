@@ -9,6 +9,7 @@ use arkret_models_collaboration::event_sync::{
 };
 use arkret_state::lattice::CellState;
 use arkret_state::lattice::ordered_log::IssuedOp;
+use arkret_state::state::store::{ControlProposalIngress, ControlProposalIngressClass};
 use arkret_state::state::{
     CellLatticeBinding, ControlEventStore, ControlMoveReject, ControlProposalSnapshot,
     PendingControlEventRecord, SealEffect, SealLeafUnionProof, SealReject, SealStore,
@@ -497,20 +498,24 @@ impl ProjectionService {
         event: &Event,
         ack: &ControlProposalAck,
     ) -> StoreResult<()> {
-        self.put_pending_control_event(event, Some(ack))
+        self.put_pending_control_event(event, &ControlProposalIngress::AckRequired(ack.clone()))
     }
 
     /// Record an accepted Control Move before a Seal may cover it.
     ///
-    /// Closed genesis units carry ingress-authority Control Proposal Acks even
-    /// though their Events have no predecessor `seal_basis`; the founding
-    /// Seal still supplies finality later.
+    /// The ingress classification is part of the durable row
+    /// (`event-auth-state-resolution.md` §7.2): `AckRequired` atomically binds
+    /// the canonical Control Proposal Ack (a genesis unit's
+    /// ingress-authority Ack included), while `AcklessSelfPrincipal` stores
+    /// the stable references its first admission was proven against. An
+    /// Ack-required Move without its Ack is unrepresentable here.
     pub fn put_pending_control_event(
         &self,
         event: &Event,
-        ack: Option<&ControlProposalAck>,
+        ingress: &ControlProposalIngress,
     ) -> StoreResult<()> {
-        self.control_event_store().put_pending_with_ack(event, ack)
+        self.control_event_store()
+            .put_pending_with_ingress(event, ingress)
     }
 
     /// Control-plane Events are keyed by their canonical `event_digest`, not by
@@ -645,13 +650,29 @@ impl ProjectionService {
                 // outside the external proposal/Ack bounded-decision rail.
                 // They remain pending until successor-Seal finality, but are
                 // not governance-health proposals and have no decision clock.
-                if ackless_authorized.contains(&digest) {
+                // Only a row durably classified AcklessSelfPrincipal at
+                // ingress may take this branch; an Ack-required row missing
+                // its Ack is an integrity failure no revalidation can excuse.
+                if matches!(
+                    record.ingress_class,
+                    ControlProposalIngressClass::AcklessSelfPrincipal(_)
+                ) && ackless_authorized.contains(&digest)
+                {
                     continue;
                 }
                 return Err(arkret_state::state::StoreError::Conflict(format!(
                     "pending Control Move {digest} is missing its Control Proposal Ack"
                 )));
             };
+            if matches!(
+                record.ingress_class,
+                ControlProposalIngressClass::AcklessSelfPrincipal(_)
+            ) {
+                return Err(arkret_state::state::StoreError::Conflict(format!(
+                    "pending Control Move {digest} carries a Control Proposal Ack but was \
+                     classified Ack-less at ingress"
+                )));
+            }
             ack.validate_structural(policy).map_err(|error| {
                 arkret_state::state::StoreError::Conflict(format!(
                     "pending Control Move {digest} has an invalid Control Proposal Ack \
@@ -706,13 +727,26 @@ impl ProjectionService {
             let Some(ack) = record.control_proposal_ack else {
                 // The same Ack-less PCR class has no proposal deadline to
                 // retain as a governance fault after its Seal is accepted.
-                if ackless_authorized.contains(&digest) {
+                if matches!(
+                    record.ingress_class,
+                    ControlProposalIngressClass::AcklessSelfPrincipal(_)
+                ) && ackless_authorized.contains(&digest)
+                {
                     continue;
                 }
                 return Err(arkret_state::state::StoreError::Conflict(format!(
                     "sealed Control Move {digest} is missing its Control Proposal Ack"
                 )));
             };
+            if matches!(
+                record.ingress_class,
+                ControlProposalIngressClass::AcklessSelfPrincipal(_)
+            ) {
+                return Err(arkret_state::state::StoreError::Conflict(format!(
+                    "sealed Control Move {digest} carries a Control Proposal Ack but was \
+                     classified Ack-less at ingress"
+                )));
+            }
             if record
                 .decisions
                 .iter()
@@ -1310,14 +1344,20 @@ impl ProjectionService {
 
     #[cfg(feature = "test-support")]
     #[doc(hidden)]
-    pub fn test_mark_control_event_sealed(&self, event: &Event, seal: &Seal) -> StoreResult<()> {
+    pub fn test_mark_control_event_sealed(
+        &self,
+        event: &Event,
+        seal: &Seal,
+        ingress: &ControlProposalIngress,
+    ) -> StoreResult<()> {
         let digest = Hash::new(
             event
                 .event_digest()
                 .map_err(|error| StoreError::Conflict(error.to_string()))?,
         )
         .map_err(|error| StoreError::Conflict(error.to_string()))?;
-        self.control_event_store().put_pending(event)?;
+        self.control_event_store()
+            .put_pending_with_ingress(event, ingress)?;
         self.control_event_store().mark_sealed(&digest, seal)
     }
 
@@ -1392,18 +1432,11 @@ impl ProjectionService {
         let state = self.state.lock();
         let invite = state.invites.get(invite_id).ok_or("not_found")?;
         let third_party_invite = invite.third_party_invite.as_ref().ok_or("not_found")?;
-        let expected_verification_public_key = third_party_invite
-            .get("verification_public_key")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or("verification_public_key_required")?;
-        let expected_verification_service_id = third_party_invite
-            .get("verification_service_id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or("verification_service_id_required")?;
+        let expected_verification_public_key = third_party_invite.verification_public_key.trim();
+        if expected_verification_public_key.is_empty() {
+            return Err("verification_public_key_required");
+        }
+        let expected_verification_service_id = third_party_invite.verification_service_id.as_str();
         let invite_record = serde_json::json!({
             "expires_at": arkret_canonical::format_timestamp_canonical(invite.expires_at),
             "invite_id": invite.invite_id,
@@ -2739,11 +2772,25 @@ mod control_governance_health_tests {
         .unwrap()
     }
 
+    fn ackless_class() -> arkret_state::state::store::AcklessSelfPrincipalIngress {
+        arkret_state::state::store::AcklessSelfPrincipalIngress {
+            device_id: "ak:device:fixture".to_owned(),
+            device_authorize_event_id: "ak:event:fixture".to_owned(),
+            device_generation_ref: 1,
+            seal_basis_digest: "sha256:fixture".to_owned(),
+        }
+    }
+
     #[test]
     fn ackless_governance_exemption_is_exact_digest_and_default_fail_closed() {
         let service = service();
         let event = ackless_event("authorized");
-        service.put_pending_control_event(&event, None).unwrap();
+        service
+            .put_pending_control_event(
+                &event,
+                &ControlProposalIngress::AcklessSelfPrincipal(ackless_class()),
+            )
+            .unwrap();
         let realm_id = event.realm_id.clone();
 
         let default_error = service
