@@ -317,7 +317,7 @@ pub fn realm_genesis_payload(
 /// id it derives — is fully determined by this function plus the current
 /// `arkret-spec` artifacts.
 #[must_use]
-pub fn development_demo_genesis_event() -> arkret_wire::Event {
+pub fn development_demo_genesis_event() -> arkret_wire::AuthoredEvent {
     let created_at = chrono::DateTime::parse_from_rfc3339(DEVELOPMENT_DEMO_GENESIS_CREATED_AT)
         .expect("development demo genesis timestamp")
         .with_timezone(&chrono::Utc);
@@ -360,7 +360,7 @@ pub fn development_demo_genesis_event() -> arkret_wire::Event {
 /// **derived**, never copied: a hard-coded literal went stale three times.
 #[must_use]
 pub fn development_demo_realm_id() -> RealmId {
-    RealmId::from_event_id(&development_demo_genesis_event().event_id)
+    RealmId::from_event_id(development_demo_genesis_event().event_id())
 }
 
 pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {

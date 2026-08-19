@@ -310,6 +310,11 @@ fn signed_actor_private_event_envelope(
         actor_id,
         verification_method.clone(),
     );
+    let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture envelope finalizes");
     arkret_signatures::sign_event(
         &mut event,
         &signer,
@@ -317,6 +322,7 @@ fn signed_actor_private_event_envelope(
         arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .expect("SDK Event signer accepts actor-private fixture");
+    let mut event = event.into_event();
     // `id-kind-registry.json` gives the `operation` kind `id_form:
     // producer_allocated`, so the Operation id is the producer's to mint and a
     // receiver cannot derive one from the content-bound full-digest Event id.

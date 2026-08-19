@@ -2076,6 +2076,11 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         arkret_wire::AuthorizationRef::new(agent_record.controller_authorization_ref.as_str())
             .unwrap(),
     );
+    let mut pending = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        pending,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture envelope finalizes");
     arkret_signatures::sign_event(
         &mut pending,
         &signer,
@@ -2087,6 +2092,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         },
     )
     .unwrap();
+    let pending = pending.into_event();
     state
         .test_persistence()
         .events()

@@ -153,6 +153,11 @@ fn resign_federation_event_as(event: Value, actor_full_id: &str) -> Value {
     );
     let created_at = event.created_at;
     event.proofs.clear();
+    let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture envelope finalizes");
     arkret_signatures::sign_event(
         &mut event,
         &signer,
@@ -160,6 +165,7 @@ fn resign_federation_event_as(event: Value, actor_full_id: &str) -> Value {
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .expect("federation fixture signs with its development verification method");
+    let mut event = event.into_event();
     let producer = event.proofs[0]
         .as_producer()
         .expect("fixture has one producer proof")

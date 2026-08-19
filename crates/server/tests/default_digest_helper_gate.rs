@@ -18,8 +18,13 @@ fn production_http_authoring_never_uses_default_event_digest_helpers() {
     let mut sources = Vec::new();
     rust_sources(&root, &mut sources);
 
+    // An `AuthoredEvent` carries the suite its identity was derived under, and
+    // signing reuses it, so the suite can only be chosen wrongly at the
+    // authoring boundary. These are the helpers that silently choose the v1
+    // default there; production Realm paths must pass the projected suite.
     let forbidden = [
-        "arkret_signatures::sign_event(",
+        "AuthoredEvent::finalize(",
+        ".author_now(",
         "event_proof_verification_context(",
     ];
     let mut violations = Vec::new();

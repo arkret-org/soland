@@ -247,7 +247,7 @@ fn fixture_pcr_founding_device_descriptor(
 
 /// Deterministic, fully content-bound PCR create Event shared by fixtures that
 /// need to name the PCR before seeding its accepted projection.
-pub fn fixture_principal_control_realm_create(principal_id: &str) -> arkret_wire::Event {
+pub fn fixture_principal_control_realm_create(principal_id: &str) -> arkret_wire::AuthoredEvent {
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .expect("fixture PCR genesis timestamp")
         .with_timezone(&chrono::Utc);
@@ -415,7 +415,7 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
     }
     if is_principal_control_realm {
         let event = fixture_principal_control_realm_create(subject);
-        project_fixture_genesis_event(state, &realm, event).await;
+        project_fixture_genesis_event(state, &realm, event.into_event()).await;
         return;
     }
     let genesis_event_id = realm.event_id().to_string();

@@ -780,10 +780,13 @@ pub struct CommitAcceptedEventCommand {
     pub event: AcceptedEvent,
     pub device_pairing_authorization: Option<CommitDevicePairingAuthorization>,
     pub contact_projection: Option<CommitContactProjection>,
-    pub control_proposal_ack: Option<arkret_wire::ControlProposalAck>,
+    /// Durable ingress classification of an accepted Control Move
+    /// (`event-auth-state-resolution.md` §7.2): `Some` iff the Event enters the
+    /// pending-control log. Class and payload are inseparable at the store
+    /// boundary.
+    pub control_proposal_ingress: Option<arkret_state::state::store::ControlProposalIngress>,
     pub device_revocation_transition: Option<soland_storage::DeviceRevocationTransition>,
     pub device_revocation_gate: Option<soland_storage::DeviceRevocationGateSelector>,
-    pub self_principal_pcr_device_authorized: bool,
     pub projections: Vec<ProjectedEvent>,
     pub idempotency: Option<IdempotentResponse>,
     pub deliveries: Vec<FederationDelivery>,
@@ -2351,10 +2354,9 @@ mod tests {
                     envelope: serde_json::json!({}),
                     received_at: now,
                 },
-                control_proposal_ack: None,
+                control_proposal_ingress: None,
                 device_revocation_transition: None,
                 device_revocation_gate: None,
-                self_principal_pcr_device_authorized: false,
                 projections: vec![ProjectedEvent {
                     event_id,
                     realm_id,

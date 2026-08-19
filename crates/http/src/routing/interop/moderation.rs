@@ -89,17 +89,12 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
             });
     let reporter = typed_payload.reporter.as_str().to_owned();
     let target_ref = typed_payload.target_ref.clone();
-    let mut event =
-        arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::SelfModerationReport>::new(
-            event_scope,
-            service_actor_id.clone(),
-            service_actor_id,
-            typed_payload,
-        )
-        .and_then(|draft| draft.author(actor_seq, hlc, created_at))
-        .map_err(|error| AppError::internal(format!("moderation Event build failed: {error}")))?;
+    // Actor frontier and CBA basis are producer-signed envelope members, so
+    // they are resolved before authoring rather than written onto an Event that
+    // already carries an id.
+    let mut prev_refs = Vec::new();
     if let Some(max_actor_seq) = max_actor_seq {
-        event.prev_refs = records
+        prev_refs = records
             .iter()
             .filter(|record| record.actor_seq == max_actor_seq)
             .map(|record| {
@@ -108,10 +103,8 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        event
-            .prev_refs
-            .sort_by(|left, right| left.as_str().cmp(right.as_str()));
-        event.prev_refs.dedup();
+        prev_refs.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        prev_refs.dedup();
     }
     let seal = crate::notary::ensure_realm_seal_head(state, &realm_id)
         .map_err(|error| {
@@ -124,13 +117,28 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
             )
             .with_status(StatusCode::SERVICE_UNAVAILABLE)
         })?;
-    event.seal_ref = Some(seal.id);
-    event.auth_context = Some(arkret_wire::AuthContext {
-        actor_id: event.actor_id.clone(),
+    let auth_context = arkret_wire::AuthContext {
+        actor_id: service_actor_id.clone(),
         key_id: arkret_wire::OpaqueLocalId::new("notary-key").expect("notary key id is opaque"),
         key_epoch: 0,
         credential_epoch: None,
-    });
+    };
+    let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
+    let mut event =
+        arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::SelfModerationReport>::new(
+            event_scope,
+            service_actor_id.clone(),
+            service_actor_id,
+            typed_payload,
+        )
+        .and_then(|draft| {
+            draft
+                .with_prev_refs(prev_refs)
+                .with_seal_ref(seal.id)
+                .with_auth_context(auth_context)
+                .author_with_digest_suite(actor_seq, hlc, created_at, digest_suite)
+        })
+        .map_err(|error| AppError::internal(format!("moderation Event build failed: {error}")))?;
     let verification_method = arkret_wire::DidUrl::new(format!("{service_did}#notary-key"))
         .map_err(|error| {
             AppError::internal(format!(
@@ -142,18 +150,14 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
         service_did,
         verification_method.clone(),
     );
-    let digest_suite = state
-        .projections()
-        .realm_digest_suite(event.realm_id.as_str());
-    arkret_signatures::sign_event_with_digest_suite(
+    arkret_signatures::sign_event(
         &mut event,
         &signer,
         &verification_method,
-        digest_suite,
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .map_err(|error| AppError::internal(format!("moderation Event signing failed: {error}")))?;
-    let event_id = event.event_id.to_string();
+    let event_id = event.event_id().to_string();
     let session = soland_services::identity::SessionIdentityState {
         token_hash: "moderation-report-service".to_owned(),
         actor: state.service_id().clone(),

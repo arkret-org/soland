@@ -39,6 +39,7 @@ fn sign_contact_draft(
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .expect("sign prepared Contact Event");
+    let event = event.into_event();
     let proof = event
         .proofs
         .iter()

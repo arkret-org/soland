@@ -306,6 +306,13 @@ impl<'a> CallerSignedEvent<'a> {
             actor,
             verification_method.clone(),
         );
+        // Producer-signed content is complete: derive the identity once, then
+        // attach the proof the same way a real client does.
+        let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+            event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .expect("the fixture envelope finalizes");
         arkret_signatures::sign_event(
             &mut event,
             &signer,
@@ -313,7 +320,7 @@ impl<'a> CallerSignedEvent<'a> {
             arkret_signatures::SignEventOptions::new().with_created_at(now),
         )
         .expect("SDK Event signer accepts the fixture envelope");
-        event
+        event.into_event()
     }
 
     /// Build and sign the envelope, as the JSON an HTTP fixture posts.

@@ -9,6 +9,7 @@ use arkret_models_identity::{
     OrganizationRegistrationScope, OrganizationRegistrationStatus, ServiceRouteHandoverNotice,
     ServiceRouteHandoverNoticeCore, ServiceRouteHandoverState,
 };
+use arkret_state::state::store::ControlProposalIngress;
 use arkret_wire::{
     AccountStatusRecordId, DidCoreId, DidFullId, DidUrl, Hash, NonEmptyString, PayloadProof,
     ProofContextId, ProtocolSignature, RealmId, ReceiptId, SchemaId, project_full_id_to_core_id,
@@ -1022,8 +1023,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         device_pairing_authorization: None,
         contact_projection: None,
         event,
-        control_proposal_ack: Some(control_proposal_ack),
-        self_principal_pcr_device_authorized: false,
+        control_proposal_ingress: Some(ControlProposalIngress::AckRequired(control_proposal_ack)),
         device_revocation_transition: None,
         device_revocation_gate: None,
         projections: vec![ProjectionEventRecord {
@@ -1161,8 +1161,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         }),
         contact_projection: None,
         event: pairing_event,
-        control_proposal_ack: Some(pairing_ack),
-        self_principal_pcr_device_authorized: false,
+        control_proposal_ingress: Some(ControlProposalIngress::AckRequired(pairing_ack)),
         device_revocation_transition: None,
         device_revocation_gate: None,
         projections: vec![ProjectionEventRecord {
@@ -1260,13 +1259,10 @@ pub async fn assert_event_commit_unit_of_work_contract(
             conflict_code: "contact_round_conflict".to_owned(),
             invite_policy: None,
         }),
-        control_proposal_ack: Some(contract_control_proposal_ack(
-            &contact_event,
-            &realm_id,
-            now,
+        control_proposal_ingress: Some(ControlProposalIngress::AckRequired(
+            contract_control_proposal_ack(&contact_event, &realm_id, now),
         )),
         event: contact_event,
-        self_principal_pcr_device_authorized: false,
         device_revocation_transition: None,
         device_revocation_gate: None,
         projections: Vec::new(),
@@ -1345,13 +1341,10 @@ pub async fn assert_event_commit_unit_of_work_contract(
                 conflict_code: "contact_lineage_conflict".to_owned(),
                 invite_policy: None,
             }),
-            control_proposal_ack: Some(contract_control_proposal_ack(
-                &failed_contact_event,
-                &realm_id,
-                now,
+            control_proposal_ingress: Some(ControlProposalIngress::AckRequired(
+                contract_control_proposal_ack(&failed_contact_event, &realm_id, now),
             )),
             event: failed_contact_event,
-            self_principal_pcr_device_authorized: false,
             device_revocation_transition: None,
             device_revocation_gate: None,
             projections: Vec::new(),
@@ -1395,8 +1388,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         device_pairing_authorization: None,
         contact_projection: None,
         event: rollback_event,
-        control_proposal_ack: Some(rollback_ack),
-        self_principal_pcr_device_authorized: false,
+        control_proposal_ingress: Some(ControlProposalIngress::AckRequired(rollback_ack)),
         device_revocation_transition: None,
         device_revocation_gate: None,
         projections: vec![ProjectionEventRecord {

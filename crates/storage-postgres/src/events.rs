@@ -511,7 +511,7 @@ pub(crate) async fn bind_event_outbox_rows(
 async fn insert_pending_control_event(
     conn: &mut AsyncPgConnection,
     record: &CanonicalEventRecord,
-    control_proposal_ack: Option<&arkret_wire::ControlProposalAck>,
+    control_proposal_ack: &arkret_wire::ControlProposalAck,
 ) -> PersistenceResult<()> {
     let event =
         serde_json::from_value::<arkret_wire::Event>(record.envelope.clone()).map_err(|error| {
@@ -529,37 +529,43 @@ async fn insert_pending_control_event(
             "schema_violation: canonical digest differs from anchor Event digest".to_owned(),
         ));
     }
-    if let Some(control_proposal_ack) = control_proposal_ack {
-        if control_proposal_ack.proposal_digest.as_str() != digest
-            || control_proposal_ack.realm_id != event.realm_id
-        {
-            return Err(PersistenceError::Conflict(
-                "schema_violation: Control Proposal Ack does not bind anchor Event".to_owned(),
-            ));
-        }
-        control_proposal_ack
-            .validate_protocol_bounds()
+    // Anchor/bootstrap/founding rows always enter the pending-control log on
+    // the Ack-required rail: their Acks are minted server-side at admission.
+    if control_proposal_ack.proposal_digest.as_str() != digest
+        || control_proposal_ack.realm_id != event.realm_id
+    {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: Control Proposal Ack does not bind anchor Event".to_owned(),
+        ));
+    }
+    control_proposal_ack
+        .validate_protocol_bounds()
+        .map_err(|error| {
+            PersistenceError::Conflict(format!(
+                "schema_violation: invalid Control Proposal Ack: {error}"
+            ))
+        })?;
+    let control_proposal_ack = serde_json::to_value(control_proposal_ack).map_err(|error| {
+        PersistenceError::Internal(format!("Control Proposal Ack encoding failed: {error}"))
+    })?;
+    let ingress_class =
+        serde_json::to_value(arkret_state::state::store::ControlProposalIngressClass::AckRequired)
             .map_err(|error| {
-                PersistenceError::Conflict(format!(
-                    "schema_violation: invalid Control Proposal Ack: {error}"
+                PersistenceError::Internal(format!(
+                    "Control Move ingress class encoding failed: {error}"
                 ))
             })?;
-    }
-    let control_proposal_ack = control_proposal_ack
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(|error| {
-            PersistenceError::Internal(format!("Control Proposal Ack encoding failed: {error}"))
-        })?;
     sql_query(
         "INSERT INTO state_control_events \
-         (event_digest, realm_id, event_json, control_proposal_ack) VALUES ($1, $2, $3, $4) \
+         (event_digest, realm_id, event_json, control_proposal_ack, ingress_class) \
+         VALUES ($1, $2, $3, $4, $5) \
          ON CONFLICT (event_digest) DO UPDATE SET \
            control_proposal_ack = COALESCE( \
              state_control_events.control_proposal_ack, EXCLUDED.control_proposal_ack \
            ) \
          WHERE state_control_events.realm_id = EXCLUDED.realm_id \
            AND state_control_events.event_json = EXCLUDED.event_json \
+           AND state_control_events.ingress_class = EXCLUDED.ingress_class \
            AND (state_control_events.control_proposal_ack IS NULL \
              OR EXCLUDED.control_proposal_ack IS NULL \
              OR state_control_events.control_proposal_ack = EXCLUDED.control_proposal_ack)",
@@ -567,14 +573,15 @@ async fn insert_pending_control_event(
     .bind::<Text, _>(&digest)
     .bind::<Text, _>(event.realm_id.as_str())
     .bind::<Jsonb, _>(&record.envelope)
-    .bind::<Nullable<Jsonb>, _>(control_proposal_ack.as_ref())
+    .bind::<Jsonb, _>(&control_proposal_ack)
+    .bind::<Jsonb, _>(&ingress_class)
     .execute(conn)
     .await
     .map_err(PersistenceError::database)
     .and_then(|affected| {
         if affected == 0 {
             Err(PersistenceError::Conflict(
-                "duplicate_conflict: pending Control Move has different canonical bytes or Control Proposal Ack"
+                "duplicate_conflict: pending Control Move has different canonical bytes, ingress class or Control Proposal Ack"
                     .to_owned(),
             ))
         } else {
@@ -862,7 +869,7 @@ impl EventStore for PgEventStore {
                             .to_owned(),
                     )
                         })?;
-                    insert_pending_control_event(conn, &record, Some(control_proposal_ack)).await?;
+                    insert_pending_control_event(conn, &record, control_proposal_ack).await?;
                 }
                 // Same transaction as the Events: the delivery intent for a Realm
                 // genesis unit is not a post-commit best-effort follow-up.
@@ -993,7 +1000,7 @@ impl EventStore for PgEventStore {
                             .to_owned(),
                     )
                 })?;
-                insert_pending_control_event(conn, &record, Some(ack)).await?;
+                insert_pending_control_event(conn, &record, ack).await?;
             }
             let event_ids = serde_json::to_value(&slot.event_ids).map_err(PersistenceError::database)?;
             sql_query(
@@ -1179,7 +1186,14 @@ impl EventStore for PgEventStore {
                         insert_pending_control_event(
                             conn,
                             &record,
-                            control_proposal_acks_by_digest.get(&record.canonical_digest),
+                            control_proposal_acks_by_digest
+                                .get(&record.canonical_digest)
+                                .ok_or_else(|| {
+                                    PersistenceError::Conflict(
+                                        "schema_violation: identity anchor Control Move is missing Control Proposal Ack"
+                                            .to_owned(),
+                                    )
+                                })?,
                         )
                         .await?;
                     }

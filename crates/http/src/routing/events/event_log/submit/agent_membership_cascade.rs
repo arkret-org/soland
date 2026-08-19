@@ -6,6 +6,7 @@ use arkret_models_collaboration::governance::agent_membership_cascade::{
     AgentMembershipCascadeSchema, AgentMembershipCascadeSubmission,
     MAX_AGENT_MEMBERSHIP_CASCADE_TRANSITIONS,
 };
+use arkret_state::state::store::ControlProposalIngress;
 
 use super::*;
 
@@ -500,13 +501,19 @@ async fn finalize_prepared_batch(
         // which are never the Ack-less self-principal PCR class: the submit
         // lane therefore minted or verified a canonical Ack during
         // preparation, and its absence here is an invariant violation.
-        let control_proposal_ack = event.command.control_proposal_ack.clone().ok_or_else(|| {
-            cascade_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "cascade-prepared Control Move is missing its Control Proposal Ack",
-            )
-        })?;
+        let control_proposal_ack = event
+            .command
+            .control_proposal_ingress
+            .as_ref()
+            .and_then(ControlProposalIngress::ack)
+            .cloned()
+            .ok_or_else(|| {
+                cascade_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "cascade-prepared Control Move is missing its Control Proposal Ack",
+                )
+            })?;
         state
             .projections()
             .put_pending_control_event_with_ack(&event.control_event, &control_proposal_ack)
@@ -800,7 +807,14 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
 
     let acks = prepared
         .iter()
-        .filter_map(|event| event.command.control_proposal_ack.clone())
+        .filter_map(|event| {
+            event
+                .command
+                .control_proposal_ingress
+                .as_ref()
+                .and_then(ControlProposalIngress::ack)
+                .cloned()
+        })
         .collect::<Vec<_>>();
     if acks.len() != prepared.len() {
         return Err(cascade_error(
@@ -1292,7 +1306,14 @@ async fn submit_federated_cascade_after_transport_validation(
     }
     let acks = prepared
         .iter()
-        .filter_map(|event| event.command.control_proposal_ack.clone())
+        .filter_map(|event| {
+            event
+                .command
+                .control_proposal_ingress
+                .as_ref()
+                .and_then(ControlProposalIngress::ack)
+                .cloned()
+        })
         .collect::<Vec<_>>();
     if acks.len() != prepared.len() {
         return Err(cascade_error(

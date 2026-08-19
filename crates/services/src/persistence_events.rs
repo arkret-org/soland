@@ -159,10 +159,9 @@ fn persistence_event_commit_request(
                 invite_policy: commit.invite_policy,
             }
         }),
-        control_proposal_ack: command.control_proposal_ack,
+        control_proposal_ingress: command.control_proposal_ingress,
         device_revocation_transition: command.device_revocation_transition,
         device_revocation_gate: command.device_revocation_gate,
-        self_principal_pcr_device_authorized: command.self_principal_pcr_device_authorized,
         projections: command
             .projections
             .into_iter()

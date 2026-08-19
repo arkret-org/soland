@@ -215,7 +215,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         method_history_head: format!("sha256:{}", "1".repeat(64)),
         version_id: "1-Qmfixture".to_owned(),
     };
-    let mut bootstrap = arkret_bootstrap::build_self_principal_pcr_create(
+    let bootstrap = arkret_bootstrap::build_self_principal_pcr_create(
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
             principal_id: controller_id.clone(),
             principal_full_id: actor.clone(),
@@ -242,7 +242,8 @@ pub(crate) async fn seed_active_controller_device_generation(
         },
         &genesis_projector,
     )
-    .unwrap();
+    .unwrap()
+    .into_event();
     let realm = arkret_identifiers::RealmId::from_event_id(&bootstrap.event_id);
     let realm_id = realm.to_string();
     let authority_key = arkret_wire::PrincipalAuthorityKey::new(
@@ -257,6 +258,11 @@ pub(crate) async fn seed_active_controller_device_generation(
         actor.clone(),
         verification_method.clone(),
     );
+    let mut bootstrap = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        bootstrap,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture envelope finalizes");
     arkret_signatures::sign_event(
         &mut bootstrap,
         &bootstrap_signer,
@@ -268,6 +274,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .unwrap();
+    let bootstrap = bootstrap.into_event();
     let mut authorize = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::DeviceAuthorize.as_str(),
         arkret_wire::ScopeRef::Realm {
@@ -282,6 +289,11 @@ pub(crate) async fn seed_active_controller_device_generation(
     )
     .unwrap();
     authorize.prev_refs = vec![bootstrap.event_id.clone()];
+    let mut authorize = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        authorize,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture envelope finalizes");
     arkret_signatures::sign_event(
         &mut authorize,
         &bootstrap_signer,
@@ -289,6 +301,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .unwrap();
+    let authorize = authorize.into_event();
     let bootstrap_seal = arkret_bootstrap::build_self_principal_bootstrap_seal(
         &bootstrap,
         &authorize,
@@ -748,6 +761,11 @@ async fn provision_agent_sdk_commit_attempt_inner(
     pcr_genesis.authorization_ref = Some(controller_authorization_ref.clone().into());
     pcr_genesis.refs.clear();
     pcr_genesis.refresh_content_bound_identity().unwrap();
+    let mut pcr_genesis = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        pcr_genesis,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture envelope finalizes");
     arkret_signatures::sign_event(
         &mut pcr_genesis,
         &signer,
@@ -755,6 +773,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .unwrap();
+    let pcr_genesis = pcr_genesis.into_event();
     let principal_control_realm_id = pcr_genesis.realm_id.clone();
     let mut frontier_response = TestClient::query("http://server/_arkret/self/events/frontier")
         .json(&serde_json::json!({"realm_id": controller_realm_id}))
@@ -778,7 +797,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     else {
         panic!("controller Realm frontier must materialize a Seal view");
     };
-    let mut event = arkret_bootstrap::build_agent_provision_event_draft(
+    let event = arkret_bootstrap::build_agent_provision_intent(
         &controller_id,
         &controller_realm_id,
         &agent_id,
@@ -788,19 +807,24 @@ async fn provision_agent_sdk_commit_attempt_inner(
         &expected_scope_digest,
         arkret_models_identity::handle::HandleVisibility::Private,
         None,
-        arkret_bootstrap::AgentProvisionEventDraftOptions {
+        arkret_bootstrap::AgentProvisionIntentOptions {
             controller_principal_server_id: arkret_identifiers::DidCoreId::new(
                 state.service_id().to_owned(),
             )
             .unwrap(),
             created_at: now,
-            actor_seq: next_actor_seq,
-            hlc: arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0001-a13f9c2e")).unwrap(),
-            prev_refs: actor_frontier.frontier_event_ids,
             seal_basis: Some(frontier.seal_basis()),
         },
     )
     .unwrap();
+    let mut event = event
+        .with_prev_refs(actor_frontier.frontier_event_ids)
+        .author_with_digest_suite(
+            next_actor_seq,
+            arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0001-a13f9c2e")).unwrap(),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .expect("the provision intent finalizes");
     arkret_signatures::sign_event(
         &mut event,
         &signer,
@@ -808,6 +832,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .unwrap();
+    let event = event.into_event();
     let provision_event = prepare_self_principal_pcr_initial_submissions(state, token, vec![event])
         .await
         .into_iter()

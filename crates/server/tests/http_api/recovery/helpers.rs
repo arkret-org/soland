@@ -491,6 +491,11 @@ pub(crate) async fn post_recovery_policy(
         event_verification_method.clone(),
     );
     let event_created_at = event.created_at;
+    let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture envelope finalizes");
     arkret_signatures::sign_event(
         &mut event,
         &signer,
@@ -498,6 +503,7 @@ pub(crate) async fn post_recovery_policy(
         arkret_signatures::SignEventOptions::new().with_created_at(event_created_at),
     )
     .unwrap();
+    let event = event.into_event();
 
     let lease_request = arkret_wire::AuthorizationLeaseIssueRequestBody {
         events: vec![event.clone()],

@@ -205,7 +205,7 @@ fn stage_control_proposal_ack(
     let is_control_move =
         event.kind.is_reducer_input() && event.seal_ref.is_none() && event.auth_context.is_none();
     if !is_control_move {
-        if request.control_proposal_ack.is_some() || request.self_principal_pcr_device_authorized {
+        if request.control_proposal_ingress.is_some() {
             return Err(PersistenceError::Conflict(
                 "schema_violation: non-Control Event cannot carry Control Proposal authority"
                     .to_owned(),
@@ -223,23 +223,26 @@ fn stage_control_proposal_ack(
             "schema_violation: canonical digest differs from Control Move digest".to_owned(),
         ));
     }
-    if request.self_principal_pcr_device_authorized {
-        if event.kind == arkret_wire::EventKind::DeviceRevoke
-            || request.control_proposal_ack.is_some()
-            || !soland_storage::has_self_principal_pcr_device_authorized_shape(&event)
-        {
-            return Err(PersistenceError::Conflict(
-                "schema_violation: invalid self-principal PCR device-authorized Control Move"
-                    .to_owned(),
-            ));
+    let Some(ingress) = request.control_proposal_ingress.as_ref() else {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: accepted Control Move is missing its durable ingress classification"
+                .to_owned(),
+        ));
+    };
+    let ack = match ingress {
+        arkret_state::state::store::ControlProposalIngress::AcklessSelfPrincipal(_) => {
+            if event.kind == arkret_wire::EventKind::DeviceRevoke
+                || !soland_storage::has_self_principal_pcr_device_authorized_shape(&event)
+            {
+                return Err(PersistenceError::Conflict(
+                    "schema_violation: invalid self-principal PCR device-authorized Control Move"
+                        .to_owned(),
+                ));
+            }
+            return Ok(());
         }
-        return Ok(());
-    }
-    let ack = request.control_proposal_ack.as_ref().ok_or_else(|| {
-        PersistenceError::Conflict(
-            "schema_violation: accepted Control Move is missing Control Proposal Ack".to_owned(),
-        )
-    })?;
+        arkret_state::state::store::ControlProposalIngress::AckRequired(ack) => ack,
+    };
     ack.validate_protocol_bounds().map_err(|error| {
         PersistenceError::Conflict(format!(
             "schema_violation: invalid Control Proposal Ack: {error}"
@@ -281,7 +284,11 @@ fn stage_device_revocation(
     if !is_revoke
         || transition.proposal_event_id != request.event.event_id
         || transition.proposal_digest != request.event.canonical_digest
-        || request.control_proposal_ack.as_ref() != Some(&transition.control_proposal_ack)
+        || request
+            .control_proposal_ingress
+            .as_ref()
+            .and_then(arkret_state::state::store::ControlProposalIngress::ack)
+            != Some(&transition.control_proposal_ack)
     {
         return Err(PersistenceError::Conflict(
             "schema_violation: device revocation transition does not bind Event and Ack".to_owned(),
@@ -945,8 +952,7 @@ mod tests {
                 envelope,
                 received_at: Utc::now(),
             },
-            control_proposal_ack: None,
-            self_principal_pcr_device_authorized: false,
+            control_proposal_ingress: None,
             device_revocation_transition: None,
             device_revocation_gate: None,
             projections: Vec::new(),
@@ -1128,8 +1134,16 @@ mod tests {
                 envelope: serde_json::to_value(event).unwrap(),
                 received_at: created_at,
             },
-            control_proposal_ack: None,
-            self_principal_pcr_device_authorized: true,
+            control_proposal_ingress: Some(
+                arkret_state::state::store::ControlProposalIngress::AcklessSelfPrincipal(
+                    arkret_state::state::store::AcklessSelfPrincipalIngress {
+                        device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+                        device_authorize_event_id: format!("ak:event:{}", "b".repeat(43)),
+                        device_generation_ref: 1,
+                        seal_basis_digest: format!("sha256:{}", "a".repeat(64)),
+                    },
+                ),
+            ),
             device_revocation_transition: None,
             device_revocation_gate: None,
             projections: Vec::new(),
@@ -1221,8 +1235,11 @@ mod tests {
                     envelope: serde_json::to_value(event).unwrap(),
                     received_at: created_at,
                 },
-                control_proposal_ack: Some(control_proposal_ack),
-                self_principal_pcr_device_authorized: false,
+                control_proposal_ingress: Some(
+                    arkret_state::state::store::ControlProposalIngress::AckRequired(
+                        control_proposal_ack,
+                    ),
+                ),
                 device_revocation_transition: Some(transition),
                 device_revocation_gate: None,
                 projections: Vec::new(),
@@ -1244,12 +1261,12 @@ mod tests {
             "Ack-less PCR move must not synthesize an Ack"
         );
 
-        let mut missing_flag = request.clone();
-        missing_flag.self_principal_pcr_device_authorized = false;
+        let mut missing_classification = request.clone();
+        missing_classification.control_proposal_ingress = None;
         assert!(matches!(
-            stage_control_proposal_ack(&mut staged, &missing_flag),
+            stage_control_proposal_ack(&mut staged, &missing_classification),
             Err(PersistenceError::Conflict(reason))
-                if reason.contains("missing Control Proposal Ack")
+                if reason.contains("missing its durable ingress classification")
         ));
 
         let mut delegated = request;

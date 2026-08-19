@@ -57,23 +57,6 @@ pub(super) async fn persist_mimi_canonical_message_event(
     let typed_payload: arkret_models_collaboration::events_payloads::MessageCreatePayload =
         serde_json::from_value(payload)
             .map_err(|error| AppError::internal(format!("MIMI Event payload invalid: {error}")))?;
-    let mut event =
-        arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::MessageCreate>::new(
-            arkret_wire::ScopeRef::Realm {
-                realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).map_err(
-                    |error| AppError::internal(format!("MIMI realm id invalid: {error}")),
-                )?,
-            },
-            service_actor_id.clone(),
-            service_actor_id,
-            typed_payload,
-        )
-        .and_then(|draft| {
-            draft
-                .with_prev_refs(prev_refs)
-                .author(actor_seq, hlc, created_at)
-        })
-        .map_err(|error| AppError::internal(format!("MIMI Event build failed: {error}")))?;
     let verification_method = arkret_wire::DidUrl::new(format!("{service_did}#notary-key"))
         .map_err(|error| {
             AppError::internal(format!(
@@ -91,31 +74,47 @@ pub(super) async fn persist_mimi_canonical_message_event(
             )
             .with_status(StatusCode::SERVICE_UNAVAILABLE)
         })?;
-    event.seal_ref = Some(seal.id);
-    event.auth_context = Some(arkret_wire::AuthContext {
-        actor_id: event.actor_id.clone(),
+    let digest_suite = state.projections().realm_digest_suite(realm.as_str());
+    // The CBA basis is a producer-signed envelope member, so it belongs on the
+    // draft. Attaching it after authoring only worked while signing silently
+    // re-derived `event_id`, which is exactly the identity hole this closes.
+    let auth_context = arkret_wire::AuthContext {
+        actor_id: service_actor_id.clone(),
         key_id: arkret_wire::OpaqueLocalId::new("notary-key").expect("notary key id is opaque"),
         key_epoch: 0,
         credential_epoch: None,
-    });
+    };
+    let mut event =
+        arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::MessageCreate>::new(
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm.clone(),
+            },
+            service_actor_id.clone(),
+            service_actor_id,
+            typed_payload,
+        )
+        .and_then(|draft| {
+            draft
+                .with_prev_refs(prev_refs)
+                .with_seal_ref(seal.id)
+                .with_auth_context(auth_context)
+                .author_with_digest_suite(actor_seq, hlc, created_at, digest_suite)
+        })
+        .map_err(|error| AppError::internal(format!("MIMI Event build failed: {error}")))?;
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         state.notary_signing_key().as_ref().clone(),
         service_did,
         verification_method.clone(),
     );
     let canonical_created_at = event.created_at;
-    let digest_suite = state
-        .projections()
-        .realm_digest_suite(event.realm_id.as_str());
-    arkret_signatures::sign_event_with_digest_suite(
+    arkret_signatures::sign_event(
         &mut event,
         &signer,
         &verification_method,
-        digest_suite,
         arkret_signatures::SignEventOptions::new().with_created_at(canonical_created_at),
     )
     .map_err(|error| AppError::internal(format!("MIMI Event signing failed: {error}")))?;
-    let event_id = event.event_id.to_string();
+    let event_id = event.event_id().to_string();
     let now = chrono::Utc::now();
     let session = soland_services::identity::SessionIdentityState {
         token_hash: "mimi-provider-facade".to_owned(),

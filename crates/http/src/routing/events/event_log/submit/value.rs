@@ -2766,10 +2766,16 @@ pub(super) async fn submit_event_value_with_context(
             envelope,
             received_at,
         },
-        control_proposal_ack: control_proposal_ack.clone(),
+        control_proposal_ingress: match (
+            ackless_self_principal_ingress.clone(),
+            control_proposal_ack.clone(),
+        ) {
+            (Some(class), None) => Some(ControlProposalIngress::AcklessSelfPrincipal(class)),
+            (None, Some(ack)) => Some(ControlProposalIngress::AckRequired(ack)),
+            _ => None,
+        },
         device_revocation_transition,
         device_revocation_gate: local_device_revocation_gate,
-        self_principal_pcr_device_authorized,
         projections: projected_event
             .iter()
             .map(|event| soland_services::events::ProjectedEvent {
@@ -2823,7 +2829,12 @@ pub(super) async fn submit_event_value_with_context(
                 "agent membership cascade transition must be a Control Move",
             )
         })?;
-        if command.control_proposal_ack.is_none() {
+        if command
+            .control_proposal_ingress
+            .as_ref()
+            .and_then(ControlProposalIngress::ack)
+            .is_none()
+        {
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,
                 "failed_precondition",

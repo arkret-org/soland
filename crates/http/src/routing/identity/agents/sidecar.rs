@@ -634,7 +634,7 @@ fn author_typed_sidecar_event<K: arkret_event_draft::EventSpec>(
     refs: Vec<arkret_wire::EventRef>,
     created_at: chrono::DateTime<chrono::Utc>,
     payload: K::Payload,
-) -> Result<arkret_wire::Event, AppError> {
+) -> Result<arkret_wire::AuthoredEvent, AppError> {
     TypedEventDraft::<K>::new(scope_ref, actor_id, principal_server_id, payload)
         .map(|draft| draft.with_prev_refs(prev_refs).with_refs(refs))
         .and_then(|draft| draft.author(actor_seq, hlc, created_at))
