@@ -7,8 +7,8 @@ use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use soland_http::error::{AppError, ErrorCode};
 
+use crate::AppResult;
 use crate::state::AppState;
-use crate::{JsonResult, json_ok};
 
 const RESOLUTION_REFRESH_SECONDS: i64 = 300;
 const RESOLUTION_TTL_SECONDS: i64 = 600;
@@ -264,7 +264,8 @@ pub(crate) async fn ensure_current_record(
 async fn open_service_resolution(
     service_id: PathParam<String>,
     depot: &mut Depot,
-) -> JsonResult<ServiceResolutionRecord> {
+    res: &mut Response,
+) -> AppResult<()> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let requested = DidCoreId::new(service_id.into_inner())
         .map_err(|_| AppError::not_found("service resolution not found"))?;
@@ -273,5 +274,16 @@ async fn open_service_resolution(
         return Err(AppError::not_found("service resolution not found"));
     }
     let description = super::describe::build_server_description(state);
-    json_ok(ensure_current_record(state, &description).await?)
+    let record = ensure_current_record(state, &description).await?;
+    // service-surface.md: the current-record response body is the record's
+    // canonical JCS bytes — receivers reject non-byte-canonical wire and
+    // compute pinned_record_digest over these exact bytes, so the default
+    // field-declaration-order `Json` serialization is not a valid encoding.
+    let body = arkret_canonical::canonical_json_string(&record).map_err(|error| {
+        AppError::internal(format!(
+            "service resolution canonical encoding failed: {error}"
+        ))
+    })?;
+    res.render(Text::Json(body));
+    Ok(())
 }

@@ -327,6 +327,30 @@ async fn server_describe_accepts_only_its_selected_role() {
 }
 
 #[tokio::test]
+async fn open_service_resolution_serves_byte_canonical_record() {
+    let state = soland_test_support::app_state(test_config());
+    let service = app_from_state(state.clone());
+    let service_id = arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap();
+    let path = arkret_models_identity::canonical_service_current_record_path(&service_id);
+
+    let mut response = TestClient::get(format!("http://server{path}"))
+        .send(&service)
+        .await;
+    assert_eq!(response.status_code, Some(StatusCode::OK));
+    let body = response.take_string().await.unwrap();
+    // Trust preflights pin and hash the exact wire bytes (service-surface.md),
+    // so the body must already be byte-for-byte canonical — a declaration-order
+    // `Json` rendering of the record is not a valid encoding here.
+    let record: arkret_models_identity::ServiceResolutionRecord =
+        arkret_canonical::canonical::from_canonical_json_slice(body.as_bytes())
+            .expect("current-record response body must be byte-for-byte canonical JSON");
+    assert_eq!(
+        record.record.service_id.as_str(),
+        state.service_id().as_str()
+    );
+}
+
+#[tokio::test]
 async fn readyz_returns_503_until_session_grant_introspection_bearer_is_configured() {
     let mut config = test_config();
     config.development_mode = false;
