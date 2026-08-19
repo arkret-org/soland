@@ -151,7 +151,6 @@ dependencies = [
  "arkret-state",
  "arkret-wire",
  "chrono",
- "serde",
  "serde_json",
 ]
 
@@ -177,7 +176,6 @@ version = "0.3.0"
 dependencies = [
  "arkret-canonical",
  "arkret-models-crypto",
- "arkret-models-identity",
  "arkret-signatures",
  "arkret-wire",
  "chacha20poly1305",
@@ -225,7 +223,6 @@ dependencies = [
  "arkret-models-integration",
  "arkret-wire",
  "chrono",
- "salvo-oapi",
  "serde",
  "serde_json",
  "thiserror",
@@ -291,7 +288,6 @@ version = "0.3.0"
 dependencies = [
  "arkret-canonical",
  "arkret-egress-policy",
- "arkret-identifiers",
  "arkret-keystore",
  "arkret-models-identity",
  "arkret-signatures",
@@ -398,7 +394,6 @@ name = "arkret-models-crypto"
 version = "0.3.0"
 dependencies = [
  "arkret-canonical",
- "arkret-models-identity",
  "arkret-wire",
  "chrono",
  "hex",
@@ -436,7 +431,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "subtle",
  "url",
 ]
 
@@ -507,13 +501,10 @@ version = "0.3.0"
 dependencies = [
  "arkret-canonical",
  "arkret-models-collaboration",
- "arkret-models-crypto",
  "arkret-models-discovery",
- "arkret-models-identity",
  "arkret-models-integration",
  "arkret-rate-limit",
  "arkret-signatures",
- "arkret-state",
  "arkret-wire",
  "chrono",
  "serde",
@@ -525,10 +516,8 @@ name = "arkret-signatures"
 version = "0.3.0"
 dependencies = [
  "arkret-canonical",
- "arkret-event-draft",
  "arkret-models-collaboration",
  "arkret-models-crypto",
- "arkret-models-discovery",
  "arkret-models-identity",
  "arkret-state",
  "arkret-wire",
