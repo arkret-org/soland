@@ -40,7 +40,6 @@ pub type ProjectionSnapshot = ProjectionState;
 pub type CircleReadModel = soland_domain::reducer::CircleProjection;
 pub type CircleLifecycle = soland_domain::reducer::CircleLifecycleState;
 pub type MlsRemoveObligationView = soland_domain::reducer::MlsRemoveObligation;
-pub type MlsWelcomeView = soland_domain::reducer::MlsWelcome;
 pub type MlsCommitEpochView = soland_domain::reducer::MlsCommitEpoch;
 pub type MessageReadModel = soland_domain::reducer::MessageState;
 pub type MorphReadModel = soland_domain::reducer::MorphProjection;

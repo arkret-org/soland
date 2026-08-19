@@ -1153,21 +1153,6 @@ impl AppState {
         &self.dids
     }
 
-    /// Install the one shared outbound route resolver during composition.
-    /// Replacing it at runtime is forbidden because doing so could detach a
-    /// sender from the durable floor/quarantine store it previously used.
-    pub fn install_service_route_resolver(
-        &self,
-        resolver: Arc<ServiceRouteResolver>,
-    ) -> Result<(), &'static str> {
-        let mut slot = self.service_route_resolver.lock();
-        if slot.is_some() {
-            return Err("service route resolver is already installed");
-        }
-        *slot = Some(resolver);
-        Ok(())
-    }
-
     /// Obtain the shared resolver for a production send. Absence is a hard
     /// configuration error; callers must never fall back to a raw URL/cache.
     pub fn service_route_resolver(&self) -> Result<Arc<ServiceRouteResolver>, &'static str> {

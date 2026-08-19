@@ -26,13 +26,9 @@ otel = [
 anyhow = {workspace = true}
 async-trait = {workspace = true}
 base64 = {workspace = true}
-bs58 = {workspace = true}
 bytes = {workspace = true}
 chrono = {workspace = true,features = ["serde"]}
 arkret-canonical.workspace = true
-arkret-bootstrap.workspace = true
-arkret-crypto = {workspace = true,features = ["account-data"]}
-arkret-event-draft.workspace = true
 arkret-http-client.workspace = true
 arkret-identifiers.workspace = true
 arkret-identity.workspace = true
@@ -44,13 +40,10 @@ arkret-wire.workspace = true
 dotenvy = {workspace = true}
 ed25519-dalek = {workspace = true}
 futures-util = {workspace = true}
-hex = {workspace = true}
-hmac = {workspace = true}
 object_store = {workspace = true,features = ["aws"]}
 opentelemetry = {workspace = true,default-features = false,features = ["trace"],optional = true}
 opentelemetry-otlp = {workspace = true,default-features = false,features = ["trace", "grpc-tonic"],optional = true}
 opentelemetry_sdk = {workspace = true,default-features = false,features = ["trace", "rt-tokio"],optional = true}
-parking_lot = {workspace = true}
 # `url::Url` to feed the shared SDK `webvh::prepare_service_inception` primitive
 # when self-bootstrapping the deployment's own service DID (identity-did §3.7).
 # Already present in the lock tree via arkret-sdk.
@@ -78,6 +71,8 @@ tracing-subscriber = {workspace = true,features = ["env-filter", "json"]}
 uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]
+arkret-bootstrap.workspace = true
+arkret-crypto = {workspace = true,features = ["account-data"]}
 arkret-event-draft = { workspace = true, features = ["test-support"] }
 arkret-models-collaboration.workspace = true
 arkret-schema = {workspace = true,features = ["embedded-artifacts"]}
@@ -85,6 +80,10 @@ arkret-models-crypto.workspace = true
 arkret-models-discovery.workspace = true
 arkret-models-integration.workspace = true
 arkret-policy.workspace = true
+bs58 = {workspace = true}
+hex = {workspace = true}
+hmac = {workspace = true}
+parking_lot = {workspace = true}
 proptest = {workspace = true}
 salvo = {workspace = true,features = ["test"]}
 soland-domain = {workspace = true}

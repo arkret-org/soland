@@ -785,63 +785,6 @@ impl NotaryWorker {
         }))
     }
 
-    pub fn sign_compaction_seal(
-        &self,
-        state: &AppState,
-        realm_id: &RealmId,
-        view: &arkret_state::state::EffectiveSealView,
-    ) -> Result<Seal, NotaryError> {
-        if view.predecessor_refs.is_empty() {
-            return Err(NotaryError::Construction(
-                "compaction requires at least one accepted predecessor".to_owned(),
-            ));
-        }
-        if !self.is_authorized_for(state, realm_id)? {
-            return Err(NotaryError::NotAuthorized(realm_id.to_string()));
-        }
-        let sealed_at = chrono::Utc::now();
-        let covered = view
-            .covered_event_digests
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let completeness_root = self.completeness_root_for_covered(state, &covered)?;
-        let mut seal = Seal {
-            id: SealId::new(format!("ak:seal:sha256:{}", "00".repeat(32)))
-                .expect("zero Seal id is well-formed"),
-            realm_id: realm_id.clone(),
-            predecessor_refs: view.predecessor_refs.clone(),
-            delta: Vec::new(),
-            control_event_set_root: view.control_event_set_root.clone(),
-            state_root: view.state_root.clone(),
-            completeness_root,
-            notary_seq: self.next_notary_seq(state, &view.predecessor_refs)?,
-            data_view_root: None,
-            data_event_set_root: None,
-            availability_root: None,
-            coverage_scope: None,
-            covered_event_digests: view.covered_event_digests.clone(),
-            previous_state_root: None,
-            previous_digest_algorithm: None,
-            notary_signature: NotarySig::Single(zero_notary_sig_placeholder(
-                &state.service_full_id(),
-            )?),
-            sealed_at,
-            hlc: Hlc::new(state.hlc().now())
-                .map_err(|error| NotaryError::Construction(format!("invalid HLC: {error}")))?,
-            kind: arkret_wire::SealKind::Compaction,
-        };
-        seal.validate_structural()
-            .map_err(|error| NotaryError::Construction(format!("compaction Seal: {error}")))?;
-        let canonical_bytes = seal.canonical_bytes_for_id().map_err(|error| {
-            NotaryError::Construction(format!("compaction Seal bytes: {error}"))
-        })?;
-        seal.id = Seal::id_from_canonical_bytes(&canonical_bytes)
-            .map_err(|error| NotaryError::Construction(format!("compaction Seal id: {error}")))?;
-        seal.notary_signature = NotarySig::Single(self.signature_for(state, &canonical_bytes)?);
-        Ok(seal)
-    }
-
     fn completeness_root_for_covered(
         &self,
         state: &AppState,

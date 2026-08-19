@@ -1499,16 +1499,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    state_cell_cache (realm_id, cell_id, view_hash) {
-        realm_id -> Text,
-        cell_id -> Text,
-        view_hash -> Text,
-        state_json -> Jsonb,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     state_cell_ops (seq) {
         seq -> Int8,
         realm_id -> Text,
@@ -1721,7 +1711,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     signal_relay,
     signal_relay_position,
     signal_relay_watermark,
-    state_cell_cache,
     state_cell_ops,
     state_control_events,
     state_seal_signing_leases,

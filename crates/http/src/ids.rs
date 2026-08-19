@@ -30,16 +30,6 @@ pub fn generate(kind: &str) -> String {
     arkret_identifiers::new_prefixed_uuid7(&format!("ak:{kind}:"))
 }
 
-/// A locally-minted correlation token for a server-side record that stands
-/// behind no Event.
-///
-/// It is deliberately its own kind rather than a fabricated `ak:event:` id:
-/// an Event id is content-bound, so minting one would claim an Event that was
-/// never authored and that no receiver could resolve.
-pub fn generate_local_ref() -> String {
-    generate("local_ref")
-}
-
 pub fn generate_operation_id() -> String {
     generate("operation")
 }
@@ -57,10 +47,6 @@ pub fn generate_install_id() -> String {
 
 pub fn generate_snapshot_id() -> String {
     generate("snapshot")
-}
-
-pub fn generate_read_cursor_id() -> String {
-    generate("read_cursor")
 }
 
 /// Notification id helper. Spec uses the full `ak:notification:` kind.

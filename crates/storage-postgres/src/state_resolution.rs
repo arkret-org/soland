@@ -12,8 +12,8 @@ use arkret_state::state::{
     control_event_digest,
 };
 use arkret_wire::{
-    Bottom, ControlProposalAck, ControlProposalDecision, ControlProposalDecisionPolicy, Event,
-    LatticeOp, Seal,
+    ControlProposalAck, ControlProposalDecision, ControlProposalDecisionPolicy, Event, LatticeOp,
+    Seal,
 };
 use diesel::sql_types::{BigInt, Bool, Jsonb, Nullable, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
@@ -445,30 +445,6 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
     })
 }
 
-fn cell_state_from_value(value: Value) -> StoreResult<CellState> {
-    match value.get("state").and_then(Value::as_str) {
-        Some("value") => Ok(CellState::Value(
-            value.get("value").cloned().unwrap_or(Value::Null),
-        )),
-        Some("bottom") => {
-            let bottom = value
-                .get("bottom")
-                .cloned()
-                .ok_or_else(|| StoreError::Backend("cell state missing bottom".to_owned()))
-                .and_then(|bottom| {
-                    serde_json::from_value::<Bottom>(bottom).map_err(serde_to_store)
-                })?;
-            Ok(CellState::Bottom(bottom))
-        }
-        Some(other) => Err(StoreError::Backend(format!(
-            "unknown cell state tag: {other}"
-        ))),
-        None => Err(StoreError::Backend(
-            "cell state missing state tag".to_owned(),
-        )),
-    }
-}
-
 fn sealed_op_to_value(issued: &IssuedOp) -> StoreResult<Value> {
     Ok(serde_json::json!({
         "issuer": issued.issuer.as_str(),
@@ -527,19 +503,6 @@ fn effective_state_with_new_ops(
         );
     }
     Ok(joined)
-}
-
-fn cell_state_to_value(state: &CellState) -> StoreResult<Value> {
-    match state {
-        CellState::Value(value) => Ok(serde_json::json!({
-            "state": "value",
-            "value": value,
-        })),
-        CellState::Bottom(bottom) => Ok(serde_json::json!({
-            "state": "bottom",
-            "bottom": serde_json::to_value(bottom).map_err(serde_to_store)?,
-        })),
-    }
 }
 
 fn seal_predecessor_refs_json(seal: &Seal) -> Value {
@@ -1461,11 +1424,6 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     .bind::<Jsonb, _>(op_json)
                     .execute(&mut *conn)
                     .await?;
-                    sql_query("DELETE FROM state_cell_cache WHERE realm_id = $1 AND cell_id = $2")
-                        .bind::<Text, _>(&realm_id)
-                        .bind::<Text, _>(cell)
-                        .execute(&mut *conn)
-                        .await?;
                 }
                 let rows = sql_query(
                     "SELECT cell_id, seal_id, op_json \
@@ -1706,65 +1664,28 @@ impl CellStore for PgCellStore {
         })
     }
 
+    // No durable per-view state cache: nothing in the SDK state-resolution
+    // runtime consumes these `CellStore` hooks, so the backend deliberately
+    // reports a miss and drops writes instead of maintaining a table no read
+    // path can reach. `None` makes the runtime recompute from the sealed op
+    // log, which is always correct.
     fn cached_state(
         &self,
-        realm_id: &RealmId,
-        cell: &CellRef,
-        view_hash: &Hash,
+        _realm_id: &RealmId,
+        _cell: &CellRef,
+        _view_hash: &Hash,
     ) -> StoreResult<Option<CellState>> {
-        let pool = self.pool.clone();
-        let realm_id = realm_id.as_str().to_owned();
-        let cell = cell.as_str().to_owned();
-        let view_hash = view_hash.as_str().to_owned();
-        run_blocking(async move {
-            let mut conn = pg_conn(&pool).await?;
-            sql_query(
-                "SELECT state_json AS value \
-                 FROM state_cell_cache \
-                 WHERE realm_id = $1 AND cell_id = $2 AND view_hash = $3",
-            )
-            .bind::<Text, _>(&realm_id)
-            .bind::<Text, _>(&cell)
-            .bind::<Text, _>(&view_hash)
-            .get_result::<JsonRow>(&mut *conn)
-            .await
-            .optional()
-            .map_err(diesel_to_store)?
-            .map(|row| cell_state_from_value(row.value))
-            .transpose()
-        })
+        Ok(None)
     }
 
     fn put_cached_state(
         &self,
-        realm_id: &RealmId,
-        cell: &CellRef,
-        view_hash: &Hash,
-        state: &CellState,
+        _realm_id: &RealmId,
+        _cell: &CellRef,
+        _view_hash: &Hash,
+        _state: &CellState,
     ) -> StoreResult<()> {
-        let pool = self.pool.clone();
-        let realm_id = realm_id.as_str().to_owned();
-        let cell = cell.as_str().to_owned();
-        let view_hash = view_hash.as_str().to_owned();
-        let state_json = cell_state_to_value(state)?;
-        run_blocking(async move {
-            let mut conn = pg_conn(&pool).await?;
-            sql_query(
-                "INSERT INTO state_cell_cache (realm_id, cell_id, view_hash, state_json) \
-                 VALUES ($1, $2, $3, $4) \
-                 ON CONFLICT (realm_id, cell_id, view_hash) DO UPDATE SET \
-                   state_json = EXCLUDED.state_json, \
-                   updated_at = now()",
-            )
-            .bind::<Text, _>(&realm_id)
-            .bind::<Text, _>(&cell)
-            .bind::<Text, _>(&view_hash)
-            .bind::<Jsonb, _>(&state_json)
-            .execute(&mut *conn)
-            .await
-            .map(|_| ())
-            .map_err(diesel_to_store)
-        })
+        Ok(())
     }
 
     fn append_sealed_effects(
@@ -1807,12 +1728,6 @@ impl CellStore for PgCellStore {
                 .execute(&mut *conn)
                 .await
                 .map_err(diesel_to_store)?;
-                sql_query("DELETE FROM state_cell_cache WHERE realm_id = $1 AND cell_id = $2")
-                    .bind::<Text, _>(&realm_id)
-                    .bind::<Text, _>(&cell)
-                    .execute(&mut *conn)
-                    .await
-                    .map_err(diesel_to_store)?;
             }
             Ok(())
         })
@@ -1824,30 +1739,12 @@ impl CellStore for PgCellStore {
         let seal = seal.as_str().to_owned();
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
-            let cells = sql_query(
-                "SELECT DISTINCT cell_id AS value \
-                 FROM state_cell_ops \
-                 WHERE realm_id = $1 AND seal_id = $2",
-            )
-            .bind::<Text, _>(&realm_id)
-            .bind::<Text, _>(&seal)
-            .load::<TextRow>(&mut *conn)
-            .await
-            .map_err(diesel_to_store)?;
             sql_query("DELETE FROM state_cell_ops WHERE realm_id = $1 AND seal_id = $2")
                 .bind::<Text, _>(&realm_id)
                 .bind::<Text, _>(&seal)
                 .execute(&mut *conn)
                 .await
                 .map_err(diesel_to_store)?;
-            for cell in cells {
-                sql_query("DELETE FROM state_cell_cache WHERE realm_id = $1 AND cell_id = $2")
-                    .bind::<Text, _>(&realm_id)
-                    .bind::<Text, _>(&cell.value)
-                    .execute(&mut *conn)
-                    .await
-                    .map_err(diesel_to_store)?;
-            }
             Ok(())
         })
     }

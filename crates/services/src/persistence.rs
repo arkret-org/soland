@@ -47,20 +47,6 @@ impl PersistenceHandle {
             .await?)
     }
 
-    pub async fn current_account_status_record(
-        &self,
-        account_authority_id: &str,
-        account_id: &str,
-    ) -> crate::ServiceResult<
-        Option<arkret_models_collaboration::account_lifecycle::AccountStatusRecord>,
-    > {
-        Ok(self
-            .persistence
-            .account_status_replicas()
-            .current(account_authority_id, account_id)
-            .await?)
-    }
-
     pub async fn resolve_account_status_records(
         &self,
         account_authority_id: &str,
@@ -362,41 +348,6 @@ impl PersistenceHandle {
             .persistence
             .service_routes()
             .last_seen_floor(service_id, service_kind)
-            .await?)
-    }
-
-    pub async fn advance_service_route_floor(
-        &self,
-        floor: arkret_models_identity::ServiceResolutionLastSeenFloor,
-    ) -> crate::ServiceResult<soland_storage::MonotonicRouteWrite> {
-        Ok(self
-            .persistence
-            .service_routes()
-            .advance_last_seen_floor(floor)
-            .await?)
-    }
-
-    pub async fn service_route_notice_state(
-        &self,
-        service_id: &arkret_wire::DidCoreId,
-        service_kind: &str,
-        handover_id: &str,
-    ) -> crate::ServiceResult<Option<arkret_models_identity::ServiceRouteNoticeState>> {
-        Ok(self
-            .persistence
-            .service_routes()
-            .notice_state(service_id, service_kind, handover_id)
-            .await?)
-    }
-
-    pub async fn advance_service_route_notice(
-        &self,
-        notice: arkret_models_identity::ServiceRouteNoticeState,
-    ) -> crate::ServiceResult<soland_storage::MonotonicRouteWrite> {
-        Ok(self
-            .persistence
-            .service_routes()
-            .advance_notice_state(notice)
             .await?)
     }
 

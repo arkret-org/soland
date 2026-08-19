@@ -340,11 +340,3 @@ pub fn record_is_peer_authz_state_record(record: &CanonicalEventRecord) -> bool 
             | arkret_wire::EventKind::InviteAccept
     )
 }
-#[doc(hidden)]
-pub fn event_payload_field<'a>(envelope: &'a Value, field: &str) -> Option<&'a Value> {
-    let payload = envelope.get("payload")?;
-    payload
-        .get(field)
-        .or_else(|| payload.get("object").and_then(|object| object.get(field)))
-        .or_else(|| payload.get("patch").and_then(|patch| patch.get(field)))
-}

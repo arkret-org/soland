@@ -598,15 +598,6 @@ CREATE INDEX state_cell_ops_cell_idx ON public.state_cell_ops USING btree (realm
 
 CREATE INDEX state_cell_ops_seal_idx ON public.state_cell_ops USING btree (realm_id, seal_id);
 
-CREATE TABLE public.state_cell_cache (
-    realm_id text NOT NULL,
-    cell_id text NOT NULL,
-    view_hash text NOT NULL,
-    state_json jsonb NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT state_cell_cache_pkey PRIMARY KEY (realm_id, cell_id, view_hash)
-);
-
 CREATE TABLE public.consent_cells (
     id uuid PRIMARY KEY,
     holder_id text NOT NULL,

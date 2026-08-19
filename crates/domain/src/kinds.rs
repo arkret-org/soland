@@ -7,13 +7,6 @@ use serde_json::Value;
 
 use crate::artifacts;
 
-// AKP-0007 — typed Relation kind couples a "wide synthesis" Strand (often
-// Realm-default scope) to a "narrow discussion" Strand bound to a
-// `scope_circle_id` Circle. Stored on `ak.relation.create` /
-// `ak.relation.update` payloads as `relation_kind`. Spec
-// `zh/models/circle.md` §7.2.
-pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discussion_of";
-
 // COT-06-004: Realm default-Strand pointer event. The canonical event kind
 // constant is exposed as `arkret_wire::EventKind::RealmSetDefaultStrand`.
 

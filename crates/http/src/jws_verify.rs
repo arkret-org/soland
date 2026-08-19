@@ -186,37 +186,6 @@ pub async fn verify_did_controlled_ed25519_signature_async(
     verify_ed25519_signature_with_public_key(payload, signature_b64url, &public_key)
 }
 
-/// Verify a compact Ed25519 signature and require the resolved DID method to
-/// publish the exact multibase key carried by the signed protocol object.
-/// This prevents an object from naming the right method id while embedding a
-/// different attacker-controlled key.
-pub async fn verify_did_controlled_ed25519_signature_with_public_key_async(
-    payload: &[u8],
-    signature_b64url: &str,
-    verification_method: &str,
-    issuer: &str,
-    expected_public_key_multibase: &str,
-    state: &AppState,
-) -> Result<(), String> {
-    let did = arkret_identity::verification_method_did(verification_method)
-        .map_err(|error| error.to_string())?;
-    let issuer_did = DidFullId::new(issuer.to_owned()).map_err(|error| error.to_string())?;
-    if did != issuer_did {
-        return Err("verification method controller does not match issuer".to_owned());
-    }
-    let document = document_for_verification(state, &did, verification_method).await?;
-    let public_key_multibase = document
-        .verification_methods
-        .get(verification_method)
-        .ok_or_else(|| "verification method is absent from DID document".to_owned())?;
-    if public_key_multibase != expected_public_key_multibase {
-        return Err("embedded verification key does not match the resolved DID method".to_owned());
-    }
-    let public_key = arkret_canonical::decode_ed25519_multibase(public_key_multibase)
-        .map_err(|error| format!("verification method key is invalid: {error}"))?;
-    verify_ed25519_signature_with_public_key(payload, signature_b64url, &public_key)
-}
-
 pub fn verify_ed25519_signature_with_public_key(
     payload: &[u8],
     signature_b64url: &str,
@@ -777,21 +746,6 @@ pub fn verify_principal_authorized_control_ack_jws_async<'a>(
         );
         outcome
     })
-}
-
-/// Generic compact Ed25519 principal authorization remains fail-closed without
-/// an exact `(principal_id, principal_server_id)` account authority context and
-/// accepted local device evidence.
-pub async fn verify_principal_authorized_ed25519_signature_async(
-    _payload: &[u8],
-    _signature_b64url: &str,
-    _verification_method: &str,
-    _principal_id: &str,
-    _state: &AppState,
-) -> Result<(), PrincipalAuthorizedJwsError> {
-    Err(PrincipalAuthorizedJwsError::Verification(
-        "principal authorization requires an explicit account authority context".to_owned(),
-    ))
 }
 
 /// Event-proof counterpart of [`verify_principal_authorized_jws_ed25519_async`].
