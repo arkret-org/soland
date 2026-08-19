@@ -2099,7 +2099,8 @@ mod tests {
             },
             &genesis_cell_write_projector,
         )
-        .unwrap();
+        .unwrap()
+        .into_event();
         attach_bootstrap_fixture_proof(
             &mut create,
             "did:key:z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ#z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ",

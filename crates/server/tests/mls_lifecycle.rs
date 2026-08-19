@@ -237,6 +237,11 @@ fn signed_event(
         actor_full_id,
         verification_method.clone(),
     );
+    let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture envelope finalizes");
     arkret_signatures::sign_event(
         &mut event,
         &signer,
@@ -244,6 +249,7 @@ fn signed_event(
         arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .unwrap();
+    let event = event.into_event();
     serde_json::to_value(event).unwrap()
 }
 
@@ -267,6 +273,11 @@ fn set_event_prev_refs(event: &mut Value, prev_refs: &[&str]) {
         verification_method.clone(),
     );
     let created_at = typed.created_at;
+    let mut typed = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        typed,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture envelope finalizes");
     arkret_signatures::sign_event(
         &mut typed,
         &signer,
@@ -274,6 +285,7 @@ fn set_event_prev_refs(event: &mut Value, prev_refs: &[&str]) {
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .unwrap();
+    let typed = typed.into_event();
     *event = serde_json::to_value(typed).unwrap();
 }
 

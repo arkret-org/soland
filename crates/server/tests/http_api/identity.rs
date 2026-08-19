@@ -41,7 +41,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
         .into_iter()
         .find(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
         .expect("PCR genesis Event");
-    let mut genesis: arkret_wire::Event = serde_json::from_value(genesis_record.envelope).unwrap();
+    let genesis: arkret_wire::Event = serde_json::from_value(genesis_record.envelope).unwrap();
     let create_payload: RealmCreatePayload =
         serde_json::from_value(serde_json::to_value(&genesis.payload).unwrap()).unwrap();
     let descriptor = create_payload
@@ -79,7 +79,6 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
     )
     .unwrap();
     authorize.prev_refs = vec![genesis.event_id.clone()];
-    authorize.refresh_content_bound_identity().unwrap();
     let verification_method =
         arkret_wire::DidUrl::new(format!("{principal_full_id}#{}", descriptor.device_id)).unwrap();
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
@@ -87,16 +86,25 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
         principal_full.clone(),
         verification_method.clone(),
     );
-    for event in [&mut genesis, &mut authorize] {
+    let mut signed = Vec::new();
+    for event in [genesis, authorize] {
         let created_at = event.created_at;
-        arkret_signatures::sign_event(
+        let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
             event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .expect("fixture envelope finalizes");
+        arkret_signatures::sign_event(
+            &mut event,
             &signer,
             &verification_method,
             arkret_signatures::SignEventOptions::new().with_created_at(created_at),
         )
         .unwrap();
+        signed.push(event.into_event());
     }
+    let [genesis, authorize]: [arkret_wire::Event; 2] =
+        signed.try_into().expect("both fixtures signed");
     state
         .test_persistence()
         .events()

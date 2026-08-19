@@ -15,8 +15,8 @@ use arkret_models_collaboration::governance::peer_contact::{
 };
 use arkret_models_identity::ServiceResolutionCarrier;
 use arkret_wire::{
-    Base64UrlString, DidUrl, Event, IdempotencyKey, ProtocolOperationId, ProtocolSignature,
-    ReservationHandle,
+    AuthoredEvent, Base64UrlString, DidUrl, Event, IdempotencyKey, ProtocolOperationId,
+    ProtocolSignature, ReservationHandle,
 };
 use ed25519_dalek::Signature;
 use serde::de::DeserializeOwned;
@@ -387,7 +387,7 @@ fn new_unsigned_contact_event<K: arkret_event_draft::EventSpec>(
     seal_basis: arkret_wire::SealBasis,
     created_at: chrono::DateTime<chrono::Utc>,
     payload: K::Payload,
-) -> Result<Event, AppError> {
+) -> Result<AuthoredEvent, AppError> {
     arkret_event_draft::TypedEventDraft::<K>::new(
         arkret_wire::ScopeRef::Realm { realm_id },
         holder.contact_actor_id(),

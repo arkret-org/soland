@@ -1032,7 +1032,7 @@ async fn range_completeness_for_query(
         RangeCompletenessAttestationWitnessAttestation,
         RangeCompletenessAttestationWitnessAttestationWitnessesItem,
     };
-    use arkret_signatures::{Ed25519PayloadSigner, SignEventOptions, sign_event_with_digest_suite};
+    use arkret_signatures::{Ed25519PayloadSigner, SignEventOptions, sign_event};
     use arkret_wire::{Hash, PayloadProofPurpose, PayloadSigner, proof_kind};
 
     if !parts.include_completeness
@@ -1197,19 +1197,18 @@ async fn range_completeness_for_query(
         draft.author_with_digest_suite(actor_seq, attestation_hlc, observed_at, digest_suite)
     })
     .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let event_id = attestation_event.event_id.clone();
-    sign_event_with_digest_suite(
+    let event_id = attestation_event.event_id().clone();
+    sign_event(
         &mut attestation_event,
         &signer,
         &verification_method,
-        digest_suite,
         SignEventOptions::new().with_created_at(observed_at),
     )
     .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     Ok(Some(
         arkret_models_collaboration::http_bodies::EventsRangeCompleteness {
             attestation_refs: vec![event_id],
-            attestations: vec![attestation_event],
+            attestations: vec![attestation_event.into_event()],
         },
     ))
 }

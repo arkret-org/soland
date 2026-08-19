@@ -700,7 +700,7 @@ pub use soland_http::project_accepted_operations;
 pub fn fixture_principal_control_realm(principal_id: &str) -> String {
     cba_basis::fixture_principal_control_realm_create(principal_id)
         .realm_id
-        .into_string()
+        .to_string()
 }
 
 /// Project one accepted principal device together with the exact local account

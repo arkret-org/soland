@@ -532,31 +532,36 @@ fn signed_ghost_provision_body(
     let grant_binding = grant.canonical_proof_binding_bytes().unwrap();
     grant.proof.jws =
         arkret_signatures::jws::sign_jws_ed25519(&grant_binding, &signing_key).unwrap();
-    let mut accountability_event = arkret_event_draft::accountability_grant_event(
+    let accountability_intent = arkret_event_draft::accountability_grant_intent(
         &grant,
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
-        0,
-        arkret_identifiers::Hlc::new(format!(
-            "{:012x}-0000-a11ce001",
-            now.timestamp_millis().max(0) as u64
-        ))
-        .unwrap(),
+        now,
         None,
     )
-    .unwrap();
-    accountability_event.applet_id = Some(applet_id.clone());
-    accountability_event.authorization_ref =
-        Some(arkret_wire::AuthorizationRef::new(authorization_ref.clone()).unwrap());
-    accountability_event.seal_basis = Some(seal_basis.clone());
+    .unwrap()
+    .with_applet_id(applet_id.clone())
+    .with_authorization_ref(arkret_wire::AuthorizationRef::new(authorization_ref.clone()).unwrap())
+    .with_seal_basis(seal_basis.clone());
     let event_grant: AccountabilityGrantPayload =
-        serde_json::from_value(serde_json::to_value(&accountability_event.payload).unwrap())
+        serde_json::from_value(serde_json::to_value(accountability_intent.payload()).unwrap())
             .unwrap();
     assert_eq!(
         event_grant.canonical_proof_binding_bytes().unwrap(),
         grant_binding
     );
+    let mut accountability_event = accountability_intent
+        .author_with_digest_suite(
+            0,
+            arkret_identifiers::Hlc::new(format!(
+                "{:012x}-0000-a11ce001",
+                now.timestamp_millis().max(0) as u64
+            ))
+            .unwrap(),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .expect("the accountability intent finalizes");
     arkret_signatures::sign_event(
         &mut accountability_event,
         &signer,
@@ -564,6 +569,7 @@ fn signed_ghost_provision_body(
         arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .unwrap();
+    let accountability_event = accountability_event.into_event();
 
     let profile_external_ref = json!({
         "protocol": protocol,
@@ -589,28 +595,35 @@ fn signed_ghost_provision_body(
         arkret_wire::AuthorizationRef::new(authorization_ref).unwrap(),
         applet_id,
     );
+    // `ak.profile.create` is a control-plane reducer input in the event-kind
+    // registry, so `event-auth-state-resolution.md` §5 makes it a Control Move:
+    // it names the same accepted Seal basis as the accountability grant it
+    // travels with. The delegated applet authorization on the envelope is a
+    // separate, additive check — it never substitutes for the CBA basis. Both
+    // are producer-signed content, so they ride the intent, and the reference
+    // to the grant names its FINAL id.
     let mut profile_event = profile
-        .profile_create_event(
+        .profile_create_intent(
             arkret_wire::ScopeRef::Realm { realm_id },
+            now,
+            Some(&delegation),
+        )
+        .unwrap()
+        .with_ref(arkret_wire::EventRef::new(
+            accountability_event.event_id.as_str(),
+            "accountability",
+        ))
+        .with_seal_basis(seal_basis.clone())
+        .author_with_digest_suite(
             0,
             arkret_identifiers::Hlc::new(format!(
                 "{:012x}-0001-a11ce001",
                 now.timestamp_millis().max(0) as u64
             ))
             .unwrap(),
-            Some(&delegation),
+            arkret_canonical::DigestSuite::Sha256,
         )
-        .unwrap();
-    profile_event.refs.push(arkret_wire::EventRef::new(
-        accountability_event.event_id.as_str(),
-        "accountability",
-    ));
-    // `ak.profile.create` is a control-plane reducer input in the event-kind
-    // registry, so `event-auth-state-resolution.md` §5 makes it a Control Move:
-    // it names the same accepted Seal basis as the accountability grant it
-    // travels with. The delegated applet authorization on the envelope is a
-    // separate, additive check — it never substitutes for the CBA basis.
-    profile_event.seal_basis = Some(seal_basis.clone());
+        .expect("the profile intent finalizes");
     arkret_signatures::sign_event(
         &mut profile_event,
         &signer,
@@ -618,6 +631,7 @@ fn signed_ghost_provision_body(
         arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .unwrap();
+    let profile_event = profile_event.into_event();
     json!({
         "schema": "ak.applet.ghost_actor.provision_request.v1",
         "applet_id": package.applet_id,
@@ -1291,6 +1305,11 @@ async fn applet_message_event(
         .unwrap(),
         verification_method.clone(),
     );
+    let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture envelope finalizes");
     arkret_signatures::sign_event(
         &mut event,
         &signer,
@@ -1298,6 +1317,7 @@ async fn applet_message_event(
         arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .unwrap();
+    let event = event.into_event();
     serde_json::to_value(event).unwrap()
 }
 
@@ -1858,6 +1878,11 @@ async fn signed_install_events(
     .unwrap();
     registration_event.prev_refs = vec![EventId::new(frontier.event_id.clone()).unwrap()];
     registration_event.seal_basis = Some(seal_basis.clone());
+    let mut registration_event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        registration_event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture envelope finalizes");
     arkret_signatures::sign_event(
         &mut registration_event,
         &signer,
@@ -1865,6 +1890,7 @@ async fn signed_install_events(
         SignEventOptions::new().with_created_at(now),
     )
     .unwrap();
+    let registration_event = registration_event.into_event();
 
     let mut previous_event_id = registration_event.event_id.clone();
     let mut capability_grant_events = Vec::with_capacity(approved_actions.len());
@@ -1918,6 +1944,11 @@ async fn signed_install_events(
         .unwrap();
         event.prev_refs = vec![previous_event_id];
         event.seal_basis = Some(seal_basis.clone());
+        let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+            event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .expect("fixture envelope finalizes");
         arkret_signatures::sign_event(
             &mut event,
             &signer,
@@ -1925,6 +1956,7 @@ async fn signed_install_events(
             SignEventOptions::new().with_created_at(now),
         )
         .unwrap();
+        let event = event.into_event();
         previous_event_id = event.event_id.clone();
         capability_grant_events.push(event);
     }
@@ -2002,6 +2034,11 @@ async fn signed_revoke_events(
         .unwrap();
         event.prev_refs = vec![previous_event_id];
         event.seal_basis = Some(seal_basis.clone());
+        let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+            event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .expect("fixture envelope finalizes");
         arkret_signatures::sign_event(
             &mut event,
             &signer,
@@ -2009,6 +2046,7 @@ async fn signed_revoke_events(
             SignEventOptions::new().with_created_at(now),
         )
         .unwrap();
+        let event = event.into_event();
         previous_event_id = event.event_id.clone();
         submissions.push(arkret_wire::EventInitialSubmission {
             event,

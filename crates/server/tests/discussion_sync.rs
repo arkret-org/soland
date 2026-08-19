@@ -658,6 +658,11 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         actor_full,
         verification_method.clone(),
     );
+    let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture envelope finalizes");
     arkret_signatures::sign_event(
         &mut event,
         &signer,
@@ -665,6 +670,7 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .expect("SDK Event signer accepts discussion fixture");
+    let event = event.into_event();
     serde_json::to_value(event).expect("SDK Event serializes")
 }
 

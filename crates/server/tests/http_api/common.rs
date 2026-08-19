@@ -1071,6 +1071,11 @@ pub(crate) fn resign_canonical_event(event: &mut Value) {
         verification_method.clone(),
     );
     let created_at = typed.created_at;
+    let mut typed = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        typed,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture envelope finalizes");
     arkret_signatures::sign_event(
         &mut typed,
         &signer,
@@ -1078,6 +1083,7 @@ pub(crate) fn resign_canonical_event(event: &mut Value) {
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .expect("SDK Event signer re-signs mutated HTTP fixture");
+    let typed = typed.into_event();
     *event = serde_json::to_value(typed).expect("re-signed fixture serializes");
 }
 

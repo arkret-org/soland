@@ -2207,7 +2207,7 @@ mod federated_producer_event_proof_tests {
         ))
         .unwrap();
         let created_at = chrono::Utc::now();
-        let mut event = arkret_wire::test_support::raw_event_at(
+        let event = arkret_wire::test_support::raw_event_at(
             arkret_wire::EventKind::MessageCreate.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_wire::RealmId::new(
@@ -2232,15 +2232,19 @@ mod federated_producer_event_proof_tests {
             actor,
             verification_method.clone(),
         );
-        arkret_signatures::sign_event_with_digest_suite(
+        let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+            event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+        arkret_signatures::sign_event(
             &mut event,
             &signer,
             &verification_method,
-            arkret_canonical::DigestSuite::Sha256,
             arkret_signatures::SignEventOptions::new().with_created_at(created_at),
         )
         .unwrap();
-        event
+        event.into_event()
     }
 
     fn sign_with_protected_header(
