@@ -2,6 +2,8 @@
 //! `ProjectionState`; methods resolve by type, so cross-family
 //! `self.apply_*` / `self.check_*` calls are unaffected.
 
+use arkret_models_collaboration::events_payloads::ContentBlock;
+
 use super::*;
 
 impl ProjectionState {
@@ -75,7 +77,20 @@ impl ProjectionState {
             schema_refs,
             facets,
             versions,
-            content: object.get("content").cloned(),
+            // The create Event's `object` was already validated against the
+            // SDK `Morph` shape at admission, so `content` decodes as the
+            // authoritative `ContentBlock`; reject defensively if it does not.
+            content: match object.get("content").cloned() {
+                Some(value) => match ContentBlock::from_value(value) {
+                    Ok(content) => Some(content),
+                    Err(_) => {
+                        return ProjectionEffect::Rejected {
+                            reason: "morph_content_invalid".to_owned(),
+                        };
+                    }
+                },
+                None => None,
+            },
             encrypted_content: object.get("encrypted_content").cloned(),
             state: ObjectLifecycleState::Active,
             state_changed_at: None,

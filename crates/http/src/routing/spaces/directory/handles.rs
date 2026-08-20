@@ -691,7 +691,7 @@ pub(super) async fn signed_handle_claim(
         claim_scope: BTreeMap::new(),
         member_delivery_binding: Some(member_delivery_binding),
         claims: Vec::new(),
-        created_at: Some(created_at),
+        created_at,
         expires_at: Some(expires_at),
         verified_at: None,
         source_refs: Vec::new(),

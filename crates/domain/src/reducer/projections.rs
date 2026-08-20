@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
+use arkret_models_collaboration::events_payloads::ContentBlock;
 use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 use arkret_models_collaboration::objects::profiles::StrandTrack;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
@@ -707,7 +708,7 @@ impl CircleLifecycleState {
 }
 
 /// Server-side Morph state cache. Mirrors `projection_morphs` table.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MorphProjection {
     pub morph_id: String,
     pub realm_id: String,
@@ -726,7 +727,12 @@ pub struct MorphProjection {
     /// **both MUST be absent once `state=redacted`** — that absence is what
     /// makes "the content really was cleared" verifiable from a single
     /// materialized object instead of by replaying the event stream.
-    pub content: Option<Value>,
+    ///
+    /// Typed as the SDK [`ContentBlock`]: the morph payload validator has
+    /// already decoded the create Event through
+    /// `arkret_models_collaboration::objects::profiles::Morph`, so the
+    /// projection stores the same decoded shape instead of raw JSON.
+    pub content: Option<ContentBlock>,
     /// E2EE counterpart of `content`; mutually exclusive with it.
     pub encrypted_content: Option<Value>,
     pub state: ObjectLifecycleState,

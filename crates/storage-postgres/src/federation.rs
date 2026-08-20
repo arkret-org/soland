@@ -120,7 +120,9 @@ impl FederationOutboxStore for PgFederationOutboxStore {
                     "schema_violation: coalescing lane omits its position".to_owned(),
                 )
             })?;
-            let lock_key = format!("{}\0{coalescing_key}", record.peer_did);
+            // The advisory-lock key is bound as TEXT, and PostgreSQL rejects
+            // NUL in text; \u{1f} keeps the two halves unambiguous.
+            let lock_key = format!("{}\u{1f}{coalescing_key}", record.peer_did);
             sql_query("SELECT true AS present FROM pg_advisory_xact_lock(hashtextextended($1, 0))")
                 .bind::<Text, _>(&lock_key)
                 .get_result::<ExistsRow>(&mut *conn)
@@ -239,7 +241,8 @@ impl FederationOutboxStore for PgFederationOutboxStore {
             if let FederationOutboxOutcome::Superseded(successor) = &transition.outcome
                 && let Some(coalescing_key) = successor.coalescing_key.as_deref()
             {
-                let lock_key = format!("{}\0{coalescing_key}", successor.peer_did);
+                // Same TEXT-bound advisory-lock key as `enqueue`: no NUL.
+                let lock_key = format!("{}\u{1f}{coalescing_key}", successor.peer_did);
                 sql_query(
                     "SELECT true AS present FROM pg_advisory_xact_lock(hashtextextended($1, 0))",
                 )

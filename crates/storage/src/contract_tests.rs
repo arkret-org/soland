@@ -185,7 +185,13 @@ pub async fn assert_organization_registration_store_contract(
     // millisecond wire format, so a sub-millisecond `now` would compare
     // unequal after a durable JSON round-trip.
     let now = arkret_canonical::normalize_timestamp_canonical(database_timestamp_now());
-    let organization_full_id = test_full_id("zOrg", namespace);
+    // `project_full_id_to_core_id` drops the domain — and the namespace hash
+    // it carries — so the namespace must also reach the SCID slot, or a rerun
+    // on the same database reads the previous run's state as its own.
+    let organization_full_id = test_full_id(
+        &format!("zOrg{}", &test_hash_hex(namespace)[..12]),
+        namespace,
+    );
     let organization_id = project_full_id_to_core_id(&organization_full_id)
         .expect("organization full DID projects through the registered adapter");
     let first_admin = test_did("zAdmin", namespace);
@@ -2925,7 +2931,9 @@ pub async fn assert_service_route_handover_plan_store_contract(
     store: &dyn ServiceRouteHandoverPlanStore,
     service_id: &DidCoreId,
 ) {
-    let now = Utc::now();
+    // timestamptz is microsecond-precision; a nanosecond `now` would read back
+    // unequal and turn an identical re-open into a rejection.
+    let now = database_timestamp_now();
     let service_kind = "principal_server";
     let basis = digest_of("basis-record");
     let other_basis = digest_of("other-basis-record");

@@ -1416,17 +1416,22 @@ mod consent_proof_tests {
         let device_id = DeviceId::new(device_id.to_owned()).unwrap();
         let principal_server_id = request.consent_event.event.principal_server_id.clone();
         let created_at = now();
-        let genesis = arkret_wire::test_support::raw_event_at(
+        let mut genesis = arkret_wire::test_support::raw_event_at(
             EventKind::RealmCreate.as_str(),
             ScopeRef::RealmGenesis,
             request.actor_id.clone(),
             principal_server_id.clone(),
             0,
             Hlc::new("019641370000-0000-00000001".to_owned()).unwrap(),
-            json!({"fixture": "mimi-consent-authority"}),
+            json!({"object": {"purpose": "principal_control"}}),
             created_at,
         )
         .unwrap();
+        genesis.refs = vec![arkret_wire::EventRef::new(
+            format!("sha256:{}", "1".repeat(64)),
+            "did_inception",
+        )];
+        genesis.refresh_content_bound_identity().unwrap();
         let pcr_realm_id = genesis.realm_id.clone();
         let signing_key = arkret_signatures::development_signing_key(
             request.signature.verification_method.as_str(),
@@ -1434,7 +1439,7 @@ mod consent_proof_tests {
         let device_public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
             signing_key.verifying_key().as_bytes(),
         );
-        let authorize = arkret_wire::test_support::raw_event_at(
+        let mut authorize = arkret_wire::test_support::raw_event_at(
             EventKind::DeviceAuthorize.as_str(),
             ScopeRef::Realm {
                 realm_id: pcr_realm_id.clone(),
@@ -1457,6 +1462,14 @@ mod consent_proof_tests {
             created_at,
         )
         .unwrap();
+        authorize.prev_refs = vec![genesis.event_id.clone()];
+        authorize.refresh_content_bound_identity().unwrap();
+        state
+            .test_persistence()
+            .events()
+            .put(canonical_event_record(&genesis, created_at))
+            .await
+            .unwrap();
         state
             .test_persistence()
             .events()
@@ -1505,7 +1518,8 @@ mod consent_proof_tests {
                     payload: json!({
                         "device_id": device_id,
                         "device_public_key": device_public_key,
-                        "device_authorize_event_id": authorize.event_id
+                        "device_authorize_event_id": authorize.event_id,
+                        "authorized_generation_ref": 1
                     }),
                     created_at,
                     updated_at: created_at,

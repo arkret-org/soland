@@ -47,6 +47,23 @@ struct PreparedDeviceMessageTarget {
     intent_digest: String,
 }
 
+/// Canonical preimage of one to-device message intent, digested for
+/// idempotent-send conflict detection. The shape is typed so `kind` and
+/// `content` cannot be paired by hand-authored JSON; `content` stays the
+/// spec-open object declared by `device-message.schema.json` and arrives
+/// already validated through [`DeviceMessageTarget`].
+#[derive(serde::Serialize)]
+struct DeviceMessageIntentPreimage<'a> {
+    device_message_id: &'a arkret_wire::DeviceMessageId,
+    kind: &'a arkret_wire::ProtocolKind,
+    sender_principal_id: &'a str,
+    sender_device_id: &'a str,
+    recipient_principal_id: &'a arkret_wire::DidCoreId,
+    recipient_device_id: &'a arkret_wire::DeviceId,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    content: &'a BTreeMap<String, Value>,
+}
+
 pub(crate) async fn prune_device_messages_for_limits(
     state: &AppState,
 ) -> soland_services::ServiceResult<()> {
@@ -138,16 +155,16 @@ async fn send_device_messages(
                 "device_message_id": target.device_message_id,
             }))
             .map_err(|error| AppError::internal(error.to_string()))?;
-            let intent_digest = arkret_canonical::canonical_sha256(&json!({
-                "device_message_id": target.device_message_id,
-                "kind": target.kind,
-                "sender_principal_id": session.actor,
-                "sender_device_id": session.device_id,
-                "recipient_principal_id": recipient,
-                "recipient_device_id": device_id,
-                "expires_at": target.expires_at,
-                "content": target.content,
-            }))
+            let intent_digest = arkret_canonical::canonical_sha256(&DeviceMessageIntentPreimage {
+                device_message_id: &target.device_message_id,
+                kind: &target.kind,
+                sender_principal_id: &session.actor,
+                sender_device_id: &session.device_id,
+                recipient_principal_id: &recipient,
+                recipient_device_id: &device_id,
+                expires_at: target.expires_at,
+                content: &target.content,
+            })
             .map_err(|error| AppError::internal(error.to_string()))?;
             prepared_targets.push(PreparedDeviceMessageTarget {
                 recipient: recipient.to_string(),
@@ -200,7 +217,11 @@ async fn send_device_messages(
     } else {
         false
     };
-    if has_fresh_targets && !sender_verified {
+    // A restricted fresh-device session (development-mode, grant-less,
+    // same-principal, `ak.key.verification.*` only — device-lifecycle.md §7)
+    // may bootstrap without an accepted sender device; every other fresh send
+    // requires one.
+    if has_fresh_targets && !sender_verified && !restricted_fresh_device_verification {
         return Err(AppError::capability_denied(
             "to-device send requires an accepted current sender device",
         )
@@ -230,6 +251,15 @@ async fn send_device_messages(
             let target_active = device_is_active(target_record.as_ref()) || target_agent_endpoint;
             let target_verified =
                 device_is_active_verified(target_record.as_ref()) || target_agent_endpoint;
+            // The fresh-device bootstrap exemption reaches only authorized
+            // same-principal devices (the kind/principal restriction is pinned
+            // by `restricted_fresh_device_verification` above).
+            if !sender_verified && !target_verified {
+                return Err(AppError::capability_denied(
+                    "fresh device sessions may only send verification bootstrap to authorized same-principal devices",
+                )
+                .with_wire_code("fresh_device_scope_violation"));
+            }
             if secret_message && !target_verified {
                 return Err(AppError::capability_denied(
                     "secret to-device messages require authorized sender and recipient devices",

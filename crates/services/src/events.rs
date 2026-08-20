@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arkret_identifiers::{DidCoreId, RealmId};
+use arkret_models_collaboration::events_payloads::ContentBlock;
 use arkret_models_collaboration::events_payloads::agent::{
     AgentProvisionAccountabilityScope, AgentProvisionPayload,
 };
@@ -95,7 +96,7 @@ pub struct StrandProjectionRecord {
     pub scope_circle_id: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MorphProjectionRecord {
     pub morph_id: String,
     pub realm_id: String,
@@ -108,7 +109,9 @@ pub struct MorphProjectionRecord {
     pub versions: Vec<soland_domain::reducer::DocumentVersionProjection>,
     /// Canonical content slot; exactly one of the two is present on an active
     /// object and both are absent once `state=redacted` (common-fields.md 5.2).
-    pub content: Option<serde_json::Value>,
+    /// Typed as the SDK [`ContentBlock`], matching
+    /// `arkret_models_collaboration::objects::profiles::Morph`.
+    pub content: Option<ContentBlock>,
     pub encrypted_content: Option<serde_json::Value>,
     pub state: String,
     pub state_changed_at: Option<DateTime<Utc>>,

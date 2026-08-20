@@ -1048,7 +1048,6 @@ pub fn describe(
             .iter()
             .map(|profile| (*profile).to_owned())
             .collect(),
-        supported_schema_profiles: Vec::new(),
         auth_metadata,
         privacy_derivation: Some(crate::routing::push_target_privacy_derivation_claim(now())),
         receive_policy_constraints: None,

@@ -186,7 +186,8 @@ struct AgentGrantPresentation {
 
 /// Build the `Authorization`/`DPoP` header pair for one request. `htu` is the
 /// configured origin plus the bare path — the query string is excluded, exactly
-/// as the server's verifier reconstructs it.
+/// as the server's verifier reconstructs it. The grant rides the RFC 9449
+/// `DPoP` authorization scheme; `Bearer` is reserved for local dev sessions.
 fn agent_grant_headers(
     presentation: &AgentGrantPresentation,
     method: &str,
@@ -199,7 +200,7 @@ fn agent_grant_headers(
     )
     .expect("DPoP proof builds");
     (
-        format!("Bearer {}", presentation.grant_jwt),
+        format!("DPoP {}", presentation.grant_jwt),
         proof.header_value,
     )
 }
