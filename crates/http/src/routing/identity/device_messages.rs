@@ -200,14 +200,18 @@ async fn send_device_messages(
     } else {
         false
     };
+    if has_fresh_targets && !sender_verified {
+        return Err(AppError::capability_denied(
+            "to-device send requires an accepted current sender device",
+        )
+        .with_wire_code("device_unauthorized"));
+    }
 
     let mut batch_items = Vec::with_capacity(prepared_targets.len());
     for prepared in &prepared_targets {
         let message = if existing_message_outcomes.contains_key(&prepared.message_key) {
             None
         } else {
-            let same_principal = prepared.recipient == session.actor;
-            let verification_bootstrap = prepared.target.kind.starts_with("ak.key.verification.");
             let secret_message = prepared.target.kind.starts_with("ak.secret.");
             let target_record = state
                 .identities()
@@ -226,20 +230,13 @@ async fn send_device_messages(
             let target_active = device_is_active(target_record.as_ref()) || target_agent_endpoint;
             let target_verified =
                 device_is_active_verified(target_record.as_ref()) || target_agent_endpoint;
-            if !(sender_verified || same_principal && target_verified && verification_bootstrap) {
-                return Err(AppError::capability_denied(
-                    "fresh device sessions may only send verification bootstrap to authorized same-principal devices",
-                )
-                .with_wire_code("fresh_device_scope_violation"));
-            }
-            if secret_message && !(sender_verified && target_verified) {
+            if secret_message && !target_verified {
                 return Err(AppError::capability_denied(
                     "secret to-device messages require authorized sender and recipient devices",
                 )
                 .with_wire_code("device_unauthorized"));
             }
-            let deliverable = target_active
-                && (target_verified || sender_verified && same_principal && verification_bootstrap);
+            let deliverable = target_active;
             if deliverable {
                 let created_at = now();
                 let mut content = serde_json::to_value(&prepared.target)

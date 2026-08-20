@@ -1,4 +1,5 @@
 use arkret_wire::{
+    AcceptedDevicePossessionProof, AcceptedDevicePossessionVerification,
     DeviceRevocationGateActionClass, DeviceRevocationGateCheckOutcome,
     DeviceRevocationGateCheckRequestBody, DeviceRevocationGateDecision,
     DeviceRevocationGateDecisionReceipt, Hash, PayloadProof, SealId,
@@ -97,6 +98,13 @@ fn project_gate_decision(
     }
 }
 
+fn current_binding_stable(
+    before: Option<&soland_storage::DeviceRevocationGateSelector>,
+    after: Option<&soland_storage::DeviceRevocationGateSelector>,
+) -> bool {
+    before == after
+}
+
 #[salvo::oapi::endpoint(
     operation_id = "ak.peer.device_revocations.command.check",
     tags("events")
@@ -131,6 +139,7 @@ pub(super) async fn check_device_revocation_gate(
     if !matches!(
         request.action_class,
         DeviceRevocationGateActionClass::SessionGrantIssue
+            | DeviceRevocationGateActionClass::ReturningSessionGrantIssue
             | DeviceRevocationGateActionClass::SessionGrantRefresh
     ) {
         return Err(schema_violation(
@@ -146,6 +155,70 @@ pub(super) async fn check_device_revocation_gate(
         ));
     }
 
+    // Identity-anchor admission uses the same principal-scoped lock. Holding it
+    // through proof verification and receipt construction keeps the memory
+    // adapter linearizable and avoids needless optimistic retries in one
+    // process. PostgreSQL correctness does not rely on this process-local lock:
+    // the durable gate is followed by an exact current-binding revalidation.
+    let generation_lock =
+        crate::routing::identity::device_generation::device_generation_admission_lock(
+            request.principal_authority.principal_id.as_str(),
+        );
+    let _generation_guard = generation_lock.lock().await;
+
+    // A handoff/session DPoP proves possession of the short-lived holder key,
+    // not of the durable accepted-device key. Returning issue and human
+    // refresh therefore carry one closed proof, verified here against the
+    // origin's accepted current device authority before any allow receipt can
+    // be minted. Initial registration/recovery issue deliberately has no such
+    // proof because its accepted binding comes from its own terminal ledger.
+    let (accepted_device_possession_verification, verified_proof_binding) = if let Some(proof) =
+        request.accepted_device_possession_proof.as_ref()
+    {
+        let (issued_at, expires_at, signature) = match proof {
+            AcceptedDevicePossessionProof::Issue(proof) => {
+                (proof.issued_at, proof.expires_at, proof.signature.as_str())
+            }
+            AcceptedDevicePossessionProof::Refresh(proof) => {
+                (proof.issued_at, proof.expires_at, proof.signature.as_str())
+            }
+        };
+        let now = chrono::Utc::now();
+        if request.requested_at < issued_at
+            || request.requested_at >= expires_at
+            || now < issued_at
+            || now >= expires_at
+        {
+            return Err(schema_violation(
+                "accepted-device possession proof is outside its validity window",
+            ));
+        }
+        let signing_bytes = proof
+            .canonical_signing_bytes()
+            .map_err(|error| schema_violation(error.to_string()))?;
+        let verified_binding = crate::jws_verify::verify_principal_authorized_ed25519_signature_with_account_authority_async(
+            &signing_bytes,
+            signature,
+            proof.verification_method().as_str(),
+            &request.principal_authority,
+            &request.device_id,
+            state,
+        )
+        .await
+        .map_err(|_| schema_violation("accepted-device possession proof is invalid"))?;
+        (
+            Some(AcceptedDevicePossessionVerification {
+                proof_digest: proof
+                    .proof_digest()
+                    .map_err(|error| schema_violation(error.to_string()))?,
+                verification_method: proof.verification_method().clone(),
+            }),
+            Some(verified_binding),
+        )
+    } else {
+        (None, None)
+    };
+
     let origin_current_selector = admit_origin_current_selector(
         crate::routing::identity::device_generation::active_device_revocation_gate_selector(
             state,
@@ -154,8 +227,22 @@ pub(super) async fn check_device_revocation_gate(
         )
         .await,
     )?;
+    if let Some(verified_binding) = verified_proof_binding
+        && !origin_current_selector.as_ref().is_some_and(|selector| {
+            selector.target_device_authorize_event_id
+                == verified_binding.authorization_event_id.as_str()
+                && selector.target_device_generation_ref == verified_binding.generation_ref
+        })
+    {
+        return Err(schema_violation(
+            "accepted-device proof key is no longer the current device generation",
+        ));
+    }
     let action_class = match request.action_class {
         DeviceRevocationGateActionClass::SessionGrantIssue => {
+            soland_storage::DeviceRevocationGateAction::SessionGrantIssue
+        }
+        DeviceRevocationGateActionClass::ReturningSessionGrantIssue => {
             soland_storage::DeviceRevocationGateAction::SessionGrantIssue
         }
         DeviceRevocationGateActionClass::SessionGrantRefresh => {
@@ -187,6 +274,31 @@ pub(super) async fn check_device_revocation_gate(
                 "device revocation gate linearization failed: {error}"
             ))
         })?;
+
+    // Optimistic current-device linearization. Revocation acceptance is
+    // already ordered with this intent by the durable per-device gate head.
+    // Re-read the independently projected authorization/generation after that
+    // durable point and require the exact content-addressed Event + monotonic
+    // generation snapshot observed during proof verification. A generation
+    // or key transition that committed before the gate is rejected here; one
+    // that commits afterwards is correctly ordered after this decision.
+    let post_linearization_selector = admit_origin_current_selector(
+        crate::routing::identity::device_generation::active_device_revocation_gate_selector(
+            state,
+            request.principal_authority.principal_id.as_str(),
+            request.device_id.as_str(),
+        )
+        .await,
+    )?;
+    if !current_binding_stable(
+        origin_current_selector.as_ref(),
+        post_linearization_selector.as_ref(),
+    ) {
+        return Err(AppError::conflict(
+            "device authorization changed while the gate decision was linearized",
+        )
+        .with_wire_code("device_generation_changed"));
+    }
 
     let GateDecisionProjection {
         decision,
@@ -235,6 +347,7 @@ pub(super) async fn check_device_revocation_gate(
         target_device_generation_ref,
         action_class: request.action_class,
         intent_digest: request.intent_digest.clone(),
+        accepted_device_possession_verification,
         decision,
         linearization_seq: linearization.linearization_seq,
         linearized_at: linearization.linearized_at,
@@ -289,6 +402,28 @@ mod tests {
             target_device_authorize_event_id: AUTHORIZE_EVENT.to_owned(),
             target_device_generation_ref: 1,
         }
+    }
+
+    #[test]
+    fn optimistic_linearization_rejects_any_current_binding_change() {
+        let before = selector();
+        let mut different_generation = before.clone();
+        different_generation.target_device_generation_ref += 1;
+        let mut different_authorization = before.clone();
+        different_authorization.target_device_authorize_event_id =
+            format!("ak:event:A{}", "b".repeat(43));
+
+        assert!(current_binding_stable(Some(&before), Some(&before)));
+        assert!(current_binding_stable(None, None));
+        assert!(!current_binding_stable(
+            Some(&before),
+            Some(&different_generation)
+        ));
+        assert!(!current_binding_stable(
+            Some(&before),
+            Some(&different_authorization)
+        ));
+        assert!(!current_binding_stable(Some(&before), None));
     }
 
     /// Canonical positive: a fully derivable selector is admitted and flows

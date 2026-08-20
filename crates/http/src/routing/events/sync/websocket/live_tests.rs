@@ -207,8 +207,8 @@ async fn run_introspection_mock(
                 "device_binding": device_binding.clone(),
                 "audience": audience,
                 "scopes": [
-                    "urn:arkret:principal-server:session.bind",
-                    format!("urn:arkret:client:device:{ALICE_DEVICE}")
+                    "ak.self.account.stream.subscribe",
+                    "ak.self.events.stream.subscribe"
                 ],
                 "expires_at": expires_at,
                 "revocation_ref": "ak:session:live-websocket-test",

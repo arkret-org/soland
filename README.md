@@ -386,12 +386,12 @@ embedded DID uses the public `did:webvh:<scid>:<host>:webvh:<local_id>` path
 rather than the internal registration API path.
 
 Production authentication presents the coauth-issued `ak.session.grant`
-directly to soland as `Authorization: Bearer <ak.session.grant>` plus a DPoP
-proof. soland validates the grant through session-grant introspection, requires
-`urn:arkret:principal-server:session.bind`, and maps the introspection subject
-and device binding into the local request-scoped account/device view. soland no
-longer exposes a Principal-local credential issuance endpoint for production
-grants.
+directly to soland as `Authorization: DPoP <ak.session.grant>` plus a matching
+`DPoP` proof. soland validates the grant through session-grant introspection
+and maps its typed holder/device binding into the local request-scoped
+account/device view. Device identity is not encoded as a sentinel scope.
+soland no longer exposes a Principal-local credential issuance endpoint for
+production grants.
 
 Account subscribe and Events API cursors are structured `ak:cursor:` tokens
 bound to the principal, device, service DID, filter hash, stream positions, and

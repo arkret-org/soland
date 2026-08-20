@@ -680,7 +680,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
             dev_login_path: "/_soland/gate/auth/dev-login".to_owned(),
             session_grant_issuance_path: "/_arkret/gate/account/session-grants".to_owned(),
             session_grant_presentation:
-                "Authorization: Bearer <ak.session.grant> with a DPoP proof on /_arkret/self/*"
+                "Authorization: DPoP <ak.session.grant> with a DPoP proof on /_arkret/self/*"
                     .to_owned(),
             principal_id_body_field: "principal_id".to_owned(),
         },
@@ -824,7 +824,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
         examples: json!({
             "compose_strand": {
                 "step_1": {"service": "coauth", "path": "/_arkret/gate/account/session-grants", "method": "POST"},
-                "step_2": {"service": "soland", "path": "protected route", "method": "Authorization: Bearer <ak.session.grant> + DPoP"},
+                "step_2": {"service": "soland", "path": "protected route", "method": "Authorization: DPoP <ak.session.grant> + DPoP"},
                 "step_3": {"service": "soland", "path": "/_soland/edge/push/outbound/bridge/fetch", "method": "POST"},
                 "step_4": {"service": "soland", "path": "/_arkret/edge/push/register-device", "method": "POST"}
             }

@@ -51,6 +51,12 @@ pub struct ResolvedVerificationKey {
     pub key_log_head: Hash,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedPrincipalDeviceSignatureBinding {
+    pub authorization_event_id: arkret_wire::EventId,
+    pub generation_ref: u64,
+}
+
 // Re-exports of pure helpers from the SDK. Identical signatures so call
 // sites in `notary.rs`, `compactor.rs`, `routing::admin::seal.rs`,
 // `routing::federation::move_seal.rs` and `routing::events::event_log.rs`
@@ -428,14 +434,20 @@ pub async fn verify_principal_authorized_jws_ed25519_async(
 
 /// Verify a principal-device detached JWS against an explicit local account
 /// authority coordinate and the accepted device authorization in that PCR.
-pub async fn verify_principal_authorized_jws_with_account_authority_async(
-    canonical_bytes: &[u8],
-    jws: &str,
+async fn principal_authorized_device_binding_with_account_authority_async(
     verification_method: &str,
     authority: &arkret_wire::PrincipalAuthorityKey,
     expected_device_id: &arkret_identifiers::DeviceId,
     state: &AppState,
-) -> Result<(), PrincipalAuthorizedJwsError> {
+) -> Result<
+    (
+        arkret_wire::DidUrl,
+        DidDocument,
+        arkret_identity::AcceptedDidBinding,
+        VerifiedPrincipalDeviceSignatureBinding,
+    ),
+    PrincipalAuthorizedJwsError,
+> {
     let fail = |reason: String| PrincipalAuthorizedJwsError::Verification(reason);
     if authority.principal_server_id.as_str() != state.service_id() {
         return Err(fail(
@@ -499,6 +511,24 @@ pub async fn verify_principal_authorized_jws_with_account_authority_async(
         .ok_or_else(|| fail("principal signer key is unavailable".to_owned()))?;
     crate::routing::identity::device_signing::decode_ed25519_key(signing_key, "multibase")
         .map_err(|error| fail(format!("principal signer key is invalid: {error}")))?;
+    let generation_ref = payload
+        .authorized_generation_ref
+        .ok_or_else(|| fail("principal signer has no active device generation".to_owned()))?;
+    let generation = crate::routing::identity::device_generation::current_device_generation(
+        state,
+        authority.principal_id.as_str(),
+    )
+    .await
+    .map_err(|error| fail(format!("principal device generation unavailable: {error}")))?
+    .ok_or_else(|| fail("principal device generation is unavailable".to_owned()))?;
+    if generation.status
+        != crate::routing::identity::device_generation::DeviceGenerationStatus::Active
+        || generation.current_ref != generation_ref
+    {
+        return Err(fail(
+            "principal signer is outside the active device generation".to_owned(),
+        ));
+    }
     let authorize_event_id = payload
         .device_authorize_event_id
         .ok_or_else(|| fail("principal signer has no accepted authorization Event".to_owned()))?;
@@ -544,20 +574,94 @@ pub async fn verify_principal_authorized_jws_with_account_authority_async(
             .ok_or_else(|| {
                 fail("principal device key cannot form an accepted binding".to_owned())
             })?;
-    let verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
+    let verification_method_id = arkret_wire::DidUrl::new(verification_method.to_owned())
         .map_err(|error| fail(format!("principal verification method is invalid: {error}")))?;
+    let authorization_event_id = arkret_wire::EventId::new(authorize_event_id)
+        .map_err(|error| fail(format!("device authorization Event id is invalid: {error}")))?;
+    Ok((
+        verification_method_id,
+        document,
+        accepted,
+        VerifiedPrincipalDeviceSignatureBinding {
+            authorization_event_id,
+            generation_ref,
+        },
+    ))
+}
+
+pub async fn verify_principal_authorized_jws_with_account_authority_async(
+    canonical_bytes: &[u8],
+    jws: &str,
+    verification_method: &str,
+    authority: &arkret_wire::PrincipalAuthorityKey,
+    expected_device_id: &arkret_identifiers::DeviceId,
+    state: &AppState,
+) -> Result<(), PrincipalAuthorizedJwsError> {
+    let (verification_method, _, accepted, _) =
+        principal_authorized_device_binding_with_account_authority_async(
+            verification_method,
+            authority,
+            expected_device_id,
+            state,
+        )
+        .await?;
     let outcome = arkret_identity::verify_jws_with_binding(
         canonical_bytes,
         jws,
         &verification_method,
         &accepted,
     )
-    .map_err(|error| fail(error.to_string()));
+    .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()));
     crate::metrics::record_signature_verify(
         crate::metrics::SIGNATURE_SCHEME_PINNED_DOCUMENT,
         outcome.is_ok(),
     );
     outcome
+}
+
+/// Verify the accepted-device proof's raw Ed25519 signature against the same
+/// durable PCR authority and current device authorization used for detached
+/// principal JWS verification.
+pub async fn verify_principal_authorized_ed25519_signature_with_account_authority_async(
+    canonical_bytes: &[u8],
+    signature_b64url: &str,
+    verification_method: &str,
+    authority: &arkret_wire::PrincipalAuthorityKey,
+    expected_device_id: &arkret_identifiers::DeviceId,
+    state: &AppState,
+) -> Result<VerifiedPrincipalDeviceSignatureBinding, PrincipalAuthorizedJwsError> {
+    let (verification_method, document, _, binding) =
+        principal_authorized_device_binding_with_account_authority_async(
+            verification_method,
+            authority,
+            expected_device_id,
+            state,
+        )
+        .await?;
+    let public_key_multibase = document
+        .verification_methods
+        .get(verification_method.as_str())
+        .ok_or_else(|| {
+            PrincipalAuthorizedJwsError::Verification(
+                "principal verification method is absent from the accepted device binding"
+                    .to_owned(),
+            )
+        })?;
+    let public_key =
+        arkret_canonical::decode_ed25519_multibase(public_key_multibase).map_err(|error| {
+            PrincipalAuthorizedJwsError::Verification(format!(
+                "principal verification method key is invalid: {error}"
+            ))
+        })?;
+    let outcome =
+        verify_ed25519_signature_with_public_key(canonical_bytes, signature_b64url, &public_key)
+            .map_err(PrincipalAuthorizedJwsError::Verification);
+    crate::metrics::record_signature_verify(
+        crate::metrics::SIGNATURE_SCHEME_PINNED_DOCUMENT,
+        outcome.is_ok(),
+    );
+    outcome?;
+    Ok(binding)
 }
 
 /// Verify a principal-device compact JWS when the signed Control Proposal Ack

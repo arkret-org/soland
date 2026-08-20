@@ -43,15 +43,10 @@ pub async fn authenticated_session(
             "auth material in query strings is not allowed",
         ));
     }
-    let token = bearer_token(req).ok_or((
-        StatusCode::UNAUTHORIZED,
-        "unauthenticated",
-        "missing bearer token",
-    ))?;
-    // §3.3 inbound credential discriminator. `ak.session.grant` presentation
-    // is request-scoped and always carries DPoP; dev-login credentials are
-    // local SessionRecord lookups.
-    if super::super::auth_grant_dpop::is_grant_dpop_presentation(req) {
+    // §3.3 inbound credential discriminator. A grant is request-scoped and
+    // uses the RFC 9449 DPoP authorization scheme; a development login uses a
+    // local Bearer SessionRecord. The two schemes are never interchangeable.
+    if let Some(token) = dpop_token(req) {
         // The presented credential is request-scoped: it is validated and used
         // for this request, never persisted as a local bearer. Writes and
         // sensitive reads bypass the introspection cache so revocation is
@@ -65,6 +60,18 @@ pub async fn authenticated_session(
         .await?;
         enforce_session_device_revocation_gate(state, &session).await?;
         return Ok(session);
+    }
+    let token = bearer_token(req).ok_or((
+        StatusCode::UNAUTHORIZED,
+        "unauthenticated",
+        "missing or unsupported authorization scheme",
+    ))?;
+    if super::super::auth_grant_dpop::dpop_header(req).is_some() {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "DPoP-bound session grant requires the DPoP authorization scheme",
+        ));
     }
     if bearer_looks_like_session_grant(token) {
         return Err((

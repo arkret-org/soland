@@ -17,15 +17,14 @@ pub use arkret_models_crypto::{
 };
 pub use arkret_models_discovery::ops::HardeningStatus;
 use arkret_models_discovery::{
-    AccountAuthority, AuthGrantExchange, AuthMetadata, AuthMethod, AuthMethodKind,
-    ClaimedProfileEntry, ServiceDescribe,
+    AccountAuthority, AuthGrantExchange, AuthGrantExchangeKind, AuthMetadata, AuthMethod,
+    AuthMethodKind, ClaimedProfileEntry, ServiceDescribe,
 };
 pub use arkret_models_discovery::{
     RealmJoinCandidate, RealmJoinCandidateRole, RealmJoinCandidateServiceKind,
     RealmJoinCandidateSource, RealmJoinMethod,
 };
 pub use arkret_models_identity::identity::IdentityResolveRequestBody;
-use arkret_models_identity::session_credential::SessionGrantProofKind;
 pub use arkret_models_integration::{OkOutcome, PushNotifyOutcome, PushNotifyRequestBody};
 use arkret_wire::{
     MAX_AUTHORITY_CHAIN_DEPTH, MAX_AUTHORIZED_BY_REFS, MAX_EVENT_ENVELOPE_BYTES,
@@ -655,7 +654,7 @@ fn profile_limitations() -> Vec<Value> {
             "status": "standard_gate_supported",
             "spec_operation": arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_DEVICE,
             "canonical_path": "/_arkret/gate/account/device-pair",
-            "reason": "ak.gate.account.command.pair_device is served on the spec path for existing-device-authorized sibling registration. The old soland-local device pairing scaffold and approval family are removed; v1 core does not define a self/devices pairing-requests approval surface (service-http-binding.md §85, key-management.md §384, device-lifecycle.md §499). ak.gate.account.exchange.complete_oidc is delegated to the bridges deployment and not served here."
+            "reason": "ak.gate.account.command.pair_device is served on the spec path for existing-device-authorized sibling registration. The old soland-local device pairing scaffold and approval family are removed; v1 core does not define a self/devices pairing-requests approval surface (service-http-binding.md §85, key-management.md §384, device-lifecycle.md §499)."
         }),
         json!({
             "area": "consent.scope_any_cross_service_cascade",
@@ -744,7 +743,7 @@ pub fn describe(
     // Authentication methods are pure provider discovery; they do not decide
     // gate/account routing. Advertise OIDC when an Auth Server is configured;
     // the client uses standard OIDC discovery and submits an
-    // `oidc_code_exchange` proof to the Account Authority's `session-grants`.
+    // OIDC proof to the Account Authority's one-shot account-handoff operation.
     let mut methods = Vec::new();
     if let Some(account_authority_url) =
         account_authority_url.filter(|value| !value.trim().is_empty())
@@ -764,7 +763,7 @@ pub fn describe(
                 .map(str::to_owned),
             scopes: vec!["openid".to_owned(), "profile".to_owned()],
             grant_exchange: AuthGrantExchange {
-                proof_kind: SessionGrantProofKind::OidcCodeExchange,
+                kind: AuthGrantExchangeKind::AccountHandoff,
             },
         });
     }

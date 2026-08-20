@@ -34,9 +34,9 @@ pub(crate) mod webvh_validation;
 
 use super::system::describe;
 use super::{
-    AuthArgs, SyncCursorError, append_audit_log, bearer_token, handle_for_did, is_device_revoked,
-    normalize_localpart, now, parse_and_validate_sync_cursor, query_param, render_error,
-    sha256_hex, sync_token_for_client_sync, validate_device_id, validate_did,
+    AuthArgs, SyncCursorError, append_audit_log, bearer_token, dpop_token, handle_for_did,
+    is_device_revoked, normalize_localpart, now, parse_and_validate_sync_cursor, query_param,
+    render_error, sha256_hex, sync_token_for_client_sync, validate_device_id, validate_did,
 };
 
 pub fn router() -> Router {

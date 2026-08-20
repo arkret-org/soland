@@ -96,6 +96,37 @@ pub fn bearer_token(req: &Request) -> Option<&str> {
         .and_then(|value| value.strip_prefix("Bearer "))
 }
 
+/// Extract an RFC 9449 DPoP-bound access token from `Authorization`.
+/// Bearer and DPoP are deliberately separate parsers so a caller cannot
+/// silently reinterpret a token presented with the wrong scheme.
+pub fn dpop_token(req: &Request) -> Option<&str> {
+    req.headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("DPoP "))
+}
+
+#[cfg(test)]
+mod authorization_scheme_tests {
+    use super::*;
+
+    #[test]
+    fn bearer_and_dpop_schemes_are_not_interchangeable() {
+        let mut bearer = Request::new();
+        bearer
+            .headers_mut()
+            .insert(header::AUTHORIZATION, "Bearer local-token".parse().unwrap());
+        assert_eq!(bearer_token(&bearer), Some("local-token"));
+        assert_eq!(dpop_token(&bearer), None);
+
+        let mut dpop = Request::new();
+        dpop.headers_mut()
+            .insert(header::AUTHORIZATION, "DPoP session-grant".parse().unwrap());
+        assert_eq!(dpop_token(&dpop), Some("session-grant"));
+        assert_eq!(bearer_token(&dpop), None);
+    }
+}
+
 // ── Crypto helpers ──────────────────────────────────────────────────────────
 
 /// Hex-encoded SHA-256 of `bytes` (lowercase, 64 chars).

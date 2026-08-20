@@ -19,8 +19,8 @@
 //!   `SessionRecord`'s key. Under ② the same Ed25519 device key backs both the DPoP `cnf.jkt`
 //!   sender-constraint and this 9421 body-integrity layer.
 //!
-//! Bearer session validation itself still runs in the per-handler
-//! `AuthArgs::authenticated_session`; this hoop only adds the PoP layer.
+//! Session credential validation itself still runs in the per-handler
+//! `AuthArgs::authenticated_session`; this hoop only adds the RFC 9421 layer.
 
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
@@ -33,7 +33,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use salvo::prelude::*;
 use soland_http::error::{AppError, ErrorCode};
-use soland_http::util::bearer_token;
+use soland_http::util::{bearer_token, dpop_token};
 
 use crate::routing::federation::{signature_authority, signature_target_uri};
 use crate::routing::identity::auth::session_credential_hash;
@@ -92,9 +92,12 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
     }
 
     // A signature is present: it MUST verify against the session signing key.
-    let token = bearer_token(req).ok_or_else(|| {
-        AppError::unauthenticated("PoP presentation requires a bearer session token")
-    })?;
+    let token = if super::auth_grant_dpop::is_grant_dpop_presentation(req) {
+        dpop_token(req)
+    } else {
+        bearer_token(req)
+    }
+    .ok_or_else(|| AppError::unauthenticated("PoP presentation requires a session token"))?;
     let jwk = session_signing_key_jwk(state, req, token).await?;
     let (public_key, explicit_kid, thumbprint) = parse_session_jwk(&jwk)?;
 

@@ -10,7 +10,7 @@ use super::*;
 /// the single client-visible hard logout (account-lifecycle §4.1).
 ///
 /// Request identity differs from every other protected endpoint: per §4.1 the
-/// caller presents `Authorization: Bearer <ak.session.grant>` (NOT the soland
+/// caller presents `Authorization: DPoP <ak.session.grant>` (NOT the soland
 /// principal bearer) plus a `DPoP` holder proof bound to the grant's `cnf.jkt`.
 /// We therefore do NOT run the soland session-bearer pipeline
 /// (`AuthArgs::authenticated_session`) here; instead we identify the
@@ -34,20 +34,23 @@ pub(super) async fn logout(
     let _ = &aa; // header presence registered with the OpenAPI doc
     let state = depot.get_typed::<AppState>().expect("state injected");
 
-    // §4.1 — the Authorization Bearer is the ak.session.grant, not a soland
-    // principal bearer. Identify the grant's subject + device by introspecting
-    // it against the Auth Server (coauth) over the existing S2S channel.
-    let grant_jwt = bearer_token(req)
-        .map(str::to_owned)
-        .ok_or_else(|| AppError::unauthenticated("missing session-grant bearer"))?;
     // Development fallback: with no Auth Server introspection wired (dev mode
     // dev-login mints plain soland bearers, not DPoP-bound grants), treat the
     // Authorization bearer as a local session bearer and perform the
     // principal-side termination directly. Production keeps the strict
     // grant+DPoP+introspection contract below.
     if state.config().development_mode && state.config().session_grant_introspection_url.is_none() {
+        let grant_jwt = bearer_token(req)
+            .map(str::to_owned)
+            .ok_or_else(|| AppError::unauthenticated("missing local development bearer"))?;
         return json_ok(dev_mode_local_logout(state, &grant_jwt).await?);
     }
+
+    // §4.1 — identify the DPoP-scheme grant's subject + device by
+    // introspecting it against the Auth Server over the existing S2S channel.
+    let grant_jwt = dpop_token(req)
+        .map(str::to_owned)
+        .ok_or_else(|| AppError::unauthenticated("missing DPoP session grant"))?;
 
     let grant = introspect_session_grant_for_logout(state, &grant_jwt).await?;
     if grant.credential_class

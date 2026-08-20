@@ -3,7 +3,7 @@
 //! Per api-conventions.md §3.3 the Principal Server (soland) no longer mints a
 //! local credential from a session grant. The client
 //! presents the `ak.session.grant` directly on every `/_arkret/self/*` request
-//! as `Authorization: Bearer <ak.session.grant>` plus a sender-constrained
+//! as `Authorization: DPoP <ak.session.grant>` plus a sender-constrained
 //! `DPoP` proof. soland validates and serves; the resulting `SessionRecord` is
 //! request-scoped and is NEVER persisted as a local bearer.
 //!
@@ -16,8 +16,8 @@
 //!   3. DPoP `htm` == request method, `htu` == request URL, `ath` == base64url(sha256(grant)).
 //!   4. DPoP `jti` + `iat` freshness window for replay defense.
 //!   5. grant audience == this service's `service_id`.
-//!   6. human/device grants contain `session.bind` plus a device scope; agent grants carry fresh
-//!      `agent_key_proof` resource-scope metadata. Grant not expired.
+//!   6. human grants carry the exact typed holder/device binding; agent grants carry current
+//!      runtime-key authorization metadata. Grant not expired.
 //!
 //! DPoP does NOT bind the request body — body integrity rides on TLS, same as
 //! Matrix (api-conventions.md §3.3). Body-bound integrity is layered separately
@@ -448,13 +448,11 @@ pub(crate) fn dpop_header(req: &Request) -> Option<String> {
 
 // ── Orchestration ────────────────────────────────────────────────────────────
 
-/// Whether a `ak.session.grant` + DPoP credential is being presented: the
-/// request carries BOTH an `Authorization: Bearer` and a `DPoP` header. This is
-/// the discriminator §3.3 pins — a grant presentation MUST carry DPoP, while a
-/// dev-login session credential does not. Branching on the `DPoP` header keeps
-/// the local development path separate from production grant presentation.
+/// Whether an `ak.session.grant` is presented through the RFC 9449 token
+/// scheme. Proof presence is validated separately so `Authorization: DPoP`
+/// without a `DPoP` header fails as an incomplete grant presentation.
 pub(crate) fn is_grant_dpop_presentation(req: &Request) -> bool {
-    req.headers().contains_key("dpop")
+    soland_http::util::dpop_token(req).is_some()
 }
 
 fn session_binding_from_introspection(
