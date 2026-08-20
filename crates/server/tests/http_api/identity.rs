@@ -384,8 +384,7 @@ async fn identity_surface_works() {
             .any(|root| root["id"] == "soland.local_identity_store"
                 && root["service_id"].as_str() == Some(expected_service_id.as_str())
                 && root["kind"] == "local_identity_store"
-                && root["proof_verification"]["webvh_witness_quorum"]
-                    == "required_when_policy_present"),
+                && root["proof_verification"]["webvh_witness_quorum"] == "unsupported"),
         "identity describe must publish the local resolver trust root and proof-validation policy: {describe}"
     );
     assert_eq!(

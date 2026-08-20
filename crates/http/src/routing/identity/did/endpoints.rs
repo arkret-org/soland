@@ -776,8 +776,13 @@ pub(crate) async fn identity_resolve(
         // G3.S3: every did:webvh resolution MUST first re-validate the
         // log chain, SCID derivation, configured witness quorum, and
         // rotation control authorisation. Rotation entries fail closed
-        // when witness quorum is missing; non-rotation entries may only
-        // remain in degraded_no_witness for the spec's 24h window.
+        // when witness quorum is missing.
+        // `degraded_no_witness` is a spec-defined health state
+        // (identity-did.md health-status section): hosting stays reachable
+        // but witness evidence is missing or expired. No soland code path
+        // currently enters that state — witness verification and the
+        // degradation window are unimplemented; the gap is tracked in
+        // arkret-work (review/spec-done/2026-08-18-2315-soland-cannot-verify-or-issue-webvh-witness-yet-advertises-support.md).
         // Rotation control authorisation accepts a previous-controller
         // proof, a genesis-declared recovery key (key-management.md §3.3),
         // or an organization governance quorum (identity-did.md §8.1–§8.2).

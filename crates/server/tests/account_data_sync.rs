@@ -998,6 +998,11 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
     )
     .await;
+    assert_eq!(
+        registered["push_target_id"].as_str(),
+        Some(push_target_id.as_str()),
+        "register-device response must carry the service-derived push_target_id"
+    );
     let push_target_id = push_target_id.as_str();
 
     let rejected = TestClient::post("http://server/_arkret/edge/push/notify")

@@ -414,16 +414,17 @@ async fn push_profile_and_moderation_contracts_work() {
         .await
         .unwrap();
     assert_eq!(push["ok"], true);
-    // push-notifications.md §5.1: push_target_id is the HMAC-derived pairwise
-    // pseudonym (ak:pseudonym:push:...). It is service-private and is never
-    // published to the client, so a notify caller reads it from the stored
-    // registration; the client only sees the gateway-local registration_id.
+    // push-notifications.md §3.1: the registration response MUST carry the
+    // HMAC-derived pairwise pseudonym (ak:pseudonym:push:...) — it is the only
+    // contractual path a caller gets it from. Cross-check it against the
+    // stored registration the notify path resolves.
     let push_target = soland_test_support::registered_push_target_id(
         &state,
         fixture_actor_core_id(ALICE).as_str(),
         ALICE_DEVICE,
     )
     .await;
+    assert_eq!(push["push_target_id"].as_str(), Some(push_target.as_str()));
 
     let initial_rules = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
     assert!(
@@ -1350,15 +1351,19 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
         .await
         .unwrap();
     assert_eq!(registered["ok"], true);
-    // push-notifications.md §5.1: notify MUST use the HMAC-derived pairwise
-    // pseudonym, which stays service-private; the client only sees the
-    // gateway-local registration_id.
+    // push-notifications.md §3.1: the registration response carries the
+    // HMAC-derived pairwise pseudonym notify MUST target; cross-check it
+    // against the stored registration.
     let push_target = soland_test_support::registered_push_target_id(
         &state,
         fixture_actor_core_id(ALICE).as_str(),
         ALICE_DEVICE,
     )
     .await;
+    assert_eq!(
+        registered["push_target_id"].as_str(),
+        Some(push_target.as_str())
+    );
 
     let stale_notify: arkret_models_integration::models_push::PushNotifyOutcome =
         TestClient::post("http://server/_arkret/edge/push/notify")

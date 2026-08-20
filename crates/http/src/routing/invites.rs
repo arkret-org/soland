@@ -6,11 +6,12 @@
 use arkret_canonical as canonical;
 use arkret_identifiers::{DidCoreId, Hash, InviteLocatorId};
 use arkret_models_collaboration::governance::invite_addressing::{
-    DisclosedOutcome, DisclosureLevel, IntroductionEvidence, InviteDeliveryOutcome,
-    InviteDeliveryOutcomeStatus, InviteDeliveryRequestBody, InviteLocatorIssueOutcome,
-    InviteLocatorIssueRequestBody, InviteLocatorResolveRequestBody, InviteLocatorRevokeOutcome,
-    InviteLocatorRevokeRequestBody, InviteLocatorRotateRequestBody, InviteLocatorStatus,
-    InviteReceivePolicy, PrincipalLocator, PrincipalLocatorProof, PrincipalLocatorProofPurpose,
+    DisclosedOutcome, DisclosureLevel, IntroductionEvidence, InviteDelivery, InviteDeliveryEntry,
+    InviteDeliveryOutcome, InviteDeliveryOutcomeStatus, InviteDeliveryRequestBody,
+    InviteLocatorIssueOutcome, InviteLocatorIssueRequestBody, InviteLocatorResolveRequestBody,
+    InviteLocatorRevokeOutcome, InviteLocatorRevokeRequestBody, InviteLocatorRotateRequestBody,
+    InviteLocatorStatus, InviteReceivePolicy, PrincipalLocator, PrincipalLocatorProof,
+    PrincipalLocatorProofPurpose,
 };
 use arkret_models_collaboration::governance::member_delivery_binding_candidate::{
     CandidateIntent, CandidateValidationContext, MemberDeliveryBindingCandidate,
@@ -64,12 +65,10 @@ const INVITE_LOCATOR_CACHE_CONTROL: &str = "private, no-store";
 const INVITE_QUARANTINE_TTL_DAYS: i64 = 30;
 const MAX_INVITE_QUARANTINE_ENTRIES: usize = 200;
 const INVITE_QUARANTINE_ORIGIN_DEVICE: &str = "server:invite_quarantine";
-/// Actor-private account-data cell that carries a delivered invite's private
-/// delivery material (the invite token) to the invitee's devices. The Invite
-/// read model never carries it (governance-objects.md §5.3), so this
-/// holder-private carrier is the only wire path that does.
-const INVITE_DELIVERY_ACCOUNT_DATA_KEY: &str = "ak.account.invite_delivery";
-const MAX_INVITE_DELIVERY_ENTRIES: usize = 200;
+/// Server-origin marker for the delivery fanout's `sender_device_id`. The
+/// `ActorPrivateDeviceUpdate` wire type carries this field as an untyped
+/// string with no `ak:device:` lexical rule, so the `server:` spelling —
+/// mirroring the quarantine fanout — marks a write no client device authored.
 const INVITE_DELIVERY_ORIGIN_DEVICE: &str = "server:invite_delivery";
 const INVITE_DELIVERY_CAS_ATTEMPTS: usize = 3;
 
@@ -840,7 +839,7 @@ async fn deliver_invite_credential(
         .get("event_id")
         .and_then(Value::as_str)
         .and_then(|value| arkret_identifiers::EventId::new(value.to_owned()).ok())
-        .map(|event_id| arkret_identifiers::InviteId::from_event_id(&event_id).to_string())
+        .map(|event_id| arkret_identifiers::InviteId::from_event_id(&event_id))
         .ok_or_else(|| {
             super::events::peer::schema_violation("invite_event.event_id must be an Event id")
         })?;
@@ -868,49 +867,40 @@ async fn deliver_invite_credential(
         })
         .transpose()?
         .unwrap_or_else(|| created_at + Duration::days(7));
-    let invite_token = crate::routing::generate_invite_token(&invite_id, realm_id, subject);
+    let invite_token = crate::routing::generate_invite_token(invite_id.as_str(), realm_id, subject);
 
     let received_at = now();
+    let new_entry = InviteDeliveryEntry {
+        invite_id,
+        realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
+            .map_err(|error| AppError::internal(format!("invite realm id is invalid: {error}")))?,
+        inviter: DidCoreId::new(inviter.to_owned())
+            .map_err(|error| AppError::internal(format!("inviter id is invalid: {error}")))?,
+        invite_token,
+        received_at,
+        expires_at,
+    };
     let account_data = state.account_data();
     let mut attempt = 0;
     let record = loop {
         let existing = account_data
-            .entry(subject, INVITE_DELIVERY_ACCOUNT_DATA_KEY)
+            .entry(subject, AccountDataKey::ACCOUNT_INVITE_DELIVERY)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
-        let mut entries = existing
+        let existing_cell = existing
             .as_ref()
-            .and_then(|record| record.payload.get("entries"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        entries.retain(|candidate| {
-            invite_delivery_entry_active(candidate, received_at)
-                && candidate
-                    .get("invite_id")
-                    .and_then(Value::as_str)
-                    .is_none_or(|existing_id| existing_id != invite_id.as_str())
-        });
-        entries.push(json!({
-            "invite_id": invite_id,
-            "realm_id": realm_id,
-            "inviter": inviter,
-            "invite_token": invite_token,
-            "received_at": received_at,
-            "expires_at": expires_at,
-        }));
-        if entries.len() > MAX_INVITE_DELIVERY_ENTRIES {
-            let excess = entries.len() - MAX_INVITE_DELIVERY_ENTRIES;
-            entries.drain(0..excess);
-        }
-        let payload = json!({
-            "schema": INVITE_DELIVERY_ACCOUNT_DATA_KEY,
-            "entries": entries,
-            "updated_at": received_at,
-        });
+            .map(|record| serde_json::from_value::<InviteDelivery>(record.payload.clone()))
+            .transpose()
+            .map_err(|error| {
+                AppError::internal(format!("invite delivery cell does not parse: {error}"))
+            })?;
+        let cell = merge_invite_delivery_cell(existing_cell, new_entry.clone(), received_at)?;
+        let payload = serde_json::to_value(&cell).map_err(|error| {
+            AppError::internal(format!("invite delivery cell serialize: {error}"))
+        })?;
         let record = AccountDataState {
             actor_id: subject.to_owned(),
-            account_data_key: INVITE_DELIVERY_ACCOUNT_DATA_KEY.to_owned(),
+            account_data_key: AccountDataKey::ACCOUNT_INVITE_DELIVERY.to_owned(),
             revision: existing.as_ref().map_or(1, |record| record.revision + 1),
             payload,
             tombstone: false,
@@ -941,7 +931,7 @@ async fn deliver_invite_credential(
             sender_device_id: INVITE_DELIVERY_ORIGIN_DEVICE.to_owned(),
             content: ActorPrivateAccountDataUpdate {
                 operation: ActorPrivateAccountDataOperation::Put,
-                account_data_key: INVITE_DELIVERY_ACCOUNT_DATA_KEY.to_owned(),
+                account_data_key: AccountDataKey::ACCOUNT_INVITE_DELIVERY.to_owned(),
                 revision: record.revision,
                 content: Some(record.payload.clone()),
                 updated_at: record.updated_at,
@@ -953,13 +943,42 @@ async fn deliver_invite_credential(
     Ok(true)
 }
 
-fn invite_delivery_entry_active(entry: &Value, at: chrono::DateTime<chrono::Utc>) -> bool {
-    entry
-        .get("expires_at")
-        .and_then(Value::as_str)
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&chrono::Utc) > at)
-        .unwrap_or(false)
+/// Merge one accepted delivery into the current `ak.account.invite_delivery`
+/// cell (spec invite-addressing.md §7 write semantics): purge entries expired
+/// at `received_at`, replace any prior entry for the same invite, append the
+/// new entry, then evict the oldest entries beyond
+/// [`InviteDelivery::MAX_ENTRIES`]. The result is validated against the SDK
+/// cell contract before it is offered to the CAS write.
+fn merge_invite_delivery_cell(
+    existing: Option<InviteDelivery>,
+    new_entry: InviteDeliveryEntry,
+    received_at: chrono::DateTime<chrono::Utc>,
+) -> Result<InviteDelivery, AppError> {
+    let mut cell = existing.unwrap_or_else(|| InviteDelivery::new(received_at, Vec::new()));
+    // Cells written before the `ak.schema.invite_delivery.v1` discriminator
+    // landed carry the account-data key in `schema`; re-pin the canonical
+    // const on write so the register self-heals instead of failing CAS.
+    cell.schema = InviteDelivery::SCHEMA.to_owned();
+    cell.entries.retain(|candidate| {
+        invite_delivery_entry_active(candidate, received_at)
+            && candidate.invite_id != new_entry.invite_id
+    });
+    cell.entries.push(new_entry);
+    if cell.entries.len() > InviteDelivery::MAX_ENTRIES {
+        let excess = cell.entries.len() - InviteDelivery::MAX_ENTRIES;
+        cell.entries.drain(0..excess);
+    }
+    cell.updated_at = received_at;
+    cell.validate()
+        .map_err(|error| AppError::internal(format!("invite delivery cell is invalid: {error}")))?;
+    Ok(cell)
+}
+
+fn invite_delivery_entry_active(
+    entry: &InviteDeliveryEntry,
+    at: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    entry.expires_at > at
 }
 
 #[endpoint(
@@ -2171,15 +2190,106 @@ mod invite_locator_security_tests {
         let at = chrono::DateTime::parse_from_rfc3339("2026-08-01T00:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
+        let entry_with_expiry = |expires_at: &str| InviteDeliveryEntry {
+            invite_id: arkret_identifiers::InviteId::new(
+                "ak:invite:AZYDg8DDhw3K_txXc2FaKw9baWMbenl1vvUcRFfpjp3K".to_owned(),
+            )
+            .unwrap(),
+            realm_id: arkret_identifiers::RealmId::new(
+                "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W".to_owned(),
+            )
+            .unwrap(),
+            inviter: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+            invite_token: "opaque-token".to_owned(),
+            received_at: at,
+            expires_at: chrono::DateTime::parse_from_rfc3339(expires_at)
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        };
         assert!(invite_delivery_entry_active(
-            &json!({"expires_at": "2026-08-05T10:00:00.000Z"}),
+            &entry_with_expiry("2026-08-05T10:00:00.000Z"),
             at
         ));
         assert!(!invite_delivery_entry_active(
-            &json!({"expires_at": "2026-07-05T10:00:00.000Z"}),
+            &entry_with_expiry("2026-07-05T10:00:00.000Z"),
             at
         ));
-        assert!(!invite_delivery_entry_active(&json!({}), at));
+        assert!(!invite_delivery_entry_active(
+            &entry_with_expiry("2026-08-01T00:00:00.000Z"),
+            at
+        ));
+    }
+
+    #[test]
+    fn invite_delivery_cell_merge_matches_the_spec_write_semantics() {
+        let at = chrono::DateTime::parse_from_rfc3339("2026-08-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let entry = |invite_token: &str, expires_at: &str| InviteDeliveryEntry {
+            invite_id: arkret_identifiers::InviteId::new(
+                "ak:invite:AZYDg8DDhw3K_txXc2FaKw9baWMbenl1vvUcRFfpjp3K".to_owned(),
+            )
+            .unwrap(),
+            realm_id: arkret_identifiers::RealmId::new(
+                "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W".to_owned(),
+            )
+            .unwrap(),
+            inviter: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+            invite_token: invite_token.to_owned(),
+            received_at: at,
+            expires_at: chrono::DateTime::parse_from_rfc3339(expires_at)
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        };
+
+        // A redelivery of the same invite replaces the previous entry instead
+        // of taking a second slot, an expired prior entry is purged, and a
+        // legacy cell carrying the account-data key in `schema` is re-pinned
+        // to the canonical discriminator.
+        let mut prior =
+            InviteDelivery::new(at, vec![entry("stale-token", "2026-07-05T10:00:00.000Z")]);
+        prior.schema = AccountDataKey::ACCOUNT_INVITE_DELIVERY.to_owned();
+        let merged = merge_invite_delivery_cell(
+            Some(prior),
+            entry("fresh-token", "2026-08-05T10:00:00.000Z"),
+            at,
+        )
+        .expect("merge into a cell holding only a stale entry");
+        assert_eq!(merged.entries.len(), 1);
+        assert_eq!(merged.entries[0].invite_token, "fresh-token");
+        assert_eq!(merged.updated_at, at);
+        assert_eq!(merged.schema, InviteDelivery::SCHEMA);
+        merged.validate().expect("merged cell validates");
+
+        // Overflow evicts from the front (oldest first) down to the cap.
+        let invite_id_for = |seed: u8| {
+            arkret_identifiers::InviteId::from_event_id(&arkret_identifiers::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [seed; 32],
+            ))
+        };
+        let full = InviteDelivery::new(
+            at,
+            (0..InviteDelivery::MAX_ENTRIES)
+                .map(|index| {
+                    let mut held = entry("held-token", "2026-08-05T10:00:00.000Z");
+                    held.invite_id = invite_id_for(index as u8);
+                    held
+                })
+                .collect(),
+        );
+        let mut new_entry = entry("fresh-token", "2026-08-05T10:00:00.000Z");
+        new_entry.invite_id = invite_id_for(u8::MAX);
+        let merged =
+            merge_invite_delivery_cell(Some(full), new_entry, at).expect("merge into a full cell");
+        assert_eq!(merged.entries.len(), InviteDelivery::MAX_ENTRIES);
+        assert_eq!(
+            merged
+                .entries
+                .last()
+                .map(|entry| entry.invite_token.as_str()),
+            Some("fresh-token")
+        );
     }
 
     #[tokio::test]
@@ -2214,7 +2324,10 @@ mod invite_locator_security_tests {
         assert!(
             state
                 .account_data()
-                .entry("did:web:carol.example", INVITE_DELIVERY_ACCOUNT_DATA_KEY)
+                .entry(
+                    "did:web:carol.example",
+                    AccountDataKey::ACCOUNT_INVITE_DELIVERY
+                )
                 .await
                 .expect("account data lookup")
                 .is_none(),

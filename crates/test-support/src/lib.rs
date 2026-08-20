@@ -818,13 +818,12 @@ pub async fn project_authorized_principal_device(
 
 /// Read the service-derived `push_target_id` for one registered device.
 ///
-/// `push_register_device_outcome` deliberately returns only the gateway-local
-/// `registration_id`: the push target pseudonym is the receiving service's
-/// private linkability namespace and MUST NOT be published to the client
-/// (`zh/discovery/push-notifications.md`). A notify caller inside the service
-/// reads it from the stored registration, which is what this helper does; a
-/// test that reuses `registration_id` as a push target is asserting a
-/// conflation the two values no longer have.
+/// `push_register_device_outcome` returns the pseudonym to the registering
+/// client itself (`zh/discovery/push-notifications.md` §3.1: the registration
+/// response is the only contractual path that hands it out); this helper reads
+/// the stored registration instead, which is what a notify caller inside the
+/// service does. A test that reuses `registration_id` as a push target is
+/// asserting a conflation the two values never had.
 pub async fn registered_push_target_id(
     state: &AppState,
     principal_id: &str,

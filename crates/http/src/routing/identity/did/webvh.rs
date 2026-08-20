@@ -21,7 +21,10 @@ pub(super) fn identity_trust_roots(state: &AppState) -> Vec<Value> {
             "controller_proof": "eddsa-jcs-2022",
             "webvh_log_chain": "required",
             "webvh_scid": "required",
-            "webvh_witness_quorum": "required_when_policy_present"
+            // Fail-closed today: soland cannot verify witness evidence, so a
+            // log declaring a witness policy is always rejected with
+            // WitnessQuorumNotMet (`webvh_validation::validate_witness_policy_for_log`).
+            "webvh_witness_quorum": "unsupported"
         }
     })];
     if let Some(url) = state.config().external_webvh_provider_url.as_deref() {

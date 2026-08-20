@@ -1814,13 +1814,12 @@ impl AppState {
     }
 
     /// Stored push-device registrations, for tests that need the
-    /// service-private `push_target_id`.
+    /// service-derived `push_target_id` from the server's side.
     ///
-    /// `push_register_device_outcome` returns only the gateway-local
-    /// `registration_id`: the push target pseudonym is this service's private
-    /// linkability namespace and is never published to the client
-    /// (`zh/discovery/push-notifications.md`). A test that needs it reads the
-    /// stored registration, exactly as the notify path does.
+    /// `push_register_device_outcome` returns the pseudonym to the registering
+    /// client (`zh/discovery/push-notifications.md` §3.1); a test that needs
+    /// the value as the notify path sees it reads the stored registration
+    /// here.
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub async fn test_push_devices(&self) -> Vec<serde_json::Value> {

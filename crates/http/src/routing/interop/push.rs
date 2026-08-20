@@ -209,7 +209,7 @@ pub(super) async fn push_register(
             "push_key": push_key,
             "recipient_service_id": state.service_id().as_str(),
             "push_route_id": push_route_id,
-            "push_target_id": push_target_id,
+            "push_target_id": push_target_id.clone(),
             "salt_epoch_id": salt_epoch_id,
             "salt_rotation_seconds": PUSH_TARGET_SALT_ROTATION_SECONDS,
             "retained_push_targets": retained_push_targets,
@@ -222,6 +222,7 @@ pub(super) async fn push_register(
     json_ok(
         arkret_models_integration::models_push::PushRegisterDeviceOutcome {
             ok: true,
+            push_target_id,
             registration_id: Some(registration_id),
             expires_at: None,
         },

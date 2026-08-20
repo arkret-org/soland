@@ -261,22 +261,6 @@ pub struct AppConfig {
     /// the accepted AuthServer service-registration mapping for
     /// `account_authority_url` supplies the runtime identity.
     pub account_authority_service_id: Option<String>,
-    /// Deployment policy for the fresh high-risk action authentication that
-    /// `ak.self.account.command.request_erasure` requires
-    /// (`account-lifecycle.md` §8.1). The value names the session-grant scope
-    /// the Account Authority only issues after a fresh high-risk
-    /// authentication (recent login, WebAuthn, recovery key or a deployment
-    /// equivalent). The Principal Server has no other wire-visible signal of
-    /// how or when the holder authenticated, so an unset policy is a
-    /// deployment that cannot satisfy §8.1 and every erasure request fails
-    /// closed with `reauthentication_required` and zero writes.
-    pub account_erasure_request_required_session_scope: Option<String>,
-    /// Optional withdrawal window granted between accepting a self-erasure
-    /// request and the Account Authority signing the `erasure_pending`
-    /// `AccountStatusRecord` (`account-lifecycle.md` §8.1). When set, the
-    /// acceptance outcome carries `withdrawal_window_ends_at`; when unset the
-    /// field is omitted and the deployment grants no window.
-    pub account_erasure_request_withdrawal_window_seconds: Option<u64>,
     /// OAuth/OIDC `client_id` this soland deployment is registered as at the
     /// Auth Server, advertised to browser clients in
     /// `/_arkret/describe.auth_metadata.methods[].oidc.client_id`. The web
@@ -895,8 +879,6 @@ impl AppConfig {
             cors_allow_origin: None,
             account_authority_url: None,
             account_authority_service_id: None,
-            account_erasure_request_required_session_scope: None,
-            account_erasure_request_withdrawal_window_seconds: None,
             oidc_client_id: None,
             development_mode: false,
             failpoints: crate::failpoints::FailpointRegistry::disabled(),
@@ -1007,27 +989,6 @@ impl AppConfig {
                 anyhow::anyhow!("SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID is invalid: {error}")
             })?;
         }
-        let account_erasure_request_required_session_scope =
-            env_non_empty(values, "SOLAND_ACCOUNT_ERASURE_REQUEST_REQUIRED_SCOPE");
-        let account_erasure_request_withdrawal_window_seconds = match env_non_empty(
-            values,
-            "SOLAND_ACCOUNT_ERASURE_REQUEST_WITHDRAWAL_WINDOW_SECONDS",
-        ) {
-            None => None,
-            Some(value) => {
-                let seconds = value.parse::<u64>().map_err(|error| {
-                    anyhow::anyhow!(
-                        "SOLAND_ACCOUNT_ERASURE_REQUEST_WITHDRAWAL_WINDOW_SECONDS is invalid: {error}"
-                    )
-                })?;
-                if seconds == 0 {
-                    anyhow::bail!(
-                        "SOLAND_ACCOUNT_ERASURE_REQUEST_WITHDRAWAL_WINDOW_SECONDS must be greater than zero"
-                    );
-                }
-                Some(seconds)
-            }
-        };
         let oidc_client_id = env_non_empty(values, "SOLAND_OAUTH_CLIENT_ID");
         // Default to a production-safe posture (no `dev_login`, no relaxed DID
         // validation, no admin snapshot endpoints). Local development must opt
@@ -1298,8 +1259,6 @@ impl AppConfig {
             cors_allow_origin,
             account_authority_url,
             account_authority_service_id,
-            account_erasure_request_required_session_scope,
-            account_erasure_request_withdrawal_window_seconds,
             oidc_client_id,
             development_mode,
             failpoints,
