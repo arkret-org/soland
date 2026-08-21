@@ -143,50 +143,6 @@ fn wire_rejection_to_validation_error(
     )
 }
 
-pub(in crate::routing::events::event_log) fn validate_realm_create_policy_constraints(
-    kind: &str,
-    payload: &Value,
-    _is_self_principal_pcr_bootstrap_create: bool,
-) -> Result<(), EventValidationError> {
-    if kind != arkret_wire::event_kind_str::REALM_CREATE {
-        return Ok(());
-    }
-    let Some(object_value) = payload.get("object") else {
-        return Ok(());
-    };
-    let Some(object) = object_value.as_object() else {
-        return Ok(());
-    };
-    let history_access = object
-        .get("history_access")
-        .and_then(Value::as_str)
-        .unwrap_or("since_join");
-    if !matches!(
-        history_access,
-        "since_join" | "all_history_for_current_members"
-    ) {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            arkret_wire::ErrorCode::SCHEMA_VIOLATION,
-            "history_access has an unknown value",
-        ));
-    }
-    let purpose = object.get("purpose").and_then(Value::as_str);
-    let fixed_since_join = matches!(
-        purpose,
-        Some("direct_conversation" | "principal_control" | "managed_agent_control")
-    ) || object.get("encryption_profile").and_then(Value::as_str)
-        == Some("mls_rfc9420");
-    if fixed_since_join && history_access != "since_join" {
-        return Err(event_validation_error(
-            StatusCode::PRECONDITION_FAILED,
-            "failed_precondition",
-            "history_access_requires_history_capable_scheme",
-        ));
-    }
-    Ok(())
-}
-
 pub(super) fn validate_space_container_lifecycle_payload(
     payload: &Value,
 ) -> Result<(), EventValidationError> {
@@ -413,22 +369,5 @@ mod tests {
             error.reason_code,
             Some(arkret_wire::ReasonCode::OBJECT_ID_NOT_EVENT_DERIVED)
         );
-    }
-
-    #[test]
-    fn standard_mls_realm_is_pinned_to_since_join() {
-        let payload = json!({
-            "object": {
-                "history_access": "all_history_for_current_members",
-                "encryption_profile": "mls_rfc9420"
-            }
-        });
-        let error = validate_realm_create_policy_constraints(
-            arkret_wire::EventKind::RealmCreate.as_str(),
-            &payload,
-            false,
-        )
-        .expect_err("standard MLS cannot expose pre-join history");
-        assert_eq!(error.status, StatusCode::PRECONDITION_FAILED);
     }
 }

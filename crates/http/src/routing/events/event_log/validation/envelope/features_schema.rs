@@ -207,7 +207,6 @@ pub(crate) fn validate_event_schema_and_payload(
     _schema_id: &str,
     envelope: &Value,
     object: &serde_json::Map<String, Value>,
-    is_self_principal_pcr_bootstrap_create: bool,
 ) -> Result<(), EventValidationError> {
     if !state.config().development_mode {
         let registry = artifacts::protocol_schema_registry().map_err(|error| {
@@ -271,11 +270,6 @@ pub(crate) fn validate_event_schema_and_payload(
             )
         })?;
     }
-    validate_realm_create_policy_constraints(
-        kind,
-        payload,
-        is_self_principal_pcr_bootstrap_create,
-    )?;
     Ok(())
 }
 

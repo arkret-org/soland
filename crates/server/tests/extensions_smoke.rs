@@ -36,8 +36,11 @@ use soland_test_support::AppStateTestExt as _;
 /// Derived, never copied: the demo Realm id is `retype(genesis.event_id)` and
 /// moves with any `arkret-spec` change that touches the genesis payload.
 fn demo_realm_id() -> &'static str {
-    static ID: std::sync::LazyLock<String> =
-        std::sync::LazyLock::new(|| soland_http::state::development_demo_realm_id().to_string());
+    static ID: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        soland_test_support::app_state(test_config())
+            .development_demo_realm_id()
+            .to_string()
+    });
     &ID
 }
 // `new_with_demo_data` metadata still uses a historical fixture Realm id.
@@ -282,8 +285,8 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         0,
         arkret_identifiers::Hlc::new("0196419b0000-0000-51c0a1ed").unwrap(),
         soland_test_support::cba_basis::realm_genesis_payload(
+            state,
             "did:web:alice.example",
-            state.service_id(),
             "Extension test Realm",
             "ak:trust_domain:soland.test",
             created_at,

@@ -876,7 +876,6 @@ fn event_payload_validator_rejects_registered_payload_shape_errors() {
         "ak.schema.event.v1",
         &envelope,
         object,
-        false,
     )
     .expect_err("strand.move without target/rank must fail payload validation");
     assert_eq!(err.code, "schema_violation");
@@ -901,7 +900,6 @@ fn member_state_join_schema_allows_contextual_invite_ref() {
         "ak.schema.event.v1",
         &valid,
         valid.as_object().unwrap(),
-        false,
     )
     .expect("ak.member.state join schema should allow contextual invite_ref");
 }
@@ -927,7 +925,6 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
         "ak.schema.event.v1",
         &valid,
         valid.as_object().unwrap(),
-        false,
     )
     .expect("canonical ak.strand.update strand_patch_payload should validate");
 
@@ -948,7 +945,6 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
         "ak.schema.event.v1",
         &invalid_patch_op,
         invalid_patch_op.as_object().unwrap(),
-        false,
     )
     .expect_err("ak.strand.update patch operations must match ak.patch.v1 exactly");
     assert_eq!(err.code, "schema_violation");
@@ -1094,27 +1090,6 @@ fn event_payload_validator_enforces_patch_family_schema() {
             )
             .is_err(),
         "ak.strand.tracks.update must reject retired strand_id/tracks payloads"
-    );
-}
-
-#[test]
-fn standard_mls_rejects_all_history_access() {
-    let payload = json!({
-        "object": {
-            "history_access": "all_history_for_current_members",
-            "encryption_profile": "mls_rfc9420"
-        }
-    });
-    let err = validate_realm_create_policy_constraints(
-        arkret_wire::EventKind::RealmCreate.as_str(),
-        &payload,
-        false,
-    )
-    .expect_err("standard MLS is pinned to since_join");
-    assert_eq!(err.code, "failed_precondition");
-    assert_eq!(
-        err.message,
-        "history_access_requires_history_capable_scheme"
     );
 }
 

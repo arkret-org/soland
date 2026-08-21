@@ -437,8 +437,12 @@ pub(crate) async fn post_recovery_policy(
             .expect("fixture recovery principal full DID"),
     )
     .expect("fixture recovery principal projection");
-    let basis =
-        soland_test_support::cba_basis::realm_basis_seal(&realm_id, &principal_core, fixture_basis);
+    let basis = soland_test_support::cba_basis::realm_basis_seal(
+        &state,
+        &realm_id,
+        &principal_core,
+        fixture_basis,
+    );
     seed_local_notary_authority(&state, &realm, &basis);
     let prior = state
         .test_persistence()

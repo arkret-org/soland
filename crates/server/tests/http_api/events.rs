@@ -1059,8 +1059,8 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
     .await;
     let created_at = chrono::Utc::now();
     let payload = soland_test_support::cba_basis::realm_genesis_payload(
+        &state,
         &actor,
-        state.service_id(),
         "Bootstrap effects realm",
         "ak:trust_domain:soland.local",
         created_at,

@@ -97,25 +97,26 @@ static REALM_BASES: LazyLock<Mutex<BTreeMap<BasisKey, RealmBasis>>> =
 
 /// The sealed genesis unit `subject` holds in `realm_id`.
 pub fn realm_basis(
+    state: &AppState,
     realm_id: &str,
     subject: &arkret_identifiers::DidCoreId,
-    notary: &str,
     basis: FixtureBasis<'_>,
 ) -> RealmBasis {
-    realm_basis_for_principal_server(realm_id, subject, notary, notary, basis)
+    realm_basis_for_principal_server(state, realm_id, subject, state.service_id(), basis)
 }
 
 /// The sealed genesis unit for an actor whose exact Principal Server differs
 /// from the Realm notary. Federation fixtures use this to preserve the
 /// `(subject, principal_server_id)` capability authority pair.
 pub fn realm_basis_for_principal_server(
+    state: &AppState,
     realm_id: &str,
     subject: &arkret_identifiers::DidCoreId,
     principal_server_id: &str,
-    notary: &str,
     basis: FixtureBasis<'_>,
 ) -> RealmBasis {
     let subject = subject.as_str();
+    let notary = state.service_id().clone();
     let actions = basis
         .data_plane_actions
         .iter()
@@ -125,39 +126,50 @@ pub fn realm_basis_for_principal_server(
         realm_id.to_owned(),
         subject.to_owned(),
         principal_server_id.to_owned(),
-        notary.to_owned(),
+        notary,
         basis.id_domain.to_owned(),
         actions.clone(),
     );
+    // Build outside the cache lock. A panic inside `or_insert_with` poisons the
+    // process-wide mutex, which turns one fixture mismatch into a failure for
+    // every later test in the binary.
+    if let Some(cached) = REALM_BASES
+        .lock()
+        .expect("fixture basis cache")
+        .get(&key)
+        .cloned()
+    {
+        return cached;
+    }
+    let notary_signer = fixture_notary_signer(state);
+    let built = soland_services::conformance_basis::build_realm_basis(
+        realm_id,
+        subject,
+        soland_services::conformance_basis::RealmBasisFixtureOptions {
+            principal_server_id,
+            notary_signer: &notary_signer,
+            install_notary: true,
+            data_plane_actions: &actions,
+            fixture_id_domain: basis.id_domain,
+        },
+    )
+    .expect("fixture Realm basis");
     REALM_BASES
         .lock()
         .expect("fixture basis cache")
         .entry(key)
-        .or_insert_with(|| {
-            let notary_signer = fixture_notary_signer(notary);
-            soland_services::conformance_basis::build_realm_basis(
-                realm_id,
-                subject,
-                soland_services::conformance_basis::RealmBasisFixtureOptions {
-                    principal_server_id,
-                    notary_signer: &notary_signer,
-                    install_notary: true,
-                    data_plane_actions: &actions,
-                    fixture_id_domain: basis.id_domain,
-                },
-            )
-            .expect("fixture Realm basis")
-        })
+        .or_insert(built)
         .clone()
 }
 
 /// The Seal a fixture Event names in `seal_ref` / `seal_basis`.
 pub fn realm_basis_seal(
+    state: &AppState,
     realm_id: &str,
     subject: &arkret_identifiers::DidCoreId,
     basis: FixtureBasis<'_>,
 ) -> Seal {
-    realm_basis(realm_id, subject, &fixture_notary_did(), basis).seal
+    realm_basis(state, realm_id, subject, basis).seal
 }
 
 /// The fixture basis Seal an already-built Event cites.
@@ -177,20 +189,17 @@ pub fn basis_seal_with_id(seal_id: &SealId) -> Option<Seal> {
         .map(|basis| basis.seal.clone())
 }
 
-/// The service DID every fixture Realm designates as its notary.
+/// The notary signer of every fixture Realm hosted by `state`.
 ///
 /// A Control Move submitted to this service has its Control Proposal Ack minted
 /// here, and `NotaryWorker::authority_set_ref_for_events` only issues one when
-/// the Realm's notary profile names the service.
-fn fixture_notary_did() -> String {
-    crate::app_state(crate::app_config()).service_id().clone()
-}
-
+/// the Realm's notary names the service. The descriptor therefore has to come
+/// from the deployment under test, never from a second fixture deployment: a
+/// test that runs on its own service DID would otherwise seal its Realms with a
+/// notary key the running service does not hold.
 fn fixture_notary_signer(
-    expected_actor_id: &str,
+    state: &AppState,
 ) -> soland_services::conformance_basis::ConformanceNotarySigner {
-    let state = crate::app_state(crate::app_config());
-    assert_eq!(state.service_id(), expected_actor_id);
     soland_services::conformance_basis::ConformanceNotarySigner::ed25519(
         state.service_full_id(),
         state
@@ -337,7 +346,7 @@ pub async fn seed_realm_basis(
         &DidFullId::new(subject.to_owned()).expect("fixture basis subject full DID"),
     )
     .expect("fixture basis subject projection");
-    let basis = realm_basis(realm_id, &subject_core, state.service_id(), fixture_basis);
+    let basis = realm_basis(state, realm_id, &subject_core, fixture_basis);
     state
         .test_put_seal(&basis.seal, arkret_canonical::DigestSuite::Sha256)
         .expect("fixture basis Seal");
@@ -373,13 +382,13 @@ pub async fn seed_realm_basis(
 /// that id out from under production.
 #[must_use]
 pub fn realm_genesis_payload(
+    state: &AppState,
     subject: &str,
-    notary_actor_id: &str,
     _title: &str,
     trust_domain: &str,
     _created_at: chrono::DateTime<chrono::Utc>,
 ) -> serde_json::Value {
-    let notary_signer = fixture_notary_signer(notary_actor_id);
+    let notary_signer = fixture_notary_signer(state);
     soland_http::state::realm_genesis_payload(subject, &notary_signer.descriptor, trust_domain)
 }
 
@@ -454,8 +463,8 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
         .expect("fixture genesis timestamp")
         .with_timezone(&chrono::Utc);
     let payload = realm_genesis_payload(
+        state,
         subject,
-        state.service_id(),
         "Fixture Realm",
         "ak:trust_domain:soland.test",
         created_at,
@@ -563,8 +572,8 @@ pub async fn seed_event_derived_realm_genesis_event(
         .expect("fixture genesis timestamp")
         .with_timezone(&chrono::Utc);
     let mut payload = realm_genesis_payload(
+        state,
         subject,
-        state.service_id(),
         title,
         "ak:trust_domain:soland.test",
         created_at,
@@ -745,7 +754,17 @@ pub fn apply_registered_cba_plane(
     if !carries_a_cba_basis(event) {
         return;
     }
-    let seal = realm_basis_seal(event.realm_id.as_str(), &event.actor_id, basis);
+    // The stateless envelope builders author against the default fixture
+    // deployment, so that is the notary whose key seals their basis. A test
+    // running on its own service DID seals through `realm_basis_seal` with the
+    // deployment it actually stood up.
+    let default_deployment = crate::app_state(crate::app_config());
+    let seal = realm_basis_seal(
+        &default_deployment,
+        event.realm_id.as_str(),
+        &event.actor_id,
+        basis,
+    );
     apply_registered_cba_plane_seal(event, verification_method, seal.id);
 }
 

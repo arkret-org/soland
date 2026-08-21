@@ -73,7 +73,7 @@ async fn seed_peer_delivery_binding(state: &AppState) {
             state: "join".to_owned(),
             role: "member".to_owned(),
             delivery_status: Some("routable".to_owned()),
-            recipient_service_id: Some(SERVICE_ID.to_owned()),
+            recipient_service_id: Some(service_id().to_owned()),
             recipient_service_resolution: None,
             membership_event_ref: Some(PEER_DELIVERY_FRONTIER.to_owned()),
             delivery_binding_frontier: Some(PEER_DELIVERY_FRONTIER.to_owned()),
@@ -107,7 +107,16 @@ async fn signed_event_after_current_alice_frontier(state: &AppState, fixture_lab
         .collect();
     signed_event_envelope(fixture_label, actor_seq + 1, frontier_event_ids)
 }
-const SERVICE_ID: &str = "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x";
+/// Derived, never copied: the destination service id every federated request
+/// addresses is this deployment's own resolved identity.
+fn service_id() -> &'static str {
+    static ID: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        soland_test_support::app_state(super::common::test_config())
+            .service_id()
+            .clone()
+    });
+    &ID
+}
 const DESTINATION_TRUST_DOMAIN: &str = "ak:trust_domain:soland.local";
 fn test_realm_id() -> &'static str {
     demo_realm_id()
@@ -132,6 +141,7 @@ fn resign_federation_event_as(event: Value, actor_full_id: &str) -> Value {
     if event.seal_ref.is_some() {
         event.seal_ref = Some(
             test_realm_basis_for_principal_server(
+                &soland_test_support::app_state(super::common::test_config()),
                 event.realm_id.as_str(),
                 actor_full_id,
                 PEER_SOURCE_ID,
@@ -294,7 +304,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
     let mut query = TestClient::query(query_target).json(&read_body);
     for (name, value) in signed_federation_query_headers(
         PEER_SOURCE_DID,
-        SERVICE_ID,
+        service_id(),
         DESTINATION_TRUST_DOMAIN,
         query_target,
         &read_body,
@@ -330,7 +340,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
     let mut frontier = TestClient::query(frontier_target).json(&frontier_body);
     for (name, value) in signed_federation_query_headers(
         PEER_SOURCE_DID,
-        SERVICE_ID,
+        service_id(),
         DESTINATION_TRUST_DOMAIN,
         frontier_target,
         &frontier_body,
@@ -359,7 +369,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
             .unwrap()
             .starts_with("sha256:")
     );
-    assert_eq!(frontier["issuer"], SERVICE_ID);
+    assert_eq!(frontier["issuer"], service_id());
     assert_eq!(frontier["signature"]["scheme"], "ed25519-detached-jws");
     assert_eq!(
         frontier["signature"]["signed_payload"]["frontier_root"],
@@ -384,7 +394,7 @@ async fn peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason()
     let mut query = TestClient::query(query_target).json(&read_body);
     for (name, value) in signed_federation_query_headers(
         PEER_SOURCE_DID,
-        SERVICE_ID,
+        service_id(),
         DESTINATION_TRUST_DOMAIN,
         query_target,
         &read_body,
@@ -430,7 +440,7 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
     let mut submit = TestClient::post(target).json(&body);
     for (name, value) in signed_federation_push_headers(
         PEER_SOURCE_DID,
-        SERVICE_ID,
+        service_id(),
         DESTINATION_TRUST_DOMAIN,
         target,
         &body,
@@ -481,7 +491,7 @@ async fn peer_events_submit_verifies_digest_against_the_received_wire_body() {
     let mut submit = TestClient::post(target).json(&body);
     for (name, value) in signed_federation_push_headers(
         PEER_SOURCE_DID,
-        SERVICE_ID,
+        service_id(),
         DESTINATION_TRUST_DOMAIN,
         target,
         &body,
@@ -523,7 +533,7 @@ async fn peer_events_submit_accepts_online_event_without_offline_evidence() {
     let mut submit = TestClient::post(target).json(&body);
     for (name, value) in signed_federation_push_headers(
         PEER_SOURCE_DID,
-        SERVICE_ID,
+        service_id(),
         DESTINATION_TRUST_DOMAIN,
         target,
         &body,
@@ -564,7 +574,7 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
     let mut frontier = TestClient::query(frontier_target).json(&frontier_body);
     for (name, value) in signed_federation_query_headers(
         PEER_SOURCE_DID,
-        SERVICE_ID,
+        service_id(),
         DESTINATION_TRUST_DOMAIN,
         frontier_target,
         &frontier_body,
@@ -612,7 +622,7 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
     let mut submit = TestClient::post(target).json(&body);
     for (name, value) in signed_federation_push_headers(
         PEER_SOURCE_DID,
-        SERVICE_ID,
+        service_id(),
         DESTINATION_TRUST_DOMAIN,
         target,
         &body,
@@ -663,7 +673,7 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
     let mut submit = TestClient::post(target).json(&body);
     for (name, value) in signed_federation_push_headers(
         PEER_SOURCE_DID,
-        SERVICE_ID,
+        service_id(),
         DESTINATION_TRUST_DOMAIN,
         target,
         &body,
@@ -762,7 +772,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     let mut query = TestClient::query(query_target).json(&query_body);
     for (name, value) in signed_federation_query_headers(
         PEER_SOURCE_DID,
-        SERVICE_ID,
+        service_id(),
         DESTINATION_TRUST_DOMAIN,
         query_target,
         &query_body,
@@ -793,7 +803,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     let mut resolve = TestClient::query(resolve_target).json(&resolve_body);
     for (name, value) in signed_federation_query_headers(
         PEER_SOURCE_DID,
-        SERVICE_ID,
+        service_id(),
         DESTINATION_TRUST_DOMAIN,
         resolve_target,
         &resolve_body,
@@ -1099,7 +1109,7 @@ async fn submit_peer_event(state: AppState, event: &Value) -> Value {
     let mut submit = TestClient::post(target).json(&body);
     for (name, value) in signed_federation_push_headers(
         PEER_SOURCE_DID,
-        SERVICE_ID,
+        service_id(),
         DESTINATION_TRUST_DOMAIN,
         target,
         &body,

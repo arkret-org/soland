@@ -12,8 +12,8 @@ mod service_route_handover_signer;
 
 pub use app_state::{
     AppState, AppStateRuntime, ConnectionDrain, DEVELOPMENT_DEMO_SUBJECT_DID,
-    DEVELOPMENT_SERVICE_DID, build_realm_directory, development_demo_genesis_event,
-    development_demo_realm_id, getrandom_seed, realm_genesis_payload,
+    build_realm_directory, development_demo_genesis_event, development_demo_realm_id,
+    getrandom_seed, realm_genesis_payload,
 };
 pub(crate) use member_identity::{
     HandleClaimDigestInput, HandleClaimEvidenceRecord, MemberIdentityEventRecord,

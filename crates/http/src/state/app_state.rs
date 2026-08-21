@@ -256,24 +256,11 @@ pub struct AppStateRuntime {
     pub storage_mode: &'static str,
 }
 
-/// Development service DID. Both the demo Realm's notary and its genesis
-/// `principal_server_id` are this deployment identity.
-pub const DEVELOPMENT_SERVICE_DID: &str =
-    "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
 /// Founding principal of the development demo Realm.
 pub const DEVELOPMENT_DEMO_SUBJECT_DID: &str = "did:web:alice.example";
 const DEVELOPMENT_DEMO_TRUST_DOMAIN: &str = "ak:trust_domain:soland.test";
 const DEVELOPMENT_DEMO_GENESIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
 const DEVELOPMENT_DEMO_GENESIS_CREATED_AT: &str = "2026-01-01T00:00:00Z";
-
-fn development_service_core_id() -> DidCoreId {
-    DidCoreId::from(
-        arkret_wire::project_full_id_to_core_id(
-            &DidFullId::new(DEVELOPMENT_SERVICE_DID.to_owned()).expect("development service DID"),
-        )
-        .expect("development service projection"),
-    )
-}
 
 /// Canonical `ak.realm.create` payload for a deterministic Realm genesis.
 #[must_use]
@@ -320,28 +307,16 @@ fn demo_notary_signer_descriptor(
     .expect("development notary signer descriptor")
 }
 
-fn development_default_notary_signing_seed() -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(b"soland:test-fixture-notary:");
-    hasher.update(development_service_core_id().as_str().as_bytes());
-    hasher.finalize().into()
-}
-
 /// The development demo Realm's canonical genesis Event.
 ///
-/// Every input is a development constant, so the Event — and therefore the Realm
-/// id it derives — is fully determined by this function plus the current
-/// `arkret-spec` artifacts.
+/// Every input except the deployment identity is a development constant, so the
+/// Event — and therefore the Realm id it derives — is fully determined by this
+/// deployment's own service identity, its notary key and the current
+/// `arkret-spec` artifacts. There is no parameterless variant: a demo Realm id
+/// derived from a copied service DID is a Realm no running deployment can
+/// re-derive.
 #[must_use]
-pub fn development_demo_genesis_event() -> arkret_wire::AuthoredEvent {
-    development_demo_genesis_event_with_notary(
-        &DidFullId::new(DEVELOPMENT_SERVICE_DID.to_owned()).expect("development service DID"),
-        &development_service_core_id(),
-        development_default_notary_signing_seed(),
-    )
-}
-
-fn development_demo_genesis_event_with_notary(
+pub fn development_demo_genesis_event(
     service_full_id: &DidFullId,
     service_id: &DidCoreId,
     signing_seed: [u8; 32],
@@ -380,16 +355,23 @@ fn development_demo_genesis_event_with_notary(
     .expect("development demo genesis Event")
 }
 
-/// Realm identity of the development demo Realm.
+/// Realm identity of the development demo Realm served by this deployment.
 ///
 /// This is content-derived (`retype(genesis_event.event_id)`), so it moves
-/// whenever anything inside the genesis Event's canonical bytes moves — including
-/// an `arkret-spec` schema or registry change that has nothing to do with the demo
-/// data (the payload embeds `capability_action_registry_digest`). It is therefore
-/// **derived**, never copied: a hard-coded literal went stale three times.
+/// whenever anything inside the genesis Event's canonical bytes moves — the
+/// deployment's own service identity and notary key included, because the
+/// genesis payload freezes the notary signer descriptor. It is therefore
+/// **derived**, never copied: a hard-coded literal went stale four times, most
+/// recently as a service DID copied from one deployment into another.
 #[must_use]
-pub fn development_demo_realm_id() -> RealmId {
-    RealmId::from_event_id(development_demo_genesis_event().event_id())
+pub fn development_demo_realm_id(
+    service_full_id: &DidFullId,
+    service_id: &DidCoreId,
+    signing_seed: [u8; 32],
+) -> RealmId {
+    RealmId::from_event_id(
+        development_demo_genesis_event(service_full_id, service_id, signing_seed).event_id(),
+    )
 }
 
 pub fn build_realm_directory(
@@ -401,14 +383,7 @@ pub fn build_realm_directory(
     let mut realms = RealmDirectoryIndex::new();
     if config.seed_demo_data {
         let mut demo = RealmDirectoryEntry::new(
-            RealmId::from_event_id(
-                development_demo_genesis_event_with_notary(
-                    service_full_id,
-                    service_id,
-                    resolved_signing_seed,
-                )
-                .event_id(),
-            ),
+            development_demo_realm_id(service_full_id, service_id, resolved_signing_seed),
             "Arkret Demo Realm",
             // Seeded locally, not projected from an Event.
             soland_services::events::DirectoryProvenance::LocalOnly,
@@ -758,6 +733,26 @@ impl AppState {
     ) -> Result<arkret_wire::DidUrl, String> {
         arkret_wire::DidUrl::new(format!("{}#{fragment}", self.service_full_id()))
             .map_err(|error| format!("service verification method is invalid: {error}"))
+    }
+
+    /// The development demo Realm this deployment seeds when `seed_demo_data`
+    /// is on.
+    ///
+    /// Derived from exactly the three inputs [`build_realm_directory`] used, so
+    /// the directory entry, the canonical genesis Event and every fixture that
+    /// re-seeds that Event agree by construction rather than by a copied
+    /// literal.
+    #[must_use]
+    pub fn development_demo_realm_id(&self) -> RealmId {
+        let identity_state = self.service_identity_state();
+        let identity = identity_state
+            .identity()
+            .expect("AppState requires a serving service identity");
+        development_demo_realm_id(
+            &identity.full_id,
+            &identity.service_id,
+            self.notary_signing_key().to_bytes(),
+        )
     }
 
     pub fn service_notary_signer_descriptor(

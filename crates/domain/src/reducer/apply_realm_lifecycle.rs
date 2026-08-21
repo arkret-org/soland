@@ -1202,35 +1202,6 @@ impl ProjectionState {
         } else {
             None
         };
-        // Standard MLS never exports history secrets, so its history policy is
-        // permanently pinned to `since_join`.
-        if kind == arkret_wire::EventKind::RealmCreate
-            && let Some(object) = payload_object
-        {
-            let history_access = object
-                .get("history_access")
-                .and_then(Value::as_str)
-                .unwrap_or("since_join");
-            if !matches!(
-                history_access,
-                "since_join" | "all_history_for_current_members"
-            ) {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                };
-            }
-            let purpose = object.get("purpose").and_then(Value::as_str);
-            let fixed_since_join = matches!(
-                purpose,
-                Some("direct_conversation" | "principal_control" | "managed_agent_control")
-            ) || object.get("encryption_profile").and_then(Value::as_str)
-                == Some("mls_rfc9420");
-            if fixed_since_join && history_access != "since_join" {
-                return ProjectionEffect::Rejected {
-                    reason: "history_access_requires_history_capable_scheme".to_owned(),
-                };
-            }
-        }
         let creator = if kind == arkret_wire::EventKind::RealmCreate {
             registered_authority_root_write(self.projected_cell_writes()).and_then(|value| {
                 value

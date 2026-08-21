@@ -638,22 +638,7 @@ async fn validate_event_envelope_with_ingress(
         ));
     }
     require_object_field(object, "payload")?;
-    let is_self_principal_pcr_bootstrap_create = kind
-        == arkret_wire::EventKind::RealmCreate.as_str()
-        && realm_bootstrap_contexts.iter().any(|context| {
-            context.self_principal_pcr_bootstrap
-                && context.realm_id == realm_id.as_str()
-                && context.actor_id == actor_id.as_str()
-                && context.identity_anchor_event_id.as_deref() == Some(event_id.as_str())
-        });
-    validate_event_schema_and_payload(
-        state,
-        &kind,
-        &schema_id,
-        envelope,
-        object,
-        is_self_principal_pcr_bootstrap_create,
-    )?;
+    validate_event_schema_and_payload(state, &kind, &schema_id, envelope, object)?;
     // The Principal Server owns only deterministic wire admission and epoch
     // CAS. RFC 9420 group-state/frontier verification remains receiver-owned;
     // accepting a durable Commit never authorizes a member to apply it.

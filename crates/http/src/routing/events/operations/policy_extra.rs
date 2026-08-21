@@ -7,6 +7,15 @@ use serde_json::Value;
 
 use super::*;
 
+/// `realm-and-space.md` section 2.3 cross-field constraint.
+///
+/// Only `content_scheme=mls_rfc9420` pins `history_access` to `since_join`;
+/// plaintext and `mls_exporter_aead_v1` may use either state. The scheme itself
+/// is frozen by the accepted MLS group Genesis, never by `ak.realm.create`:
+/// `realm-genesis.schema.json` is `additionalProperties:false` and does not
+/// declare `content_scheme`, so a Realm whose MLS group Genesis has not been
+/// accepted yet has no effective scheme to compare against. Treating that
+/// absence as a violation rejected every MLS-backed Realm create.
 pub(crate) async fn validate_history_access_content_scheme_policy(
     state: &AppState,
     operations: &[Operation],
@@ -23,12 +32,17 @@ pub(crate) async fn validate_history_access_content_scheme_policy(
     if encryption_profile.as_deref() != Some("mls_rfc9420") {
         return Ok(());
     }
-    let content_scheme = intended_content_scheme_for_realm(state, operations, realm_id).await;
+    let Some(content_scheme) = intended_content_scheme_for_realm(state, realm_id) else {
+        return Ok(());
+    };
+    if content_scheme != "mls_rfc9420" {
+        return Ok(());
+    }
     let history_access = intended_history_access_for_realm(state, operations, realm_id).await;
-    match content_scheme.as_deref() {
-        Some("mls_rfc9420") if history_access == "since_join" => Ok(()),
-        Some("mls_exporter_aead_v1") => Ok(()),
-        _ => Err("history_access_requires_history_capable_scheme"),
+    if history_access == "since_join" {
+        Ok(())
+    } else {
+        Err("history_access_requires_history_capable_scheme")
     }
 }
 
@@ -88,30 +102,15 @@ async fn intended_history_access_for_realm(
         .unwrap_or_else(|| "since_join".to_owned())
 }
 
-async fn intended_content_scheme_for_realm(
-    state: &AppState,
-    operations: &[Operation],
-    realm_id: &str,
-) -> Option<String> {
-    for operation in operations.iter().rev() {
-        if operation.realm_id.as_str() != realm_id {
-            continue;
-        }
-        if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_wire::EventKind::RealmCreate)
-            && let Some(value) = operation
-                .payload
-                .get("object")
-                .and_then(|object| object.get("content_scheme"))
-                .and_then(Value::as_str)
-        {
-            return Some(value.to_owned());
-        }
-    }
-    {
-        let projection = state.projections().snapshot();
-        projection.realm_content_scheme(realm_id)
-    }
+/// The Realm's effective `content_scheme`, or `None` while no accepted MLS
+/// group Genesis has fixed one.
+///
+/// There is no same-batch source: `ak.realm.create` structurally cannot carry
+/// the value, and the scheme is create-locked, so scanning the pending
+/// operations would only re-read a field the closed genesis schema forbids.
+fn intended_content_scheme_for_realm(state: &AppState, realm_id: &str) -> Option<String> {
+    let projection = state.projections().snapshot();
+    projection.realm_content_scheme(realm_id)
 }
 
 async fn intended_encryption_profile_for_realm(

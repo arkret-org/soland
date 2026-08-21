@@ -4,7 +4,7 @@ use super::enrollment::validate_device_authorization_binding;
 use super::mls_governance::projected_media_plaintext_service_present;
 use super::payload_shape::{
     validate_event_audience_fields, validate_pre_schema_wire_shape,
-    validate_realm_create_policy_constraints, validate_space_container_lifecycle_payload,
+    validate_space_container_lifecycle_payload,
 };
 
 const LOCAL_EVENT_CRITICAL_FEATURES: [&str; 4] = [

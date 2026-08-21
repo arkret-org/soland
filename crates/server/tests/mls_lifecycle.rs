@@ -449,8 +449,8 @@ async fn mls_lifecycle_end_to_end() {
         alice_did,
         alice_device,
         soland_test_support::cba_basis::realm_genesis_payload(
+            &state,
             alice_did,
-            state.service_id(),
             "MLS lifecycle",
             "ak:trust_domain:soland-mls-test.local",
             Utc::now(),

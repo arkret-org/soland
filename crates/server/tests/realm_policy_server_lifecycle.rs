@@ -97,8 +97,8 @@ async fn bootstrap_realm(state: &AppState, token: &str, title: &str) -> String {
         ALICE,
         ALICE_DEVICE,
         soland_test_support::cba_basis::realm_genesis_payload(
+            state,
             ALICE,
-            state.service_id(),
             title,
             TRUST_DOMAIN,
             Utc::now(),

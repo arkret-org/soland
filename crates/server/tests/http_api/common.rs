@@ -36,8 +36,11 @@ pub(crate) use soland_test_support::AppStateTestExt;
 /// Derived, never copied: the demo Realm id is `retype(genesis.event_id)` and
 /// moves with any `arkret-spec` change that touches the genesis payload.
 pub(crate) fn demo_realm_id() -> &'static str {
-    static ID: std::sync::LazyLock<String> =
-        std::sync::LazyLock::new(|| soland_http::state::development_demo_realm_id().to_string());
+    static ID: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        soland_test_support::app_state(test_config())
+            .development_demo_realm_id()
+            .to_string()
+    });
     &ID
 }
 /// Fixed REST-style TURN shared secret installed by `test_config()` so the
@@ -1754,31 +1757,32 @@ pub(crate) const HTTP_API_FIXTURE_BASIS: soland_test_support::cba_basis::Fixture
         &FIXTURE_DATA_PLANE_GRANT_ACTIONS,
     );
 
-fn test_realm_basis(realm_id: &str, subject: &str, notary: &str) -> TestRealmBasis {
+fn test_realm_basis(state: &AppState, realm_id: &str, subject: &str) -> TestRealmBasis {
     let subject_core = arkret_wire::project_full_id_to_core_id(
         &arkret_identifiers::DidFullId::new(subject.to_owned())
             .expect("fixture basis subject full DID"),
     )
     .expect("fixture basis subject projection");
     soland_test_support::cba_basis::realm_basis(
+        state,
         realm_id,
         &subject_core,
-        notary,
         HTTP_API_FIXTURE_BASIS,
     )
 }
 
 pub(crate) fn test_realm_basis_for_principal_server(
+    state: &AppState,
     realm_id: &str,
     subject: &str,
     principal_server_id: &str,
 ) -> TestRealmBasis {
     let subject_core = fixture_actor_core_id(subject);
     soland_test_support::cba_basis::realm_basis_for_principal_server(
+        state,
         realm_id,
         &subject_core,
         principal_server_id,
-        &fixture_notary_did(),
         HTTP_API_FIXTURE_BASIS,
     )
 }
@@ -1790,7 +1794,8 @@ pub(crate) async fn seed_test_realm_basis_seal_for_principal_server(
     principal_server_id: &str,
 ) -> arkret_wire::SealId {
     let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
-    let basis = test_realm_basis_for_principal_server(realm_id, subject, principal_server_id);
+    let basis =
+        test_realm_basis_for_principal_server(state, realm_id, subject, principal_server_id);
     state
         .test_put_seal(&basis.seal, arkret_canonical::DigestSuite::Sha256)
         .unwrap();
@@ -1806,19 +1811,6 @@ pub(crate) async fn seed_test_realm_basis_seal_for_principal_server(
     }
     seed_realm_genesis_event(state, realm_id, "did:web:alice.example").await;
     basis.seal.id
-}
-
-/// The service DID every fixture Realm designates as its notary.
-///
-/// A Control Move submitted to `/_arkret/self/events` has its Control Proposal Ack
-/// minted by this service, and `NotaryWorker::authority_set_ref_for_events`
-/// only issues one when the Realm's notary profile names the service. A fixture
-/// Realm notarised by its owner would be well-formed but unable to advance a
-/// single Control Move through the service that hosts it.
-pub(crate) fn fixture_notary_did() -> String {
-    soland_test_support::app_state(test_config())
-        .service_id()
-        .clone()
 }
 
 /// Store the Realm's canonical `ak.realm.create`.
@@ -1848,7 +1840,12 @@ pub(crate) async fn seed_realm_genesis_event(
 
 /// The Seal a fixture Event names in `seal_ref` / `seal_basis`.
 pub(crate) fn test_realm_basis_seal(realm_id: &str, subject: &str) -> arkret_wire::Seal {
-    test_realm_basis(realm_id, subject, &fixture_notary_did()).seal
+    test_realm_basis(
+        &soland_test_support::app_state(test_config()),
+        realm_id,
+        subject,
+    )
+    .seal
 }
 
 /// The fixture basis Seal an already-built Event cites.
@@ -1887,7 +1884,7 @@ pub(crate) async fn seed_test_realm_basis_seal(
     subject: &str,
 ) -> arkret_wire::SealId {
     let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
-    let basis = test_realm_basis(realm_id, subject, state.service_id().as_str());
+    let basis = test_realm_basis(state, realm_id, subject);
     state
         .test_put_seal(&basis.seal, arkret_canonical::DigestSuite::Sha256)
         .unwrap();
