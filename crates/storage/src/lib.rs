@@ -45,7 +45,7 @@ mod events;
 mod federation;
 mod governance;
 mod governance_history;
-mod history_mailbox;
+mod history_response_stream;
 mod idempotency;
 #[doc(hidden)]
 pub mod ids;
@@ -91,7 +91,7 @@ pub use events::*;
 pub use federation::*;
 pub use governance::*;
 pub use governance_history::*;
-pub use history_mailbox::*;
+pub use history_response_stream::*;
 pub use idempotency::*;
 pub use invite_locators::*;
 pub use join_applications::*;
@@ -392,7 +392,7 @@ pub trait FederationGovernanceStoreRegistry: Send + Sync {
     fn governance_dependencies(&self) -> &dyn GovernanceDependencyStore;
     fn history_traversal_retentions(&self) -> &dyn HistoryTraversalRetentionStore;
     fn pending_rrk_acquisitions(&self) -> &dyn PendingRrkAcquisitionStore;
-    fn history_mailboxes(&self) -> &dyn HistoryMailboxStore;
+    fn history_response_streams(&self) -> &dyn HistoryResponseStreamStore;
 }
 
 /// Delivery, policy, recovery, and service identity persistence registry.

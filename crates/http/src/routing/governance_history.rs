@@ -16,11 +16,12 @@ use arkret_models_collaboration::history_key::{
     HistoryKeyRequestReplicaOutcome, HistoryKeyResponseAckOutcome, HistoryKeyResponseAckRequest,
     HistoryKeyResponseContent, HistoryKeyResponseListOutcome, HistoryKeyResponseListQuery,
     HistoryKeyResponseRecord, HistoryKeyResponseSendOutcome, HistoryKeyResponseSendReceipt,
-    HistoryKeyResponseSendRequest, HistoryKeySourceRelay, HistoryMailboxAckTokenClaims,
-    HistoryMailboxCapabilitySealContext, HistoryMailboxCapabilitySealPurpose, HistoryMailboxId,
-    HistoryMailboxPageEntry, HistoryManifestAdmission, HistoryManifestAdmissionKind,
-    HistoryManifestAdmissionPass, HistoryReleaseAttestation, HistoryReleaseAttestationKind,
-    HistoryReleaseVerifierProfile, MailboxCapabilityPlaintext, MailboxCapabilityPlaintextKind,
+    HistoryKeyResponseSendRequest, HistoryKeySourceRelay, HistoryManifestAdmission,
+    HistoryManifestAdmissionKind, HistoryManifestAdmissionPass, HistoryReleaseAttestation,
+    HistoryReleaseAttestationKind, HistoryReleaseVerifierProfile, HistoryRequestId,
+    HistoryResponseAckTokenClaims, HistoryResponseCapabilityPlaintext,
+    HistoryResponseCapabilityPlaintextKind, HistoryResponseCapabilitySealContext,
+    HistoryResponseCapabilitySealPurpose, HistoryResponsePageEntry,
     OrganizationRecoveryArchiveListItem, OrganizationRecoveryArchiveListOutcome,
     OrganizationRecoveryArchiveListQuery, OrganizationRecoveryArchiveReplica,
     OrganizationRecoveryArchiveReplicaOutcome, OrganizationRecoveryArchiveSetMember,
@@ -28,8 +29,8 @@ use arkret_models_collaboration::history_key::{
     RealmSealViewLocator, RequestExpiringRetention, RequestExpiringRetentionKind,
     RequesterEndpointAuthorization, RrkHolderAuthorityObservation, SourceAuthorityLocator,
     SourceKind, SourceRelayAttestation, SourceRelayAttestationKind, SourceRelayViewLocator,
-    agent_signer_evidence_digest, mailbox_capability_commitment,
-    organization_recovery_archive_coverage,
+    agent_signer_evidence_digest, organization_recovery_archive_coverage,
+    response_capability_commitment,
 };
 use arkret_models_collaboration::http_bodies::{
     PeerSealResolveRequestBody, SealResolveOutcome, SelfSealResolveRequestBody,
@@ -64,14 +65,8 @@ pub(super) fn self_router() -> Router {
         .push(Router::with_path("history-key-requests").post(create_history_key_request))
         .push(Router::with_path("history-key-requests/read").post(list_history_key_requests))
         .push(Router::with_path("history-key-responses").post(send_history_key_response))
-        .push(
-            Router::with_path("history-key-responses/{reply_mailbox_id}/read")
-                .post(read_history_key_responses),
-        )
-        .push(
-            Router::with_path("history-key-responses/{reply_mailbox_id}/ack")
-                .post(ack_history_key_responses),
-        )
+        .push(Router::with_path("history-key-responses/read").post(read_history_key_responses))
+        .push(Router::with_path("history-key-responses/ack").post(ack_history_key_responses))
         .push(
             Router::with_path("organization-recovery-archives/read")
                 .post(list_organization_recovery_archives),
@@ -363,62 +358,18 @@ async fn create_history_key_request(
             .map_err(|error| AppError::internal(error.to_string()))?,
     )
     .map_err(|error| AppError::internal(error.to_string()))?;
-    let mut mailbox_id_bytes = [0_u8; 16];
-    rand::rng().fill(&mut mailbox_id_bytes);
-    let reply_mailbox_id = HistoryMailboxId::new(format!(
-        "ak:history_mailbox:{}",
-        URL_SAFE_NO_PAD.encode(mailbox_id_bytes)
-    ))
-    .map_err(|error| AppError::internal(error.to_string()))?;
-    let mut mailbox_capability_bytes = [0_u8; 32];
-    rand::rng().fill(&mut mailbox_capability_bytes);
-    let mailbox_capability_b64u = URL_SAFE_NO_PAD.encode(mailbox_capability_bytes);
-    let mailbox_capability_commitment =
-        mailbox_capability_commitment(&reply_mailbox_id, &mailbox_capability_b64u)
-            .map_err(|error| AppError::internal(error.to_string()))?;
-    let seal_context = HistoryMailboxCapabilitySealContext {
-        purpose: HistoryMailboxCapabilitySealPurpose::Value,
-        request_digest: request_digest.clone(),
-        reply_mailbox_id: reply_mailbox_id.clone(),
-        mailbox_capability_commitment: mailbox_capability_commitment.clone(),
-        effective_scope: request.effective_scope.clone(),
-        release_service_id: release_service_id.clone(),
-        release_service_binding_ref: release_service_binding_ref.clone(),
-        release_service_resolution_ref: resolution.record.resolution_event_ref.clone(),
-        release_service_resolution_sequence: resolution.record.record_sequence,
-        release_service_resolution_record_digest: release_service_resolution_record_digest.clone(),
-        release_service_route_digest: resolution.record.describe_digest.clone(),
-        expires_at: request.expires_at,
-    };
-    let sealed_mailbox_capability = arkret_crypto::secret_share::seal_history_mailbox_capability(
-        &request.recipient_hpke_public_key,
-        &seal_context,
-        &MailboxCapabilityPlaintext {
-            kind: MailboxCapabilityPlaintextKind::Value,
-            mailbox_capability_b64u,
-        },
-    )
-    .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    let sealed_capability_digest = sealed_mailbox_capability
-        .sealed_capability_digest()
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let verification_method = history_service_verification_method(state)?;
-    let request_receipt = HistoryKeyRequestReceipt::build_signed_proof(
-        verification_method,
-        accepted_at,
-        |service_proof| HistoryKeyRequestReceipt {
-            kind: HistoryKeyRequestReceiptKind::Value,
+    loop {
+        let mut response_capability_bytes = [0_u8; 32];
+        rand::rng().fill(&mut response_capability_bytes);
+        let response_capability_b64u = URL_SAFE_NO_PAD.encode(response_capability_bytes);
+        let response_capability_commitment =
+            response_capability_commitment(&response_capability_b64u)
+                .map_err(|error| AppError::internal(error.to_string()))?;
+        let seal_context = HistoryResponseCapabilitySealContext {
+            purpose: HistoryResponseCapabilitySealPurpose::Value,
             request_digest: request_digest.clone(),
-            reply_mailbox_id: reply_mailbox_id.clone(),
-            mailbox_capability_commitment: mailbox_capability_commitment.clone(),
-            sealed_capability_digest: sealed_capability_digest.clone(),
+            response_capability_commitment: response_capability_commitment.clone(),
             effective_scope: request.effective_scope.clone(),
-            requester_sender_domain: request.requester_sender_domain.clone(),
-            requester_authorization_incarnation: request
-                .requester_authorization_incarnation
-                .clone(),
-            trusted_history_base_basis: request.trusted_history_base_basis.clone(),
-            trusted_current_basis: request.trusted_current_basis.clone(),
             release_service_id: release_service_id.clone(),
             release_service_binding_ref: release_service_binding_ref.clone(),
             release_service_resolution_ref: resolution.record.resolution_event_ref.clone(),
@@ -426,51 +377,96 @@ async fn create_history_key_request(
             release_service_resolution_record_digest: release_service_resolution_record_digest
                 .clone(),
             release_service_route_digest: resolution.record.describe_digest.clone(),
-            history_traversal_retention: retention.clone(),
-            accepted_at,
             expires_at: request.expires_at,
-            service_proof,
-        },
-        |binding| history_service_jws(state, binding),
-    )
-    .map_err(|error| AppError::internal(error.to_string()))?;
-    let request_receipt_digest = request_receipt
-        .request_receipt_digest()
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let write = soland_storage::HistoryRequestInboxWrite {
-        request_digest: request_digest.clone(),
-        request_receipt_digest: request_receipt_digest.clone(),
-        request,
-        request_receipt,
-        sealed_mailbox_capability: Some(sealed_mailbox_capability),
-        local_traversal: Some(soland_storage::HistoryTraversalRetentionWrite {
-            access: soland_storage::HistoryTraversalAccess::SelfAccess(
-                arkret_models_collaboration::history_key::SelfHistoryTraversalAccess::RequestReceipt {
-                    request_receipt_digest,
+        };
+        let sealed_history_response_capability =
+            arkret_crypto::secret_share::seal_history_response_capability(
+                &request.recipient_hpke_public_key,
+                &seal_context,
+                &HistoryResponseCapabilityPlaintext {
+                    kind: HistoryResponseCapabilityPlaintextKind::Value,
+                    response_capability_b64u,
                 },
-            ),
-            retention,
-            pins,
-            objects,
-        }),
-        request_replica: None,
-        stored_at: accepted_at,
-    };
-    match history.store_history_request(write).await {
-        Ok((_, record)) => {
-            enqueue_member_history_request_replicas(state, &record).await?;
-            history_request_create_outcome(record)
-        }
-        Err(error) => {
-            if let Some(record) = history
-                .history_request_by_digest(&request_digest)
-                .await
-                .map_err(map_service_error)?
-            {
+            )
+            .map_err(|error| AppError::param_invalid(error.to_string()))?;
+        let sealed_response_capability_digest = sealed_history_response_capability
+            .sealed_response_capability_digest()
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        let verification_method = history_service_verification_method(state)?;
+        let request_receipt = HistoryKeyRequestReceipt::build_signed_proof(
+            verification_method,
+            accepted_at,
+            |service_proof| HistoryKeyRequestReceipt {
+                kind: HistoryKeyRequestReceiptKind::Value,
+                request_digest: request_digest.clone(),
+                response_capability_commitment: response_capability_commitment.clone(),
+                sealed_response_capability_digest: sealed_response_capability_digest.clone(),
+                effective_scope: request.effective_scope.clone(),
+                requester_sender_domain: request.requester_sender_domain.clone(),
+                requester_authorization_incarnation: request
+                    .requester_authorization_incarnation
+                    .clone(),
+                trusted_history_base_basis: request.trusted_history_base_basis.clone(),
+                trusted_current_basis: request.trusted_current_basis.clone(),
+                release_service_id: release_service_id.clone(),
+                release_service_binding_ref: release_service_binding_ref.clone(),
+                release_service_resolution_ref: resolution.record.resolution_event_ref.clone(),
+                release_service_resolution_sequence: resolution.record.record_sequence,
+                release_service_resolution_record_digest: release_service_resolution_record_digest
+                    .clone(),
+                release_service_route_digest: resolution.record.describe_digest.clone(),
+                history_traversal_retention: retention.clone(),
+                accepted_at,
+                expires_at: request.expires_at,
+                service_proof,
+            },
+            |binding| history_service_jws(state, binding),
+        )
+        .map_err(|error| AppError::internal(error.to_string()))?;
+        let request_receipt_digest = request_receipt
+            .request_receipt_digest()
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        let write = soland_storage::HistoryRequestWrite {
+            request_digest: request_digest.clone(),
+            request_receipt_digest: request_receipt_digest.clone(),
+            request: request.clone(),
+            request_receipt,
+            sealed_history_response_capability: Some(sealed_history_response_capability),
+            local_traversal: Some(soland_storage::HistoryTraversalRetentionWrite {
+                access: soland_storage::HistoryTraversalAccess::SelfAccess(
+                    arkret_models_collaboration::history_key::SelfHistoryTraversalAccess::RequestReceipt {
+                        request_receipt_digest,
+                    },
+                ),
+                retention: retention.clone(),
+                pins: pins.clone(),
+                objects: objects.clone(),
+            }),
+            request_replica: None,
+            stored_at: accepted_at,
+        };
+        match history.store_history_request(write).await {
+            Ok(soland_storage::HistoryRequestPutOutcome::Stored { record, .. }) => {
                 enqueue_member_history_request_replicas(state, &record).await?;
-                history_request_create_outcome(record)
-            } else {
-                Err(map_service_error(error))
+                return history_request_create_outcome(record);
+            }
+            Ok(soland_storage::HistoryRequestPutOutcome::CapabilityCommitmentCollision) => {
+                // The storage transaction has made no durable writes.  Generate a
+                // new capability and rebuild both its HPKE seal and signed receipt
+                // so every commitment-bound field remains exact.
+                continue;
+            }
+            Err(error) => {
+                if let Some(record) = history
+                    .history_request_by_digest(&request_digest)
+                    .await
+                    .map_err(map_service_error)?
+                {
+                    enqueue_member_history_request_replicas(state, &record).await?;
+                    return history_request_create_outcome(record);
+                } else {
+                    return Err(map_service_error(error));
+                }
             }
         }
     }
@@ -478,7 +474,7 @@ async fn create_history_key_request(
 
 async fn enqueue_member_history_request_replicas(
     state: &AppState,
-    record: &soland_storage::HistoryRequestInboxRecord,
+    record: &soland_storage::HistoryRequestRecord,
 ) -> Result<(), AppError> {
     if record.write.request_replica.is_some() {
         return Ok(());
@@ -617,17 +613,17 @@ async fn enqueue_member_history_request_replicas(
 }
 
 fn history_request_create_outcome(
-    record: soland_storage::HistoryRequestInboxRecord,
+    record: soland_storage::HistoryRequestRecord,
 ) -> JsonResult<HistoryKeyRequestCreateOutcome> {
-    let sealed_mailbox_capability = record
+    let sealed_history_response_capability = record
         .write
-        .sealed_mailbox_capability
+        .sealed_history_response_capability
         .ok_or_else(|| AppError::conflict("history request digest belongs to a replica"))?;
     let outcome = HistoryKeyRequestCreateOutcome {
         kind: HistoryKeyRequestAcceptedKind::Value,
         request: record.write.request,
         request_receipt: record.write.request_receipt,
-        sealed_mailbox_capability,
+        sealed_history_response_capability,
     };
     outcome
         .validate()
@@ -1395,7 +1391,6 @@ async fn validate_remote_source_chunk_manifest(
     })?;
     if manifest.request_digest != response.request_digest
         || manifest.request_receipt_digest != response.request_receipt_digest
-        || manifest.reply_mailbox_id != response.reply_mailbox_id
         || manifest.effective_scope != response.effective_scope
         || manifest.source_actor_id != response.source_actor_id
         || manifest.source_sender_domain != response.source_sender_domain
@@ -1489,10 +1484,10 @@ async fn build_local_history_source_relay(
     let request_record = state
         .persistence()
         .governance_history_service()
-        .history_request_by_mailbox(response.reply_mailbox_id.as_str())
+        .history_request_by_digest(&response.request_digest)
         .await
         .map_err(map_service_error)?
-        .ok_or_else(|| AppError::not_found("history request mailbox is unavailable"))?;
+        .ok_or_else(|| AppError::not_found("history request is unavailable"))?;
     let request = &request_record.write.request;
     let realm_id = match &response.effective_scope {
         HistoryEffectiveScope::Realm { realm_id }
@@ -1773,7 +1768,7 @@ async fn history_response_coverage_ranges(
                 .persistence()
                 .governance_history_service()
                 .accepted_history_manifest(
-                    response.reply_mailbox_id.as_str(),
+                    &response.request_digest,
                     &chunk.manifest_digest,
                     &chunk.manifest_admission_digest,
                 )
@@ -2055,7 +2050,7 @@ fn validate_history_request_bases(
 ) -> Result<(), AppError> {
     let mut current = state
         .projections()
-        .realm_seal_leaves(realm_id)
+        .realm_seal_leaves(&realm_id)
         .map_err(|error| AppError::internal(error.to_string()))?;
     current.sort();
     if current != request.trusted_current_basis.leaves {
@@ -2195,7 +2190,7 @@ async fn build_member_history_retention(
         for event_digest in &seal.delta {
             let event = state
                 .projections()
-                .control_event_by_digest(event_digest)
+                .control_event_by_digest(&event_digest)
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| {
                     AppError::new(
@@ -2501,14 +2496,14 @@ fn traversal_admission_registry_digest() -> Result<arkret_wire::Hash, AppError> 
 async fn validate_history_response_request_binding(
     state: &AppState,
     response: &HistoryKeyResponseSendRequest,
-) -> Result<soland_storage::HistoryRequestInboxRecord, AppError> {
+) -> Result<soland_storage::HistoryRequestRecord, AppError> {
     let request = state
         .persistence()
         .governance_history_service()
-        .history_request_by_mailbox(response.reply_mailbox_id.as_str())
+        .history_request_by_digest(&response.request_digest)
         .await
         .map_err(map_service_error)?
-        .ok_or_else(|| AppError::not_found("history request mailbox is unavailable"))?;
+        .ok_or_else(|| AppError::not_found("history request is unavailable"))?;
     if request.write.request_digest != response.request_digest
         || request.write.request_receipt_digest != response.request_receipt_digest
         || request.write.request.effective_scope != response.effective_scope
@@ -2557,16 +2552,16 @@ async fn accept_history_response_manifest(
         }
     }
     let request_record = history
-        .history_request_by_mailbox(response.reply_mailbox_id.as_str())
+        .history_request_by_digest(&response.request_digest)
         .await
         .map_err(map_service_error)?
-        .ok_or_else(|| AppError::not_found("history request mailbox is unavailable"))?;
+        .ok_or_else(|| AppError::not_found("history request is unavailable"))?;
     if existing_reservation.is_none() {
         let (current_release_service_id, _) =
             validate_local_history_release_binding(state, &request_record.write.request).await?;
         if request_record.write.request_receipt.release_service_id != current_release_service_id {
             return Err(AppError::capability_denied(
-                "history mailbox release service binding changed",
+                "history response stream release service binding changed",
             ));
         }
         let _ = validate_retained_history_cut(state, &request_record).await?;
@@ -2652,8 +2647,8 @@ async fn accept_history_response_manifest(
     };
     let cursor = history_sequence_cursor_encode(
         state,
-        "mailbox-record",
-        response.reply_mailbox_id.as_str().as_bytes(),
+        "response-record",
+        response.request_digest.as_str().as_bytes(),
         reservation.sequence,
     )?;
     let record = sign_history_response_record(
@@ -2673,7 +2668,7 @@ async fn accept_history_response_manifest(
         None,
         accepted_at,
     )?;
-    let signer_dependencies = history_mailbox_signer_dependencies(
+    let signer_dependencies = history_response_signer_dependencies(
         source_signer_dependencies,
         &reservation.input.release_service_signer_evidence,
     )?;
@@ -2695,7 +2690,7 @@ async fn accept_history_response_manifest(
 
 async fn validate_retained_history_cut(
     state: &AppState,
-    request_record: &soland_storage::HistoryRequestInboxRecord,
+    request_record: &soland_storage::HistoryRequestRecord,
 ) -> Result<MlsGovernanceVerificationCheckpoint, AppError> {
     let derived_traversal;
     let traversal = if let Some(local) = request_record.write.local_traversal.as_ref() {
@@ -3087,7 +3082,7 @@ async fn validate_retained_history_cut(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let checkpoint = arkret::verify_mls_governance_closure(
-        realm_id,
+        &realm_id,
         target_basis,
         &replay_seals,
         &replay_events,
@@ -3218,16 +3213,16 @@ async fn accept_history_response_chunk(
         }
     }
     let request_record = history
-        .history_request_by_mailbox(response.reply_mailbox_id.as_str())
+        .history_request_by_digest(&response.request_digest)
         .await
         .map_err(map_service_error)?
-        .ok_or_else(|| AppError::not_found("history request mailbox is unavailable"))?;
+        .ok_or_else(|| AppError::not_found("history request is unavailable"))?;
     if existing_reservation.is_none() {
         let (current_release_service_id, _) =
             validate_local_history_release_binding(state, &request_record.write.request).await?;
         if request_record.write.request_receipt.release_service_id != current_release_service_id {
             return Err(AppError::capability_denied(
-                "history mailbox release service binding changed",
+                "history response stream release service binding changed",
             ));
         }
     }
@@ -3236,7 +3231,7 @@ async fn accept_history_response_chunk(
     };
     let accepted_manifest = history
         .accepted_history_manifest(
-            response.reply_mailbox_id.as_str(),
+            &response.request_digest,
             &chunk.manifest_digest,
             &chunk.manifest_admission_digest,
         )
@@ -3336,8 +3331,8 @@ async fn accept_history_response_chunk(
     };
     let cursor = history_sequence_cursor_encode(
         state,
-        "mailbox-record",
-        response.reply_mailbox_id.as_str().as_bytes(),
+        "response-record",
+        response.request_digest.as_str().as_bytes(),
         reservation.sequence,
     )?;
     let record = sign_history_chunk_response_record(
@@ -3357,7 +3352,7 @@ async fn accept_history_response_chunk(
         Some(release_attestation_digest),
         accepted_at,
     )?;
-    let signer_dependencies = history_mailbox_signer_dependencies(
+    let signer_dependencies = history_response_signer_dependencies(
         source_signer_dependencies,
         &reservation.input.release_service_signer_evidence,
     )?;
@@ -3379,7 +3374,7 @@ async fn accept_history_response_chunk(
 
 async fn build_history_release_attestation(
     state: &AppState,
-    request_record: &soland_storage::HistoryRequestInboxRecord,
+    request_record: &soland_storage::HistoryRequestRecord,
     response: &HistoryKeyResponseSendRequest,
     source_relay: &SourceRelayAttestation,
     manifest_admission: &HistoryManifestAdmission,
@@ -3399,7 +3394,7 @@ async fn build_history_release_attestation(
     };
     let mut current_leaves = state
         .projections()
-        .realm_seal_leaves(realm_id)
+        .realm_seal_leaves(&realm_id)
         .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
     current_leaves.sort();
     let seal_basis = arkret_wire::SealBasis {
@@ -3566,7 +3561,6 @@ async fn build_history_release_attestation(
         response_id: response.response_id.clone(),
         request_digest: response.request_digest.clone(),
         request_receipt_digest: response.request_receipt_digest.clone(),
-        reply_mailbox_id: response.reply_mailbox_id.clone(),
         effective_scope: response.effective_scope.clone(),
         manifest_admission_digest: manifest_admission.manifest_admission_digest.clone(),
         t0_pass: HistoryManifestAdmissionPass::Value,
@@ -3946,7 +3940,7 @@ fn history_release_predicate_registry_digest() -> Result<arkret_wire::Hash, AppE
 
 async fn validate_manifest_current_gate(
     state: &AppState,
-    request_record: &soland_storage::HistoryRequestInboxRecord,
+    request_record: &soland_storage::HistoryRequestRecord,
     response: &HistoryKeyResponseSendRequest,
     source_relay: &SourceRelayAttestation,
 ) -> Result<(), AppError> {
@@ -4166,7 +4160,7 @@ async fn validate_manifest_current_gate(
 
 fn replay_derived_history_join_epoch(
     state: &AppState,
-    request_record: &soland_storage::HistoryRequestInboxRecord,
+    request_record: &soland_storage::HistoryRequestRecord,
 ) -> Result<u64, AppError> {
     use arkret_models_collaboration::events_payloads::mls::{MlsProposalPayload, MlsProposalType};
     use arkret_models_crypto::mls_payloads::MlsCommitPayload;
@@ -4570,7 +4564,7 @@ fn history_release_service_signer_evidence_coordinates(
     Ok((evidence_ref, content_digest.clone()))
 }
 
-fn history_mailbox_signer_dependencies(
+fn history_response_signer_dependencies(
     mut source_dependencies: Vec<GovernanceDependency>,
     release_dependency: &GovernanceDependency,
 ) -> Result<Vec<GovernanceDependency>, AppError> {
@@ -4952,21 +4946,29 @@ async fn replicate_history_key_request(
         .request_receipt_digest()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let request_replica = replica.clone();
-    let (_, record) = state
+    let outcome = state
         .persistence()
         .governance_history_service()
-        .store_history_request(soland_storage::HistoryRequestInboxWrite {
+        .store_history_request(soland_storage::HistoryRequestWrite {
             request_digest: request_digest.clone(),
             request_receipt_digest,
             request: replica.request,
             request_receipt: replica.request_receipt,
-            sealed_mailbox_capability: None,
+            sealed_history_response_capability: None,
             local_traversal: None,
             request_replica: Some(request_replica),
             stored_at,
         })
         .await
         .map_err(map_service_error)?;
+    let record = match outcome {
+        soland_storage::HistoryRequestPutOutcome::Stored { record, .. } => record,
+        soland_storage::HistoryRequestPutOutcome::CapabilityCommitmentCollision => {
+            return Err(AppError::internal(
+                "replicated history request unexpectedly collided with a local response capability",
+            ));
+        }
+    };
     let outcome = sign_history_request_replica_outcome(
         state,
         request_digest,
@@ -5335,20 +5337,18 @@ async fn read_history_key_responses(
     req: &mut Request,
 ) -> JsonResult<HistoryKeyResponseListOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let reply_mailbox_id = history_mailbox_id(req)?;
-    let capability = history_mailbox_capability(req)?;
-    let capability_commitment =
-        history_mailbox_capability_commitment(&reply_mailbox_id, &capability)?;
+    let capability = history_response_capability(req)?;
+    let capability_commitment = history_response_capability_commitment(&capability)?;
     let payload = req
         .payload()
         .await
-        .map_err(|_| AppError::json_invalid("invalid history mailbox list query"))?
+        .map_err(|_| AppError::json_invalid("invalid history response stream list query"))?
         .to_vec();
     let query = if payload.is_empty() {
         HistoryKeyResponseListQuery::default()
     } else {
         serde_json::from_slice::<HistoryKeyResponseListQuery>(&payload)
-            .map_err(|_| AppError::json_invalid("invalid history mailbox list query"))?
+            .map_err(|_| AppError::json_invalid("invalid history response stream list query"))?
     };
     query
         .validate()
@@ -5356,8 +5356,7 @@ async fn read_history_key_responses(
     let history = state.persistence().governance_history_service();
     let read_at = now();
     let page = history
-        .read_history_mailbox(
-            reply_mailbox_id.as_str(),
+        .read_history_response_stream(
             &capability_commitment,
             query.after.as_deref(),
             usize::from(query.limit.unwrap_or(100)),
@@ -5366,18 +5365,18 @@ async fn read_history_key_responses(
         .await
         .map_err(map_service_error)?;
     let request = history
-        .history_request_by_mailbox(reply_mailbox_id.as_str())
+        .history_request_by_capability_commitment(&capability_commitment)
         .await
         .map_err(map_service_error)?
-        .ok_or_else(|| AppError::not_found("history mailbox is unavailable"))?;
+        .ok_or_else(|| AppError::not_found("history response stream is unavailable"))?;
     let high_water_cursor = page
         .entries
         .last()
-        .map(history_mailbox_entry_cursor)
+        .map(history_response_entry_cursor)
         .unwrap_or_else(|| query.after.clone().unwrap_or_default());
-    let (ack_token, ack_token_claims) = history_mailbox_ack_token(
+    let (ack_token, ack_token_claims) = history_response_ack_token(
         state,
-        reply_mailbox_id.as_str(),
+        request.write.request.request_id.as_str(),
         &page.entries,
         &high_water_cursor,
         request.write.request.expires_at,
@@ -5386,7 +5385,7 @@ async fn read_history_key_responses(
         history
             .store_history_ack_token(
                 &capability_commitment,
-                soland_storage::HistoryMailboxAckTokenWrite {
+                soland_storage::HistoryResponseAckTokenWrite {
                     ack_token: ack_token.clone(),
                     claims: ack_token_claims,
                 },
@@ -5418,10 +5417,8 @@ async fn ack_history_key_responses(
     req: &mut Request,
 ) -> JsonResult<HistoryKeyResponseAckOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let reply_mailbox_id = history_mailbox_id(req)?;
-    let capability = history_mailbox_capability(req)?;
-    let capability_commitment =
-        history_mailbox_capability_commitment(&reply_mailbox_id, &capability)?;
+    let capability = history_response_capability(req)?;
+    let capability_commitment = history_response_capability_commitment(&capability)?;
     let request = body.into_inner();
     request
         .validate()
@@ -5429,12 +5426,7 @@ async fn ack_history_key_responses(
     let acked_through_cursor = state
         .persistence()
         .governance_history_service()
-        .ack_history_mailbox(
-            reply_mailbox_id.as_str(),
-            &capability_commitment,
-            &request,
-            now(),
-        )
+        .ack_history_response_stream(&capability_commitment, &request, now())
         .await
         .map_err(map_service_error)?;
     let outcome = HistoryKeyResponseAckOutcome {
@@ -5446,41 +5438,33 @@ async fn ack_history_key_responses(
     json_ok(outcome)
 }
 
-fn history_mailbox_id(req: &Request) -> Result<HistoryMailboxId, AppError> {
-    let value = req
-        .param::<String>("reply_mailbox_id")
-        .ok_or_else(|| AppError::not_found("history mailbox is unavailable"))?;
-    HistoryMailboxId::new(value).map_err(|_| AppError::not_found("history mailbox is unavailable"))
-}
-
-fn history_mailbox_capability(req: &Request) -> Result<String, AppError> {
+fn history_response_capability(req: &Request) -> Result<String, AppError> {
     let capability = req
         .headers()
         .get(salvo::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Arkret-Mailbox "))
-        .ok_or_else(|| AppError::not_found("history mailbox is unavailable"))?;
+        .and_then(|value| value.strip_prefix("Arkret-History-Capability "))
+        .ok_or_else(|| AppError::not_found("history response stream is unavailable"))?;
     let decoded = URL_SAFE_NO_PAD
         .decode(capability.as_bytes())
-        .map_err(|_| AppError::not_found("history mailbox is unavailable"))?;
+        .map_err(|_| AppError::not_found("history response stream is unavailable"))?;
     if decoded.len() != 32 || URL_SAFE_NO_PAD.encode(decoded) != capability {
-        return Err(AppError::not_found("history mailbox is unavailable"));
+        return Err(AppError::not_found(
+            "history response stream is unavailable",
+        ));
     }
     Ok(capability.to_owned())
 }
 
-fn history_mailbox_capability_commitment(
-    reply_mailbox_id: &HistoryMailboxId,
-    capability: &str,
-) -> Result<arkret_wire::Hash, AppError> {
-    mailbox_capability_commitment(reply_mailbox_id, capability)
+fn history_response_capability_commitment(capability: &str) -> Result<arkret_wire::Hash, AppError> {
+    response_capability_commitment(capability)
         .map_err(|error| AppError::internal(error.to_string()))
 }
 
-fn history_mailbox_entry_cursor(entry: &HistoryMailboxPageEntry) -> String {
+fn history_response_entry_cursor(entry: &HistoryResponsePageEntry) -> String {
     match entry {
-        HistoryMailboxPageEntry::Record { record } => record.cursor.clone(),
-        HistoryMailboxPageEntry::Lost { lost_record } => lost_record.cursor.clone(),
+        HistoryResponsePageEntry::Record { record } => record.cursor.clone(),
+        HistoryResponsePageEntry::Lost { lost_record } => lost_record.cursor.clone(),
     }
 }
 
@@ -5578,17 +5562,18 @@ fn enforce_history_response_limit(
     Ok(())
 }
 
-fn history_mailbox_ack_token(
+fn history_response_ack_token(
     state: &AppState,
-    reply_mailbox_id: &str,
-    entries: &[HistoryMailboxPageEntry],
+    request_id: &str,
+    entries: &[HistoryResponsePageEntry],
     high_water_cursor: &str,
-    token_expiry: chrono::DateTime<chrono::Utc>,
-) -> Result<(String, HistoryMailboxAckTokenClaims), AppError> {
+    token_expires_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(String, HistoryResponseAckTokenClaims), AppError> {
     let release_service_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("local service DID is invalid: {error}")))?;
-    let reply_mailbox_id = HistoryMailboxId::new(reply_mailbox_id.to_owned())
-        .map_err(|error| AppError::internal(format!("history mailbox ID is invalid: {error}")))?;
+    let request_id = HistoryRequestId::new(request_id.to_owned()).map_err(|error| {
+        AppError::internal(format!("history response stream ID is invalid: {error}"))
+    })?;
     let ordered_ack_entries = entries
         .iter()
         .map(|entry| {
@@ -5597,12 +5582,12 @@ fn history_mailbox_ack_token(
                 .map_err(|error| AppError::internal(error.to_string()))
         })
         .collect::<Result<Vec<_>, AppError>>()?;
-    let claims = HistoryMailboxAckTokenClaims {
+    let claims = HistoryResponseAckTokenClaims {
         release_service_id,
-        reply_mailbox_id,
+        request_id,
         ordered_ack_entries,
         high_water_cursor: high_water_cursor.to_owned(),
-        token_expiry,
+        token_expires_at,
     };
     let input = claims
         .hmac_input_bytes()

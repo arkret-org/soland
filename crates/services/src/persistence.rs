@@ -40,7 +40,7 @@ impl PersistenceHandle {
         authority_view_cas: Arc<dyn soland_storage::HistoryAuthorityViewCas>,
     ) {
         self.persistence
-            .history_mailboxes()
+            .history_response_streams()
             .bind_authority_view_cas(authority_view_cas);
     }
 

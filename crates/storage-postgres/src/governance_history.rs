@@ -919,14 +919,14 @@ pub(crate) async fn persist_retention_in_transaction(
     Ok(ExactWriteOutcome::Inserted)
 }
 
-pub(crate) async fn append_mailbox_signer_dependencies_in_transaction(
+pub(crate) async fn append_response_signer_dependencies_in_transaction(
     conn: &mut AsyncPgConnection,
     retention_digest: &Hash,
     record: &arkret_models_collaboration::history_key::HistoryKeyResponseRecord,
     dependencies: &[GovernanceDependency],
 ) -> Result<(), PgTransactionError> {
     let additions =
-        soland_storage::history_mailbox_signer_retained_dependencies(record, dependencies)?;
+        soland_storage::history_response_signer_retained_dependencies(record, dependencies)?;
     append_signer_dependency_additions_in_transaction(conn, retention_digest, additions).await
 }
 

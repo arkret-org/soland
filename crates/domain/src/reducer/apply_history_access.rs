@@ -37,20 +37,25 @@ impl ProjectionState {
                 CellState::Value(Value::String(value)) => Some(value.as_str()),
                 _ => None,
             });
-        let Some(current) = current else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::FAILED_PRECONDITION.to_owned(),
-            };
-        };
-        if from != Some(current) {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
-            };
-        }
-        if !valid_ratchet(current, to) {
-            return ProjectionEffect::Rejected {
-                reason: "history_access_widening_forbidden".to_owned(),
-            };
+        match current {
+            None if from.is_none() => {}
+            None => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
+                };
+            }
+            Some(current) => {
+                if from != Some(current) {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
+                    };
+                }
+                if !valid_ratchet(current, to) {
+                    return ProjectionEffect::Rejected {
+                        reason: "history_access_widening_forbidden".to_owned(),
+                    };
+                }
+            }
         }
         if (self.realm_is_direct_conversation(&realm_id)
             || self.realm_is_principal_control(&realm_id))

@@ -2169,7 +2169,7 @@ async fn verify_federated_event_admission(
     let admission_bytes = admission
         .canonical_binding_bytes()
         .map_err(|error| error.to_string())?;
-    crate::jws_verify::verify_did_controlled_ed25519_signature_async(
+    crate::jws_verify::verify_did_controlled_jws_async(
         &admission_bytes,
         &admission.jws,
         admission.verification_method.as_str(),

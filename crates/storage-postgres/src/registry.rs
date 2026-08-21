@@ -45,7 +45,7 @@ pub struct PgPersistenceStore {
     realm_organization_statements: PgRealmOrganizationStatementStore,
     governance_dependencies: PgGovernanceDependencyStore,
     history_traversal_retentions: PgHistoryTraversalRetentionStore,
-    history_mailboxes: PgHistoryMailboxStore,
+    history_response_streams: PgHistoryResponseStreamStore,
     pending_rrk_acquisitions: PgPendingRrkAcquisitionStore,
     push_bridge_cache: PgPushBridgeCacheStore,
     multisig_pending: PgMultisigPendingStore,
@@ -127,7 +127,7 @@ impl PgPersistenceStore {
             realm_organization_statements: PgRealmOrganizationStatementStore { pool: pool.clone() },
             governance_dependencies: PgGovernanceDependencyStore { pool: pool.clone() },
             history_traversal_retentions: PgHistoryTraversalRetentionStore { pool: pool.clone() },
-            history_mailboxes: PgHistoryMailboxStore { pool: pool.clone() },
+            history_response_streams: PgHistoryResponseStreamStore { pool: pool.clone() },
             pending_rrk_acquisitions: PgPendingRrkAcquisitionStore { pool: pool.clone() },
             push_bridge_cache: PgPushBridgeCacheStore { pool: pool.clone() },
             multisig_pending: PgMultisigPendingStore { pool: pool.clone() },
@@ -322,8 +322,8 @@ impl FederationGovernanceStoreRegistry for PgPersistenceStore {
         &self.pending_rrk_acquisitions
     }
 
-    fn history_mailboxes(&self) -> &dyn HistoryMailboxStore {
-        &self.history_mailboxes
+    fn history_response_streams(&self) -> &dyn HistoryResponseStreamStore {
+        &self.history_response_streams
     }
 
     fn federation_outbox(&self) -> &dyn FederationOutboxStore {

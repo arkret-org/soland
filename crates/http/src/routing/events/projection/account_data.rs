@@ -2,7 +2,7 @@ use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::objects::read_receipts::ReadCursorCausalRelation;
 use arkret_models_collaboration::sync_frames::account_sync::{
     ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
-    ActorPrivateReadCursorUpdate,
+    ActorPrivateReadCursorUpdate, DeviceMessageSender,
 };
 use serde_json::Value;
 use soland_services::identity::{AccountDataCasOutcome, AccountDataState};
@@ -229,6 +229,16 @@ pub(super) async fn project_account_data_set(
         }
     };
     if !source_device_id.is_empty() {
+        let Ok(sender_device_id) = arkret_identifiers::DeviceId::new(source_device_id.to_owned())
+        else {
+            tracing::warn!(
+                owner,
+                source_device_id,
+                "actor-private account-data fanout source is not a DeviceId"
+            );
+            return;
+        };
+        let sender = DeviceMessageSender::Device { sender_device_id };
         let content = ActorPrivateAccountDataUpdate {
             operation: if tombstone {
                 ActorPrivateAccountDataOperation::Delete
@@ -242,13 +252,13 @@ pub(super) async fn project_account_data_set(
         };
         let update = if account_data_key == arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST {
             ActorPrivateDeviceUpdate::Blocklist {
-                sender_device_id: source_device_id.to_owned(),
+                sender,
                 content,
                 created_at: applied.updated_at,
             }
         } else {
             ActorPrivateDeviceUpdate::AccountData {
-                sender_device_id: source_device_id.to_owned(),
+                sender,
                 content,
                 created_at: applied.updated_at,
             }
@@ -270,12 +280,13 @@ pub(super) async fn fanout_projection_effect_private_update(
     if source_device_id.is_empty() || marker.actor_id.as_str() != origin {
         return;
     }
-    let origin_device = marker.device_id.as_str();
     fanout_actor_private_update(
         state,
         marker.actor_id.as_str(),
         ActorPrivateDeviceUpdate::ReadCursor {
-            sender_device_id: origin_device.to_owned(),
+            sender: DeviceMessageSender::Device {
+                sender_device_id: marker.device_id.clone(),
+            },
             content: ActorPrivateReadCursorUpdate {
                 schema: arkret_wire::SchemaId::READ_CURSOR_V1.to_owned(),
                 actor_id: marker.actor_id.clone(),

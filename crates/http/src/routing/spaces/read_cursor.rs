@@ -8,7 +8,7 @@ use arkret_models_collaboration::objects::read_receipts::{
     ReadCursor, ReadCursorAdvanceRequestBody, ReadCursorList, ReadMarkerOutcome,
 };
 use arkret_models_collaboration::sync_frames::account_sync::{
-    ActorPrivateDeviceUpdate, ActorPrivateReadCursorUpdate,
+    ActorPrivateDeviceUpdate, ActorPrivateReadCursorUpdate, DeviceMessageSender,
 };
 use arkret_wire::{Event, ReadCursorScope, ReadScopeKind};
 use salvo::oapi::endpoint;
@@ -70,7 +70,14 @@ pub(super) async fn set_read_cursor(
             state,
             &session.actor,
             ActorPrivateDeviceUpdate::ReadCursor {
-                sender_device_id: session.device_id.clone(),
+                sender: DeviceMessageSender::Device {
+                    sender_device_id: arkret_identifiers::DeviceId::new(session.device_id.clone())
+                        .map_err(|error| {
+                            AppError::internal(format!(
+                                "authenticated device id is invalid: {error}"
+                            ))
+                        })?,
+                },
                 content: ActorPrivateReadCursorUpdate {
                     schema: arkret_wire::SchemaId::READ_CURSOR_V1.to_owned(),
                     actor_id: marker.actor_id.clone(),

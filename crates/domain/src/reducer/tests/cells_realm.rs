@@ -1553,6 +1553,29 @@ fn bootstrap_policy_bundle_uses_registered_value_without_projection_metadata() {
 // history_access is a two-state, narrowing-only FSM.
 
 #[test]
+fn realm_history_access_initializes_an_absent_cell_once() {
+    let realm_id = "ak:realm:ARKEyrg59dN-i97Pleo3vwwRkZomIcqPiuK9PtjzGLdh";
+    let initialize = make_operation(
+        arkret_wire::EventKind::RealmHistoryAccess,
+        realm_id,
+        serde_json::json!({
+            "from": null,
+            "to": "since_join"
+        }),
+    );
+    let mut state = ProjectionState::new();
+    assert!(!matches!(
+        state.apply(&initialize, &ServerHlc::new("test")),
+        ProjectionEffect::Rejected { .. }
+    ));
+    assert!(matches!(
+        state.apply(&initialize, &ServerHlc::new("test")),
+        ProjectionEffect::Rejected { ref reason }
+            if reason == arkret_wire::ErrorCode::CAS_CONFLICT
+    ));
+}
+
+#[test]
 fn realm_history_access_can_only_tighten() {
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     let create = make_operation(

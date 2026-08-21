@@ -5537,6 +5537,7 @@ dependencies = [
  "serde",
  "serde_json",
  "soland-domain",
+ "subtle",
  "thiserror",
  "uuid",
 ]

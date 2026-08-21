@@ -403,13 +403,13 @@ pub fn history_source_signer_retained_dependencies(
 }
 
 /// Select and validate the exact source and release-service signer evidence
-/// carried by one mailbox record, then materialize their retention pins.
-pub fn history_mailbox_signer_retained_dependencies(
+/// carried by one response-stream record, then materialize their retention pins.
+pub fn history_response_signer_retained_dependencies(
     record: &arkret_models_collaboration::history_key::HistoryKeyResponseRecord,
     dependencies: &[GovernanceDependency],
 ) -> PersistenceResult<Vec<(HistoryTraversalPin, HistoryTraversalRetainedObject)>> {
     let closure = arkret_models_collaboration::governance_dependencies::
-        history_mailbox_record_signer_dependency_closure(record, dependencies)
+        history_response_record_signer_dependency_closure(record, dependencies)
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
     let mut selected = closure.source_signer_dependencies;
     for dependency in closure.release_service_signer_dependencies {
@@ -419,7 +419,7 @@ pub fn history_mailbox_signer_retained_dependencies(
     }
     if selected.len() != dependencies.len() {
         return Err(PersistenceError::SchemaViolation(
-            "history mailbox signer dependency set contains surplus evidence".to_owned(),
+            "history response signer dependency set contains surplus evidence".to_owned(),
         ));
     }
     selected
@@ -443,7 +443,7 @@ pub fn history_lost_signer_retained_dependencies(
     dependencies: &[GovernanceDependency],
 ) -> PersistenceResult<Vec<(HistoryTraversalPin, HistoryTraversalRetainedObject)>> {
     let selected = arkret_models_collaboration::governance_dependencies::
-        history_mailbox_lost_signer_dependency_closure(lost_record, dependencies)
+        history_response_lost_signer_dependency_closure(lost_record, dependencies)
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
     if selected.len() != dependencies.len() {
         return Err(PersistenceError::SchemaViolation(

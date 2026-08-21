@@ -481,7 +481,7 @@ impl NotaryWorker {
         // empty.
         let view = state
             .projections()
-            .effective_seal_view(&leaves, realm_id)
+            .effective_seal_view_with_digest_suite(&leaves, realm_id, event_digest_suite)
             .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
 
         // Recompute pre_state map (effective_seal_view returns state_root

@@ -216,19 +216,19 @@ fn resign_federation_event_as(event: Value, actor_full_id: &str) -> Value {
     let admission_bytes = admission
         .canonical_binding_bytes()
         .expect("fixture admission binding canonicalizes");
-    admission.jws = URL_SAFE_NO_PAD.encode(
-        publication_signing_key(admission_verification_method.as_str())
-            .sign(&admission_bytes)
-            .to_bytes(),
-    );
-    soland_http::jws_verify::verify_ed25519_signature_with_public_key(
-        &admission_bytes,
-        &admission.jws,
-        publication_signing_key(admission_verification_method.as_str())
-            .verifying_key()
-            .as_bytes(),
-    )
-    .expect("fixture admission signature verifies against the installed peer key");
+    let admission_signing_key = publication_signing_key(admission_verification_method.as_str());
+    admission.jws =
+        arkret_signatures::sign_ed25519_detached_jws(&admission_signing_key, &admission_bytes)
+            .expect("fixture admission detached JWS signs");
+    arkret_signatures::Ed25519DetachedJwsVerifier::new()
+        .verify_detached_jws(
+            &admission.jws,
+            &admission_bytes,
+            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                bytes: admission_signing_key.verifying_key().as_bytes().to_vec(),
+            },
+        )
+        .expect("fixture admission signature verifies against the installed peer key");
     event.proofs.push(admission.into());
     event
         .validate_principal_server_admission_binding(arkret_canonical::DigestSuite::Sha256)

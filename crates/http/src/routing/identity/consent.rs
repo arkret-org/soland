@@ -37,19 +37,11 @@ use soland_services::identity::{
 };
 
 use super::{AuthArgs, append_audit_log, now, query_param};
-use crate::routing::identity::device_messages::fanout_actor_private_update;
+use crate::routing::identity::device_messages::{
+    fanout_actor_private_update, principal_server_device_message_sender,
+};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
-
-/// Server-origin marker for the consent-revoke quarantine-cell fanout's
-/// `sender_device_id`. KNOWN DEAD WRITE — same shape as the invite
-/// delivery/quarantine markers in `routing/invites.rs`: the device-message
-/// sender contract has no service-authored branch, so this fanout is rejected
-/// at the device revocation gate outside development mode and dropped by the
-/// reader's sender XOR in development mode. Tracked in arkret-work
-/// review/spec-open/2026-08-21-0532-invite-delivery-fanout-must-vs-device-
-/// message-sender-closure.md; do not invent an `ak:` sender here.
-const INVITE_QUARANTINE_ORIGIN_DEVICE: &str = "server:consent_revoke";
 
 pub(super) fn router() -> Router {
     Router::with_path("consent")
@@ -112,7 +104,7 @@ async fn project_consent_revoke_operation(
 ) -> Result<(), AppError> {
     let holder = consent_holder(operation)?;
     let consent_id = consent_id(&operation.payload)?;
-    let (peer, scope) = consent_revoke_target(state, &holder, &operation.payload, &consent_id)?;
+    let (peer, scope) = consent_revoke_target(state, &holder, &consent_id)?;
     validate_holder_update(&holder, &holder, &peer)?;
     let observed_dots = observed_dots(&operation.payload)?;
     let revoked_at = consent_revoked_at(&operation.payload)?.unwrap_or(operation.created_at);
@@ -263,12 +255,8 @@ async fn revoke_consent_cell(
     let session = aa.authenticated_session(state, req).await?;
     let holder = holder_principal_id.into_inner();
     let submission = body.into_inner().revoke_event;
-    let target = caller_signed_consent_target(
-        &session.actor,
-        &holder,
-        &submission.event,
-        arkret_wire::EventKind::ConsentRevoke.as_str(),
-    )?;
+    let target =
+        caller_signed_consent_revoke_target(state, &session.actor, &holder, &submission.event)?;
     // The dots being removed come from the Event the holder signed, never from a
     // server-side enumeration: an observe-remove OR-Set revoke is only correct
     // when the revoker named the dots it observed.
@@ -319,6 +307,46 @@ fn caller_signed_consent_target(
     event: &Event,
     expected_kind: &str,
 ) -> Result<ConsentTarget, AppError> {
+    let (event_id, payload, consent_id) =
+        caller_signed_consent_event_identity(actor, holder, event, expected_kind)?;
+    let peer = consent_peer(&payload)?;
+    validate_holder_update(actor, holder, peer.as_str())?;
+    Ok(ConsentTarget {
+        event_id,
+        consent_id,
+        peer,
+        scope: consent_scope(&payload)?,
+    })
+}
+
+fn caller_signed_consent_revoke_target(
+    state: &AppState,
+    actor: &str,
+    holder: &str,
+    event: &Event,
+) -> Result<ConsentTarget, AppError> {
+    let (event_id, _payload, consent_id) = caller_signed_consent_event_identity(
+        actor,
+        holder,
+        event,
+        arkret_wire::EventKind::ConsentRevoke.as_str(),
+    )?;
+    let (peer, scope) = consent_revoke_target(state, holder, &consent_id)?;
+    validate_holder_update(actor, holder, peer.as_str())?;
+    Ok(ConsentTarget {
+        event_id,
+        consent_id,
+        peer,
+        scope,
+    })
+}
+
+fn caller_signed_consent_event_identity(
+    actor: &str,
+    holder: &str,
+    event: &Event,
+    expected_kind: &str,
+) -> Result<(String, Value, String), AppError> {
     if event.kind.as_str() != expected_kind {
         return Err(AppError::param_invalid(format!(
             "submitted Event kind must be {expected_kind}"
@@ -332,14 +360,16 @@ fn caller_signed_consent_target(
     // The payload accessors are shared with the projection path, which reads a
     // whole-value payload; an envelope carries the same object as a map.
     let payload = event_payload_value(event);
-    let peer = consent_peer(&payload)?;
-    validate_holder_update(actor, holder, peer.as_str())?;
-    Ok(ConsentTarget {
-        event_id: event.event_id.to_string(),
-        consent_id: consent_id(&payload)?,
-        peer,
-        scope: consent_scope(&payload)?,
-    })
+    if DidCoreId::new(holder.to_owned()).is_err() {
+        return Err(AppError::param_invalid("invalid holder principal id"));
+    }
+    if actor != holder {
+        return Err(AppError::capability_denied(
+            "only the holder DID may update a consent cell",
+        ));
+    }
+    let consent_id = consent_id(&payload)?;
+    Ok((event.event_id.to_string(), payload, consent_id))
 }
 
 /// Restate a typed envelope's payload as the whole `Value` the shared payload
@@ -816,21 +846,24 @@ fn consent_scope(payload: &Value) -> Result<String, AppError> {
 fn consent_revoke_target(
     state: &AppState,
     holder: &str,
-    payload: &Value,
     consent_id: &str,
 ) -> Result<(String, String), AppError> {
-    if let (Ok(peer), Ok(scope)) = (consent_peer(payload), consent_scope(payload)) {
-        return Ok((peer, scope));
-    }
     let cell_id = consent_cell_id_for_consent_id(consent_id);
-    state
+    let matches = state
         .consents()
-        .holder_cell_by_id(holder, &cell_id)
-        .as_ref()
-        .map(|cell| (cell.peer.clone(), cell.scope.clone()))
-        .ok_or_else(|| {
-            AppError::param_missing("revoke requires peer/scope or an existing consent_id cell")
-        })
+        .visible_cells(holder)
+        .into_iter()
+        .filter(|cell| cell.holder == holder && cell.cell_id == cell_id)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [cell] => Ok((cell.peer.clone(), cell.scope.clone())),
+        [] => Err(AppError::param_invalid(
+            "revoke consent_id does not identify an existing holder consent cell",
+        )),
+        _ => Err(AppError::param_invalid(
+            "revoke consent_id identifies more than one holder consent cell",
+        )),
+    }
 }
 
 fn consent_expires_at(payload: &Value) -> Result<Option<DateTime<Utc>>, AppError> {
@@ -1137,7 +1170,7 @@ async fn invalidate_quarantined_invites_for_revoke(
     let mut object = existing.payload.as_object().cloned().unwrap_or_default();
     object.insert(
         "schema".to_owned(),
-        Value::String(arkret_wire::AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned()),
+        Value::String(crate::routing::invites::INVITE_QUARANTINE_SCHEMA.to_owned()),
     );
     object.insert("entries".to_owned(), Value::Array(retained));
     object.insert("updated_at".to_owned(), json!(revoked_at));
@@ -1175,7 +1208,7 @@ async fn invalidate_quarantined_invites_for_revoke(
         state,
         holder,
         ActorPrivateDeviceUpdate::AccountData {
-            sender_device_id: INVITE_QUARANTINE_ORIGIN_DEVICE.to_owned(),
+            sender: principal_server_device_message_sender(state),
             content: ActorPrivateAccountDataUpdate {
                 operation: ActorPrivateAccountDataOperation::Put,
                 account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
@@ -1215,7 +1248,6 @@ fn quarantine_entry_matches_consent_revoke(entry: &Value, peer: &str) -> bool {
         .is_none_or(|scope| scope == "invite");
     let peer_matches = entry
         .get("source_peer_principal_id")
-        .or_else(|| entry.get("inviter"))
         .and_then(Value::as_str)
         == Some(peer);
     pending && invite_scope && peer_matches
@@ -1280,6 +1312,7 @@ impl ConsentRevokeInvalidationChannel {
 
 #[cfg(test)]
 mod tests {
+    use soland_services::identity::{DeviceIdentity, SaveDeviceCommand};
     use soland_storage_postgres::Db;
 
     use super::*;
@@ -1352,6 +1385,28 @@ mod tests {
         })
     }
 
+    fn revoke_payload() -> Value {
+        json!({
+            "consent_id": CONSENT_ID,
+            "observed_dots": [format!("{GRANT_EVENT}:0")],
+            "revoked_at": "2026-07-06T00:00:00.000Z",
+        })
+    }
+
+    fn consent_cell(peer: &str, scope: &str) -> ConsentCellRecord {
+        ConsentCellRecord {
+            holder: HOLDER.to_owned(),
+            peer: peer.to_owned(),
+            scope: scope.to_owned(),
+            cell_id: consent_cell_id_for_consent_id(CONSENT_ID),
+            requested_at: None,
+            grant_dots: std::collections::BTreeMap::new(),
+            revoked_dots: BTreeSet::new(),
+            revoked_at: None,
+            updated_at: Utc::now(),
+        }
+    }
+
     #[test]
     fn a_grant_event_reports_the_cell_it_names() {
         let event = consent_event(
@@ -1396,18 +1451,59 @@ mod tests {
 
     #[test]
     fn a_revoke_endpoint_refuses_a_grant_event() {
+        let state = AppState::new(test_config(), Db { pool: None });
         let event = consent_event(
             arkret_wire::EventKind::ConsentGrant.as_str(),
             HOLDER,
             grant_payload(),
         );
-        caller_signed_consent_target(
-            HOLDER,
-            HOLDER,
-            &event,
+        caller_signed_consent_revoke_target(&state, HOLDER, HOLDER, &event)
+            .expect_err("the revoke surface must not accept a grant Event");
+    }
+
+    #[test]
+    fn canonical_revoke_resolves_peer_and_scope_from_the_holder_cell() {
+        let state = AppState::new(test_config(), Db { pool: None });
+        state
+            .consents()
+            .install_runtime_cell(consent_cell(PEER, "invite"));
+        let event = consent_event(
             arkret_wire::EventKind::ConsentRevoke.as_str(),
-        )
-        .expect_err("the revoke surface must not accept a grant Event");
+            HOLDER,
+            revoke_payload(),
+        );
+
+        let target = caller_signed_consent_revoke_target(&state, HOLDER, HOLDER, &event)
+            .expect("canonical revoke resolves its existing consent cell");
+
+        assert_eq!(target.event_id, GRANT_EVENT);
+        assert_eq!(target.consent_id, CONSENT_ID);
+        assert_eq!(target.peer, PEER);
+        assert_eq!(target.scope, "invite");
+    }
+
+    #[test]
+    fn canonical_revoke_missing_or_ambiguous_cell_fails_closed() {
+        let state = AppState::new(test_config(), Db { pool: None });
+        let event = consent_event(
+            arkret_wire::EventKind::ConsentRevoke.as_str(),
+            HOLDER,
+            revoke_payload(),
+        );
+        let missing = caller_signed_consent_revoke_target(&state, HOLDER, HOLDER, &event)
+            .expect_err("unknown consent_id must fail closed");
+        assert!(missing.to_string().contains("does not identify"));
+
+        state
+            .consents()
+            .install_runtime_cell(consent_cell(PEER, "invite"));
+        state.consents().install_runtime_cell(consent_cell(
+            "ak:did_core:web:second-peer.example",
+            "direct_message",
+        ));
+        let ambiguous = caller_signed_consent_revoke_target(&state, HOLDER, HOLDER, &event)
+            .expect_err("duplicate consent_id cells must fail closed");
+        assert!(ambiguous.to_string().contains("more than one"));
     }
 
     #[test]
@@ -1460,5 +1556,116 @@ mod tests {
             jws_replay_window_per_family: std::collections::BTreeMap::new(),
             ..AppConfig::test_default()
         }
+    }
+
+    fn production_test_config() -> AppConfig {
+        AppConfig {
+            public_base_url: "http://test".to_owned(),
+            object_storage: ObjectStorageConfig::local(std::env::temp_dir()),
+            development_mode: false,
+            seed_demo_data: false,
+            did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
+            jws_replay_window_seconds: 0,
+            jws_replay_window_per_family: std::collections::BTreeMap::new(),
+            ..AppConfig::test_default()
+        }
+    }
+
+    #[tokio::test]
+    async fn production_consent_revoke_invalidation_fanout_has_a_readable_service_sender() {
+        let state = AppState::new(production_test_config(), Db { pool: None });
+        let device_id = "ak:device:01904100-0000-7000-8000-0000000000f1";
+        let updated_at = now();
+        state
+            .identities()
+            .save_device(SaveDeviceCommand {
+                actor_id: HOLDER.to_owned(),
+                device_id: device_id.to_owned(),
+                display_name: None,
+                device: DeviceIdentity {
+                    actor_id: HOLDER.to_owned(),
+                    device_id: device_id.to_owned(),
+                    display_name: None,
+                    verification_state: "verified".to_owned(),
+                    payload: json!({"device_id": device_id}),
+                    created_at: updated_at,
+                    updated_at,
+                    revoked_at: None,
+                },
+            })
+            .await
+            .expect("holder device");
+        let initial = AccountDataState {
+            actor_id: HOLDER.to_owned(),
+            account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+            revision: 1,
+            payload: json!({
+                "schema": crate::routing::invites::INVITE_QUARANTINE_SCHEMA,
+                "entries": [{
+                    "entry_digest": format!("sha256:{}", "a".repeat(64)),
+                    "status": "pending_review",
+                    "consent_scope": "invite",
+                    "source_peer_principal_id": PEER,
+                }],
+                "updated_at": updated_at,
+            }),
+            tombstone: false,
+            updated_at,
+        };
+        assert!(matches!(
+            state
+                .account_data()
+                .compare_and_set(initial, 0)
+                .await
+                .expect("seed quarantine cell"),
+            AccountDataCasOutcome::Applied(_)
+        ));
+
+        assert_eq!(
+            invalidate_quarantined_invites_for_revoke(
+                &state,
+                HOLDER,
+                PEER,
+                "invite",
+                updated_at + chrono::Duration::seconds(1),
+            )
+            .await
+            .expect("consent revoke invalidation"),
+            1
+        );
+        let cell = state
+            .account_data()
+            .entry(HOLDER, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+            .await
+            .expect("quarantine cell")
+            .expect("updated quarantine cell");
+        assert_eq!(
+            cell.payload["schema"],
+            crate::routing::invites::INVITE_QUARANTINE_SCHEMA
+        );
+        assert_eq!(cell.payload["entries"], json!([]));
+        let queued = state
+            .deliveries()
+            .device_messages_after(HOLDER, device_id, 0)
+            .await
+            .expect("holder to-device queue");
+        assert_eq!(queued.len(), 1);
+        let envelopes = crate::routing::identity::device_messages::device_message_envelopes_after(
+            &state, &queued,
+        );
+        assert_eq!(envelopes.len(), 1, "service envelope parses without repair");
+        let envelope = &envelopes[0];
+        assert_eq!(envelope.sender_principal_id.as_str(), HOLDER);
+        assert_eq!(envelope.recipient_principal_id.as_str(), HOLDER);
+        assert!(matches!(
+            &envelope.sender,
+            crate::wire::DeviceMessageSender::Service { sender_service_id }
+                if sender_service_id.as_str() == state.service_id()
+        ));
+        assert_eq!(
+            envelope.content.get("revision"),
+            Some(&json!(cell.revision))
+        );
+        assert_eq!(envelope.content.get("content"), Some(&cell.payload));
     }
 }

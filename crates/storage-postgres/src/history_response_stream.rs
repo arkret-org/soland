@@ -5,22 +5,22 @@ use arkret_models_collaboration::history_key::{
     CurrentGateProjection, HistoryEffectiveScope, HistoryKeyRequest, HistoryKeyRequestReceipt,
     HistoryKeyRequestReplica, HistoryKeyResponseAckRequest, HistoryKeyResponseLostRecord,
     HistoryKeyResponseRecord, HistoryKeyResponseSendReceipt, HistoryKeyResponseSendRequest,
-    HistoryMailboxAckEntry, HistoryMailboxAckTokenClaims, HistoryMailboxPageEntry,
-    HistoryManifestAdmission, HistoryReleaseAttestation, HistoryResponseId,
-    SealedMailboxCapability,
+    HistoryManifestAdmission, HistoryReleaseAttestation, HistoryResponseAckEntry,
+    HistoryResponseAckTokenClaims, HistoryResponseId, HistoryResponsePageEntry,
+    SealedHistoryResponseCapability,
 };
 use arkret_wire::Hash;
 use chrono::{DateTime, Duration, Utc};
 use soland_storage::{
-    ExactWriteOutcome, HISTORY_COMPACT_RECEIPTS_PER_MAILBOX_LIMIT,
-    HISTORY_COMPACT_RECEIPTS_PER_REQUESTER_LIMIT, HISTORY_MAILBOX_ACTIVE_BYTES_LIMIT,
-    HistoryAcceptedManifestRecord, HistoryAuthorityViewCas, HistoryMailboxAckTokenWrite,
-    HistoryMailboxReadPage, HistoryMailboxStore, HistoryRequestInboxPage,
-    HistoryRequestInboxRecord, HistoryRequestInboxWrite, HistoryResponseCompleteOutcome,
-    HistoryResponseCompleteWrite, HistoryResponseReservationInput,
-    HistoryResponseReservationRecord, HistoryResponseRetryRecord, HistoryResponseTombstone,
+    ExactWriteOutcome, HISTORY_COMPACT_RECEIPTS_PER_REQUEST_LIMIT,
+    HISTORY_COMPACT_RECEIPTS_PER_REQUESTER_LIMIT, HISTORY_RESPONSE_STREAM_ACTIVE_BYTES_LIMIT,
+    HistoryAcceptedManifestRecord, HistoryAuthorityViewCas, HistoryRequestPage,
+    HistoryRequestPutOutcome, HistoryRequestRecord, HistoryRequestWrite,
+    HistoryResponseAckTokenWrite, HistoryResponseCompleteOutcome, HistoryResponseCompleteWrite,
+    HistoryResponseReadPage, HistoryResponseReservationInput, HistoryResponseReservationRecord,
+    HistoryResponseRetryRecord, HistoryResponseStreamStore, HistoryResponseTombstone,
     PersistenceError, PersistenceResult, history_lost_record_bytes, history_lost_record_digest,
-    history_scope_parts,
+    history_response_capability_commitment_matches, history_scope_parts,
 };
 
 use super::{
@@ -30,7 +30,7 @@ use super::{
 };
 use crate::governance_history::{
     append_lost_signer_dependencies_in_transaction,
-    append_mailbox_signer_dependencies_in_transaction, load_retention,
+    append_response_signer_dependencies_in_transaction, load_retention,
     persist_retention_in_transaction, release_retention_in_transaction,
 };
 
@@ -47,7 +47,7 @@ struct RequestRow {
     #[diesel(sql_type = Jsonb)]
     request_receipt_json: Value,
     #[diesel(sql_type = Nullable<Jsonb>)]
-    sealed_mailbox_capability_json: Option<Value>,
+    sealed_history_response_capability_json: Option<Value>,
     #[diesel(sql_type = Nullable<Text>)]
     request_replica_digest: Option<String>,
     #[diesel(sql_type = Nullable<Jsonb>)]
@@ -149,7 +149,7 @@ async fn lock_and_validate_release_authority(
     conn: &mut AsyncPgConnection,
     attestation: &HistoryReleaseAttestation,
 ) -> Result<(), PgTransactionError> {
-    // Hold the accepted Seal/quarantine relation stable until the mailbox row
+    // Hold the accepted Seal/quarantine relation stable until the stream row
     // is written. Advisory locks alone cannot fence a concurrent writer that
     // does not participate in this service-local lock namespace.
     sql_query("LOCK TABLE state_seals IN SHARE MODE")
@@ -249,7 +249,7 @@ struct ResponseRow {
     #[diesel(sql_type = Text)]
     response_id: String,
     #[diesel(sql_type = Text)]
-    reply_mailbox_id: String,
+    request_id: String,
     #[diesel(sql_type = Text)]
     source_record_digest: String,
     #[diesel(sql_type = Jsonb)]
@@ -287,15 +287,73 @@ struct ResponseRow {
 }
 
 #[derive(QueryableByName)]
-struct MailboxRow {
+struct ResponseStreamRow {
+    #[diesel(sql_type = Text)]
+    request_id: String,
     #[diesel(sql_type = Text)]
     release_service_id: String,
     #[diesel(sql_type = Text)]
-    mailbox_capability_commitment: String,
+    response_capability_commitment: String,
     #[diesel(sql_type = Timestamptz)]
     expires_at: DateTime<Utc>,
     #[diesel(sql_type = Nullable<BigInt>)]
     acked_sequence: Option<i64>,
+}
+
+fn authorize_response_stream_row(
+    row: Option<ResponseStreamRow>,
+    presented: &Hash,
+    now: DateTime<Utc>,
+) -> PersistenceResult<ResponseStreamRow> {
+    let commitment_matches = history_response_capability_commitment_matches(
+        row.as_ref()
+            .map(|row| row.response_capability_commitment.as_str()),
+        presented,
+    );
+    row.filter(|row| commitment_matches & (row.expires_at > now))
+        .ok_or_else(|| PersistenceError::NotFound("history stream unavailable".to_owned()))
+}
+
+#[cfg(test)]
+mod capability_authorization_tests {
+    use super::*;
+
+    fn commitment(hex: char) -> Hash {
+        Hash::new(format!("sha256:{}", hex.to_string().repeat(64))).expect("valid hash")
+    }
+
+    fn row(commitment: &Hash, expires_at: DateTime<Utc>) -> ResponseStreamRow {
+        ResponseStreamRow {
+            request_id: "ak:history-key-request:01910000-0000-7000-8000-000000000001".to_owned(),
+            release_service_id: "did:webvh:example".to_owned(),
+            response_capability_commitment: commitment.as_str().to_owned(),
+            expires_at,
+            acked_sequence: None,
+        }
+    }
+
+    #[test]
+    fn authorization_hides_missing_and_expired_streams_behind_not_found() {
+        let now = Utc::now();
+        let presented = commitment('a');
+        assert!(authorize_response_stream_row(None, &presented, now).is_err());
+        assert!(
+            authorize_response_stream_row(
+                Some(row(&presented, now - Duration::seconds(1))),
+                &presented,
+                now,
+            )
+            .is_err()
+        );
+        assert!(
+            authorize_response_stream_row(
+                Some(row(&presented, now + Duration::seconds(1))),
+                &presented,
+                now,
+            )
+            .is_ok()
+        );
+    }
 }
 
 #[derive(QueryableByName)]
@@ -386,7 +444,7 @@ fn stored_hash(value: String, field: &str) -> PersistenceResult<Hash> {
     Hash::new(value).map_err(|error| PersistenceError::Internal(format!("stored {field}: {error}")))
 }
 
-fn decode_request(row: RequestRow) -> PersistenceResult<HistoryRequestInboxRecord> {
+fn decode_request(row: RequestRow) -> PersistenceResult<HistoryRequestRecord> {
     let request_replica = row
         .request_replica_json
         .map(|value| decode::<HistoryKeyRequestReplica>(value, "request replica"))
@@ -405,9 +463,9 @@ fn decode_request(row: RequestRow) -> PersistenceResult<HistoryRequestInboxRecor
             ));
         }
     }
-    Ok(HistoryRequestInboxRecord {
+    Ok(HistoryRequestRecord {
         sequence: as_u64(row.request_sequence, "request sequence")?,
-        write: HistoryRequestInboxWrite {
+        write: HistoryRequestWrite {
             request_digest: stored_hash(row.request_digest, "request digest")?,
             request_receipt_digest: stored_hash(
                 row.request_receipt_digest,
@@ -418,9 +476,14 @@ fn decode_request(row: RequestRow) -> PersistenceResult<HistoryRequestInboxRecor
                 row.request_receipt_json,
                 "request receipt",
             )?,
-            sealed_mailbox_capability: row
-                .sealed_mailbox_capability_json
-                .map(|value| decode::<SealedMailboxCapability>(value, "sealed capability"))
+            sealed_history_response_capability: row
+                .sealed_history_response_capability_json
+                .map(|value| {
+                    decode::<SealedHistoryResponseCapability>(
+                        value,
+                        "sealed history response capability",
+                    )
+                })
                 .transpose()?,
             local_traversal: None,
             request_replica,
@@ -479,9 +542,9 @@ fn reservation(row: &ResponseRow) -> PersistenceResult<HistoryResponseReservatio
     })
 }
 
-fn page_entry(row: &ResponseRow) -> PersistenceResult<HistoryMailboxPageEntry> {
+fn page_entry(row: &ResponseRow) -> PersistenceResult<HistoryResponsePageEntry> {
     match row.state.as_str() {
-        "accepted" => Ok(HistoryMailboxPageEntry::Record {
+        "accepted" => Ok(HistoryResponsePageEntry::Record {
             record: decode(
                 row.record_json.clone().ok_or_else(|| {
                     PersistenceError::Internal("accepted response lost record bytes".to_owned())
@@ -489,7 +552,7 @@ fn page_entry(row: &ResponseRow) -> PersistenceResult<HistoryMailboxPageEntry> {
                 "response record",
             )?,
         }),
-        "lost" => Ok(HistoryMailboxPageEntry::Lost {
+        "lost" => Ok(HistoryResponsePageEntry::Lost {
             lost_record: decode(
                 row.lost_record_json.clone().ok_or_else(|| {
                     PersistenceError::Internal("lost response lacks descriptor".to_owned())
@@ -498,7 +561,7 @@ fn page_entry(row: &ResponseRow) -> PersistenceResult<HistoryMailboxPageEntry> {
             )?,
         }),
         state => Err(PersistenceError::Internal(format!(
-            "mailbox row has unreadable state {state}"
+            "stream row has unreadable state {state}"
         ))),
     }
 }
@@ -507,10 +570,10 @@ async fn request_by(
     conn: &mut AsyncPgConnection,
     column: &str,
     value: &str,
-) -> PersistenceResult<Option<HistoryRequestInboxRecord>> {
+) -> PersistenceResult<Option<HistoryRequestRecord>> {
     let row=sql_query(format!(
         "SELECT request_sequence,request_digest,request_receipt_digest,request_json, \
-         request_receipt_json,sealed_mailbox_capability_json,request_replica_digest,request_replica_json,stored_at \
+         request_receipt_json,sealed_history_response_capability_json,request_replica_digest,request_replica_json,stored_at \
          FROM history_key_requests WHERE {column}=$1"
     ))
     .bind::<Text, _>(value)
@@ -522,7 +585,7 @@ async fn request_by(
         return Ok(None);
     };
     let mut record = decode_request(row)?;
-    if record.write.sealed_mailbox_capability.is_some() {
+    if record.write.sealed_history_response_capability.is_some() {
         let retention_digest = record.write.traversal_retention_digest().clone();
         record.write.local_traversal = Some(
             load_retention(conn, &retention_digest)
@@ -545,7 +608,7 @@ async fn response_by(
 ) -> PersistenceResult<Option<ResponseRow>> {
     let lock = if lock { " FOR UPDATE" } else { "" };
     sql_query(format!(
-        "SELECT response_id,reply_mailbox_id,source_record_digest,source_record_json, \
+        "SELECT response_id,request_id,source_record_digest,source_record_json, \
          manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at, \
          state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes \
          FROM history_key_responses WHERE response_id=$1{lock}"
@@ -557,23 +620,23 @@ async fn response_by(
     .map_err(PersistenceError::database)
 }
 
-pub struct PgHistoryMailboxStore {
+pub struct PgHistoryResponseStreamStore {
     pub pool: PgPool,
 }
 
 #[async_trait]
-impl HistoryMailboxStore for PgHistoryMailboxStore {
+impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
     fn bind_authority_view_cas(&self, _authority_view_cas: Arc<dyn HistoryAuthorityViewCas>) {}
 
     async fn put_request_exact(
         &self,
-        write: HistoryRequestInboxWrite,
-    ) -> PersistenceResult<(ExactWriteOutcome, HistoryRequestInboxRecord)> {
+        write: HistoryRequestWrite,
+    ) -> PersistenceResult<HistoryRequestPutOutcome> {
         write.validate()?;
         let request_json = encode(&write.request)?;
         let receipt_json = encode(&write.request_receipt)?;
         let capability_json = write
-            .sealed_mailbox_capability
+            .sealed_history_response_capability
             .as_ref()
             .map(encode)
             .transpose()?;
@@ -602,8 +665,8 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
                     && existing.write.request_receipt_digest == write.request_receipt_digest
                     && existing.write.request == write.request
                     && existing.write.request_receipt == write.request_receipt
-                    && existing.write.sealed_mailbox_capability
-                        == write.sealed_mailbox_capability
+                    && existing.write.sealed_history_response_capability
+                        == write.sealed_history_response_capability
                     && existing.write.request_replica == write.request_replica
                 {
                     if let Some(expected) = &write.local_traversal {
@@ -624,28 +687,53 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
                             .into());
                         }
                     }
-                    return Ok((ExactWriteOutcome::ExactReplay, existing));
+                    return Ok(HistoryRequestPutOutcome::Stored {
+                        outcome: ExactWriteOutcome::ExactReplay,
+                        record: existing,
+                    });
                 }
                 return Err(PersistenceError::Conflict(
                     "duplicate_conflict: history request id differs".to_owned(),
                 )
                 .into());
             }
+            if write.local_traversal.is_some() {
+                let commitment = write
+                    .request_receipt
+                    .response_capability_commitment
+                    .as_str();
+                let capability_lock = format!("history-response-capability:{commitment}");
+                sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+                    .bind::<Text, _>(&capability_lock)
+                    .execute(&mut *conn)
+                    .await?;
+                let bound = sql_query(
+                    "SELECT request_id AS value FROM history_key_response_streams \
+                     WHERE response_capability_commitment=$1 LIMIT 1",
+                )
+                .bind::<Text, _>(commitment)
+                .get_result::<TextValueRow>(&mut *conn)
+                .await
+                .optional()?;
+                if bound.is_some() {
+                    return Ok(HistoryRequestPutOutcome::CapabilityCommitmentCollision);
+                }
+            }
             let collision = sql_query(
                 "SELECT request_sequence AS sequence FROM history_key_requests \
-                 WHERE request_digest=$1 OR request_receipt_digest=$2 OR reply_mailbox_id=$3 \
+                 WHERE request_digest=$1 OR request_receipt_digest=$2 OR request_id=$3 \
                  OR ($4 IS NOT NULL AND request_replica_digest=$4) LIMIT 1",
             )
             .bind::<Text, _>(write.request_digest.as_str())
             .bind::<Text, _>(write.request_receipt_digest.as_str())
-            .bind::<Text, _>(write.request_receipt.reply_mailbox_id.as_str())
+            .bind::<Text, _>(write.request.request_id.as_str())
             .bind::<Nullable<Text>, _>(request_replica_digest.as_ref().map(|digest| digest.as_str()))
             .get_result::<SequenceRow>(&mut *conn)
             .await
             .optional()?;
             if collision.is_some() {
                 return Err(PersistenceError::Conflict(
-                    "duplicate_conflict: history request digest or mailbox is already bound"
+                    "duplicate_conflict: history request digest or stream is already bound"
                         .to_owned(),
                 )
                 .into());
@@ -689,25 +777,23 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
             }
             let sequence = sql_query(
                 "INSERT INTO history_key_requests \
-                 (request_id,request_digest,request_receipt_digest,reply_mailbox_id,effective_scope_kind, \
+                 (request_id,request_digest,request_receipt_digest,effective_scope_kind, \
                   realm_id,circle_id,requester_actor_id,requester_sender_domain,release_service_id, \
-                  mailbox_capability_commitment,traversal_retention_digest,request_json, \
-                  request_receipt_json,sealed_mailbox_capability_json,request_replica_digest,request_replica_json, \
+                  traversal_retention_digest,request_json, \
+                  request_receipt_json,sealed_history_response_capability_json,request_replica_digest,request_replica_json, \
                   stored_at,expires_at) \
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) \
                  RETURNING request_sequence AS sequence",
             )
             .bind::<Text, _>(write.request.request_id.as_str())
             .bind::<Text, _>(write.request_digest.as_str())
             .bind::<Text, _>(write.request_receipt_digest.as_str())
-            .bind::<Text, _>(write.request_receipt.reply_mailbox_id.as_str())
             .bind::<Text, _>(&scope_kind)
             .bind::<Text, _>(&realm_id)
             .bind::<Nullable<Text>, _>(circle_id.as_deref())
             .bind::<Text, _>(write.request.requester_actor_id.as_str())
             .bind::<Text, _>(&write.request.requester_sender_domain)
             .bind::<Text, _>(write.request_receipt.release_service_id.as_str())
-            .bind::<Text, _>(write.request_receipt.mailbox_capability_commitment.as_str())
             .bind::<Nullable<Text>, _>(write.local_traversal.as_ref().map(|_| write.traversal_retention_digest().as_str()))
             .bind::<Jsonb, _>(&request_json)
             .bind::<Jsonb, _>(&receipt_json)
@@ -720,25 +806,23 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
             .await?;
             if write.local_traversal.is_some() {
                 sql_query(
-                    "INSERT INTO history_key_mailboxes \
-                     (reply_mailbox_id,release_service_id,mailbox_capability_commitment,expires_at,created_at) \
-                     VALUES ($1,$2,$3,$4,$5)",
+                    "INSERT INTO history_key_response_streams \
+                     (request_id,response_capability_commitment,created_at) \
+                     VALUES ($1,$2,$3)",
                 )
-                .bind::<Text, _>(write.request_receipt.reply_mailbox_id.as_str())
-                .bind::<Text, _>(write.request_receipt.release_service_id.as_str())
-                .bind::<Text, _>(write.request_receipt.mailbox_capability_commitment.as_str())
-                .bind::<Timestamptz, _>(write.request.expires_at)
+                .bind::<Text, _>(write.request.request_id.as_str())
+                .bind::<Text, _>(write.request_receipt.response_capability_commitment.as_str())
                 .bind::<Timestamptz, _>(write.stored_at)
                 .execute(&mut *conn)
                 .await?;
             }
-            Ok((
-                ExactWriteOutcome::Inserted,
-                HistoryRequestInboxRecord {
+            Ok(HistoryRequestPutOutcome::Stored {
+                outcome: ExactWriteOutcome::Inserted,
+                record: HistoryRequestRecord {
                     sequence: as_u64(sequence.sequence, "request sequence")?,
                     write,
                 },
-            ))
+            })
         })
         .await
         .map_err(PgTransactionError::into_persistence)
@@ -747,7 +831,7 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
     async fn get_request_by_digest(
         &self,
         digest: &Hash,
-    ) -> PersistenceResult<Option<HistoryRequestInboxRecord>> {
+    ) -> PersistenceResult<Option<HistoryRequestRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         request_by(&mut conn, "request_digest", digest.as_str()).await
     }
@@ -755,17 +839,37 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
     async fn get_request_by_receipt_digest(
         &self,
         digest: &Hash,
-    ) -> PersistenceResult<Option<HistoryRequestInboxRecord>> {
+    ) -> PersistenceResult<Option<HistoryRequestRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         request_by(&mut conn, "request_receipt_digest", digest.as_str()).await
     }
 
-    async fn get_request_by_mailbox(
+    async fn get_request_by_id(
         &self,
-        mailbox: &str,
-    ) -> PersistenceResult<Option<HistoryRequestInboxRecord>> {
+        request_id: &str,
+    ) -> PersistenceResult<Option<HistoryRequestRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        request_by(&mut conn, "reply_mailbox_id", mailbox).await
+        request_by(&mut conn, "request_id", request_id).await
+    }
+
+    async fn get_request_by_capability_commitment(
+        &self,
+        response_capability_commitment: &Hash,
+    ) -> PersistenceResult<Option<HistoryRequestRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let request_id = sql_query(
+            "SELECT request_id AS value FROM history_key_response_streams \
+             WHERE response_capability_commitment=$1",
+        )
+        .bind::<Text, _>(response_capability_commitment.as_str())
+        .get_result::<TextValueRow>(&mut conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        match request_id {
+            Some(row) => request_by(&mut conn, "request_id", &row.value).await,
+            None => Ok(None),
+        }
     }
 
     async fn list_requests(
@@ -773,7 +877,7 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
         scope: &HistoryEffectiveScope,
         after: Option<u64>,
         limit: usize,
-    ) -> PersistenceResult<HistoryRequestInboxPage> {
+    ) -> PersistenceResult<HistoryRequestPage> {
         if !(1..=100).contains(&limit) {
             return Err(PersistenceError::SchemaViolation(
                 "history request list limit is invalid".to_owned(),
@@ -787,7 +891,7 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
             "SELECT request_sequence,request_digest,request_receipt_digest,request_json, \
-             request_receipt_json,sealed_mailbox_capability_json,request_replica_digest,request_replica_json,stored_at FROM history_key_requests \
+             request_receipt_json,sealed_history_response_capability_json,request_replica_digest,request_replica_json,stored_at FROM history_key_requests \
              WHERE effective_scope_kind=$1 AND realm_id=$2 AND circle_id IS NOT DISTINCT FROM $3 \
              AND request_sequence>$4 ORDER BY request_sequence LIMIT $5",
         )
@@ -804,7 +908,7 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
             .map(decode_request)
             .collect::<PersistenceResult<Vec<_>>>()?;
         for record in &mut records {
-            if record.write.sealed_mailbox_capability.is_some() {
+            if record.write.sealed_history_response_capability.is_some() {
                 let retention_digest = record.write.traversal_retention_digest().clone();
                 record.write.local_traversal = Some(
                     load_retention(&mut conn, &retention_digest)
@@ -820,7 +924,7 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
         }
         let limited = records.len() > limit;
         records.truncate(limit);
-        Ok(HistoryRequestInboxPage {
+        Ok(HistoryRequestPage {
             next_sequence: limited.then(|| records.last().expect("limited page").sequence),
             records,
         })
@@ -869,8 +973,8 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
             if let Some(attestation) = &input.release_attestation {
                 lock_and_validate_release_authority(conn, attestation).await?;
             }
-            let request = request_by(conn, "reply_mailbox_id", input.source_record.reply_mailbox_id.as_str())
-                .await?.ok_or_else(|| PersistenceError::NotFound("history response mailbox unavailable".to_owned()))?;
+            let request = request_by(conn, "request_digest", input.source_record.request_digest.as_str())
+                .await?.ok_or_else(|| PersistenceError::NotFound("history response stream unavailable".to_owned()))?;
             if input.source_record.request_digest != request.write.request_digest
                 || input.source_record.request_receipt_digest != request.write.request_receipt_digest
                 || input.source_record.effective_scope != request.write.request.effective_scope
@@ -878,17 +982,17 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
                 || reserved_at > input.source_record.expires_at {
                 return Err(PersistenceError::SchemaViolation("history response request binding mismatch".to_owned()).into());
             }
-            let sequence = sql_query("UPDATE history_key_mailboxes SET next_sequence=next_sequence+1 WHERE reply_mailbox_id=$1 RETURNING next_sequence-1 AS sequence")
-                .bind::<Text,_>(input.source_record.reply_mailbox_id.as_str())
+            let sequence = sql_query("UPDATE history_key_response_streams SET next_sequence=next_sequence+1 WHERE request_id=$1 RETURNING next_sequence-1 AS sequence")
+                .bind::<Text,_>(request.write.request.request_id.as_str())
                 .get_result::<SequenceRow>(&mut *conn).await.optional()?
-                .ok_or_else(|| PersistenceError::NotFound("history response mailbox is not local".to_owned()))?;
+                .ok_or_else(|| PersistenceError::NotFound("history response stream is not local".to_owned()))?;
             let manifest = input.manifest_admission.as_ref().map(encode).transpose()?;
             let manifest_digest=input.manifest_admission.as_ref().map(|admission|admission.manifest_digest.as_str());
             let manifest_admission_digest=input.manifest_admission.as_ref().map(|admission|admission.manifest_admission_digest.as_str());
             let release = input.release_attestation.as_ref().map(encode).transpose()?;
-            sql_query("INSERT INTO history_key_responses (response_id,reply_mailbox_id,source_sender_domain,source_record_digest,source_record_json,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,sent_at,reserved_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)")
+            sql_query("INSERT INTO history_key_responses (response_id,request_id,source_sender_domain,source_record_digest,source_record_json,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,sent_at,reserved_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)")
                 .bind::<Text,_>(input.source_record.response_id.as_str())
-                .bind::<Text,_>(input.source_record.reply_mailbox_id.as_str())
+                .bind::<Text,_>(request.write.request.request_id.as_str())
                 .bind::<Text,_>(&input.source_record.source_sender_domain)
                 .bind::<Text,_>(input.source_record_digest.as_str())
                 .bind::<Jsonb,_>(&encode(&input.source_record)?)
@@ -925,35 +1029,36 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
         )?;
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            let authority=sql_query("SELECT r.requester_actor_id,m.release_service_id FROM history_key_mailboxes m JOIN history_key_requests r USING (reply_mailbox_id) WHERE m.reply_mailbox_id=$1")
-                .bind::<Text,_>(write.record.source_record.reply_mailbox_id.as_str())
+            let row = response_by(conn, write.record.source_record.response_id.as_str(), true).await?
+                .ok_or_else(|| PersistenceError::NotFound("response reservation unavailable".to_owned()))?;
+            let request_id = row.request_id.clone();
+            let authority=sql_query("SELECT r.requester_actor_id,r.release_service_id FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.request_id=$1")
+                .bind::<Text,_>(&request_id)
                 .get_result::<CompactReceiptAuthorityRow>(&mut *conn).await.optional()?
-                .ok_or_else(||PersistenceError::NotFound("response mailbox unavailable".to_owned()))?;
+                .ok_or_else(||PersistenceError::NotFound("response stream unavailable".to_owned()))?;
             for quota_lock in [
                 format!("history-compact-service:{}", authority.release_service_id),
                 format!("history-compact-requester:{}:{}", authority.release_service_id, authority.requester_actor_id),
-                format!("history-compact-mailbox:{}", write.record.source_record.reply_mailbox_id.as_str()),
+                format!("history-compact-request:{}", request_id),
             ] {
                 sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
                     .bind::<Text,_>(&quota_lock).execute(&mut *conn).await?;
             }
-            let mailbox_guard=sql_query("SELECT release_service_id,mailbox_capability_commitment,expires_at,acked_sequence FROM history_key_mailboxes WHERE reply_mailbox_id=$1 FOR UPDATE")
-                .bind::<Text,_>(write.record.source_record.reply_mailbox_id.as_str())
-                .get_result::<MailboxRow>(&mut *conn).await.optional()?
-                .ok_or_else(||PersistenceError::NotFound("response mailbox unavailable".to_owned()))?;
-            if mailbox_guard.release_service_id != authority.release_service_id {
-                return Err(PersistenceError::Internal("history response mailbox authority changed".to_owned()).into());
+            let stream_guard=sql_query("SELECT s.request_id,r.release_service_id,s.response_capability_commitment,r.expires_at,s.acked_sequence FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.request_id=$1 FOR UPDATE OF s")
+                .bind::<Text,_>(&request_id)
+                .get_result::<ResponseStreamRow>(&mut *conn).await.optional()?
+                .ok_or_else(||PersistenceError::NotFound("response stream unavailable".to_owned()))?;
+            if stream_guard.release_service_id != authority.release_service_id {
+                return Err(PersistenceError::Internal("history response stream authority changed".to_owned()).into());
             }
-            let request = request_by(conn, "reply_mailbox_id", write.record.source_record.reply_mailbox_id.as_str())
+            let request = request_by(conn, "request_id", &request_id)
                 .await?.ok_or_else(||PersistenceError::NotFound("history response request is unavailable".to_owned()))?;
-            append_mailbox_signer_dependencies_in_transaction(
+            append_response_signer_dependencies_in_transaction(
                 conn,
                 request.write.traversal_retention_digest(),
                 &write.record,
                 &write.signer_dependencies,
             ).await?;
-            let row = response_by(conn, write.record.source_record.response_id.as_str(), true).await?
-                .ok_or_else(|| PersistenceError::NotFound("response reservation unavailable".to_owned()))?;
             if let Some(receipt_json) = row.send_receipt_json.clone() {
                 let receipt: HistoryKeyResponseSendReceipt = decode(receipt_json,"send receipt")?;
                 let record = row.record_json.clone().map(|value| decode::<HistoryKeyResponseRecord>(value,"response record")).transpose()?;
@@ -974,25 +1079,25 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
                 || !write.signer_dependencies.contains(&reserved.input.release_service_signer_evidence) {
                 return Err(PersistenceError::Conflict("duplicate_conflict: completion differs from reservation".to_owned()).into());
             }
-            let requester_total=sql_query("SELECT SUM(m.compact_receipt_bytes)::bigint AS total FROM history_key_mailboxes m JOIN history_key_requests r USING (reply_mailbox_id) WHERE m.release_service_id=$1 AND r.requester_actor_id=$2")
+            let requester_total=sql_query("SELECT SUM(s.compact_receipt_bytes)::bigint AS total FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE r.release_service_id=$1 AND r.requester_actor_id=$2")
                 .bind::<Text,_>(&authority.release_service_id).bind::<Text,_>(&authority.requester_actor_id)
                 .get_result::<SumRow>(&mut *conn).await?.total.unwrap_or(0);
             let requester_limit=as_i64(HISTORY_COMPACT_RECEIPTS_PER_REQUESTER_LIMIT,"requester compact receipt quota")?;
             if requester_total.checked_add(compact_receipt_bytes).is_none_or(|total| total>requester_limit) {
                 return Err(PersistenceError::Conflict("failed_precondition: history requester compact receipt quota exceeded".to_owned()).into());
             }
-            let service_total=sql_query("SELECT SUM(compact_receipt_bytes)::bigint AS total FROM history_key_mailboxes WHERE release_service_id=$1")
+            let service_total=sql_query("SELECT SUM(s.compact_receipt_bytes)::bigint AS total FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE r.release_service_id=$1")
                 .bind::<Text,_>(&authority.release_service_id).get_result::<SumRow>(&mut *conn).await?.total.unwrap_or(0);
             let advertised_service_limit=as_i64(write.advertised_service_compact_receipt_bytes,"advertised service compact receipt quota")?;
             if service_total.checked_add(compact_receipt_bytes).is_none_or(|total| total>advertised_service_limit) {
                 return Err(PersistenceError::Conflict("failed_precondition: history release service compact receipt quota exceeded".to_owned()).into());
             }
-            let quota=sql_query("UPDATE history_key_mailboxes SET active_bytes=active_bytes+$2,compact_receipt_bytes=compact_receipt_bytes+$3 WHERE reply_mailbox_id=$1 AND active_bytes+$2<=$4 AND compact_receipt_bytes+$3<=$5")
-                .bind::<Text,_>(&row.reply_mailbox_id).bind::<BigInt,_>(bytes).bind::<BigInt,_>(compact_receipt_bytes)
-                .bind::<BigInt,_>(as_i64(HISTORY_MAILBOX_ACTIVE_BYTES_LIMIT,"mailbox quota")?)
-                .bind::<BigInt,_>(as_i64(HISTORY_COMPACT_RECEIPTS_PER_MAILBOX_LIMIT,"mailbox compact receipt quota")?)
+            let quota=sql_query("UPDATE history_key_response_streams SET active_bytes=active_bytes+$2,compact_receipt_bytes=compact_receipt_bytes+$3 WHERE request_id=$1 AND active_bytes+$2<=$4 AND compact_receipt_bytes+$3<=$5")
+                .bind::<Text,_>(&row.request_id).bind::<BigInt,_>(bytes).bind::<BigInt,_>(compact_receipt_bytes)
+                .bind::<BigInt,_>(as_i64(HISTORY_RESPONSE_STREAM_ACTIVE_BYTES_LIMIT,"stream quota")?)
+                .bind::<BigInt,_>(as_i64(HISTORY_COMPACT_RECEIPTS_PER_REQUEST_LIMIT,"stream compact receipt quota")?)
                 .execute(&mut *conn).await?;
-            if quota==0 { return Err(PersistenceError::Conflict("failed_precondition: history mailbox active or compact receipt quota exceeded".to_owned()).into()); }
+            if quota==0 { return Err(PersistenceError::Conflict("failed_precondition: history stream active or compact receipt quota exceeded".to_owned()).into()); }
             sql_query("UPDATE history_key_responses SET state='accepted',cursor=$2,record_digest=$3,record_json=$4,send_receipt_json=$5,active_bytes=$6,compact_receipt_bytes=$7,accepted_at=$8 WHERE response_id=$1 AND state='reserved'")
                 .bind::<Text,_>(&row.response_id).bind::<Text,_>(&write.record.cursor)
                 .bind::<Text,_>(write.record.record_digest.as_str()).bind::<Jsonb,_>(&encode(&write.record)?)
@@ -1036,13 +1141,13 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
 
     async fn get_accepted_manifest(
         &self,
-        reply_mailbox_id: &str,
+        request_digest: &Hash,
         manifest_digest: &Hash,
         manifest_admission_digest: &Hash,
     ) -> PersistenceResult<Option<HistoryAcceptedManifestRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let row=sql_query("SELECT source_record_json,manifest_admission_json FROM history_key_responses WHERE reply_mailbox_id=$1 AND manifest_digest=$2 AND manifest_admission_digest=$3 AND state IN ('accepted','lost','acked')")
-            .bind::<Text,_>(reply_mailbox_id).bind::<Text,_>(manifest_digest.as_str()).bind::<Text,_>(manifest_admission_digest.as_str())
+        let row=sql_query("SELECT h.source_record_json,h.manifest_admission_json FROM history_key_responses h JOIN history_key_requests r USING (request_id) WHERE r.request_digest=$1 AND h.manifest_digest=$2 AND h.manifest_admission_digest=$3 AND h.state IN ('accepted','lost','acked')")
+            .bind::<Text,_>(request_digest.as_str()).bind::<Text,_>(manifest_digest.as_str()).bind::<Text,_>(manifest_admission_digest.as_str())
             .get_result::<AcceptedManifestRow>(&mut conn).await.optional().map_err(PersistenceError::database)?;
         let Some(row) = row else {
             return Ok(None);
@@ -1099,14 +1204,14 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_,PgTransactionError,_>(async move|conn|{
             let unlocked=response_by(conn,response_id.as_str(),false).await?.ok_or_else(||PersistenceError::NotFound("response unavailable".to_owned()))?;
-            sql_query("SELECT release_service_id,mailbox_capability_commitment,expires_at,acked_sequence FROM history_key_mailboxes WHERE reply_mailbox_id=$1 FOR UPDATE")
-                .bind::<Text,_>(&unlocked.reply_mailbox_id).get_result::<MailboxRow>(&mut *conn).await.optional()?
-                .ok_or_else(||PersistenceError::NotFound("response mailbox unavailable".to_owned()))?;
+            sql_query("SELECT s.request_id,r.release_service_id,s.response_capability_commitment,r.expires_at,s.acked_sequence FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.request_id=$1 FOR UPDATE OF s")
+                .bind::<Text,_>(&unlocked.request_id).get_result::<ResponseStreamRow>(&mut *conn).await.optional()?
+                .ok_or_else(||PersistenceError::NotFound("response stream unavailable".to_owned()))?;
             let row=response_by(conn,response_id.as_str(),true).await?.ok_or_else(||PersistenceError::NotFound("response unavailable".to_owned()))?;
             if row.state=="lost" { let stored:HistoryKeyResponseLostRecord=decode(row.lost_record_json.ok_or_else(||PersistenceError::Internal("lost descriptor missing".to_owned()))?,"lost descriptor")?; return if stored==lost&&stored.record_digest==expected{Ok(ExactWriteOutcome::ExactReplay)}else{Err(PersistenceError::Conflict("duplicate_conflict: lost descriptor differs".to_owned()).into())}; }
             let record:HistoryKeyResponseRecord=decode(row.record_json.ok_or_else(||PersistenceError::Conflict("duplicate_conflict: response not accepted".to_owned()))?,"response record")?;
             if row.state!="accepted"||record.record_digest!=expected||lost.sequence!=record.sequence||lost.cursor!=record.cursor||lost.response_id!=response_id||lost.record_digest!=expected{return Err(PersistenceError::Conflict("duplicate_conflict: lost descriptor binding mismatch".to_owned()).into());}
-            let request=request_by(conn,"reply_mailbox_id",&row.reply_mailbox_id).await?
+            let request=request_by(conn,"request_id",&row.request_id).await?
                 .ok_or_else(||PersistenceError::NotFound("history response request is unavailable".to_owned()))?;
             append_lost_signer_dependencies_in_transaction(
                 conn,
@@ -1114,42 +1219,52 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
                 &lost,
                 &signer_dependencies,
             ).await?;
-            let quota=sql_query("UPDATE history_key_mailboxes SET active_bytes=active_bytes-$2+$3 WHERE reply_mailbox_id=$1 AND active_bytes-$2+$3<=$4")
-                .bind::<Text,_>(&row.reply_mailbox_id).bind::<BigInt,_>(row.active_bytes).bind::<BigInt,_>(lost_bytes)
-                .bind::<BigInt,_>(as_i64(HISTORY_MAILBOX_ACTIVE_BYTES_LIMIT,"mailbox quota")?).execute(&mut *conn).await?;
-            if quota==0{return Err(PersistenceError::Conflict("failed_precondition: history mailbox active quota exceeded".to_owned()).into());}
+            let quota=sql_query("UPDATE history_key_response_streams SET active_bytes=active_bytes-$2+$3 WHERE request_id=$1 AND active_bytes-$2+$3<=$4")
+                .bind::<Text,_>(&row.request_id).bind::<BigInt,_>(row.active_bytes).bind::<BigInt,_>(lost_bytes)
+                .bind::<BigInt,_>(as_i64(HISTORY_RESPONSE_STREAM_ACTIVE_BYTES_LIMIT,"stream quota")?).execute(&mut *conn).await?;
+            if quota==0{return Err(PersistenceError::Conflict("failed_precondition: history stream active quota exceeded".to_owned()).into());}
             sql_query("UPDATE history_key_responses SET state='lost',record_json=NULL,lost_record_digest=$2,lost_record_json=$3,active_bytes=$4 WHERE response_id=$1")
                 .bind::<Text,_>(response_id.as_str()).bind::<Text,_>(digest.as_str()).bind::<Jsonb,_>(&encode(&lost)?).bind::<BigInt,_>(lost_bytes).execute(&mut *conn).await?; Ok(ExactWriteOutcome::Inserted)
         }).await.map_err(PgTransactionError::into_persistence)
     }
 
-    async fn read_mailbox_page(
+    async fn read_response_page(
         &self,
-        mailbox: &str,
-        capability: &Hash,
+        response_capability_commitment: &Hash,
         after: Option<&str>,
         limit: usize,
         now: DateTime<Utc>,
-    ) -> PersistenceResult<HistoryMailboxReadPage> {
+    ) -> PersistenceResult<HistoryResponseReadPage> {
         if !(1..=100).contains(&limit) {
             return Err(PersistenceError::SchemaViolation(
-                "history mailbox limit invalid".to_owned(),
+                "history stream limit invalid".to_owned(),
             ));
         }
         let mut conn = pg_conn(&self.pool).await?;
-        let auth=sql_query("SELECT release_service_id,mailbox_capability_commitment,expires_at,acked_sequence FROM history_key_mailboxes WHERE reply_mailbox_id=$1")
-            .bind::<Text,_>(mailbox).get_result::<MailboxRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
-            .filter(|row|row.mailbox_capability_commitment==capability.as_str()&&row.expires_at>now)
-            .ok_or_else(||PersistenceError::NotFound("history mailbox unavailable".to_owned()))?;
+        let auth=sql_query("SELECT s.request_id,r.release_service_id,s.response_capability_commitment,r.expires_at,s.acked_sequence FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.response_capability_commitment=$1")
+            .bind::<Text,_>(response_capability_commitment.as_str()).get_result::<ResponseStreamRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
+            ;
+        let auth = authorize_response_stream_row(auth, response_capability_commitment, now)?;
+        let stream = auth.request_id.as_str();
         let after_sequence = if let Some(cursor) = after {
-            sql_query("SELECT sequence FROM history_key_responses WHERE reply_mailbox_id=$1 AND cursor=$2")
-            .bind::<Text,_>(mailbox).bind::<Text,_>(cursor).get_result::<SequenceRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
-            .ok_or_else(||PersistenceError::NotFound("history mailbox cursor unavailable".to_owned()))?.sequence
+            sql_query(
+                "SELECT sequence FROM history_key_responses WHERE request_id=$1 AND cursor=$2",
+            )
+            .bind::<Text, _>(stream)
+            .bind::<Text, _>(cursor)
+            .get_result::<SequenceRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+            .ok_or_else(|| {
+                PersistenceError::NotFound("history stream cursor unavailable".to_owned())
+            })?
+            .sequence
         } else {
             -1
         };
-        let rows=sql_query("SELECT response_id,reply_mailbox_id,source_record_digest,source_record_json,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at,state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes FROM history_key_responses WHERE reply_mailbox_id=$1 AND sequence>$2 AND state IN ('accepted','lost') ORDER BY sequence LIMIT $3")
-            .bind::<Text,_>(mailbox).bind::<BigInt,_>(after_sequence).bind::<BigInt,_>(i64::try_from(limit+1).unwrap_or(101))
+        let rows=sql_query("SELECT response_id,request_id,source_record_digest,source_record_json,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at,state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes FROM history_key_responses WHERE request_id=$1 AND sequence>$2 AND state IN ('accepted','lost') ORDER BY sequence LIMIT $3")
+            .bind::<Text,_>(stream).bind::<BigInt,_>(after_sequence).bind::<BigInt,_>(i64::try_from(limit+1).unwrap_or(101))
             .load::<ResponseRow>(&mut *conn).await.map_err(PersistenceError::database)?;
         let mut entries = rows
             .iter()
@@ -1157,13 +1272,13 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
             .collect::<PersistenceResult<Vec<_>>>()?;
         let limited = entries.len() > limit;
         entries.truncate(limit);
-        let high_water_sequence = entries.last().map(HistoryMailboxPageEntry::sequence);
+        let high_water_sequence = entries.last().map(HistoryResponsePageEntry::sequence);
         let cursor = limited.then(|| match entries.last().expect("limited page") {
-            HistoryMailboxPageEntry::Record { record } => record.cursor.clone(),
-            HistoryMailboxPageEntry::Lost { lost_record } => lost_record.cursor.clone(),
+            HistoryResponsePageEntry::Record { record } => record.cursor.clone(),
+            HistoryResponsePageEntry::Lost { lost_record } => lost_record.cursor.clone(),
         });
         let _ = auth.acked_sequence;
-        Ok(HistoryMailboxReadPage {
+        Ok(HistoryResponseReadPage {
             entries,
             cursor,
             limited,
@@ -1173,15 +1288,15 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
 
     async fn put_ack_token_exact(
         &self,
-        capability: &Hash,
-        write: HistoryMailboxAckTokenWrite,
+        response_capability_commitment: &Hash,
+        write: HistoryResponseAckTokenWrite,
         now: DateTime<Utc>,
     ) -> PersistenceResult<ExactWriteOutcome> {
         write
             .claims
             .validate()
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-        if write.ack_token.is_empty() || write.claims.token_expiry <= now {
+        if write.ack_token.is_empty() || write.claims.token_expires_at <= now {
             return Err(PersistenceError::SchemaViolation(
                 "ack token binding invalid".to_owned(),
             ));
@@ -1194,57 +1309,61 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
             .sequence;
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_,PgTransactionError,_>(async move|conn|{
-            let auth=sql_query("SELECT release_service_id,mailbox_capability_commitment,expires_at,acked_sequence FROM history_key_mailboxes WHERE reply_mailbox_id=$1 FOR UPDATE")
-                .bind::<Text,_>(write.claims.reply_mailbox_id.as_str()).get_result::<MailboxRow>(&mut *conn).await.optional()?.filter(|row|row.mailbox_capability_commitment==capability.as_str()&&row.expires_at>now).ok_or_else(||PersistenceError::NotFound("history mailbox unavailable".to_owned()))?;
+            let auth=sql_query("SELECT s.request_id,r.release_service_id,s.response_capability_commitment,r.expires_at,s.acked_sequence FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.response_capability_commitment=$1 FOR UPDATE OF s")
+                .bind::<Text,_>(response_capability_commitment.as_str()).get_result::<ResponseStreamRow>(&mut *conn).await.optional()?;
+            let auth = authorize_response_stream_row(auth, response_capability_commitment, now)?;
+            if auth.request_id.as_str() != write.claims.request_id.as_str() {
+                return Err(PersistenceError::NotFound("history stream unavailable".to_owned()).into());
+            }
             if auth.release_service_id.as_str() != write.claims.release_service_id.as_str() {
                 return Err(PersistenceError::SchemaViolation("ack token release service mismatch".to_owned()).into());
             }
-            if let Some(stored)=sql_query("SELECT claims_json,consumed_request_json,consumed_at FROM history_key_mailbox_ack_tokens WHERE ack_token=$1 AND reply_mailbox_id=$2")
-                .bind::<Text,_>(&write.ack_token).bind::<Text,_>(write.claims.reply_mailbox_id.as_str())
+            if let Some(stored)=sql_query("SELECT claims_json,consumed_request_json,consumed_at FROM history_key_response_ack_tokens WHERE ack_token=$1 AND request_id=$2")
+                .bind::<Text,_>(&write.ack_token).bind::<Text,_>(write.claims.request_id.as_str())
                 .get_result::<TokenRow>(&mut *conn).await.optional()? {
-                return if decode::<HistoryMailboxAckTokenClaims>(stored.claims_json,"ack token claims")?==write.claims {
+                return if decode::<HistoryResponseAckTokenClaims>(stored.claims_json,"ack token claims")?==write.claims {
                     Ok(ExactWriteOutcome::ExactReplay)
                 } else {
                     Err(PersistenceError::Conflict("duplicate_conflict: ack token differs".to_owned()).into())
                 };
             }
-            for claim in &write.claims.ordered_ack_entries { let sequence=as_i64(claim.sequence,"ack sequence")?; let row=sql_query("SELECT response_id,reply_mailbox_id,source_record_digest,source_record_json,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at,state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes FROM history_key_responses WHERE reply_mailbox_id=$1 AND sequence=$2 AND state IN ('accepted','lost')")
-                .bind::<Text,_>(write.claims.reply_mailbox_id.as_str()).bind::<BigInt,_>(sequence).get_result::<ResponseRow>(&mut *conn).await.optional()?.ok_or_else(||PersistenceError::Conflict("duplicate_conflict: ack token entry unavailable".to_owned()))?; let entry=page_entry(&row)?; if entry.ack_token_entry().map_err(|error|PersistenceError::SchemaViolation(error.to_string()))? != *claim {return Err(PersistenceError::Conflict("duplicate_conflict: ack token entry differs".to_owned()).into());} if claim.sequence==high_water_sequence && row.cursor.as_deref()!=Some(write.claims.high_water_cursor.as_str()){return Err(PersistenceError::SchemaViolation("ack high-water cursor mismatch".to_owned()).into());}}
-            let inserted=sql_query("INSERT INTO history_key_mailbox_ack_tokens (ack_token,reply_mailbox_id,claims_json,issued_at) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING")
-                .bind::<Text,_>(&write.ack_token).bind::<Text,_>(write.claims.reply_mailbox_id.as_str()).bind::<Jsonb,_>(&encode(&write.claims)?)
+            for claim in &write.claims.ordered_ack_entries { let sequence=as_i64(claim.sequence,"ack sequence")?; let row=sql_query("SELECT response_id,request_id,source_record_digest,source_record_json,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at,state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes FROM history_key_responses WHERE request_id=$1 AND sequence=$2 AND state IN ('accepted','lost')")
+                .bind::<Text,_>(write.claims.request_id.as_str()).bind::<BigInt,_>(sequence).get_result::<ResponseRow>(&mut *conn).await.optional()?.ok_or_else(||PersistenceError::Conflict("duplicate_conflict: ack token entry unavailable".to_owned()))?; let entry=page_entry(&row)?; if entry.ack_token_entry().map_err(|error|PersistenceError::SchemaViolation(error.to_string()))? != *claim {return Err(PersistenceError::Conflict("duplicate_conflict: ack token entry differs".to_owned()).into());} if claim.sequence==high_water_sequence && row.cursor.as_deref()!=Some(write.claims.high_water_cursor.as_str()){return Err(PersistenceError::SchemaViolation("ack high-water cursor mismatch".to_owned()).into());}}
+            let inserted=sql_query("INSERT INTO history_key_response_ack_tokens (ack_token,request_id,claims_json,issued_at) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING")
+                .bind::<Text,_>(&write.ack_token).bind::<Text,_>(write.claims.request_id.as_str()).bind::<Jsonb,_>(&encode(&write.claims)?)
                 .bind::<Timestamptz,_>(now).execute(&mut *conn).await?;
             let _=auth.acked_sequence; if inserted==0{return Err(PersistenceError::Conflict("duplicate_conflict: ack token is already bound".to_owned()).into());} Ok(ExactWriteOutcome::Inserted)
         }).await.map_err(PgTransactionError::into_persistence)
     }
 
-    async fn ack_mailbox(
+    async fn ack_response_stream(
         &self,
-        mailbox: &str,
-        capability: &Hash,
+        response_capability_commitment: &Hash,
         request: &HistoryKeyResponseAckRequest,
         now: DateTime<Utc>,
     ) -> PersistenceResult<String> {
         request
             .validate()
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-        let mailbox = mailbox.to_owned();
-        let capability = capability.clone();
+        let response_capability_commitment = response_capability_commitment.clone();
         let request = request.clone();
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_,PgTransactionError,_>(async move|conn|{
-            let mb=sql_query("SELECT release_service_id,mailbox_capability_commitment,expires_at,acked_sequence FROM history_key_mailboxes WHERE reply_mailbox_id=$1 FOR UPDATE").bind::<Text,_>(&mailbox).get_result::<MailboxRow>(&mut *conn).await.optional()?.filter(|row|row.mailbox_capability_commitment==capability.as_str()&&row.expires_at>now).ok_or_else(||PersistenceError::NotFound("history mailbox unavailable".to_owned()))?;
-            let token=sql_query("SELECT claims_json,consumed_request_json,consumed_at FROM history_key_mailbox_ack_tokens WHERE ack_token=$1 AND reply_mailbox_id=$2 FOR UPDATE").bind::<Text,_>(&request.ack_token).bind::<Text,_>(&mailbox).get_result::<TokenRow>(&mut *conn).await.optional()?.ok_or_else(||PersistenceError::NotFound("ack token unavailable".to_owned()))?;
+            let mb=sql_query("SELECT s.request_id,r.release_service_id,s.response_capability_commitment,r.expires_at,s.acked_sequence FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.response_capability_commitment=$1 FOR UPDATE OF s").bind::<Text,_>(response_capability_commitment.as_str()).get_result::<ResponseStreamRow>(&mut *conn).await.optional()?;
+            let mb = authorize_response_stream_row(mb, &response_capability_commitment, now)?;
+            let stream = mb.request_id.clone();
+            let token=sql_query("SELECT claims_json,consumed_request_json,consumed_at FROM history_key_response_ack_tokens WHERE ack_token=$1 AND request_id=$2 FOR UPDATE").bind::<Text,_>(&request.ack_token).bind::<Text,_>(&stream).get_result::<TokenRow>(&mut *conn).await.optional()?.ok_or_else(||PersistenceError::NotFound("ack token unavailable".to_owned()))?;
             if let Some(value)=token.consumed_request_json.clone(){let prior:HistoryKeyResponseAckRequest=decode(value,"consumed ack")?;if prior==request{return Ok(request.high_water_cursor);}}
-            let claims:HistoryMailboxAckTokenClaims=decode(token.claims_json,"ack token claims")?;
+            let claims:HistoryResponseAckTokenClaims=decode(token.claims_json,"ack token claims")?;
             claims.validate().map_err(|error|PersistenceError::Internal(format!("stored ack token claims are invalid: {error}")))?;
-            if token.consumed_at.is_some()||claims.token_expiry<=now||claims.reply_mailbox_id.as_str()!=mailbox.as_str()||claims.release_service_id.as_str()!=mb.release_service_id.as_str()||claims.high_water_cursor!=request.high_water_cursor||claims.ordered_ack_entries.len()!=request.ack_entries.len(){return Err(PersistenceError::Conflict("failed_precondition: ack token invalid".to_owned()).into());}
+            if token.consumed_at.is_some()||claims.token_expires_at<=now||claims.request_id.as_str()!=stream.as_str()||claims.release_service_id.as_str()!=mb.release_service_id.as_str()||claims.high_water_cursor!=request.high_water_cursor||claims.ordered_ack_entries.len()!=request.ack_entries.len(){return Err(PersistenceError::Conflict("failed_precondition: ack token invalid".to_owned()).into());}
             let high_water_sequence=as_i64(claims.ordered_ack_entries.last().expect("validated claims").sequence,"ack high water")?;
-            let mut expected_sequences=Vec::new(); for(claim,ack)in claims.ordered_ack_entries.iter().zip(&request.ack_entries){let claim_kind=match claim.kind{arkret_models_collaboration::history_key::HistoryMailboxAckTokenEntryKind::Record=>"record",arkret_models_collaboration::history_key::HistoryMailboxAckTokenEntryKind::Lost=>"lost"}; let(ab_seq,ab_kind,ab_id,ab_digest,status)=match ack{HistoryMailboxAckEntry::Record{sequence,response_id,record_digest,status}=>(*sequence,"record",response_id.as_str(),record_digest,match status{arkret_models_collaboration::history_key::HistoryMailboxRecordStatus::Installed=>"installed",arkret_models_collaboration::history_key::HistoryMailboxRecordStatus::CryptographicallyRejected=>"cryptographically_rejected",arkret_models_collaboration::history_key::HistoryMailboxRecordStatus::SupersededDuplicate=>"superseded_duplicate"}),HistoryMailboxAckEntry::Lost{sequence,response_id,lost_record_digest,..}=>(*sequence,"lost",response_id.as_str(),lost_record_digest,"service_record_lost")}; if(claim.sequence,claim_kind,claim.response_id.as_str(),claim.entry_digest.as_str())!=(ab_seq,ab_kind,ab_id,ab_digest.as_str()){return Err(PersistenceError::Conflict("duplicate_conflict: ack entry binding differs".to_owned()).into());} expected_sequences.push(as_i64(ab_seq,"ack sequence")?); sql_query("INSERT INTO history_key_mailbox_dispositions (reply_mailbox_id,sequence,response_id,entry_kind,entry_digest,status,acked_at) VALUES ($1,$2,$3,$4,$5,$6,$7)").bind::<Text,_>(&mailbox).bind::<BigInt,_>(as_i64(ab_seq,"ack sequence")?).bind::<Text,_>(ab_id).bind::<Text,_>(ab_kind).bind::<Text,_>(ab_digest.as_str()).bind::<Text,_>(status).bind::<Timestamptz,_>(now).execute(&mut *conn).await?;}
-            let active=sql_query("SELECT response_id,reply_mailbox_id,source_record_digest,source_record_json,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at,state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes FROM history_key_responses WHERE reply_mailbox_id=$1 AND sequence>$2 AND sequence<=$3 AND state IN ('accepted','lost') ORDER BY sequence FOR UPDATE").bind::<Text,_>(&mailbox).bind::<BigInt,_>(mb.acked_sequence.unwrap_or(-1)).bind::<BigInt,_>(high_water_sequence).load::<ResponseRow>(&mut *conn).await?;
+            let mut expected_sequences=Vec::new(); for(claim,ack)in claims.ordered_ack_entries.iter().zip(&request.ack_entries){let claim_kind=match claim.kind{arkret_models_collaboration::history_key::HistoryResponseAckTokenEntryKind::Record=>"record",arkret_models_collaboration::history_key::HistoryResponseAckTokenEntryKind::Lost=>"lost"}; let(ab_seq,ab_kind,ab_id,ab_digest,status)=match ack{HistoryResponseAckEntry::Record{sequence,response_id,record_digest,status}=>(*sequence,"record",response_id.as_str(),record_digest,match status{arkret_models_collaboration::history_key::HistoryResponseRecordStatus::Installed=>"installed",arkret_models_collaboration::history_key::HistoryResponseRecordStatus::CryptographicallyRejected=>"cryptographically_rejected",arkret_models_collaboration::history_key::HistoryResponseRecordStatus::SupersededDuplicate=>"superseded_duplicate"}),HistoryResponseAckEntry::Lost{sequence,response_id,lost_record_digest,..}=>(*sequence,"lost",response_id.as_str(),lost_record_digest,"service_record_lost")}; if(claim.sequence,claim_kind,claim.response_id.as_str(),claim.entry_digest.as_str())!=(ab_seq,ab_kind,ab_id,ab_digest.as_str()){return Err(PersistenceError::Conflict("duplicate_conflict: ack entry binding differs".to_owned()).into());} expected_sequences.push(as_i64(ab_seq,"ack sequence")?); sql_query("INSERT INTO history_key_response_dispositions (request_id,sequence,response_id,entry_kind,entry_digest,status,acked_at) VALUES ($1,$2,$3,$4,$5,$6,$7)").bind::<Text,_>(&stream).bind::<BigInt,_>(as_i64(ab_seq,"ack sequence")?).bind::<Text,_>(ab_id).bind::<Text,_>(ab_kind).bind::<Text,_>(ab_digest.as_str()).bind::<Text,_>(status).bind::<Timestamptz,_>(now).execute(&mut *conn).await?;}
+            let active=sql_query("SELECT response_id,request_id,source_record_digest,source_record_json,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at,state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes FROM history_key_responses WHERE request_id=$1 AND sequence>$2 AND sequence<=$3 AND state IN ('accepted','lost') ORDER BY sequence FOR UPDATE").bind::<Text,_>(&stream).bind::<BigInt,_>(mb.acked_sequence.unwrap_or(-1)).bind::<BigInt,_>(high_water_sequence).load::<ResponseRow>(&mut *conn).await?;
             if active.iter().map(|row|row.sequence).collect::<Vec<_>>()!=expected_sequences{return Err(PersistenceError::Conflict("failed_precondition: ack crosses undisposed response".to_owned()).into());} let released: i64=active.iter().map(|row|row.active_bytes).sum();
-            sql_query("UPDATE history_key_responses SET state='acked',record_json=NULL,lost_record_json=NULL,active_bytes=0,acked_at=$2 WHERE reply_mailbox_id=$1 AND sequence>$3 AND sequence<=$4 AND state IN ('accepted','lost')").bind::<Text,_>(&mailbox).bind::<Timestamptz,_>(now).bind::<BigInt,_>(mb.acked_sequence.unwrap_or(-1)).bind::<BigInt,_>(high_water_sequence).execute(&mut *conn).await?;
-            sql_query("UPDATE history_key_mailboxes SET acked_sequence=$2,acked_cursor=$3,active_bytes=active_bytes-$4 WHERE reply_mailbox_id=$1").bind::<Text,_>(&mailbox).bind::<BigInt,_>(high_water_sequence).bind::<Text,_>(&request.high_water_cursor).bind::<BigInt,_>(released).execute(&mut *conn).await?;
-            sql_query("UPDATE history_key_mailbox_ack_tokens SET consumed_request_json=$2,consumed_at=$3 WHERE ack_token=$1").bind::<Text,_>(&request.ack_token).bind::<Jsonb,_>(&encode(&request)?).bind::<Timestamptz,_>(now).execute(&mut *conn).await?; Ok(request.high_water_cursor)
+            sql_query("UPDATE history_key_responses SET state='acked',record_json=NULL,lost_record_json=NULL,active_bytes=0,acked_at=$2 WHERE request_id=$1 AND sequence>$3 AND sequence<=$4 AND state IN ('accepted','lost')").bind::<Text,_>(&stream).bind::<Timestamptz,_>(now).bind::<BigInt,_>(mb.acked_sequence.unwrap_or(-1)).bind::<BigInt,_>(high_water_sequence).execute(&mut *conn).await?;
+            sql_query("UPDATE history_key_response_streams SET acked_sequence=$2,acked_cursor=$3,active_bytes=active_bytes-$4 WHERE request_id=$1").bind::<Text,_>(&stream).bind::<BigInt,_>(high_water_sequence).bind::<Text,_>(&request.high_water_cursor).bind::<BigInt,_>(released).execute(&mut *conn).await?;
+            sql_query("UPDATE history_key_response_ack_tokens SET consumed_request_json=$2,consumed_at=$3 WHERE ack_token=$1").bind::<Text,_>(&request.ack_token).bind::<Jsonb,_>(&encode(&request)?).bind::<Timestamptz,_>(now).execute(&mut *conn).await?; Ok(request.high_water_cursor)
         }).await.map_err(PgTransactionError::into_persistence)
     }
 
@@ -1256,7 +1375,7 @@ impl HistoryMailboxStore for PgHistoryMailboxStore {
         }
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_,PgTransactionError,_>(async move|conn|{let rows=sql_query("SELECT request_sequence AS sequence FROM history_key_requests WHERE expires_at<=$1 ORDER BY expires_at,request_sequence FOR UPDATE SKIP LOCKED LIMIT $2").bind::<Timestamptz,_>(now).bind::<BigInt,_>(i64::try_from(limit).unwrap_or(4096)).load::<SequenceRow>(&mut *conn).await?;
-            for row in &rows {sql_query("INSERT INTO history_key_response_tombstones (response_id,source_record_digest,terminal_status,expired_at,retain_until) SELECT response_id,source_record_digest,CASE WHEN state='acked' THEN 'acked' ELSE 'expired' END,$2,$3 FROM history_key_responses WHERE reply_mailbox_id=(SELECT reply_mailbox_id FROM history_key_requests WHERE request_sequence=$1) ON CONFLICT DO NOTHING").bind::<BigInt,_>(row.sequence).bind::<Timestamptz,_>(now).bind::<Timestamptz,_>(now+Duration::days(30)).execute(&mut *conn).await?; let retention=sql_query("SELECT traversal_retention_digest FROM history_key_requests WHERE request_sequence=$1").bind::<BigInt,_>(row.sequence).get_result::<RetentionDigestRow>(&mut *conn).await?; sql_query("DELETE FROM history_key_requests WHERE request_sequence=$1").bind::<BigInt,_>(row.sequence).execute(&mut *conn).await?; if let Some(digest)=retention.traversal_retention_digest {let digest=Hash::new(digest).map_err(|error|PersistenceError::Internal(format!("stored traversal retention digest is invalid: {error}")))?; if !release_retention_in_transaction(conn,&digest,Some("request_receipt")).await? {return Err(PersistenceError::Internal("local request traversal retention disappeared during expiry".to_owned()).into());}}}
+            for row in &rows {sql_query("INSERT INTO history_key_response_tombstones (response_id,source_record_digest,terminal_status,expired_at,retain_until) SELECT response_id,source_record_digest,CASE WHEN state='acked' THEN 'acked' ELSE 'expired' END,$2,$3 FROM history_key_responses WHERE request_id=(SELECT request_id FROM history_key_requests WHERE request_sequence=$1) ON CONFLICT DO NOTHING").bind::<BigInt,_>(row.sequence).bind::<Timestamptz,_>(now).bind::<Timestamptz,_>(now+Duration::days(30)).execute(&mut *conn).await?; let retention=sql_query("SELECT traversal_retention_digest FROM history_key_requests WHERE request_sequence=$1").bind::<BigInt,_>(row.sequence).get_result::<RetentionDigestRow>(&mut *conn).await?; sql_query("DELETE FROM history_key_requests WHERE request_sequence=$1").bind::<BigInt,_>(row.sequence).execute(&mut *conn).await?; if let Some(digest)=retention.traversal_retention_digest {let digest=Hash::new(digest).map_err(|error|PersistenceError::Internal(format!("stored traversal retention digest is invalid: {error}")))?; if !release_retention_in_transaction(conn,&digest,Some("request_receipt")).await? {return Err(PersistenceError::Internal("local request traversal retention disappeared during expiry".to_owned()).into());}}}
             sql_query("DELETE FROM history_key_response_tombstones WHERE retain_until<=$1").bind::<Timestamptz,_>(now).execute(&mut *conn).await?;Ok(rows.len())}).await.map_err(PgTransactionError::into_persistence)
     }
 }

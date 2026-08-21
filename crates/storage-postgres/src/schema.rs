@@ -1664,18 +1664,16 @@ diesel::table! {
         request_id -> Text,
         request_digest -> Text,
         request_receipt_digest -> Text,
-        reply_mailbox_id -> Text,
         effective_scope_kind -> Text,
         realm_id -> Text,
         circle_id -> Nullable<Text>,
         requester_actor_id -> Text,
         requester_sender_domain -> Text,
         release_service_id -> Text,
-        mailbox_capability_commitment -> Text,
         traversal_retention_digest -> Nullable<Text>,
         request_json -> Jsonb,
         request_receipt_json -> Jsonb,
-        sealed_mailbox_capability_json -> Nullable<Jsonb>,
+        sealed_history_response_capability_json -> Nullable<Jsonb>,
         request_replica_digest -> Nullable<Text>,
         request_replica_json -> Nullable<Jsonb>,
         stored_at -> Timestamptz,
@@ -1684,11 +1682,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    history_key_mailboxes (reply_mailbox_id) {
-        reply_mailbox_id -> Text,
-        release_service_id -> Text,
-        mailbox_capability_commitment -> Text,
-        expires_at -> Timestamptz,
+    history_key_response_streams (request_id) {
+        request_id -> Text,
+        response_capability_commitment -> Text,
         next_sequence -> Int8,
         acked_sequence -> Nullable<Int8>,
         acked_cursor -> Nullable<Text>,
@@ -1701,7 +1697,7 @@ diesel::table! {
 diesel::table! {
     history_key_responses (response_id) {
         response_id -> Text,
-        reply_mailbox_id -> Text,
+        request_id -> Text,
         source_sender_domain -> Text,
         source_record_digest -> Text,
         source_record_json -> Jsonb,
@@ -1729,9 +1725,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    history_key_mailbox_ack_tokens (ack_token) {
+    history_key_response_ack_tokens (ack_token) {
         ack_token -> Text,
-        reply_mailbox_id -> Text,
+        request_id -> Text,
         claims_json -> Jsonb,
         consumed_request_json -> Nullable<Jsonb>,
         issued_at -> Timestamptz,
@@ -1740,8 +1736,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    history_key_mailbox_dispositions (reply_mailbox_id, sequence) {
-        reply_mailbox_id -> Text,
+    history_key_response_dispositions (request_id, sequence) {
+        request_id -> Text,
         sequence -> Int8,
         response_id -> Text,
         entry_kind -> Text,
@@ -1974,9 +1970,9 @@ diesel::allow_tables_to_appear_in_same_query!(
     history_traversal_pins,
     history_traversal_retained_objects,
     history_traversal_retentions,
-    history_key_mailbox_ack_tokens,
-    history_key_mailbox_dispositions,
-    history_key_mailboxes,
+    history_key_response_ack_tokens,
+    history_key_response_dispositions,
+    history_key_response_streams,
     history_key_requests,
     history_key_response_tombstones,
     history_key_responses,

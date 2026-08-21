@@ -50,7 +50,9 @@ use soland_services::identity::{
     AccountDataCasOutcome, AccountDataState, SessionIdentityState as SessionRecord,
 };
 
-use crate::routing::identity::device_messages::fanout_actor_private_update;
+use crate::routing::identity::device_messages::{
+    fanout_actor_private_update, principal_server_device_message_sender,
+};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::now;
@@ -64,21 +66,7 @@ const ACTIVE_LOCATOR_LIMIT: usize = 16;
 const INVITE_LOCATOR_CACHE_CONTROL: &str = "private, no-store";
 const INVITE_QUARANTINE_TTL_DAYS: i64 = 30;
 const MAX_INVITE_QUARANTINE_ENTRIES: usize = 200;
-const INVITE_QUARANTINE_ORIGIN_DEVICE: &str = "server:invite_quarantine";
-/// Server-origin marker for the delivery fanout's `sender_device_id`.
-///
-/// KNOWN DEAD WRITE — do not imitate. The device-message sender contract is a
-/// closed XOR of a real `ak:device:` sender or a complete Native Agent triple
-/// (`device-message.schema.json` sender `oneOf`; SDK `DeviceMessageSender`),
-/// with no service/server-authored branch, so this spelling can never be read
-/// back: outside development mode `fanout_actor_private_update` rejects it at
-/// the device revocation gate, and in development mode the reader
-/// (`device_message_envelope_from_record`) drops the queued row on the sender
-/// XOR. The fanout itself is mandated by `invite-addressing.md:364` (MUST),
-/// which contradicts the sender closure; resolution is tracked in arkret-work
-/// review/spec-open/2026-08-21-0532-invite-delivery-fanout-must-vs-device-
-/// message-sender-closure.md. Do not invent an `ak:` sender to "fix" this.
-const INVITE_DELIVERY_ORIGIN_DEVICE: &str = "server:invite_delivery";
+pub(crate) const INVITE_QUARANTINE_SCHEMA: &str = "ak.schema.invite_quarantine.v1";
 const INVITE_DELIVERY_CAS_ATTEMPTS: usize = 3;
 
 pub(crate) fn peer_router() -> Router {
@@ -937,7 +925,7 @@ async fn deliver_invite_credential(
         state,
         subject,
         ActorPrivateDeviceUpdate::AccountData {
-            sender_device_id: INVITE_DELIVERY_ORIGIN_DEVICE.to_owned(),
+            sender: principal_server_device_message_sender(state),
             content: ActorPrivateAccountDataUpdate {
                 operation: ActorPrivateAccountDataOperation::Put,
                 account_data_key: AccountDataKey::ACCOUNT_INVITE_DELIVERY.to_owned(),
@@ -1170,8 +1158,8 @@ async fn persist_invite_quarantine_entry(
     let request_digest = canonical_digest(body)?;
     let idempotency_key_digest =
         format!("sha256:{}", sha256_hex(delivery.idempotency_key.as_bytes()));
-    let quarantine_id = format!(
-        "ak:invite_quarantine:{}",
+    let entry_digest = format!(
+        "sha256:{}",
         sha256_hex(
             format!(
                 "{subject}|{source_service_id}|{}|{invite_event_digest}",
@@ -1181,11 +1169,10 @@ async fn persist_invite_quarantine_entry(
         )
     );
     let entry = json!({
-        "quarantine_id": quarantine_id.clone(),
+        "entry_digest": entry_digest.clone(),
         "status": "pending_review",
         "subject_id": subject,
-        "inviter": inviter,
-        "source_peer_did": inviter,
+        "source_peer_principal_id": inviter,
         "source_service_id": source_service_id,
         "recipient_service_id": delivery.invite_address.recipient_service_id.as_str(),
         "consent_scope": "invite",
@@ -1214,9 +1201,9 @@ async fn persist_invite_quarantine_entry(
     entries.retain(|candidate| {
         invite_quarantine_entry_active(candidate, received_at)
             && candidate
-                .get("quarantine_id")
+                .get("entry_digest")
                 .and_then(Value::as_str)
-                .is_none_or(|existing_id| existing_id != quarantine_id.as_str())
+                .is_none_or(|existing_digest| existing_digest != entry_digest.as_str())
     });
     entries.push(entry);
     if entries.len() > MAX_INVITE_QUARANTINE_ENTRIES {
@@ -1225,8 +1212,7 @@ async fn persist_invite_quarantine_entry(
     }
 
     let payload = json!({
-        "schema": arkret_wire::AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
-        "status": "pending_review",
+        "schema": INVITE_QUARANTINE_SCHEMA,
         "entries": entries,
         "updated_at": received_at,
     });
@@ -1253,7 +1239,7 @@ async fn persist_invite_quarantine_entry(
         state,
         subject,
         ActorPrivateDeviceUpdate::AccountData {
-            sender_device_id: INVITE_QUARANTINE_ORIGIN_DEVICE.to_owned(),
+            sender: principal_server_device_message_sender(state),
             content: ActorPrivateAccountDataUpdate {
                 operation: ActorPrivateAccountDataOperation::Put,
                 account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
@@ -2155,7 +2141,145 @@ fn invite_locator_not_found() -> AppError {
 
 #[cfg(test)]
 mod invite_locator_security_tests {
+    use soland_services::identity::{AccountProfileState, DeviceIdentity, SaveDeviceCommand};
+
     use super::*;
+
+    const PRODUCTION_HOLDER: &str = "ak:did_core:web:holder.example";
+    const PRODUCTION_INVITER: &str = "ak:did_core:web:inviter.example";
+    const PRODUCTION_DEVICE_A: &str = "ak:device:01904100-0000-7000-8000-0000000000e1";
+    const PRODUCTION_DEVICE_B: &str = "ak:device:01904100-0000-7000-8000-0000000000e2";
+    const PRODUCTION_REALM: &str = "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W";
+    const PRODUCTION_INVITE_EVENT: &str = "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E2";
+
+    async fn production_holder_state() -> AppState {
+        let state = AppState::new(
+            crate::config::AppConfig {
+                development_mode: false,
+                seed_demo_data: false,
+                object_storage: crate::config::ObjectStorageConfig::local(
+                    std::env::temp_dir().join("soland-invite-service-fanout-test-blobs"),
+                ),
+                ..crate::config::AppConfig::test_default()
+            },
+            soland_storage_postgres::Db { pool: None },
+        );
+        let created_at = now();
+        state
+            .identities()
+            .save_account(AccountProfileState {
+                id: PRODUCTION_HOLDER.to_owned(),
+                did: PRODUCTION_HOLDER.to_owned(),
+                localpart: "holder".to_owned(),
+                display_name: None,
+                bio: None,
+                avatar_blob_ref: None,
+                created_at,
+            })
+            .await
+            .expect("holder account");
+        for device_id in [PRODUCTION_DEVICE_A, PRODUCTION_DEVICE_B] {
+            state
+                .identities()
+                .save_device(SaveDeviceCommand {
+                    actor_id: PRODUCTION_HOLDER.to_owned(),
+                    device_id: device_id.to_owned(),
+                    display_name: None,
+                    device: DeviceIdentity {
+                        actor_id: PRODUCTION_HOLDER.to_owned(),
+                        device_id: device_id.to_owned(),
+                        display_name: None,
+                        verification_state: "verified".to_owned(),
+                        payload: json!({"device_id": device_id}),
+                        created_at,
+                        updated_at: created_at,
+                        revoked_at: None,
+                    },
+                })
+                .await
+                .expect("holder device");
+        }
+        state
+    }
+
+    async fn assert_service_account_data_fanout(
+        state: &AppState,
+        account_data_key: &str,
+        expected_revision: u64,
+        expected_payload: &Value,
+    ) {
+        for device_id in [PRODUCTION_DEVICE_A, PRODUCTION_DEVICE_B] {
+            let queued = state
+                .deliveries()
+                .device_messages_after(PRODUCTION_HOLDER, device_id, 0)
+                .await
+                .expect("holder to-device queue");
+            assert_eq!(
+                queued.len(),
+                1,
+                "all active holder devices receive service fanout"
+            );
+            let envelopes =
+                crate::routing::identity::device_messages::device_message_envelopes_after(
+                    state, &queued,
+                );
+            assert_eq!(envelopes.len(), 1, "queued service envelope is readable");
+            let envelope = &envelopes[0];
+            assert_eq!(envelope.sender_principal_id.as_str(), PRODUCTION_HOLDER);
+            assert_eq!(envelope.recipient_principal_id.as_str(), PRODUCTION_HOLDER);
+            assert_eq!(envelope.recipient_device_id.as_str(), device_id);
+            assert!(matches!(
+                &envelope.sender,
+                crate::wire::DeviceMessageSender::Service { sender_service_id }
+                    if sender_service_id.as_str() == state.service_id()
+            ));
+            assert_eq!(
+                envelope.content.get("account_data_key"),
+                Some(&json!(account_data_key))
+            );
+            assert_eq!(
+                envelope.content.get("revision"),
+                Some(&json!(expected_revision))
+            );
+            assert_eq!(envelope.content.get("content"), Some(expected_payload));
+        }
+    }
+
+    fn production_invite_delivery(state: &AppState) -> InviteDeliveryRequestBody {
+        let event: arkret_wire::Event = serde_json::from_value(json!({
+            "event_id": PRODUCTION_INVITE_EVENT,
+            "kind": arkret_wire::EventKind::InviteCreate.as_str(),
+            "realm_id": PRODUCTION_REALM,
+            "scope_ref": { "kind": "realm", "realm_id": PRODUCTION_REALM },
+            "actor_id": PRODUCTION_INVITER,
+            "principal_server_id": state.service_id(),
+            "actor_seq": 0,
+            "created_at": "2026-08-21T00:00:00.000Z",
+            "prev_refs": [],
+            "refs": [],
+            "payload": {
+                "invitee": PRODUCTION_HOLDER,
+                "expires_at": "2099-01-01T00:00:00.000Z"
+            },
+            "proofs": []
+        }))
+        .expect("invite Event");
+        let service_id = DidCoreId::new(state.service_id().to_owned()).unwrap();
+        let address = arkret_models_collaboration::governance::invite_addressing::InviteAddress::principal_server(
+            DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
+            service_id,
+            ServiceResolutionCarrier::CurrentRecordUrl {
+                current_record_url: "https://soland.test/.well-known/arkret/current".to_owned(),
+                pinned_record_digest: None,
+            },
+        );
+        InviteDeliveryRequestBody::new(
+            event,
+            address,
+            IntroductionEvidence::ExplicitAddress,
+            "ak:idempotency:production-service-fanout",
+        )
+    }
 
     #[test]
     fn issued_secret_is_192_bit_opaque_and_never_enters_the_durable_record() {
@@ -2299,6 +2423,89 @@ mod invite_locator_security_tests {
                 .map(|entry| entry.invite_token.as_str()),
             Some("fresh-token")
         );
+    }
+
+    #[tokio::test]
+    async fn production_invite_delivery_fanout_uses_a_readable_service_sender() {
+        let state = production_holder_state().await;
+        let delivery = production_invite_delivery(&state);
+        let body = serde_json::to_value(&delivery).unwrap();
+
+        assert!(
+            deliver_invite_credential(
+                &state,
+                PRODUCTION_HOLDER,
+                PRODUCTION_INVITER,
+                &body,
+                PRODUCTION_REALM,
+            )
+            .await
+            .expect("invite credential delivery")
+        );
+        let cell = state
+            .account_data()
+            .entry(PRODUCTION_HOLDER, AccountDataKey::ACCOUNT_INVITE_DELIVERY)
+            .await
+            .expect("invite delivery cell")
+            .expect("invite delivery write");
+        assert_service_account_data_fanout(
+            &state,
+            AccountDataKey::ACCOUNT_INVITE_DELIVERY,
+            cell.revision,
+            &cell.payload,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn production_invite_quarantine_fanout_uses_a_readable_service_sender() {
+        let state = production_holder_state().await;
+        let delivery = production_invite_delivery(&state);
+        let body = serde_json::to_value(&delivery).unwrap();
+        let decision = ReceiveDecision {
+            action: InviteReceiveAction::Quarantine,
+            effective_kind: "explicit_address",
+            trust_tier: TrustTier::Low,
+            disclosed_outcome: None,
+        };
+
+        assert!(
+            persist_invite_quarantine_entry(
+                &state,
+                PRODUCTION_HOLDER,
+                state.service_id(),
+                PRODUCTION_INVITER,
+                &delivery,
+                &body,
+                &decision,
+            )
+            .await
+            .expect("invite quarantine write")
+        );
+        let cell = state
+            .account_data()
+            .entry(PRODUCTION_HOLDER, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+            .await
+            .expect("invite quarantine cell")
+            .expect("invite quarantine write");
+        assert_eq!(cell.payload["schema"], INVITE_QUARANTINE_SCHEMA);
+        let entry = &cell.payload["entries"][0];
+        assert!(
+            entry["entry_digest"]
+                .as_str()
+                .is_some_and(|digest| digest.starts_with("sha256:") && digest.len() == 71)
+        );
+        assert_eq!(entry["source_peer_principal_id"], PRODUCTION_INVITER);
+        assert!(entry.get("quarantine_id").is_none());
+        assert!(entry.get("source_peer_did").is_none());
+        assert!(entry.get("inviter").is_none());
+        assert_service_account_data_fanout(
+            &state,
+            AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+            cell.revision,
+            &cell.payload,
+        )
+        .await;
     }
 
     #[tokio::test]

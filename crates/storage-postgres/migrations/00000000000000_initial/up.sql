@@ -837,18 +837,16 @@ CREATE TABLE public.history_key_requests (
     request_id text NOT NULL UNIQUE,
     request_digest text NOT NULL UNIQUE,
     request_receipt_digest text NOT NULL UNIQUE,
-    reply_mailbox_id text NOT NULL UNIQUE,
     effective_scope_kind text NOT NULL,
     realm_id text NOT NULL,
     circle_id text,
     requester_actor_id text NOT NULL,
     requester_sender_domain text NOT NULL,
     release_service_id text NOT NULL,
-    mailbox_capability_commitment text NOT NULL,
     traversal_retention_digest text REFERENCES public.history_traversal_retentions(retention_digest) ON DELETE RESTRICT,
     request_json jsonb NOT NULL,
     request_receipt_json jsonb NOT NULL,
-    sealed_mailbox_capability_json jsonb,
+    sealed_history_response_capability_json jsonb,
     request_replica_digest text UNIQUE,
     request_replica_json jsonb,
     stored_at timestamp with time zone NOT NULL,
@@ -858,9 +856,9 @@ CREATE TABLE public.history_key_requests (
         (effective_scope_kind = 'circle' AND circle_id IS NOT NULL)
     ),
     CONSTRAINT history_key_requests_local_replica_check CHECK (
-        (sealed_mailbox_capability_json IS NOT NULL AND traversal_retention_digest IS NOT NULL
+        (sealed_history_response_capability_json IS NOT NULL AND traversal_retention_digest IS NOT NULL
             AND request_replica_digest IS NULL AND request_replica_json IS NULL) OR
-        (sealed_mailbox_capability_json IS NULL AND traversal_retention_digest IS NULL
+        (sealed_history_response_capability_json IS NULL AND traversal_retention_digest IS NULL
             AND request_replica_digest IS NOT NULL AND request_replica_json IS NOT NULL)
     ),
     CONSTRAINT history_key_requests_expiry_check CHECK (expires_at >= stored_at)
@@ -874,27 +872,25 @@ CREATE INDEX history_key_requests_scope_sequence_idx
         request_sequence
     );
 
-CREATE TABLE public.history_key_mailboxes (
-    reply_mailbox_id text PRIMARY KEY REFERENCES public.history_key_requests(reply_mailbox_id) ON DELETE CASCADE,
-    release_service_id text NOT NULL,
-    mailbox_capability_commitment text NOT NULL,
-    expires_at timestamp with time zone NOT NULL,
+CREATE TABLE public.history_key_response_streams (
+    request_id text PRIMARY KEY REFERENCES public.history_key_requests(request_id) ON DELETE CASCADE,
+    response_capability_commitment text NOT NULL UNIQUE,
     next_sequence bigint DEFAULT 0 NOT NULL,
     acked_sequence bigint,
     acked_cursor text,
     active_bytes bigint DEFAULT 0 NOT NULL,
     compact_receipt_bytes bigint DEFAULT 0 NOT NULL,
     created_at timestamp with time zone NOT NULL,
-    CONSTRAINT history_key_mailboxes_next_sequence_check CHECK (next_sequence >= 0),
-    CONSTRAINT history_key_mailboxes_acked_sequence_check CHECK (acked_sequence IS NULL OR acked_sequence >= 0),
-    CONSTRAINT history_key_mailboxes_ack_pair_check CHECK ((acked_sequence IS NULL) = (acked_cursor IS NULL)),
-    CONSTRAINT history_key_mailboxes_active_bytes_check CHECK (active_bytes >= 0 AND active_bytes <= 16777216),
-    CONSTRAINT history_key_mailboxes_compact_receipt_bytes_check CHECK (compact_receipt_bytes >= 0 AND compact_receipt_bytes <= 67108864)
+    CONSTRAINT history_key_response_streams_next_sequence_check CHECK (next_sequence >= 0),
+    CONSTRAINT history_key_response_streams_acked_sequence_check CHECK (acked_sequence IS NULL OR acked_sequence >= 0),
+    CONSTRAINT history_key_response_streams_ack_pair_check CHECK ((acked_sequence IS NULL) = (acked_cursor IS NULL)),
+    CONSTRAINT history_key_response_streams_active_bytes_check CHECK (active_bytes >= 0 AND active_bytes <= 16777216),
+    CONSTRAINT history_key_response_streams_compact_receipt_bytes_check CHECK (compact_receipt_bytes >= 0 AND compact_receipt_bytes <= 67108864)
 );
 
 CREATE TABLE public.history_key_responses (
     response_id text PRIMARY KEY,
-    reply_mailbox_id text NOT NULL REFERENCES public.history_key_mailboxes(reply_mailbox_id) ON DELETE CASCADE,
+    request_id text NOT NULL REFERENCES public.history_key_response_streams(request_id) ON DELETE CASCADE,
     source_sender_domain text NOT NULL,
     source_record_digest text NOT NULL,
     source_record_json jsonb NOT NULL,
@@ -918,9 +914,9 @@ CREATE TABLE public.history_key_responses (
     compact_receipt_bytes bigint DEFAULT 0 NOT NULL,
     accepted_at timestamp with time zone,
     acked_at timestamp with time zone,
-    UNIQUE (reply_mailbox_id, sequence),
-    UNIQUE (reply_mailbox_id, cursor),
-    UNIQUE (reply_mailbox_id, manifest_digest, manifest_admission_digest),
+    UNIQUE (request_id, sequence),
+    UNIQUE (request_id, cursor),
+    UNIQUE (request_id, manifest_digest, manifest_admission_digest),
     CONSTRAINT history_key_responses_sequence_check CHECK (sequence >= 0),
     CONSTRAINT history_key_responses_active_bytes_check CHECK (active_bytes >= 0),
     CONSTRAINT history_key_responses_compact_receipt_bytes_check CHECK (compact_receipt_bytes >= 0),
@@ -950,35 +946,35 @@ CREATE TABLE public.history_key_responses (
     )
 );
 
-CREATE INDEX history_key_responses_mailbox_stream_idx
-    ON public.history_key_responses (reply_mailbox_id, sequence)
+CREATE INDEX history_key_responses_request_stream_idx
+    ON public.history_key_responses (request_id, sequence)
     WHERE state IN ('accepted', 'lost');
 
 CREATE INDEX history_key_responses_accepted_manifest_idx
-    ON public.history_key_responses (reply_mailbox_id, manifest_digest, manifest_admission_digest)
+    ON public.history_key_responses (request_id, manifest_digest, manifest_admission_digest)
     WHERE manifest_admission_json IS NOT NULL AND state IN ('accepted', 'lost', 'acked');
 
-CREATE TABLE public.history_key_mailbox_ack_tokens (
+CREATE TABLE public.history_key_response_ack_tokens (
     ack_token text PRIMARY KEY,
-    reply_mailbox_id text NOT NULL REFERENCES public.history_key_mailboxes(reply_mailbox_id) ON DELETE CASCADE,
+    request_id text NOT NULL REFERENCES public.history_key_response_streams(request_id) ON DELETE CASCADE,
     claims_json jsonb NOT NULL,
     consumed_request_json jsonb,
     issued_at timestamp with time zone NOT NULL,
     consumed_at timestamp with time zone,
-    CONSTRAINT history_key_mailbox_ack_tokens_consumed_check CHECK ((consumed_request_json IS NULL) = (consumed_at IS NULL))
+    CONSTRAINT history_key_response_ack_tokens_consumed_check CHECK ((consumed_request_json IS NULL) = (consumed_at IS NULL))
 );
 
-CREATE TABLE public.history_key_mailbox_dispositions (
-    reply_mailbox_id text NOT NULL REFERENCES public.history_key_mailboxes(reply_mailbox_id) ON DELETE CASCADE,
+CREATE TABLE public.history_key_response_dispositions (
+    request_id text NOT NULL REFERENCES public.history_key_response_streams(request_id) ON DELETE CASCADE,
     sequence bigint NOT NULL,
     response_id text NOT NULL UNIQUE,
     entry_kind text NOT NULL,
     entry_digest text NOT NULL,
     status text NOT NULL,
     acked_at timestamp with time zone NOT NULL,
-    PRIMARY KEY (reply_mailbox_id, sequence),
-    CONSTRAINT history_key_mailbox_dispositions_kind_check CHECK (entry_kind IN ('record', 'lost')),
-    CONSTRAINT history_key_mailbox_dispositions_status_check CHECK (
+    PRIMARY KEY (request_id, sequence),
+    CONSTRAINT history_key_response_dispositions_kind_check CHECK (entry_kind IN ('record', 'lost')),
+    CONSTRAINT history_key_response_dispositions_status_check CHECK (
         (entry_kind = 'record' AND status IN ('installed', 'cryptographically_rejected', 'superseded_duplicate')) OR
         (entry_kind = 'lost' AND status = 'service_record_lost')
     )

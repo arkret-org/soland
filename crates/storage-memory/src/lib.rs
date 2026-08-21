@@ -95,7 +95,7 @@ mod fault_injection;
 mod federation;
 mod governance;
 mod governance_history;
-mod history_mailbox;
+mod history_response_stream;
 mod idempotency;
 mod invite_locators;
 mod join_applications;
@@ -162,7 +162,7 @@ pub(crate) use governance_history::{
     MemoryGovernanceDependencyStore, MemoryHistoryTraversalRetentionStore,
     MemoryPendingRrkAcquisitionStore,
 };
-pub(crate) use history_mailbox::MemoryHistoryMailboxStore;
+pub(crate) use history_response_stream::MemoryHistoryResponseStreamStore;
 pub(crate) use idempotency::MemoryIdempotencyStore;
 pub(crate) use invite_locators::MemoryInviteLocatorStore;
 pub(crate) use join_applications::MemoryJoinApplicationStore;

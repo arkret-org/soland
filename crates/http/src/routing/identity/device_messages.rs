@@ -39,6 +39,16 @@ use crate::wire::{
 
 pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 1000;
 
+/// Build the only service sender accepted by the internal actor-private
+/// materializer. Keeping this constructor beside the fanout prevents CAS
+/// producers from accepting or copying a caller-supplied service identity.
+pub(crate) fn principal_server_device_message_sender(state: &AppState) -> DeviceMessageSender {
+    DeviceMessageSender::Service {
+        sender_service_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
+            .expect("the loaded Principal Server identity is a core DID"),
+    }
+}
+
 struct PreparedDeviceMessageTarget {
     recipient: String,
     device_id: String,
@@ -380,7 +390,9 @@ fn device_message_intent_conflict() -> AppError {
 }
 
 /// Fan an actor-private update (account-data / blocklist / read-cursor
-/// deltas, plaintext `content`) out to the actor's *other* devices.
+/// deltas, plaintext `content`) out to the holder's active devices. A real
+/// device sender excludes its origin device; the local Principal Server
+/// materializer has no origin device and therefore reaches every active one.
 ///
 /// Sidecar isolation note (zh/models/sidecar.md §7 / private-objects.md
 /// §4.2): controller-private account-data plaintext travels over this surface,
@@ -403,23 +415,65 @@ pub(crate) async fn fanout_actor_private_update(
     update: ActorPrivateDeviceUpdate,
 ) -> usize {
     let event_type = update.kind();
-    let origin_device_id = update.sender_device_id();
     let created_at = update.created_at();
-    let sender_revocation_gate =
-        match super::device_generation::active_device_revocation_gate_selector(
-            state,
-            actor,
-            origin_device_id,
-        )
-        .await
-        {
-            Ok(selector) => Some(selector),
-            Err(_) if state.config().development_mode => None,
-            Err(error) => {
-                tracing::warn!(%error, actor, origin_device_id, "actor-private fanout rejected because the sender device authority is not active");
+    let sender = match &update {
+        ActorPrivateDeviceUpdate::AccountData { sender, .. }
+        | ActorPrivateDeviceUpdate::Blocklist { sender, .. }
+        | ActorPrivateDeviceUpdate::ReadCursor { sender, .. } => sender,
+    };
+    let (origin_device_id, sender_endpoint_id, sender_revocation_gate) = match sender {
+        DeviceMessageSender::Device { sender_device_id } => {
+            let sender_revocation_gate =
+                match super::device_generation::active_device_revocation_gate_selector(
+                    state,
+                    actor,
+                    sender_device_id.as_str(),
+                )
+                .await
+                {
+                    Ok(selector) => Some(selector),
+                    Err(_) if state.config().development_mode => None,
+                    Err(error) => {
+                        tracing::warn!(
+                            %error,
+                            actor,
+                            origin_device_id = sender_device_id.as_str(),
+                            "actor-private fanout rejected because the sender device authority is not active"
+                        );
+                        return 0;
+                    }
+                };
+            (
+                Some(sender_device_id.as_str()),
+                sender_device_id.as_str(),
+                sender_revocation_gate,
+            )
+        }
+        DeviceMessageSender::Service { sender_service_id } => {
+            if sender_service_id.as_str() != state.service_id() {
+                tracing::warn!(
+                    actor,
+                    sender_service_id = sender_service_id.as_str(),
+                    local_service_id = state.service_id(),
+                    "actor-private fanout rejected because the service sender is not local"
+                );
                 return 0;
             }
-        };
+            // This internal materializer always writes `sender == recipient ==
+            // actor` below. A Principal Server update is therefore scoped to
+            // the holder whose cell changed, does not borrow a holder device's
+            // authority, and has neither a device-revocation gate nor an
+            // origin device to exclude.
+            (None, sender_service_id.as_str(), None)
+        }
+        DeviceMessageSender::NativeAgent { .. } => {
+            tracing::warn!(
+                actor,
+                "actor-private fanout rejected because Native Agent senders are not cell materializers"
+            );
+            return 0;
+        }
+    };
     let envelope = match serde_json::to_value(&update) {
         Ok(envelope) => envelope,
         Err(error) => {
@@ -434,11 +488,13 @@ pub(crate) async fn fanout_actor_private_update(
         .unwrap_or_default();
     let mut delivered = 0;
     for device in devices {
-        if device.revoked_at.is_some() || device.device_id == origin_device_id {
+        if device.revoked_at.is_some()
+            || origin_device_id.is_some_and(|origin| device.device_id == origin)
+        {
             continue;
         }
         let position = state.next_to_device_position();
-        let idempotency_key = format!("{event_type}:{actor}:{origin_device_id}:{position}");
+        let idempotency_key = format!("{event_type}:{actor}:{sender_endpoint_id}:{position}");
         match state
             .deliveries()
             .append_device_message(
@@ -553,7 +609,7 @@ async fn get_device_messages(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let has_more = queued.len() > page_limit;
     let page = queued.into_iter().take(page_limit).collect::<Vec<_>>();
-    let messages = device_message_envelopes_after(&page);
+    let messages = device_message_envelopes_after(state, &page);
     let delivered_position = page
         .iter()
         .map(|message| message.position)
@@ -632,11 +688,12 @@ async fn ack_device_messages(
 }
 
 pub(crate) fn device_message_envelopes_after(
+    state: &AppState,
     messages: &[DeviceMessageState],
 ) -> Vec<DeviceMessageEnvelope> {
     messages
         .iter()
-        .filter_map(device_message_envelope_from_record)
+        .filter_map(|message| device_message_envelope_from_record(state, message))
         .collect()
 }
 
@@ -710,6 +767,7 @@ fn note_unknown_device(
 }
 
 fn device_message_envelope_from_record(
+    state: &AppState,
     message: &DeviceMessageState,
 ) -> Option<DeviceMessageEnvelope> {
     let kind = arkret_wire::wire_strings::ProtocolKind::new(
@@ -749,6 +807,15 @@ fn device_message_envelope_from_record(
     // exactly one complete branch is dropped rather than repaired: repairing it
     // would mean choosing a sender identity the producer never wrote down.
     let sender = <DeviceMessageSender as serde::Deserialize>::deserialize(&message.content).ok()?;
+    if let DeviceMessageSender::Service { sender_service_id } = &sender
+        && (sender_service_id.as_str() != state.service_id() || message.sender != message.recipient)
+    {
+        // Fail closed on persisted rows that do not carry the exact local
+        // service/holder binding the internal materializer wrote. In
+        // particular, do not reinterpret legacy `server:*` device strings or
+        // rewrite a foreign service sender into the local service identity.
+        return None;
+    }
     Some(DeviceMessageEnvelope {
         device_message_id: arkret_identifiers::DeviceMessageId::new(
             message
@@ -785,6 +852,18 @@ mod tests {
                 std::env::temp_dir().join("soland-device-messages-test-blobs"),
             ),
             development_mode: true,
+            seed_demo_data: false,
+            ..crate::config::AppConfig::test_default()
+        };
+        AppState::new(config, soland_storage_postgres::Db { pool: None })
+    }
+
+    fn production_test_state() -> AppState {
+        let config = crate::config::AppConfig {
+            object_storage: crate::config::ObjectStorageConfig::local(
+                std::env::temp_dir().join("soland-device-messages-production-test-blobs"),
+            ),
+            development_mode: false,
             seed_demo_data: false,
             ..crate::config::AppConfig::test_default()
         };
@@ -839,7 +918,10 @@ mod tests {
             &state,
             controller,
             ActorPrivateDeviceUpdate::AccountData {
-                sender_device_id: origin_device.to_owned(),
+                sender: DeviceMessageSender::Device {
+                    sender_device_id: arkret_identifiers::DeviceId::new(origin_device.to_owned())
+                        .unwrap(),
+                },
                 content: ActorPrivateAccountDataUpdate {
                     operation: ActorPrivateAccountDataOperation::Put,
                     account_data_key: "ak.account.blocklist".to_owned(),
@@ -880,5 +962,64 @@ mod tests {
             cross_queue.is_empty(),
             "the agent device id is not addressable under the controller actor"
         );
+    }
+
+    #[tokio::test]
+    async fn production_service_fanout_reaches_every_active_holder_device_and_is_readable() {
+        let state = production_test_state();
+        let holder = "ak:did_core:web:holder.example";
+        let first_device = "ak:device:01904100-0000-7000-8000-0000000000d1";
+        let second_device = "ak:device:01904100-0000-7000-8000-0000000000d2";
+        save_active_device(&state, holder, first_device).await;
+        save_active_device(&state, holder, second_device).await;
+        let updated_at = now();
+        let cell = json!({"entries": [{"invite_id": "one"}]});
+
+        let delivered = fanout_actor_private_update(
+            &state,
+            holder,
+            ActorPrivateDeviceUpdate::AccountData {
+                sender: principal_server_device_message_sender(&state),
+                content: ActorPrivateAccountDataUpdate {
+                    operation: ActorPrivateAccountDataOperation::Put,
+                    account_data_key: "ak.account.invite_delivery".to_owned(),
+                    revision: 7,
+                    content: Some(cell.clone()),
+                    updated_at,
+                },
+                created_at: updated_at,
+            },
+        )
+        .await;
+
+        assert_eq!(
+            delivered, 2,
+            "service fanout has no origin device to exclude"
+        );
+        for device_id in [first_device, second_device] {
+            let queued = state
+                .deliveries()
+                .device_messages_after(holder, device_id, 0)
+                .await
+                .expect("holder device queue");
+            assert_eq!(queued.len(), 1);
+            let envelopes = device_message_envelopes_after(&state, &queued);
+            assert_eq!(
+                envelopes.len(),
+                1,
+                "service sender must parse without repair"
+            );
+            let envelope = &envelopes[0];
+            assert_eq!(envelope.sender_principal_id.as_str(), holder);
+            assert_eq!(envelope.recipient_principal_id.as_str(), holder);
+            assert_eq!(envelope.recipient_device_id.as_str(), device_id);
+            assert!(matches!(
+                &envelope.sender,
+                DeviceMessageSender::Service { sender_service_id }
+                    if sender_service_id.as_str() == state.service_id()
+            ));
+            assert_eq!(envelope.content.get("revision"), Some(&json!(7)));
+            assert_eq!(envelope.content.get("content"), Some(&cell));
+        }
     }
 }

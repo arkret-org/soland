@@ -12,11 +12,11 @@ use arkret_models_collaboration::history_key::{
 use arkret_wire::{DidCoreId, Event, Hash, RealmId, Seal};
 use chrono::{DateTime, Utc};
 use soland_storage::{
-    ExactWriteOutcome, HistoryMailboxAckTokenWrite, HistoryMailboxReadPage,
-    HistoryRequestInboxPage, HistoryRequestInboxRecord, HistoryRequestInboxWrite,
-    HistoryResponseCompleteOutcome, HistoryResponseCompleteWrite, HistoryResponseReservationInput,
-    HistoryResponseReservationRecord, HistoryResponseRetryRecord, HistoryTraversalAccess,
-    PendingRrkAcquisitionInput, PendingRrkAcquisitionRecord, PersistenceStore, StorageCasOutcome,
+    ExactWriteOutcome, HistoryRequestPage, HistoryRequestRecord, HistoryRequestWrite,
+    HistoryResponseAckTokenWrite, HistoryResponseCompleteOutcome, HistoryResponseCompleteWrite,
+    HistoryResponseReadPage, HistoryResponseReservationInput, HistoryResponseReservationRecord,
+    HistoryResponseRetryRecord, HistoryTraversalAccess, PendingRrkAcquisitionInput,
+    PendingRrkAcquisitionRecord, PersistenceStore, StorageCasOutcome,
 };
 
 use crate::{ServiceError, ServiceResult};
@@ -365,7 +365,7 @@ impl GovernanceHistoryService {
                 arkret_models_collaboration::history_key::HistoryGovernanceTraversalIntent::MemberHistoryDelivery { .. },
             ) => self
                 .persistence
-                .history_mailboxes()
+                .history_response_streams()
                 .get_request_by_receipt_digest(request_receipt_digest)
                 .await?
                 .is_some_and(|request| request.write.request.requester_actor_id == *caller),
@@ -577,34 +577,45 @@ impl GovernanceHistoryService {
 
     pub async fn store_history_request(
         &self,
-        write: HistoryRequestInboxWrite,
-    ) -> ServiceResult<(ExactWriteOutcome, HistoryRequestInboxRecord)> {
+        write: HistoryRequestWrite,
+    ) -> ServiceResult<soland_storage::HistoryRequestPutOutcome> {
         Ok(self
             .persistence
-            .history_mailboxes()
+            .history_response_streams()
             .put_request_exact(write)
             .await?)
     }
 
-    pub async fn history_request_by_mailbox(
+    pub async fn history_request_by_id(
         &self,
-        reply_mailbox_id: &str,
-    ) -> ServiceResult<Option<HistoryRequestInboxRecord>> {
+        request_id: &str,
+    ) -> ServiceResult<Option<HistoryRequestRecord>> {
         Ok(self
             .persistence
-            .history_mailboxes()
-            .get_request_by_mailbox(reply_mailbox_id)
+            .history_response_streams()
+            .get_request_by_id(request_id)
             .await?)
     }
 
     pub async fn history_request_by_digest(
         &self,
         request_digest: &Hash,
-    ) -> ServiceResult<Option<HistoryRequestInboxRecord>> {
+    ) -> ServiceResult<Option<HistoryRequestRecord>> {
         Ok(self
             .persistence
-            .history_mailboxes()
+            .history_response_streams()
             .get_request_by_digest(request_digest)
+            .await?)
+    }
+
+    pub async fn history_request_by_capability_commitment(
+        &self,
+        response_capability_commitment: &Hash,
+    ) -> ServiceResult<Option<HistoryRequestRecord>> {
+        Ok(self
+            .persistence
+            .history_response_streams()
+            .get_request_by_capability_commitment(response_capability_commitment)
             .await?)
     }
 
@@ -613,32 +624,25 @@ impl GovernanceHistoryService {
         effective_scope: &HistoryEffectiveScope,
         after_sequence: Option<u64>,
         limit: usize,
-    ) -> ServiceResult<HistoryRequestInboxPage> {
+    ) -> ServiceResult<HistoryRequestPage> {
         Ok(self
             .persistence
-            .history_mailboxes()
+            .history_response_streams()
             .list_requests(effective_scope, after_sequence, limit)
             .await?)
     }
 
-    pub async fn read_history_mailbox(
+    pub async fn read_history_response_stream(
         &self,
-        reply_mailbox_id: &str,
-        capability_commitment: &Hash,
+        response_capability_commitment: &Hash,
         after_cursor: Option<&str>,
         limit: usize,
         now: DateTime<Utc>,
-    ) -> ServiceResult<HistoryMailboxReadPage> {
+    ) -> ServiceResult<HistoryResponseReadPage> {
         Ok(self
             .persistence
-            .history_mailboxes()
-            .read_mailbox_page(
-                reply_mailbox_id,
-                capability_commitment,
-                after_cursor,
-                limit,
-                now,
-            )
+            .history_response_streams()
+            .read_response_page(response_capability_commitment, after_cursor, limit, now)
             .await?)
     }
 
@@ -649,7 +653,7 @@ impl GovernanceHistoryService {
     ) -> ServiceResult<(ExactWriteOutcome, HistoryResponseReservationRecord)> {
         Ok(self
             .persistence
-            .history_mailboxes()
+            .history_response_streams()
             .reserve_response_exact(input, reserved_at)
             .await?)
     }
@@ -660,7 +664,7 @@ impl GovernanceHistoryService {
     ) -> ServiceResult<HistoryResponseCompleteOutcome> {
         Ok(self
             .persistence
-            .history_mailboxes()
+            .history_response_streams()
             .complete_response_exact(write)
             .await?)
     }
@@ -671,21 +675,21 @@ impl GovernanceHistoryService {
     ) -> ServiceResult<Option<HistoryResponseRetryRecord>> {
         Ok(self
             .persistence
-            .history_mailboxes()
+            .history_response_streams()
             .response_retry(response_id)
             .await?)
     }
 
     pub async fn accepted_history_manifest(
         &self,
-        reply_mailbox_id: &str,
+        request_digest: &Hash,
         manifest_digest: &Hash,
         manifest_admission_digest: &Hash,
     ) -> ServiceResult<Option<soland_storage::HistoryAcceptedManifestRecord>> {
         Ok(self
             .persistence
-            .history_mailboxes()
-            .get_accepted_manifest(reply_mailbox_id, manifest_digest, manifest_admission_digest)
+            .history_response_streams()
+            .get_accepted_manifest(request_digest, manifest_digest, manifest_admission_digest)
             .await?)
     }
 
@@ -700,7 +704,7 @@ impl GovernanceHistoryService {
     ) -> ServiceResult<ExactWriteOutcome> {
         Ok(self
             .persistence
-            .history_mailboxes()
+            .history_response_streams()
             .replace_response_with_lost_exact(
                 response_id,
                 expected_record_digest,
@@ -712,28 +716,27 @@ impl GovernanceHistoryService {
 
     pub async fn store_history_ack_token(
         &self,
-        capability_commitment: &Hash,
-        write: HistoryMailboxAckTokenWrite,
+        response_capability_commitment: &Hash,
+        write: HistoryResponseAckTokenWrite,
         now: DateTime<Utc>,
     ) -> ServiceResult<ExactWriteOutcome> {
         Ok(self
             .persistence
-            .history_mailboxes()
-            .put_ack_token_exact(capability_commitment, write, now)
+            .history_response_streams()
+            .put_ack_token_exact(response_capability_commitment, write, now)
             .await?)
     }
 
-    pub async fn ack_history_mailbox(
+    pub async fn ack_history_response_stream(
         &self,
-        reply_mailbox_id: &str,
-        capability_commitment: &Hash,
+        response_capability_commitment: &Hash,
         request: &HistoryKeyResponseAckRequest,
         now: DateTime<Utc>,
     ) -> ServiceResult<String> {
         Ok(self
             .persistence
-            .history_mailboxes()
-            .ack_mailbox(reply_mailbox_id, capability_commitment, request, now)
+            .history_response_streams()
+            .ack_response_stream(response_capability_commitment, request, now)
             .await?)
     }
 }

@@ -19,7 +19,7 @@ use super::{
     MemoryDevicePairingStore, MemoryDeviceRevocationStore, MemoryEventStore,
     MemoryFederationFrontierExchangeStore, MemoryFederationOperationsStore,
     MemoryFederationOutboxStore, MemoryGovernanceDependencyStore, MemoryHandleReleaseStore,
-    MemoryHistoryMailboxStore, MemoryHistoryTraversalRetentionStore, MemoryIdempotencyStore,
+    MemoryHistoryResponseStreamStore, MemoryHistoryTraversalRetentionStore, MemoryIdempotencyStore,
     MemoryInviteLocatorStore, MemoryInviteReceivePolicyStore, MemoryJoinApplicationStore,
     MemoryKeyBackupStore, MemoryMemberIdentityStore, MemoryMessageStore,
     MemoryMimiConsentCorrelationStore, MemoryMlsCommitStore, MemoryMlsKeyPackageStore,
@@ -85,7 +85,7 @@ pub struct SolandMemoryPersistenceStore {
     realm_organization_statements: MemoryRealmOrganizationStatementStore,
     governance_dependencies: MemoryGovernanceDependencyStore,
     history_traversal_retentions: MemoryHistoryTraversalRetentionStore,
-    history_mailboxes: MemoryHistoryMailboxStore,
+    history_response_streams: MemoryHistoryResponseStreamStore,
     pending_rrk_acquisitions: MemoryPendingRrkAcquisitionStore,
     join_applications: MemoryJoinApplicationStore,
     audit: MemoryAuditStore,
@@ -158,8 +158,8 @@ impl SolandMemoryPersistenceStore {
         let security_transactions =
             MemorySecurityTransactionStore::new(recovery_sessions.shared_data());
         let history_traversal_retentions = MemoryHistoryTraversalRetentionStore::default();
-        let history_mailboxes =
-            MemoryHistoryMailboxStore::new(history_traversal_retentions.clone());
+        let history_response_streams =
+            MemoryHistoryResponseStreamStore::new(history_traversal_retentions.clone());
         Self {
             #[cfg(feature = "fault-injection")]
             fault_injector: fault_injector.clone(),
@@ -193,7 +193,7 @@ impl SolandMemoryPersistenceStore {
             realm_organization_statements: MemoryRealmOrganizationStatementStore::new(),
             governance_dependencies: MemoryGovernanceDependencyStore::default(),
             history_traversal_retentions,
-            history_mailboxes,
+            history_response_streams,
             pending_rrk_acquisitions: MemoryPendingRrkAcquisitionStore::default(),
             join_applications: MemoryJoinApplicationStore::new(),
             audit: MemoryAuditStore::new(),
@@ -456,8 +456,8 @@ impl soland_storage::FederationGovernanceStoreRegistry for SolandMemoryPersisten
         &self.pending_rrk_acquisitions
     }
 
-    fn history_mailboxes(&self) -> &dyn soland_storage::HistoryMailboxStore {
-        &self.history_mailboxes
+    fn history_response_streams(&self) -> &dyn soland_storage::HistoryResponseStreamStore {
+        &self.history_response_streams
     }
 
     fn federation_outbox(&self) -> &dyn FederationOutboxStore {

@@ -979,6 +979,15 @@ impl ProjectionService {
         realm_id: &RealmId,
     ) -> Result<EffectiveSealView, SealReject> {
         let digest_suite = self.predecessor_digest_suite(realm_id, leaves)?;
+        self.effective_seal_view_with_digest_suite(leaves, realm_id, digest_suite)
+    }
+
+    pub fn effective_seal_view_with_digest_suite(
+        &self,
+        leaves: &[SealId],
+        realm_id: &RealmId,
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> Result<EffectiveSealView, SealReject> {
         arkret_state::effective_seal_view(
             leaves,
             realm_id,
@@ -1433,31 +1442,7 @@ impl ProjectionService {
             ));
         }
         let predecessor_state = self.effective_state_at(predecessor_refs, realm_id)?;
-        let digest_suite_cell =
-            arkret_wire::null_subject_cell(arkret_wire::CellFamilyId::REALM_DIGEST_SUITE_V1);
-        match predecessor_state
-            .iter()
-            .find(|(cell, _)| cell.as_str() == digest_suite_cell)
-            .map(|(_, state)| state)
-        {
-            Some(CellState::Value(Value::String(value))) => arkret_canonical::digest_suite(value)
-                .map_err(|error| SealReject::Structural(error.to_string())),
-            Some(CellState::Bottom(_)) => {
-                return Err(SealReject::Structural(
-                    "predecessor digest-suite cell is Bottom".to_owned(),
-                ));
-            }
-            Some(_) => {
-                return Err(SealReject::Structural(
-                    "predecessor digest-suite cell has a non-string value".to_owned(),
-                ));
-            }
-            None => {
-                return Err(SealReject::Structural(
-                    "predecessor view omits the live digest-suite cell".to_owned(),
-                ));
-            }
-        }
+        arkret_state::live_digest_suite_from_state(&predecessor_state)
     }
 
     pub fn commit_event_seal_if_frontier(
@@ -2807,7 +2792,9 @@ pub(crate) fn uses_validated_realm_bootstrap_facet_reducer(kind: &str) -> bool {
     kind.starts_with("ak.realm.")
         && !matches!(
             kind,
-            arkret_wire::event_kind_str::REALM_CREATE | arkret_wire::event_kind_str::REALM_PROFILE
+            arkret_wire::event_kind_str::REALM_CREATE
+                | arkret_wire::event_kind_str::REALM_PROFILE
+                | arkret_wire::event_kind_str::REALM_HISTORY_ACCESS
         )
 }
 
@@ -3296,6 +3283,9 @@ mod fsm_registry_tests {
     fn realm_profile_uses_lifecycle_reducer_inside_bootstrap() {
         assert!(!uses_validated_realm_bootstrap_facet_reducer(
             arkret_wire::EventKind::RealmProfile.as_str(),
+        ));
+        assert!(!uses_validated_realm_bootstrap_facet_reducer(
+            arkret_wire::EventKind::RealmHistoryAccess.as_str(),
         ));
         assert!(uses_validated_realm_bootstrap_facet_reducer(
             arkret_wire::EventKind::RealmAlias.as_str(),

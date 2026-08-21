@@ -396,14 +396,14 @@ impl MemoryHistoryTraversalRetentionStore {
         Ok(ExactWriteOutcome::Inserted)
     }
 
-    pub(crate) fn append_mailbox_signer_dependencies_locked(
+    pub(crate) fn append_response_signer_dependencies_locked(
         &self,
         retention_digest: &arkret_wire::Hash,
         record: &arkret_models_collaboration::history_key::HistoryKeyResponseRecord,
         dependencies: &[GovernanceDependency],
     ) -> PersistenceResult<()> {
         let additions =
-            soland_storage::history_mailbox_signer_retained_dependencies(record, dependencies)?;
+            soland_storage::history_response_signer_retained_dependencies(record, dependencies)?;
         self.append_signer_dependency_additions_locked(retention_digest, additions)
     }
 

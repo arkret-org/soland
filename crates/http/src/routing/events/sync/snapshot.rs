@@ -260,7 +260,7 @@ pub(crate) async fn build_sync_snapshot(
             .into_iter()
             .take(TO_DEVICE_PAGE_LIMIT)
             .collect::<Vec<_>>();
-        let events = device_message_envelopes_after(&page);
+        let events = device_message_envelopes_after(state, &page);
         if let Some(max_position) = page.iter().map(|message| message.position).max() {
             to_device_position = to_device_position.max(max_position);
             to_device_ack_token = state

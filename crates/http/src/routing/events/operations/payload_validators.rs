@@ -433,7 +433,8 @@ pub(crate) fn validate_history_access_payload(operation: &Operation) -> Result<(
         .ok_or("ak.realm.history_access requires to")?;
     if !matches!(
         (from, to),
-        (Some("all_history_for_current_members"), "since_join")
+        (None, "all_history_for_current_members" | "since_join")
+            | (Some("all_history_for_current_members"), "since_join")
             | (Some("since_join"), "since_join")
     ) {
         return Err("history_access_widening_forbidden");

@@ -2,20 +2,20 @@ use std::collections::BTreeMap;
 
 use arkret_models_collaboration::history_key::{
     HistoryKeyResponseAckRequest, HistoryKeyResponseLostRecord, HistoryKeyResponseSendReceipt,
-    HistoryMailboxAckEntry, HistoryMailboxPageEntry, HistoryResponseId,
+    HistoryResponseAckEntry, HistoryResponseId, HistoryResponsePageEntry,
 };
 use arkret_wire::Hash;
 use chrono::{DateTime, Utc};
 use soland_storage::{
-    ExactWriteOutcome, HISTORY_COMPACT_RECEIPTS_PER_MAILBOX_LIMIT,
-    HISTORY_COMPACT_RECEIPTS_PER_REQUESTER_LIMIT, HISTORY_MAILBOX_ACTIVE_BYTES_LIMIT,
-    HistoryAcceptedManifestRecord, HistoryAuthorityViewCas, HistoryMailboxAckTokenWrite,
-    HistoryMailboxReadPage, HistoryMailboxStore, HistoryRequestInboxPage,
-    HistoryRequestInboxRecord, HistoryRequestInboxWrite, HistoryResponseCompleteOutcome,
-    HistoryResponseCompleteWrite, HistoryResponseReservationInput,
-    HistoryResponseReservationRecord, HistoryResponseRetryRecord, HistoryResponseTombstone,
+    ExactWriteOutcome, HISTORY_COMPACT_RECEIPTS_PER_REQUEST_LIMIT,
+    HISTORY_COMPACT_RECEIPTS_PER_REQUESTER_LIMIT, HISTORY_RESPONSE_STREAM_ACTIVE_BYTES_LIMIT,
+    HistoryAcceptedManifestRecord, HistoryAuthorityViewCas, HistoryRequestPage,
+    HistoryRequestPutOutcome, HistoryRequestRecord, HistoryRequestWrite,
+    HistoryResponseAckTokenWrite, HistoryResponseCompleteOutcome, HistoryResponseCompleteWrite,
+    HistoryResponseReadPage, HistoryResponseReservationInput, HistoryResponseReservationRecord,
+    HistoryResponseRetryRecord, HistoryResponseStreamStore, HistoryResponseTombstone,
     HistoryTraversalRetentionStore, PersistenceError, PersistenceResult, history_lost_record_bytes,
-    history_lost_record_digest,
+    history_lost_record_digest, history_response_capability_commitment_matches,
 };
 
 use super::{Arc, MemoryHistoryTraversalRetentionStore, Mutex};
@@ -34,13 +34,13 @@ struct MemoryResponseRow {
 
 #[derive(Clone)]
 struct MemoryAckToken {
-    write: HistoryMailboxAckTokenWrite,
+    write: HistoryResponseAckTokenWrite,
     consumed_request: Option<HistoryKeyResponseAckRequest>,
     consumed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Default)]
-struct MemoryMailbox {
+struct MemoryResponseStream {
     next_sequence: u64,
     acked_sequence: Option<u64>,
     acked_cursor: Option<String>,
@@ -52,25 +52,25 @@ struct MemoryMailbox {
 }
 
 #[derive(Default)]
-struct MemoryHistoryMailboxData {
+struct MemoryHistoryResponseStreamData {
     next_request_sequence: u64,
-    requests: BTreeMap<String, HistoryRequestInboxRecord>,
+    requests: BTreeMap<String, HistoryRequestRecord>,
     request_digests: BTreeMap<String, String>,
     request_receipt_digests: BTreeMap<String, String>,
-    mailboxes: BTreeMap<String, MemoryMailbox>,
-    mailbox_requests: BTreeMap<String, String>,
-    response_mailboxes: BTreeMap<String, String>,
+    streams: BTreeMap<String, MemoryResponseStream>,
+    capability_requests: BTreeMap<String, String>,
+    response_requests: BTreeMap<String, String>,
     tombstones: BTreeMap<String, HistoryResponseTombstone>,
 }
 
 #[derive(Clone)]
-pub(crate) struct MemoryHistoryMailboxStore {
-    data: Arc<Mutex<MemoryHistoryMailboxData>>,
+pub(crate) struct MemoryHistoryResponseStreamStore {
+    data: Arc<Mutex<MemoryHistoryResponseStreamData>>,
     traversals: MemoryHistoryTraversalRetentionStore,
     authority_view_cas: Arc<Mutex<Option<Arc<dyn HistoryAuthorityViewCas>>>>,
 }
 
-impl MemoryHistoryMailboxStore {
+impl MemoryHistoryResponseStreamStore {
     pub(crate) fn new(traversals: MemoryHistoryTraversalRetentionStore) -> Self {
         Self {
             data: Arc::default(),
@@ -81,8 +81,8 @@ impl MemoryHistoryMailboxStore {
 
     async fn hydrate_local_traversal(
         &self,
-        mut record: HistoryRequestInboxRecord,
-    ) -> PersistenceResult<HistoryRequestInboxRecord> {
+        mut record: HistoryRequestRecord,
+    ) -> PersistenceResult<HistoryRequestRecord> {
         if record.write.local_traversal.is_some() {
             let retention_digest = record.write.traversal_retention_digest().clone();
             record.write.local_traversal = Some(
@@ -102,12 +102,18 @@ impl MemoryHistoryMailboxStore {
 }
 
 fn reserve_response_locked(
-    data: &mut MemoryHistoryMailboxData,
+    data: &mut MemoryHistoryResponseStreamData,
     input: &HistoryResponseReservationInput,
     reserved_at: DateTime<Utc>,
 ) -> PersistenceResult<(ExactWriteOutcome, HistoryResponseReservationRecord)> {
     let response_id = input.source_record.response_id.as_str().to_owned();
-    let mailbox_id = input.source_record.reply_mailbox_id.as_str().to_owned();
+    let request_id = data
+        .request_digests
+        .get(input.source_record.request_digest.as_str())
+        .cloned()
+        .ok_or_else(|| {
+            PersistenceError::NotFound("history response stream is unavailable".to_owned())
+        })?;
     if let Some(tombstone) = data.tombstones.get(&response_id) {
         return Err(PersistenceError::Conflict(
             if tombstone.source_record_digest == input.source_record_digest {
@@ -117,12 +123,12 @@ fn reserve_response_locked(
             },
         ));
     }
-    if let Some(existing_mailbox) = data.response_mailboxes.get(&response_id) {
+    if let Some(existing_stream) = data.response_requests.get(&response_id) {
         let row = data
-            .mailboxes
-            .get(existing_mailbox)
-            .and_then(|mailbox| {
-                mailbox.responses.values().find(|row| {
+            .streams
+            .get(existing_stream)
+            .and_then(|stream| {
+                stream.responses.values().find(|row| {
                     row.reservation.input.source_record.response_id.as_str() == response_id
                 })
             })
@@ -137,10 +143,7 @@ fn reserve_response_locked(
             ))
         };
     }
-    let request_id = data.mailbox_requests.get(&mailbox_id).ok_or_else(|| {
-        PersistenceError::NotFound("history response mailbox is unavailable".to_owned())
-    })?;
-    let request = data.requests.get(request_id).ok_or_else(|| {
+    let request = data.requests.get(&request_id).ok_or_else(|| {
         PersistenceError::Internal("history response request index is corrupt".to_owned())
     })?;
     if input.source_record.request_digest != request.write.request_digest
@@ -150,22 +153,22 @@ fn reserve_response_locked(
         || reserved_at > input.source_record.expires_at
     {
         return Err(PersistenceError::SchemaViolation(
-            "history response does not bind its durable request mailbox".to_owned(),
+            "history response does not bind its durable request stream".to_owned(),
         ));
     }
-    let mailbox = data.mailboxes.get_mut(&mailbox_id).ok_or_else(|| {
-        PersistenceError::Internal("history response mailbox row is missing".to_owned())
+    let stream = data.streams.get_mut(&request_id).ok_or_else(|| {
+        PersistenceError::Internal("history response stream row is missing".to_owned())
     })?;
-    let sequence = mailbox.next_sequence;
-    mailbox.next_sequence = mailbox.next_sequence.checked_add(1).ok_or_else(|| {
-        PersistenceError::Internal("history mailbox sequence exhausted".to_owned())
+    let sequence = stream.next_sequence;
+    stream.next_sequence = stream.next_sequence.checked_add(1).ok_or_else(|| {
+        PersistenceError::Internal("history stream sequence exhausted".to_owned())
     })?;
     let reservation = HistoryResponseReservationRecord {
         sequence,
         input: input.clone(),
         reserved_at,
     };
-    mailbox.responses.insert(
+    stream.responses.insert(
         sequence,
         MemoryResponseRow {
             reservation: reservation.clone(),
@@ -178,35 +181,35 @@ fn reserve_response_locked(
             acked_at: None,
         },
     );
-    data.response_mailboxes.insert(response_id, mailbox_id);
+    data.response_requests.insert(response_id, request_id);
     Ok((ExactWriteOutcome::Inserted, reservation))
 }
 
-fn mailbox_entry(row: &MemoryResponseRow) -> Option<HistoryMailboxPageEntry> {
+fn stream_entry(row: &MemoryResponseRow) -> Option<HistoryResponsePageEntry> {
     if row.acked_at.is_some() {
         return None;
     }
     if let Some(lost_record) = &row.lost_record {
-        return Some(HistoryMailboxPageEntry::Lost {
+        return Some(HistoryResponsePageEntry::Lost {
             lost_record: lost_record.clone(),
         });
     }
     row.record
         .as_ref()
-        .map(|record| HistoryMailboxPageEntry::Record {
+        .map(|record| HistoryResponsePageEntry::Record {
             record: record.clone(),
         })
 }
 
-fn ack_binding(entry: &HistoryMailboxAckEntry) -> (u64, &str, &str, &Hash) {
+fn ack_binding(entry: &HistoryResponseAckEntry) -> (u64, &str, &str, &Hash) {
     match entry {
-        HistoryMailboxAckEntry::Record {
+        HistoryResponseAckEntry::Record {
             sequence,
             response_id,
             record_digest,
             ..
         } => (*sequence, "record", response_id.as_str(), record_digest),
-        HistoryMailboxAckEntry::Lost {
+        HistoryResponseAckEntry::Lost {
             sequence,
             response_id,
             lost_record_digest,
@@ -215,31 +218,39 @@ fn ack_binding(entry: &HistoryMailboxAckEntry) -> (u64, &str, &str, &Hash) {
     }
 }
 
-fn authorized_mailbox<'a>(
-    data: &'a MemoryHistoryMailboxData,
-    reply_mailbox_id: &str,
-    capability_commitment: &Hash,
+fn authorized_stream<'a>(
+    data: &'a MemoryHistoryResponseStreamData,
+    response_capability_commitment: &Hash,
     now: DateTime<Utc>,
-) -> PersistenceResult<(&'a HistoryRequestInboxRecord, &'a MemoryMailbox)> {
+) -> PersistenceResult<(&'a HistoryRequestRecord, &'a MemoryResponseStream)> {
     let request_id = data
-        .mailbox_requests
-        .get(reply_mailbox_id)
-        .ok_or_else(|| PersistenceError::NotFound("history mailbox is unavailable".to_owned()))?;
+        .capability_requests
+        .get(response_capability_commitment.as_str());
+    let request = request_id.and_then(|request_id| data.requests.get(request_id));
+    let commitment_matches = history_response_capability_commitment_matches(
+        request.map(|request| {
+            request
+                .write
+                .request_receipt
+                .response_capability_commitment
+                .as_str()
+        }),
+        response_capability_commitment,
+    );
+    let request_id = request_id
+        .filter(|_| {
+            commitment_matches
+                & request.is_some_and(|request| request.write.request.expires_at > now)
+        })
+        .ok_or_else(|| PersistenceError::NotFound("history stream is unavailable".to_owned()))?;
     let request = data.requests.get(request_id).ok_or_else(|| {
-        PersistenceError::Internal("history mailbox request index is corrupt".to_owned())
+        PersistenceError::Internal("history stream request index is corrupt".to_owned())
     })?;
-    if &request.write.request_receipt.mailbox_capability_commitment != capability_commitment
-        || request.write.request.expires_at <= now
-    {
-        return Err(PersistenceError::NotFound(
-            "history mailbox is unavailable".to_owned(),
-        ));
-    }
-    let mailbox = data
-        .mailboxes
-        .get(reply_mailbox_id)
-        .ok_or_else(|| PersistenceError::Internal("history mailbox row is missing".to_owned()))?;
-    Ok((request, mailbox))
+    let stream = data
+        .streams
+        .get(request_id)
+        .ok_or_else(|| PersistenceError::Internal("history stream row is missing".to_owned()))?;
+    Ok((request, stream))
 }
 
 fn traversal_writes_exact(
@@ -258,20 +269,19 @@ fn traversal_writes_exact(
 }
 
 #[async_trait::async_trait]
-impl HistoryMailboxStore for MemoryHistoryMailboxStore {
+impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
     fn bind_authority_view_cas(&self, authority_view_cas: Arc<dyn HistoryAuthorityViewCas>) {
         *self.authority_view_cas.lock() = Some(authority_view_cas);
     }
 
     async fn put_request_exact(
         &self,
-        mut write: HistoryRequestInboxWrite,
-    ) -> PersistenceResult<(ExactWriteOutcome, HistoryRequestInboxRecord)> {
+        mut write: HistoryRequestWrite,
+    ) -> PersistenceResult<HistoryRequestPutOutcome> {
         write.validate()?;
         let gate = self.traversals.transaction_gate();
         let _guard = gate.lock();
         let request_id = write.request.request_id.as_str().to_owned();
-        let mailbox_id = write.request_receipt.reply_mailbox_id.as_str().to_owned();
         let normalized_local_objects = write
             .local_traversal
             .as_ref()
@@ -298,16 +308,30 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
                 && record.write.request_receipt_digest == write.request_receipt_digest
                 && record.write.request == write.request
                 && record.write.request_receipt == write.request_receipt
-                && record.write.sealed_mailbox_capability == write.sealed_mailbox_capability
+                && record.write.sealed_history_response_capability
+                    == write.sealed_history_response_capability
                 && traversal_exact
                 && record.write.request_replica == write.request_replica
             {
-                Ok((ExactWriteOutcome::ExactReplay, record.clone()))
+                Ok(HistoryRequestPutOutcome::Stored {
+                    outcome: ExactWriteOutcome::ExactReplay,
+                    record: record.clone(),
+                })
             } else {
                 Err(PersistenceError::Conflict(
                     "duplicate_conflict: history request id differs".to_owned(),
                 ))
             };
+        }
+        if write.local_traversal.is_some()
+            && data.capability_requests.contains_key(
+                write
+                    .request_receipt
+                    .response_capability_commitment
+                    .as_str(),
+            )
+        {
+            return Ok(HistoryRequestPutOutcome::CapabilityCommitmentCollision);
         }
         if data
             .request_digests
@@ -315,10 +339,10 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
             || data
                 .request_receipt_digests
                 .contains_key(write.request_receipt_digest.as_str())
-            || data.mailbox_requests.contains_key(&mailbox_id)
+            || data.requests.contains_key(&request_id)
         {
             return Err(PersistenceError::Conflict(
-                "duplicate_conflict: history request digest or mailbox is already bound".to_owned(),
+                "duplicate_conflict: history request digest or stream is already bound".to_owned(),
             ));
         }
         let active_for_scope_sender = data
@@ -353,7 +377,7 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
             traversal.objects = objects;
         }
         data.next_request_sequence = next_request_sequence;
-        let record = HistoryRequestInboxRecord { sequence, write };
+        let record = HistoryRequestRecord { sequence, write };
         data.request_digests.insert(
             record.write.request_digest.as_str().to_owned(),
             request_id.clone(),
@@ -362,19 +386,30 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
             record.write.request_receipt_digest.as_str().to_owned(),
             request_id.clone(),
         );
-        data.mailbox_requests
-            .insert(mailbox_id.clone(), request_id.clone());
         if record.write.local_traversal.is_some() {
-            data.mailboxes.insert(mailbox_id, MemoryMailbox::default());
+            data.capability_requests.insert(
+                record
+                    .write
+                    .request_receipt
+                    .response_capability_commitment
+                    .as_str()
+                    .to_owned(),
+                request_id.clone(),
+            );
+            data.streams
+                .insert(request_id.clone(), MemoryResponseStream::default());
         }
         data.requests.insert(request_id, record.clone());
-        Ok((ExactWriteOutcome::Inserted, record))
+        Ok(HistoryRequestPutOutcome::Stored {
+            outcome: ExactWriteOutcome::Inserted,
+            record,
+        })
     }
 
     async fn get_request_by_digest(
         &self,
         request_digest: &Hash,
-    ) -> PersistenceResult<Option<HistoryRequestInboxRecord>> {
+    ) -> PersistenceResult<Option<HistoryRequestRecord>> {
         let record = {
             let data = self.data.lock();
             data.request_digests
@@ -391,7 +426,7 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
     async fn get_request_by_receipt_digest(
         &self,
         request_receipt_digest: &Hash,
-    ) -> PersistenceResult<Option<HistoryRequestInboxRecord>> {
+    ) -> PersistenceResult<Option<HistoryRequestRecord>> {
         let record = {
             let data = self.data.lock();
             data.request_receipt_digests
@@ -405,14 +440,28 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
         }
     }
 
-    async fn get_request_by_mailbox(
+    async fn get_request_by_id(
         &self,
-        reply_mailbox_id: &str,
-    ) -> PersistenceResult<Option<HistoryRequestInboxRecord>> {
+        request_id: &str,
+    ) -> PersistenceResult<Option<HistoryRequestRecord>> {
         let record = {
             let data = self.data.lock();
-            data.mailbox_requests
-                .get(reply_mailbox_id)
+            data.requests.get(request_id).cloned()
+        };
+        match record {
+            Some(record) => self.hydrate_local_traversal(record).await.map(Some),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_request_by_capability_commitment(
+        &self,
+        response_capability_commitment: &Hash,
+    ) -> PersistenceResult<Option<HistoryRequestRecord>> {
+        let record = {
+            let data = self.data.lock();
+            data.capability_requests
+                .get(response_capability_commitment.as_str())
                 .and_then(|request_id| data.requests.get(request_id))
                 .cloned()
         };
@@ -427,7 +476,7 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
         effective_scope: &arkret_models_collaboration::history_key::HistoryEffectiveScope,
         after_sequence: Option<u64>,
         limit: usize,
-    ) -> PersistenceResult<HistoryRequestInboxPage> {
+    ) -> PersistenceResult<HistoryRequestPage> {
         if !(1..=100).contains(&limit) {
             return Err(PersistenceError::SchemaViolation(
                 "history request list limit must be within 1..=100".to_owned(),
@@ -451,7 +500,7 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
         for record in records {
             hydrated.push(self.hydrate_local_traversal(record).await?);
         }
-        Ok(HistoryRequestInboxPage {
+        Ok(HistoryRequestPage {
             next_sequence: limited.then(|| hydrated.last().expect("non-empty page").sequence),
             records: hydrated,
         })
@@ -471,7 +520,7 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
             let mut data = self.data.lock();
             let response_id = input.source_record.response_id.as_str();
             if data.tombstones.contains_key(response_id)
-                || data.response_mailboxes.contains_key(response_id)
+                || data.response_requests.contains_key(response_id)
             {
                 return reserve_response_locked(&mut data, &input, reserved_at);
             }
@@ -479,7 +528,7 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
 
         let authority_view_cas = self.authority_view_cas.lock().clone().ok_or_else(|| {
             PersistenceError::Internal(
-                "history authority view CAS is not bound to the memory mailbox".to_owned(),
+                "history authority view CAS is not bound to the memory stream".to_owned(),
             )
         })?;
         let attestation = input
@@ -498,7 +547,7 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
         if let Err(error) = cas_result {
             let mut data = self.data.lock();
             if data
-                .response_mailboxes
+                .response_requests
                 .contains_key(input.source_record.response_id.as_str())
             {
                 return reserve_response_locked(&mut data, &input, reserved_at);
@@ -518,29 +567,26 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
         let gate = self.traversals.transaction_gate();
         let _guard = gate.lock();
         let mut data = self.data.lock();
-        let mailbox_id = data
-            .response_mailboxes
+        let request_id = data
+            .response_requests
             .get(response_id)
             .cloned()
             .ok_or_else(|| {
                 PersistenceError::NotFound("history response reservation is unavailable".to_owned())
             })?;
-        let request_id = data.mailbox_requests.get(&mailbox_id).ok_or_else(|| {
-            PersistenceError::Internal("history response request index is missing".to_owned())
-        })?;
         let retention_digest = data
             .requests
-            .get(request_id)
+            .get(&request_id)
             .ok_or_else(|| {
                 PersistenceError::Internal("history response request row is missing".to_owned())
             })?
             .write
             .traversal_retention_digest()
             .clone();
-        let mailbox = data.mailboxes.get(&mailbox_id).ok_or_else(|| {
-            PersistenceError::Internal("history response mailbox row is missing".to_owned())
+        let stream = data.streams.get(&request_id).ok_or_else(|| {
+            PersistenceError::Internal("history response stream row is missing".to_owned())
         })?;
-        let row = mailbox
+        let row = stream
             .responses
             .get(&write.record.sequence)
             .ok_or_else(|| {
@@ -589,52 +635,47 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
                     .to_owned(),
             ));
         }
-        if mailbox.cursors.contains_key(&write.record.cursor) {
+        if stream.cursors.contains_key(&write.record.cursor) {
             return Err(PersistenceError::Conflict(
-                "duplicate_conflict: history mailbox cursor is already bound".to_owned(),
+                "duplicate_conflict: history stream cursor is already bound".to_owned(),
             ));
         }
         let active_bytes = u64::try_from(canonical_len)
             .map_err(|_| PersistenceError::Internal("history record is too large".to_owned()))?;
         let compact_receipt_bytes = u64::try_from(compact_receipt_len)
             .map_err(|_| PersistenceError::Internal("history receipt is too large".to_owned()))?;
-        if mailbox.active_bytes.saturating_add(active_bytes) > HISTORY_MAILBOX_ACTIVE_BYTES_LIMIT {
-            return Err(PersistenceError::Conflict(
-                "failed_precondition: history mailbox active quota exceeded".to_owned(),
-            ));
-        }
-        if mailbox
-            .compact_receipt_bytes
-            .checked_add(compact_receipt_bytes)
-            .is_none_or(|total| total > HISTORY_COMPACT_RECEIPTS_PER_MAILBOX_LIMIT)
+        if stream.active_bytes.saturating_add(active_bytes)
+            > HISTORY_RESPONSE_STREAM_ACTIVE_BYTES_LIMIT
         {
             return Err(PersistenceError::Conflict(
-                "failed_precondition: history mailbox compact receipt quota exceeded".to_owned(),
+                "failed_precondition: history stream active quota exceeded".to_owned(),
             ));
         }
-        let request_id = data.mailbox_requests.get(&mailbox_id).ok_or_else(|| {
-            PersistenceError::Internal("history mailbox request index is corrupt".to_owned())
-        })?;
-        let request = data.requests.get(request_id).ok_or_else(|| {
-            PersistenceError::Internal("history mailbox request row is missing".to_owned())
+        if stream
+            .compact_receipt_bytes
+            .checked_add(compact_receipt_bytes)
+            .is_none_or(|total| total > HISTORY_COMPACT_RECEIPTS_PER_REQUEST_LIMIT)
+        {
+            return Err(PersistenceError::Conflict(
+                "failed_precondition: history stream compact receipt quota exceeded".to_owned(),
+            ));
+        }
+        let request = data.requests.get(&request_id).ok_or_else(|| {
+            PersistenceError::Internal("history stream request row is missing".to_owned())
         })?;
         let requester_actor_id = request.write.request.requester_actor_id.clone();
         let release_service_id = request.write.request_receipt.release_service_id.clone();
         let mut requester_total = 0_u64;
         let mut service_total = 0_u64;
-        for (candidate_mailbox_id, candidate_mailbox) in &data.mailboxes {
-            let candidate_request = data
-                .mailbox_requests
-                .get(candidate_mailbox_id)
-                .and_then(|candidate_request_id| data.requests.get(candidate_request_id))
-                .ok_or_else(|| {
-                    PersistenceError::Internal(
-                        "history compact receipt accounting index is corrupt".to_owned(),
-                    )
-                })?;
+        for (candidate_request_id, candidate_stream) in &data.streams {
+            let candidate_request = data.requests.get(candidate_request_id).ok_or_else(|| {
+                PersistenceError::Internal(
+                    "history compact receipt accounting index is corrupt".to_owned(),
+                )
+            })?;
             if candidate_request.write.request_receipt.release_service_id == release_service_id {
                 service_total = service_total
-                    .checked_add(candidate_mailbox.compact_receipt_bytes)
+                    .checked_add(candidate_stream.compact_receipt_bytes)
                     .ok_or_else(|| {
                         PersistenceError::Internal(
                             "history service compact receipt accounting overflow".to_owned(),
@@ -642,7 +683,7 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
                     })?;
                 if candidate_request.write.request.requester_actor_id == requester_actor_id {
                     requester_total = requester_total
-                        .checked_add(candidate_mailbox.compact_receipt_bytes)
+                        .checked_add(candidate_stream.compact_receipt_bytes)
                         .ok_or_else(|| {
                             PersistenceError::Internal(
                                 "history requester compact receipt accounting overflow".to_owned(),
@@ -668,21 +709,21 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
                     .to_owned(),
             ));
         }
-        self.traversals.append_mailbox_signer_dependencies_locked(
+        self.traversals.append_response_signer_dependencies_locked(
             &retention_digest,
             &write.record,
             &write.signer_dependencies,
         )?;
-        let mailbox = data
-            .mailboxes
-            .get_mut(&mailbox_id)
-            .expect("validated mailbox exists");
-        mailbox
+        let stream = data
+            .streams
+            .get_mut(&request_id)
+            .expect("validated stream exists");
+        stream
             .cursors
             .insert(write.record.cursor.clone(), write.record.sequence);
-        mailbox.active_bytes += active_bytes;
-        mailbox.compact_receipt_bytes += compact_receipt_bytes;
-        let row = mailbox
+        stream.active_bytes += active_bytes;
+        stream.compact_receipt_bytes += compact_receipt_bytes;
+        let row = stream
             .responses
             .get_mut(&write.record.sequence)
             .expect("validated response reservation exists");
@@ -701,14 +742,14 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
         if let Some(tombstone) = data.tombstones.get(response_id.as_str()) {
             return Ok(Some(HistoryResponseRetryRecord::Expired(tombstone.clone())));
         }
-        let Some(mailbox_id) = data.response_mailboxes.get(response_id.as_str()) else {
+        let Some(request_id) = data.response_requests.get(response_id.as_str()) else {
             return Ok(None);
         };
         let row = data
-            .mailboxes
-            .get(mailbox_id)
-            .and_then(|mailbox| {
-                mailbox
+            .streams
+            .get(request_id)
+            .and_then(|stream| {
+                stream
                     .responses
                     .values()
                     .find(|row| row.reservation.input.source_record.response_id == *response_id)
@@ -725,15 +766,18 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
 
     async fn get_accepted_manifest(
         &self,
-        reply_mailbox_id: &str,
+        request_digest: &Hash,
         manifest_digest: &Hash,
         manifest_admission_digest: &Hash,
     ) -> PersistenceResult<Option<HistoryAcceptedManifestRecord>> {
         let data = self.data.lock();
-        let Some(mailbox) = data.mailboxes.get(reply_mailbox_id) else {
+        let Some(request_id) = data.request_digests.get(request_digest.as_str()) else {
             return Ok(None);
         };
-        for row in mailbox.responses.values() {
+        let Some(stream) = data.streams.get(request_id) else {
+            return Ok(None);
+        };
+        for row in stream.responses.values() {
             if row.send_receipt.is_none() {
                 continue;
             }
@@ -790,36 +834,30 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
         let gate = self.traversals.transaction_gate();
         let _guard = gate.lock();
         let mut data = self.data.lock();
-        let mailbox_id = data
-            .response_mailboxes
+        let request_id = data
+            .response_requests
             .get(response_id.as_str())
             .cloned()
             .ok_or_else(|| {
                 PersistenceError::NotFound("history response is unavailable".to_owned())
             })?;
-        let request_id = data.mailbox_requests.get(&mailbox_id).ok_or_else(|| {
-            PersistenceError::Internal("history response request index is missing".to_owned())
-        })?;
         let retention_digest = data
             .requests
-            .get(request_id)
+            .get(&request_id)
             .ok_or_else(|| {
                 PersistenceError::Internal("history response request row is missing".to_owned())
             })?
             .write
             .traversal_retention_digest()
             .clone();
-        let mailbox = data.mailboxes.get_mut(&mailbox_id).ok_or_else(|| {
-            PersistenceError::Internal("history response mailbox row is missing".to_owned())
+        let stream = data.streams.get_mut(&request_id).ok_or_else(|| {
+            PersistenceError::Internal("history response stream row is missing".to_owned())
         })?;
-        let row = mailbox
-            .responses
-            .get(&lost_record.sequence)
-            .ok_or_else(|| {
-                PersistenceError::Conflict(
-                    "duplicate_conflict: lost response sequence differs".to_owned(),
-                )
-            })?;
+        let row = stream.responses.get(&lost_record.sequence).ok_or_else(|| {
+            PersistenceError::Conflict(
+                "duplicate_conflict: lost response sequence differs".to_owned(),
+            )
+        })?;
         if let Some(existing) = &row.lost_record {
             return if existing == &lost_record && &existing.record_digest == expected_record_digest
             {
@@ -847,16 +885,16 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
             ));
         }
         let old_active_bytes = row.active_bytes;
-        let replacement_total = mailbox
+        let replacement_total = stream
             .active_bytes
             .checked_sub(old_active_bytes)
             .and_then(|total| total.checked_add(lost_bytes))
             .ok_or_else(|| {
-                PersistenceError::Internal("history mailbox active accounting overflow".to_owned())
+                PersistenceError::Internal("history stream active accounting overflow".to_owned())
             })?;
-        if replacement_total > HISTORY_MAILBOX_ACTIVE_BYTES_LIMIT {
+        if replacement_total > HISTORY_RESPONSE_STREAM_ACTIVE_BYTES_LIMIT {
             return Err(PersistenceError::Conflict(
-                "failed_precondition: history mailbox active quota exceeded".to_owned(),
+                "failed_precondition: history stream active quota exceeded".to_owned(),
             ));
         }
         self.traversals.append_lost_signer_dependencies_locked(
@@ -864,8 +902,8 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
             &lost_record,
             &signer_dependencies,
         )?;
-        mailbox.active_bytes = replacement_total;
-        let row = mailbox
+        stream.active_bytes = replacement_total;
+        let row = stream
             .responses
             .get_mut(&lost_record.sequence)
             .expect("validated response exists");
@@ -876,45 +914,44 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
         Ok(ExactWriteOutcome::Inserted)
     }
 
-    async fn read_mailbox_page(
+    async fn read_response_page(
         &self,
-        reply_mailbox_id: &str,
-        capability_commitment: &Hash,
+        response_capability_commitment: &Hash,
         after_cursor: Option<&str>,
         limit: usize,
         now: DateTime<Utc>,
-    ) -> PersistenceResult<HistoryMailboxReadPage> {
+    ) -> PersistenceResult<HistoryResponseReadPage> {
         if !(1..=100).contains(&limit) {
             return Err(PersistenceError::SchemaViolation(
-                "history mailbox list limit must be within 1..=100".to_owned(),
+                "history stream list limit must be within 1..=100".to_owned(),
             ));
         }
         let data = self.data.lock();
-        let (_, mailbox) = authorized_mailbox(&data, reply_mailbox_id, capability_commitment, now)?;
+        let (_, stream) = authorized_stream(&data, response_capability_commitment, now)?;
         let after_sequence = match after_cursor {
-            Some(cursor) => Some(*mailbox.cursors.get(cursor).ok_or_else(|| {
-                PersistenceError::NotFound("history mailbox cursor is unavailable".to_owned())
+            Some(cursor) => Some(*stream.cursors.get(cursor).ok_or_else(|| {
+                PersistenceError::NotFound("history stream cursor is unavailable".to_owned())
             })?),
             None => None,
         };
-        let mut entries = mailbox
+        let mut entries = stream
             .responses
             .iter()
             .filter(|(sequence, _)| after_sequence.is_none_or(|after| **sequence > after))
-            .filter_map(|(_, row)| mailbox_entry(row))
+            .filter_map(|(_, row)| stream_entry(row))
             .collect::<Vec<_>>();
         let limited = entries.len() > limit;
         entries.truncate(limit);
-        let high_water_sequence = entries.last().map(HistoryMailboxPageEntry::sequence);
+        let high_water_sequence = entries.last().map(HistoryResponsePageEntry::sequence);
         let cursor = if limited {
             entries.last().map(|entry| match entry {
-                HistoryMailboxPageEntry::Record { record } => record.cursor.clone(),
-                HistoryMailboxPageEntry::Lost { lost_record } => lost_record.cursor.clone(),
+                HistoryResponsePageEntry::Record { record } => record.cursor.clone(),
+                HistoryResponsePageEntry::Lost { lost_record } => lost_record.cursor.clone(),
             })
         } else {
             None
         };
-        Ok(HistoryMailboxReadPage {
+        Ok(HistoryResponseReadPage {
             entries,
             cursor,
             limited,
@@ -924,42 +961,42 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
 
     async fn put_ack_token_exact(
         &self,
-        capability_commitment: &Hash,
-        write: HistoryMailboxAckTokenWrite,
+        response_capability_commitment: &Hash,
+        write: HistoryResponseAckTokenWrite,
         now: DateTime<Utc>,
     ) -> PersistenceResult<ExactWriteOutcome> {
         write
             .claims
             .validate()
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-        if write.ack_token.is_empty() || write.claims.token_expiry <= now {
+        if write.ack_token.is_empty() || write.claims.token_expires_at <= now {
             return Err(PersistenceError::SchemaViolation(
                 "history ack token binding is invalid".to_owned(),
             ));
         }
         let mut data = self.data.lock();
-        let (request, mailbox) = authorized_mailbox(
-            &data,
-            write.claims.reply_mailbox_id.as_str(),
-            capability_commitment,
-            now,
-        )?;
+        let (request, stream) = authorized_stream(&data, response_capability_commitment, now)?;
+        if request.write.request.request_id != write.claims.request_id {
+            return Err(PersistenceError::NotFound(
+                "history stream is unavailable".to_owned(),
+            ));
+        }
         if request.write.request_receipt.release_service_id != write.claims.release_service_id {
             return Err(PersistenceError::SchemaViolation(
                 "history ack token release service mismatch".to_owned(),
             ));
         }
-        if let Some((existing_mailbox_id, existing)) =
-            data.mailboxes
+        if let Some((existing_request_id, existing)) =
+            data.streams
                 .iter()
-                .find_map(|(candidate_mailbox_id, candidate_mailbox)| {
-                    candidate_mailbox
+                .find_map(|(candidate_request_id, candidate_stream)| {
+                    candidate_stream
                         .ack_tokens
                         .get(&write.ack_token)
-                        .map(|existing| (candidate_mailbox_id, existing))
+                        .map(|existing| (candidate_request_id, existing))
                 })
         {
-            return if existing_mailbox_id.as_str() == write.claims.reply_mailbox_id.as_str()
+            return if existing_request_id.as_str() == write.claims.request_id.as_str()
                 && existing.write == write
             {
                 Ok(ExactWriteOutcome::ExactReplay)
@@ -970,10 +1007,10 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
             };
         }
         for claim in &write.claims.ordered_ack_entries {
-            let stored = mailbox
+            let stored = stream
                 .responses
                 .get(&claim.sequence)
-                .and_then(mailbox_entry)
+                .and_then(stream_entry)
                 .ok_or_else(|| {
                     PersistenceError::Conflict(
                         "duplicate_conflict: history ack token entry is unavailable".to_owned(),
@@ -994,25 +1031,25 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
             .last()
             .expect("validated claims")
             .sequence;
-        let last_cursor = match mailbox
+        let last_cursor = match stream
             .responses
             .get(&last_sequence)
-            .and_then(mailbox_entry)
+            .and_then(stream_entry)
             .expect("validated claim entry")
         {
-            HistoryMailboxPageEntry::Record { record } => record.cursor,
-            HistoryMailboxPageEntry::Lost { lost_record } => lost_record.cursor,
+            HistoryResponsePageEntry::Record { record } => record.cursor,
+            HistoryResponsePageEntry::Lost { lost_record } => lost_record.cursor,
         };
         if last_cursor != write.claims.high_water_cursor {
             return Err(PersistenceError::SchemaViolation(
                 "history ack token high-water cursor mismatch".to_owned(),
             ));
         }
-        let mailbox = data
-            .mailboxes
-            .get_mut(write.claims.reply_mailbox_id.as_str())
-            .expect("authorized mailbox");
-        mailbox.ack_tokens.insert(
+        let stream = data
+            .streams
+            .get_mut(write.claims.request_id.as_str())
+            .expect("authorized stream");
+        stream.ack_tokens.insert(
             write.ack_token.clone(),
             MemoryAckToken {
                 write,
@@ -1023,10 +1060,9 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
         Ok(ExactWriteOutcome::Inserted)
     }
 
-    async fn ack_mailbox(
+    async fn ack_response_stream(
         &self,
-        reply_mailbox_id: &str,
-        capability_commitment: &Hash,
+        response_capability_commitment: &Hash,
         request: &HistoryKeyResponseAckRequest,
         now: DateTime<Utc>,
     ) -> PersistenceResult<String> {
@@ -1034,12 +1070,19 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
             .validate()
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
         let mut data = self.data.lock();
-        authorized_mailbox(&data, reply_mailbox_id, capability_commitment, now)?;
-        let mailbox = data
-            .mailboxes
-            .get_mut(reply_mailbox_id)
-            .expect("authorized mailbox");
-        let token = mailbox
+        let (authorized_request, _) =
+            authorized_stream(&data, response_capability_commitment, now)?;
+        let request_id = authorized_request
+            .write
+            .request
+            .request_id
+            .as_str()
+            .to_owned();
+        let stream = data
+            .streams
+            .get_mut(&request_id)
+            .expect("authorized stream");
+        let token = stream
             .ack_tokens
             .get(&request.ack_token)
             .cloned()
@@ -1049,7 +1092,7 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
         if token.consumed_request.as_ref() == Some(request) {
             return Ok(request.high_water_cursor.clone());
         }
-        if token.consumed_at.is_some() || token.write.claims.token_expiry <= now {
+        if token.consumed_at.is_some() || token.write.claims.token_expires_at <= now {
             return Err(PersistenceError::Conflict(
                 "failed_precondition: history ack token is expired or consumed".to_owned(),
             ));
@@ -1070,8 +1113,8 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
         {
             let ack = ack_binding(ack_entry);
             let kind = match claim.kind {
-                arkret_models_collaboration::history_key::HistoryMailboxAckTokenEntryKind::Record => "record",
-                arkret_models_collaboration::history_key::HistoryMailboxAckTokenEntryKind::Lost => "lost",
+                arkret_models_collaboration::history_key::HistoryResponseAckTokenEntryKind::Record => "record",
+                arkret_models_collaboration::history_key::HistoryResponseAckTokenEntryKind::Lost => "lost",
             };
             if (
                 claim.sequence,
@@ -1092,15 +1135,13 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
             .last()
             .expect("non-empty token entries")
             .sequence;
-        let expected_sequences = mailbox
+        let expected_sequences = stream
             .responses
             .iter()
             .filter(|(sequence, row)| {
                 **sequence <= high_water
-                    && mailbox
-                        .acked_sequence
-                        .is_none_or(|acked| **sequence > acked)
-                    && mailbox_entry(row).is_some()
+                    && stream.acked_sequence.is_none_or(|acked| **sequence > acked)
+                    && stream_entry(row).is_some()
             })
             .map(|(sequence, _)| *sequence)
             .collect::<Vec<_>>();
@@ -1119,7 +1160,7 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
         let mut released_bytes = 0_u64;
         for ack_entry in &request.ack_entries {
             let sequence = ack_entry.sequence();
-            let row = mailbox
+            let row = stream
                 .responses
                 .get_mut(&sequence)
                 .expect("token row exists");
@@ -1130,20 +1171,20 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
                 .checked_add(row.active_bytes)
                 .ok_or_else(|| {
                     PersistenceError::Internal(
-                        "history mailbox active accounting overflow".to_owned(),
+                        "history stream active accounting overflow".to_owned(),
                     )
                 })?;
             row.active_bytes = 0;
         }
-        mailbox.active_bytes = mailbox
+        stream.active_bytes = stream
             .active_bytes
             .checked_sub(released_bytes)
             .ok_or_else(|| {
-                PersistenceError::Internal("history mailbox active accounting underflow".to_owned())
+                PersistenceError::Internal("history stream active accounting underflow".to_owned())
             })?;
-        mailbox.acked_sequence = Some(high_water);
-        mailbox.acked_cursor = Some(request.high_water_cursor.clone());
-        let stored_token = mailbox
+        stream.acked_sequence = Some(high_water);
+        stream.acked_cursor = Some(request.high_water_cursor.clone());
+        let stored_token = stream
             .ack_tokens
             .get_mut(&request.ack_token)
             .expect("ack token exists");
@@ -1192,14 +1233,9 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
                     .requests
                     .remove(request_id)
                     .expect("selected request exists");
-                let mailbox_id = record
-                    .write
-                    .request_receipt
-                    .reply_mailbox_id
-                    .as_str()
-                    .to_owned();
-                if let Some(mailbox) = data.mailboxes.remove(&mailbox_id) {
-                    for row in mailbox.responses.into_values() {
+                let request_id = record.write.request.request_id.as_str().to_owned();
+                if let Some(stream) = data.streams.remove(&request_id) {
+                    for row in stream.responses.into_values() {
                         let response = &row.reservation.input.source_record;
                         data.tombstones.insert(
                             response.response_id.as_str().to_owned(),
@@ -1214,11 +1250,16 @@ impl HistoryMailboxStore for MemoryHistoryMailboxStore {
                                 now,
                             ),
                         );
-                        data.response_mailboxes
-                            .remove(response.response_id.as_str());
+                        data.response_requests.remove(response.response_id.as_str());
                     }
                 }
-                data.mailbox_requests.remove(&mailbox_id);
+                data.capability_requests.remove(
+                    record
+                        .write
+                        .request_receipt
+                        .response_capability_commitment
+                        .as_str(),
+                );
                 data.request_digests
                     .remove(record.write.request_digest.as_str());
                 data.request_receipt_digests
