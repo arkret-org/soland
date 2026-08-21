@@ -298,7 +298,7 @@ pub async fn assert_device_message_snapshot_guard_contract(
                     recipient: actor.clone(),
                     device_id: device_id.clone(),
                     position: index as i64 + 1,
-                    content: serde_json::json!({"kind":"ak.member.repair.request","content":{}}),
+                    content: serde_json::json!({"kind":"ak.agent.runtime.command","content":{}}),
                     created_at: now,
                 }),
             })
@@ -3867,18 +3867,15 @@ fn contract_covering_seal(
         notary_seq: 0,
         data_view_root: None,
         data_event_set_root: None,
-        availability_root: None,
-        coverage_scope: None,
+        availability_receipt_digests: Vec::new(),
         covered_event_digests: Vec::new(),
         previous_state_root: None,
         previous_digest_algorithm: None,
-        notary_signature: arkret_wire::NotarySig::Single(arkret_wire::PayloadSignature {
+        notary_signature: arkret_wire::NotarySig::Single(arkret_wire::SealSignature {
             verification_method: DidUrl::new("did:key:z6MkFixture#z6MkFixture")
                 .expect("fixture verification method"),
             payload_digest: placeholder,
-            created_at: sealed_at,
             jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
-            extra: Default::default(),
         }),
         sealed_at,
         hlc: arkret_wire::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).expect("fixture HLC"),

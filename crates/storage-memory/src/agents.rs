@@ -693,7 +693,7 @@ mod tests {
                     .to_owned(),
                 updated_at: snapshot_at,
             },
-            content: serde_json::json!({"kind": "direct_conversation_repair", "seq": 1}),
+            content: serde_json::json!({"kind": "agent_runtime_command", "seq": 1}),
             enqueued_at: Utc::now(),
         };
 
