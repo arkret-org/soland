@@ -1,7 +1,9 @@
 use soland_storage::contract_tests::{
-    EventCommitContractStores, assert_atomic_batch_outbox_rollback_contract,
+    DeviceRevocationSealSettlementStores, EventCommitContractStores,
+    assert_atomic_batch_outbox_rollback_contract,
     assert_control_proposal_authority_ack_store_contract,
-    assert_device_message_snapshot_guard_contract, assert_event_commit_unit_of_work_contract,
+    assert_device_message_snapshot_guard_contract,
+    assert_device_revocation_seal_settlement_contract, assert_event_commit_unit_of_work_contract,
     assert_federation_outbox_store_contract, assert_idempotency_store_contract,
     assert_last_resort_claim_ledger_contract, assert_mimi_consent_correlation_store_contract,
     assert_mls_keypackage_retirement_contract, assert_organization_registration_store_contract,
@@ -138,6 +140,32 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract_when_configured
             device_pairings: &device_pairings,
             contacts: &contacts,
             invite_policies: &invite_policies,
+        },
+        &namespace,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn postgres_adapter_settles_sealed_device_revocations_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let cell_registry: std::sync::Arc<dyn arkret_state::state::CellRegistry> = std::sync::Arc::new(
+        soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry()
+            .expect("validated SDK cell registry"),
+    );
+    let stores =
+        soland_storage_postgres::build_state_resolution_stores(Some(pool.clone()), cell_registry);
+    let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
+    let revocations = soland_storage_postgres::PgDeviceRevocationStore { pool };
+    let namespace = format!("pgrevseal{}", uuid::Uuid::now_v7().simple());
+    assert_device_revocation_seal_settlement_contract(
+        DeviceRevocationSealSettlementStores {
+            unit_of_work: &unit_of_work,
+            revocations: &revocations,
+            control_events: stores.control_event_store.as_ref(),
         },
         &namespace,
     )

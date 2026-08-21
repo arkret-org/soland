@@ -1762,6 +1762,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "floria-contracts"
+version = "0.3.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "fluent-uri"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5178,6 +5185,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "ed25519-dalek",
+ "floria-contracts",
  "futures-util",
  "hex",
  "hmac 0.13.0",
@@ -5291,6 +5299,7 @@ dependencies = [
  "bytes",
  "chrono",
  "ed25519-dalek",
+ "floria-contracts",
  "futures-util",
  "hex",
  "hmac 0.13.0",

@@ -625,7 +625,10 @@ fn events_query_cursor_error(error: SyncCursorError) -> soland_http::error::AppE
             soland_http::error::ErrorCode::CursorExpired,
             "cursor has expired",
         ),
-        SyncCursorError::Invalid(message) => soland_http::error::AppError::param_invalid(message),
+        // encoding.md §8.3 closed set: syntax/schema failures pin the top-level
+        // `param_invalid` code with reason `invalid_cursor`.
+        SyncCursorError::Invalid(message) => soland_http::error::AppError::param_invalid(message)
+            .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR),
         SyncCursorError::Mismatch(message) | SyncCursorError::Integrity(message) => {
             soland_http::error::AppError::new(
                 soland_http::error::ErrorCode::CursorIntegrityInvalid,

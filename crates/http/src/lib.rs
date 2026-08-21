@@ -12,7 +12,7 @@ pub mod config;
 pub mod content_encoding;
 mod control_proposal;
 pub mod control_seal_coordinator;
-pub mod cursor;
+pub mod deactivation_push_fanout;
 pub mod error;
 pub mod failpoints;
 pub mod gc;

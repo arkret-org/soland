@@ -35,6 +35,10 @@ pub fn build_app_state(
         })?;
     let stores =
         soland_storage_postgres::build_state_resolution_stores(db.pool.clone(), cell_registry);
+    // The memory device-revocation adapter derives seal-settled (`revoked`)
+    // state from the exact Control Event store the projection commits seals
+    // into; durable adapters ignore this bind and JOIN the shared table.
+    persistence.bind_device_revocation_control_events(stores.control_event_store.clone());
     let service_id = service_identity
         .identity()
         .ok_or_else(|| anyhow::anyhow!("runtime requires a serving service identity"))?

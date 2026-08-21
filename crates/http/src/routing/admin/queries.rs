@@ -140,6 +140,14 @@ pub(super) fn admin_actor_row(
         )
         .is_empty()
     });
+    // `deactivation_partial` also applies to erasure_pending: erasure
+    // execution runs the same deactivation fanout (including the
+    // push-gateway leg) before erasing.
+    let deactivation_partial = matches!(
+        status,
+        AccountStatus::Deactivated | AccountStatus::ErasurePending
+    )
+    .then(|| state.deactivation_push_partial(&account.did));
     let handle = account.handle();
     Some(AdminActor {
         id: account.did.clone(),
@@ -150,6 +158,7 @@ pub(super) fn admin_actor_row(
         status: Some(status),
         is_admin: Some(state.is_admin_principal(&account.did)),
         deactivation_federation_incomplete,
+        deactivation_partial,
         created_at: Some(account.created_at),
         // Not tracked by this deployment — reported as unknown, never a
         // fabricated timestamp.

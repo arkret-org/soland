@@ -158,6 +158,11 @@ pub fn app_state_with_identity(
     let cell_registry = ProjectionService::sdk_cell_registry();
     let control_event_store: Arc<dyn ControlEventStore> =
         Arc::new(MemoryControlEventStore::default());
+    // Mirror production bootstrap: the memory device-revocation adapter
+    // derives seal-settled state from this Control Event store.
+    persistence
+        .device_revocations()
+        .bind_control_event_store(control_event_store.clone());
     let seal_store = Arc::new(MemorySealStore::default());
     let cell_store = Arc::new(MemoryCellStore::default());
     let event_seal_committer = Arc::new(MemoryEventSealCommitter {

@@ -174,6 +174,44 @@ mod sync_token_tests {
     }
 }
 
+/// Convert a persisted [`soland_services::sync::CursorState`] row into the
+/// SDK [`arkret_server::CursorBindingRecord`] consumed by
+/// [`arkret_server::CursorAuthority::resolve_stream`].
+///
+/// Rows missing required binding fields map to
+/// [`arkret_server::CursorAuthorityError::IntegrityInvalid`] (encoding.md
+/// §8.3.1: incomplete/foreign binding rows are integrity failures, never a
+/// panic or a silent accept).
+pub fn cursor_binding_record_from_state(
+    record: soland_services::sync::CursorState,
+) -> Result<arkret_server::CursorBindingRecord, arkret_server::CursorAuthorityError> {
+    use arkret_server::CursorAuthorityError;
+    let purpose = match record.purpose.as_str() {
+        "stream" => CursorPurpose::Stream,
+        "barrier" => CursorPurpose::Barrier,
+        _ => return Err(CursorAuthorityError::IntegrityInvalid),
+    };
+    Ok(arkret_server::CursorBindingRecord {
+        handle: record.handle,
+        context: arkret_server::CursorBindingContext::new(
+            record
+                .principal_id
+                .ok_or(CursorAuthorityError::IntegrityInvalid)?,
+            record.device_id,
+            record.service_id,
+            record
+                .filter_digest
+                .ok_or(CursorAuthorityError::IntegrityInvalid)?,
+        ),
+        purpose,
+        positions: record
+            .positions
+            .ok_or(CursorAuthorityError::IntegrityInvalid)?,
+        issued_at_ms: record.issued_at_ms,
+        expires_at_ms: record.expires_at_ms,
+    })
+}
+
 /// `sha256:<64 lowercase hex>` shape.
 pub fn is_valid_sha256_digest(value: &str) -> bool {
     value.starts_with("sha256:") && arkret_identifiers::Hash::new(value.to_owned()).is_ok()

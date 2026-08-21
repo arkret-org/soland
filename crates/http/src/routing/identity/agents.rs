@@ -545,11 +545,41 @@ mod tests {
         );
     }
 
+    /// `key-management.md` §7.4.1 — the bare full DID projects onto the Core
+    /// actor id through its method adapter; a core id concatenated with a
+    /// fragment is not a DID URL and never matches.
     #[test]
-    fn verification_method_principal_strips_query_and_fragment() {
+    fn verification_method_principal_projects_full_did_to_core_id() {
         assert_eq!(
-            verification_method_principal("did:web:agent.example?versionId=1#key-1"),
-            "did:web:agent.example"
+            verification_method_principal("did:web:agent.example?versionId=1#key-1")
+                .as_ref()
+                .map(arkret_identifiers::DidCoreId::as_str),
+            Some(AGENT_CORE)
+        );
+        assert_eq!(
+            verification_method_principal(&format!("{AGENT_CORE}#key-1")),
+            None
+        );
+    }
+
+    #[test]
+    fn verification_method_agent_endpoint_matches_projected_controller() {
+        let device_id = "ak:device:01904100-0000-7000-8000-000000000042";
+        assert_eq!(
+            verification_method_agent_endpoint(&format!("{AGENT_FULL}#{device_id}"), AGENT_CORE,)
+                .as_ref()
+                .map(arkret_identifiers::DeviceId::as_str),
+            Some(device_id)
+        );
+        // The schema-valid full-DID form must not be compared against the raw
+        // core id string, and a core-id controller must never match.
+        assert_eq!(
+            verification_method_agent_endpoint(&format!("{AGENT_FULL}#{device_id}"), AGENT_FULL),
+            None
+        );
+        assert_eq!(
+            verification_method_agent_endpoint(&format!("{AGENT_CORE}#{device_id}"), AGENT_CORE),
+            None
         );
     }
 

@@ -281,25 +281,29 @@ pub(crate) fn agent_grant_within_requested_scope(
     })
 }
 
-pub(super) fn verification_method_principal(verification_method: &str) -> &str {
-    verification_method
-        .split('#')
-        .next()
-        .unwrap_or("")
-        .split('?')
-        .next()
-        .unwrap_or("")
+/// Project the bare full DID of a verification method DID URL onto its Core
+/// identity (`key-management.md` §7.4.1): the controller equals an `actor_id`
+/// only after method-adapter projection. A controller that is not a full DID —
+/// including a core `ak:did_core:` id concatenated with a fragment — projects
+/// to `None` and can never match.
+pub(super) fn verification_method_principal(
+    verification_method: &str,
+) -> Option<arkret_identifiers::DidCoreId> {
+    let full_id = arkret_identity::verification_method_did(verification_method).ok()?;
+    arkret_wire::project_full_id_to_core_id(&full_id).ok()
 }
 
 pub(super) fn verification_method_agent_endpoint(
     verification_method: &str,
     agent_id: &str,
 ) -> Option<arkret_identifiers::DeviceId> {
-    let (controller, fragment) = verification_method.split_once('#')?;
+    let controller = verification_method_principal(verification_method)?;
+    if controller.as_str() != agent_id {
+        return None;
+    }
+    let (_, fragment) = verification_method.split_once('#')?;
     let fragment = fragment.split('?').next().unwrap_or("");
-    (controller == agent_id)
-        .then(|| arkret_identifiers::DeviceId::new(fragment.to_owned()).ok())
-        .flatten()
+    arkret_identifiers::DeviceId::new(fragment.to_owned()).ok()
 }
 
 #[cfg(test)]

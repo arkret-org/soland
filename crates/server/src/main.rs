@@ -266,6 +266,18 @@ async fn run() -> anyhow::Result<()> {
         "background worker configured"
     );
 
+    // account-lifecycle.md §7.1 — retries the push-gateway deactivation
+    // fanout until the gateway acks, keeping `deactivation_partial` honest.
+    // `None` when no gateway is configured (single-box posture: the local
+    // push-route purge completes the Push-route fanout row).
+    let _deactivation_push_fanout_worker =
+        soland_http::deactivation_push_fanout::spawn(state.clone());
+    tracing::info!(
+        worker = "deactivation_push_fanout",
+        enabled = _deactivation_push_fanout_worker.is_some(),
+        "background worker configured"
+    );
+
     // TTL backstop for the durable sync-cursor handle table (forward-progress
     // pruning on cursor presentation handles the steady state; this clears
     // rows whose client never returned).

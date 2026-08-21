@@ -52,6 +52,7 @@ arkret-signatures = { workspace = true, features = ["collaboration", "keypackage
 arkret-state = { workspace = true, features = ["openapi"] }
 arkret-wire.workspace = true
 ed25519-dalek.workspace = true
+floria-contracts.workspace = true
 futures-util.workspace = true
 hex.workspace = true
 hmac.workspace = true

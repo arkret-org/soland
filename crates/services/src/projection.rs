@@ -13,7 +13,7 @@ use arkret_state::state::store::{ControlProposalIngress, ControlProposalIngressC
 use arkret_state::state::{
     CellLatticeBinding, ControlEventStore, ControlMoveReject, ControlProposalSnapshot,
     PendingControlEventRecord, SealEffect, SealLeafUnionProof, SealReject, SealStore,
-    SealedControlEventRecord, StoreError, StoreResult,
+    SealedControlEventRecord, StoreResult,
 };
 use arkret_state::{CellRegistry, CellStore, EffectiveSealView};
 use arkret_wire::cba::ProjectedCellWrite;
@@ -141,7 +141,6 @@ pub struct ProjectionService {
     cell_store: Arc<dyn CellStore>,
     cell_registry: Arc<dyn CellRegistry>,
     event_seal_committer: Arc<dyn EventSealCommitPort>,
-    device_revocations: Option<Arc<dyn soland_storage::DeviceRevocationStore>>,
     control_decision_commit_lock: Arc<Mutex<()>>,
     clock: Arc<ServiceClock>,
 }
@@ -391,20 +390,9 @@ impl ProjectionService {
             cell_store,
             cell_registry,
             event_seal_committer,
-            device_revocations: None,
             control_decision_commit_lock: Arc::new(Mutex::new(())),
             clock: Arc::new(ServiceClock::new(clock_node)),
         }
-    }
-
-    #[must_use]
-    pub fn with_device_revocation_store(
-        mut self,
-        store: Arc<dyn soland_storage::DeviceRevocationStore>,
-    ) -> Self {
-        store.bind_control_event_store(self.control_event_store.clone());
-        self.device_revocations = Some(store);
-        self
     }
 
     pub async fn hydrate_from_persistence(
@@ -562,26 +550,6 @@ impl ProjectionService {
         decision: &ControlProposalDecision,
         policy: ControlProposalDecisionPolicy,
     ) -> StoreResult<soland_storage::ControlProposalDecisionCommitOutcome> {
-        if let Some(store) = &self.device_revocations {
-            return store
-                .commit_decision(event_digest.as_str(), decision, policy.clone())
-                .await
-                .map_err(|error| match error {
-                    soland_storage::PersistenceError::NotFound(detail) => {
-                        StoreError::NotFound(detail)
-                    }
-                    soland_storage::PersistenceError::Conflict(detail) => {
-                        StoreError::Conflict(detail)
-                    }
-                    soland_storage::PersistenceError::SchemaViolation(detail) => {
-                        StoreError::Conflict(format!("schema_violation: {detail}"))
-                    }
-                    soland_storage::PersistenceError::Database(detail)
-                    | soland_storage::PersistenceError::Internal(detail) => {
-                        StoreError::Backend(detail)
-                    }
-                });
-        }
         let _guard = self.control_decision_commit_lock.lock();
         if self
             .control_event_store()
@@ -1254,26 +1222,6 @@ impl ProjectionService {
         )
     }
 
-    pub async fn commit_event_seal_if_frontier_with_revocations(
-        &self,
-        seal: &Seal,
-        expected_store_frontier: &[SealId],
-        new_ops: &[(CellRef, IssuedOp)],
-        covered: &std::collections::BTreeSet<Hash>,
-    ) -> StoreResult<bool> {
-        let inserted =
-            self.commit_event_seal_if_frontier(seal, expected_store_frontier, new_ops, covered)?;
-        if inserted && let Some(store) = &self.device_revocations {
-            for digest in covered {
-                store
-                    .mark_sealed(digest.as_str(), seal.id.as_str(), seal.sealed_at)
-                    .await
-                    .map_err(|error| StoreError::Backend(error.to_string()))?;
-            }
-        }
-        Ok(inserted)
-    }
-
     #[doc(hidden)]
     pub fn conformance_put_seal(&self, seal: &Seal) -> StoreResult<()> {
         self.seal_store().put(seal)
@@ -1352,9 +1300,9 @@ impl ProjectionService {
         let digest = Hash::new(
             event
                 .event_digest()
-                .map_err(|error| StoreError::Conflict(error.to_string()))?,
+                .map_err(|error| arkret_state::state::StoreError::Conflict(error.to_string()))?,
         )
-        .map_err(|error| StoreError::Conflict(error.to_string()))?;
+        .map_err(|error| arkret_state::state::StoreError::Conflict(error.to_string()))?;
         self.control_event_store()
             .put_pending_with_ingress(event, ingress)?;
         self.control_event_store().mark_sealed(&digest, seal)

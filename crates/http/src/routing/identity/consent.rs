@@ -41,6 +41,14 @@ use crate::routing::identity::device_messages::fanout_actor_private_update;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
+/// Server-origin marker for the consent-revoke quarantine-cell fanout's
+/// `sender_device_id`. KNOWN DEAD WRITE — same shape as the invite
+/// delivery/quarantine markers in `routing/invites.rs`: the device-message
+/// sender contract has no service-authored branch, so this fanout is rejected
+/// at the device revocation gate outside development mode and dropped by the
+/// reader's sender XOR in development mode. Tracked in arkret-work
+/// review/spec-open/2026-08-21-0532-invite-delivery-fanout-must-vs-device-
+/// message-sender-closure.md; do not invent an `ak:` sender here.
 const INVITE_QUARANTINE_ORIGIN_DEVICE: &str = "server:consent_revoke";
 
 pub(super) fn router() -> Router {

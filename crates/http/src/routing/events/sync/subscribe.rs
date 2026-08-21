@@ -149,10 +149,17 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                 return;
             }
             Err(SyncCursorError::Invalid(message)) => {
-                soland_http::error::render_error_code(
-                    soland_http::error::ErrorCode::ParamInvalid,
+                // encoding.md §8.3 closed set: syntax/schema failures pin the
+                // top-level `param_invalid` code with reason `invalid_cursor`.
+                soland_http::error::render_error_with_reason_code(
                     res,
+                    soland_http::error::error_http_status(
+                        soland_http::error::ErrorCode::ParamInvalid,
+                    ),
+                    soland_http::error::ErrorCode::ParamInvalid.as_str(),
                     message,
+                    arkret_wire::ReasonCode::INVALID_CURSOR,
+                    None,
                 );
                 return;
             }
@@ -483,10 +490,15 @@ fn render_account_cursor_error(res: &mut Response, error: SyncCursorError, barri
             res,
             &format!("{context} cursor has expired"),
         ),
-        SyncCursorError::Invalid(message) => soland_http::error::render_error_code(
-            soland_http::error::ErrorCode::ParamInvalid,
+        // encoding.md §8.3 closed set: syntax/schema failures pin the top-level
+        // `param_invalid` code with reason `invalid_cursor`.
+        SyncCursorError::Invalid(message) => soland_http::error::render_error_with_reason_code(
             res,
+            soland_http::error::error_http_status(soland_http::error::ErrorCode::ParamInvalid),
+            soland_http::error::ErrorCode::ParamInvalid.as_str(),
             message,
+            arkret_wire::ReasonCode::INVALID_CURSOR,
+            None,
         ),
         SyncCursorError::Mismatch(message) | SyncCursorError::Integrity(message) => {
             soland_http::error::render_error_code(

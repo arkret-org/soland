@@ -65,10 +65,19 @@ const INVITE_LOCATOR_CACHE_CONTROL: &str = "private, no-store";
 const INVITE_QUARANTINE_TTL_DAYS: i64 = 30;
 const MAX_INVITE_QUARANTINE_ENTRIES: usize = 200;
 const INVITE_QUARANTINE_ORIGIN_DEVICE: &str = "server:invite_quarantine";
-/// Server-origin marker for the delivery fanout's `sender_device_id`. The
-/// `ActorPrivateDeviceUpdate` wire type carries this field as an untyped
-/// string with no `ak:device:` lexical rule, so the `server:` spelling —
-/// mirroring the quarantine fanout — marks a write no client device authored.
+/// Server-origin marker for the delivery fanout's `sender_device_id`.
+///
+/// KNOWN DEAD WRITE — do not imitate. The device-message sender contract is a
+/// closed XOR of a real `ak:device:` sender or a complete Native Agent triple
+/// (`device-message.schema.json` sender `oneOf`; SDK `DeviceMessageSender`),
+/// with no service/server-authored branch, so this spelling can never be read
+/// back: outside development mode `fanout_actor_private_update` rejects it at
+/// the device revocation gate, and in development mode the reader
+/// (`device_message_envelope_from_record`) drops the queued row on the sender
+/// XOR. The fanout itself is mandated by `invite-addressing.md:364` (MUST),
+/// which contradicts the sender closure; resolution is tracked in arkret-work
+/// review/spec-open/2026-08-21-0532-invite-delivery-fanout-must-vs-device-
+/// message-sender-closure.md. Do not invent an `ak:` sender to "fix" this.
 const INVITE_DELIVERY_ORIGIN_DEVICE: &str = "server:invite_delivery";
 const INVITE_DELIVERY_CAS_ATTEMPTS: usize = 3;
 

@@ -234,6 +234,15 @@ pub struct AppState {
     /// fail-closed. Reducer-shape validation (digest binding, segment
     /// whitelist) IS real per MID-2.
     member_identity: Arc<Mutex<MemberIdentityRegistry>>,
+    /// In-memory projection of the spec's `deactivation_partial` flag
+    /// (`account-lifecycle.md` §3 / §7.1): DIDs whose push-gateway
+    /// deactivation fanout has failed and is still being retried. Durable
+    /// truth is the account-lifecycle registry plus the fanout completion
+    /// markers in the jobs idempotency ledger; the inline fanout attempt and
+    /// the [`crate::deactivation_push_fanout`] worker keep this set
+    /// converged (including after a restart, on the worker's first pass).
+    /// Orthogonal to `deactivation_federation_incomplete` — never merged.
+    deactivation_push_partial: Arc<Mutex<std::collections::BTreeSet<String>>>,
 }
 
 pub struct AppStateRuntime {
@@ -502,6 +511,12 @@ mod test_construction {
                 db.pool.clone(),
                 cell_registry,
             );
+            // Mirror production bootstrap: the memory device-revocation
+            // adapter derives seal-settled state from this Control Event
+            // store; durable adapters ignore the bind.
+            persistence
+                .device_revocations()
+                .bind_control_event_store(stores.control_event_store.clone());
             let event_seal_committer =
                 Arc::new(TestEventSealCommitter(stores.event_seal_committer));
             let storage_mode = db.mode();
@@ -1082,6 +1097,7 @@ impl AppState {
             // schema and logging policy.
             verified_profiles,
             member_identity: Arc::new(Mutex::new(MemberIdentityRegistry::new())),
+            deactivation_push_partial: Arc::new(Mutex::new(std::collections::BTreeSet::new())),
         }
     }
 
@@ -1707,6 +1723,26 @@ impl AppState {
 
     pub fn account_lifecycle_state(&self, did: &str) -> String {
         self.identities.account_lifecycle_state(did)
+    }
+
+    /// Whether the push-gateway leg of `did`'s deactivation fanout is still
+    /// incomplete (`deactivation_partial`, `account-lifecycle.md` §3/§7.1).
+    /// Always `false` when no push gateway is configured — in that posture
+    /// the local push-route purge is the complete Push-route action.
+    pub fn deactivation_push_partial(&self, did: &str) -> bool {
+        self.deactivation_push_partial.lock().contains(did)
+    }
+
+    /// Raise or clear the `deactivation_partial` projection for `did`.
+    /// Only the deactivation fanout path and its reconciliation worker
+    /// call this.
+    pub fn set_deactivation_push_partial(&self, did: &str, partial: bool) {
+        let mut set = self.deactivation_push_partial.lock();
+        if partial {
+            set.insert(did.to_owned());
+        } else {
+            set.remove(did);
+        }
     }
 
     /// Record a new peer KeyPackage claim attempt. Duplicate deliveries are

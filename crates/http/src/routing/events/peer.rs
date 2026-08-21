@@ -1865,7 +1865,10 @@ fn peer_events_query_cursor_error(error: super::sync::SyncCursorError) -> AppErr
             soland_http::error::ErrorCode::CursorExpired,
             "cursor has expired",
         ),
-        super::sync::SyncCursorError::Invalid(message) => AppError::param_invalid(message),
+        // encoding.md §8.3 closed set: syntax/schema failures pin the top-level
+        // `param_invalid` code with reason `invalid_cursor`.
+        super::sync::SyncCursorError::Invalid(message) => AppError::param_invalid(message)
+            .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR),
         super::sync::SyncCursorError::Mismatch(message)
         | super::sync::SyncCursorError::Integrity(message) => AppError::new(
             soland_http::error::ErrorCode::CursorIntegrityInvalid,

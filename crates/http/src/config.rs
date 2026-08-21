@@ -458,6 +458,26 @@ pub struct AppConfig {
     /// `pending` and have to be promoted manually via the live-fetch path.
     /// Env: `SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_IDS` (comma-separated).
     pub push_bridge_trusted_service_ids: Vec<String>,
+    /// Base URL of the push gateway (floria) this deployment notifies over
+    /// the registered internal channel when an account is deactivated
+    /// (`account-lifecycle.md` §7.1 "Push route 行的完成判据"). The fanout
+    /// endpoint is derived by appending
+    /// `floria_contracts::ACCOUNT_DEACTIVATE_FANOUT_PATH`.
+    ///
+    /// `None` (default) declares that this deployment has **no** independent
+    /// push gateway holding registration/delivery state — the single-box /
+    /// dev posture. In that posture the local push-route purge is the
+    /// complete Push-route fanout action and `deactivation_partial` is never
+    /// raised for the gateway leg. Deployments that run floria MUST set this,
+    /// or the spec's gateway-side stop-delivery guarantee silently does not
+    /// exist. Env: `SOLAND_DEACTIVATION_PUSH_GATEWAY_URL`.
+    pub deactivation_push_gateway_url: Option<String>,
+    /// Bearer token for floria's `http.internal_auth` profile on the
+    /// deactivation fanout endpoint. When the gateway URL is set but this is
+    /// missing, the fanout is still attempted (and honestly fails with 401,
+    /// keeping `deactivation_partial=true`) rather than being silently
+    /// skipped. Env: `SOLAND_DEACTIVATION_PUSH_GATEWAY_BEARER`.
+    pub deactivation_push_gateway_bearer: Option<String>,
     /// Resumable (tus) blob upload — staging directory for in-progress
     /// upload parts before they are completed into the blob store. See
     /// spec crypto-media/media-and-blob.md §2.1.
@@ -923,6 +943,8 @@ impl AppConfig {
             db_pool_acquire_timeout_seconds: None,
             push_bridge_cache_ttl_seconds: 900,
             push_bridge_trusted_service_ids: Vec::new(),
+            deactivation_push_gateway_url: None,
+            deactivation_push_gateway_bearer: None,
             resumable_upload_dir: PathBuf::from("./soland-resumable-uploads"),
             resumable_upload_incomplete_ttl_seconds: 86_400,
             seal_compaction_min_age_seconds: 604_800,
@@ -1157,6 +1179,15 @@ impl AppConfig {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+        let deactivation_push_gateway_url =
+            env_non_empty(values, "SOLAND_DEACTIVATION_PUSH_GATEWAY_URL");
+        let deactivation_push_gateway_bearer =
+            env_non_empty(values, "SOLAND_DEACTIVATION_PUSH_GATEWAY_BEARER");
+        if deactivation_push_gateway_url.is_none() && deactivation_push_gateway_bearer.is_some() {
+            anyhow::bail!(
+                "SOLAND_DEACTIVATION_PUSH_GATEWAY_BEARER is set without SOLAND_DEACTIVATION_PUSH_GATEWAY_URL"
+            );
+        }
         let resumable_upload_dir = env_non_empty(values, "SOLAND_RESUMABLE_UPLOAD_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("./soland-resumable-uploads"));
@@ -1298,6 +1329,8 @@ impl AppConfig {
             db_pool_acquire_timeout_seconds,
             push_bridge_cache_ttl_seconds,
             push_bridge_trusted_service_ids,
+            deactivation_push_gateway_url,
+            deactivation_push_gateway_bearer,
             resumable_upload_dir,
             resumable_upload_incomplete_ttl_seconds,
             seal_compaction_min_age_seconds,

@@ -31,6 +31,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use arkret_hlc::{Cursor, CursorPurpose};
+use arkret_server::{CursorAuthority, CursorAuthorityError, CursorBindingContext};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
@@ -944,8 +945,12 @@ pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<Snaps
     tags("conformance")
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.query"))]
-pub async fn query(body: JsonBody<QueryVectorRequest>) -> JsonResult<QueryVectorOutcome> {
+pub async fn query(
+    body: JsonBody<QueryVectorRequest>,
+    depot: &mut Depot,
+) -> JsonResult<QueryVectorOutcome> {
     super::ensure_enabled()?;
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let body_value = serde_json::to_value(&body)
         .map_err(|error| AppError::internal(format!("conformance query body encode: {error}")))?;
@@ -966,17 +971,18 @@ pub async fn query(body: JsonBody<QueryVectorRequest>) -> JsonResult<QueryVector
 
     let query_digest_shape = query_digest_value(query_value);
     let query_digest = digest_json(&query_digest_shape);
-    let offset = query_value
+    let offset = match query_value
         .get("cursor")
         .or_else(|| body_value.get("cursor"))
         .and_then(Value::as_str)
-        .map(|cursor_token| decode_query_cursor(cursor_token, &query_digest))
-        .transpose()?
-        .unwrap_or(0);
+    {
+        Some(cursor_token) => resolve_query_cursor(state, cursor_token, &query_digest).await?,
+        None => 0,
+    };
     if offset > rows.len() {
         return Err(
             AppError::param_invalid("query cursor offset is beyond the result set")
-                .with_wire_code("invalid_cursor"),
+                .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR),
         );
     }
     let limit = query_value
@@ -988,11 +994,11 @@ pub async fn query(body: JsonBody<QueryVectorRequest>) -> JsonResult<QueryVector
     let end = (offset + limit).min(rows.len());
     let page: Vec<Value> = rows[offset..end].to_vec();
     let next_cursor = if end < rows.len() {
-        Some(encode_query_cursor(end, &query_digest)?)
+        Some(mint_query_cursor(state, end, &query_digest).await?)
     } else {
         None
     };
-    let barrier_cursor = encode_query_cursor(rows.len(), &query_digest)?;
+    let barrier_cursor = mint_query_barrier_cursor(state, rows.len(), &query_digest).await?;
 
     json_ok(QueryVectorOutcome {
         vector_id: vector.to_owned(),
@@ -1354,17 +1360,106 @@ fn default_query_rows() -> Vec<Value> {
     ]
 }
 
-fn encode_query_cursor(offset: usize, query_digest: &str) -> Result<String, AppError> {
-    let shape = json!({
-        "v": "1",
-        "offset": offset,
-        "query_digest": query_digest,
-    });
-    let canonical = canonical_json(&shape).map_err(schema_error)?;
-    Ok(format!(
-        "ak:cursor:{}",
-        URL_SAFE_NO_PAD.encode(canonical.as_bytes())
-    ))
+// ── Conformance query pagination cursor (encoding.md §8) ────────────────────
+//
+// The wire body carries only the canonical core `{v, purpose, issued_at,
+// expires_at, h}` fields; the page offset and the query digest are bound
+// server-side to the `h` handle, exactly like the production list surfaces.
+
+const CONFORMANCE_QUERY_CURSOR_TTL_MS: i64 = 60 * 60 * 1000;
+
+fn conformance_cursor_error(error: CursorAuthorityError) -> AppError {
+    match error {
+        // encoding.md §8.3 closed set: syntax/schema failures pin the top-level
+        // `param_invalid` code with reason `invalid_cursor`.
+        CursorAuthorityError::ParamInvalid(message) => AppError::param_invalid(message)
+            .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR),
+        CursorAuthorityError::Expired => {
+            AppError::new(ErrorCode::CursorExpired, "cursor has expired")
+        }
+        CursorAuthorityError::IntegrityInvalid => AppError::new(
+            ErrorCode::CursorIntegrityInvalid,
+            "cursor integrity check failed",
+        ),
+    }
+}
+
+fn query_cursor_context(state: &AppState, query_digest: &str) -> CursorBindingContext {
+    // The conformance namespace is unauthenticated; the binding still pins
+    // service identity and the canonical query digest.
+    CursorBindingContext::new("anonymous", None, state.service_id().clone(), query_digest)
+}
+
+async fn persist_query_cursor_row(
+    state: &AppState,
+    row: soland_services::sync::CursorState,
+) -> Result<(), AppError> {
+    state
+        .sync()
+        .upsert_cursor(&row)
+        .await
+        .map_err(|error| AppError::internal(format!("cursor binding persistence failed: {error}")))
+}
+
+async fn mint_query_cursor(
+    state: &AppState,
+    offset: usize,
+    query_digest: &str,
+) -> Result<String, AppError> {
+    let (token, record) = CursorAuthority::mint_stream(
+        query_cursor_context(state, query_digest),
+        json!({ "offset": offset }),
+        CONFORMANCE_QUERY_CURSOR_TTL_MS,
+    )
+    .map_err(conformance_cursor_error)?;
+    persist_query_cursor_row(
+        state,
+        soland_services::sync::CursorState {
+            handle: record.handle,
+            principal_id: Some(record.context.principal_id),
+            device_id: record.context.device_id,
+            service_id: record.context.service_id,
+            filter_digest: Some(record.context.filter_digest),
+            purpose: "stream".to_owned(),
+            positions: Some(record.positions),
+            target: None,
+            issued_at_ms: record.issued_at_ms,
+            expires_at_ms: record.expires_at_ms,
+        },
+    )
+    .await?;
+    Ok(token)
+}
+
+async fn mint_query_barrier_cursor(
+    state: &AppState,
+    row_count: usize,
+    query_digest: &str,
+) -> Result<String, AppError> {
+    let minted = Cursor::new_at(chrono::Utc::now(), Cursor::BARRIER_TTL_MAX_MS)
+        .map_err(|error| AppError::internal(format!("mint barrier cursor: {error}")))?
+        .with_barrier();
+    let token = minted
+        .encode()
+        .map_err(|error| AppError::internal(format!("encode barrier cursor: {error}")))?;
+    let context = query_cursor_context(state, query_digest);
+    persist_query_cursor_row(
+        state,
+        soland_services::sync::CursorState {
+            handle: minted.h.clone(),
+            principal_id: Some(context.principal_id),
+            device_id: context.device_id,
+            service_id: context.service_id,
+            filter_digest: Some(context.filter_digest),
+            purpose: "barrier".to_owned(),
+            positions: None,
+            target: Some(json!({ "row_count": row_count })),
+            issued_at_ms: minted.issued_at.timestamp_millis(),
+            expires_at_ms: minted.expires_at.timestamp_millis(),
+        },
+    )
+    .await?;
+    Ok(token)
 }
 
 fn query_digest_value(query_value: &Value) -> Value {
@@ -1375,24 +1470,32 @@ fn query_digest_value(query_value: &Value) -> Value {
     digest_value
 }
 
-fn decode_query_cursor(cursor_token: &str, query_digest: &str) -> Result<usize, AppError> {
-    let payload = cursor_token
-        .strip_prefix("ak:cursor:")
-        .ok_or_else(|| AppError::param_invalid("query cursor must start with ak:cursor:"))?;
-    let bytes = URL_SAFE_NO_PAD
-        .decode(payload)
-        .map_err(|_| AppError::param_invalid("query cursor is not base64url"))?;
-    let shape: Value = serde_json::from_slice(&bytes)
-        .map_err(|_| AppError::param_invalid("query cursor payload is not JSON"))?;
-    if shape.get("query_digest").and_then(Value::as_str) != Some(query_digest) {
-        return Err(AppError::param_invalid("query cursor digest mismatch")
-            .with_wire_code("invalid_cursor"));
-    }
-    shape
+async fn resolve_query_cursor(
+    state: &AppState,
+    cursor_token: &str,
+    query_digest: &str,
+) -> Result<usize, AppError> {
+    let decoded =
+        CursorAuthority::decode_stream(cursor_token.trim()).map_err(conformance_cursor_error)?;
+    let stored =
+        state.sync().cursor(&decoded.h).await.map_err(|error| {
+            AppError::internal(format!("cursor binding lookup failed: {error}"))
+        })?;
+    let record = stored
+        .map(soland_http::util::cursor_binding_record_from_state)
+        .transpose()
+        .map_err(conformance_cursor_error)?;
+    let positions = CursorAuthority::resolve_stream(
+        &decoded,
+        &query_cursor_context(state, query_digest),
+        record.as_ref(),
+    )
+    .map_err(conformance_cursor_error)?;
+    positions
         .get("offset")
         .and_then(Value::as_u64)
-        .map(|offset| offset as usize)
-        .ok_or_else(|| AppError::param_invalid("query cursor offset missing"))
+        .and_then(|offset| usize::try_from(offset).ok())
+        .ok_or_else(|| conformance_cursor_error(CursorAuthorityError::IntegrityInvalid))
 }
 
 fn digest_json(value: &Value) -> String {
@@ -1515,16 +1618,30 @@ mod tests {
         );
     }
 
-    #[test]
-    fn query_cursor_round_trip_is_bound_to_query_digest() {
+    #[tokio::test]
+    async fn query_cursor_round_trip_is_bound_to_query_digest() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
         let first_query = json!({"filter": [{"field": "kind", "op": "eq", "value": "task"}]});
         let first_digest = digest_json(&query_digest_value(&first_query));
         let second_digest =
             digest_json(&json!({"filter": [{"field": "kind", "op": "eq", "value": "note"}]}));
-        let cursor_token = encode_query_cursor(25, &first_digest).expect("cursor encodes");
+        let cursor_token = mint_query_cursor(&state, 25, &first_digest)
+            .await
+            .expect("cursor mints");
+
+        // Wire body is the canonical core cursor: it decodes through the SDK
+        // profile and carries no inline offset / query_digest fields.
+        let decoded = Cursor::decode(&cursor_token).expect("SDK core cursor shape");
+        assert_eq!(decoded.purpose, CursorPurpose::Stream);
+        assert!(decoded.h.len() >= arkret_hlc::CURSOR_HANDLE_MIN_LEN);
 
         assert_eq!(
-            decode_query_cursor(&cursor_token, &first_digest).unwrap(),
+            resolve_query_cursor(&state, &cursor_token, &first_digest)
+                .await
+                .unwrap(),
             25
         );
         assert_eq!(
@@ -1535,9 +1652,30 @@ mod tests {
             first_digest
         );
 
-        let err = decode_query_cursor(&cursor_token, &second_digest)
+        // Cross-query replay is a binding mismatch -> integrity failure
+        // (encoding.md §8.3.1), not a syntax error.
+        let err = resolve_query_cursor(&state, &cursor_token, &second_digest)
+            .await
             .expect_err("cursor must be bound to the canonical query shape");
-        assert_eq!(err.wire_code(), "invalid_cursor");
+        assert_eq!(err.wire_code(), "cursor_integrity_invalid");
+
+        // Syntax failures pin `param_invalid` + reason `invalid_cursor`
+        // (encoding.md §8.3 closed set).
+        let err = resolve_query_cursor(&state, "ak:cursor:!!!not-base64url", &first_digest)
+            .await
+            .expect_err("malformed cursor must fail the syntax gate");
+        assert_eq!(err.wire_code(), "param_invalid");
+        assert_eq!(
+            err.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::INVALID_CURSOR)
+        );
+
+        // Barrier mint keeps the canonical shape and the barrier purpose.
+        let barrier = mint_query_barrier_cursor(&state, 3, &first_digest)
+            .await
+            .expect("barrier cursor mints");
+        let decoded = Cursor::decode(&barrier).expect("SDK core cursor shape");
+        assert_eq!(decoded.purpose, CursorPurpose::Barrier);
     }
 
     #[test]
