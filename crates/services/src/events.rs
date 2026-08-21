@@ -1921,11 +1921,6 @@ pub struct RealmMetadata {
     pub plaintext_visible_service_classes:
         BTreeMap<String, BTreeSet<arkret_wire::PlaintextDataClassKind>>,
     pub minimal_metadata_realm: bool,
-    /// Realm ceiling on encrypted-envelope `aad_visibility_event_id_kind`, re-derived
-    /// from every accepted `ak.realm.policy_bundle` revision
-    /// (`crypto-media/encryption-and-audit.md` §2.8). `hidden` by default and
-    /// when the bundle declares no `aad_visibility` component.
-    pub aad_visibility_ceiling: arkret_models_crypto::EncryptedEnvelopeAadVisibility,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

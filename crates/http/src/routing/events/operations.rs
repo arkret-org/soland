@@ -113,8 +113,5 @@ mod participant_binding_tests;
 mod policy_tests;
 
 #[cfg(test)]
-#[path = "operations_minimal_metadata_aad_tests.rs"]
-mod minimal_metadata_aad_tests;
-#[cfg(test)]
 #[path = "operations_wire_payload_tests.rs"]
 mod wire_payload_tests;

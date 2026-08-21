@@ -151,32 +151,7 @@ fn value_is_plaintext_content(value: &Value) -> bool {
 }
 
 fn encrypted_payload_value(value: &Value) -> bool {
-    validate_encrypted_payload_envelope(value).is_ok() || sdk_encrypted_payload_value(value)
-}
-
-// Strand content-floor admission only needs to distinguish ciphertext-shaped
-// content from plaintext. Message/device validators still enforce the stricter
-// wire envelope shape through `validate_encrypted_payload_envelope`.
-fn sdk_encrypted_payload_value(value: &Value) -> bool {
-    let Some(envelope) = value.as_object() else {
-        return false;
-    };
-    for field in ["scheme", "group_id", "content_type", "ciphertext"] {
-        if envelope
-            .get(field)
-            .and_then(Value::as_str)
-            .is_none_or(|value| value.trim().is_empty())
-        {
-            return false;
-        }
-    }
-    envelope
-        .get("epoch")
-        .is_some_and(|value| value.as_u64().is_some())
-        && envelope
-            .get("payload_digest")
-            .and_then(Value::as_str)
-            .is_some_and(is_valid_hash_digest)
+    validate_encrypted_payload_envelope(value).is_ok()
 }
 
 fn patch_operation_value_is_plaintext_content(value: &Value) -> bool {
@@ -266,14 +241,6 @@ pub(crate) fn operation_audience_mentions(
         Some(content) => audience_mention_nodes(content)?,
         None => Vec::new(),
     };
-    if operation.payload.get("encrypted_content").is_some()
-        && operation
-            .payload
-            .get("audience_mention_routing_hint")
-            .is_some()
-    {
-        return Err("audience_mention_routing_hint unsupported without explicit E2EE profile");
-    }
     Ok(mentions)
 }
 

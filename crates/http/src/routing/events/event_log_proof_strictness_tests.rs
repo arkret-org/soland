@@ -293,7 +293,6 @@ async fn policy_bundle_media_plaintext_reads_realm_meta() {
                     ]),
                 )]),
                 minimal_metadata_realm: false,
-                aad_visibility_ceiling: Default::default(),
                 created_at: now,
                 updated_at: now,
             },
@@ -304,111 +303,6 @@ async fn policy_bundle_media_plaintext_reads_realm_meta() {
     let payload = json!({ "media_service_decrypts": true });
 
     assert!(projected_media_plaintext_service_present(&state, realm_id, &payload).await);
-}
-
-#[tokio::test]
-async fn minimal_metadata_realm_rejects_non_hidden_aad() {
-    // SEC-08 — a minimal-metadata Realm rejects an encrypted message whose
-    // aad_visibility_event_id_kind is not `hidden`, and accepts `hidden`.
-    let state = make_state(true);
-    let realm_id = "ak:realm:AYsBNj0a7HLJqOe9-NntccoPREQfK8qFgK7Oon_kf_JO";
-    let now = chrono::Utc::now();
-    state
-        .realms()
-        .store_realm_metadata(
-            realm_id,
-            soland_services::events::RealmMetadata {
-                owner: "did:web:alice.example".to_owned(),
-                deleted: false,
-                discoverability: "restricted".to_owned(),
-                history_access: "since_join".to_owned(),
-                preview_policy: None,
-                preview_policy_digest: None,
-                asset_privacy_policy: None,
-                asset_privacy_policy_digest: None,
-                encryption_profile: Some("mls_rfc9420".to_owned()),
-                plaintext_visible_services: std::collections::BTreeSet::new(),
-                plaintext_visible_service_classes: Default::default(),
-                minimal_metadata_realm: true,
-                aad_visibility_ceiling: Default::default(),
-                created_at: now,
-                updated_at: now,
-            },
-        )
-        .await
-        .unwrap();
-
-    let encrypted_envelope = |visibility: &str| {
-        let typed_realm = arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap();
-        let scope_digest = arkret_models_crypto::encrypted_envelope_scope_digest(
-            &arkret_wire::ScopeRef::Realm {
-                realm_id: typed_realm.clone(),
-            },
-            &typed_realm,
-        )
-        .unwrap();
-        json!({
-            "strand_id": "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
-            "track_name": "main",
-            "encrypted_content": {
-                "scheme": "mls_rfc9420",
-                "version": "1.0",
-                "group_id": "base64url",
-                "epoch": 12,
-                "content_type": "application/json",
-                "ciphertext": "base64url",
-                "aad_visibility_event_id_kind": visibility,
-                "aad": {
-                    "realm_id": realm_id,
-                    "scope_digest": scope_digest,
-                    "event_kind": "ak.message.create"
-                },
-                "key_ref": {
-                    "algorithm": "MLS",
-                    "group_state_ref": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                },
-                "payload_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-                "aad_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-            }
-        })
-    };
-    let message_op = |payload: serde_json::Value| {
-        arkret_event_draft::test_support::raw_projected_operation(
-            arkret_identifiers::OperationId::new(
-                "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
-            )
-            .unwrap(),
-            arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::MessageCreate.as_str(),
-            payload,
-        )
-    };
-
-    // Non-hidden aad → rejected.
-    let routing = message_op(encrypted_envelope("routing_digest"));
-    let err = validate_operation_policy(&state, std::slice::from_ref(&routing))
-        .await
-        .unwrap_err();
-    assert!(err.contains("aad_visibility_event_id_kind=hidden"));
-
-    // Encrypted envelope with no discriminator → fail closed.
-    let mut no_disc = encrypted_envelope("hidden");
-    no_disc["encrypted_content"]
-        .as_object_mut()
-        .unwrap()
-        .remove("aad_visibility_event_id_kind");
-    let missing = message_op(no_disc);
-    assert!(
-        validate_operation_policy(&state, std::slice::from_ref(&missing))
-            .await
-            .is_err()
-    );
-
-    // hidden aad → accepted (other policy gates are satisfied here).
-    let hidden = message_op(encrypted_envelope("hidden"));
-    validate_operation_policy(&state, std::slice::from_ref(&hidden))
-        .await
-        .unwrap();
 }
 
 #[tokio::test]
@@ -759,7 +653,6 @@ async fn applet_registration_requires_realm_admin() {
                 plaintext_visible_services: std::collections::BTreeSet::new(),
                 plaintext_visible_service_classes: Default::default(),
                 minimal_metadata_realm: false,
-                aad_visibility_ceiling: Default::default(),
                 created_at: now,
                 updated_at: now,
             },
@@ -819,109 +712,6 @@ async fn applet_registration_requires_realm_admin() {
         .await
         .unwrap_err();
     assert_eq!(err, "applet_registration_unauthorized");
-}
-
-#[tokio::test]
-async fn a_non_minimal_realm_still_needs_a_declared_aad_visibility_ceiling() {
-    // SEC-08 — a Realm that did not declare `ak.profile.mls.minimal_metadata_realm.v1`
-    // is unaffected by *that* gate. It is still bound by the Realm
-    // `aad_visibility` ceiling (`encryption-and-audit.md` §2.8): the two gates
-    // are orthogonal, and an undeclared component is the `hidden` ceiling, so
-    // `routing_digest` only becomes reachable once the Realm declares it.
-    let state = make_state(true);
-    let realm_id = "ak:realm:AaC6awQXoDvccRoEZwVD7m5mADrXw1xpWyy-RN165msk";
-    let now = chrono::Utc::now();
-    state
-        .realms()
-        .store_realm_metadata(
-            realm_id,
-            soland_services::events::RealmMetadata {
-                owner: "did:web:alice.example".to_owned(),
-                deleted: false,
-                discoverability: "restricted".to_owned(),
-                history_access: "since_join".to_owned(),
-                preview_policy: None,
-                preview_policy_digest: None,
-                asset_privacy_policy: None,
-                asset_privacy_policy_digest: None,
-                encryption_profile: Some("mls_rfc9420".to_owned()),
-                plaintext_visible_services: std::collections::BTreeSet::new(),
-                plaintext_visible_service_classes: Default::default(),
-                minimal_metadata_realm: false,
-                // Undeclared component: the hidden ceiling.
-                aad_visibility_ceiling: Default::default(),
-                created_at: now,
-                updated_at: now,
-            },
-        )
-        .await
-        .unwrap();
-
-    let op = arkret_event_draft::test_support::raw_projected_operation(
-        arkret_identifiers::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c6")
-            .unwrap(),
-        arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-        arkret_wire::EventKind::MessageCreate.as_str(),
-        {
-            let typed_realm = arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap();
-            let scope_digest = arkret_models_crypto::encrypted_envelope_scope_digest(
-                &arkret_wire::ScopeRef::Realm {
-                    realm_id: typed_realm.clone(),
-                },
-                &typed_realm,
-            )
-            .unwrap();
-            json!({
-            "strand_id": "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
-            "track_name": "main",
-            "encrypted_content": {
-                "scheme": "mls_rfc9420",
-                "version": "1.0",
-                "group_id": "base64url",
-                "epoch": 12,
-                "content_type": "application/json",
-                "ciphertext": "base64url",
-                "aad_visibility_event_id_kind": "routing_digest",
-                "aad": {
-                    "realm_id": realm_id,
-                    "scope_digest": scope_digest,
-                    "event_kind": "ak.message.create",
-                    "event_ref_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                },
-                "key_ref": {
-                    "algorithm": "MLS",
-                    "group_state_ref": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                },
-                "payload_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-                "aad_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-            }
-            })
-        },
-    );
-    // The envelope is wider than the hidden ceiling, so it is rejected rather
-    // than silently downgraded and routed on.
-    assert_eq!(
-        validate_operation_policy(&state, std::slice::from_ref(&op)).await,
-        Err(arkret_wire::ReasonCode::POLICY_DENIED)
-    );
-
-    // Once the Realm declares the ceiling the same envelope is admissible.
-    let mut declared = state
-        .realms()
-        .realm_metadata(realm_id)
-        .await
-        .unwrap()
-        .unwrap();
-    declared.aad_visibility_ceiling =
-        arkret_models_crypto::EncryptedEnvelopeAadVisibility::RoutingDigest;
-    state
-        .realms()
-        .store_realm_metadata(realm_id, declared)
-        .await
-        .unwrap();
-    validate_operation_policy(&state, std::slice::from_ref(&op))
-        .await
-        .unwrap();
 }
 
 #[test]
@@ -2027,15 +1817,13 @@ fn data_event_e2ee_object_with_refs(
             "strand_id": DATA_EVENT_STRAND,
             "track_name": "main",
             "encrypted_content": {
-                "scheme": "mls_rfc9420",
                 "version": "1.0",
-                "group_id": DATA_EVENT_MLS_GROUP,
-                "epoch": 7,
                 "content_type": "application/json",
+                "encryption_context": {
+                    "epoch": 7,
+                    "group_state_ref": "ak:event:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml"
+                },
                 "ciphertext": "base64url",
-                "aad_visibility_event_id_kind": "hidden",
-                "payload_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-                "aad_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
             }
         }),
     );

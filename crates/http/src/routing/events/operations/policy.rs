@@ -6,8 +6,6 @@ mod governance;
 mod message_rules;
 mod realm_circle;
 
-#[cfg(test)]
-pub(super) use accountability::minimal_metadata_aad_visibility;
 use accountability::*;
 pub(crate) use agent_participation::{
     agent_participation_ceiling_record, validate_agent_participation_ceiling,
@@ -297,8 +295,6 @@ async fn validate_one_operation_policy(
         validate_audience_mention_operation_policy(state, operation).await?;
         validate_message_edit_redact_window_policy(state, operation).await?;
         validate_reaction_scope_policy(state, operation)?;
-        validate_minimal_metadata_aad_policy(state, operation).await?;
-        validate_aad_visibility_policy(state, operation).await?;
     }
     Ok(())
 }

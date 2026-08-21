@@ -417,7 +417,7 @@ fn delivery_binding_policy_no_did_fallback_when_policy_unset() {
 }
 
 #[test]
-fn direct_conversation_bootstrap_allows_exact_founding_peer_without_policy() {
+fn direct_conversation_bootstrap_reason_does_not_bypass_atomic_unit() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = create_direct_conversation(&mut state, &hlc);
@@ -442,32 +442,8 @@ fn direct_conversation_bootstrap_allows_exact_founding_peer_without_policy() {
         }),
     );
     let effect = state.apply(&founding_peer, &hlc);
-    assert!(
-        matches!(effect, ProjectionEffect::MembershipChanged { .. }),
-        "expected Direct Conversation founding peer join to pass, got {effect:?}"
-    );
-
-    let third_member_binding = complete_binding(json!({
-        "binding_source": "explicit",
-        "recipient_service_id": "ak:did_core:web:soland-gamma.example",
-        "service_acceptance_ref": "ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim",
-        "resolved_at": "2026-07-25T00:00:00.000Z"
-    }));
-    let third_member = op(
-        arkret_wire::EventKind::MemberState,
-        &realm_id,
-        json!({
-            "realm_id": realm_id,
-            "actor_id": "ak:did_core:web:carol.example",
-            "sender": "ak:did_core:web:alice.example",
-            "membership": "join",
-            "reason": "direct_conversation_bootstrap",
-            "delivery_status": "routable",
-            "delivery_binding": third_member_binding
-        }),
-    );
     assert!(matches!(
-        state.apply(&third_member, &hlc),
+        effect,
         ProjectionEffect::Rejected { reason } if reason == "delivery_binding_policy_unset"
     ));
 }

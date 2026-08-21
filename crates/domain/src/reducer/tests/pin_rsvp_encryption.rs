@@ -3,56 +3,25 @@ use super::*;
 const REALM_ID: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
 const STRAND_ID: &str = "ak:strand:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD";
 
-/// `purpose` of the exporter-derived content AEAD domain
-/// (`encryption-and-audit.md` §2.10.2).
-const EXPORTER_AEAD_CONTENT_PURPOSE: &str = "mls_exporter_aead_content";
-
-/// `canonical_id` of the v1 mandatory-to-implement MLS ciphersuite
-/// (`mls-ciphersuite-registry.json`). §2.10.2 requires `aead_profile` to be the
-/// registry id of the suite the group actually negotiated, never a local alias.
-const EXPORTER_AEAD_PROFILE: &str = "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519";
-
 fn encrypted_payload(event_kind: &str) -> Value {
     encrypted_payload_with_scheme(event_kind, "mls_rfc9420", "MLS")
 }
 
-/// `purpose` / `aead_profile` are required for `mls_exporter_aead_v1` and
-/// forbidden for `mls_rfc9420`, so the fixture carries them exactly when the
-/// scheme it declares does.
 fn encrypted_payload_with_scheme(event_kind: &str, scheme: &str, algorithm: &str) -> Value {
-    let realm_id = arkret_identifiers::RealmId::new(REALM_ID).unwrap();
-    let scope_digest = arkret_models_crypto::encrypted_envelope_scope_digest(
-        &arkret_wire::ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        },
-        &realm_id,
-    )
-    .unwrap();
-    let mut envelope = serde_json::json!({
-        "scheme": scheme,
-        "version": "1.0",
-        "group_id": "Z3JvdXA",
+    let _ = (event_kind, algorithm);
+    let mut encryption_context = serde_json::json!({
         "epoch": 7u64,
-        "content_type": "application/json",
-        "ciphertext": "Y2lwaGVydGV4dA",
-        "aad_visibility_event_id_kind": "hidden",
-        "aad": {
-            "realm_id": REALM_ID,
-            "scope_digest": scope_digest,
-            "event_kind": event_kind
-        },
-        "key_ref": {
-            "algorithm": algorithm,
-            "group_state_ref": "ak:event:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml"
-        },
-        "aad_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-        "payload_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        "group_state_ref": "ak:event:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml"
     });
     if scheme == "mls_exporter_aead_v1" {
-        envelope["purpose"] = Value::String(EXPORTER_AEAD_CONTENT_PURPOSE.to_owned());
-        envelope["aead_profile"] = Value::String(EXPORTER_AEAD_PROFILE.to_owned());
+        encryption_context["counter"] = Value::from(4u64);
     }
-    envelope
+    serde_json::json!({
+        "version": "1.0",
+        "content_type": "application/json",
+        "encryption_context": encryption_context,
+        "ciphertext": "Y2lwaGVydGV4dA",
+    })
 }
 
 fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {

@@ -2807,11 +2807,9 @@ CREATE TABLE public.realm_meta (
     plaintext_visible_services jsonb NOT NULL DEFAULT '[]'::jsonb,
     plaintext_visible_service_classes jsonb NOT NULL DEFAULT '{}'::jsonb,
     minimal_metadata_realm boolean NOT NULL DEFAULT false,
-    aad_visibility_ceiling text NOT NULL DEFAULT 'hidden',
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT realm_meta_history_visibility_check CHECK ((history_visibility = ANY (ARRAY['world_readable'::text, 'shared'::text, 'invited'::text, 'joined'::text, 'restricted'::text]))),
-    CONSTRAINT realm_meta_aad_visibility_ceiling_check CHECK ((aad_visibility_ceiling = ANY (ARRAY['hidden'::text, 'routing_digest'::text, 'opaque_id'::text])))
+    CONSTRAINT realm_meta_history_visibility_check CHECK ((history_visibility = ANY (ARRAY['world_readable'::text, 'shared'::text, 'invited'::text, 'joined'::text, 'restricted'::text])))
 );
 
 -- Durable message projection: keyed by the canonical Event id so replayed

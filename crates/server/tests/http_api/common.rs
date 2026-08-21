@@ -704,7 +704,6 @@ pub(crate) async fn seed_test_realm(
                 plaintext_visible_services,
                 plaintext_visible_service_classes,
                 minimal_metadata_realm: false,
-                aad_visibility_ceiling: Default::default(),
                 created_at: now,
                 updated_at: now,
             },
@@ -1183,60 +1182,20 @@ pub(crate) fn signed_message_event_envelope(
         "track_name": "discussion",
     });
     if encrypted {
-        let mut encrypted_payload = content;
-        if let Some(object) = encrypted_payload.as_object_mut()
-            && object.get("scheme").and_then(Value::as_str) == Some("mls_rfc9420")
-        {
-            let typed_realm_id =
-                RealmId::new(realm_id.to_owned()).expect("fixture message Realm id");
-            let scope_digest = arkret_models_crypto::encrypted_envelope_scope_digest(
-                &arkret_wire::ScopeRef::Realm {
-                    realm_id: typed_realm_id.clone(),
-                },
-                &typed_realm_id,
-            )
-            .expect("fixture encrypted envelope scope digest");
-            object.insert("version".to_owned(), Value::String("1.0".to_owned()));
-            object.insert(
-                "content_type".to_owned(),
-                Value::String("application/vnd.arkret.message+json".to_owned()),
-            );
-            object.insert(
-                "aad_visibility_event_id_kind".to_owned(),
-                Value::String("hidden".to_owned()),
-            );
-            object.insert(
-                "aad".to_owned(),
-                serde_json::json!({
-                    "realm_id": realm_id,
-                    "event_kind": "ak.message.create",
-                    "scope_digest": scope_digest
-                }),
-            );
-            object.insert(
-                "key_ref".to_owned(),
-                serde_json::json!({
-                    "algorithm": "MLS",
-                    "group_state_ref": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                }),
-            );
-            object.insert(
-                "aad_digest".to_owned(),
-                Value::String(
-                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                        .to_owned(),
-                ),
-            );
-            object.insert(
-                "payload_digest".to_owned(),
-                Value::String(
-                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                        .to_owned(),
-                ),
-            );
-            object.remove("authentication_tag");
-            object.remove("digests");
-        }
+        let epoch = content.get("epoch").and_then(Value::as_u64).unwrap_or(0);
+        let ciphertext = content
+            .get("ciphertext")
+            .and_then(Value::as_str)
+            .unwrap_or("Y2lwaGVydGV4dA");
+        let encrypted_payload = serde_json::json!({
+            "version": "1.0",
+            "content_type": "application/vnd.arkret.message+json",
+            "encryption_context": {
+                "epoch": epoch,
+                "group_state_ref": "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19"
+            },
+            "ciphertext": ciphertext
+        });
         payload["encrypted_content"] = encrypted_payload;
     } else {
         let mut content = content;
@@ -1445,7 +1404,6 @@ pub(crate) async fn authorize_test_plaintext_message_service(
             plaintext_visible_services: Default::default(),
             plaintext_visible_service_classes: Default::default(),
             minimal_metadata_realm: false,
-            aad_visibility_ceiling: Default::default(),
             created_at: now,
             updated_at: now,
         });

@@ -36,6 +36,7 @@ const BOB: &str = "ak:did_core:web:bob.example";
 const MALLORY: &str = "ak:did_core:web:mallory.example";
 
 fn op(kind: impl AsRef<str>, realm_id: &str, mut payload: Value) -> Operation {
+    let kind = kind.as_ref();
     let object = payload.get_mut("object").and_then(Value::as_object_mut);
     let sender = object
         .as_ref()
@@ -51,6 +52,16 @@ fn op(kind: impl AsRef<str>, realm_id: &str, mut payload: Value) -> Operation {
         .map(|token| format!("ak:event:{token}"))
         .unwrap_or_else(|| soland_test_support::fixture_content_bound_id("ak:event:"));
     if let Some(object) = object {
+        if kind == arkret_wire::EventKind::CircleCreate.as_str() {
+            object
+                .entry("encryption_profile")
+                .or_insert_with(|| Value::String("none".to_owned()));
+            if object.get("encryption_profile").and_then(Value::as_str) == Some("mls_rfc9420") {
+                object
+                    .entry("content_scheme")
+                    .or_insert_with(|| Value::String("mls_rfc9420".to_owned()));
+            }
+        }
         object.remove("id");
         object.remove("created_by");
     }
@@ -69,7 +80,7 @@ fn op(kind: impl AsRef<str>, realm_id: &str, mut payload: Value) -> Operation {
     arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         RealmId::new(realm_id).unwrap(),
-        kind.as_ref(),
+        kind,
         payload,
     )
 }

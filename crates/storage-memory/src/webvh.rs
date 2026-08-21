@@ -35,6 +35,14 @@ impl MemoryWebvhStore {
             ..Self::default()
         }
     }
+
+    pub(crate) fn seed_log_event(&self, event: WebvhLogRecord) {
+        self.log
+            .lock()
+            .entry(event.did.clone())
+            .or_default()
+            .push(event);
+    }
 }
 #[async_trait]
 impl WebvhStore for MemoryWebvhStore {

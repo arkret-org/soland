@@ -1246,7 +1246,7 @@ impl StrandWatchProjectionStore for PgStrandWatchProjectionStore {
 const REALM_META_COLUMNS: &str = "realm_id, owner, deleted, discoverability, history_access, \
      preview_policy, preview_policy_digest, asset_privacy_policy, asset_privacy_policy_digest, encryption_profile, \
      plaintext_visible_services, plaintext_visible_service_classes, minimal_metadata_realm, \
-     aad_visibility_ceiling, created_at, updated_at";
+     created_at, updated_at";
 
 pub struct PgRealmMetaStore {
     pub pool: PgPool,
@@ -1280,8 +1280,6 @@ struct RealmMetaRow {
     plaintext_visible_service_classes: Value,
     #[diesel(sql_type = Bool)]
     minimal_metadata_realm: bool,
-    #[diesel(sql_type = Text)]
-    aad_visibility_ceiling: String,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Timestamptz)]
@@ -1307,10 +1305,6 @@ impl From<RealmMetaRow> for RealmMetaRecord {
             )
             .unwrap_or_default(),
             minimal_metadata_realm: row.minimal_metadata_realm,
-            aad_visibility_ceiling: serde_json::from_value(Value::String(
-                row.aad_visibility_ceiling,
-            ))
-            .unwrap_or_default(),
             created_at: row.created_at,
             updated_at: row.updated_at,
         }
@@ -1345,12 +1339,6 @@ impl RealmMetaStore for PgRealmMetaStore {
                     "cannot encode plaintext_visible_service_classes: {error}"
                 ))
             })?;
-        let aad_visibility_ceiling = serde_json::to_value(record.aad_visibility_ceiling)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_owned))
-            .ok_or_else(|| {
-                PersistenceError::Internal("cannot encode aad_visibility_ceiling".to_owned())
-            })?;
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -1359,8 +1347,8 @@ impl RealmMetaStore for PgRealmMetaStore {
              (realm_id, owner, deleted, discoverability, history_access, \
               preview_policy, preview_policy_digest, asset_privacy_policy, asset_privacy_policy_digest, \
               encryption_profile, plaintext_visible_services, plaintext_visible_service_classes, \
-              minimal_metadata_realm, aad_visibility_ceiling, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
+              minimal_metadata_realm, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
              ON CONFLICT (realm_id) DO UPDATE SET \
                 owner = EXCLUDED.owner, \
                 deleted = EXCLUDED.deleted, \
@@ -1374,7 +1362,6 @@ impl RealmMetaStore for PgRealmMetaStore {
                 plaintext_visible_services = EXCLUDED.plaintext_visible_services, \
                 plaintext_visible_service_classes = EXCLUDED.plaintext_visible_service_classes, \
                 minimal_metadata_realm = EXCLUDED.minimal_metadata_realm, \
-                aad_visibility_ceiling = EXCLUDED.aad_visibility_ceiling, \
                 created_at = EXCLUDED.created_at, \
                 updated_at = EXCLUDED.updated_at",
         )
@@ -1391,7 +1378,6 @@ impl RealmMetaStore for PgRealmMetaStore {
         .bind::<Jsonb, _>(&plaintext_visible_services)
         .bind::<Jsonb, _>(&plaintext_visible_service_classes)
         .bind::<Bool, _>(record.minimal_metadata_realm)
-        .bind::<Text, _>(&aad_visibility_ceiling)
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.updated_at)
         .execute(&mut *conn)

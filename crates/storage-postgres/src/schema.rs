@@ -1189,7 +1189,6 @@ diesel::table! {
         plaintext_visible_services -> Jsonb,
         plaintext_visible_service_classes -> Jsonb,
         minimal_metadata_realm -> Bool,
-        aad_visibility_ceiling -> Text,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
     }

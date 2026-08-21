@@ -66,7 +66,6 @@ async fn set_demo_realm_visibility(state: &AppState, discoverability: &str, hist
                 ]),
             )]),
             minimal_metadata_realm: false,
-            aad_visibility_ceiling: Default::default(),
             created_at: now,
             updated_at: now,
         });

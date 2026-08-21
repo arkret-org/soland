@@ -781,56 +781,27 @@ mod tests {
     use super::validate_encrypted_payload_envelope;
 
     #[test]
-    fn encrypted_payload_envelope_accepts_exporter_aead_scheme_binding() {
+    fn encrypted_payload_envelope_accepts_only_the_minimal_closed_wire() {
         let envelope = json!({
-            "scheme": "mls_exporter_aead_v1",
             "version": "1.0",
-            "group_id": "Z3JvdXA",
-            "epoch": 7u64,
             "content_type": "application/json",
+            "encryption_context": {
+                "epoch": 7u64,
+                "group_state_ref": "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
+                "counter": 9u64,
+            },
             "ciphertext": "Y2lwaGVydGV4dA",
-            "aad_visibility_event_id_kind": "hidden",
-            "aad": {
-                "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
-                "scope_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-                "event_kind": "ak.message.create"
-            },
-            "key_ref": {
-                "algorithm": "MLS-EXPORTER-AEAD",
-                "group_state_ref": "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19"
-            },
-            // Required for `mls_exporter_aead_v1` and forbidden for
-            // `mls_rfc9420` (`encryption-and-audit.md` §2.10.2). `aead_profile`
-            // is the `canonical_id` of the suite the group negotiated, taken
-            // from `mls-ciphersuite-registry.json`.
-            "purpose": "mls_exporter_aead_content",
-            "aead_profile": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
-            "aad_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-            "payload_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
         });
 
         assert_eq!(validate_encrypted_payload_envelope(&envelope), Ok(()));
 
-        let mut mismatched = envelope.clone();
-        mismatched["key_ref"]["algorithm"] = json!("MLS");
-        assert_eq!(
-            validate_encrypted_payload_envelope(&mismatched),
-            Err("encrypted content envelope violates SDK schema")
-        );
-
-        // The two AEAD header members are load-bearing, not decorative: a
-        // receiver that cannot read the negotiated suite off the envelope
-        // cannot rebuild `aead_aad_bytes`, so dropping either one MUST fail.
-        for dropped in ["purpose", "aead_profile"] {
-            let mut incomplete = envelope.clone();
-            incomplete
-                .as_object_mut()
-                .expect("envelope is an object")
-                .remove(dropped);
+        for forbidden in ["scheme", "group_id", "aad", "payload_digest"] {
+            let mut widened = envelope.clone();
+            widened[forbidden] = json!("forbidden");
             assert_eq!(
-                validate_encrypted_payload_envelope(&incomplete),
+                validate_encrypted_payload_envelope(&widened),
                 Err("encrypted content envelope violates SDK schema"),
-                "{dropped} is required for mls_exporter_aead_v1"
+                "{forbidden} must not be duplicated on the wire"
             );
         }
     }

@@ -1467,8 +1467,17 @@ pub(super) async fn accepted_event_envelope(
             error.to_string(),
         )
     })?;
-    admission.jws =
-        URL_SAFE_NO_PAD.encode(state.notary_signing_key().sign(&signing_input).to_bytes());
+    admission.jws = arkret_signatures::sign_ed25519_detached_jws(
+        state.notary_signing_key().as_ref(),
+        &signing_input,
+    )
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("Principal Server admission proof signing failed: {error}"),
+        )
+    })?;
     event.proofs.push(admission.into());
     event
         .validate_principal_server_admission_binding(parsed.digest_suite)

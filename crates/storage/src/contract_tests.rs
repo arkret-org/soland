@@ -3436,7 +3436,6 @@ pub async fn assert_realm_meta_store_contract(store: &dyn RealmMetaStore, namesp
             std::collections::BTreeSet::from([arkret_wire::PlaintextDataClassKind::HistoryPreview]),
         )]),
         minimal_metadata_realm: true,
-        aad_visibility_ceiling: arkret_models_crypto::EncryptedEnvelopeAadVisibility::RoutingDigest,
         created_at: now,
         updated_at: now,
     };

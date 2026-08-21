@@ -307,7 +307,6 @@ impl SolandMemoryPersistenceStore {
                 plaintext_visible_services: std::collections::BTreeSet::new(),
                 plaintext_visible_service_classes: std::collections::BTreeMap::new(),
                 minimal_metadata_realm: false,
-                aad_visibility_ceiling: Default::default(),
                 created_at: now,
                 updated_at: now,
             },
@@ -320,6 +319,10 @@ impl SolandMemoryPersistenceStore {
         identity: arkret_identity::service_identity::StoredDidCoreIdentity,
     ) {
         self.service_identity.seed(identity);
+    }
+
+    pub fn seed_webvh_log_event(&self, event: soland_storage::WebvhLogRecord) {
+        self.webvh.seed_log_event(event);
     }
 
     #[cfg(feature = "fault-injection")]

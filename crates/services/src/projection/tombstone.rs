@@ -22,8 +22,6 @@ const TOMBSTONE_DERIVED_FIELD_KEYS: &[&str] = &[
     "encrypted_content",
     "in_reply_to",
     "media",
-    "mention_routing_hint",
-    "mention_sidecar_digest",
     "mentions",
     "message_key",
     "message_key_ref",

@@ -318,33 +318,6 @@ pub(crate) async fn dispatch_message_notifications(
         .into_iter()
         .filter(|subject| !subject.trim().is_empty())
         .collect::<BTreeSet<_>>();
-    // SPI-SOL-004 — mention-routing sidecar gate (push-notifications.md
-    // §4.5). Opaque `mention_sidecar_digest` tags on an encrypted message may
-    // only ever be consulted under an effective `recipient_registered_token`
-    // policy; the effective hint is resolved BEFORE any sidecar consumption.
-    // Hardened Realms (minimal-metadata + both audited E2EE profiles) and
-    // undeclared / unknown hints force `disabled`: the tags are dropped here,
-    // unregistered / uncompared / unpersisted, and mention wakeup rides the
-    // blind / batch path. soland has no recipient token registry yet, so even
-    // an opted-in ordinary E2EE Realm falls back to blind delivery — a future
-    // registry MUST be driven through
-    // `mention_routing::drive_mention_routing_sidecar`, never directly.
-    let sidecar_tag_count = payload
-        .get("mention_sidecar_digest")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
-    if sidecar_tag_count > 0 {
-        let effective_hint =
-            super::mention_routing::effective_realm_mention_routing_hint(state, &realm_id, None)
-                .await;
-        tracing::debug!(
-            %realm_id,
-            sidecar_tag_count,
-            effective_hint = effective_hint.as_str(),
-            "mention sidecar tags dropped; blind/batch fallback"
-        );
-    }
     if let Some(strand_id) = strand_id.as_deref() {
         for recipient in all_watch_recipients(state, strand_id) {
             if recipient == sender || mentioned_subjects.contains(&recipient) {
@@ -1032,32 +1005,6 @@ mod tests {
         )
     }
 
-    fn encrypted_unregistered_sidecar_message(
-        realm_id: &str,
-        seed: &str,
-        sender: &str,
-    ) -> arkret_event_draft::ProjectedEventOperation {
-        let event_id = fixture_event_id(seed);
-        arkret_event_draft::test_support::raw_projected_operation(
-            arkret_identifiers::OperationId::new(format!(
-                "ak:operation:01904100-0000-7000-8000-{seed}"
-            ))
-            .unwrap(),
-            arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::MessageCreate.as_str(),
-            json!({
-                "sender": sender,
-                "event_id": event_id,
-                "mention_sidecar_digest": ["unregistered-opaque-tag"],
-                "encrypted": true,
-                "encrypted_content": {
-                    "content_type": "ak.message.v1",
-                    "ciphertext": "opaque-ciphertext"
-                }
-            }),
-        )
-    }
-
     #[tokio::test]
     async fn plain_message_does_not_notify_unmentioned_members_by_default() {
         let state = test_state();
@@ -1269,23 +1216,6 @@ mod tests {
         dispatch_schedule_notifications(&state, &operation).await;
 
         assert!(notifications_for(&state, bob).await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn unregistered_mention_sidecar_is_never_compared_to_member_ids() {
-        let state = test_state();
-        let realm_id = "ak:realm:AZfY2N95Y0T6RkbZInh0TK2U52OiArWMoi24g5SjFjSe";
-        let alice = "ak:did_core:web:alice.example";
-        let bob = "ak:did_core:web:bob.example";
-        let carol = "ak:did_core:web:carol.example";
-        seed_realm_members(&state, realm_id, &[alice, bob, carol]);
-
-        let delivered = encrypted_unregistered_sidecar_message(realm_id, "000000009975", alice);
-        dispatch_message_notifications(&state, &delivered).await;
-
-        let bob_notifications = notifications_for(&state, bob).await;
-        assert!(bob_notifications.is_empty());
-        assert!(notifications_for(&state, carol).await.is_empty());
     }
 
     #[tokio::test]

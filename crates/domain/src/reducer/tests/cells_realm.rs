@@ -1655,7 +1655,6 @@ fn the_bundle_projects_every_registered_component() {
     );
     let payload = serde_json::json!({
         "policy_revision": 1,
-        "aad_visibility": {"event_id_kind": "routing_digest"},
         "mls_send_pause": "advisory",
         "relaxed_window_max_ms": 60000,
         "media_service_decrypts": true,
@@ -1701,7 +1700,6 @@ fn the_bundle_projects_every_registered_component() {
         .realm_policy_bundle_cell_value(realm_id)
         .expect("bundle projects");
     for component in [
-        "aad_visibility",
         "mls_send_pause",
         "relaxed_window_max_ms",
         "media_service_decrypts",
@@ -1717,10 +1715,6 @@ fn the_bundle_projects_every_registered_component() {
             "the reducer dropped '{component}'"
         );
     }
-    assert_eq!(
-        state.realm_aad_visibility_ceiling(realm_id).value(),
-        arkret_models_crypto::EncryptedEnvelopeAadVisibility::RoutingDigest
-    );
 }
 
 #[test]

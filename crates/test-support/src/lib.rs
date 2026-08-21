@@ -28,6 +28,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::{self, BoxStream, StreamExt};
 use parking_lot::Mutex;
+use rand_core::SeedableRng;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use soland_http::config::AppConfig;
@@ -42,7 +43,10 @@ use soland_storage::PersistenceStore;
 use soland_storage_memory::SolandMemoryPersistenceStore;
 
 pub fn app_config() -> AppConfig {
-    AppConfig::test_default()
+    AppConfig {
+        public_base_url: "https://server.test".to_owned(),
+        ..AppConfig::test_default()
+    }
 }
 
 pub fn app_state(config: AppConfig) -> AppState {
@@ -53,7 +57,12 @@ pub fn app_state(config: AppConfig) -> AppState {
     } else {
         SolandMemoryPersistenceStore::new()
     };
-    persistence.seed_service_identity(fixture_stored_service_identity(&identity, signing_seed));
+    persistence.seed_service_identity(fixture_stored_service_identity(
+        &config,
+        &identity,
+        signing_seed,
+    ));
+    persistence.seed_webvh_log_event(fixture_service_webvh_log(&config, signing_seed));
     app_state_with_identity(config, Arc::new(persistence), identity, signing_seed)
 }
 
@@ -65,7 +74,11 @@ pub fn app_state_with_service_full_id(config: AppConfig, full_id: DidFullId) -> 
     } else {
         SolandMemoryPersistenceStore::new()
     };
-    persistence.seed_service_identity(fixture_stored_service_identity(&identity, signing_seed));
+    persistence.seed_service_identity(fixture_stored_service_identity(
+        &config,
+        &identity,
+        signing_seed,
+    ));
     app_state_with_identity(config, Arc::new(persistence), identity, signing_seed)
 }
 
@@ -105,9 +118,32 @@ pub async fn app_state_with_persistence(
     if stored.is_none() {
         persistence
             .service_identity()
-            .put(fixture_stored_service_identity(&identity, signing_seed))
+            .put(fixture_stored_service_identity(
+                &config,
+                &identity,
+                signing_seed,
+            ))
             .await
             .expect("fixture service identity seed");
+    }
+    if persistence
+        .webvh()
+        .list_log_events(
+            identity
+                .identity()
+                .expect("fixture has a serving identity")
+                .full_id
+                .as_str(),
+        )
+        .await
+        .expect("fixture service WebVH history lookup")
+        .is_empty()
+    {
+        persistence
+            .webvh()
+            .append_log_event(fixture_service_webvh_log(&config, signing_seed))
+            .await
+            .expect("fixture service WebVH history seed");
     }
     app_state_with_identity(config, persistence, identity, signing_seed)
 }
@@ -134,19 +170,62 @@ pub fn fixture_content_bound_id(prefix: &str) -> String {
 }
 
 pub fn fixture_signing_seed(config: &AppConfig, identity: &DidCoreIdentityState) -> [u8; 32] {
+    let _ = identity.identity().expect("fixture has a serving identity");
+    fixture_service_signing_seed(config)
+}
+
+fn fixture_service_signing_seed(config: &AppConfig) -> [u8; 32] {
     config.notary_signing_key_seed.unwrap_or_else(|| {
         let mut hasher = Sha256::new();
         hasher.update(b"soland:test-fixture-notary:");
-        hasher.update(
-            identity
-                .identity()
-                .expect("fixture has a serving identity")
-                .service_id
-                .as_str()
-                .as_bytes(),
-        );
+        hasher.update(config.public_base_url.as_bytes());
         hasher.finalize().into()
     })
+}
+
+fn fixture_prepared_service_inception(
+    config: &AppConfig,
+    signing_seed: [u8; 32],
+) -> arkret_signatures::webvh::PreparedInception {
+    let principal_endpoint = CanonicalServiceUrl::canonicalize(&config.public_base_url)
+        .expect("test public base must be canonicalizable");
+    let mut rng_seed = Sha256::new();
+    rng_seed.update(b"soland:test-fixture-webvh-update:");
+    rng_seed.update(config.public_base_url.as_bytes());
+    let mut rng = rand_chacha::ChaCha20Rng::from_seed(rng_seed.finalize().into());
+    let version_time = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+        .expect("fixture WebVH timestamp")
+        .with_timezone(&chrono::Utc);
+    arkret_signatures::webvh::prepare_service_inception_with_did_key_seed(
+        &mut rng,
+        &arkret_signatures::webvh::ServiceInceptionInput {
+            principal_endpoint: &principal_endpoint.as_url(),
+            local_id: "service",
+            also_known_as: &[],
+            version_time,
+            did_key_fragment: Some("notary-key"),
+        },
+        &signing_seed,
+    )
+    .expect("fixture service WebVH inception")
+}
+
+fn fixture_service_webvh_log(
+    config: &AppConfig,
+    signing_seed: [u8; 32],
+) -> soland_storage::WebvhLogRecord {
+    let prepared = fixture_prepared_service_inception(config, signing_seed);
+    let event_digest = arkret_canonical::canonical_sha256(&prepared.log_entry)
+        .expect("fixture service WebVH history digest");
+    soland_storage::WebvhLogRecord {
+        event_digest,
+        did: prepared.did.clone(),
+        seq: 1,
+        operation: prepared.log_entry.clone(),
+        created_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .expect("fixture WebVH timestamp")
+            .with_timezone(&chrono::Utc),
+    }
 }
 
 pub fn app_state_with_identity(
@@ -179,9 +258,16 @@ pub fn app_state_with_identity(
         let identity = service_identity
             .identity()
             .expect("fixture has a serving identity");
+        let prepared = fixture_prepared_service_inception(&config, resolved_signing_seed);
+        let method_history_head = if prepared.did == identity.full_id.as_str() {
+            arkret_canonical::canonical_sha256(&prepared.log_entry)
+                .expect("fixture service WebVH history digest")
+        } else {
+            format!("sha256:{}", "0".repeat(64))
+        };
         arkret_models_identity::ResolutionCommitment {
             full_id: identity.full_id.clone(),
-            method_history_head: format!("sha256:{}", "0".repeat(64)),
+            method_history_head,
             version_id: identity.version_id.clone(),
         }
     };
@@ -361,30 +447,34 @@ fn state_test_registry() -> &'static Mutex<BTreeMap<usize, StateTestResources>> 
 
 #[must_use]
 pub fn fixture_principal_server_id() -> DidCoreId {
-    DidCoreId::from(
-        project_full_id_to_core_id(
-            &DidFullId::new(
-                "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-            )
-            .expect("fixture service DID"),
-        )
-        .expect("fixture service projection"),
-    )
+    fixture_service_identity(&app_config())
+        .identity()
+        .expect("fixture has a serving identity")
+        .service_id
+        .clone()
 }
 
 pub fn fixture_service_identity(config: &AppConfig) -> DidCoreIdentityState {
-    fixture_service_identity_for_full_id(
+    let signing_seed = fixture_service_signing_seed(config);
+    let prepared = fixture_prepared_service_inception(config, signing_seed);
+    fixture_service_identity_for_full_id_and_version(
         config,
-        DidFullId::new(
-            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-        )
-        .expect("fixture service DID"),
+        DidFullId::new(prepared.did.clone()).expect("prepared fixture service DID"),
+        prepared.version_id.clone(),
     )
 }
 
 fn fixture_service_identity_for_full_id(
     config: &AppConfig,
     full_id: DidFullId,
+) -> DidCoreIdentityState {
+    fixture_service_identity_for_full_id_and_version(config, full_id, "fixture-v1".to_owned())
+}
+
+fn fixture_service_identity_for_full_id_and_version(
+    config: &AppConfig,
+    full_id: DidFullId,
+    version_id: String,
 ) -> DidCoreIdentityState {
     let registration_key = ServiceRegistrationKey::new(
         ServiceKind::PrincipalServer,
@@ -407,13 +497,14 @@ fn fixture_service_identity_for_full_id(
             active_signing_key_ref: signing_key_ref,
             control_key_ref: DidCoreIdentityKeyRef::new("fixture:soland:webvh-control-key")
                 .expect("fixture control key ref"),
-            version_id: "fixture-v1".to_owned(),
+            version_id,
             last_verified_at: chrono::Utc::now(),
         },
     }
 }
 
 fn fixture_stored_service_identity(
+    config: &AppConfig,
     state: &DidCoreIdentityState,
     signing_seed: [u8; 32],
 ) -> StoredDidCoreIdentity {
@@ -422,28 +513,47 @@ fn fixture_stored_service_identity(
         .expect("fixture has a serving identity")
         .clone();
     let verification_method = format!("{}#notary-key", identity.full_id);
-    let did_document = ServiceDidDocument {
-        context: vec!["https://www.w3.org/ns/did/v1".to_owned()],
-        id: identity.full_id.clone(),
-        also_known_as: Vec::new(),
-        verification_method: vec![ServiceDidVerificationMethod {
-            id: verification_method.clone(),
-            method_type: "Multikey".to_owned(),
-            controller: identity.full_id.clone(),
-            public_key_multibase: arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-                ed25519_dalek::SigningKey::from_bytes(&signing_seed)
-                    .verifying_key()
-                    .as_bytes(),
-            ),
-        }],
-        authentication: vec![verification_method.clone()],
-        assertion_method: vec![verification_method],
-        service: vec![ServiceDidEndpoint {
-            id: format!("{}#service", identity.full_id),
-            endpoint_type: "ArkretService".to_owned(),
-            service_kind: ServiceKind::PrincipalServer,
-            service_endpoint: identity.registration_key.public_base().clone(),
-        }],
+    let prepared = fixture_prepared_service_inception(config, signing_seed);
+    let prepared_matches_identity = prepared.did == identity.full_id.as_str();
+    let did_document = if prepared_matches_identity {
+        serde_json::from_value(
+            prepared
+                .log_entry
+                .get("state")
+                .cloned()
+                .expect("fixture WebVH inception state"),
+        )
+        .expect("fixture WebVH DID document")
+    } else {
+        ServiceDidDocument {
+            context: vec!["https://www.w3.org/ns/did/v1".to_owned()],
+            id: identity.full_id.clone(),
+            also_known_as: Vec::new(),
+            verification_method: vec![ServiceDidVerificationMethod {
+                id: verification_method.clone(),
+                method_type: "Multikey".to_owned(),
+                controller: identity.full_id.clone(),
+                public_key_multibase: arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+                    ed25519_dalek::SigningKey::from_bytes(&signing_seed)
+                        .verifying_key()
+                        .as_bytes(),
+                ),
+            }],
+            authentication: vec![verification_method.clone()],
+            assertion_method: vec![verification_method],
+            service: vec![ServiceDidEndpoint {
+                id: format!("{}#service", identity.full_id),
+                endpoint_type: "ArkretService".to_owned(),
+                service_kind: ServiceKind::PrincipalServer,
+                service_endpoint: identity.registration_key.public_base().clone(),
+            }],
+        }
+    };
+    let log_head_digest = if prepared_matches_identity {
+        arkret_canonical::canonical_sha256(&prepared.log_entry)
+            .expect("fixture service WebVH history digest")
+    } else {
+        format!("sha256:{}", "0".repeat(64))
     };
     let issued_at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let provider_full_id =
@@ -459,7 +569,7 @@ fn fixture_stored_service_identity(
         service_id: identity.service_id.clone(),
         full_id: identity.full_id.clone(),
         version_id: identity.version_id.clone(),
-        log_head_digest: format!("sha256:{}", "0".repeat(64)),
+        log_head_digest,
         control_key_digest: format!("sha256:{}", "1".repeat(64)),
         issued_at,
         provider_service_id: project_full_id_to_core_id(&provider_full_id)

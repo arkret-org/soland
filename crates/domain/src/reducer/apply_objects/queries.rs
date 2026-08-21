@@ -824,18 +824,6 @@ impl ProjectionState {
             .unwrap_or_default()
     }
 
-    /// Realm ceiling on encrypted-envelope `aad_visibility_event_id_kind`, resolved
-    /// from the accepted policy bundle. An absent component is the `hidden`
-    /// ceiling, never an unchecked one.
-    pub fn realm_aad_visibility_ceiling(
-        &self,
-        realm_id: &str,
-    ) -> arkret_models_crypto::AadVisibilityCeiling {
-        crate::reducer::policy_validation::aad_visibility_ceiling_from_bundle(
-            self.realm_policy_bundle_cell_value(realm_id),
-        )
-    }
-
     /// The Realm's non-`⊥` policy control cells.
     ///
     /// `authz/policy-server.md` §5 defines `policy_frontier_digest` as a

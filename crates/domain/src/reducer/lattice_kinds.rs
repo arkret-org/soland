@@ -16,7 +16,7 @@ use arkret_state::lattice::LatticeKind;
 use arkret_state::state::{BottomMode, CellRegistry, MemoryCellRegistry};
 
 /// Closed shared-FSM family count in the canonical v1 contract.
-pub const CANONICAL_SHARED_FSM_FAMILY_COUNT: usize = 17;
+pub const CANONICAL_SHARED_FSM_FAMILY_COUNT: usize = 19;
 
 /// Resolve and validate the one shared SDK registry used by every Soland
 /// state-resolution path.
@@ -95,7 +95,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn canonical_fsm_startup_gate_is_an_exact_17_family_closure() {
+    fn canonical_fsm_startup_gate_is_an_exact_19_family_closure() {
         let contracts = canonical_fsm_contracts().unwrap();
         validate_canonical_fsm_exact_closure(&contracts).unwrap();
         try_build_validated_sdk_cell_registry().unwrap();

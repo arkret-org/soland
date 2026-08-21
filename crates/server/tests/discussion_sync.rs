@@ -152,7 +152,6 @@ async fn seed_realm(state: &AppState, owner: &str, title: &str, history_access: 
                     std::collections::BTreeSet::from([PlaintextDataClassKind::MessageContent]),
                 )]),
                 minimal_metadata_realm: false,
-                aad_visibility_ceiling: Default::default(),
                 created_at: now,
                 updated_at: now,
             },
@@ -472,39 +471,22 @@ async fn send_circle_scoped_encrypted_message(
     realm_id: &str,
 ) -> String {
     let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
-    // Spec-conforming encrypted message: `encrypted_content` (not the retired
-    // `encrypted_payload`), `track_name`, and AAD committed to the exact
-    // reducer-derived scope. The message does NOT carry scope_circle_id — its
-    // Circle scope is derived from the Strand and authenticated by scope_digest.
-    let mut payload = json!({
+    // The message does not carry scope_circle_id. Its Circle scope, purpose,
+    // group id and AAD are reconstructed from the signed outer Event and the
+    // exact winning group-state Event.
+    let payload = json!({
         "strand_id": strand_id_for_realm(realm_id),
         "track_name": "discussion",
         "encrypted_content": {
-            "scheme": "mls_rfc9420",
             "version": "1.0",
-            "group_id": soland_test_support::cba_basis::FIXTURE_MLS_GROUP_ID,
-            "epoch": 1,
             "content_type": "application/vnd.arkret.message+json",
-            "ciphertext": "Q2lyY2xlQ2lwaGVydGV4dA",
-            "aad_visibility_event_id_kind": "hidden",
-            "aad": {
-                "realm_id": realm_id,
-                "event_kind": "ak.message.create"
+            "encryption_context": {
+                "epoch": 1,
+                "group_state_ref": soland_test_support::fixture_content_bound_id("ak:event:")
             },
-            "key_ref": {
-                "algorithm": "MLS",
-                "group_state_ref": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-            },
-            "aad_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-            "payload_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            "ciphertext": "Q2lyY2xlQ2lwaGVydGV4dA"
         }
     });
-    let accepted_scope = derived_scope_ref(&state, realm_id, "ak.message.create", &payload);
-    let typed_realm_id = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
-    let scope_digest =
-        arkret_models_crypto::encrypted_envelope_scope_digest(&accepted_scope, &typed_realm_id)
-            .expect("fixture encrypted AAD scope digest");
-    payload["encrypted_content"]["aad"]["scope_digest"] = Value::String(scope_digest.to_string());
     let event = signed_event(SignedEvent {
         state: &state,
         token,
@@ -1093,11 +1075,16 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         Some(circle_id.clone()),
         "the Circle scope the server derives for this Strand"
     );
-    assert!(
-        bob_read["event"]["payload"]["encrypted_content"]["aad"]
-            .get("scope_circle_id")
-            .is_none(),
-        "encrypted message aad MUST NOT carry scope_circle_id (spec): {bob_read:?}"
+    let encrypted_content = bob_read["event"]["payload"]["encrypted_content"]
+        .as_object()
+        .expect("encrypted_content object");
+    assert_eq!(
+        encrypted_content.keys().cloned().collect::<std::collections::BTreeSet<_>>(),
+        ["ciphertext", "content_type", "encryption_context", "version"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        "encrypted message MUST use the minimal closed wire: {bob_read:?}"
     );
 
     let mallory_read = TestClient::get(format!("http://server/_arkret/self/events/{event_id}"))
@@ -1108,7 +1095,7 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
 }
 
 #[tokio::test]
-async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
+async fn chat_projection_exposes_reactions_reply_and_mentions() {
     let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -1147,9 +1134,6 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
             "content": {
                 "kind": "ak.content.text",
                 "body": "root mentions bob",
-                "mention_routing_hint": {
-                    "mentioned": [bob_core]
-                },
                 "mentions": [{
                     "kind": "mention",
                     "subject_id": bob_core,
@@ -1226,10 +1210,6 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         .iter()
         .find(|event| event["event_id"] == root_event_id)
         .unwrap_or_else(|| panic!("root message missing from sync projection: {timeline:?}"));
-    assert_eq!(
-        root["payload"]["content"]["mention_routing_hint"]["mentioned"],
-        json!([bob_core])
-    );
     assert_eq!(
         root["payload"]["content"]["mentions"][0]["subject_id"],
         bob_core

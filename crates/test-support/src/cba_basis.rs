@@ -627,6 +627,10 @@ async fn persist_and_project_realm_genesis_event(
             serde_json::json!({"value": "invite"}),
         ),
         (
+            arkret_wire::EventKind::RealmHistoryAccess,
+            serde_json::json!({"from": null, "to": "since_join"}),
+        ),
+        (
             arkret_wire::EventKind::RealmDiscovery,
             serde_json::json!({"value": "invite_only"}),
         ),

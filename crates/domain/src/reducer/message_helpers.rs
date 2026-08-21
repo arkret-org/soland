@@ -124,12 +124,7 @@ pub(crate) fn message_content_from_payload(
         .cloned()
         .unwrap_or_else(|| payload.clone());
     if let Some(object) = content.as_object_mut() {
-        for key in [
-            "reply_to",
-            "in_reply_to",
-            "mention_routing_hint",
-            "mention_sidecar_digest",
-        ] {
+        for key in ["reply_to", "in_reply_to"] {
             if !object.contains_key(key)
                 && let Some(value) = payload.get(key)
             {

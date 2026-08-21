@@ -120,10 +120,6 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                 minimal_metadata_realm: kinds::payload_declares_minimal_metadata_realm(
                     &operation.payload,
                 ),
-                aad_visibility_ceiling: kinds::policy_bundle_aad_visibility_ceiling(
-                    &operation.payload,
-                )
-                .unwrap_or_default(),
                 created_at: now,
                 updated_at: now,
             };
@@ -197,16 +193,6 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                 && kinds::payload_declares_minimal_metadata_realm(&operation.payload)
             {
                 record.minimal_metadata_realm = true;
-                changed = true;
-            }
-            // §2.8 — re-derive the aad_visibility ceiling from every bundle
-            // revision. This one does NOT latch: the bundle restates its whole
-            // component set, so a revision that drops `aad_visibility` really
-            // does lower the ceiling back to `hidden`.
-            if let Some(ceiling) = kinds::policy_bundle_aad_visibility_ceiling(&operation.payload)
-                && record.aad_visibility_ceiling != ceiling
-            {
-                record.aad_visibility_ceiling = ceiling;
                 changed = true;
             }
             if changed {
