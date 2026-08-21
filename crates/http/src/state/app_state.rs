@@ -2056,7 +2056,7 @@ impl AppState {
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_install_consent_cell(&self, cell: soland_services::identity::ConsentCellRecord) {
-        self.consents.install_runtime_cell(cell);
+        self.consents.install_committed_cell(cell);
     }
 
     #[cfg(any(test, feature = "test-support"))]

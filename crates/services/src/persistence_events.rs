@@ -161,6 +161,25 @@ fn persistence_event_commit_request(
                 invite_policy: commit.invite_policy,
             }
         }),
+        consent_projection: command.consent_projection.map(|commit| {
+            soland_storage::ConsentProjectionCommit {
+                cell: crate::persistence_identity::storage_consent_cell(commit.cell),
+                invite_quarantine: commit.invite_quarantine.map(|cas| {
+                    soland_storage::AccountDataCasCommit {
+                        record: soland_storage::AccountDataRecord {
+                            actor: cas.record.actor_id,
+                            account_data_key: cas.record.account_data_key,
+                            revision: cas.record.revision,
+                            payload: cas.record.payload,
+                            tombstone: cas.record.tombstone,
+                            updated_at: cas.record.updated_at,
+                        },
+                        expected_revision: cas.expected_revision,
+                        conflict_code: cas.conflict_code,
+                    }
+                }),
+            }
+        }),
         control_proposal_ingress: command.control_proposal_ingress,
         device_revocation_transition: command.device_revocation_transition,
         device_revocation_gate: command.device_revocation_gate,

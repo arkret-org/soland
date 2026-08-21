@@ -192,9 +192,10 @@ impl InviteReceivePolicyStore for MemoryInviteReceivePolicyStore {
             .collect())
     }
 }
-// In-memory consent-cell store
+// In-memory consent-cell store. Rows land here only through the Event commit
+// unit of work, which is why the store itself has no writer.
 pub(crate) struct MemoryConsentCellStore {
-    data: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
+    pub(crate) data: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
 }
 impl MemoryConsentCellStore {
     pub(crate) fn new() -> Self {
@@ -208,25 +209,13 @@ impl ConsentCellStore for MemoryConsentCellStore {
     async fn get(
         &self,
         holder: &str,
-        peer: &str,
-        scope: &str,
+        cell_id: &str,
     ) -> PersistenceResult<Option<ConsentCellRecord>> {
         let key = ConsentCellKey {
             holder: holder.to_owned(),
-            peer: peer.to_owned(),
-            scope: scope.to_owned(),
+            cell_id: cell_id.to_owned(),
         };
         Ok(self.data.lock().get(&key).cloned())
-    }
-
-    async fn put(&self, record: &ConsentCellRecord) -> PersistenceResult<()> {
-        let key = ConsentCellKey {
-            holder: record.holder.clone(),
-            peer: record.peer.clone(),
-            scope: record.scope.clone(),
-        };
-        self.data.lock().insert(key, record.clone());
-        Ok(())
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentCellKey, ConsentCellRecord)>> {

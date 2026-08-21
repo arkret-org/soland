@@ -346,17 +346,6 @@ fn application_account_data(
 
 #[async_trait::async_trait]
 impl crate::identity::ConsentCellPort for PersistenceConsentCells {
-    async fn save_cell(
-        &self,
-        cell: crate::identity::ConsentCellRecord,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .consent_cells()
-            .put(&storage_consent_cell(cell))
-            .await?;
-        Ok(())
-    }
-
     async fn cells(
         &self,
     ) -> crate::ServiceResult<
@@ -509,8 +498,7 @@ impl crate::identity::InviteReceivePolicyPort for PersistenceInviteReceivePolici
 fn application_consent_key(key: soland_storage::ConsentCellKey) -> crate::identity::ConsentCellKey {
     crate::identity::ConsentCellKey {
         holder: key.holder,
-        peer: key.peer,
-        scope: key.scope,
+        cell_id: key.cell_id,
     }
 }
 
@@ -518,11 +506,10 @@ fn application_consent_cell(
     cell: soland_storage::ConsentCellRecord,
 ) -> crate::identity::ConsentCellRecord {
     crate::identity::ConsentCellRecord {
+        cell_id: cell.cell_id,
         holder: cell.holder,
         peer: cell.peer,
-        scope: cell.scope,
-        cell_id: cell.cell_id,
-        requested_at: cell.requested_at,
+        consent_scope: cell.consent_scope,
         grant_dots: cell
             .grant_dots
             .into_iter()
@@ -531,6 +518,7 @@ fn application_consent_cell(
                     key,
                     crate::identity::ConsentGrantDot {
                         dot: dot.dot,
+                        not_before: dot.not_before,
                         expires_at: dot.expires_at,
                         granted_at: dot.granted_at,
                     },
@@ -538,20 +526,18 @@ fn application_consent_cell(
             })
             .collect(),
         revoked_dots: cell.revoked_dots,
-        revoked_at: cell.revoked_at,
         updated_at: cell.updated_at,
     }
 }
 
-fn storage_consent_cell(
+pub(crate) fn storage_consent_cell(
     cell: crate::identity::ConsentCellRecord,
 ) -> soland_storage::ConsentCellRecord {
     soland_storage::ConsentCellRecord {
+        cell_id: cell.cell_id,
         holder: cell.holder,
         peer: cell.peer,
-        scope: cell.scope,
-        cell_id: cell.cell_id,
-        requested_at: cell.requested_at,
+        consent_scope: cell.consent_scope,
         grant_dots: cell
             .grant_dots
             .into_iter()
@@ -560,6 +546,7 @@ fn storage_consent_cell(
                     key,
                     soland_storage::ConsentGrantDot {
                         dot: dot.dot,
+                        not_before: dot.not_before,
                         expires_at: dot.expires_at,
                         granted_at: dot.granted_at,
                     },
@@ -567,7 +554,6 @@ fn storage_consent_cell(
             })
             .collect(),
         revoked_dots: cell.revoked_dots,
-        revoked_at: cell.revoked_at,
         updated_at: cell.updated_at,
     }
 }

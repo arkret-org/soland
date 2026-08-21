@@ -2050,12 +2050,26 @@ pub(super) async fn submit_event_value_with_context(
         "submit_event"
     );
     let mut strand_status_audit_payload = None;
+    let mut consent_admission = None;
     if let Some(operation) = projection_operation.as_ref() {
         if let Err(message) = validate_operation_semantics(state, std::slice::from_ref(operation)) {
             return Err(SubmitOneError::semantic_schema_violation(message));
         }
         preflight_moderation_dismiss(state, operation).await?;
         preflight_account_data_cas(state, operation).await?;
+        // Holder-private consent is admission state, not a post-acceptance
+        // cache: resolve the whole or_set mutation and its eager invalidation
+        // here so a Move that cannot be projected is refused with zero writes
+        // (`consent-model.md` sections 3.1, 3.3 and 4.1.2).
+        consent_admission = crate::routing::identity::consent::preflight_consent_admission(
+            state,
+            operation,
+            &submitted_event,
+        )
+        .await
+        .map_err(|rejection| {
+            SubmitOneError::new(rejection.status, rejection.code, rejection.message)
+        })?;
         if let Err(reason) =
             crate::routing::identity::agents::sidecar::validate_sidecar_mls_event_binding(
                 state,
@@ -2853,6 +2867,9 @@ pub(super) async fn submit_event_value_with_context(
         contact_projection: commit_options
             .as_ref()
             .and_then(|options| options.contact_projection.cloned()),
+        consent_projection: consent_admission
+            .as_ref()
+            .map(crate::routing::identity::consent::ConsentAdmission::commit),
         event: soland_services::events::AcceptedEvent {
             event_id: parsed.event_id.to_string(),
             actor_id: parsed.actor_id.to_string(),
@@ -3162,6 +3179,12 @@ pub(super) async fn submit_event_value_with_context(
                 )
             })?;
         state.wake_control_seal_coordinator();
+    }
+    if let Some(admission) = consent_admission.as_ref() {
+        // The cell row and its invalidation are already durable; publish the
+        // runtime projection and the holder's notifications.
+        crate::routing::identity::consent::apply_committed_consent_admission(state, admission)
+            .await;
     }
     if let Some(operation) = projection_operation {
         crate::routing::events::projection::project_accepted_canonical_event_from_device(

@@ -6,30 +6,37 @@ use arkret_models_collaboration::contact_operations::{
 };
 use chrono::{DateTime, Utc};
 
+/// A consent cell is addressed by its subject: `consent_id` is the cell
+/// subject of exactly one holder (`consent-model.md` section 3.1), so the
+/// durable key is `(holder, cell_id)`. `(peer, consent_scope)` is the intent
+/// carried by the cell's dots, not part of its address.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ConsentCellKey {
     pub holder: String,
-    pub peer: String,
-    pub scope: String,
+    pub cell_id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsentGrantDot {
     pub dot: String,
+    pub not_before: Option<DateTime<Utc>>,
     pub expires_at: Option<DateTime<Utc>>,
     pub granted_at: DateTime<Utc>,
 }
 
+/// One holder-private `ak.component.consent.grant.v1` or_set cell.
+///
+/// `peer` and `consent_scope` are the intent frozen by the cell's first
+/// accepted grant; every later dot on the same `consent_id` MUST carry that
+/// same intent (`consent-model.md` sections 3.1 and 3.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsentCellRecord {
+    pub cell_id: String,
     pub holder: String,
     pub peer: String,
-    pub scope: String,
-    pub cell_id: String,
-    pub requested_at: Option<DateTime<Utc>>,
+    pub consent_scope: String,
     pub grant_dots: BTreeMap<String, ConsentGrantDot>,
     pub revoked_dots: BTreeSet<String>,
-    pub revoked_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
 }
 

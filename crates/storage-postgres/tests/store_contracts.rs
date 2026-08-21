@@ -1,6 +1,6 @@
 use soland_storage::contract_tests::{
-    DeviceRevocationSealSettlementStores, EventCommitContractStores,
-    assert_atomic_batch_outbox_rollback_contract,
+    ConsentCommitContractStores, DeviceRevocationSealSettlementStores, EventCommitContractStores,
+    assert_atomic_batch_outbox_rollback_contract, assert_consent_projection_commit_contract,
     assert_control_proposal_authority_ack_store_contract,
     assert_device_message_snapshot_guard_contract,
     assert_device_revocation_seal_settlement_contract, assert_event_commit_unit_of_work_contract,
@@ -160,6 +160,29 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract_when_configured
 }
 
 #[tokio::test]
+async fn postgres_adapter_satisfies_shared_consent_projection_commit_contract_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
+    let events = PgEventStore { pool: pool.clone() };
+    let consent_cells = soland_storage_postgres::PgConsentCellStore { pool: pool.clone() };
+    let account_data = PgAccountDataStore { pool: pool.clone() };
+    let namespace = format!("pg-consent-commit-{}", uuid::Uuid::now_v7());
+    assert_consent_projection_commit_contract(
+        ConsentCommitContractStores {
+            unit_of_work: &unit_of_work,
+            events: &events,
+            consent_cells: &consent_cells,
+            account_data: &account_data,
+        },
+        &namespace,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn postgres_adapter_settles_sealed_device_revocations_when_configured() {
     let Some(pool) = test_pool().await else {
         return;
@@ -258,6 +281,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
         .commit_event(EventCommitRequest {
             device_pairing_authorization: None,
             contact_projection: None,
+            consent_projection: None,
             event: CanonicalEventRecord {
                 event_id: event_id.to_string(),
                 actor_id: event.actor_id.to_string(),
@@ -509,6 +533,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
                 EventCommitRequest {
                     device_pairing_authorization: None,
                     contact_projection: None,
+                    consent_projection: None,
                     event: prefix,
                     control_proposal_ingress: None,
                     device_revocation_transition: None,
@@ -520,6 +545,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
                 EventCommitRequest {
                     device_pairing_authorization: None,
                     contact_projection: None,
+                    consent_projection: None,
                     event: incoming,
                     control_proposal_ingress: None,
                     device_revocation_transition: None,
@@ -859,6 +885,7 @@ mod control_move_ingress_negatives {
             EventCommitRequest {
                 device_pairing_authorization: None,
                 contact_projection: None,
+                consent_projection: None,
                 event: CanonicalEventRecord {
                     event_id: self.event.event_id.to_string(),
                     actor_id: self.event.actor_id.to_string(),

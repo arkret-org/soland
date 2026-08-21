@@ -288,6 +288,84 @@ fn contact_event_ref(value: Option<&str>) -> PersistenceResult<Option<Vec<u8>>> 
         .transpose()
 }
 
+/// Commit one accepted consent Control Move's holder-private effects.
+///
+/// The or_set cell row and the eager invite-quarantine invalidation
+/// (`consent-model.md` section 4.1.2) run inside the Event transaction, so a
+/// failure here rolls the canonical Event back with them. The intent guard
+/// repeats admission's `(holder, consent_id)` binding check inside the
+/// transaction: a concurrent grant cannot rebind the same consent_id between
+/// admission and commit.
+async fn commit_consent_projection(
+    conn: &mut diesel_async::AsyncPgConnection,
+    commit: soland_storage::ConsentProjectionCommit,
+) -> PersistenceResult<()> {
+    let cell = commit.cell;
+    let grant_dots = soland_storage::encode_grant_dots(&cell.grant_dots);
+    let revoked_dots = serde_json::Value::Array(
+        cell.revoked_dots
+            .iter()
+            .map(|dot| serde_json::Value::String(dot.clone()))
+            .collect(),
+    );
+    let affected = sql_query(
+        "INSERT INTO consent_cells          (id, cell_id, holder_id, peer_id, consent_scope, grant_dots, revoked_dots, updated_at)          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)          ON CONFLICT (holder_id, cell_id) DO UPDATE SET             grant_dots = EXCLUDED.grant_dots,             revoked_dots = EXCLUDED.revoked_dots,             updated_at = EXCLUDED.updated_at          WHERE consent_cells.peer_id = EXCLUDED.peer_id            AND consent_cells.consent_scope = EXCLUDED.consent_scope",
+    )
+    .bind::<Uuid, _>(uuid::Uuid::now_v7())
+    .bind::<Text, _>(&cell.cell_id)
+    .bind::<Text, _>(&cell.holder)
+    .bind::<Text, _>(&cell.peer)
+    .bind::<Text, _>(&cell.consent_scope)
+    .bind::<Jsonb, _>(&grant_dots)
+    .bind::<Jsonb, _>(&revoked_dots)
+    .bind::<Timestamptz, _>(cell.updated_at)
+    .execute(conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if affected == 0 {
+        return Err(PersistenceError::Conflict(
+            "consent_intent_rebind".to_owned(),
+        ));
+    }
+    let Some(cas) = commit.invite_quarantine else {
+        return Ok(());
+    };
+    let record = cas.record;
+    let affected = if cas.expected_revision == 0 {
+        sql_query(
+            "INSERT INTO account_datas              (id, actor_id, account_data_key, payload, revision, tombstone, updated_at)              VALUES ($1, $2, $3, $4, $5, $6, $7)              ON CONFLICT (actor_id, account_data_key) DO NOTHING",
+        )
+        .bind::<Uuid, _>(uuid::Uuid::now_v7())
+        .bind::<Text, _>(&record.actor)
+        .bind::<Text, _>(&record.account_data_key)
+        .bind::<Jsonb, _>(&record.payload)
+        .bind::<BigInt, _>(record.revision as i64)
+        .bind::<Bool, _>(record.tombstone)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .execute(conn)
+        .await
+        .map_err(PersistenceError::database)?
+    } else {
+        sql_query(
+            "UPDATE account_datas SET payload = $1, revision = $2, tombstone = $3,                 updated_at = $4              WHERE actor_id = $5 AND account_data_key = $6 AND revision = $7",
+        )
+        .bind::<Jsonb, _>(&record.payload)
+        .bind::<BigInt, _>(record.revision as i64)
+        .bind::<Bool, _>(record.tombstone)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .bind::<Text, _>(&record.actor)
+        .bind::<Text, _>(&record.account_data_key)
+        .bind::<BigInt, _>(cas.expected_revision as i64)
+        .execute(conn)
+        .await
+        .map_err(PersistenceError::database)?
+    };
+    if affected == 0 {
+        return Err(PersistenceError::Conflict(cas.conflict_code));
+    }
+    Ok(())
+}
+
 async fn commit_contact_projection(
     conn: &mut diesel_async::AsyncPgConnection,
     commit: soland_storage::ContactProjectionCommit,
@@ -706,6 +784,9 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             })?;
             if let Some(contact_projection) = request.contact_projection {
                 commit_contact_projection(conn, contact_projection).await?;
+            }
+            if let Some(consent_projection) = request.consent_projection {
+                commit_consent_projection(conn, consent_projection).await?;
             }
             // Control/Data routing is defined by the typed Event plane. A
             // closed genesis anchor is a basis-free Control Move; a DataEvent

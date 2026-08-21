@@ -5,8 +5,7 @@ use super::{
     ContactStore, ContactVerifiedMirrorRecord, ContactVerifiedMirrorStore,
     InviteReceivePolicyStore, Jsonb, MimiConsentCorrelationRecord, MimiConsentCorrelationStore,
     Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName,
-    RunQueryDsl, Text, Timestamptz, Value, async_trait, decode_grant_dots, encode_grant_dots, ids,
-    pg_conn, sql_query,
+    RunQueryDsl, Text, Timestamptz, Value, async_trait, decode_grant_dots, ids, pg_conn, sql_query,
 };
 /// Encode a contact's Event reference for storage.
 ///
@@ -652,32 +651,29 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
     }
 }
 // ── Pg-backed consent-cell store ─────────────────────────────────────────
-// Durable backing for the holder-private consent-cell projection. Column
-// order mirrors `state::ConsentCellRecord`; `grant_dots` is persisted as a
-// JSONB object `{dot -> {dot, expires_at, granted_at}}` and `revoked_dots` as
-// a JSONB string array so the in-memory `BTreeMap`/`BTreeSet` round-trip
-// losslessly.
+// Durable backing for the holder-private consent-cell projection, keyed by
+// (holder, cell_id) because `consent_id` is the cell subject. Column order
+// mirrors `ConsentCellRecord`; `grant_dots` is persisted as a JSONB object
+// `{dot -> {dot, not_before, expires_at, granted_at}}` and `revoked_dots` as a
+// JSONB string array so the in-memory `BTreeMap`/`BTreeSet` round-trip
+// losslessly. Writes happen only inside the Event commit unit of work.
 pub struct PgConsentCellStore {
     pub pool: PgPool,
 }
 #[derive(QueryableByName)]
 struct ConsentCellRow {
     #[diesel(sql_type = Text)]
+    cell_id: String,
+    #[diesel(sql_type = Text)]
     holder: String,
     #[diesel(sql_type = Text)]
     peer: String,
     #[diesel(sql_type = Text)]
-    scope: String,
-    #[diesel(sql_type = Text)]
-    cell_id: String,
-    #[diesel(sql_type = Nullable<Timestamptz>)]
-    requested_at: Option<chrono::DateTime<chrono::Utc>>,
+    consent_scope: String,
     #[diesel(sql_type = Jsonb)]
     grant_dots: Value,
     #[diesel(sql_type = Jsonb)]
     revoked_dots: Value,
-    #[diesel(sql_type = Nullable<Timestamptz>)]
-    revoked_at: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = Timestamptz)]
     updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -695,88 +691,41 @@ impl ConsentCellRow {
             .unwrap_or_default();
         let key = ConsentCellKey {
             holder: self.holder.clone(),
-            peer: self.peer.clone(),
-            scope: self.scope.clone(),
+            cell_id: self.cell_id.clone(),
         };
         let record = ConsentCellRecord {
+            cell_id: self.cell_id,
             holder: self.holder,
             peer: self.peer,
-            scope: self.scope,
-            cell_id: self.cell_id,
-            requested_at: self.requested_at,
+            consent_scope: self.consent_scope,
             grant_dots: decode_grant_dots(&self.grant_dots),
             revoked_dots,
-            revoked_at: self.revoked_at,
             updated_at: self.updated_at,
         };
         (key, record)
     }
 }
-const CONSENT_CELL_COLUMNS: &str = "holder_id AS holder, peer_id AS peer, scope, cell_id, requested_at, grant_dots, \
-     revoked_dots, revoked_at, updated_at";
+const CONSENT_CELL_COLUMNS: &str = "cell_id, holder_id AS holder, peer_id AS peer, consent_scope, grant_dots,      revoked_dots, updated_at";
 #[async_trait]
 impl ConsentCellStore for PgConsentCellStore {
     async fn get(
         &self,
         holder: &str,
-        peer: &str,
-        scope: &str,
+        cell_id: &str,
     ) -> PersistenceResult<Option<ConsentCellRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         let row = sql_query(format!(
-            "SELECT {CONSENT_CELL_COLUMNS} FROM consent_cells \
-             WHERE holder_id = $1 AND peer_id = $2 AND scope = $3"
+            "SELECT {CONSENT_CELL_COLUMNS} FROM consent_cells              WHERE holder_id = $1 AND cell_id = $2"
         ))
         .bind::<Text, _>(holder)
-        .bind::<Text, _>(peer)
-        .bind::<Text, _>(scope)
+        .bind::<Text, _>(cell_id)
         .get_result::<ConsentCellRow>(&mut *conn)
         .await
         .optional()
         .map_err(PersistenceError::database)?;
         Ok(row.map(|row| row.into_pair().1))
-    }
-
-    async fn put(&self, record: &ConsentCellRecord) -> PersistenceResult<()> {
-        let grant_dots = encode_grant_dots(&record.grant_dots);
-        let revoked_dots = Value::Array(
-            record
-                .revoked_dots
-                .iter()
-                .map(|dot| Value::String(dot.clone()))
-                .collect(),
-        );
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "INSERT INTO consent_cells \
-             (id, holder_id, peer_id, scope, cell_id, requested_at, grant_dots, revoked_dots, revoked_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
-             ON CONFLICT (holder_id, peer_id, scope) DO UPDATE SET \
-                cell_id = EXCLUDED.cell_id, \
-                requested_at = EXCLUDED.requested_at, \
-                grant_dots = EXCLUDED.grant_dots, \
-                revoked_dots = EXCLUDED.revoked_dots, \
-                revoked_at = EXCLUDED.revoked_at, \
-                updated_at = EXCLUDED.updated_at",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
-        .bind::<Text, _>(&record.holder)
-        .bind::<Text, _>(&record.peer)
-        .bind::<Text, _>(&record.scope)
-        .bind::<Text, _>(&record.cell_id)
-        .bind::<Nullable<Timestamptz>, _>(record.requested_at)
-        .bind::<Jsonb, _>(&grant_dots)
-        .bind::<Jsonb, _>(&revoked_dots)
-        .bind::<Nullable<Timestamptz>, _>(record.revoked_at)
-        .bind::<Timestamptz, _>(record.updated_at)
-        .execute(&mut *conn)
-        .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentCellKey, ConsentCellRecord)>> {

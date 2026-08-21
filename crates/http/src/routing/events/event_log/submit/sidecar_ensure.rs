@@ -155,6 +155,7 @@ async fn validate_and_prepare(
     let command = soland_services::events::CommitAcceptedEventCommand {
         device_pairing_authorization: None,
         contact_projection: None,
+        consent_projection: None,
         event: soland_services::events::AcceptedEvent {
             event_id: parsed.event_id.to_string(),
             actor_id: parsed.actor_id.to_string(),

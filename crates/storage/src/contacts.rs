@@ -81,21 +81,19 @@ pub trait InviteReceivePolicyStore: Send + Sync {
     >;
 }
 /// Durable backing for the holder-private consent-cell projection (spec
-/// `consent-model.md` §3 / G3.S4). The in-memory
-/// `AppState::consent_cells` map keyed by `(holder, peer, scope)` remains the
-/// working OR-set projection; this store hydrates it on boot and is written
-/// through after each accepted grant/revoke/pending mutation. `grant_dots` /
-/// `revoked_dots` are persisted as JSONB so the `BTreeMap`/`BTreeSet`
-/// round-trips losslessly.
+/// `consent-model.md` sections 3 to 5), keyed by `(holder, cell_id)` because
+/// `consent_id` is the cell subject. Rows are only ever written inside the
+/// Event commit unit of work that accepts the grant/revoke Control Move, so
+/// this store exposes reads alone; boot hydration replays it into the working
+/// projection. `grant_dots` / `revoked_dots` are persisted as JSONB so the
+/// `BTreeMap`/`BTreeSet` round-trip losslessly.
 #[async_trait]
 pub trait ConsentCellStore: Send + Sync {
     async fn get(
         &self,
         holder: &str,
-        peer: &str,
-        scope: &str,
+        cell_id: &str,
     ) -> PersistenceResult<Option<ConsentCellRecord>>;
-    async fn put(&self, record: &ConsentCellRecord) -> PersistenceResult<()>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentCellKey, ConsentCellRecord)>>;
 }
 
@@ -150,6 +148,11 @@ pub fn decode_grant_dots(value: &Value) -> BTreeMap<String, ConsentGrantDot> {
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&chrono::Utc))
             .unwrap_or_else(chrono::Utc::now);
+        let not_before = entry
+            .get("not_before")
+            .and_then(Value::as_str)
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
         let expires_at = entry
             .get("expires_at")
             .and_then(Value::as_str)
@@ -159,6 +162,7 @@ pub fn decode_grant_dots(value: &Value) -> BTreeMap<String, ConsentGrantDot> {
             key.clone(),
             ConsentGrantDot {
                 dot,
+                not_before,
                 expires_at,
                 granted_at,
             },
@@ -178,9 +182,12 @@ pub fn encode_grant_dots(dots: &BTreeMap<String, ConsentGrantDot>) -> Value {
 pub fn json_for_grant_dot(grant: &ConsentGrantDot) -> Value {
     serde_json::json!({
         "dot": grant.dot,
-        "granted_at": arkret_canonical::format_timestamp_canonical(grant.granted_at),
+        "not_before": grant
+            .not_before
+            .map(arkret_canonical::format_timestamp_canonical),
         "expires_at": grant
             .expires_at
             .map(arkret_canonical::format_timestamp_canonical),
+        "granted_at": arkret_canonical::format_timestamp_canonical(grant.granted_at),
     })
 }

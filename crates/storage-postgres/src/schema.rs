@@ -316,14 +316,12 @@ diesel::table! {
 diesel::table! {
     consent_cells (id) {
         id -> Uuid,
+        cell_id -> Text,
         holder_id -> Text,
         peer_id -> Text,
-        scope -> Text,
-        cell_id -> Text,
-        requested_at -> Nullable<Timestamptz>,
+        consent_scope -> Text,
         grant_dots -> Jsonb,
         revoked_dots -> Jsonb,
-        revoked_at -> Nullable<Timestamptz>,
         updated_at -> Timestamptz,
     }
 }

@@ -425,6 +425,50 @@ fn stage_contact_projection(
     Ok(())
 }
 
+fn stage_consent_projection(
+    staged_cells: &mut std::collections::BTreeMap<
+        soland_storage::ConsentCellKey,
+        soland_storage::ConsentCellRecord,
+    >,
+    staged_account_data: &mut std::collections::BTreeMap<
+        (String, String),
+        soland_storage::AccountDataRecord,
+    >,
+    commit: Option<&soland_storage::ConsentProjectionCommit>,
+) -> PersistenceResult<()> {
+    let Some(commit) = commit else {
+        return Ok(());
+    };
+    let key = soland_storage::ConsentCellKey {
+        holder: commit.cell.holder.clone(),
+        cell_id: commit.cell.cell_id.clone(),
+    };
+    if let Some(current) = staged_cells.get(&key)
+        && (current.peer != commit.cell.peer || current.consent_scope != commit.cell.consent_scope)
+    {
+        return Err(PersistenceError::Conflict(
+            "consent_intent_rebind".to_owned(),
+        ));
+    }
+    staged_cells.insert(key, commit.cell.clone());
+    if let Some(cas) = commit.invite_quarantine.as_ref() {
+        let account_key = (
+            cas.record.actor.clone(),
+            cas.record.account_data_key.clone(),
+        );
+        let current_revision = staged_account_data
+            .get(&account_key)
+            .map_or(0, |record| record.revision);
+        if current_revision != cas.expected_revision
+            || cas.record.revision != cas.expected_revision.saturating_add(1)
+        {
+            return Err(PersistenceError::Conflict(cas.conflict_code.clone()));
+        }
+        staged_account_data.insert(account_key, cas.record.clone());
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
     async fn commit_event(
@@ -449,6 +493,8 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut contacts = self.contacts.data.lock();
         let mut invite_policies = self.invite_receive_policies.data.lock();
         let mut device_revocations = self.device_revocations.state.lock();
+        let mut consent_cells = self.consent_cells.data.lock();
+        let mut account_data = self.account_data.data.lock();
 
         let mut staged_events = events.clone();
         let mut staged_control_proposal_acks = control_proposal_acks.clone();
@@ -460,6 +506,8 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_contacts = contacts.clone();
         let mut staged_invite_policies = invite_policies.clone();
         let mut staged_device_revocations = device_revocations.clone();
+        let mut staged_consent_cells = consent_cells.clone();
+        let mut staged_account_data = account_data.clone();
 
         stage_device_pairing_authorization(
             &mut staged_pairings,
@@ -542,6 +590,11 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         soland_storage::validate_actor_scope_commit(staged_events.values(), &request.event)?;
         stage_control_proposal_ack(&mut staged_control_proposal_acks, &request)?;
         stage_contact_projection(&mut staged_contacts, request.contact_projection.as_ref())?;
+        stage_consent_projection(
+            &mut staged_consent_cells,
+            &mut staged_account_data,
+            request.consent_projection.as_ref(),
+        )?;
         if let Some(policy) = request
             .contact_projection
             .as_ref()
@@ -620,6 +673,8 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *contacts = staged_contacts;
         *invite_policies = staged_invite_policies;
         *device_revocations = staged_device_revocations;
+        *consent_cells = staged_consent_cells;
+        *account_data = staged_account_data;
 
         let outcome = EventCommitOutcome {
             event_inserted: true,
@@ -955,6 +1010,7 @@ mod tests {
         EventCommitRequest {
             device_pairing_authorization: None,
             contact_projection: None,
+            consent_projection: None,
             event: CanonicalEventRecord {
                 event_id: event_id.clone(),
                 actor_id: actor_id.to_owned(),
@@ -1161,6 +1217,7 @@ mod tests {
         EventCommitRequest {
             device_pairing_authorization: None,
             contact_projection: None,
+            consent_projection: None,
             event: CanonicalEventRecord {
                 event_id,
                 actor_id: actor_id.to_owned(),
@@ -1268,6 +1325,7 @@ mod tests {
             EventCommitRequest {
                 device_pairing_authorization: None,
                 contact_projection: None,
+                consent_projection: None,
                 event: CanonicalEventRecord {
                     event_id,
                     actor_id: actor_id.to_string(),

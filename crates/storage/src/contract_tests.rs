@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use arkret_models_collaboration::account_lifecycle::{
     AccountStatusPrincipalAuthority, AccountStatusReceipt, AccountStatusRecord,
     UnsignedAccountStatusReceipt, UnsignedAccountStatusRecord,
@@ -17,8 +19,10 @@ use arkret_wire::{
 use chrono::{Duration, Utc};
 
 use super::{
+    AccountDataCasCommit, AccountDataCasResult, AccountDataRecord, AccountDataStore,
     AccountStatusReplicaAppend, AccountStatusReplicaConflictKind, AccountStatusReplicaStore,
-    CanonicalEventRecord, ContactProjectionCommit, ContactRecord, ContactStore,
+    CanonicalEventRecord, ConsentCellRecord, ConsentCellStore, ConsentGrantDot,
+    ConsentProjectionCommit, ContactProjectionCommit, ContactRecord, ContactStore,
     ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore, DeviceInventoryRecord,
     DeviceInventoryStore, DeviceKeyStore, DeviceMessageBatchCommitOutcome,
     DeviceMessageBatchItemRecord, DeviceMessageBatchRecord, DeviceMessageRecord,
@@ -37,10 +41,11 @@ use super::{
     OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
     OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
     OrganizationRegistrationTerminalReason, PeerKeyPackageClaimLedgerRecord,
-    PeerKeyPackageClaimLedgerWriteResult, ProjectionEventRecord, ProjectionEventStore,
-    RealmFanoutAuthorityWitness, RealmFanoutBinding, RealmMetaRecord, RealmMetaStore,
-    ServiceRouteHandoverNoticeCommit, ServiceRouteHandoverNoticeRecord, ServiceRouteHandoverPlan,
-    ServiceRouteHandoverPlanState, ServiceRouteHandoverPlanStore, ServiceRouteHandoverPlanWrite,
+    PeerKeyPackageClaimLedgerWriteResult, PersistenceError, ProjectionEventRecord,
+    ProjectionEventStore, RealmFanoutAuthorityWitness, RealmFanoutBinding, RealmMetaRecord,
+    RealmMetaStore, ServiceRouteHandoverNoticeCommit, ServiceRouteHandoverNoticeRecord,
+    ServiceRouteHandoverPlan, ServiceRouteHandoverPlanState, ServiceRouteHandoverPlanStore,
+    ServiceRouteHandoverPlanWrite,
 };
 
 pub fn minimal_history_signer_evidence(
@@ -1235,6 +1240,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let request = EventCommitRequest {
         device_pairing_authorization: None,
         contact_projection: None,
+        consent_projection: None,
         event,
         control_proposal_ingress: Some(ControlProposalIngress::AckRequired(control_proposal_ack)),
         device_revocation_transition: None,
@@ -1373,6 +1379,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             changed_at: now,
         }),
         contact_projection: None,
+        consent_projection: None,
         event: pairing_event,
         control_proposal_ingress: Some(ControlProposalIngress::AckRequired(pairing_ack)),
         device_revocation_transition: None,
@@ -1472,6 +1479,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             conflict_code: "contact_round_conflict".to_owned(),
             invite_policy: None,
         }),
+        consent_projection: None,
         control_proposal_ingress: Some(ControlProposalIngress::AckRequired(
             contract_control_proposal_ack(&contact_event, &realm_id, now),
         )),
@@ -1554,6 +1562,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
                 conflict_code: "contact_lineage_conflict".to_owned(),
                 invite_policy: None,
             }),
+            consent_projection: None,
             control_proposal_ingress: Some(ControlProposalIngress::AckRequired(
                 contract_control_proposal_ack(&failed_contact_event, &realm_id, now),
             )),
@@ -1600,6 +1609,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let failed = EventCommitRequest {
         device_pairing_authorization: None,
         contact_projection: None,
+        consent_projection: None,
         event: rollback_event,
         control_proposal_ingress: Some(ControlProposalIngress::AckRequired(rollback_ack)),
         device_revocation_transition: None,
@@ -3840,6 +3850,7 @@ fn contract_device_revoke_fixture(
         EventCommitRequest {
             device_pairing_authorization: None,
             contact_projection: None,
+            consent_projection: None,
             event: record,
             control_proposal_ingress: Some(ingress.clone()),
             device_revocation_transition: Some(transition),
@@ -4003,4 +4014,249 @@ pub async fn assert_device_revocation_seal_settlement_contract(
             .iter()
             .all(|intent| intent.proposal_digest != proposal_digest)
     );
+}
+
+/// Stores one consent-projection commit contract needs.
+pub struct ConsentCommitContractStores<'a> {
+    pub unit_of_work: &'a dyn EventCommitUnitOfWork,
+    pub events: &'a dyn EventStore,
+    pub consent_cells: &'a dyn ConsentCellStore,
+    pub account_data: &'a dyn AccountDataStore,
+}
+
+/// Both adapters commit a consent Control Move, its or_set cell row and its
+/// eager invite-quarantine invalidation as one unit, and both refuse to rebind
+/// a `consent_id` to a different intent.
+///
+/// Spec `consent-model.md` sections 3.1 and 4.1.2: the cell subject is the
+/// `consent_id`, and the downstream invalidation belongs inside the accepted
+/// revoke's transaction boundary.
+pub async fn assert_consent_projection_commit_contract(
+    stores: ConsentCommitContractStores<'_>,
+    namespace: &str,
+) {
+    let now = database_timestamp_now();
+    let realm_id = contract_realm_id(&format!("consent-commit:{namespace}"));
+    let holder = format!("did:web:{namespace}-holder.example");
+    let peer = format!("did:web:{namespace}-peer.example");
+    let other_peer = format!("did:web:{namespace}-other.example");
+    let cell_id = format!(
+        "ak:cell:ak.component.consent.grant.v1:ak:consent:01964137-0000-7000-8000-{:012x}",
+        namespace.len()
+    );
+
+    let grant_event = canonical_wire_event_record("", &holder, &realm_id, 0, now);
+    let grant_event_id = grant_event.event_id.clone();
+    let grant_ack = contract_control_proposal_ack(&grant_event, &realm_id, now);
+    let dot = format!("{grant_event_id}:0");
+    let granted = ConsentCellRecord {
+        cell_id: cell_id.clone(),
+        holder: holder.clone(),
+        peer: peer.clone(),
+        consent_scope: "invite".to_owned(),
+        grant_dots: BTreeMap::from([(
+            dot.clone(),
+            ConsentGrantDot {
+                dot: dot.clone(),
+                not_before: None,
+                expires_at: None,
+                granted_at: now,
+            },
+        )]),
+        revoked_dots: BTreeSet::new(),
+        updated_at: now,
+    };
+    stores
+        .unit_of_work
+        .commit_event(consent_commit_request(
+            grant_event,
+            grant_ack,
+            ConsentProjectionCommit {
+                cell: granted.clone(),
+                invite_quarantine: None,
+            },
+        ))
+        .await
+        .expect("consent grant commits with its cell");
+    assert_eq!(
+        stores
+            .consent_cells
+            .get(&holder, &cell_id)
+            .await
+            .expect("read consent cell"),
+        Some(granted.clone()),
+        "the accepted grant's cell row is durable"
+    );
+
+    // A second consent_id-identical grant that names another peer is a rebind.
+    let rebind_event = canonical_wire_event_record("", &holder, &realm_id, 1, now);
+    let rebind_event_id = rebind_event.event_id.clone();
+    let rebind_ack = contract_control_proposal_ack(&rebind_event, &realm_id, now);
+    let mut rebound = granted.clone();
+    rebound.peer = other_peer;
+    let rejected = stores
+        .unit_of_work
+        .commit_event(consent_commit_request(
+            rebind_event,
+            rebind_ack,
+            ConsentProjectionCommit {
+                cell: rebound,
+                invite_quarantine: None,
+            },
+        ))
+        .await;
+    assert!(
+        matches!(rejected, Err(PersistenceError::Conflict(ref code)) if code == "consent_intent_rebind"),
+        "a consent_id binds one intent: {rejected:?}"
+    );
+    assert!(
+        stores
+            .events
+            .get(&rebind_event_id)
+            .await
+            .expect("read rebind event")
+            .is_none(),
+        "a refused consent projection leaves no accepted Event"
+    );
+    assert_eq!(
+        stores
+            .consent_cells
+            .get(&holder, &cell_id)
+            .await
+            .expect("read consent cell"),
+        Some(granted.clone()),
+        "a refused rebind leaves the frozen intent untouched"
+    );
+
+    // A revoke commits its cell mutation and its quarantine CAS together.
+    let quarantine_key = "ak.account.invite_quarantine";
+    let seeded = AccountDataRecord {
+        actor: holder.clone(),
+        account_data_key: quarantine_key.to_owned(),
+        revision: 1,
+        payload: serde_json::json!({"entries": [{"source_peer_principal_id": peer}]}),
+        tombstone: false,
+        updated_at: now,
+    };
+    assert!(
+        matches!(
+            stores
+                .account_data
+                .compare_and_set(&seeded, 0)
+                .await
+                .expect("seed quarantine cell"),
+            AccountDataCasResult::Applied(_)
+        ),
+        "quarantine cell seeds at revision 1"
+    );
+
+    let stale_event = canonical_wire_event_record("", &holder, &realm_id, 1, now);
+    let stale_event_id = stale_event.event_id.clone();
+    let stale_ack = contract_control_proposal_ack(&stale_event, &realm_id, now);
+    let mut revoked = granted.clone();
+    revoked.revoked_dots.insert(dot.clone());
+    let stale_cas = AccountDataCasCommit {
+        record: AccountDataRecord {
+            revision: 8,
+            ..seeded.clone()
+        },
+        expected_revision: 7,
+        conflict_code: "cas_conflict".to_owned(),
+    };
+    let stale = stores
+        .unit_of_work
+        .commit_event(consent_commit_request(
+            stale_event,
+            stale_ack,
+            ConsentProjectionCommit {
+                cell: revoked.clone(),
+                invite_quarantine: Some(stale_cas),
+            },
+        ))
+        .await;
+    assert!(
+        matches!(stale, Err(PersistenceError::Conflict(ref code)) if code == "cas_conflict"),
+        "a stale invalidation CAS refuses the whole revoke: {stale:?}"
+    );
+    assert!(
+        stores
+            .events
+            .get(&stale_event_id)
+            .await
+            .expect("read stale revoke event")
+            .is_none(),
+        "a failed invalidation leaves no accepted revoke Event"
+    );
+    assert_eq!(
+        stores
+            .consent_cells
+            .get(&holder, &cell_id)
+            .await
+            .expect("read consent cell")
+            .expect("cell still exists")
+            .revoked_dots
+            .len(),
+        0,
+        "a failed invalidation leaves no partial cell mutation"
+    );
+
+    let revoke_event = canonical_wire_event_record("", &holder, &realm_id, 1, now);
+    let revoke_ack = contract_control_proposal_ack(&revoke_event, &realm_id, now);
+    let applied_cas = AccountDataCasCommit {
+        record: AccountDataRecord {
+            revision: 2,
+            payload: serde_json::json!({"entries": []}),
+            ..seeded.clone()
+        },
+        expected_revision: 1,
+        conflict_code: "cas_conflict".to_owned(),
+    };
+    stores
+        .unit_of_work
+        .commit_event(consent_commit_request(
+            revoke_event,
+            revoke_ack,
+            ConsentProjectionCommit {
+                cell: revoked.clone(),
+                invite_quarantine: Some(applied_cas),
+            },
+        ))
+        .await
+        .expect("consent revoke commits with its invalidation");
+    assert_eq!(
+        stores
+            .consent_cells
+            .get(&holder, &cell_id)
+            .await
+            .expect("read consent cell"),
+        Some(revoked),
+        "the accepted revoke's removal is durable"
+    );
+    let quarantine = stores
+        .account_data
+        .get(&holder, quarantine_key)
+        .await
+        .expect("read quarantine cell")
+        .expect("quarantine cell exists");
+    assert_eq!(quarantine.revision, 2);
+    assert_eq!(quarantine.payload, serde_json::json!({"entries": []}));
+}
+
+fn consent_commit_request(
+    event: CanonicalEventRecord,
+    ack: arkret_wire::ControlProposalAck,
+    consent_projection: ConsentProjectionCommit,
+) -> EventCommitRequest {
+    EventCommitRequest {
+        device_pairing_authorization: None,
+        contact_projection: None,
+        consent_projection: Some(consent_projection),
+        event,
+        control_proposal_ingress: Some(ControlProposalIngress::AckRequired(ack)),
+        device_revocation_transition: None,
+        device_revocation_gate: None,
+        projections: Vec::new(),
+        idempotency: None,
+        outbox: Vec::new(),
+    }
 }

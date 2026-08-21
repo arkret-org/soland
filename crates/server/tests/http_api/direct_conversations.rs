@@ -287,21 +287,22 @@ async fn seed_remote_claim_prerequisites(
             .unwrap()
             .to_string();
     state.test_install_consent_cell(soland_services::identity::ConsentCellRecord {
+        cell_id:
+            "ak:cell:ak.component.consent.grant.v1:ak:consent:01964137-0000-7000-8000-0000000000c1"
+                .to_owned(),
         holder: core_id(BOB_DID).to_string(),
         peer: core_id(alice).to_string(),
-        scope: "direct_message".to_owned(),
-        cell_id: "ak:consent:peer-keypackage-claim".to_owned(),
-        requested_at: None,
+        consent_scope: "direct_message".to_owned(),
         grant_dots: BTreeMap::from([(
             grant_dot.clone(),
             soland_services::identity::ConsentGrantDot {
                 dot: grant_dot,
+                not_before: None,
                 expires_at: None,
                 granted_at: now,
             },
         )]),
         revoked_dots: BTreeSet::new(),
-        revoked_at: None,
         updated_at: now,
     });
     (signing_key, authorize_event_id)

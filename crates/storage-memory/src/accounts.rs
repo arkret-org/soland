@@ -321,7 +321,7 @@ impl AccountLifecycleStore for MemoryAccountLifecycleStore {
 /// In-memory `(actor, account_data_key) -> AccountDataRecord` table. Mirrors the
 /// `account_datas` Pg table on the same composite key.
 pub(crate) struct MemoryAccountDataStore {
-    data: Arc<Mutex<BTreeMap<(String, String), AccountDataRecord>>>,
+    pub(crate) data: Arc<Mutex<BTreeMap<(String, String), AccountDataRecord>>>,
 }
 impl MemoryAccountDataStore {
     pub(crate) fn new() -> Self {

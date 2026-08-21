@@ -784,6 +784,9 @@ pub struct CommitAcceptedEventCommand {
     pub event: AcceptedEvent,
     pub device_pairing_authorization: Option<CommitDevicePairingAuthorization>,
     pub contact_projection: Option<CommitContactProjection>,
+    /// Holder-private consent cell mutation plus its eager cache
+    /// invalidation, staged by admission and committed with the Event.
+    pub consent_projection: Option<CommitConsentProjection>,
     /// Durable ingress classification of an accepted Control Move
     /// (`event-auth-state-resolution.md` §7.2): `Some` iff the Event enters the
     /// pending-control log. Class and payload are inseparable at the store
@@ -794,6 +797,25 @@ pub struct CommitAcceptedEventCommand {
     pub projections: Vec<ProjectedEvent>,
     pub idempotency: Option<IdempotentResponse>,
     pub deliveries: Vec<FederationDelivery>,
+}
+
+/// The holder-private consent effects of one accepted consent Control Move.
+///
+/// `consent-model.md` section 4.1.2 puts the downstream invalidation inside
+/// the same transaction boundary as the accepted revoke, so the or_set cell
+/// mutation and the invite-quarantine CAS commit with the canonical Event.
+#[derive(Clone, Debug)]
+pub struct CommitConsentProjection {
+    pub cell: crate::identity::ConsentCellRecord,
+    pub invite_quarantine: Option<CommitAccountDataCas>,
+}
+
+/// One account-data cell replaced by revision CAS inside an Event commit.
+#[derive(Clone, Debug)]
+pub struct CommitAccountDataCas {
+    pub record: crate::identity::AccountDataState,
+    pub expected_revision: u64,
+    pub conflict_code: String,
 }
 
 #[derive(Clone, Debug)]
@@ -2340,6 +2362,7 @@ mod tests {
             .commit_accepted_event(CommitAcceptedEventCommand {
                 device_pairing_authorization: None,
                 contact_projection: None,
+                consent_projection: None,
                 event: AcceptedEvent {
                     event_id: event_id.clone(),
                     actor_id: "did:web:alice.example".to_owned(),

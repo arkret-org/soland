@@ -557,7 +557,6 @@ async fn project_accepted_operations_inner(
         if kinds::canonical_kind(operation) == arkret_wire::EventKind::SelfModerationReport {
             materialize_moderation_report(state, operation).await;
         }
-        crate::routing::identity::consent::project_consent_operation(state, operation).await;
         // Device-identity Phase 1 — persist an accepted `ak.device.authorize`'s
         // `payload.device_public_key` into the devices table so the
         // `keys/query` signing-key directory resolves devices that were

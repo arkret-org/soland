@@ -854,10 +854,10 @@ async fn verify_mimi_consent_correlation(
                 .map_err(|error| AppError::internal(format!("MIMI consent cell id: {error}")))?;
             let cell = state
                 .consents()
-                .holder_cell_by_id(body.actor_id.as_str(), cell_id.as_str())
+                .holder_cell(body.actor_id.as_str(), cell_id.as_str())
                 .filter(|cell| {
                     cell.peer == correlation.requester_id
-                        && cell.scope == correlation.purpose
+                        && cell.consent_scope == correlation.purpose
                         && observed_dots.iter().all(|observed_dot| {
                             observed_dot.as_str().is_some_and(|observed_dot| {
                                 cell.grant_dots.get(observed_dot).is_some_and(|dot| {

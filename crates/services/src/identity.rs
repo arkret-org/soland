@@ -120,30 +120,37 @@ impl arkret_wire::PayloadSigner for FrozenEd25519NotarySigner {
     }
 }
 
+/// A consent cell is addressed by its subject: `consent_id` is the cell
+/// subject of exactly one holder (`consent-model.md` section 3.1), so the
+/// runtime key is `(holder, cell_id)`. `(peer, consent_scope)` is the intent
+/// carried by the cell's dots, not part of its address.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ConsentCellKey {
     pub holder: String,
-    pub peer: String,
-    pub scope: String,
+    pub cell_id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsentGrantDot {
     pub dot: String,
+    pub not_before: Option<DateTime<Utc>>,
     pub expires_at: Option<DateTime<Utc>>,
     pub granted_at: DateTime<Utc>,
 }
 
+/// One holder-private `ak.component.consent.grant.v1` or_set cell.
+///
+/// `peer` and `consent_scope` are the intent frozen by the cell's first
+/// accepted grant; every later dot on the same `consent_id` MUST carry that
+/// same intent (`consent-model.md` sections 3.1 and 3.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsentCellRecord {
+    pub cell_id: String,
     pub holder: String,
     pub peer: String,
-    pub scope: String,
-    pub cell_id: String,
-    pub requested_at: Option<DateTime<Utc>>,
+    pub consent_scope: String,
     pub grant_dots: BTreeMap<String, ConsentGrantDot>,
     pub revoked_dots: BTreeSet<String>,
-    pub revoked_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -423,9 +430,14 @@ pub struct AccountDataService {
     account_data: Arc<dyn AccountDataPort>,
 }
 
+/// Read side of the durable holder-private consent projection.
+///
+/// Consent cells are only ever written inside the Event commit unit of work
+/// that accepts their `ak.consent.grant` / `ak.consent.revoke` Control Move,
+/// so this port carries no writer: a second write path would be a second
+/// source of truth for replicated cell state.
 #[async_trait]
 pub trait ConsentCellPort: Send + Sync {
-    async fn save_cell(&self, cell: ConsentCellRecord) -> ServiceResult<()>;
     async fn cells(&self) -> ServiceResult<Vec<(ConsentCellKey, ConsentCellRecord)>>;
 }
 
@@ -681,14 +693,6 @@ impl ConsentService {
         self.mimi_correlations.correlation(consent_id).await
     }
 
-    pub async fn save_cell(&self, cell: ConsentCellRecord) -> ServiceResult<()> {
-        self.consent_cells.save_cell(cell).await
-    }
-
-    pub async fn cells(&self) -> ServiceResult<Vec<(ConsentCellKey, ConsentCellRecord)>> {
-        self.consent_cells.cells().await
-    }
-
     pub async fn hydrate_runtime(&self) -> ServiceResult<()> {
         self.replace_runtime_cells(self.consent_cells.cells().await?);
         Ok(())
@@ -701,32 +705,30 @@ impl ConsentService {
         *self.runtime_cells.lock() = cells.into_iter().collect();
     }
 
-    pub fn install_runtime_cell(&self, cell: ConsentCellRecord) {
-        let key = consent_cell_key(&cell.holder, &cell.peer, &cell.scope);
+    /// Publish one durably committed consent cell into the runtime
+    /// projection. The Event commit already succeeded, so this only refreshes
+    /// the working view a restart would rebuild from `hydrate_runtime`.
+    pub fn install_committed_cell(&self, cell: ConsentCellRecord) {
+        let key = consent_cell_key(&cell.holder, &cell.cell_id);
         self.runtime_cells.lock().insert(key, cell);
     }
 
-    pub fn visible_cells(&self, actor_id: &str) -> Vec<ConsentCellRecord> {
+    /// Every consent cell the holder owns. Consent is holder-private
+    /// (`consent-model.md` section 8): a peer never reads cells, dots or
+    /// expiry, so there is no peer-visible listing.
+    pub fn holder_cells(&self, holder: &str) -> Vec<ConsentCellRecord> {
         self.runtime_cells
             .lock()
             .values()
-            .filter(|cell| cell.holder == actor_id || cell.peer == actor_id)
+            .filter(|cell| cell.holder == holder)
             .cloned()
             .collect()
     }
 
-    pub fn cell(&self, holder: &str, peer: &str, scope: &str) -> Option<ConsentCellRecord> {
+    pub fn holder_cell(&self, holder: &str, cell_id: &str) -> Option<ConsentCellRecord> {
         self.runtime_cells
             .lock()
-            .get(&consent_cell_key(holder, peer, scope))
-            .cloned()
-    }
-
-    pub fn holder_cell_by_id(&self, holder: &str, cell_id: &str) -> Option<ConsentCellRecord> {
-        self.runtime_cells
-            .lock()
-            .values()
-            .find(|cell| cell.holder == holder && cell.cell_id == cell_id)
+            .get(&consent_cell_key(holder, cell_id))
             .cloned()
     }
 
@@ -739,134 +741,28 @@ impl ConsentService {
             .collect()
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn grant_cell(
+    /// Holder cells whose frozen intent is exactly `(peer, consent_scope)`.
+    pub fn cells_for_intent(
         &self,
         holder: &str,
         peer: &str,
-        scope: &str,
-        default_cell_id: String,
-        dot: String,
-        cell_id: Option<String>,
-        expires_at: Option<DateTime<Utc>>,
-        granted_at: DateTime<Utc>,
-    ) -> ConsentCellRecord {
-        let key = consent_cell_key(holder, peer, scope);
-        let mut cells = self.runtime_cells.lock();
-        let cell = cells.entry(key).or_insert_with(|| {
-            empty_consent_cell(holder, peer, scope, default_cell_id, granted_at)
-        });
-        if let Some(cell_id) = cell_id {
-            cell.cell_id = cell_id;
-        }
-        cell.grant_dots.insert(
-            dot.clone(),
-            ConsentGrantDot {
-                dot,
-                expires_at,
-                granted_at,
-            },
-        );
-        cell.revoked_at = None;
-        cell.updated_at = granted_at;
-        cell.clone()
-    }
-
-    pub fn grant_dots(&self, holder: &str, peer: &str, scope: &str) -> Vec<String> {
+        consent_scope: &str,
+    ) -> Vec<ConsentCellRecord> {
         self.runtime_cells
             .lock()
-            .get(&consent_cell_key(holder, peer, scope))
-            .map(|cell| cell.grant_dots.keys().cloned().collect())
-            .unwrap_or_default()
-    }
-
-    pub fn revoke_cell(
-        &self,
-        holder: &str,
-        peer: &str,
-        scope: &str,
-        default_cell_id: String,
-        observed_dots: &[String],
-        revoked_at: DateTime<Utc>,
-    ) -> ConsentCellRecord {
-        let key = consent_cell_key(holder, peer, scope);
-        let mut cells = self.runtime_cells.lock();
-        let cell = cells.entry(key).or_insert_with(|| {
-            empty_consent_cell(holder, peer, scope, default_cell_id, revoked_at)
-        });
-        cell.revoked_dots.extend(observed_dots.iter().cloned());
-        cell.revoked_at = Some(revoked_at);
-        cell.updated_at = revoked_at;
-        cell.clone()
-    }
-
-    pub fn mark_superseded_by_any_revoke(
-        &self,
-        holder: &str,
-        peer: &str,
-        scope: &str,
-        default_cell_id: String,
-        marker: &str,
-        revoked_at: DateTime<Utc>,
-    ) -> ConsentCellRecord {
-        let key = consent_cell_key(holder, peer, scope);
-        let mut cells = self.runtime_cells.lock();
-        let cell = cells.entry(key).or_insert_with(|| {
-            empty_consent_cell(holder, peer, scope, default_cell_id, revoked_at)
-        });
-        cell.revoked_dots.insert(marker.to_owned());
-        cell.revoked_at = Some(revoked_at);
-        cell.updated_at = revoked_at;
-        cell.clone()
-    }
-
-    pub fn restore_cell_if_current(
-        &self,
-        current: &ConsentCellRecord,
-        previous: Option<ConsentCellRecord>,
-    ) -> bool {
-        let key = consent_cell_key(&current.holder, &current.peer, &current.scope);
-        let mut cells = self.runtime_cells.lock();
-        if !cells.get(&key).is_some_and(|cell| cell == current) {
-            return false;
-        }
-        match previous {
-            Some(previous) => {
-                cells.insert(key, previous);
-            }
-            None => {
-                cells.remove(&key);
-            }
-        }
-        true
+            .values()
+            .filter(|cell| {
+                cell.holder == holder && cell.peer == peer && cell.consent_scope == consent_scope
+            })
+            .cloned()
+            .collect()
     }
 }
 
-fn consent_cell_key(holder: &str, peer: &str, scope: &str) -> ConsentCellKey {
+fn consent_cell_key(holder: &str, cell_id: &str) -> ConsentCellKey {
     ConsentCellKey {
         holder: holder.to_owned(),
-        peer: peer.to_owned(),
-        scope: scope.to_owned(),
-    }
-}
-
-fn empty_consent_cell(
-    holder: &str,
-    peer: &str,
-    scope: &str,
-    cell_id: String,
-    updated_at: DateTime<Utc>,
-) -> ConsentCellRecord {
-    ConsentCellRecord {
-        holder: holder.to_owned(),
-        peer: peer.to_owned(),
-        scope: scope.to_owned(),
-        cell_id,
-        requested_at: None,
-        grant_dots: BTreeMap::new(),
-        revoked_dots: Default::default(),
-        revoked_at: None,
-        updated_at,
+        cell_id: cell_id.to_owned(),
     }
 }
 

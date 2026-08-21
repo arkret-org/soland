@@ -1102,21 +1102,25 @@ CREATE INDEX state_cell_ops_cell_idx ON public.state_cell_ops USING btree (realm
 
 CREATE INDEX state_cell_ops_seal_idx ON public.state_cell_ops USING btree (realm_id, seal_id);
 
+-- Holder-private consent cells. `consent_id` is the cell subject
+-- (`consent-model.md` section 3.1), so the natural key is (holder, cell_id);
+-- peer_id and consent_scope are the intent frozen by the cell's first grant.
 CREATE TABLE public.consent_cells (
     id uuid PRIMARY KEY,
+    cell_id text NOT NULL,
     holder_id text NOT NULL,
     peer_id text NOT NULL,
-    scope text NOT NULL,
-    cell_id text NOT NULL,
-    requested_at timestamp with time zone,
+    consent_scope text NOT NULL,
     grant_dots jsonb DEFAULT '{}'::jsonb NOT NULL,
     revoked_dots jsonb DEFAULT '[]'::jsonb NOT NULL,
-    revoked_at timestamp with time zone,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 ALTER TABLE ONLY public.consent_cells
-    ADD CONSTRAINT consent_cells_holder_peer_scope_key UNIQUE (holder_id, peer_id, scope);
+    ADD CONSTRAINT consent_cells_holder_cell_key UNIQUE (holder_id, cell_id);
+
+CREATE INDEX consent_cells_holder_intent_idx
+    ON public.consent_cells USING btree (holder_id, peer_id, consent_scope);
 
 -- Private service-local MIMI request correlation. These rows are not consent
 -- cells and do not represent accepted protocol state; they only bind the

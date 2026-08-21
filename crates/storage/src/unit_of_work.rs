@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 
 use crate::{
-    CanonicalEventRecord, ContactRecord, DevicePairingAuthorizationCommit,
-    DeviceRevocationGateSelector, DeviceRevocationTransition, FederationOutboxRecord,
-    IdempotencyRecord, PersistenceResult, ProjectionEventRecord,
+    AccountDataRecord, CanonicalEventRecord, ConsentCellRecord, ContactRecord,
+    DevicePairingAuthorizationCommit, DeviceRevocationGateSelector, DeviceRevocationTransition,
+    FederationOutboxRecord, IdempotencyRecord, PersistenceResult, ProjectionEventRecord,
 };
 
 /// One Contact projection mutation committed with its canonical Event and
@@ -25,6 +25,31 @@ pub struct ContactProjectionCommit {
 /// Adapters must make the complete request visible atomically. Returning an
 /// error must leave the event log, projection log, idempotency table, and
 /// federation outbox unchanged.
+/// The holder-private consent effects of one accepted `ak.consent.grant` /
+/// `ak.consent.revoke` Control Move.
+///
+/// `consent-model.md` section 4.1.2 requires the downstream invalidation to
+/// land inside the same transaction boundary as the accepted revoke, and the
+/// or_set cell mutation is what the Event *means*, so the cell row, the
+/// invalidation and the canonical Event share one commit. Admission computes
+/// all of it before acceptance; a rejected Move writes none of it.
+#[derive(Clone, Debug)]
+pub struct ConsentProjectionCommit {
+    pub cell: ConsentCellRecord,
+    /// Eager invite-quarantine invalidation for an accepted revoke
+    /// (`consent-model.md` section 4.1.2), staged as a whole-value CAS against
+    /// the revision admission read.
+    pub invite_quarantine: Option<AccountDataCasCommit>,
+}
+
+/// One account-data cell replaced by revision CAS inside an Event commit.
+#[derive(Clone, Debug)]
+pub struct AccountDataCasCommit {
+    pub record: AccountDataRecord,
+    pub expected_revision: u64,
+    pub conflict_code: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct EventCommitRequest {
     pub event: CanonicalEventRecord,
@@ -32,6 +57,9 @@ pub struct EventCommitRequest {
     /// boundary as the canonical Event and its reducer projection.
     pub device_pairing_authorization: Option<DevicePairingAuthorizationCommit>,
     pub contact_projection: Option<ContactProjectionCommit>,
+    /// Holder-private consent cell mutation plus its eager cache
+    /// invalidation, committed with the Event that authorizes them.
+    pub consent_projection: Option<ConsentProjectionCommit>,
     /// Durable ingress classification of an accepted Control Move
     /// (`event-auth-state-resolution.md` §7.2): `Some` iff the Event enters the
     /// pending-control log. The class and its payload are inseparable, so an

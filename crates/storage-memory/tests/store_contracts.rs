@@ -1,7 +1,7 @@
 use soland_storage::contract_tests::{
-    DeviceRevocationSealSettlementStores, EventCommitContractStores,
+    ConsentCommitContractStores, DeviceRevocationSealSettlementStores, EventCommitContractStores,
     assert_account_status_replica_decision_table_contract,
-    assert_atomic_batch_outbox_rollback_contract,
+    assert_atomic_batch_outbox_rollback_contract, assert_consent_projection_commit_contract,
     assert_control_proposal_authority_ack_store_contract, assert_device_key_store_contract,
     assert_device_message_snapshot_guard_contract,
     assert_device_revocation_seal_settlement_contract, assert_event_commit_unit_of_work_contract,
@@ -91,6 +91,21 @@ async fn memory_adapter_satisfies_shared_event_commit_contract() {
             invite_policies: store.invite_receive_policies(),
         },
         "memory-event-commit",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn memory_adapter_satisfies_shared_consent_projection_commit_contract() {
+    let store = SolandMemoryPersistenceStore::new();
+    assert_consent_projection_commit_contract(
+        ConsentCommitContractStores {
+            unit_of_work: &store,
+            events: store.events(),
+            consent_cells: store.consent_cells(),
+            account_data: store.account_data(),
+        },
+        "memory-consent-commit",
     )
     .await;
 }
