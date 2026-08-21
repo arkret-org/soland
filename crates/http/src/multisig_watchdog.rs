@@ -20,8 +20,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arkret_identifiers::{DidFullId, Hash, Hlc, RealmId, SealId};
-use arkret_wire::{PartialSignature, Seal, ThresholdAggregator, WireError};
+use arkret_identifiers::DidFullId;
+use arkret_wire::{NotarySig, PartialSignature, Seal, ThresholdAggregator, WireError};
 use base64::Engine as _;
 use chrono::Utc;
 use soland_services::governance::MultisigPendingRecord;
@@ -251,55 +251,6 @@ fn aggregate_and_publish(state: &AppState, record: &MultisigPendingRecord) -> Re
         .decode(&record.canonical_b64)
         .map_err(|e| format!("canonical_b64 decode failed: {e}"))?;
 
-    // Reconstruct the structured seal body from the canonical JSON.
-    let body: serde_json::Value = serde_json::from_slice(&canonical_bytes)
-        .map_err(|e| format!("canonical_bytes are not JSON: {e}"))?;
-    let realm_id = body
-        .get("realm_id")
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| "canonical body missing realm_id".to_owned())?;
-    let predecessor_refs = body
-        .get("predecessor_refs")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(ToOwned::to_owned))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let delta = body
-        .get("delta")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(ToOwned::to_owned))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let state_root = body
-        .get("state_root")
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| "canonical body missing state_root".to_owned())?;
-    let hlc_str = body
-        .get("hlc")
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| "canonical body missing hlc".to_owned())?;
-
-    let realm_id = RealmId::new(realm_id).map_err(|e| format!("invalid realm_id: {e}"))?;
-    let predecessor_refs: Vec<SealId> = predecessor_refs
-        .into_iter()
-        .map(|s| SealId::new(s).map_err(|e| format!("invalid SealId: {e}")))
-        .collect::<Result<_, _>>()?;
-    let delta: Vec<Hash> = delta
-        .into_iter()
-        .map(|s| Hash::new(s).map_err(|e| format!("invalid Hash: {e}")))
-        .collect::<Result<_, _>>()?;
-    let state_root = Hash::new(state_root).map_err(|e| format!("invalid state_root hash: {e}"))?;
-    let hlc = Hlc::new(hlc_str).map_err(|e| format!("invalid hlc: {e}"))?;
-
     let mut aggregator = ThresholdAggregator::new(record.threshold_k as usize)
         .map_err(|e| format!("aggregator init: {e}"))?;
     for (signer_did, partial) in &record.partials {
@@ -330,21 +281,18 @@ fn aggregate_and_publish(state: &AppState, record: &MultisigPendingRecord) -> Re
         return Err("threshold not yet met".to_owned());
     }
 
-    let _multi = aggregator
+    let multi = aggregator
         .aggregate(&canonical_bytes, |partial, bytes| {
             verify_ed25519_partial(state, partial, bytes).map_err(WireError::Protocol)
         })
         .map_err(|e| format!("aggregate: {e}"))?;
 
-    let seal = Seal::sign_threshold_partial(
-        realm_id,
-        predecessor_refs,
-        delta,
-        state_root,
-        hlc,
-        &aggregator,
+    let seal = Seal::from_canonical_body_and_signature(
+        &canonical_bytes,
+        NotarySig::Multi(multi),
+        record.digest_suite,
     )
-    .map_err(|e| format!("sign_threshold_partial: {e}"))?;
+    .map_err(|e| format!("aggregated Seal construction failed: {e}"))?;
 
     Ok(seal)
 }
@@ -418,6 +366,7 @@ mod tests {
         soland_storage::MultisigPendingRecord {
             seal_id: seal_id.to_owned(),
             realm_id: "ak:realm:AXVdykmiwmiUakQOqyMoYAwL8Eh63mpQHFaMczNjNT5p".to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
             threshold_k,
             threshold_n: 3,
             members: (0..3)

@@ -76,7 +76,7 @@ pub struct AdminRealmItem {
     pub member_count: usize,
     pub members: Vec<String>,
     pub created_by: Option<String>,
-    pub history_visibility: Option<String>,
+    pub history_access: Option<String>,
     pub is_encrypted: bool,
     /// Mirrors `deleted`; kept because the console renders a blocked badge.
     pub is_blocked: bool,

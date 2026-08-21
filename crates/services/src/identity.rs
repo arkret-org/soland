@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arkret_identifiers::{BlobRef, DidFullId, EventId, Hash};
+use arkret_identifiers::{BlobRef, DidCoreId, DidFullId, EventId, Hash};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::contact_operations::{
     ContactRoundEvidenceBundle, PeerContactMirrorReceipt, PeerContactSubmitOutcome,
@@ -16,12 +16,109 @@ use arkret_models_identity::service_identity::{
     ServiceRegistrationKey, ServiceRegistrationOutcome,
 };
 use arkret_wire::{
-    DeviceReanchorPreFenceSealFrontier, DidUrl, LeaseBasisRef, NonEmptyString, OpaqueLocalId,
+    DeviceReanchorPreFenceSealFrontier, DidUrl, LeaseBasisRef, NonEmptyString, NotaryJoseAlgorithm,
+    NotaryKeyKind, NotarySignerDescriptor, OpaqueLocalId,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use ed25519_dalek::Signer as _;
 use parking_lot::Mutex;
 use serde_json::Value;
+
+/// Freeze one locally held Ed25519 notary key into the canonical Realm
+/// notary descriptor. Callers must pass the verification key belonging to the
+/// exact signer that will issue Seals; this helper never resolves or invents
+/// key material.
+pub fn ed25519_notary_signer_descriptor(
+    actor_id: DidCoreId,
+    verification_method: DidUrl,
+    public_key: &[u8; 32],
+) -> Result<NotarySignerDescriptor, String> {
+    let descriptor = NotarySignerDescriptor {
+        actor_id,
+        verification_method,
+        key_kind: NotaryKeyKind::Ed25519Raw32,
+        jose_algorithm: NotaryJoseAlgorithm::Ed25519,
+        frozen_public_key_b64u: arkret_canonical::base64url_encode(public_key),
+        frozen_public_key_digest: Hash::new(arkret_canonical::sha256_digest(public_key))
+            .map_err(|error| error.to_string())?,
+    };
+    descriptor.validate().map_err(|error| error.to_string())?;
+    Ok(descriptor)
+}
+
+/// Sign a frozen-notary transcript with the SDK-owned detached-JWS `kid`
+/// binding required by [`arkret_wire::SealSignature`].
+pub fn sign_ed25519_frozen_notary_jws(
+    canonical_bytes: &[u8],
+    verification_method: &DidUrl,
+    signing_key: &ed25519_dalek::SigningKey,
+) -> Result<String, String> {
+    let signing_input = arkret_signatures::proof::ed25519_detached_jws_signing_input(
+        canonical_bytes,
+        Some(verification_method.as_str()),
+    )
+    .map_err(|error| error.to_string())?;
+    let signature = signing_key.sign(signing_input.as_bytes());
+    arkret_signatures::proof::ed25519_detached_jws_from_signature(
+        &signature.to_bytes(),
+        Some(verification_method.as_str()),
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// SDK [`arkret_wire::PayloadSigner`] adapter for frozen Realm-notary Seals.
+pub struct FrozenEd25519NotarySigner {
+    signing_key: ed25519_dalek::SigningKey,
+    signer_did: DidFullId,
+    verification_method: DidUrl,
+}
+
+impl FrozenEd25519NotarySigner {
+    #[must_use]
+    pub fn from_seed(seed: [u8; 32], signer_did: DidFullId, verification_method: DidUrl) -> Self {
+        Self {
+            signing_key: ed25519_dalek::SigningKey::from_bytes(&seed),
+            signer_did,
+            verification_method,
+        }
+    }
+
+    #[must_use]
+    pub fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.signing_key.verifying_key()
+    }
+}
+
+impl arkret_wire::PayloadSigner for FrozenEd25519NotarySigner {
+    fn signer_did(&self) -> &DidFullId {
+        &self.signer_did
+    }
+
+    fn verification_method_id(&self) -> &DidUrl {
+        &self.verification_method
+    }
+
+    fn sign_payload(
+        &self,
+        canonical_bytes: &[u8],
+    ) -> arkret_wire::Result<arkret_wire::PayloadSignature> {
+        let payload_digest = Hash::new(arkret_canonical::sha256_digest(canonical_bytes))?;
+        let jws = sign_ed25519_frozen_notary_jws(
+            canonical_bytes,
+            &self.verification_method,
+            &self.signing_key,
+        )
+        .map_err(arkret_wire::Error::Protocol)?;
+        Ok(arkret_wire::PayloadSignature {
+            verification_method: self.verification_method.clone(),
+            payload_digest,
+            created_at: Utc::now(),
+            jws,
+            extra: BTreeMap::new(),
+        })
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ConsentCellKey {
@@ -95,8 +192,8 @@ pub struct ContactRecord {
 ///
 /// `contact-and-direct-conversation.md` §8.3: the binding is written once and
 /// never retired, so this carries no lifecycle state, no `supersedes` ref and
-/// no permanent `mls_group_id` — participant authority always reads the current
-/// active MLS generation instead.
+/// no separately mutable `mls_group_id`; the MLS group is uniquely derived
+/// from the immutable Realm scope.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DirectConversationBindingRecord {
     pub participants_unordered: Vec<String>,

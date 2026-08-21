@@ -1202,25 +1202,32 @@ impl ProjectionState {
         } else {
             None
         };
-        // `encryption-and-audit.md` §2.10 — the history_visibility ×
-        // content_scheme linkage MUST hold on every write surface, genesis
-        // included. The create object declares all three inputs itself, so the
-        // effective combination is evaluated straight from the signed payload
-        // before any state mutation.
+        // Standard MLS never exports history secrets, so its history policy is
+        // permanently pinned to `since_join`.
         if kind == arkret_wire::EventKind::RealmCreate
             && let Some(object) = payload_object
-            && object.get("encryption_profile").and_then(Value::as_str) == Some("mls_rfc9420")
         {
-            let history_visibility = object
-                .get("history_visibility")
+            let history_access = object
+                .get("history_access")
                 .and_then(Value::as_str)
-                .unwrap_or("joined");
-            if let Err(reason) = arkret_models_collaboration::governance::history_visibility::validate_history_visibility_content_scheme_values(
-                history_visibility,
-                object.get("content_scheme").and_then(Value::as_str),
+                .unwrap_or("since_join");
+            if !matches!(
+                history_access,
+                "since_join" | "all_history_for_current_members"
             ) {
                 return ProjectionEffect::Rejected {
-                    reason: reason.to_owned(),
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+            let purpose = object.get("purpose").and_then(Value::as_str);
+            let fixed_since_join = matches!(
+                purpose,
+                Some("direct_conversation" | "principal_control" | "managed_agent_control")
+            ) || object.get("encryption_profile").and_then(Value::as_str)
+                == Some("mls_rfc9420");
+            if fixed_since_join && history_access != "since_join" {
+                return ProjectionEffect::Rejected {
+                    reason: "history_access_requires_history_capable_scheme".to_owned(),
                 };
             }
         }
@@ -1501,6 +1508,30 @@ impl ProjectionState {
                     self.realm_null_subject_cells.insert(
                         (realm_id.clone(), arkret_wire::REALM_GENESIS_CELL.to_owned()),
                         CellState::Value(Value::Object(genesis.clone())),
+                    );
+                }
+                if let Some(history_access) = payload_object.and_then(|object| {
+                    object
+                        .get("history_access")
+                        .and_then(Value::as_str)
+                        .or_else(|| {
+                            matches!(
+                                object.get("purpose").and_then(Value::as_str),
+                                Some(
+                                    "direct_conversation"
+                                        | "principal_control"
+                                        | "managed_agent_control"
+                                )
+                            )
+                            .then_some("since_join")
+                        })
+                }) {
+                    self.realm_null_subject_cells.insert(
+                        (
+                            realm_id.clone(),
+                            "ak:cell:ak.component.realm.history_access.v1:null".to_owned(),
+                        ),
+                        CellState::Value(Value::String(history_access.to_owned())),
                     );
                 }
                 if let Some(notary) = payload_object.and_then(|object| object.get("notary")) {

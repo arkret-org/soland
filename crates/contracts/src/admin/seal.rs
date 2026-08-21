@@ -6,7 +6,7 @@ use serde_json::Value;
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum NotaryKind {
-    SingleDid,
+    SingleSigner,
     Threshold,
     OpenSet,
     Mixed,
@@ -15,7 +15,7 @@ pub enum NotaryKind {
 impl NotaryKind {
     pub fn label(&self) -> &'static str {
         match self {
-            NotaryKind::SingleDid => "single_did",
+            NotaryKind::SingleSigner => "single_signer",
             NotaryKind::Threshold => "threshold",
             NotaryKind::OpenSet => "open_set",
             NotaryKind::Mixed => "mixed",
@@ -23,24 +23,10 @@ impl NotaryKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct AdminNotaryValue {
-    pub kind_raw: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub single_actor_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub threshold_k: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub threshold_n: Option<u32>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub threshold_actor_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub open_set_members: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mixed_primary_actor_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mixed_recovery_actor_ids: Vec<String>,
+    pub notary: arkret_wire::NotaryValue,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revocation_freshness_window_ms: Option<u64>,
     #[serde(default)]
@@ -48,45 +34,39 @@ pub struct AdminNotaryValue {
 }
 
 impl AdminNotaryValue {
-    pub fn kind(&self) -> Option<NotaryKind> {
-        match self.kind_raw.as_str() {
-            "single_did" => Some(NotaryKind::SingleDid),
-            "threshold" => Some(NotaryKind::Threshold),
-            "open_set" => Some(NotaryKind::OpenSet),
-            "mixed" => Some(NotaryKind::Mixed),
-            _ => None,
+    pub fn kind(&self) -> NotaryKind {
+        match &self.notary {
+            arkret_wire::NotaryValue::SingleSigner { .. } => NotaryKind::SingleSigner,
+            arkret_wire::NotaryValue::Threshold { .. } => NotaryKind::Threshold,
+            arkret_wire::NotaryValue::OpenSet { .. } => NotaryKind::OpenSet,
+            arkret_wire::NotaryValue::Mixed { .. } => NotaryKind::Mixed,
         }
     }
 
     pub fn kind_label(&self) -> String {
-        match self.kind() {
-            Some(kind) => kind.label().to_string(),
-            None => format!("unknown:{}", self.kind_raw),
-        }
+        self.kind().label().to_owned()
     }
 
     pub fn summary(&self) -> String {
-        match self.kind() {
-            Some(NotaryKind::SingleDid) => {
-                format!(
-                    "single_did({})",
-                    self.single_actor_id.as_deref().unwrap_or("?")
-                )
+        match &self.notary {
+            arkret_wire::NotaryValue::SingleSigner { signer, .. } => {
+                format!("single_signer({})", signer.actor_id)
             }
-            Some(NotaryKind::Threshold) => {
-                let k = self.threshold_k.unwrap_or(0);
-                let n = self.threshold_n.unwrap_or(0);
-                format!("threshold({k}/{n})")
+            arkret_wire::NotaryValue::Threshold {
+                threshold, members, ..
+            } => format!("threshold({threshold}/{})", members.len()),
+            arkret_wire::NotaryValue::OpenSet { members } => {
+                format!("open_set(n={})", members.len())
             }
-            Some(NotaryKind::OpenSet) => {
-                format!("open_set(n={})", self.open_set_members.len())
-            }
-            Some(NotaryKind::Mixed) => format!(
+            arkret_wire::NotaryValue::Mixed {
+                signer,
+                recovery_members,
+                ..
+            } => format!(
                 "mixed(primary={}, recovery_n={})",
-                self.mixed_primary_actor_id.as_deref().unwrap_or("?"),
-                self.mixed_recovery_actor_ids.len()
+                signer.actor_id,
+                recovery_members.len()
             ),
-            None => format!("unknown({})", self.kind_raw),
         }
     }
 }
@@ -190,34 +170,6 @@ pub struct SealDagSnapshot {
     pub state_root: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_compaction_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct SealPruneRequestBody {
-    pub seal_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct SealPruneOutcome {
-    pub seal_id: String,
-    pub pruned: bool,
-    pub eligibility: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rewired: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub diagnostics: Option<SealPruneDiagnostics>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct SealPruneDiagnostics {
-    pub age_seconds: u64,
-    pub compaction_witnesses: u32,
-    pub successor_count: usize,
-    pub is_genesis: bool,
-    pub kind: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

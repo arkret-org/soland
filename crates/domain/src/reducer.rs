@@ -25,6 +25,7 @@
 // SOL-07-005: strand/morph/circle/applet/agent `apply_*` reducers (additional
 // `impl ProjectionState` blocks) split out of this file.
 mod apply_capability;
+mod apply_history_access;
 mod apply_identity_resolution;
 mod apply_invites;
 mod apply_key_backup;
@@ -32,7 +33,6 @@ mod apply_member_application;
 mod apply_messages;
 mod apply_moderation;
 mod apply_objects;
-mod apply_realm_key;
 mod apply_realm_lifecycle;
 mod apply_realm_organization;
 mod apply_realm_policy;

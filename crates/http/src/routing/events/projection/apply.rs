@@ -1,8 +1,6 @@
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_models_collaboration::events_payloads::RealmKeyShareTarget;
 use arkret_models_collaboration::sync_frames::account_sync::{
     MlsWelcomeProjectedDeviceMessage, MlsWelcomeProjectionBinding,
-    RealmKeyShareProjectedDeviceMessage,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -642,15 +640,6 @@ async fn project_accepted_operations_inner(
                     "durably accepted active-series Event rejected by live reducer: {reason}"
                 );
             }
-            // Durable member-device history shares are themselves the delivery
-            // source of truth. Enqueue from the accepted canonical kind instead
-            // of coupling transport delivery to the reducer's transient effect
-            // view: replay/hydration may legitimately collapse that view after
-            // the cell write, while the idempotent device-message projection
-            // must still be rebuilt.
-            if kinds::canonical_kind(operation) == arkret_wire::EventKind::RealmKeyShare {
-                project_realm_key_share_to_device(state, origin, source_device_id, operation).await;
-            }
             fanout_projection_effect_private_update(state, origin, source_device_id, &effect).await;
             mirror_mls_effect_to_persistence(state, origin, source_device_id, operation, &effect)
                 .await;
@@ -969,84 +958,6 @@ async fn project_mls_welcome_to_device(
     }
 }
 
-async fn project_realm_key_share_to_device(
-    state: &AppState,
-    origin: &str,
-    source_device_id: &str,
-    operation: &Operation,
-) {
-    let Ok(share) = operation.typed_payload::<arkret_wire::event_spec::RealmKeyShare>() else {
-        return;
-    };
-    if share.key_scope.effective_scope.realm_id().as_str() != operation.realm_id.as_str()
-        || share
-            .key_scope
-            .from_epoch
-            .zip(share.key_scope.to_epoch)
-            .is_some_and(|(from_epoch, to_epoch)| from_epoch > to_epoch)
-    {
-        tracing::warn!(
-            operation_id = %operation.operation_id,
-            "accepted realm key share failed delivery projection invariants"
-        );
-        return;
-    }
-    // share_kind=realm_recovery_key (recipient_device_id absent): the recipient is
-    // an offline recovery org delivered via the durable Event, not a to-device
-    // queue (encryption-and-audit.md §2.10.8). No device message is enqueued.
-    let RealmKeyShareTarget::MemberDevice {
-        recipient_device_id,
-    } = &share.target
-    else {
-        return;
-    };
-    let recipient_device_id = recipient_device_id.to_string();
-    let recipient = share.recipient_principal_id.to_string();
-    let sender_device_id = if source_device_id.trim().is_empty() {
-        share.sender_device_id.as_str()
-    } else {
-        source_device_id.trim()
-    }
-    .to_owned();
-    if sender_device_id.is_empty() {
-        tracing::warn!(
-            operation_id = %operation.operation_id,
-            "cannot enqueue realm key share device message without sender device id"
-        );
-        return;
-    }
-    let content = match serde_json::to_value(RealmKeyShareProjectedDeviceMessage {
-        sender_device_id,
-        realm_id: operation.realm_id.clone(),
-        operation_id: operation.operation_id.to_string(),
-        payload: share,
-    }) {
-        Ok(content) => content,
-        Err(error) => {
-            tracing::warn!(%error, operation_id = %operation.operation_id, "failed to serialize typed Realm Key Share device message");
-            return;
-        }
-    };
-    let record = DeviceMessageState {
-        idempotency_key: format!("realm_key_share:{}", operation.operation_id),
-        sender: origin.to_owned(),
-        recipient,
-        device_id: recipient_device_id,
-        position: state.next_to_device_position(),
-        content,
-        created_at: operation.created_at,
-    };
-    // The accepted Event is the authorization linearization point for this
-    // projection effect, so no second, time-shifted device gate is applied.
-    if let Err(error) = state.deliveries().append_device_message(None, record).await {
-        tracing::warn!(
-            %error,
-            operation_id = %operation.operation_id,
-            "failed to enqueue realm key share to-device message"
-        );
-    }
-}
-
 /// Device-identity Phase 1 — persist an accepted `ak.device.authorize`'s
 /// authoritative `device_public_key` into the devices inventory so the
 /// `keys/query` signing-key directory (`device-lifecycle.md` §8.2) can resolve
@@ -1230,7 +1141,6 @@ pub(in crate::routing) fn refresh_authz_index_from_capability_grant_id(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::routing::identity::device_messages::device_message_envelopes_after;
 
     fn accepted_test_operation(
         operation_id: arkret_identifiers::OperationId,
@@ -1256,6 +1166,7 @@ mod tests {
             arkret_wire::OperationKind::Create,
             None,
             &event,
+            arkret_canonical::DigestSuite::Sha256,
         )
         .unwrap()
     }
@@ -1292,7 +1203,9 @@ mod tests {
         )
         .unwrap();
         event.hlc = None;
-        event.event_id = event.derive_event_id().unwrap();
+        event.event_id = event
+            .derive_event_id_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
         let cell_writes = state
             .projections()
             .project_accepted_cell_writes(&event)
@@ -1307,6 +1220,7 @@ mod tests {
             arkret_wire::OperationKind::Create,
             None,
             &event,
+            arkret_canonical::DigestSuite::Sha256,
         )
         .unwrap();
         assert!(operation.context.hlc.is_none());
@@ -1331,143 +1245,6 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-    }
-
-    #[tokio::test]
-    async fn realm_key_share_device_projection_accepts_projected_payload_context() {
-        let state = AppState::new(
-            crate::config::AppConfig::test_default(),
-            soland_storage_postgres::Db { pool: None },
-        );
-        let realm_id = arkret_identifiers::RealmId::new(
-            "ak:realm:AfQwJHPhBleRZGcIQe5JusJEaZwwkeT8TDwxd957Ic4z".to_owned(),
-        )
-        .unwrap();
-        let operation_id = arkret_identifiers::OperationId::new(
-            "ak:operation:0196419b-1000-7000-8000-000000000102",
-        )
-        .unwrap();
-        let sender = "ak:did_core:web:alice.example";
-        let sender_device = "ak:device:01904100-0000-7000-8000-a11ce0000101";
-        let recipient = "ak:did_core:web:bob.example";
-        let recipient_device = "ak:device:01904100-0000-7000-8000-b0b000000101";
-        let payload = json!({
-            "share_kind": "member_device",
-            "recipient_principal_id": recipient,
-            "recipient_device_id": recipient_device,
-            "sender_device_id": sender_device,
-            "source_authorization_ref": "ak:event:AauJX1Coqu2PGQIViJss03KgbYKe__UV68K84NDE8zt6",
-            "sender_device_signature": {
-                "signature_algorithm": "Ed25519",
-                "signature": "signature",
-                "signer_public_key_multibase": "z6MkkWfGNkv1TUe64XN2p4WMVabjTxzk4snewMn4774HxGyB"
-            },
-            "key_scope": {
-                "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
-                "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-                "from_epoch": 0,
-                "to_epoch": 0
-            },
-            "ciphertext": "sealed",
-            "created_at": "2026-07-05T00:00:00.000Z"
-        });
-        let operation = accepted_test_operation(
-            operation_id.clone(),
-            realm_id.clone(),
-            sender,
-            1,
-            arkret_wire::EventKind::RealmKeyShare,
-            payload,
-            chrono::Utc::now(),
-        );
-
-        project_accepted_operations_from_device(
-            &state,
-            sender,
-            sender_device,
-            std::slice::from_ref(&operation),
-        )
-        .await;
-
-        let queued = state
-            .deliveries()
-            .device_messages_after(recipient, recipient_device, 0)
-            .await
-            .expect("queued device messages");
-        assert_eq!(queued.len(), 1);
-        assert_eq!(
-            queued[0].content["kind"],
-            arkret_wire::EventKind::RealmKeyShare.as_str()
-        );
-        assert_eq!(
-            queued[0].content["content"]["payload"]["ciphertext"],
-            "sealed"
-        );
-    }
-
-    #[test]
-    fn realm_key_share_device_projection_preserves_payload_in_envelope_content() {
-        let realm_id = "ak:realm:ARZTx1K62JEESOCDcEVZTToJPN3vCoG0zRRnpm3t3OeX";
-        let operation_id = "ak:operation:0196419b-1000-7000-8000-000000000002";
-        let sender = "ak:did_core:web:alice.example";
-        let sender_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-        let recipient = "ak:did_core:web:bob.example";
-        let recipient_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
-        let payload = json!({
-            "share_kind": "member_device",
-            "recipient_principal_id": recipient,
-            "recipient_device_id": recipient_device,
-            "sender_device_id": sender_device,
-            "source_authorization_ref": "ak:event:AYqEzQ3jW02EHkMjxFQTlyeowxPQXJE4fI6JGOnzi23t",
-            "sender_device_signature": {
-                "signature_algorithm": "Ed25519",
-                "kid": "did:web:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",
-                "sig": "signature"
-            },
-            "key_scope": {
-                "effective_scope": {"kind": "realm", "realm_id": realm_id},
-                "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-                "from_epoch": 0,
-                "to_epoch": 0
-            },
-            "ciphertext": "sealed",
-            "aad_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-            "created_at": "2026-06-30T00:00:00.000Z"
-        });
-        let created_at = chrono::Utc::now();
-        // Production assigns the `device_message_id` in the storage `append`
-        // (the persistence adapter assigns a message id); this test builds the
-        // record by hand, so inject it the same way the store would.
-        let projected = RealmKeyShareProjectedDeviceMessage {
-            sender_device_id: sender_device.to_owned(),
-            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            operation_id: operation_id.to_owned(),
-            payload: serde_json::from_value(payload.clone()).unwrap(),
-        };
-        let mut content = serde_json::to_value(projected).unwrap();
-        content.as_object_mut().unwrap().insert(
-            "device_message_id".to_owned(),
-            json!("ak:device_message:0196419b-1000-7000-8000-000000000099"),
-        );
-        let record = DeviceMessageState {
-            idempotency_key: format!("realm_key_share:{operation_id}"),
-            sender: sender.to_owned(),
-            recipient: recipient.to_owned(),
-            device_id: recipient_device.to_owned(),
-            position: 1,
-            content,
-            created_at,
-        };
-
-        let delivered = device_message_envelopes_after(&[record]);
-        assert_eq!(delivered.len(), 1);
-        assert_eq!(
-            delivered[0].kind.as_str(),
-            arkret_wire::EventKind::RealmKeyShare.as_str()
-        );
-        assert_eq!(delivered[0].content["realm_id"], realm_id);
-        assert_eq!(delivered[0].content["operation_id"], operation_id);
-        assert_eq!(delivered[0].content["payload"], payload);
     }
 
     #[test]

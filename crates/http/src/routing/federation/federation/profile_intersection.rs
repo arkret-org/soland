@@ -278,7 +278,7 @@ impl SemanticAtoms {
         if self
             .kind
             .as_deref()
-            .is_some_and(|kind| kind.starts_with("ak.mls.") || kind.starts_with("ak.realm_key."))
+            .is_some_and(|kind| kind.starts_with("ak.mls."))
         {
             self.requires_mls_governance = true;
         }

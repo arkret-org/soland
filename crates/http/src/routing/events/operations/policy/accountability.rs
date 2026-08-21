@@ -361,11 +361,11 @@ pub(super) async fn validate_aad_visibility_policy(
     let Some(visibility) = minimal_metadata_aad_visibility(envelope) else {
         // An encrypted envelope whose discriminator is absent or unrecognised
         // cannot be proven to sit under the ceiling.
-        return Err(arkret_wire::ReasonCode::AAD_VISIBILITY_POLICY_VIOLATION);
+        return Err(arkret_wire::ReasonCode::POLICY_DENIED);
     };
     ceiling
         .check(visibility)
-        .map_err(|_| arkret_wire::ReasonCode::AAD_VISIBILITY_POLICY_VIOLATION)
+        .map_err(|_| arkret_wire::ReasonCode::POLICY_DENIED)
 }
 
 /// The encrypted envelope an operation carries, if any.

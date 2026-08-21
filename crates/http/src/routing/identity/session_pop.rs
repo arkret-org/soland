@@ -262,7 +262,23 @@ fn pop_required(state: &AppState, req: &Request) -> bool {
     if !state.config().sovereign_enclave_enabled || req.method() == salvo::http::Method::OPTIONS {
         return false;
     }
+    if is_mailbox_capability_request(req) {
+        return false;
+    }
     !is_public_projection_request(req)
+}
+
+fn is_mailbox_capability_request(req: &Request) -> bool {
+    let policy = session_pop_policy();
+    policy.bindings.iter().any(|(method, path, operation_id)| {
+        method == req.method().as_str()
+            && path_template_matches(path, req.uri().path())
+            && matches!(
+                operation_id.as_str(),
+                arkret_wire::ServiceOperationId::SELF_HISTORY_KEY_RESPONSES_READ_LIST
+                    | arkret_wire::ServiceOperationId::SELF_HISTORY_KEY_RESPONSES_COMMAND_ACK
+            )
+    })
 }
 
 fn is_public_projection_request(req: &Request) -> bool {

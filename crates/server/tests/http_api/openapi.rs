@@ -110,10 +110,6 @@ fn assert_event_read_query_bindings(root: &Value) {
             "ak.self.events.read.resolve",
         ),
         (
-            "/_arkret/self/events/mls-governance-proof",
-            "ak.self.events.read.mls_governance_proof",
-        ),
-        (
             "/_arkret/peer/events/describe",
             "ak.peer.events.read.describe",
         ),
@@ -134,6 +130,15 @@ fn assert_event_read_query_bindings(root: &Value) {
             "canonical QUERY binding {operation_id} must expose JSON content"
         );
     }
+    let proof = &root["paths"]["/_arkret/self/seals/mls-governance-proof"]["post"];
+    assert_eq!(
+        proof["operationId"],
+        "ak.self.seals.read.mls_governance_proof"
+    );
+    assert!(
+        proof["requestBody"]["content"]["application/json"].is_object(),
+        "canonical POST proof binding must expose JSON content"
+    );
 }
 
 fn assert_operation_ids_are_unique(root: &Value) {

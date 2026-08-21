@@ -150,11 +150,6 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_ADMIN_PRINCIPAL_DIDS` | empty | Comma-separated principal DID allowlist for production admin APIs. An empty value closes the admin API outside development mode; browser sessions additionally require `SOLAND_SESSION_GRANT_INTROSPECTION_URL`. |
 | `SOLAND_ADMIN_PAGE_LIMIT` | `100` | Default admin API page size. |
 | `SOLAND_ADMIN_MAX_PAGE_LIMIT` | `1000` | Maximum admin API page size; clamped above the default. |
-| `SOLAND_COMPACTION_MIN_SEAL_AGE_SECS` | `604800` | Minimum seal age before compaction pruning may consider it. |
-| `SOLAND_COMPACTION_MIN_WITNESSES` | `1` | Minimum compaction witnesses required before pruning. |
-| `SOLAND_COMPACTION_PRESERVE_GENESIS` | `true` | Preserve genesis seals during compaction pruning. |
-| `SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS` | `true` | Restrict pruning to singleton-successor seal chains. |
-| `SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT` | `50` | Maximum pruning candidates examined per realm walk. |
 | `SOLAND_DB_POOL_ACQUIRE_TIMEOUT_SECS` | deadpool default | Positive database-pool acquisition timeout; unset means no explicit wait timeout. |
 | `SOLAND_DB_POOL_MAX_SIZE` | CPU count × 4 | Positive database-pool size override. |
 | `SOLAND_DID_RESOLVER_ALLOW_METHODS` | `web,key,uuid` | Comma-separated DID methods accepted by outbound DID resolution. |

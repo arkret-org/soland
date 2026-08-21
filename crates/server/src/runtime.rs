@@ -35,11 +35,10 @@ pub fn build_app_state(
         })?;
     let stores =
         soland_storage_postgres::build_state_resolution_stores(db.pool.clone(), cell_registry);
-    let service_id = service_identity
+    let serving_identity = service_identity
         .identity()
-        .ok_or_else(|| anyhow::anyhow!("runtime requires a serving service identity"))?
-        .service_id
-        .to_string();
+        .ok_or_else(|| anyhow::anyhow!("runtime requires a serving service identity"))?;
+    let service_id = serving_identity.service_id.to_string();
     let projections = soland_services::projection::ProjectionService::new(
         stores.control_event_store,
         stores.seal_store,
@@ -48,7 +47,12 @@ pub fn build_app_state(
         Arc::new(RuntimeEventSealCommitter(stores.event_seal_committer)),
         &service_id,
     );
-    let realm_directory = soland_http::state::build_realm_directory(&config);
+    let realm_directory = soland_http::state::build_realm_directory(
+        &config,
+        &serving_identity.full_id,
+        &serving_identity.service_id,
+        resolved_signing_seed,
+    );
     let object_storage = build_object_storage(&config.object_storage)?;
     // `AppConfig::from_env_and_args` already resolved `DATABASE_URL`, and it
     // dropped a blank value to `None`. Re-reading the environment here only
@@ -86,6 +90,7 @@ impl EventSealCommitPort for RuntimeEventSealCommitter {
     fn commit_if_frontier(
         &self,
         seal: &arkret_wire::Seal,
+        digest_suite: arkret_canonical::DigestSuite,
         expected_store_frontier: &[arkret_wire::SealId],
         new_ops: &[(
             arkret_identifiers::CellRef,
@@ -93,8 +98,13 @@ impl EventSealCommitPort for RuntimeEventSealCommitter {
         )],
         covered: &BTreeSet<arkret_wire::Hash>,
     ) -> arkret_state::state::StoreResult<bool> {
-        self.0
-            .commit_if_frontier(seal, expected_store_frontier, new_ops, covered)
+        self.0.commit_if_frontier(
+            seal,
+            digest_suite,
+            expected_store_frontier,
+            new_ops,
+            covered,
+        )
     }
 }
 

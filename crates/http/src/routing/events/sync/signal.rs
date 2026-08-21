@@ -186,7 +186,7 @@ fn remote_recipient_services(state: &AppState, envelope: &SignalEnvelope) -> BTr
 }
 
 /// Reject a legacy plaintext ephemeral input before it can be mistaken for a
-/// malformed Signal (§3: "不存在 plaintext branch").
+/// malformed Signal (§3 has no plaintext branch).
 fn parse_signal_envelope(raw: Value) -> Result<SignalEnvelope, AppError> {
     let Some(object) = raw.as_object() else {
         return Err(AppError::json_invalid(

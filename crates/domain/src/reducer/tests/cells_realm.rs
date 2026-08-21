@@ -372,6 +372,7 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+    let notary = serde_json::to_value(test_single_signer_notary("did:web:alice")).unwrap();
     apply_projected_create(
         &mut state,
         realm_id,
@@ -386,11 +387,7 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
                 "digest_algorithm": "sha256",
                 "security_class": "standard",
                 "encryption_profile": "mls_rfc9420",
-                "notary_profile": "single_did",
-                "notary": {
-                    "kind": "single_did",
-                    "actor_id": "ak:did_core:web:alice"
-                },
+                "notary": notary,
                 "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
             }
         }),
@@ -726,6 +723,7 @@ fn realm_create_requires_explicit_creator_member_and_rejects_duplicate_create() 
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+    let notary = serde_json::to_value(test_single_signer_notary("did:web:notary.example")).unwrap();
     let payload = serde_json::json!({
         "object": {
             "schema": "ak.schema.realm_genesis.v1",
@@ -738,11 +736,7 @@ fn realm_create_requires_explicit_creator_member_and_rejects_duplicate_create() 
             "digest_algorithm": "sha256",
             "security_class": "standard",
             "encryption_profile": "none",
-            "notary_profile": "single_did",
-            "notary": {
-                "kind": "single_did",
-                "actor_id": "ak:did_core:web:notary.example"
-            }
+            "notary": notary
         }
     });
     let first = apply_projected_create(&mut state, realm_id, payload.clone(), &hlc);
@@ -766,10 +760,7 @@ fn realm_create_requires_explicit_creator_member_and_rejects_duplicate_create() 
                 None
             }
         }),
-        Some(&serde_json::json!({
-            "kind": "single_did",
-            "actor_id": "ak:did_core:web:notary.example"
-        }))
+        Some(&serde_json::to_value(test_single_signer_notary("did:web:notary.example")).unwrap())
     );
 
     let duplicate = apply_projected_create(&mut state, realm_id, payload, &hlc);
@@ -787,13 +778,10 @@ fn direct_conversation_role_survives_sealed_create_log_reload_via_genesis() {
     let realm_id =
         arkret_identifiers::RealmId::new("ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksgW")
             .unwrap();
-    let creator = arkret_identifiers::DidFullId::new("did:web:alice.example").unwrap();
-    let creator_actor_id = arkret_wire::project_full_id_to_core_id(&creator).unwrap();
     let payload = arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
         arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
         arkret_identifiers::TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
-        arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-        arkret_wire::notary::NotaryValue::single_did(creator_actor_id),
+        test_single_signer_notary("did:web:alice.example"),
         arkret_policy::current_capability_action_registry_digest().unwrap(),
         chrono::Utc::now(),
     )
@@ -849,11 +837,9 @@ fn direct_conversation_role_survives_sealed_create_log_reload_via_genesis() {
             "digest_algorithm": "sha256",
             "security_class": "standard",
             "encryption_profile": "mls_rfc9420",
-            "notary_profile": "single_did",
-            "notary": {
-                "kind": "single_did",
-                "actor_id": "ak:did_core:web:alice.example"
-            },
+            "notary": serde_json::to_value(test_single_signer_notary(
+                "did:web:alice.example"
+            )).unwrap(),
             "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap()
         })),
     );
@@ -1390,8 +1376,7 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
             arkret_canonical::DigestSuite::Sha256,
             arkret_wire::SecurityClass::HighAssurance,
             arkret_wire::EncryptionProfile::MlsRfc9420,
-            arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-            arkret_wire::notary::NotaryValue::single_did(agent_id.clone()),
+            test_single_signer_notary("did:webvh:z6mkreducertest"),
             arkret_policy::current_capability_action_registry_digest().unwrap(),
         )
         .unwrap();
@@ -1468,8 +1453,7 @@ fn managed_agent_genesis_requires_the_registered_status_projection() {
             arkret_canonical::DigestSuite::Sha256,
             arkret_wire::SecurityClass::HighAssurance,
             arkret_wire::EncryptionProfile::MlsRfc9420,
-            arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-            arkret_wire::notary::NotaryValue::single_did(agent_id.clone()),
+            test_single_signer_notary("did:webvh:z6mkreducertest"),
             arkret_policy::current_capability_action_registry_digest().unwrap(),
         )
         .unwrap();
@@ -1566,127 +1550,55 @@ fn bootstrap_policy_bundle_uses_registered_value_without_projection_metadata() {
     ));
 }
 
-// ── encryption-and-audit.md §2.10 — history_visibility × content_scheme
-// linkage as a reducer invariant on the facet and genesis write paths ──
-
-fn install_mls_genesis_cell(state: &mut ProjectionState, realm_id: &str) {
-    state.realm_null_subject_cells.insert(
-        (
-            realm_id.to_owned(),
-            arkret_wire::REALM_GENESIS_CELL.to_owned(),
-        ),
-        CellState::Value(serde_json::json!({ "encryption_profile": "mls_rfc9420" })),
-    );
-}
+// history_access is a two-state, narrowing-only FSM.
 
 #[test]
-fn bootstrap_history_visibility_facet_rejects_prejoin_history_without_capable_scheme() {
+fn realm_history_access_can_only_tighten() {
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let mut state = ProjectionState::new();
-    install_mls_genesis_cell(&mut state, realm_id);
-    let payload = serde_json::json!({ "value": "world_readable" });
-    let (_, writes) = projected_cell_writes(
-        arkret_wire::EventKind::RealmHistoryVisibility,
-        realm_id,
-        &payload,
-    );
-    let operation = make_operation(
-        arkret_wire::EventKind::RealmHistoryVisibility,
-        realm_id,
-        payload,
-    );
-
-    assert!(matches!(
-        state.apply_validated_realm_bootstrap_facet(&operation, &writes),
-        ProjectionEffect::Rejected { ref reason }
-            if reason == arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
-    ));
-    assert!(
-        state.realm_history_visibility(realm_id).is_none(),
-        "a rejected facet must not register its cell"
-    );
-}
-
-#[test]
-fn bootstrap_history_visibility_facet_accepts_prejoin_history_with_exporter_scheme() {
-    let realm_id = "ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksgW";
-    let mut state = ProjectionState::new();
-    install_mls_genesis_cell(&mut state, realm_id);
-    // A policy_bundle earlier in wire order has already projected the
-    // history-capable scheme.
-    state.realm_policy_bundle_cells.insert(
-        realm_id.to_owned(),
-        CellState::Value(serde_json::json!({
-            "policy_revision": 1,
-            "content_scheme": "mls_exporter_aead_v1"
-        })),
-    );
-    let payload = serde_json::json!({ "value": "world_readable" });
-    let (_, writes) = projected_cell_writes(
-        arkret_wire::EventKind::RealmHistoryVisibility,
-        realm_id,
-        &payload,
-    );
-    let operation = make_operation(
-        arkret_wire::EventKind::RealmHistoryVisibility,
-        realm_id,
-        payload,
-    );
-
-    assert!(matches!(
-        state.apply_validated_realm_bootstrap_facet(&operation, &writes),
-        ProjectionEffect::RealmBootstrapFacetProjected { .. }
-    ));
-    assert_eq!(
-        state.realm_history_visibility(realm_id).as_deref(),
-        Some("world_readable")
-    );
-}
-
-#[test]
-fn realm_create_rejects_prejoin_history_without_capable_scheme() {
-    let realm_id = "ak:realm:AcCjaDaAwSr00p03dwj9Gz2Aeq-1E2F2dAXTHFzPSdbQ";
-    let payload = serde_json::json!({
-        "object": {
-            "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
-            "encryption_profile": "mls_rfc9420",
-            "history_visibility": "world_readable"
-        }
-    });
-    let operation = make_operation(arkret_wire::EventKind::RealmCreate, realm_id, payload);
-
-    let mut state = ProjectionState::new();
-    assert!(matches!(
-        state.apply(&operation, &ServerHlc::new("test")),
-        ProjectionEffect::Rejected { ref reason }
-            if reason == arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
-    ));
-
-    // The same genesis object on a non-MLS Realm is outside the linkage.
-    let plaintext_payload = serde_json::json!({
-        "object": {
-            "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
-            "encryption_profile": "none",
-            "history_visibility": "world_readable"
-        }
-    });
-    let plaintext_operation = make_operation(
+    let create = make_operation(
         arkret_wire::EventKind::RealmCreate,
         realm_id,
-        plaintext_payload,
+        serde_json::json!({
+            "object": {
+                "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
+                "encryption_profile": "plaintext",
+                "history_access": "all_history_for_current_members"
+            }
+        }),
     );
     let mut state = ProjectionState::new();
-    let effect = state.apply(&plaintext_operation, &ServerHlc::new("test"));
-    assert!(
-        !matches!(
-            &effect,
-            ProjectionEffect::Rejected { reason }
-                if reason == arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
-        ),
-        "non-MLS genesis must not trip the scheme linkage: {effect:?}"
-    );
-}
+    assert!(!matches!(
+        state.apply(&create, &ServerHlc::new("test")),
+        ProjectionEffect::Rejected { .. }
+    ));
 
+    let tighten = make_operation(
+        arkret_wire::EventKind::RealmHistoryAccess,
+        realm_id,
+        serde_json::json!({
+            "from": "all_history_for_current_members",
+            "to": "since_join"
+        }),
+    );
+    assert!(!matches!(
+        state.apply(&tighten, &ServerHlc::new("test")),
+        ProjectionEffect::Rejected { .. }
+    ));
+
+    let widen = make_operation(
+        arkret_wire::EventKind::RealmHistoryAccess,
+        realm_id,
+        serde_json::json!({
+            "from": "since_join",
+            "to": "all_history_for_current_members"
+        }),
+    );
+    assert!(matches!(
+        state.apply(&widen, &ServerHlc::new("test")),
+        ProjectionEffect::Rejected { ref reason }
+            if reason == "history_access_widening_forbidden"
+    ));
+}
 #[test]
 fn policy_bundle_validates_control_proposal_timing_as_one_component() {
     let realm_id = "ak:realm:AdxEgvRaqkzAG9iN9YT9pxaGx7skfMnQEhVi79_pvlJs";

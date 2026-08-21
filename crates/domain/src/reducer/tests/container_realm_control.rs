@@ -168,10 +168,9 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
             REALM_ID,
             serde_json::json!({
                 "realm_id": REALM_ID,
-                "notary": {
-                    "kind": "single_did",
-                    "actor_id": "ak:did_core:web:new-notary.example"
-                }
+                "notary": serde_json::to_value(test_single_signer_notary(
+                    "did:web:new-notary.example"
+                )).unwrap()
             }),
         ),
         &hlc,

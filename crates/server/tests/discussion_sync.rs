@@ -106,12 +106,7 @@ async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String 
 /// Author the Realm genesis Event, then seed local read projections so the
 /// tests can focus on downstream sync behaviour through the canonical
 /// `POST /_arkret/self/events` path.
-async fn seed_realm(
-    state: &AppState,
-    owner: &str,
-    title: &str,
-    history_visibility: &str,
-) -> String {
+async fn seed_realm(state: &AppState, owner: &str, title: &str, history_access: &str) -> String {
     let realm_id =
         soland_test_support::cba_basis::seed_event_derived_realm_genesis_event(state, owner, title)
             .await;
@@ -124,7 +119,7 @@ async fn seed_realm(
         title,
         soland_services::events::DirectoryProvenance::LocalOnly,
     );
-    entry.description = Some("history visibility fixture".to_owned());
+    entry.description = Some("history access fixture".to_owned());
     entry.public = true;
     entry.members.insert(owner_did);
     state.test_realms().lock().upsert(entry);
@@ -143,9 +138,7 @@ async fn seed_realm(
                 owner: core_actor_id(owner),
                 deleted: false,
                 discoverability: "public".to_owned(),
-                history_visibility: history_visibility.to_owned(),
-                history_sharing_policy: None,
-                history_sharing_policy_digest: None,
+                history_access: history_access.to_owned(),
                 preview_policy: None,
                 preview_policy_digest: None,
                 asset_privacy_policy: None,
@@ -196,7 +189,7 @@ async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
 /// Have the owner admit a new member by submitting a
 /// `ak.member.state{membership:"join", actor_id: new_member}` event. The
 /// projection layer records `member.joined_at` (used by sync's
-/// history_visibility gate) and updates `state.test_realms().members` via
+/// history_access gate) and updates `state.test_realms().members` via
 /// `project_member_state`. The owner is already a member (seeded by
 /// `seed_realm`), so the event-log preflight `realm_has_member` check
 /// admits the event.
@@ -391,10 +384,12 @@ fn install_projected_circle_scope(
             display: serde_json::json!({"short_name":"Need","color_token":"slate","symbol":{"glyph":"ring"}}),
             directory_visibility: "members".to_owned(),
             join_rule: "invite".to_owned(),
-            history_visibility: "joined".to_owned(),
+            history_access: "since_join".to_owned(),
             content_encryption_floor: Some("e2ee_required".to_owned()),
             metadata_encryption_floor: Some("e2ee_required".to_owned()),
             encryption_profile: "mls_rfc9420".to_owned(),
+            content_scheme: Some("mls_rfc9420".to_owned()),
+            durability_policy: None,
             mls_group_ref: Some(format!("ak:mls:mls_rfc9420:{circle_id}")),
             state: CircleLifecycleState::Active,
             state_changed_at: None,
@@ -748,7 +743,7 @@ fn event_query_bodies(events: &Value) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
+async fn since_join_hides_pre_join_messages_from_sync_and_events_query() {
     let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -756,7 +751,7 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
     let bob_did = BOB_DID.as_str();
     let _bob_session_device = dev_token(state.clone(), bob_did, "b0b000000000").await;
     let bob = _bob_session_device;
-    let realm_id = seed_realm(&state, alice_did, "joined history", "joined").await;
+    let realm_id = seed_realm(&state, alice_did, "since-join history", "since_join").await;
 
     send_message(state.clone(), &alice, &realm_id, "before bob joined").await;
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -803,108 +798,20 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
 }
 
 #[tokio::test]
-async fn joined_member_initial_sync_includes_current_pre_join_encryption_policy() {
-    let state = soland_test_support::app_state(test_config());
-    let alice_did = ALICE_DID.as_str();
-    let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-    let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
-    let bob_did = BOB_DID.as_str();
-    let bob = dev_token(state.clone(), bob_did, "b0b000000021").await;
-    let realm_id = seed_realm(&state, alice_did, "joined security baseline", "joined").await;
-
-    let mut meta = state
-        .test_persistence()
-        .realm_meta()
-        .get(&realm_id)
-        .await
-        .unwrap()
-        .unwrap();
-    meta.encryption_profile = Some("mls_rfc9420".to_owned());
-    state
-        .test_persistence()
-        .realm_meta()
-        .put(&realm_id, &meta)
-        .await
-        .unwrap();
-
-    let old_policy_event_id = submit_projection_event(
-        state.clone(),
-        &alice,
-        alice_did,
-        alice_device_id,
-        &realm_id,
-        "ak.realm.policy_bundle",
-        json!({
-            "content_encryption_floor": "e2ee_required",
-            "content_scheme": "mls_rfc9420",
-            "metadata_encryption_floor": "e2ee_required",
-            "policy_revision": 1
-        }),
-    )
-    .await;
-    let policy_event_id = submit_projection_event(
-        state.clone(),
-        &alice,
-        alice_did,
-        alice_device_id,
-        &realm_id,
-        "ak.realm.policy_bundle",
-        json!({
-            "content_encryption_floor": "e2ee_required",
-            "content_scheme": "mls_exporter_aead_v1",
-            "metadata_encryption_floor": "e2ee_required",
-            "policy_revision": 2
-        }),
-    )
-    .await;
-    send_message(
-        state.clone(),
-        &alice,
-        &realm_id,
-        "pre-join content remains hidden",
-    )
-    .await;
-    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    admit_member(
-        state.clone(),
-        &alice,
-        alice_did,
-        alice_device_id,
-        bob_did,
-        &realm_id,
-    )
-    .await;
-
-    let sync = account_subscribe_frame(state.clone(), &bob, "catchup=true").await;
-    assert!(
-        !sync_bodies(&sync, &realm_id).contains(&"pre-join content remains hidden".to_owned()),
-        "joined history must continue to hide pre-join data events: {sync:?}"
-    );
-    let state_events = sync["realms"][&realm_id]["state"]["events"]
-        .as_array()
-        .expect("initial state baseline");
-    assert!(
-        state_events
-            .iter()
-            .all(|event| event["event_id"] != old_policy_event_id),
-        "initial security baseline must not leak superseded pre-join policy revisions"
-    );
-    let policy = state_events
-        .iter()
-        .find(|event| event["event_id"] == policy_event_id)
-        .expect("current pre-join policy-components event must be in the member baseline");
-    assert_eq!(policy["payload"]["content_scheme"], "mls_exporter_aead_v1");
-}
-
-#[tokio::test]
-async fn joined_history_incremental_sync_includes_post_join_messages_after_cursor() {
+async fn since_join_incremental_sync_includes_post_join_messages_after_cursor() {
     let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
     let bob_did = BOB_DID.as_str();
     let bob = dev_token(state.clone(), bob_did, "b0b000000020").await;
-    let realm_id = seed_realm(&state, alice_did, "joined incremental history", "joined").await;
+    let realm_id = seed_realm(
+        &state,
+        alice_did,
+        "since-join incremental history",
+        "since_join",
+    )
+    .await;
 
     send_message(state.clone(), &alice, &realm_id, "before bob joined").await;
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -942,14 +849,20 @@ async fn joined_history_incremental_sync_includes_post_join_messages_after_curso
 }
 
 #[tokio::test]
-async fn invite_accept_member_receives_joined_history_messages_after_accept() {
+async fn invite_accept_member_receives_since_join_messages_after_accept() {
     let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
     let bob_did = BOB_DID.as_str();
     let bob_device_id = "ak:device:01904100-0000-7000-8000-b0b000000003";
     let bob = dev_token(state.clone(), bob_did, "b0b000000003").await;
-    let realm_id = seed_realm(&state, alice_did, "invite accept joined history", "joined").await;
+    let realm_id = seed_realm(
+        &state,
+        alice_did,
+        "invite accept since-join history",
+        "since_join",
+    )
+    .await;
 
     let invite_id = seed_pending_invite(&state, &realm_id, alice_did, bob_did).await;
     accept_invite(
@@ -1020,7 +933,13 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
     let bob_did = BOB_DID.as_str();
     let bob = dev_token(state.clone(), bob_did, "b0b000000002").await;
-    let realm_id = seed_realm(&state, alice_did, "shared history", "shared").await;
+    let realm_id = seed_realm(
+        &state,
+        alice_did,
+        "shared history",
+        "all_history_for_current_members",
+    )
+    .await;
 
     send_message(state.clone(), &alice, &realm_id, "shared before join").await;
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -1064,7 +983,13 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
     let bob = dev_token(state.clone(), bob_did, "b0b000000010").await;
     let mallory_did = MALLORY_DID.as_str();
     let mallory = dev_token(state.clone(), mallory_did, "ca2010000010").await;
-    let realm_id = seed_realm(&state, alice_did, "circle scoped e2ee", "shared").await;
+    let realm_id = seed_realm(
+        &state,
+        alice_did,
+        "circle scoped e2ee",
+        "all_history_for_current_members",
+    )
+    .await;
     for actor in [alice_did, bob_did, mallory_did] {
         admit_member(
             state.clone(),
@@ -1192,7 +1117,13 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
     let bob_core = core_actor_id(bob_did);
     let bob_device_id = "ak:device:01904100-0000-7000-8000-b0b000000011";
     let bob = dev_token(state.clone(), bob_did, "b0b000000011").await;
-    let realm_id = seed_realm(&state, alice_did, "chat projection metadata", "shared").await;
+    let realm_id = seed_realm(
+        &state,
+        alice_did,
+        "chat projection metadata",
+        "all_history_for_current_members",
+    )
+    .await;
     admit_member(
         state.clone(),
         &alice,
@@ -1342,7 +1273,13 @@ async fn poll_content_projection_replaces_votes() {
     let carol_core = core_actor_id(carol_did);
     let carol_device_id = "ak:device:01904100-0000-7000-8000-ca2010000022";
     let carol = dev_token(state.clone(), carol_did, "ca2010000022").await;
-    let realm_id = seed_realm(&state, alice_did, "poll content reducer", "shared").await;
+    let realm_id = seed_realm(
+        &state,
+        alice_did,
+        "poll content reducer",
+        "all_history_for_current_members",
+    )
+    .await;
     allow_service_message_plaintext(&state, &realm_id).await;
     admit_member(
         state.clone(),

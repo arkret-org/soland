@@ -25,6 +25,31 @@ fn apply_policy_bundle(
     )
 }
 
+fn seed_mls_genesis(state: &mut ProjectionState, realm: &str, scope: arkret_wire::ScopeRef) {
+    let group_id = scope.canonical_mls_group_id().unwrap();
+    state.mls_commit_epochs.insert(
+        MlsCommitEpochKey::new(realm, &group_id),
+        MlsCommitEpoch {
+            group_id: group_id.clone(),
+            effective_scope: serde_json::to_value(&scope).unwrap(),
+            epoch: 0,
+            leader_actor_id: "ak:did_core:web:alice.example".to_owned(),
+            creator_device_id: "ak:device:01904100-0000-7000-8000-00000000c501".to_owned(),
+            genesis_event_ref: "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned(),
+            committed_at: 0,
+            governance_binding: serde_json::json!({
+                "realm_id": realm,
+                "mls_group_id": group_id,
+                "effective_scope": scope
+            }),
+            accepted_commit_digest: None,
+            accepted_commit_ref: None,
+            accepted_from_epoch: None,
+            frontier_contested: false,
+        },
+    );
+}
+
 // ── AKP-0007 §8 — Circle member one-way add authorization ───────────
 //
 // Seed a Realm with `alice` (manage holder) + `bob` joined, plus a
@@ -70,10 +95,12 @@ fn seed_circle_authz_state() -> (ProjectionState, ServerHlc, String, String) {
             display: serde_json::json!({"short_name":"Ops","color_token":"slate","symbol":{"glyph":"ring"}}),
             directory_visibility: "members".to_owned(),
             join_rule: "invite".to_owned(),
-            history_visibility: "joined".to_owned(),
+            history_access: "since_join".to_owned(),
             content_encryption_floor: None,
             metadata_encryption_floor: None,
             encryption_profile: "mls_rfc9420".to_owned(),
+            content_scheme: Some("mls_rfc9420".to_owned()),
+            durability_policy: None,
             mls_group_ref: None,
             state: CircleLifecycleState::Active,
             state_changed_at: None,
@@ -309,11 +336,11 @@ fn metadata_floor_ratchet_rejects_downgrade() {
     ));
 }
 
-// realm-and-space.md history-sharing — one-way `content_scheme` ratchet.
-// `mls_rfc9420` < `mls_exporter_aead_v1`; once the realm negotiates the
-// exporter-AEAD scheme it MUST NOT fall back to the application-message scheme.
+// encryption-and-audit.md §2.10.6 — policy may change the selection before
+// Genesis, but the selected scheme is immutable once an ordinary Realm or
+// Circle MLS group exists under the Realm.
 #[test]
-fn content_scheme_ratchet_allows_upgrade_then_rejects_downgrade() {
+fn content_scheme_is_selectable_before_genesis() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
@@ -338,25 +365,176 @@ fn content_scheme_ratchet_allows_upgrade_then_rejects_downgrade() {
         apply_scheme(&mut state, Some("mls_exporter_aead_v1")),
         ProjectionEffect::RealmPolicyBundleProjected { .. }
     ));
-    // re-asserting the same scheme is an idempotent no-op (accepted)
+    // Before Genesis either direction remains a policy selection.
+    assert!(matches!(
+        apply_scheme(&mut state, Some("mls_rfc9420")),
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
+    ));
     assert!(matches!(
         apply_scheme(&mut state, Some("mls_exporter_aead_v1")),
         ProjectionEffect::RealmPolicyBundleProjected { .. }
     ));
-    // downgrade exporter-aead -> rfc9420 is rejected
+}
+
+#[test]
+fn realm_genesis_locks_content_scheme_in_both_directions() {
+    let hlc = ServerHlc::new("realm-genesis-scheme");
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let scope = || arkret_wire::ScopeRef::Realm {
+        realm_id: arkret_wire::RealmId::new(realm).unwrap(),
+    };
+
+    let mut rfc = ProjectionState::new();
     assert!(matches!(
-        apply_scheme(&mut state, Some("mls_rfc9420")),
-        ProjectionEffect::Rejected { reason } if reason == CONTENT_SCHEME_DOWNGRADE
-    ));
-    // dropping the scheme by omission is also a downgrade
-    let omitted = apply_scheme(&mut state, None);
-    assert!(
-        matches!(
-            omitted,
-            ProjectionEffect::Rejected { ref reason } if reason == CONTENT_SCHEME_DOWNGRADE
+        apply_policy_bundle(
+            &mut rfc,
+            &hlc,
+            realm,
+            serde_json::json!({"content_scheme": "mls_rfc9420"}),
         ),
-        "omitted content scheme returned {omitted:?}"
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
+    ));
+    seed_mls_genesis(&mut rfc, realm, scope());
+    assert!(matches!(
+        apply_policy_bundle(
+            &mut rfc,
+            &hlc,
+            realm,
+            serde_json::json!({"content_scheme": "mls_exporter_aead_v1"}),
+        ),
+        ProjectionEffect::Rejected { reason }
+            if reason == arkret_wire::ReasonCode::MLS_CONTENT_SCHEME_IMMUTABLE
+    ));
+    assert!(matches!(
+        apply_policy_bundle(
+            &mut rfc,
+            &hlc,
+            realm,
+            serde_json::json!({"content_scheme": "mls_rfc9420"}),
+        ),
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
+    ));
+    assert!(matches!(
+        apply_policy_bundle(
+            &mut rfc,
+            &hlc,
+            realm,
+            serde_json::json!({"federation_policy": "open"})
+        ),
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
+    ));
+
+    let mut exporter = ProjectionState::new();
+    assert!(matches!(
+        apply_policy_bundle(
+            &mut exporter,
+            &hlc,
+            realm,
+            serde_json::json!({"content_scheme": "mls_exporter_aead_v1"}),
+        ),
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
+    ));
+    seed_mls_genesis(&mut exporter, realm, scope());
+    assert!(matches!(
+        apply_policy_bundle(
+            &mut exporter,
+            &hlc,
+            realm,
+            serde_json::json!({"content_scheme": "mls_rfc9420"}),
+        ),
+        ProjectionEffect::Rejected { reason }
+            if reason == arkret_wire::ReasonCode::MLS_CONTENT_SCHEME_IMMUTABLE
+    ));
+    assert!(matches!(
+        apply_policy_bundle(
+            &mut exporter,
+            &hlc,
+            realm,
+            serde_json::json!({"content_scheme": "mls_exporter_aead_v1"}),
+        ),
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
+    ));
+    assert!(matches!(
+        apply_policy_bundle(
+            &mut exporter,
+            &hlc,
+            realm,
+            serde_json::json!({"federation_policy": "open"}),
+        ),
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
+    ));
+    assert_eq!(
+        exporter.realm_content_scheme(realm).as_deref(),
+        Some("mls_exporter_aead_v1"),
+        "omission must retain the Genesis-selected scheme"
     );
+}
+
+#[test]
+fn circle_genesis_locks_parent_realm_content_scheme() {
+    let hlc = ServerHlc::new("circle-genesis-scheme");
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let circle_scope = || arkret_wire::ScopeRef::Circle {
+        realm_id: arkret_wire::RealmId::new(realm).unwrap(),
+        circle_id: arkret_wire::CircleId::new(
+            "ak:circle:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt",
+        )
+        .unwrap(),
+    };
+
+    for (selected, attempted) in [
+        ("mls_rfc9420", "mls_exporter_aead_v1"),
+        ("mls_exporter_aead_v1", "mls_rfc9420"),
+    ] {
+        let mut state = ProjectionState::new();
+        assert!(matches!(
+            apply_policy_bundle(
+                &mut state,
+                &hlc,
+                realm,
+                serde_json::json!({"content_scheme": selected}),
+            ),
+            ProjectionEffect::RealmPolicyBundleProjected { .. }
+        ));
+        seed_mls_genesis(&mut state, realm, circle_scope());
+        assert!(matches!(
+            apply_policy_bundle(
+                &mut state,
+                &hlc,
+                realm,
+                serde_json::json!({"content_scheme": attempted}),
+            ),
+            ProjectionEffect::Rejected { reason }
+                if reason == arkret_wire::ReasonCode::MLS_CONTENT_SCHEME_IMMUTABLE
+        ));
+    }
+}
+
+#[test]
+fn sidecar_only_genesis_does_not_lock_realm_content_scheme() {
+    let hlc = ServerHlc::new("sidecar-genesis-scheme");
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let mut state = ProjectionState::new();
+    seed_mls_genesis(
+        &mut state,
+        realm,
+        arkret_wire::ScopeRef::Sidecar {
+            realm_id: arkret_wire::RealmId::new(realm).unwrap(),
+            sidecar_id: arkret_wire::SidecarId::new(
+                "ak:sidecar:AUbhLbszCE22Bm-rjOxxh9NLjudxjc1Jm38OX5PZttdw",
+            )
+            .unwrap(),
+        },
+    );
+    assert!(matches!(
+        apply_policy_bundle(
+            &mut state,
+            &hlc,
+            realm,
+            serde_json::json!({"content_scheme": "mls_exporter_aead_v1"}),
+        ),
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
+    ));
 }
 
 // An unknown `content_scheme` enum value is rejected outright, even on a realm
@@ -374,92 +552,8 @@ fn content_scheme_rejects_unknown_value() {
     );
     assert!(matches!(
         effect,
-        ProjectionEffect::Rejected { reason } if reason == CONTENT_SCHEME_DOWNGRADE
-    ));
-}
-
-#[test]
-fn prejoin_history_rejects_strict_content_scheme_on_mls_realm() {
-    use arkret_state::lattice::CellState;
-
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("history-scheme");
-    let realm = "ak:realm:AT7NHZtjTsuzRThBF8kLDDkl9394Uno1fO21jOiLjo-U";
-    state.realm_null_subject_cells.insert(
-        (realm.to_owned(), arkret_wire::REALM_GENESIS_CELL.to_owned()),
-        CellState::Value(serde_json::json!({
-            "encryption_profile": "mls_rfc9420"
-        })),
-    );
-    state.realm_null_subject_cells.insert(
-        (
-            realm.to_owned(),
-            format!(
-                "ak:cell:{}:null",
-                arkret_wire::CellFamilyId::REALM_HISTORY_VISIBILITY_V1
-            ),
-        ),
-        CellState::Value(serde_json::json!({"value": "shared"})),
-    );
-    assert_eq!(
-        state.realm_encryption_profile(realm).as_deref(),
-        Some("mls_rfc9420")
-    );
-    assert_eq!(
-        state.realm_history_visibility(realm).as_deref(),
-        Some("shared")
-    );
-
-    let effect = apply_policy_bundle(
-        &mut state,
-        &hlc,
-        realm,
-        serde_json::json!({ "content_scheme": "mls_rfc9420" }),
-    );
-    assert!(
-        matches!(
-            &effect,
-            ProjectionEffect::Rejected { reason }
-                if reason
-                    == arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
-        ),
-        "expected history/content-scheme rejection, got {effect:?}"
-    );
-}
-
-#[test]
-fn prejoin_history_accepts_exporter_aead_scheme_on_mls_realm() {
-    use arkret_state::lattice::CellState;
-
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("history-scheme-ok");
-    let realm = "ak:realm:AQ5hB6Hsk2fZA-x-ErLhDAYuzeu8Y_gLzUPe2VZUa8Z8";
-    state.realm_null_subject_cells.insert(
-        (realm.to_owned(), arkret_wire::REALM_GENESIS_CELL.to_owned()),
-        CellState::Value(serde_json::json!({
-            "encryption_profile": "mls_rfc9420"
-        })),
-    );
-    state.realm_null_subject_cells.insert(
-        (
-            realm.to_owned(),
-            format!(
-                "ak:cell:{}:null",
-                arkret_wire::CellFamilyId::REALM_HISTORY_VISIBILITY_V1
-            ),
-        ),
-        CellState::Value(serde_json::json!({"value": "shared"})),
-    );
-
-    let effect = apply_policy_bundle(
-        &mut state,
-        &hlc,
-        realm,
-        serde_json::json!({ "content_scheme": "mls_exporter_aead_v1" }),
-    );
-    assert!(matches!(
-        effect,
-        ProjectionEffect::RealmPolicyBundleProjected { .. }
+        ProjectionEffect::Rejected { reason }
+            if reason == arkret_wire::ErrorCode::SCHEMA_VIOLATION
     ));
 }
 
@@ -490,7 +584,7 @@ fn content_scheme_reads_the_policy_bundle_cell() {
     );
     assert!(matches!(
         effect,
-        ProjectionEffect::Rejected { reason } if reason == CONTENT_SCHEME_DOWNGRADE
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
     ));
 }
 

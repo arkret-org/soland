@@ -67,9 +67,22 @@ pub async fn install(
     let received_at = chrono::Utc::now();
     let mut projected = 0;
     let mut staged_bootstrap = Vec::new();
-    for event in &body.events {
+    let genesis_live_digest_suite = (!already_has_realm)
+        .then(|| arkret::declared_genesis_live_digest_suite(&body.events[0]))
+        .transpose()
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    for (index, event) in body.events.iter().enumerate() {
+        let digest_suite = if already_has_realm {
+            state
+                .projections()
+                .realm_digest_suite(event.realm_id.as_str())
+        } else if index == 0 {
+            arkret_canonical::DigestSuite::Sha256
+        } else {
+            genesis_live_digest_suite.expect("new Realm fixture derived its genesis digest suite")
+        };
         let event_digest = event
-            .event_digest()
+            .event_digest_with_digest_suite(digest_suite)
             .map_err(|error| AppError::param_invalid(error.to_string()))?;
         let envelope = serde_json::to_value(event)
             .map_err(|error| AppError::param_invalid(error.to_string()))?;
@@ -87,6 +100,7 @@ pub async fn install(
                 realm_id: Some(event.realm_id.to_string()),
                 kind: event.kind.as_str().to_owned(),
                 schema_id: arkret_wire::SchemaId::EVENT_V1.to_owned(),
+                digest_suite,
                 canonical_digest: event_digest,
                 canonical_bytes,
                 envelope,
@@ -101,11 +115,12 @@ pub async fn install(
             OperationKind::Create,
             None,
             event,
+            digest_suite,
         )
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
         let writes = state
             .projections()
-            .project_accepted_cell_writes(event)
+            .project_accepted_cell_writes_with_digest_suite(event, digest_suite)
             .map_err(AppError::param_invalid)?;
         if already_has_realm {
             if let ProjectionEffectView::Rejected { reason } =

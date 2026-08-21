@@ -1,6 +1,9 @@
 use arkret_models_discovery::ServiceDescribe;
 use arkret_models_identity::service_identity::CanonicalServiceUrl;
-use arkret_models_identity::{ServiceResolutionRecord, ServiceResolutionRecordCore};
+use arkret_models_identity::{
+    AuthenticatedServiceResolution, DidDocument, ServiceResolutionRecord,
+    ServiceResolutionRecordCore,
+};
 use arkret_wire::{DidCoreId, DidUrl, Hash};
 use chrono::{Duration, Utc};
 use salvo::oapi::extract::PathParam;
@@ -13,6 +16,7 @@ use crate::state::AppState;
 const RESOLUTION_REFRESH_SECONDS: i64 = 300;
 const RESOLUTION_TTL_SECONDS: i64 = 600;
 const MAX_RESOLUTION_CAS_ATTEMPTS: usize = 8;
+const MAX_AUTHENTICATED_RESOLUTION_BYTES: usize = 1024 * 1024;
 
 pub(super) fn open_router() -> Router {
     Router::with_path("services/{service_id}/resolution").get(open_service_resolution)
@@ -273,17 +277,103 @@ async fn open_service_resolution(
     if requested != current {
         return Err(AppError::not_found("service resolution not found"));
     }
-    let description = super::describe::build_server_description(state);
-    let record = ensure_current_record(state, &description).await?;
-    // service-surface.md: the current-record response body is the record's
-    // canonical JCS bytes — receivers reject non-byte-canonical wire and
-    // compute pinned_record_digest over these exact bytes, so the default
-    // field-declaration-order `Json` serialization is not a valid encoding.
-    let body = arkret_canonical::canonical_json_string(&record).map_err(|error| {
+    let authenticated = current_authenticated_service_resolution(state).await?;
+    let body = arkret_canonical::canonical_json_string(&authenticated).map_err(|error| {
         AppError::internal(format!(
             "service resolution canonical encoding failed: {error}"
         ))
     })?;
+    if body.len() > MAX_AUTHENTICATED_RESOLUTION_BYTES {
+        return Err(AppError::new(
+            ErrorCode::LimitExceeded,
+            "authenticated service resolution exceeds 1 MiB",
+        ));
+    }
     res.render(Text::Json(body));
     Ok(())
+}
+
+pub(crate) async fn current_authenticated_service_resolution(
+    state: &AppState,
+) -> Result<AuthenticatedServiceResolution, AppError> {
+    let description = super::describe::build_server_description(state);
+    let record = ensure_current_record(state, &description).await?;
+    authenticated_current_resolution(state, record).await
+}
+
+async fn authenticated_current_resolution(
+    state: &AppState,
+    record: ServiceResolutionRecord,
+) -> Result<AuthenticatedServiceResolution, AppError> {
+    let stored = state
+        .stored_service_identity()
+        .await
+        .map_err(|error| AppError::new(ErrorCode::ServiceIdentityUnavailable, error))?;
+    if stored.identity.full_id != record.record.full_id {
+        return Err(AppError::new(
+            ErrorCode::ServiceIdentityConflict,
+            "durable service identity does not match the resolution record",
+        ));
+    }
+    let normalized_document: DidDocument =
+        serde_json::from_value(serde_json::to_value(&stored.did_document).map_err(|error| {
+            AppError::internal(format!("service DID document encoding failed: {error}"))
+        })?)
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::ServiceIdentityUnavailable,
+                format!("service DID document normalization failed: {error}"),
+            )
+        })?;
+    let mut events = state
+        .dids()
+        .log_events(record.record.full_id.as_str())
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::ServiceIdentityUnavailable,
+                format!("durable service WebVH history unavailable: {error}"),
+            )
+        })?;
+    events.sort_by(|left, right| {
+        (left.seq, left.event_digest.as_str()).cmp(&(right.seq, right.event_digest.as_str()))
+    });
+    let terminal = events
+        .iter()
+        .position(|event| {
+            event.event_digest == record.record.method_history_head
+                && event
+                    .operation
+                    .get("versionId")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(record.record.version_id.as_str())
+        })
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::ServiceIdentityUnavailable,
+                "durable service WebVH history does not contain the resolution record head",
+            )
+        })?;
+    let log_entries = events
+        .into_iter()
+        .take(terminal + 1)
+        .map(|event| event.operation)
+        .collect::<Vec<_>>();
+    let now = chrono::DateTime::<Utc>::from_timestamp_millis(Utc::now().timestamp_millis())
+        .ok_or_else(|| AppError::internal("current service resolution timestamp is invalid"))?;
+    arkret_identity::build_authenticated_webvh_service_resolution(
+        record,
+        normalized_document,
+        log_entries,
+        Vec::new(),
+        now,
+    )
+    .map_err(|error| {
+        let detail = error.to_string();
+        if detail.contains("exceeds 1 MiB") {
+            AppError::new(ErrorCode::LimitExceeded, detail)
+        } else {
+            AppError::new(ErrorCode::ServiceIdentityUnavailable, detail)
+        }
+    })
 }

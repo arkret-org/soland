@@ -29,12 +29,6 @@ pub(crate) const CIRCLE_JOIN_NOT_OPEN: &str = "circle_join_not_open";
 /// non-decreasing. Lowering `e2ee_required` back to `allow_plaintext` is rejected.
 /// One-way ratchet: effective metadata encryption floor MUST be monotonically
 /// non-decreasing (`allow_plaintext < e2ee_required`).
-/// One-way ratchet: effective Realm `content_scheme` MUST NOT downgrade from the
-/// exporter-derived AEAD scheme (`mls_exporter_aead_v1`) back to the application
-/// message scheme (`mls_rfc9420`). Lowering the negotiated scheme would let a
-/// member re-key history content under a weaker mechanism after the realm has
-/// committed to the exporter-AEAD history-sharing path.
-pub(crate) const CONTENT_SCHEME_DOWNGRADE: &str = "content_scheme_downgrade";
 /// realm-and-space.md §2.3.1 / encryption-and-audit.md §2.10.8 — a Realm Recovery
 /// Key durability policy with `mode != none` is only meaningful on a
 /// `content_scheme=mls_exporter_aead_v1` Realm, because `mls_rfc9420`
@@ -900,11 +894,9 @@ pub(crate) fn content_scheme_field(value: &Value) -> Option<&str> {
     policy_floor_field(value, "content_scheme")
 }
 
-/// Ordinal rank for the Realm `content_scheme`. The exporter-derived AEAD scheme
-/// (`mls_exporter_aead_v1`, rank 1) sits above the MLS application-message scheme
-/// (`mls_rfc9420`, rank 0). `None` / unknown values rank as `mls_rfc9420` (0);
-/// the one-way ratchet rejects any later write whose rank is strictly lower than
-/// the projected scheme.
+/// Compatibility rank used only by the durability-policy gate: exporter AEAD
+/// can carry recoverable history secrets while RFC 9420 application messages
+/// cannot. Scheme mutability is validated separately against MLS Genesis.
 pub(crate) fn content_scheme_rank(scheme: Option<&str>) -> u8 {
     match scheme.map(str::trim) {
         Some("mls_exporter_aead_v1") => 1,
@@ -913,7 +905,7 @@ pub(crate) fn content_scheme_rank(scheme: Option<&str>) -> u8 {
 }
 
 /// The canonical Realm `content_scheme` enum
-/// (realm-and-space.md history-sharing): `mls_rfc9420` (application messages) and
+/// (realm-and-space.md history access): `mls_rfc9420` (application messages) and
 /// `mls_exporter_aead_v1` (exporter-derived AEAD content for history sharing).
 pub(crate) fn content_scheme_is_known(scheme: &str) -> bool {
     matches!(scheme.trim(), "mls_rfc9420" | "mls_exporter_aead_v1")

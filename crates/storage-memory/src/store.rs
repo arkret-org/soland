@@ -18,24 +18,25 @@ use super::{
     MemoryDeviceInventoryStore, MemoryDeviceKeyStore, MemoryDeviceMessageStore,
     MemoryDevicePairingStore, MemoryDeviceRevocationStore, MemoryEventStore,
     MemoryFederationFrontierExchangeStore, MemoryFederationOperationsStore,
-    MemoryFederationOutboxStore, MemoryHandleReleaseStore, MemoryIdempotencyStore,
+    MemoryFederationOutboxStore, MemoryGovernanceDependencyStore, MemoryHandleReleaseStore,
+    MemoryHistoryMailboxStore, MemoryHistoryTraversalRetentionStore, MemoryIdempotencyStore,
     MemoryInviteLocatorStore, MemoryInviteReceivePolicyStore, MemoryJoinApplicationStore,
     MemoryKeyBackupStore, MemoryMemberIdentityStore, MemoryMessageStore,
     MemoryMimiConsentCorrelationStore, MemoryMlsCommitStore, MemoryMlsKeyPackageStore,
     MemoryMlsWelcomeStore, MemoryModerationStore, MemoryMorphProjectionStore,
     MemoryMultisigPendingStore, MemoryNotificationStore, MemoryOneTimeKeyStore,
     MemoryOrganizationPolicyStore, MemoryOrganizationRegistrationStore, MemoryOrganizationStore,
-    MemoryPolicyDocumentStore, MemoryPrincipalResolutionStore, MemoryProjectionEventStore,
-    MemoryPublicationEvidenceStore, MemoryPushBridgeCacheStore, MemoryPushDeviceStore,
-    MemoryRealmInviteStore, MemoryRealmMetaStore, MemoryRealmOrganizationStatementStore,
-    MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore, MemoryRecoverySessionStore,
-    MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore, MemorySecurityTransactionStore,
-    MemoryServiceIdentityStore, MemoryServiceRouteHandoverPlanStore, MemoryServiceRouteStore,
-    MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
-    MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
-    MemoryStrandWatchProjectionStore, MemorySyncCursorStore, MemoryWebsocketAuthStore,
-    MemoryWebvhStore, MessageStore, MimiConsentCorrelationStore, MlsCommitStore,
-    MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
+    MemoryPendingRrkAcquisitionStore, MemoryPolicyDocumentStore, MemoryPrincipalResolutionStore,
+    MemoryProjectionEventStore, MemoryPublicationEvidenceStore, MemoryPushBridgeCacheStore,
+    MemoryPushDeviceStore, MemoryRealmInviteStore, MemoryRealmMetaStore,
+    MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore,
+    MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
+    MemorySecurityTransactionStore, MemoryServiceIdentityStore,
+    MemoryServiceRouteHandoverPlanStore, MemoryServiceRouteStore, MemorySessionStore,
+    MemorySidecarStore, MemorySignalRelayStore, MemorySpaceContainerProjectionStore,
+    MemoryStrandProjectionStore, MemoryStrandWatchProjectionStore, MemorySyncCursorStore,
+    MemoryWebsocketAuthStore, MemoryWebvhStore, MessageStore, MimiConsentCorrelationStore,
+    MlsCommitStore, MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
     MultisigPendingStore, Mutex, NotificationStore, OneTimeKeyStore, OrganizationPolicyStore,
     OrganizationRegistrationStore, OrganizationStore, PersistenceStore, PolicyDocumentStore,
     PrincipalResolutionStore, ProjectionEventStore, PublicationEvidenceStore, PushBridgeCacheStore,
@@ -82,6 +83,10 @@ pub struct SolandMemoryPersistenceStore {
     organization_policies: MemoryOrganizationPolicyStore,
     realm_organizations: MemoryRealmOrganizationStore,
     realm_organization_statements: MemoryRealmOrganizationStatementStore,
+    governance_dependencies: MemoryGovernanceDependencyStore,
+    history_traversal_retentions: MemoryHistoryTraversalRetentionStore,
+    history_mailboxes: MemoryHistoryMailboxStore,
+    pending_rrk_acquisitions: MemoryPendingRrkAcquisitionStore,
     join_applications: MemoryJoinApplicationStore,
     audit: MemoryAuditStore,
     moderation: MemoryModerationStore,
@@ -152,6 +157,9 @@ impl SolandMemoryPersistenceStore {
         let recovery_sessions = MemoryRecoverySessionStore::new();
         let security_transactions =
             MemorySecurityTransactionStore::new(recovery_sessions.shared_data());
+        let history_traversal_retentions = MemoryHistoryTraversalRetentionStore::default();
+        let history_mailboxes =
+            MemoryHistoryMailboxStore::new(history_traversal_retentions.clone());
         Self {
             #[cfg(feature = "fault-injection")]
             fault_injector: fault_injector.clone(),
@@ -183,6 +191,10 @@ impl SolandMemoryPersistenceStore {
             organization_policies: MemoryOrganizationPolicyStore::new(),
             realm_organizations: MemoryRealmOrganizationStore::new(),
             realm_organization_statements: MemoryRealmOrganizationStatementStore::new(),
+            governance_dependencies: MemoryGovernanceDependencyStore::default(),
+            history_traversal_retentions,
+            history_mailboxes,
+            pending_rrk_acquisitions: MemoryPendingRrkAcquisitionStore::default(),
             join_applications: MemoryJoinApplicationStore::new(),
             audit: MemoryAuditStore::new(),
             moderation: MemoryModerationStore::new(),
@@ -286,9 +298,7 @@ impl SolandMemoryPersistenceStore {
                 owner: "ak:did_core:web:alice.example".to_owned(),
                 deleted: false,
                 discoverability: "public".to_owned(),
-                history_visibility: "shared".to_owned(),
-                history_sharing_policy: None,
-                history_sharing_policy_digest: None,
+                history_access: "all_history_for_current_members".to_owned(),
                 preview_policy: None,
                 preview_policy_digest: None,
                 asset_privacy_policy: None,
@@ -431,6 +441,22 @@ impl DevicePairingCommitUnitOfWork for SolandMemoryPersistenceStore {
 }
 
 impl soland_storage::FederationGovernanceStoreRegistry for SolandMemoryPersistenceStore {
+    fn governance_dependencies(&self) -> &dyn soland_storage::GovernanceDependencyStore {
+        &self.governance_dependencies
+    }
+
+    fn history_traversal_retentions(&self) -> &dyn soland_storage::HistoryTraversalRetentionStore {
+        &self.history_traversal_retentions
+    }
+
+    fn pending_rrk_acquisitions(&self) -> &dyn soland_storage::PendingRrkAcquisitionStore {
+        &self.pending_rrk_acquisitions
+    }
+
+    fn history_mailboxes(&self) -> &dyn soland_storage::HistoryMailboxStore {
+        &self.history_mailboxes
+    }
+
     fn federation_outbox(&self) -> &dyn FederationOutboxStore {
         &self.federation_outbox
     }

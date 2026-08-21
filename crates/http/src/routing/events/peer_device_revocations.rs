@@ -18,7 +18,7 @@ use crate::state::AppState;
 
 /// Admit the origin-derived selector, or classify why it could not be derived.
 ///
-/// `device-lifecycle.md` §"派生的定义域与缺失结论" makes this a two-way split,
+/// The derivation-domain section of `device-lifecycle.md` makes this a two-way split,
 /// never a three-way one:
 ///
 /// * the derivation is a partial function — an unknown device, a device that belongs to another

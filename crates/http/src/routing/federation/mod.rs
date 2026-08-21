@@ -6,6 +6,7 @@ pub mod frontier_exchange;
 pub(crate) mod move_seal;
 pub mod outbox;
 pub mod outbox_operator;
+pub mod rrk_acquisition;
 pub(crate) mod well_known;
 
 // SPEC-CR-001 — reused by `identity::session_pop` so self-PoP and the

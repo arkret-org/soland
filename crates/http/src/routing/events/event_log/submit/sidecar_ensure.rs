@@ -162,6 +162,7 @@ async fn validate_and_prepare(
             realm_id: Some(parsed.realm_id.to_string()),
             kind: parsed.kind,
             schema_id: parsed.schema_id,
+            digest_suite: parsed.digest_suite,
             canonical_digest: parsed.canonical_digest,
             canonical_bytes: parsed.canonical_bytes,
             envelope,

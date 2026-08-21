@@ -82,10 +82,6 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
     let service = state.realms();
     match service.realm_metadata(realm_id.as_str()).await {
         Ok(None) => {
-            let history_sharing_policy = operation_realm_history_sharing_policy(operation);
-            let history_sharing_policy_digest = history_sharing_policy
-                .as_ref()
-                .and_then(canonical_value_digest);
             let preview_policy = operation_realm_preview_policy(operation);
             let preview_policy_digest = preview_policy.as_ref().and_then(canonical_value_digest);
             let asset_privacy_policy = operation_realm_asset_privacy_policy(operation);
@@ -105,12 +101,10 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                         }
                     })
                     .to_owned(),
-                history_visibility: operation_realm_history_visibility(operation)
-                    .filter(|value| is_valid_history_visibility(value))
-                    .unwrap_or("joined")
+                history_access: operation_realm_history_access(operation)
+                    .filter(|value| is_valid_history_access(value))
+                    .unwrap_or("since_join")
                     .to_owned(),
-                history_sharing_policy,
-                history_sharing_policy_digest,
                 preview_policy,
                 preview_policy_digest,
                 asset_privacy_policy,
@@ -149,16 +143,11 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                 record.discoverability = discoverability.to_owned();
                 changed = true;
             }
-            if let Some(history_visibility) = operation_realm_history_visibility(operation)
-                .filter(|value| is_valid_history_visibility(value))
-                && record.history_visibility != history_visibility
+            if let Some(history_access) = operation_realm_history_access(operation)
+                .filter(|value| is_valid_history_access(value))
+                && record.history_access != history_access
             {
-                record.history_visibility = history_visibility.to_owned();
-                changed = true;
-            }
-            if let Some(policy) = operation_realm_history_sharing_policy(operation) {
-                record.history_sharing_policy_digest = canonical_value_digest(&policy);
-                record.history_sharing_policy = Some(policy);
+                record.history_access = history_access.to_owned();
                 changed = true;
             }
             if let Some(policy) = operation_realm_preview_policy(operation) {

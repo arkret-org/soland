@@ -1,0 +1,650 @@
+use std::sync::Arc;
+
+use arkret_models_collaboration::governance_dependencies::GovernanceDependency;
+use arkret_models_collaboration::history_key::{
+    HistoryEffectiveScope, HistoryGovernanceTraversalIntent, HistoryKeyRequest,
+    HistoryKeyRequestReceipt, HistoryKeyRequestReplica, HistoryKeyResponseAckRequest,
+    HistoryKeyResponseLostRecord, HistoryKeyResponseRecord, HistoryKeyResponseSendReceipt,
+    HistoryKeyResponseSendRequest, HistoryMailboxAckTokenClaims, HistoryMailboxPageEntry,
+    HistoryManifestAdmission, HistoryReleaseAttestation, HistoryResponseId,
+    SealedMailboxCapability,
+};
+use arkret_wire::Hash;
+use async_trait::async_trait;
+use chrono::{DateTime, Duration, Utc};
+
+use crate::{
+    ExactWriteOutcome, HistoryTraversalAccess, HistoryTraversalRetentionWrite, PersistenceError,
+    PersistenceResult,
+};
+
+pub const HISTORY_MAILBOX_ACTIVE_BYTES_LIMIT: u64 = 16 * 1024 * 1024;
+pub const HISTORY_REQUEST_BYTES_LIMIT: usize = 64 * 1024;
+pub const HISTORY_RESPONSE_MANIFEST_BYTES_LIMIT: usize = 256 * 1024;
+pub const HISTORY_RESPONSE_CHUNK_BYTES_LIMIT: usize = 2 * 1024 * 1024;
+pub const HISTORY_RESPONSE_RECORD_BYTES_LIMIT: usize = 8 * 1024 * 1024;
+pub const HISTORY_RELEASE_ATTESTATION_BYTES_LIMIT: usize = 64 * 1024;
+pub const HISTORY_COMPACT_RECEIPTS_PER_MAILBOX_LIMIT: u64 = 64 * 1024 * 1024;
+pub const HISTORY_COMPACT_RECEIPTS_PER_REQUESTER_LIMIT: u64 = 256 * 1024 * 1024;
+pub const HISTORY_COMPACT_RECEIPTS_SERVICE_FLOOR: u64 = 256 * 1024 * 1024;
+pub const HISTORY_RESPONSE_TOMBSTONE_RETENTION_DAYS: i64 = 30;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryRequestInboxWrite {
+    pub request_digest: Hash,
+    pub request_receipt_digest: Hash,
+    pub request: HistoryKeyRequest,
+    pub request_receipt: HistoryKeyRequestReceipt,
+    pub sealed_mailbox_capability: Option<SealedMailboxCapability>,
+    pub local_traversal: Option<HistoryTraversalRetentionWrite>,
+    pub request_replica: Option<HistoryKeyRequestReplica>,
+    pub stored_at: DateTime<Utc>,
+}
+
+impl HistoryRequestInboxWrite {
+    pub fn validate(&self) -> PersistenceResult<()> {
+        self.request
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        self.request_receipt
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let expected_request_digest = self
+            .request
+            .request_digest()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let expected_receipt_digest = self
+            .request_receipt
+            .request_receipt_digest()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        if arkret_canonical::canonical_json_bytes(&self.request)
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?
+            .len()
+            > HISTORY_REQUEST_BYTES_LIMIT
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "history request exceeds 65536 canonical bytes".to_owned(),
+            ));
+        }
+        if arkret_canonical::canonical_json_bytes(&self.request_receipt)
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?
+            .len()
+            > HISTORY_RESPONSE_RECORD_BYTES_LIMIT
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "history request receipt exceeds 8 MiB".to_owned(),
+            ));
+        }
+        if expected_request_digest != self.request_digest
+            || expected_receipt_digest != self.request_receipt_digest
+            || self.request_receipt.request_digest != self.request_digest
+            || self.request.effective_scope != self.request_receipt.effective_scope
+            || self.request.requester_sender_domain != self.request_receipt.requester_sender_domain
+            || self.request.requester_authorization_incarnation
+                != self.request_receipt.requester_authorization_incarnation
+            || self.request.trusted_history_base_basis
+                != self.request_receipt.trusted_history_base_basis
+            || self.request.trusted_current_basis != self.request_receipt.trusted_current_basis
+            || self.request.expires_at != self.request_receipt.expires_at
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "history request inbox receipt binding mismatch".to_owned(),
+            ));
+        }
+        if self.stored_at > self.request.expires_at {
+            return Err(PersistenceError::SchemaViolation(
+                "history request inbox write is expired".to_owned(),
+            ));
+        }
+        if self.request.expires_at - self.request_receipt.accepted_at > Duration::days(7) {
+            return Err(PersistenceError::SchemaViolation(
+                "history request TTL exceeds 604800 seconds".to_owned(),
+            ));
+        }
+        let total_epochs = self
+            .request
+            .requested_ranges
+            .iter()
+            .try_fold(0_u64, |total, range| {
+                range
+                    .to_epoch
+                    .checked_sub(range.from_epoch)
+                    .and_then(|width| width.checked_add(1))
+                    .and_then(|width| total.checked_add(width))
+            });
+        if total_epochs.is_none_or(|total| total > 65_536) {
+            return Err(PersistenceError::SchemaViolation(
+                "history request exceeds 65536 total epochs".to_owned(),
+            ));
+        }
+        match (
+            &self.sealed_mailbox_capability,
+            &self.local_traversal,
+            &self.request_replica,
+        ) {
+            (Some(capability), Some(traversal), None) => {
+                capability
+                    .validate()
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+                if capability
+                    .sealed_capability_digest()
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+                    != self.request_receipt.sealed_capability_digest
+                {
+                    return Err(PersistenceError::SchemaViolation(
+                        "sealed mailbox capability digest mismatch".to_owned(),
+                    ));
+                }
+                crate::history_traversal_canonical(traversal)?;
+                let expected_access = HistoryTraversalAccess::SelfAccess(
+                    arkret_models_collaboration::history_key::SelfHistoryTraversalAccess::RequestReceipt {
+                        request_receipt_digest: self.request_receipt_digest.clone(),
+                    },
+                );
+                if traversal.access != expected_access
+                    || traversal.retention != self.request_receipt.history_traversal_retention
+                {
+                    return Err(PersistenceError::SchemaViolation(
+                        "local history request traversal binding mismatch".to_owned(),
+                    ));
+                }
+                let HistoryGovernanceTraversalIntent::MemberHistoryDelivery {
+                    effective_scope,
+                    trusted_history_base_basis,
+                    trusted_current_basis,
+                    request_digest,
+                    requested_ranges,
+                    authorization_incarnation,
+                    retention,
+                    ..
+                } = &traversal.retention.traversal_intent
+                else {
+                    return Err(PersistenceError::SchemaViolation(
+                        "local history request requires member-history traversal".to_owned(),
+                    ));
+                };
+                if effective_scope != &self.request.effective_scope
+                    || trusted_history_base_basis != &self.request.trusted_history_base_basis
+                    || trusted_current_basis != &self.request.trusted_current_basis
+                    || request_digest != &self.request_digest
+                    || requested_ranges != &self.request.requested_ranges
+                    || authorization_incarnation
+                        != &self.request.requester_authorization_incarnation
+                    || retention.expires_at != self.request.expires_at
+                {
+                    return Err(PersistenceError::SchemaViolation(
+                        "local history traversal does not bind the exact request".to_owned(),
+                    ));
+                }
+            }
+            (None, None, Some(replica)) => {
+                replica
+                    .validate()
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+                replica
+                    .request_replica_digest()
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+                if arkret_canonical::canonical_json_bytes(replica)
+                    .map_err(|error| PersistenceError::Internal(error.to_string()))?
+                    .len()
+                    > HISTORY_RESPONSE_RECORD_BYTES_LIMIT
+                {
+                    return Err(PersistenceError::SchemaViolation(
+                        "history request replica exceeds 8 MiB".to_owned(),
+                    ));
+                }
+                if replica.request != self.request
+                    || replica.request_receipt != self.request_receipt
+                    || replica.expires_at != self.request.expires_at
+                {
+                    return Err(PersistenceError::SchemaViolation(
+                        "history request replica does not bind the durable inbox record".to_owned(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(PersistenceError::SchemaViolation(
+                    "history request must be either a local create or a replica".to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn traversal_retention_digest(&self) -> &Hash {
+        &self
+            .request_receipt
+            .history_traversal_retention
+            .traversal_intent_digest
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryRequestInboxRecord {
+    pub sequence: u64,
+    pub write: HistoryRequestInboxWrite,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryRequestInboxPage {
+    pub records: Vec<HistoryRequestInboxRecord>,
+    pub next_sequence: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryResponseReservationInput {
+    pub source_record_digest: Hash,
+    pub source_record: HistoryKeyResponseSendRequest,
+    pub manifest_admission: Option<HistoryManifestAdmission>,
+    pub release_attestation: Option<HistoryReleaseAttestation>,
+    pub release_service_signer_evidence: GovernanceDependency,
+    pub sent_at: DateTime<Utc>,
+}
+
+pub trait HistoryAuthorityViewCas: Send + Sync {
+    fn with_current_release_authority(
+        &self,
+        attestation: &HistoryReleaseAttestation,
+        mutation: &mut dyn FnMut() -> PersistenceResult<()>,
+    ) -> PersistenceResult<()>;
+}
+
+impl HistoryResponseReservationInput {
+    pub fn validate(&self) -> PersistenceResult<usize> {
+        self.source_record
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        match (
+            &self.source_record.content,
+            &self.manifest_admission,
+            &self.release_attestation,
+        ) {
+            (
+                arkret_models_collaboration::history_key::HistoryKeyResponseContent::Manifest(_),
+                Some(admission),
+                None,
+            ) => {
+                admission
+                    .validate()
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+                if self
+                    .source_record
+                    .manifest_digest()
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+                    != admission.manifest_digest
+                    || self.source_record.request_digest != admission.request_digest
+                    || self.source_record.request_receipt_digest != admission.request_receipt_digest
+                {
+                    return Err(PersistenceError::SchemaViolation(
+                        "history manifest admission binding mismatch".to_owned(),
+                    ));
+                }
+            }
+            (
+                arkret_models_collaboration::history_key::HistoryKeyResponseContent::Chunk(_),
+                None,
+                Some(attestation),
+            ) => attestation
+                .validate()
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
+            _ => {
+                return Err(PersistenceError::SchemaViolation(
+                    "history response reservation branch mismatch".to_owned(),
+                ));
+            }
+        }
+        if let Some(attestation) = &self.release_attestation
+            && arkret_canonical::canonical_json_bytes(attestation)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?
+                .len()
+                > HISTORY_RELEASE_ATTESTATION_BYTES_LIMIT
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "history release attestation exceeds 65536 canonical bytes".to_owned(),
+            ));
+        }
+        let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+            selector:
+                arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+                    content_digest,
+                },
+            authenticated_signer_resolution_evidence:
+                arkret_models_identity::AuthenticatedSignerResolutionEvidence::Service { .. },
+        } = &self.release_service_signer_evidence
+        else {
+            return Err(PersistenceError::SchemaViolation(
+                "history response release signer evidence must be service-kind".to_owned(),
+            ));
+        };
+        let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+            authenticated_signer_resolution_evidence,
+            ..
+        } = &self.release_service_signer_evidence
+        else {
+            unreachable!()
+        };
+        if authenticated_signer_resolution_evidence
+            .canonical_sha256_digest()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+            != *content_digest
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "history response release signer evidence digest mismatch".to_owned(),
+            ));
+        }
+        if self
+            .source_record
+            .source_record_digest()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+            != self.source_record_digest
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "history response source record digest mismatch".to_owned(),
+            ));
+        }
+        let canonical_bytes = arkret_canonical::canonical_json_bytes(&self.source_record)
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+        let limit = match &self.source_record.content {
+            arkret_models_collaboration::history_key::HistoryKeyResponseContent::Manifest(_) => {
+                HISTORY_RESPONSE_MANIFEST_BYTES_LIMIT
+            }
+            arkret_models_collaboration::history_key::HistoryKeyResponseContent::Chunk(_) => {
+                HISTORY_RESPONSE_CHUNK_BYTES_LIMIT
+            }
+        };
+        if canonical_bytes.len() > limit {
+            return Err(PersistenceError::SchemaViolation(
+                "history response source record exceeds its canonical byte limit".to_owned(),
+            ));
+        }
+        Ok(canonical_bytes.len())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryResponseReservationRecord {
+    pub sequence: u64,
+    pub input: HistoryResponseReservationInput,
+    pub reserved_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryAcceptedManifestRecord {
+    pub source_record: HistoryKeyResponseSendRequest,
+    pub manifest_admission: HistoryManifestAdmission,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryResponseCompleteWrite {
+    pub record: HistoryKeyResponseRecord,
+    pub send_receipt: HistoryKeyResponseSendReceipt,
+    /// Exact signer-evidence and transitive attester closure bound by the
+    /// source record and pinned with acceptance.
+    pub signer_dependencies: Vec<GovernanceDependency>,
+    /// The release service's finite advertised compact-ledger capacity.
+    pub advertised_service_compact_receipt_bytes: u64,
+}
+
+impl HistoryResponseCompleteWrite {
+    pub fn validate(&self) -> PersistenceResult<usize> {
+        if self.advertised_service_compact_receipt_bytes < HISTORY_COMPACT_RECEIPTS_SERVICE_FLOOR {
+            return Err(PersistenceError::SchemaViolation(
+                "release service compact receipt ledger advertisement is below 256 MiB".to_owned(),
+            ));
+        }
+        self.record
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        self.send_receipt
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        crate::history_mailbox_signer_retained_dependencies(
+            &self.record,
+            &self.signer_dependencies,
+        )?;
+        if self.send_receipt.response_id != self.record.source_record.response_id
+            || self.send_receipt.record_digest != self.record.record_digest
+            || self.send_receipt.sequence != self.record.sequence
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "history response send receipt does not bind its mailbox record".to_owned(),
+            ));
+        }
+        match (
+            &self.record.manifest_admission,
+            &self.record.release_attestation,
+        ) {
+            (Some(admission), None)
+                if self.send_receipt.manifest_admission_digest
+                    == admission.manifest_admission_digest
+                    && self.send_receipt.release_attestation_digest.is_none() => {}
+            (None, Some(attestation))
+                if self.send_receipt.manifest_admission_digest
+                    == attestation.manifest_admission_digest
+                    && self.send_receipt.release_attestation_digest
+                        == Some(attestation.release_attestation_digest().map_err(|error| {
+                            PersistenceError::SchemaViolation(error.to_string())
+                        })?) => {}
+            _ => {
+                return Err(PersistenceError::SchemaViolation(
+                    "history response send receipt branch digest mismatch".to_owned(),
+                ));
+            }
+        }
+        if self
+            .record
+            .response_record_digest()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+            != self.record.record_digest
+            || self
+                .send_receipt
+                .send_receipt_digest()
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+                != self.send_receipt.receipt_digest
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "history response canonical digest mismatch".to_owned(),
+            ));
+        }
+        let canonical_bytes = arkret_canonical::canonical_json_bytes(&self.record)
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+        if canonical_bytes.len() > HISTORY_RESPONSE_RECORD_BYTES_LIMIT {
+            return Err(PersistenceError::SchemaViolation(
+                "history response record exceeds 8 MiB".to_owned(),
+            ));
+        }
+        Ok(canonical_bytes.len())
+    }
+
+    pub fn compact_receipt_bytes(&self) -> PersistenceResult<usize> {
+        let bytes = arkret_canonical::canonical_json_bytes(&self.send_receipt)
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+        if bytes.len() > HISTORY_RESPONSE_RECORD_BYTES_LIMIT {
+            return Err(PersistenceError::SchemaViolation(
+                "history response send receipt exceeds 8 MiB".to_owned(),
+            ));
+        }
+        Ok(bytes.len())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum HistoryResponseCompleteOutcome {
+    Inserted(HistoryKeyResponseSendReceipt),
+    ExactReplay(HistoryKeyResponseSendReceipt),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryMailboxReadPage {
+    pub entries: Vec<HistoryMailboxPageEntry>,
+    pub cursor: Option<String>,
+    pub limited: bool,
+    pub high_water_sequence: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryMailboxAckTokenWrite {
+    /// Service-generated HMAC token from the canonical binding registry.
+    /// Storage persists and compares it but never invents protocol token bytes.
+    pub ack_token: String,
+    pub claims: HistoryMailboxAckTokenClaims,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryResponseTombstone {
+    pub response_id: HistoryResponseId,
+    pub source_record_digest: Hash,
+    pub terminal_status: String,
+    pub expired_at: DateTime<Utc>,
+    pub retain_until: DateTime<Utc>,
+}
+
+impl HistoryResponseTombstone {
+    pub fn new(
+        response_id: HistoryResponseId,
+        source_record_digest: Hash,
+        terminal_status: impl Into<String>,
+        expired_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            response_id,
+            source_record_digest,
+            terminal_status: terminal_status.into(),
+            expired_at,
+            retain_until: expired_at + Duration::days(HISTORY_RESPONSE_TOMBSTONE_RETENTION_DAYS),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum HistoryResponseRetryRecord {
+    Reserved(HistoryResponseReservationRecord),
+    Accepted(HistoryKeyResponseSendReceipt),
+    Expired(HistoryResponseTombstone),
+}
+
+pub fn history_scope_parts(scope: &HistoryEffectiveScope) -> (&'static str, &str, Option<&str>) {
+    match scope {
+        HistoryEffectiveScope::Realm { realm_id } => ("realm", realm_id.as_str(), None),
+        HistoryEffectiveScope::Circle {
+            realm_id,
+            circle_id,
+        } => ("circle", realm_id.as_str(), Some(circle_id.as_str())),
+    }
+}
+
+pub fn history_lost_record_digest(
+    lost_record: &HistoryKeyResponseLostRecord,
+) -> PersistenceResult<Hash> {
+    lost_record
+        .validate()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    lost_record
+        .lost_record_digest()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))
+}
+
+pub fn history_lost_record_bytes(
+    lost_record: &HistoryKeyResponseLostRecord,
+) -> PersistenceResult<usize> {
+    lost_record
+        .validate()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let bytes = arkret_canonical::canonical_json_bytes(lost_record)
+        .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+    if bytes.len() > HISTORY_RESPONSE_RECORD_BYTES_LIMIT {
+        return Err(PersistenceError::SchemaViolation(
+            "history lost record exceeds 8 MiB".to_owned(),
+        ));
+    }
+    Ok(bytes.len())
+}
+
+#[async_trait]
+pub trait HistoryMailboxStore: Send + Sync {
+    fn bind_authority_view_cas(&self, authority_view_cas: Arc<dyn HistoryAuthorityViewCas>);
+
+    async fn put_request_exact(
+        &self,
+        write: HistoryRequestInboxWrite,
+    ) -> PersistenceResult<(ExactWriteOutcome, HistoryRequestInboxRecord)>;
+
+    async fn get_request_by_digest(
+        &self,
+        request_digest: &Hash,
+    ) -> PersistenceResult<Option<HistoryRequestInboxRecord>>;
+
+    async fn get_request_by_receipt_digest(
+        &self,
+        request_receipt_digest: &Hash,
+    ) -> PersistenceResult<Option<HistoryRequestInboxRecord>>;
+
+    async fn get_request_by_mailbox(
+        &self,
+        reply_mailbox_id: &str,
+    ) -> PersistenceResult<Option<HistoryRequestInboxRecord>>;
+
+    async fn list_requests(
+        &self,
+        effective_scope: &HistoryEffectiveScope,
+        after_sequence: Option<u64>,
+        limit: usize,
+    ) -> PersistenceResult<HistoryRequestInboxPage>;
+
+    async fn reserve_response_exact(
+        &self,
+        input: HistoryResponseReservationInput,
+        reserved_at: DateTime<Utc>,
+    ) -> PersistenceResult<(ExactWriteOutcome, HistoryResponseReservationRecord)>;
+
+    async fn complete_response_exact(
+        &self,
+        write: HistoryResponseCompleteWrite,
+    ) -> PersistenceResult<HistoryResponseCompleteOutcome>;
+
+    async fn response_retry(
+        &self,
+        response_id: &HistoryResponseId,
+    ) -> PersistenceResult<Option<HistoryResponseRetryRecord>>;
+
+    async fn get_accepted_manifest(
+        &self,
+        reply_mailbox_id: &str,
+        manifest_digest: &Hash,
+        manifest_admission_digest: &Hash,
+    ) -> PersistenceResult<Option<HistoryAcceptedManifestRecord>>;
+
+    async fn replace_response_with_lost_exact(
+        &self,
+        response_id: &HistoryResponseId,
+        expected_record_digest: &Hash,
+        lost_record: HistoryKeyResponseLostRecord,
+        signer_dependencies: Vec<GovernanceDependency>,
+    ) -> PersistenceResult<ExactWriteOutcome>;
+
+    async fn read_mailbox_page(
+        &self,
+        reply_mailbox_id: &str,
+        capability_commitment: &Hash,
+        after_cursor: Option<&str>,
+        limit: usize,
+        now: DateTime<Utc>,
+    ) -> PersistenceResult<HistoryMailboxReadPage>;
+
+    async fn put_ack_token_exact(
+        &self,
+        capability_commitment: &Hash,
+        write: HistoryMailboxAckTokenWrite,
+        now: DateTime<Utc>,
+    ) -> PersistenceResult<ExactWriteOutcome>;
+
+    async fn ack_mailbox(
+        &self,
+        reply_mailbox_id: &str,
+        capability_commitment: &Hash,
+        request: &HistoryKeyResponseAckRequest,
+        now: DateTime<Utc>,
+    ) -> PersistenceResult<String>;
+
+    async fn expire_requests(&self, now: DateTime<Utc>, limit: usize) -> PersistenceResult<usize>;
+}

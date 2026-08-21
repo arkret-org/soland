@@ -371,8 +371,11 @@ fn revalidate_transport(delivery: &FederationDeliveryRecord) -> Result<(), Strin
         let body: arkret_models_collaboration::event_sync::EventsSubmitFederationBatchRequestBody =
             serde_json::from_str(&delivery.payload_json)
                 .map_err(|error| format!("stored federation request no longer parses: {error}"))?;
+        let events = body.transported_events().cloned().collect::<Vec<_>>();
+        let digest_suites =
+            crate::routing::events::event_log::accepted_event_digest_suites(&events)?;
         return body
-            .validate_federation_transport()
+            .validate_federation_transport(&digest_suites)
             .map_err(|error| format!("stored federation request is no longer valid: {error}"));
     }
     serde_json::from_str::<serde_json::Value>(&delivery.payload_json)

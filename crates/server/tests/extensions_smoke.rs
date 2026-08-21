@@ -217,7 +217,7 @@ async fn applet_service_token(
 }
 
 /// A citable accepted Seal of the demo Realm that establishes this service as
-/// the current single-DID proposal/notary authority.
+/// the current single-signer proposal/notary authority.
 ///
 /// `event-auth-state-resolution.md` §5 makes a control-plane Event a Control
 /// Move whose `seal_basis.leaves` must be non-empty; unlike a DataEvent
@@ -292,7 +292,12 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     )
     .unwrap();
     assert_eq!(RealmId::from_event_id(&create.event_id), realm);
-    let move_id = arkret_identifiers::Hash::new(create.event_digest().unwrap()).unwrap();
+    let move_id = arkret_identifiers::Hash::new(
+        create
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap(),
+    )
+    .unwrap();
     let admin_grant_move_id =
         arkret_identifiers::Hash::new(format!("sha256:{}", "41".repeat(32))).unwrap();
     let notary_cell: arkret_identifiers::CellRef = arkret_wire::REALM_NOTARY_CELL.parse().unwrap();
@@ -303,10 +308,12 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
             arkret_wire::LatticeOp {
                 op_type: arkret_wire::LatticeOpType::Set,
                 tag: None,
-                value: Some(json!({
-                    "kind": "single_did",
-                    "actor_id": state.service_id(),
-                })),
+                value: Some(
+                    serde_json::to_value(arkret_wire::NotaryValue::single_signer(
+                        state.service_notary_signer_descriptor().unwrap(),
+                    ))
+                    .unwrap(),
+                ),
                 from: None,
                 to: None,
                 reason: None,
@@ -377,15 +384,18 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         &admin_grant_cell,
         std::slice::from_ref(&admin_grant_op),
     );
-    let state_root = arkret_state::compute_state_root(&BTreeMap::from([
-        (notary_cell.clone(), notary_joined),
-        (admin_grant_cell.clone(), grant_joined),
-    ]))
+    let state_root = arkret_state::compute_state_root(
+        &BTreeMap::from([
+            (notary_cell.clone(), notary_joined),
+            (admin_grant_cell.clone(), grant_joined),
+        ]),
+        arkret_canonical::DigestSuite::Sha256,
+    )
     .unwrap();
-    let signer = Ed25519PayloadSigner::from_did_key_seed(
-        [0x21; 32],
-        DidFullId::new("did:web:alice.example").unwrap(),
-        arkret_wire::DidUrl::new("did:web:alice.example#extension-test-notary").unwrap(),
+    let signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
+        state.notary_signing_key().to_bytes(),
+        state.service_full_id(),
+        state.service_verification_method("notary-key").unwrap(),
     );
     let mut delta = vec![move_id, admin_grant_move_id];
     delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
@@ -395,10 +405,13 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         delta,
         state_root,
         arkret_identifiers::Hlc::new("0196419b0000-0000-a11ce001").unwrap(),
+        arkret_canonical::DigestSuite::Sha256,
         &signer,
     )
     .unwrap();
-    state.test_put_seal(&seal).unwrap();
+    state
+        .test_put_seal(&seal, arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
     state
         .test_append_sealed_effects(
             &realm,

@@ -174,6 +174,28 @@ pub fn validated_event_identity_parts(
     Ok(parts)
 }
 
+/// Validate a canonical Event identity together with the digest suite frozen
+/// by its admission record. Durable callers must not recover this value from
+/// the Event id after admission.
+pub fn validated_event_identity_parts_for_suite(
+    event_id: &str,
+    event_digest: &str,
+    canonical_bytes: &[u8],
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<EventIdentityParts, crate::PersistenceError> {
+    let parts = validated_event_identity_parts(event_id, event_digest, canonical_bytes)?;
+    let expected_code = match digest_suite {
+        arkret_canonical::DigestSuite::Sha256 => 0x01,
+        arkret_canonical::DigestSuite::Blake3 => 0x02,
+    };
+    if parts.digest_suite != expected_code {
+        return Err(crate::PersistenceError::Conflict(
+            "event_id_digest_suite_mismatch".to_owned(),
+        ));
+    }
+    Ok(parts)
+}
+
 pub fn generate(kind: &str) -> String {
     arkret_identifiers::new_prefixed_uuid7(&format!("ak:{kind}:"))
 }
@@ -287,6 +309,17 @@ mod tests {
         let event_id = format_event_id(&id);
         let event_digest = format_event_digest(0x01, &digest).unwrap();
         validated_event_identity_parts(&event_id, &event_digest, bytes).unwrap();
+        let suite_error = validated_event_identity_parts_for_suite(
+            &event_id,
+            &event_digest,
+            bytes,
+            arkret_canonical::DigestSuite::Blake3,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            suite_error,
+            crate::PersistenceError::Conflict(reason) if reason == "event_id_digest_suite_mismatch"
+        ));
 
         let error =
             validated_event_identity_parts(&event_id, &event_digest, br#"{"covered":false}"#)

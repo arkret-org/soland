@@ -210,6 +210,63 @@ pub(crate) fn rfc9421_sign(
     rfc9421_sign_with_window(state, headers, method, target_url, 300)
 }
 
+pub(crate) fn rfc9421_sign_controller_gate_request(
+    state: &AppState,
+    mut headers: reqwest::header::HeaderMap,
+    target_url: &str,
+) -> reqwest::header::HeaderMap {
+    let created = now_unix_secs();
+    let expires = created + 300;
+    let keyid = super::federation_service_signature_key_id(state.service_full_id().as_str());
+    let covered = vec![
+        Component::Method,
+        Component::TargetUri,
+        Component::Authority,
+        Component::Path,
+        Component::Header("content-digest".to_owned()),
+        Component::Header("source-service-id".to_owned()),
+        Component::Header("destination-service-id".to_owned()),
+        Component::Header("arkret-operation-id".to_owned()),
+        Component::Header("arkret-request-id".to_owned()),
+    ];
+    let signature_input = format!(
+        "{};created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
+        format_signature_input_component_list("sig1", &covered)
+            .expect("controller gate signature component profile is valid")
+    );
+    let parsed_signature_input =
+        parse_signature_input(&signature_input).expect("generated Signature-Input is valid");
+    let path = reqwest::Url::parse(target_url)
+        .map(|url| url.path().to_owned())
+        .unwrap_or_default();
+    let request = SignedRequestParts {
+        method: "POST".to_owned(),
+        target_uri: target_url.to_owned(),
+        authority: authority_from_target_url(target_url),
+        path,
+        headers: headers
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|value| (name.as_str().to_owned(), value.to_owned()))
+            })
+            .collect(),
+        body_digest: header_value(&headers, "content-digest"),
+    };
+    let signature_base = canonical_message(&request, &parsed_signature_input)
+        .expect("generated controller gate signature components are present");
+    let signature = arkret_signatures::http_signature::sign_message(
+        &signature_base,
+        &state.notary_signing_key(),
+    );
+    let signature_header = format!("sig1=:{signature}:");
+    insert_header_if_valid(&mut headers, "signature-input", &signature_input);
+    insert_header_if_valid(&mut headers, "signature", &signature_header);
+    headers
+}
+
 fn rfc9421_sign_with_window(
     state: &AppState,
     mut headers: reqwest::header::HeaderMap,
@@ -552,7 +609,9 @@ fn peer_event_partial_retry(
     request
         .cba_proof_bundles
         .retain(|bundle| required_targets.contains(&bundle.target_seal_ref));
-    request.validate_federation_transport().ok()?;
+    let digest_suites =
+        crate::routing::events::event_log::accepted_event_digest_suites(&retained_events).ok()?;
+    request.validate_federation_transport(&digest_suites).ok()?;
     let bytes = arkret_canonical::canonical_json_bytes(&request).ok()?;
     let payload_json = String::from_utf8(bytes).ok()?;
     let idempotency_key = semantic_resubmission_key(previous_key, semantic_attempts, &payload_json);
@@ -1173,6 +1232,36 @@ impl FederationDispatcher {
                         None,
                         now,
                     )
+                } else if (200..300).contains(&status)
+                    && let Err(error) = self
+                        .capture_history_response_relay_outcome(&row, &body_text)
+                        .await
+                {
+                    self.transport_retry(
+                        &row,
+                        &lease_token,
+                        attempts,
+                        Some(status),
+                        error_code::TRANSPORT_ERROR,
+                        excerpt(&format!("history_relay_receipt_validation: {error}")),
+                        None,
+                        now,
+                    )
+                } else if (200..300).contains(&status)
+                    && let Err(error) = self
+                        .capture_history_request_replica_outcome(&row, &body_text)
+                        .await
+                {
+                    self.transport_retry(
+                        &row,
+                        &lease_token,
+                        attempts,
+                        Some(status),
+                        error_code::TRANSPORT_ERROR,
+                        excerpt(&format!("history_replica_outcome_validation: {error}")),
+                        None,
+                        now,
+                    )
                 } else if let Err(error) = &account_status_resubmission {
                     self.transport_retry(
                         &row,
@@ -1213,6 +1302,62 @@ impl FederationDispatcher {
             }
         };
         self.commit(command).await;
+    }
+
+    async fn capture_history_response_relay_outcome(
+        &self,
+        row: &PendingFederationDelivery,
+        response_body: &str,
+    ) -> Result<(), String> {
+        if row.delivery.endpoint != "/_arkret/peer/history-key-responses/relay" {
+            return Ok(());
+        }
+        if response_body.len() > 64 * 1024 {
+            return Err("history response relay receipt exceeds 64 KiB".to_owned());
+        }
+        let relay: arkret_models_collaboration::history_key::HistoryKeySourceRelay =
+            serde_json::from_str(&row.delivery.payload_json)
+                .map_err(|error| format!("history source relay decode failed: {error}"))?;
+        let receipt: arkret_models_collaboration::history_key::HistoryKeyResponseSendReceipt =
+            serde_json::from_str(response_body)
+                .map_err(|error| format!("history relay receipt decode failed: {error}"))?;
+        crate::routing::governance_history::validate_remote_history_response_receipt(
+            &self.state,
+            &relay.response,
+            &relay
+                .source_relay_attestation
+                .destination_release_service_id,
+            &receipt,
+        )
+        .await
+        .map_err(|error| error.to_string())
+    }
+
+    async fn capture_history_request_replica_outcome(
+        &self,
+        row: &PendingFederationDelivery,
+        response_body: &str,
+    ) -> Result<(), String> {
+        if row.delivery.endpoint != "/_arkret/peer/history-key-requests/replicate" {
+            return Ok(());
+        }
+        if response_body.len() > 64 * 1024 {
+            return Err("history request replica outcome exceeds 64 KiB".to_owned());
+        }
+        let replica: arkret_models_collaboration::history_key::HistoryKeyRequestReplica =
+            serde_json::from_str(&row.delivery.payload_json)
+                .map_err(|error| format!("history request replica decode failed: {error}"))?;
+        let outcome: arkret_models_collaboration::history_key::HistoryKeyRequestReplicaOutcome =
+            serde_json::from_str(response_body).map_err(|error| {
+                format!("history request replica outcome decode failed: {error}")
+            })?;
+        crate::routing::governance_history::validate_remote_history_request_replica_outcome(
+            &self.state,
+            &replica,
+            &outcome,
+        )
+        .await
+        .map_err(|error| error.to_string())
     }
 
     async fn capture_contact_outcome(
@@ -1626,7 +1771,14 @@ impl FederationDispatcher {
         now: i64,
         account_status_resubmission: Option<SemanticResubmission>,
     ) -> RecordFederationAttemptCommand {
-        let response_excerpt = excerpt(body_text);
+        let response_excerpt = if row.delivery.endpoint
+            == "/_arkret/peer/history-key-responses/relay"
+            && (200..300).contains(&status)
+        {
+            body_text.to_owned()
+        } else {
+            excerpt(body_text)
+        };
         let transport_succeeded = (200..300).contains(&status);
         // The typed outcome only classifies a *successful* transport. On a
         // non-2xx the status is the verdict: an error envelope that happens not
@@ -2266,10 +2418,14 @@ mod tests {
                 credential_epoch: None,
             });
             event.event_id = event
-                .derive_event_id()
+                .derive_event_id_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
                 .expect("fixture Event id follows the completed digest payload");
-            let event_digest =
-                arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
+            let event_digest = arkret_identifiers::Hash::new(
+                event
+                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                    .unwrap(),
+            )
+            .unwrap();
             event.proofs = vec![
                 arkret_wire::primitives::Proof {
                     kind: "detached_jws".to_owned(),
@@ -2278,6 +2434,8 @@ mod tests {
                     )
                     .unwrap(),
                     event_digest: event_digest.clone(),
+                    signer_resolution_evidence_ref: None,
+                    signer_resolution_evidence_digest: None,
                     created_at: issued_at,
                     domain: None,
                     audience: None,
@@ -2304,13 +2462,27 @@ mod tests {
                         "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuVkhY7g94pVQyG98x",
                     )
                     .unwrap(),
+                    signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
+                        "ak:signer_evidence:sha256:{}",
+                        "11".repeat(32)
+                    ))
+                    .unwrap(),
+                    signer_resolution_evidence_digest: arkret_wire::Hash::new(format!(
+                        "sha256:{}",
+                        "11".repeat(32)
+                    ))
+                    .unwrap(),
                     accepted_at: issued_at,
                     jws: "admission..signature".to_owned(),
                 }
                 .into(),
             );
-            let event_digest =
-                arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
+            let event_digest = arkret_identifiers::Hash::new(
+                event
+                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                    .unwrap(),
+            )
+            .unwrap();
 
             let mut lease = arkret_wire::offline_publication::AuthorizationLease {
                 authorization_lease_id: arkret_identifiers::AuthorizationLeaseId::new(format!(
@@ -2407,8 +2579,12 @@ mod tests {
         let pending_event_id = request.events[1].event.event_id.as_str().to_owned();
         let original_receipt =
             serde_json::to_value(&request.events[1].ingress_receipts[0]).unwrap();
+        let digest_suites = crate::routing::events::event_log::accepted_event_digest_suites(
+            &request.transported_events().cloned().collect::<Vec<_>>(),
+        )
+        .unwrap();
         request
-            .validate_federation_transport()
+            .validate_federation_transport(&digest_suites)
             .expect("fixture must remain a valid federation transport request");
         let response = format!(
             r#"{{

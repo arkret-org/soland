@@ -44,11 +44,16 @@ pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandida
 
     // 1) Pending Control Move digests — never GC.
     let pending = projections
-        .pending_control_events_for_notary(realm_id, None, 4096)
+        .pending_control_records(realm_id, 4096)
         .unwrap_or_default();
     let pending_digests: std::collections::HashSet<String> = pending
         .iter()
-        .filter_map(|event| event.event_digest().ok())
+        .filter_map(|record| {
+            record
+                .event
+                .event_digest_with_digest_suite(record.digest_suite)
+                .ok()
+        })
         .collect();
 
     // 2) Union of current leaf-Seal coverage. Control Moves still covered by live leaves are also
@@ -69,10 +74,18 @@ pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandida
         };
         let next_cursor = page
             .last()
-            .and_then(|record| record.event.event_digest().ok())
+            .and_then(|record| {
+                record
+                    .event
+                    .event_digest_with_digest_suite(record.digest_suite)
+                    .ok()
+            })
             .and_then(|digest| Hash::new(digest).ok());
         for record in page {
-            let Ok(digest) = record.event.event_digest() else {
+            let Ok(digest) = record
+                .event
+                .event_digest_with_digest_suite(record.digest_suite)
+            else {
                 continue;
             };
             if pending_digests.contains(&digest) {

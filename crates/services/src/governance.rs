@@ -12,6 +12,7 @@ use crate::ServiceResult;
 pub struct MultisigPendingRecord {
     pub seal_id: String,
     pub realm_id: String,
+    pub digest_suite: arkret_canonical::DigestSuite,
     pub threshold_k: u32,
     pub threshold_n: u32,
     pub members: Vec<String>,

@@ -1683,7 +1683,10 @@ pub(super) async fn attach_agent_grant(
     let agent_id = agent_id.into_inner();
     let record = require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
-    body.validate()
+    let digest_suite = state
+        .projections()
+        .realm_digest_suite(body.grant_event.event.realm_id.as_str());
+    body.validate(digest_suite)
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let grant_payload: arkret_models_collaboration::events_payloads::capability::CapabilityGrantPayload =
         body.grant_event
@@ -1755,8 +1758,6 @@ pub(super) async fn detach_agent_grant(
     let typed_grant_id = GrantId::new(grant_id.clone())
         .map_err(|error| AppError::param_invalid(format!("grant_id is invalid: {error}")))?;
     let body = body.into_inner();
-    body.validate()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let payload = body
         .payload()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
@@ -1782,6 +1783,9 @@ pub(super) async fn detach_agent_grant(
         return Err(AppError::not_found("Agent capability grant not found"));
     };
     let event = &body.revoke_event.event;
+    let digest_suite = state.projections().realm_digest_suite(realm_id);
+    body.validate(digest_suite)
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     if event.actor_id.as_str() != session.actor
         || event.realm_id.as_str() != realm_id
         || matched_grant_id != typed_grant_id.as_str()

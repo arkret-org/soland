@@ -822,11 +822,6 @@ async fn events_query_impl(
     let range_completeness =
         range_completeness_for_query(state, session.as_ref(), &parts, &realms).await?;
     let mut accessible_realms: Vec<String> = Vec::with_capacity(realms.len());
-    // encryption-and-audit.md §2.10.8 — realms the caller may scan ONLY as a
-    // recovery recipient (non-member). Per-event visibility for these realms is
-    // restricted to the caller's own RRK-targeted `ak.realm_key.share` events.
-    let mut recovery_only_realms: std::collections::BTreeSet<String> =
-        std::collections::BTreeSet::new();
     let mut managed_agent_control_realms: std::collections::BTreeSet<String> =
         std::collections::BTreeSet::new();
     for realm in realms {
@@ -846,19 +841,6 @@ async fn events_query_impl(
             accessible_realms.push(realm);
             continue;
         }
-        // Not a member — admit for recovery-grade read iff the caller is a
-        // current recovery recipient of this realm.
-        if let Some(session) = session.as_ref()
-            && crate::routing::spaces::space::realm_recovery_recipient_principal(
-                state,
-                &realm,
-                &session.actor,
-            )
-            .await
-        {
-            recovery_only_realms.insert(realm.clone());
-            accessible_realms.push(realm);
-        }
     }
     if accessible_realms.is_empty() {
         return Err(soland_http::error::AppError::not_found("not found"));
@@ -871,7 +853,6 @@ async fn events_query_impl(
     // closed projection view and its durable digest commitment.
     if accessible_realms.len() == 1 {
         let realm_id = &accessible_realms[0];
-        let recovery_only = recovery_only_realms.contains(realm_id);
         let managed_agent_control = managed_agent_control_realms.contains(realm_id);
         match projected_event_page(state, realm_id, cursor.as_deref(), limit).await {
             Ok(Some(page)) => {
@@ -882,7 +863,6 @@ async fn events_query_impl(
                         state,
                         event,
                         session.as_ref(),
-                        recovery_only,
                         managed_agent_control,
                     )
                     .await
@@ -947,7 +927,6 @@ async fn events_query_impl(
     let mut merged: Vec<serde_json::Value> = Vec::new();
     let mut any_has_more = false;
     for realm_id in &accessible_realms {
-        let recovery_only = recovery_only_realms.contains(realm_id);
         let managed_agent_control = managed_agent_control_realms.contains(realm_id);
         match projected_event_page(state, realm_id, cursor.as_deref(), limit).await {
             Ok(Some(page)) => {
@@ -959,7 +938,6 @@ async fn events_query_impl(
                         state,
                         event,
                         session.as_ref(),
-                        recovery_only,
                         managed_agent_control,
                     )
                     .await
@@ -1213,36 +1191,16 @@ async fn range_completeness_for_query(
     ))
 }
 
-/// Per-event visibility for `events.read`. For ordinary (member) realm access
-/// this delegates to [`projection_record_visible_to_session`]. For a realm the
-/// caller reached ONLY via the recovery-recipient gate
-/// (`recovery_only == true`, encryption-and-audit.md §2.10.8), visibility is
-/// narrowed to the caller's own RRK-targeted `ak.realm_key.share` events — the
-/// recovery org reads exactly the opaque ciphertext it can HPKE-open and nothing
-/// else from the realm timeline.
+/// Per-event visibility for `events.read`. Organization Recovery holders use
+/// the dedicated archive surface and never gain timeline scan authority here.
 async fn events_query_event_visible(
     state: &AppState,
     event: &soland_services::events::ProjectedEvent,
     session: Option<&soland_services::identity::SessionIdentityState>,
-    recovery_only: bool,
     managed_agent_control: bool,
 ) -> bool {
     if managed_agent_control {
         return true;
-    }
-    if recovery_only {
-        let Some(session) = session else {
-            return false;
-        };
-        let recipient = event
-            .payload
-            .get("recipient_principal_id")
-            .and_then(Value::as_str);
-        return crate::routing::spaces::space::realm_recovery_event_visible(
-            &event.event_kind,
-            recipient,
-            &session.actor,
-        );
     }
     projection_record_visible_to_session(state, event, session).await
 }
@@ -1393,7 +1351,9 @@ mod tests {
             created_at,
         )
         .unwrap();
-        let expected_digest = event.event_digest().unwrap();
+        let expected_digest = event
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
         let event_envelope = serde_json::to_value(&event).unwrap();
         assert_eq!(event_envelope["scope_ref"]["kind"], json!("sidecar"));
         put_durable_event(
@@ -1432,7 +1392,12 @@ mod tests {
         assert_eq!(enriched.event_id, event.event_id);
         assert_eq!(enriched.scope_ref, event.scope_ref);
         assert_eq!(enriched.payload, event.payload);
-        assert_eq!(enriched.event_digest().unwrap(), expected_digest);
+        assert_eq!(
+            enriched
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+            expected_digest
+        );
     }
 
     #[tokio::test]
@@ -1454,8 +1419,12 @@ mod tests {
         )
         .unwrap();
         event.hlc = None;
-        event.event_id = event.derive_event_id().unwrap();
-        let expected_digest = event.event_digest().unwrap();
+        event.event_id = event
+            .derive_event_id_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        let expected_digest = event
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
         let envelope = serde_json::to_value(&event).unwrap();
         assert!(envelope.get("hlc").is_none());
         put_durable_event(
@@ -1476,9 +1445,16 @@ mod tests {
         let reconstructed =
             crate::routing::events::event_log::sdk_event_for_state(&state, &stored).unwrap();
         assert!(reconstructed.hlc.is_none());
-        assert_eq!(reconstructed.event_digest().unwrap(), expected_digest);
         assert_eq!(
-            reconstructed.event_digest().unwrap(),
+            reconstructed
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+            expected_digest
+        );
+        assert_eq!(
+            reconstructed
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
             stored.canonical_digest
         );
     }
@@ -1510,7 +1486,9 @@ mod tests {
             serde_json::from_value(envelope.clone()).expect("durable fixture is a typed Event");
         let canonical_bytes = crate::routing::events::event_log::event_canonical_bytes(&envelope)
             .expect("durable fixture has a canonical digest payload");
-        let canonical_digest = event.event_digest().expect("durable fixture digest");
+        let canonical_digest = event
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .expect("durable fixture digest");
         let actor_id = envelope
             .get("actor_id")
             .and_then(Value::as_str)
@@ -1534,6 +1512,7 @@ mod tests {
                 realm_id: Some(realm_id),
                 kind: kind.to_owned(),
                 schema_id: "ak.schema.event.v1".to_owned(),
+                digest_suite: arkret_canonical::DigestSuite::Sha256,
                 canonical_digest,
                 canonical_bytes,
                 envelope,
@@ -1716,7 +1695,9 @@ mod tests {
         );
         assert_eq!(
             message.event_digest.as_str(),
-            message_event.event_digest().unwrap()
+            message_event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap()
         );
         assert!(
             !serde_json::to_string(message)

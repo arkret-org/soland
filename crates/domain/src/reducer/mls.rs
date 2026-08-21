@@ -811,22 +811,12 @@ fn mls_epoch_key(
 }
 
 pub fn effective_scope_key(scope: &Value) -> Result<String, &'static str> {
-    let object = scope.as_object().ok_or("mls_effective_scope_invalid")?;
-    let realm_id = object
-        .get("realm_id")
-        .and_then(Value::as_str)
-        .ok_or("mls_effective_scope_invalid")?;
-    match object.get("kind").and_then(Value::as_str) {
-        Some("realm") => Ok(format!("realm\0{realm_id}")),
-        Some("circle") => {
-            let circle_id = object
-                .get("circle_id")
-                .and_then(Value::as_str)
-                .ok_or("mls_effective_scope_invalid")?;
-            Ok(format!("circle\0{realm_id}\0{circle_id}"))
-        }
-        _ => Err("mls_effective_scope_invalid"),
-    }
+    let scope = serde_json::from_value::<arkret_wire::ScopeRef>(scope.clone())
+        .map_err(|_| "mls_effective_scope_invalid")?;
+    let key = scope
+        .canonical_effective_scope_key_bytes()
+        .map_err(|_| "mls_effective_scope_invalid")?;
+    String::from_utf8(key).map_err(|_| "mls_effective_scope_invalid")
 }
 
 fn proposal_effective_scope(

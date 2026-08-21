@@ -92,9 +92,11 @@ pub(crate) fn mint_control_proposal_ack(
     authority_ack.signature.payload_digest = authority_ack
         .authority_ack_digest()
         .map_err(|error| error.to_string())?;
-    authority_ack.signature.jws =
-        arkret_signatures::jws::sign_jws_ed25519(&bytes, state.notary_signing_key().as_ref())
-            .map_err(|error| error.to_string())?;
+    authority_ack.signature.jws = soland_services::identity::sign_ed25519_frozen_notary_jws(
+        &bytes,
+        &authority_ack.signature.verification_method,
+        state.notary_signing_key().as_ref(),
+    )?;
     let ack = ControlProposalAck {
         kind: ControlProposalAckKind::SignedAck,
         realm_id,
@@ -115,9 +117,13 @@ pub(crate) async fn mint_control_proposal_acks(
     state: &AppState,
     realm_id: &RealmId,
     events: &[Event],
+    digest_suites: &[arkret_canonical::DigestSuite],
     received_at: chrono::DateTime<chrono::Utc>,
     bootstrap_ingress_authority_set_ref: Option<&AuthoritySetRef>,
 ) -> Result<Vec<ControlProposalAck>, String> {
+    if events.len() != digest_suites.len() {
+        return Err("Control Proposal Ack input has no exact digest suite per Event".to_owned());
+    }
     let policy = control_proposal_policy(state, realm_id, events).await?;
     let notary_authority_set_ref =
         crate::notary::NotaryWorker::for_service(state.service_id().clone())
@@ -133,10 +139,14 @@ pub(crate) async fn mint_control_proposal_acks(
     )?;
     events
         .iter()
-        .map(|event| {
-            let proposal_digest =
-                Hash::new(event.event_digest().map_err(|error| error.to_string())?)
-                    .map_err(|error| error.to_string())?;
+        .zip(digest_suites)
+        .map(|(event, digest_suite)| {
+            let proposal_digest = Hash::new(
+                event
+                    .event_digest_with_digest_suite(*digest_suite)
+                    .map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
             mint_control_proposal_ack(
                 state,
                 realm_id.clone(),
@@ -159,7 +169,7 @@ pub(crate) async fn verify_control_proposal_ack(
         .map_err(|error| error.to_string())?;
     let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
     let Some((profile, authority_set_ref)) = worker
-        .current_notary_profile_for_events(state, &ack.realm_id, std::slice::from_ref(event))
+        .current_notary_value_for_events(state, &ack.realm_id, std::slice::from_ref(event))
         .map_err(|error| error.to_string())?
     else {
         return Err("current proposal authority profile is unavailable".to_owned());
@@ -168,73 +178,31 @@ pub(crate) async fn verify_control_proposal_ack(
         return Err("Control Proposal Ack does not bind the current authority profile".to_owned());
     }
 
-    let mut signers = BTreeSet::new();
+    let mut signer_methods = BTreeSet::new();
     for member in &ack.authority_acks {
-        let signer_full_id =
-            arkret_identity::verification_method_did(&member.signature.verification_method)
-                .map_err(|error| error.to_string())?;
-        let signer = arkret_wire::project_full_id_to_core_id(&signer_full_id)
-            .map_err(|error| error.to_string())?;
-        if !signers.insert(signer.clone()) {
+        if !signer_methods.insert(member.signature.verification_method.clone()) {
             return Err("Control Proposal Ack repeats an authority member".to_owned());
         }
         let bytes = member
             .canonical_bytes_for_signature()
             .map_err(|error| error.to_string())?;
-        let device_method = member
-            .signature
-            .verification_method
-            .strip_prefix(&format!("{signer_full_id}#"))
-            .is_some_and(|fragment| arkret_identifiers::DeviceId::new(fragment.to_owned()).is_ok());
-        if device_method {
-            crate::jws_verify::verify_principal_authorized_control_ack_jws_async(
-                &bytes,
-                &member.signature.jws,
-                &member.signature.verification_method,
-                &signer,
-                event,
-                state,
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-        } else {
-            crate::jws_verify::verify_did_controlled_jws_async(
-                &bytes,
-                &member.signature.jws,
-                &member.signature.verification_method,
-                signer_full_id.as_str(),
-                state,
-            )
-            .await?;
-        }
+        let descriptor = profile
+            .signer_descriptor(&member.signature.verification_method)
+            .ok_or_else(|| {
+                "Control Proposal Ack signer is absent from the frozen notary value".to_owned()
+            })?;
+        let frozen_signature = arkret_wire::SealSignature::from(member.signature.clone());
+        arkret_signatures::verify_frozen_notary_signature(
+            &frozen_signature,
+            descriptor,
+            &bytes,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .map_err(|error| error.to_string())?;
     }
 
-    if !profile.proposal_quorum_met(&signers) {
-        let delegated_controller = event.executed_by.as_ref().filter(|controller| {
-            signers.len() == 1 && signers.iter().any(|signer| signer == *controller)
-        });
-        let delegated_quorum = if let Some(controller) = delegated_controller {
-            let envelope = serde_json::to_value(event)
-                .map_err(|error| error.to_string())?
-                .as_object()
-                .cloned()
-                .ok_or_else(|| "delegated Agent Event is not an object".to_owned())?;
-            crate::routing::identity::managed_agent_pcr::validate_delegated_agent_envelope(
-                state,
-                &envelope,
-                controller.as_str(),
-            )
-            .await
-            .is_ok()
-                && profile.proposal_quorum_met(&BTreeSet::from([event.actor_id.clone()]))
-        } else {
-            false
-        };
-        if !delegated_quorum {
-            return Err(
-                "Control Proposal Ack does not satisfy the current notary quorum".to_owned(),
-            );
-        }
+    if !profile.proposal_quorum_met(&signer_methods) {
+        return Err("Control Proposal Ack does not satisfy the current notary quorum".to_owned());
     }
     Ok(())
 }
@@ -246,13 +214,18 @@ pub(crate) async fn verify_control_proposal_ack(
 pub(crate) async fn verify_control_proposal_decision(
     state: &AppState,
     event: &Event,
+    digest_suite: arkret_canonical::DigestSuite,
     ack: &ControlProposalAck,
     previous_decisions: &[ControlProposalDecision],
     decision: &ControlProposalDecision,
     policy: ControlProposalDecisionPolicy,
 ) -> Result<(), String> {
-    let event_digest = Hash::new(event.event_digest().map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())?;
+    let event_digest = Hash::new(
+        event
+            .event_digest_with_digest_suite(digest_suite)
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     if event.realm_id != *decision.realm_id()
         || event_digest != *decision.proposal_digest()
         || ack.realm_id != event.realm_id
@@ -269,7 +242,7 @@ pub(crate) async fn verify_control_proposal_decision(
     verify_control_proposal_ack(state, event, ack, policy).await?;
     let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
     let Some((notary, authority_set_ref)) = worker
-        .current_notary_profile_for_events(state, &event.realm_id, std::slice::from_ref(event))
+        .current_notary_value_for_events(state, &event.realm_id, std::slice::from_ref(event))
         .map_err(|error| error.to_string())?
     else {
         return Err("current proposal authority profile is unavailable".to_owned());
@@ -289,35 +262,19 @@ pub(crate) async fn verify_control_proposal_decision(
         let binding = decision
             .proof_binding_bytes(proof)
             .map_err(|error| error.to_string())?;
-        let signer_full_id = arkret_identity::verification_method_did(&proof.verification_method)
-            .map_err(|error| error.to_string())?;
-        let signer = arkret_wire::project_full_id_to_core_id(&signer_full_id)
-            .map_err(|error| error.to_string())?;
-        let device_method = proof
-            .verification_method
-            .strip_prefix(&format!("{signer_full_id}#"))
-            .is_some_and(|fragment| arkret_identifiers::DeviceId::new(fragment.to_owned()).is_ok());
-        if device_method {
-            crate::jws_verify::verify_principal_authorized_control_ack_jws_async(
-                &binding,
-                &proof.jws,
-                &proof.verification_method,
-                &signer,
-                event,
-                state,
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-        } else {
-            crate::jws_verify::verify_did_controlled_jws_async(
-                &binding,
-                &proof.jws,
-                &proof.verification_method,
-                signer_full_id.as_str(),
-                state,
-            )
-            .await?;
-        }
+        let descriptor = notary
+            .signer_descriptor(&proof.verification_method)
+            .ok_or_else(|| {
+                "Control Proposal decision signer is absent from the frozen notary value".to_owned()
+            })?;
+        let frozen_signature = arkret_wire::SealSignature::from(proof.clone());
+        arkret_signatures::verify_frozen_notary_signature(
+            &frozen_signature,
+            descriptor,
+            &binding,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -328,19 +285,26 @@ mod control_proposal_ack_quorum_tests {
 
     use super::*;
 
-    fn did(name: &str) -> arkret_wire::DidCoreId {
-        arkret_wire::DidCoreId::new(format!("ak:did_core:web:{name}.example")).unwrap()
+    fn signer(name: &str) -> arkret_wire::NotarySignerDescriptor {
+        let notary = crate::test_single_signer_notary(&format!("did:web:{name}.example"), 51);
+        let NotaryValue::SingleSigner { signer, .. } = notary else {
+            unreachable!()
+        };
+        signer
     }
 
-    fn signers(values: &[&str]) -> BTreeSet<arkret_wire::DidCoreId> {
-        values.iter().map(|value| did(value)).collect()
+    fn signers(values: &[&str]) -> BTreeSet<arkret_wire::DidUrl> {
+        values
+            .iter()
+            .map(|value| signer(value).verification_method)
+            .collect()
     }
 
     #[test]
     fn threshold_requires_distinct_current_members() {
         let profile = NotaryValue::Threshold {
             threshold: 2,
-            members: vec![did("a"), did("b"), did("c")],
+            members: vec![signer("a"), signer("b"), signer("c")],
             forensic_attribution: ForensicAttribution::QuorumIntersection,
         };
         assert!(profile.proposal_quorum_met(&signers(&["a", "b"])));
@@ -351,7 +315,7 @@ mod control_proposal_ack_quorum_tests {
     #[test]
     fn open_set_ack_is_one_signer_slot_not_a_cross_leaf_quorum() {
         let profile = NotaryValue::OpenSet {
-            members: vec![did("a"), did("b")],
+            members: vec![signer("a"), signer("b")],
         };
         assert!(profile.proposal_quorum_met(&signers(&["a"])));
         assert!(!profile.proposal_quorum_met(&signers(&["a", "b"])));
@@ -361,8 +325,10 @@ mod control_proposal_ack_quorum_tests {
     #[test]
     fn mixed_accepts_primary_or_complete_recovery_set_only() {
         let profile = NotaryValue::Mixed {
-            actor_id: did("primary"),
-            recovery_members: vec![did("recovery-a"), did("recovery-b")],
+            signer: signer("primary"),
+            recovery_members: vec![signer("recovery-a"), signer("recovery-b")],
+            controller_organization: None,
+            recovery_controller_organizations: Vec::new(),
         };
         assert!(profile.proposal_quorum_met(&signers(&["primary"])));
         assert!(profile.proposal_quorum_met(&signers(&["recovery-a", "recovery-b"])));
@@ -442,9 +408,11 @@ pub(crate) fn sign_control_proposal_reject(
         .map_err(|error| error.to_string())?;
     if let ControlProposalDecision::SignedReject { proofs, .. } = &mut decision {
         proofs[0].payload_digest = digest;
-        proofs[0].jws =
-            arkret_signatures::jws::sign_jws_ed25519(&bytes, state.notary_signing_key().as_ref())
-                .map_err(|error| error.to_string())?;
+        proofs[0].jws = soland_services::identity::sign_ed25519_frozen_notary_jws(
+            &bytes,
+            &proofs[0].verification_method,
+            state.notary_signing_key().as_ref(),
+        )?;
     }
     decision
         .validate_chain_for_notary(ack, previous_defers, validation_policy, notary)
@@ -496,9 +464,11 @@ pub(crate) fn sign_control_proposal_defer(
         .map_err(|error| error.to_string())?;
     if let ControlProposalDecision::SignedDefer { proofs, .. } = &mut decision {
         proofs[0].payload_digest = digest;
-        proofs[0].jws =
-            arkret_signatures::jws::sign_jws_ed25519(&bytes, state.notary_signing_key().as_ref())
-                .map_err(|error| error.to_string())?;
+        proofs[0].jws = soland_services::identity::sign_ed25519_frozen_notary_jws(
+            &bytes,
+            &proofs[0].verification_method,
+            state.notary_signing_key().as_ref(),
+        )?;
     }
     decision
         .validate_chain_for_notary(ack, previous_defers, policy, notary)

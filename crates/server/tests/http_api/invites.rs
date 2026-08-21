@@ -186,8 +186,9 @@ async fn seed_dispatch_fixture(
                     arkret_identifiers::EventId::new(event_id.clone()).expect("accepted Event id"),
                 ],
                 event_digests: Vec::new(),
-                seal_refs: Vec::new(),
                 include_payload: Some(true),
+                history_traversal_access: None,
+                max_response_bytes: None,
             },
         )
         .send(&app_from_state(state.clone()))

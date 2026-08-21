@@ -277,9 +277,7 @@ async fn policy_bundle_media_plaintext_reads_realm_meta() {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
                 discoverability: "restricted".to_owned(),
-                history_visibility: "joined".to_owned(),
-                history_sharing_policy: None,
-                history_sharing_policy_digest: None,
+                history_access: "since_join".to_owned(),
                 preview_policy: None,
                 preview_policy_digest: None,
                 asset_privacy_policy: None,
@@ -323,9 +321,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
                 discoverability: "restricted".to_owned(),
-                history_visibility: "joined".to_owned(),
-                history_sharing_policy: None,
-                history_sharing_policy_digest: None,
+                history_access: "since_join".to_owned(),
                 preview_policy: None,
                 preview_policy_digest: None,
                 asset_privacy_policy: None,
@@ -444,10 +440,12 @@ async fn circle_scoped_write_requires_circle_membership() {
                 display: serde_json::json!({"short_name":"HR","color_token":"slate","symbol":{"glyph":"ring"}}),
                 directory_visibility: "members".to_owned(),
                 join_rule: "invite".to_owned(),
-                history_visibility: "joined".to_owned(),
+                history_access: "since_join".to_owned(),
                 content_encryption_floor: None,
                 metadata_encryption_floor: None,
                 encryption_profile: "mls_rfc9420".to_owned(),
+                content_scheme: Some("mls_rfc9420".to_owned()),
+                durability_policy: None,
                 mls_group_ref: None,
                 state: soland_domain::reducer::CircleLifecycleState::Active,
                 state_changed_at: None,
@@ -531,10 +529,12 @@ async fn circle_scoped_reaction_requires_circle_membership() {
                 display: serde_json::json!({"short_name":"HR","color_token":"slate","symbol":{"glyph":"ring"}}),
                 directory_visibility: "members".to_owned(),
                 join_rule: "invite".to_owned(),
-                history_visibility: "joined".to_owned(),
+                history_access: "since_join".to_owned(),
                 content_encryption_floor: None,
                 metadata_encryption_floor: None,
                 encryption_profile: "mls_rfc9420".to_owned(),
+                content_scheme: Some("mls_rfc9420".to_owned()),
+                durability_policy: None,
                 mls_group_ref: None,
                 state: soland_domain::reducer::CircleLifecycleState::Active,
                 state_changed_at: None,
@@ -644,10 +644,12 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
                 display: serde_json::json!({"short_name":"HR","color_token":"slate","symbol":{"glyph":"ring"}}),
                 directory_visibility: "members".to_owned(),
                 join_rule: "invite".to_owned(),
-                history_visibility: "joined".to_owned(),
+                history_access: "since_join".to_owned(),
                 content_encryption_floor: None,
                 metadata_encryption_floor: None,
                 encryption_profile: "mls_rfc9420".to_owned(),
+                content_scheme: Some("mls_rfc9420".to_owned()),
+                durability_policy: None,
                 mls_group_ref: None,
                 state: soland_domain::reducer::CircleLifecycleState::Active,
                 state_changed_at: None,
@@ -748,9 +750,7 @@ async fn applet_registration_requires_realm_admin() {
                 owner: owner.to_owned(),
                 deleted: false,
                 discoverability: "restricted".to_owned(),
-                history_visibility: "joined".to_owned(),
-                history_sharing_policy: None,
-                history_sharing_policy_digest: None,
+                history_access: "since_join".to_owned(),
                 preview_policy: None,
                 preview_policy_digest: None,
                 asset_privacy_policy: None,
@@ -839,9 +839,7 @@ async fn a_non_minimal_realm_still_needs_a_declared_aad_visibility_ceiling() {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
                 discoverability: "restricted".to_owned(),
-                history_visibility: "joined".to_owned(),
-                history_sharing_policy: None,
-                history_sharing_policy_digest: None,
+                history_access: "since_join".to_owned(),
                 preview_policy: None,
                 preview_policy_digest: None,
                 asset_privacy_policy: None,
@@ -904,7 +902,7 @@ async fn a_non_minimal_realm_still_needs_a_declared_aad_visibility_ceiling() {
     // than silently downgraded and routed on.
     assert_eq!(
         validate_operation_policy(&state, std::slice::from_ref(&op)).await,
-        Err(arkret_wire::ReasonCode::AAD_VISIBILITY_POLICY_VIOLATION)
+        Err(arkret_wire::ReasonCode::POLICY_DENIED)
     );
 
     // Once the Realm declares the ceiling the same envelope is admissible.
@@ -1310,10 +1308,10 @@ fn event_payload_validator_enforces_patch_family_schema() {
 }
 
 #[test]
-fn realm_create_rejects_world_readable_history_without_history_capable_scheme() {
+fn standard_mls_rejects_all_history_access() {
     let payload = json!({
         "object": {
-            "history_visibility": "world_readable",
+            "history_access": "all_history_for_current_members",
             "encryption_profile": "mls_rfc9420"
         }
     });
@@ -1322,11 +1320,11 @@ fn realm_create_rejects_world_readable_history_without_history_capable_scheme() 
         &payload,
         false,
     )
-    .expect_err("world-readable MLS history requires a history-capable content scheme");
+    .expect_err("standard MLS is pinned to since_join");
     assert_eq!(err.code, "failed_precondition");
     assert_eq!(
         err.message,
-        "history_visibility_requires_history_capable_scheme"
+        "history_access_requires_history_capable_scheme"
     );
 }
 
@@ -1560,14 +1558,10 @@ fn data_event_hash(byte: u8) -> arkret_identifiers::Hash {
     arkret_identifiers::Hash::new(format!("sha256:{}", format!("{byte:02x}").repeat(32))).unwrap()
 }
 
-fn data_event_dummy_signature() -> arkret_wire::PayloadSignature {
-    use chrono::TimeZone;
-
-    arkret_wire::PayloadSignature {
-        extra: Default::default(),
+fn data_event_dummy_signature() -> arkret_wire::SealSignature {
+    arkret_wire::SealSignature {
         verification_method: arkret_wire::DidUrl::new("did:web:notary.example#k1").unwrap(),
         payload_digest: data_event_hash(0xff),
-        created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 8, 0, 0, 0).unwrap(),
         jws: "AAAA.BBBB.CCCC".to_owned(),
     }
 }
@@ -1596,17 +1590,18 @@ fn insert_data_event_seal_with(
         notary_seq: 1,
         data_view_root: None,
         data_event_set_root: None,
-        availability_root: None,
-        coverage_scope: None,
+        availability_receipt_digests: Vec::new(),
         covered_event_digests: covered,
         previous_state_root: None,
         previous_digest_algorithm: None,
         notary_signature: arkret_wire::seal::NotarySig::Single(data_event_dummy_signature()),
         sealed_at: chrono::Utc.with_ymd_and_hms(2026, 5, 8, 0, 0, 0).unwrap(),
         hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
-        kind: arkret_wire::SealKind::Normal,
     };
-    state.projections().test_put_seal(&seal).unwrap();
+    state
+        .projections()
+        .test_put_seal(&seal, arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
     seal_id.as_str().to_owned()
 }
 
@@ -1760,17 +1755,18 @@ fn insert_data_event_revocation_successor(
         notary_seq: 2,
         data_view_root: None,
         data_event_set_root: None,
-        availability_root: None,
-        coverage_scope: None,
+        availability_receipt_digests: Vec::new(),
         covered_event_digests: vec![move_id.clone()],
         previous_state_root: Some(data_event_hash(0x77)),
         previous_digest_algorithm: None,
         notary_signature: arkret_wire::seal::NotarySig::Single(data_event_dummy_signature()),
         sealed_at,
         hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0001-aabbccdd".to_owned()).unwrap(),
-        kind: arkret_wire::SealKind::Normal,
     };
-    state.projections().test_put_seal(&successor).unwrap();
+    state
+        .projections()
+        .test_put_seal(&successor, arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
     let cell = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.capability.grant.v1:{grant_id}"
     ))

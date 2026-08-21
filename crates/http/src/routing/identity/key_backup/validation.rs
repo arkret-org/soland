@@ -43,6 +43,9 @@ pub(super) fn validate_key_backup_body_typed(
     actor_id: &str,
     backup: &KeyBackup,
 ) -> Result<(), AppError> {
+    backup
+        .validate()
+        .map_err(|error| schema_error(format!("invalid key backup: {error}")))?;
     if backup.backup_id.as_str() != backup_id.as_str() {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,

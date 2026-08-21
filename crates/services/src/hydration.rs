@@ -39,6 +39,7 @@ fn application_canonical_event(
         realm_id: record.realm_id.clone(),
         kind: record.kind.clone(),
         schema_id: record.schema_id.clone(),
+        digest_suite: record.digest_suite,
         canonical_digest: record.canonical_digest.clone(),
         canonical_bytes: record.canonical_bytes.clone(),
         envelope: record.envelope.clone(),
@@ -789,11 +790,13 @@ pub async fn hydrate_projections_from_persistence(
                     display: record.display,
                     directory_visibility: record.directory_visibility,
                     join_rule: record.join_rule,
-                    history_visibility: record.history_visibility,
+                    history_access: record.history_access,
                     content_encryption_floor: record.content_encryption_floor,
                     metadata_encryption_floor: record.metadata_encryption_floor,
                     encryption_profile: record.encryption_profile,
+                    content_scheme: record.content_scheme,
                     mls_group_ref: record.mls_group_ref,
+                    durability_policy: record.durability_policy,
                     state,
                     state_changed_at: record.state_changed_at,
                     created_by: record.created_by,
@@ -1039,8 +1042,7 @@ pub async fn hydrate_realms_from_canonical_events(
             hydrate_realm_member_state_event(realms, record);
         } else if matches!(
             arkret_wire::EventKind::from_wire(&record.kind),
-            arkret_wire::EventKind::RealmHistoryVisibility
-                | arkret_wire::EventKind::RealmHistorySharingPolicy
+            arkret_wire::EventKind::RealmHistoryAccess
                 | arkret_wire::EventKind::RealmPreviewPolicy
                 | arkret_wire::EventKind::RealmAssetPrivacyPolicy
         ) {
@@ -1176,10 +1178,10 @@ pub async fn hydrate_realm_create_event(
         .and_then(Value::as_str)
         .unwrap_or("invite_only")
         .to_owned();
-    let history_visibility = payload_object
-        .and_then(|object| object.get("history_visibility"))
+    let history_access = payload_object
+        .and_then(|object| object.get("history_access"))
         .and_then(Value::as_str)
-        .unwrap_or("shared")
+        .unwrap_or("since_join")
         .to_owned();
     let encryption_profile = payload_object
         .and_then(|object| object.get("encryption_profile"))
@@ -1193,12 +1195,6 @@ pub async fn hydrate_realm_create_event(
         .and_then(|object| object.get("default_join_rule"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
-    let history_sharing_policy = payload_object
-        .and_then(|object| object.get("history_sharing_policy"))
-        .cloned();
-    let history_sharing_policy_digest = history_sharing_policy
-        .as_ref()
-        .and_then(canonical_value_digest);
     let preview_policy = payload_object
         .and_then(|object| object.get("preview_policy"))
         .cloned();
@@ -1264,9 +1260,7 @@ pub async fn hydrate_realm_create_event(
         owner: record.actor_id.clone(),
         deleted: false,
         discoverability,
-        history_visibility,
-        history_sharing_policy,
-        history_sharing_policy_digest,
+        history_access,
         preview_policy,
         preview_policy_digest,
         asset_privacy_policy,
@@ -1304,28 +1298,11 @@ pub async fn hydrate_realm_policy_event(
         return;
     };
     match &event.kind {
-        arkret_wire::EventKind::RealmHistoryVisibility => {
-            let Ok(payload) =
-                event.typed_payload::<arkret_wire::event_spec::RealmHistoryVisibility>()
-            else {
+        arkret_wire::EventKind::RealmHistoryAccess => {
+            let Some(value) = event.payload.get("to").and_then(Value::as_str) else {
                 return;
             };
-            let Ok(Value::String(value)) = serde_json::to_value(payload.value) else {
-                return;
-            };
-            meta.history_visibility = value;
-        }
-        arkret_wire::EventKind::RealmHistorySharingPolicy => {
-            let Ok(payload) =
-                event.typed_payload::<arkret_wire::event_spec::RealmHistorySharingPolicy>()
-            else {
-                return;
-            };
-            let Ok(value) = serde_json::to_value(payload.value) else {
-                return;
-            };
-            meta.history_sharing_policy_digest = canonical_value_digest(&value);
-            meta.history_sharing_policy = Some(value);
+            meta.history_access = value.to_owned();
         }
         arkret_wire::EventKind::RealmPreviewPolicy => {
             let Ok(payload) = event.typed_payload::<arkret_wire::event_spec::RealmPreviewPolicy>()

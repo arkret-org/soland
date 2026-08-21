@@ -35,20 +35,25 @@ pub(super) async fn issue_control_proposal_ack(
         )
         .with_status(StatusCode::BAD_REQUEST)
     })?;
-    validate_event_envelope_with_context(state, &session, &envelope, &[], None)
+    let validated = validate_event_envelope_with_context(state, &session, &envelope, &[], None)
         .await
         .map_err(|error| {
             AppError::new(ErrorCode::PolicyViolation, error.message).with_status(error.status)
         })?;
 
     let realm_id = request.event.realm_id.clone();
-    let proposal_digest = Hash::new(request.event.event_digest().map_err(|error| {
-        AppError::new(
-            ErrorCode::SchemaViolation,
-            format!("proposal Event digest failed: {error}"),
-        )
-        .with_status(StatusCode::BAD_REQUEST)
-    })?)
+    let proposal_digest = Hash::new(
+        request
+            .event
+            .event_digest_with_digest_suite(validated.digest_suite)
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::SchemaViolation,
+                    format!("proposal Event digest failed: {error}"),
+                )
+                .with_status(StatusCode::BAD_REQUEST)
+            })?,
+    )
     .map_err(|error| {
         AppError::new(
             ErrorCode::SchemaViolation,

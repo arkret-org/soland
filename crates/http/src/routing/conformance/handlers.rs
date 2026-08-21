@@ -28,7 +28,7 @@
 //! set (`[200, 404, 405, 501]`).
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_hlc::{Cursor, CursorPurpose};
 use base64::Engine;
@@ -403,7 +403,16 @@ pub async fn realm_basis(
 
     // A synthetic Realm has no accepted create Event and therefore cannot be
     // classified as a PCR from its subject. Keep its notary service-owned.
-    let requested_notary_authority = state.service_id();
+    let local_notary_signer = soland_services::conformance_basis::ConformanceNotarySigner::ed25519(
+        state.service_full_id(),
+        state
+            .service_verification_method("notary-key")
+            .map_err(|error| {
+                AppError::internal(format!("construct local notary method: {error}"))
+            })?,
+        state.notary_signing_key().to_bytes(),
+    )
+    .map_err(|error| AppError::internal(format!("freeze local notary signer: {error}")))?;
     let notary_cell =
         arkret_identifiers::CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
             .map_err(|error| AppError::internal(format!("construct notary cell ref: {error}")))?;
@@ -412,17 +421,35 @@ pub async fn realm_basis(
         .sealed_ops_for_cell(&realm_id, &notary_cell)
         .map_err(|error| AppError::internal(format!("read current notary state: {error}")))?
         .is_empty();
+    if has_existing_notary {
+        let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
+        let (notary, _) = worker
+            .current_notary_value_for_events(state, &realm_id, &[])
+            .map_err(|error| AppError::internal(format!("resolve current notary value: {error}")))?
+            .ok_or_else(|| AppError::conflict("existing notary state is not materializable"))?;
+        let local_method =
+            BTreeSet::from([local_notary_signer.descriptor.verification_method.clone()]);
+        let local_descriptor_is_frozen = notary
+            .signer_descriptor(&local_notary_signer.descriptor.verification_method)
+            .is_some_and(|descriptor| descriptor == &local_notary_signer.descriptor);
+        if !local_descriptor_is_frozen || !notary.proposal_quorum_met(&local_method) {
+            return Err(AppError::conflict(
+                "existing conformance Realm notary is not controlled by the local frozen signer",
+            ));
+        }
+    }
     let basis = soland_services::conformance_basis::build_conformance_realm_basis(
         &body.realm_id,
         subject_actor_id.as_str(),
         state.service_id(),
-        (!has_existing_notary).then_some(requested_notary_authority),
+        &local_notary_signer,
+        !has_existing_notary,
         &body.data_plane_actions,
     )
     .map_err(|error| AppError::internal(format!("build conformance Realm basis: {error}")))?;
     state
         .projections()
-        .conformance_put_seal(&basis.seal)
+        .conformance_put_seal(&basis.seal, arkret_canonical::DigestSuite::Sha256)
         .map_err(|error| AppError::internal(format!("store conformance Realm Seal: {error}")))?;
     state
         .projections()

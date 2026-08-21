@@ -12,17 +12,11 @@
 //! write in this Realm?".
 
 use arkret_identifiers::{DidCoreId, RealmId, SpaceId};
-use arkret_models_collaboration::events_payloads::HistorySharingPolicyPayloadValue;
-use arkret_models_collaboration::governance::history_visibility::{
-    HistoryRangeContext, HistoryReaderContext, HistoryReaderEventState,
-    HistorySharingRestrictedScopeRef, HistorySharingScopeKind,
-};
 use arkret_models_collaboration::governance::realm_governance::{
     RealmArchiveRequestBody, RealmDestroyRequestBody, RealmFreezeRequestBody, RealmLifecycleView,
     RealmModerationPolicyReplaceRequestBody, RealmTombstoneRequestBody,
 };
-use arkret_policy::history_visibility::matching_restricted_rules;
-use arkret_wire::{HistoryVisibility, PlaintextDataClassKind};
+use arkret_wire::PlaintextDataClassKind;
 use chrono::{DateTime, Utc};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -647,10 +641,10 @@ pub async fn realm_visible_to(
     realm_visible_to_for_entry(state, realm, session).await
 }
 
-pub async fn realm_history_visibility(state: &AppState, realm_or_internal_id: &str) -> String {
+pub async fn realm_history_access(state: &AppState, realm_or_internal_id: &str) -> String {
     match realm_scope_to_realm_id(realm_or_internal_id) {
-        Some(realm_id) => realm_history_visibility_for_id(state, &realm_id).await,
-        None => "joined".to_owned(),
+        Some(realm_id) => realm_history_access_for_id(state, &realm_id).await,
+        None => "since_join".to_owned(),
     }
 }
 
@@ -669,51 +663,23 @@ pub async fn realm_event_visible_to_session(
     state: &AppState,
     realm_or_internal_id: &str,
     event_created_at: DateTime<Utc>,
-    sender: Option<&str>,
+    _sender: Option<&str>,
     session: Option<&SessionRecord>,
 ) -> bool {
-    if sender.is_some_and(|sender| session.is_some_and(|session| session.actor == sender)) {
-        return true;
+    let Some(session) = session else {
+        return false;
+    };
+    if !realm_active_member_at_read_time(state, realm_or_internal_id, &session.actor).await {
+        return false;
     }
-    match realm_history_visibility(state, realm_or_internal_id)
+    match realm_history_access(state, realm_or_internal_id)
         .await
         .as_str()
     {
-        "world_readable" => true,
-        "shared" => match session {
-            Some(session) => {
-                realm_active_member_at_read_time(state, realm_or_internal_id, &session.actor).await
-            }
-            None => false,
-        },
-        "invited" => {
-            let Some(session) = session else {
-                return false;
-            };
-            realm_member_invited_or_joined_at(state, realm_or_internal_id, &session.actor)
-                .await
-                .is_some_and(|visible_at| event_created_at >= visible_at)
-        }
-        "joined" => {
-            let Some(session) = session else {
-                return false;
-            };
-            realm_member_joined_at(state, realm_or_internal_id, &session.actor)
-                .await
-                .is_some_and(|joined_at| event_created_at >= joined_at)
-        }
-        "restricted" => {
-            let Some(session) = session else {
-                return false;
-            };
-            realm_restricted_history_policy_allows(
-                state,
-                realm_or_internal_id,
-                &session.actor,
-                event_created_at,
-            )
+        "all_history_for_current_members" => true,
+        "since_join" => realm_member_joined_at(state, realm_or_internal_id, &session.actor)
             .await
-        }
+            .is_some_and(|joined_at| event_created_at >= joined_at),
         _ => false,
     }
 }
@@ -951,12 +917,8 @@ pub async fn invite_token_realm_id(state: &AppState, token: &str) -> Option<Stri
 
 /// Check if a Realm is accessible for backfill/subscribe.
 ///
-/// Read-side authorization rules:
-/// 1. `discoverability=public` → anyone.
-/// 2. `history_visibility=world_readable` → anyone (including anonymous / non-member registered
-///    actors). For MLS-backed Realms this state is valid only when the effective content scheme is
-///    history-capable.
-/// 3. Otherwise → caller MUST be an authenticated member.
+/// Data-plane backfill and subscription require current Realm membership.
+/// Discoverability and the history range ratchet never grant timeline access.
 pub async fn realm_id_accessible_for_id(
     state: &AppState,
     realm_id: &str,
@@ -967,99 +929,43 @@ pub async fn realm_id_accessible_for_id(
     };
     // Snapshot the membership/realm_id off the in-memory index before any
     // `.await` so we never hold the std::sync Mutex guard across a suspension.
-    let (realm_id, members) = {
+    let members = {
         let realms = state.realm_directory().snapshot();
         let Some(realm) = realms.get(&realm_id_typed) else {
             return false;
         };
-        (realm.realm_id.as_str().to_owned(), realm.members.clone())
+        realm.members.clone()
     };
-    if realm_discoverability_for_id(state, &realm_id).await == "public" {
-        return true;
-    }
-    if realm_history_visibility_for_id(state, &realm_id).await == "world_readable" {
-        return true;
-    }
     session.is_some_and(|session| {
         arkret_identifiers::DidCoreId::new(session.actor.clone())
             .is_ok_and(|actor| members.contains(&actor))
     })
 }
 
-/// encryption-and-audit.md §2.10.8 — recovery-grade read gate.
-///
-/// ## Recovery read design decision (non-member organizational recovery)
-///
-/// §2.10.8 requires that the organization holding the RRK can retrieve the
-/// Realm's RRK-targeted `ak.realm_key.share` ciphertext events "after all member
-/// devices are lost or all members leave" — i.e. while it is NOT a member of the
-/// Realm and may never have been. The spec leaves "how a non-member org is
-/// authorized to read realm events" as an open surface. soland resolves it with
-/// a **dedicated recovery-grade read scope** that does NOT widen ordinary member
-/// gating:
-///
-/// - A session whose `actor` equals a current
-///   `durability_policy.recovery_recipients[].principal_id` is granted realm *scan admission* (so
-///   `events.read` does not `not_found` it), but
-/// - the per-event recovery filter ([`realm_recovery_event_visible`]) restricts such a session to
-///   ONLY `ak.realm_key.share` events whose `recipient_principal_id` is that same recovery
-///   recipient. The recovery org never sees the general timeline, message bodies, membership, or
-///   shares addressed to other recipients.
-///
-/// This keeps the recovery face minimal-disclosure: the recovery org reads
-/// exactly the opaque (HPKE-sealed) ciphertext it is entitled to HPKE-open, and
-/// nothing else. Ordinary `realm_id_accessible` membership semantics are
-/// untouched.
-///
-/// Returns `true` iff `actor` is a current recovery recipient of `realm_id`.
-pub async fn realm_recovery_recipient_principal(
-    state: &AppState,
-    realm_id: &str,
-    actor: &str,
-) -> bool {
-    use arkret_models_collaboration::objects::realm::DurabilityMode;
-    let Some(realm_id) = realm_scope_to_realm_id(realm_id) else {
-        return false;
-    };
-    let durability = {
-        let projection = state.projections().snapshot();
-        projection.realm_durability_policy(&realm_id)
-    };
-    let Some(durability) = durability else {
-        return false;
-    };
-    if matches!(durability.mode, DurabilityMode::None) {
-        return false;
+/// Look up the current one-way `history_access` ratchet value. Missing or
+/// unrecognized state fails closed to `since_join`.
+pub async fn realm_history_access_for_id(state: &AppState, realm_id: &str) -> String {
+    if let Some(value) = state
+        .projections()
+        .snapshot()
+        .realm_history_access(realm_id)
+    {
+        return value;
     }
-    durability
-        .recovery_recipients
-        .iter()
-        .any(|recipient| recipient.principal_id.as_str() == actor)
-}
-
-/// encryption-and-audit.md §2.10.8 — per-event recovery visibility. For a
-/// recovery-recipient (non-member) session, an event is visible ONLY when it is
-/// a `ak.realm_key.share` addressed to that recipient's `principal_id`. Used by
-/// the `events.read` per-event filter to keep the recovery face narrow.
-pub fn realm_recovery_event_visible(
-    event_kind: &arkret_wire::EventKind,
-    recipient_principal_id: Option<&str>,
-    actor: &str,
-) -> bool {
-    event_kind == &arkret_wire::EventKind::RealmKeyShare && recipient_principal_id == Some(actor)
-}
-
-/// Look up the persisted `history_visibility` for a Realm, defaulting to
-/// `joined` when no meta record exists (matches the spec default).
-pub async fn realm_history_visibility_for_id(state: &AppState, realm_id: &str) -> String {
     state
         .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
         .flatten()
-        .map(|record| record.history_visibility.clone())
-        .unwrap_or_else(|| "joined".to_owned())
+        .map(|record| record.history_access.clone())
+        .filter(|value| {
+            matches!(
+                value.as_str(),
+                "since_join" | "all_history_for_current_members"
+            )
+        })
+        .unwrap_or_else(|| "since_join".to_owned())
 }
 
 fn directory_realm_is_public(state: &AppState, realm_id: &str) -> bool {
@@ -1078,7 +984,7 @@ fn directory_realm_is_public(state: &AppState, realm_id: &str) -> bool {
 /// The reducer's member projection is authoritative when present. Bootstrap
 /// owners predate that side-band cache, so only the owner falls back to the
 /// Realm creation time. Non-owner members without joined_at are hidden by
-/// `history_visibility=joined` instead of leaking pre-join history.
+/// `history_access=since_join` instead of leaking pre-join history.
 pub async fn realm_member_joined_at_for_id(
     state: &AppState,
     realm_id: &str,
@@ -1172,92 +1078,11 @@ async fn realm_active_member_at_read_time(
     }
 }
 
-async fn realm_restricted_history_policy_allows(
-    state: &AppState,
-    realm_or_internal_id: &str,
-    actor: &str,
-    event_created_at: DateTime<Utc>,
-) -> bool {
-    let Some(realm_id) = realm_scope_to_realm_id(realm_or_internal_id) else {
-        return false;
-    };
-    let Some(meta) = state
-        .realms()
-        .realm_metadata(&realm_id)
-        .await
-        .ok()
-        .flatten()
-    else {
-        return false;
-    };
-    let Some(policy_value) = meta.history_sharing_policy else {
-        return false;
-    };
-    let Ok(policy) = serde_json::from_value::<HistorySharingPolicyPayloadValue>(policy_value)
-    else {
-        return false;
-    };
-    if arkret_policy::history_visibility::validate_history_sharing_policy(&policy).is_err() {
-        return false;
-    }
-    let active_member = realm_active_member_at_read_time(state, &realm_id, actor).await;
-    let joined_at = realm_member_joined_at_for_id(state, &realm_id, actor).await;
-    let invited_at = realm_member_invited_or_joined_at_for_id(state, &realm_id, actor).await;
-    let since_invite = invited_at.is_some_and(|at| event_created_at >= at);
-    let since_join = joined_at.is_some_and(|at| event_created_at >= at);
-    let event_state = if active_member && since_join {
-        HistoryReaderEventState::Joined
-    } else if active_member && since_invite {
-        HistoryReaderEventState::Invited
-    } else if !active_member && (since_invite || since_join) {
-        HistoryReaderEventState::Removed
-    } else {
-        HistoryReaderEventState::None
-    };
-    let reader = HistoryReaderContext {
-        current_active_member: active_member,
-        event_state,
-        has_discoverability: true,
-        has_preview_token: false,
-    };
-    let Some(receiver_class) = reader.receiver_class() else {
-        return false;
-    };
-    let range = HistoryRangeContext::from_membership(since_invite, since_join);
-    let scope = HistorySharingRestrictedScopeRef {
-        kind: HistorySharingScopeKind::Realm,
-        circle_id: None,
-    };
-    !matching_restricted_rules(
-        &policy,
-        receiver_class,
-        HistoryVisibility::Restricted,
-        range,
-        None,
-        Some(&scope),
-    )
-    .is_empty()
-}
-
 pub async fn realm_allows_plaintext_service_for_data_class_id(
     state: &AppState,
     realm_id: &str,
     data_class: PlaintextDataClassKind,
 ) -> bool {
-    let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
-        return false;
-    };
-    let directory_realm_id = {
-        let realms = state.realm_directory().snapshot();
-        realms
-            .get(&realm_id_typed)
-            .map(|realm| realm.realm_id.as_str().to_owned())
-    };
-    if let Some(directory_realm_id) = directory_realm_id
-        && realm_public_content_for_id(state, &directory_realm_id).await
-    {
-        return true;
-    }
     state
         .realms()
         .realm_metadata(realm_id)
@@ -1265,18 +1090,6 @@ pub async fn realm_allows_plaintext_service_for_data_class_id(
         .ok()
         .flatten()
         .is_some_and(|record| record.allows_plaintext_data_class(state.service_id(), data_class))
-}
-
-async fn realm_public_content_for_id(state: &AppState, realm_id: &str) -> bool {
-    state
-        .realms()
-        .realm_metadata(realm_id)
-        .await
-        .ok()
-        .flatten()
-        .is_some_and(|record| {
-            record.discoverability == "public" && record.history_visibility == "world_readable"
-        })
 }
 
 #[cfg(test)]

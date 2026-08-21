@@ -1302,8 +1302,6 @@ mod tests {
             did_resolver_allow_methods: vec!["web".to_owned()],
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: std::collections::BTreeMap::new(),
-            seal_compaction_min_age_seconds: 0,
-            compaction_min_witnesses: 0,
             ..AppConfig::test_default()
         }
     }

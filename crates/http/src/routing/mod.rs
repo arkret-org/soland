@@ -5,6 +5,7 @@ mod access;
 mod account_data_encryption;
 mod admin;
 pub(crate) mod agent_participation;
+mod governance_history;
 // AKP-0007 (P2A.3) — `/_arkret/self/circles/*` admin surface.
 pub(crate) mod circles;
 pub(crate) mod conformance;
@@ -51,9 +52,8 @@ use soland_http::util::{
 use spaces::space::{
     invite_token_matches_realm, invite_token_realm_id, is_realm_deleted,
     realm_allows_plaintext_service_for_data_class, realm_discoverability,
-    realm_event_visible_to_session, realm_has_member, realm_history_visibility,
-    realm_id_accessible, realm_resolvable_to, realm_search_visible_to, realm_visible_to,
-    touch_realm,
+    realm_event_visible_to_session, realm_has_member, realm_history_access, realm_id_accessible,
+    realm_resolvable_to, realm_search_visible_to, realm_visible_to, touch_realm,
 };
 use system::extract::AuthArgs;
 

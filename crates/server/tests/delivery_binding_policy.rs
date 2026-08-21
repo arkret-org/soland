@@ -98,8 +98,7 @@ fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) -> S
     let payload = arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
         arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
         arkret_identifiers::TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
-        arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-        arkret_wire::notary::NotaryValue::single_did(creator_actor_id.clone()),
+        soland_test_support::cba_basis::test_single_signer_notary("did:web:alice.example"),
         arkret_policy::current_capability_action_registry_digest().unwrap(),
         chrono::Utc::now(),
     )
@@ -130,6 +129,7 @@ fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) -> S
         arkret_wire::OperationKind::Create,
         None,
         &event,
+        arkret_canonical::DigestSuite::Sha256,
     )
     .unwrap();
     let effect = state.apply_projected(&create, &writes, hlc);

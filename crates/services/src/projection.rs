@@ -1,19 +1,23 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arkret_event_draft::ProjectedEventOperation as Operation;
+use arkret_event_draft::{EventPayloadExt, ProjectedEventOperation as Operation};
 use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
 use arkret_models_collaboration::event_sync::{
     ControlGovernanceHealth, ControlGovernanceHealthStatus, ControlProposalDecisionState,
     ControlProposalFaultReason, PendingControlProposal, RetainedControlProposalFault,
+};
+use arkret_models_collaboration::history_key::{
+    AuthorizationIncarnation, CurrentGateProjection, HistoryEffectiveScope,
+    HistoryReleaseAttestation,
 };
 use arkret_state::lattice::CellState;
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::store::{ControlProposalIngress, ControlProposalIngressClass};
 use arkret_state::state::{
     CellLatticeBinding, ControlEventStore, ControlMoveReject, ControlProposalSnapshot,
-    PendingControlEventRecord, SealEffect, SealLeafUnionProof, SealReject, SealStore,
-    SealedControlEventRecord, StoreError, StoreResult,
+    PendingControlEventRecord, SealDigestSuites, SealEffect, SealLeafUnionProof, SealReject,
+    SealStore, SealedControlEventRecord, StoreError, StoreResult,
 };
 use arkret_state::{CellRegistry, CellStore, EffectiveSealView};
 use arkret_wire::cba::ProjectedCellWrite;
@@ -29,7 +33,10 @@ use soland_domain::reducer::{
     MlsRemoveObligation, MlsWelcomeQueueKey, ProjectionEffect, ProjectionState,
     SolandMembershipState, SolandRealmState,
 };
-use soland_storage::{JoinApplicationRecord, PersistenceResult, PersistenceStore};
+use soland_storage::{
+    HistoryAuthorityViewCas, JoinApplicationRecord, PersistenceError, PersistenceResult,
+    PersistenceStore,
+};
 
 use crate::authorization::{RealmPolicyServerConfig, RealmPolicyServerConfigView};
 use crate::hydration::{HydrationProjectionAdapter, hydrate_projections_from_persistence};
@@ -94,6 +101,7 @@ pub trait EventSealCommitPort: Send + Sync {
     fn commit_if_frontier(
         &self,
         seal: &Seal,
+        digest_suite: arkret_canonical::DigestSuite,
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<Hash>,
@@ -143,6 +151,7 @@ pub struct ProjectionService {
     event_seal_committer: Arc<dyn EventSealCommitPort>,
     device_revocations: Option<Arc<dyn soland_storage::DeviceRevocationStore>>,
     control_decision_commit_lock: Arc<Mutex<()>>,
+    history_authority_view_cas_lock: Arc<Mutex<()>>,
     clock: Arc<ServiceClock>,
 }
 
@@ -213,7 +222,6 @@ pub enum ProjectionEffectView {
         reason: String,
     },
     Ignored,
-    RealmKeyShareProjected,
     ReadMarkerUpdated(ReadMarkerView),
     Mls(MlsProjectionEffect),
     ModerationAppealProjected {
@@ -279,7 +287,6 @@ impl From<ProjectionEffect> for ProjectionEffectView {
                 target_ref, reason, ..
             } => Self::PendingReplayQueued { target_ref, reason },
             ProjectionEffect::Ignored => Self::Ignored,
-            ProjectionEffect::RealmKeyShareProjected { .. } => Self::RealmKeyShareProjected,
             ProjectionEffect::ReadMarkerUpdated(marker) => Self::ReadMarkerUpdated(marker),
             ProjectionEffect::Mls(effect) => Self::Mls(match effect {
                 soland_domain::reducer::MlsEffect::KeyPackagePublished {
@@ -393,6 +400,7 @@ impl ProjectionService {
             event_seal_committer,
             device_revocations: None,
             control_decision_commit_lock: Arc::new(Mutex::new(())),
+            history_authority_view_cas_lock: Arc::new(Mutex::new(())),
             clock: Arc::new(ServiceClock::new(clock_node)),
         }
     }
@@ -496,8 +504,13 @@ impl ProjectionService {
         &self,
         event: &Event,
         ack: &ControlProposalAck,
+        digest_suite: arkret_canonical::DigestSuite,
     ) -> StoreResult<()> {
-        self.put_pending_control_event(event, &ControlProposalIngress::AckRequired(ack.clone()))
+        self.put_pending_control_event(
+            event,
+            &ControlProposalIngress::AckRequired(ack.clone()),
+            digest_suite,
+        )
     }
 
     /// Record an accepted Control Move before a Seal may cover it.
@@ -512,15 +525,23 @@ impl ProjectionService {
         &self,
         event: &Event,
         ingress: &ControlProposalIngress,
+        digest_suite: arkret_canonical::DigestSuite,
     ) -> StoreResult<()> {
         self.control_event_store()
-            .put_pending_with_ingress(event, ingress)
+            .put_pending_with_ingress(event, ingress, digest_suite)
     }
 
     /// Control-plane Events are keyed by their canonical `event_digest`, not by
     /// `event_id`: an equivocated id must stay distinguishable (§6.3.2).
     pub fn control_event_by_digest(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
         self.control_event_store().get(event_digest)
+    }
+
+    pub fn control_event_digest_suite(
+        &self,
+        event_digest: &Hash,
+    ) -> StoreResult<Option<arkret_canonical::DigestSuite>> {
+        self.control_event_store().digest_suite(event_digest)
     }
 
     pub fn control_proposal_ack(
@@ -643,7 +664,8 @@ impl ProjectionService {
         }
         let mut pending_proposals = Vec::with_capacity(records.len());
         for record in records {
-            let digest = arkret_state::state::control_event_digest(&record.event)?;
+            let digest =
+                arkret_state::state::control_event_digest(&record.event, record.digest_suite)?;
             let Some(ack) = record.control_proposal_ack else {
                 // Authority-authored self-principal PCR moves are deliberately
                 // outside the external proposal/Ack bounded-decision rail.
@@ -722,7 +744,8 @@ impl ProjectionService {
         )?;
         let mut retained_faults = Vec::new();
         for record in sealed {
-            let digest = arkret_state::state::control_event_digest(&record.event)?;
+            let digest =
+                arkret_state::state::control_event_digest(&record.event, record.digest_suite)?;
             let Some(ack) = record.control_proposal_ack else {
                 // The same Ack-less PCR class has no proposal deadline to
                 // retain as a governance fault after its Seal is accepted.
@@ -755,20 +778,29 @@ impl ProjectionService {
                     "signed-rejected Control Move was also sealed".to_owned(),
                 ));
             }
-            let seal = self.seal_by_id(&record.seal)?.ok_or_else(|| {
-                arkret_state::state::StoreError::Conflict(format!(
-                    "sealed Control Move references missing Seal {}",
-                    record.seal
-                ))
-            })?;
             let mut previous_due_at = ack.decision_due_at;
             let mut missed_deadline = false;
             for decision in &record.decisions {
                 missed_deadline |= !decision.satisfied_current_deadline(previous_due_at);
                 previous_due_at = decision.decision_due_at();
             }
-            missed_deadline |= seal.sealed_at > previous_due_at;
-            if missed_deadline {
+            let mut faulting_seals = Vec::new();
+            for seal_id in &record.covering_seals {
+                let seal = self.seal_by_id(seal_id)?.ok_or_else(|| {
+                    arkret_state::state::StoreError::Conflict(format!(
+                        "sealed Control Move references missing Seal {seal_id}"
+                    ))
+                })?;
+                if missed_deadline || seal.sealed_at > previous_due_at {
+                    faulting_seals.push(seal);
+                }
+            }
+            faulting_seals.sort_by(|left, right| {
+                left.sealed_at
+                    .cmp(&right.sealed_at)
+                    .then_with(|| left.id.as_str().cmp(right.id.as_str()))
+            });
+            if let Some(seal) = faulting_seals.into_iter().next() {
                 retained_faults.push(RetainedControlProposalFault {
                     proposal_digest: ack.proposal_digest.clone(),
                     control_proposal_ack: ack,
@@ -867,14 +899,31 @@ impl ProjectionService {
         self.seal_store().get(seal_id)
     }
 
-    /// The accepted Seal covering a Control Move, or `None` when the Event is
-    /// unknown, still pending, or not a Control Move at all (a DataEvent never
-    /// appears in a Seal `delta[]`).
+    pub fn seals_covering_event(&self, event_digest: &Hash) -> StoreResult<Vec<Seal>> {
+        self.control_event_store()
+            .covering_seals(event_digest)?
+            .into_iter()
+            .map(|seal_id| {
+                self.seal_by_id(&seal_id)?.ok_or_else(|| {
+                    StoreError::Conflict(format!(
+                        "Control Move references missing covering Seal {seal_id}"
+                    ))
+                })
+            })
+            .collect()
+    }
+
+    /// Compatibility point lookup for callers that require exactly one direct
+    /// covering Seal. Multi-Seal coverage is never collapsed implicitly.
     pub fn seal_covering_event(&self, event_digest: &Hash) -> StoreResult<Option<Seal>> {
-        let Some(seal_id) = self.control_event_store().sealed_by(event_digest)? else {
-            return Ok(None);
-        };
-        self.seal_by_id(&seal_id)
+        let mut seals = self.seals_covering_event(event_digest)?;
+        match seals.len() {
+            0 => Ok(None),
+            1 => Ok(seals.pop()),
+            count => Err(StoreError::Conflict(format!(
+                "Control Move has {count} direct covering Seals; singular lookup is undefined"
+            ))),
+        }
     }
 
     pub fn realm_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>> {
@@ -895,14 +944,6 @@ impl ProjectionService {
         seal_id: &SealId,
     ) -> StoreResult<Vec<SealId>> {
         self.seal_store().successors(realm_id, seal_id)
-    }
-
-    pub fn prune_seal_predecessor(
-        &self,
-        realm_id: &RealmId,
-        seal_id: &SealId,
-    ) -> StoreResult<Vec<SealId>> {
-        self.seal_store().prune_predecessor(realm_id, seal_id)
     }
 
     pub fn realm_cells(&self, realm_id: &RealmId) -> StoreResult<Vec<CellRef>> {
@@ -969,12 +1010,14 @@ impl ProjectionService {
         leaves: &[SealId],
         realm_id: &RealmId,
     ) -> Result<EffectiveSealView, SealReject> {
+        let digest_suite = self.predecessor_digest_suite(realm_id, leaves)?;
         arkret_state::effective_seal_view(
             leaves,
             realm_id,
             self.seal_store(),
             self.cell_store(),
             self.cell_registry(),
+            digest_suite,
         )
     }
 
@@ -1020,11 +1063,19 @@ impl ProjectionService {
     /// of cell targets and lattice operations is the registered reducer
     /// contract (`event-and-patch.md` §2.4.2).
     pub fn project_cell_writes(&self, event: &Event) -> Result<Vec<ProjectedCellWrite>, String> {
-        arkret_schema::project_registered_cell_writes(
+        self.project_cell_writes_with_digest_suite(
             event,
             self.realm_digest_suite(event.realm_id.as_str()),
         )
-        .map_err(|error| error.to_string())
+    }
+
+    pub fn project_cell_writes_with_digest_suite(
+        &self,
+        event: &Event,
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> Result<Vec<ProjectedCellWrite>, String> {
+        arkret_schema::project_registered_cell_writes(event, digest_suite)
+            .map_err(|error| error.to_string())
     }
 
     /// Re-project a durably accepted Event after its pre-state admission gate
@@ -1041,8 +1092,19 @@ impl ProjectionService {
         &self,
         event: &Event,
     ) -> Result<Vec<ProjectedCellWrite>, String> {
+        self.project_accepted_cell_writes_with_digest_suite(
+            event,
+            self.realm_digest_suite(event.realm_id.as_str()),
+        )
+    }
+
+    pub fn project_accepted_cell_writes_with_digest_suite(
+        &self,
+        event: &Event,
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> Result<Vec<ProjectedCellWrite>, String> {
         if event.kind != arkret_wire::EventKind::InviteCancel {
-            return self.project_cell_writes(event);
+            return self.project_cell_writes_with_digest_suite(event, digest_suite);
         }
         let invite_id = event
             .payload
@@ -1062,8 +1124,12 @@ impl ProjectionService {
             lifecycle_cell,
             serde_json::json!({"invitee": invitee}),
         )]);
-        self.project_cell_writes_with_pre_state(event, &frozen_pre_state)
-            .map_err(|error| error.to_string())
+        arkret_schema::project_registered_cell_writes_with_pre_state(
+            event,
+            digest_suite,
+            &frozen_pre_state,
+        )
+        .map_err(|error| error.to_string())
     }
 
     /// Project registered writes against one caller-frozen pre-state.
@@ -1125,13 +1191,36 @@ impl ProjectionService {
     where
         F: Fn(&Event) -> Result<(), String>,
     {
+        self.verify_control_move_in_context_with_digest_suite(
+            event,
+            realm_id,
+            pre_state,
+            self.realm_digest_suite(realm_id.as_str()),
+            verify_proofs,
+            context,
+        )
+    }
+
+    pub fn verify_control_move_in_context_with_digest_suite<F>(
+        &self,
+        event: &Event,
+        realm_id: &RealmId,
+        pre_state: &BTreeMap<CellRef, CellState>,
+        digest_suite: arkret_canonical::DigestSuite,
+        verify_proofs: F,
+        context: arkret_wire::event_envelope::EventSubmitContext,
+    ) -> Result<Vec<arkret_wire::cba::ProjectionEffect>, ControlMoveReject>
+    where
+        F: Fn(&Event) -> Result<(), String>,
+    {
         arkret_state::verify_control_move_in_context(
             event,
             realm_id,
             pre_state,
             self.cell_registry(),
+            digest_suite,
             verify_proofs,
-            |event| self.project_cell_writes(event),
+            |event| self.project_cell_writes_with_digest_suite(event, digest_suite),
             context,
         )
     }
@@ -1151,13 +1240,36 @@ impl ProjectionService {
     where
         F: Fn(&Event) -> Result<(), String>,
     {
+        self.verify_accepted_control_move_in_context_with_digest_suite(
+            event,
+            realm_id,
+            pre_state,
+            self.realm_digest_suite(realm_id.as_str()),
+            verify_proofs,
+            context,
+        )
+    }
+
+    pub fn verify_accepted_control_move_in_context_with_digest_suite<F>(
+        &self,
+        event: &Event,
+        realm_id: &RealmId,
+        pre_state: &BTreeMap<CellRef, CellState>,
+        digest_suite: arkret_canonical::DigestSuite,
+        verify_proofs: F,
+        context: arkret_wire::event_envelope::EventSubmitContext,
+    ) -> Result<Vec<arkret_wire::cba::ProjectionEffect>, ControlMoveReject>
+    where
+        F: Fn(&Event) -> Result<(), String>,
+    {
         arkret_state::verify_accepted_control_move_in_context(
             event,
             realm_id,
             pre_state,
             self.cell_registry(),
+            digest_suite,
             verify_proofs,
-            |event| self.project_accepted_cell_writes(event),
+            |event| self.project_accepted_cell_writes_with_digest_suite(event, digest_suite),
             context,
         )
     }
@@ -1170,6 +1282,25 @@ impl ProjectionService {
         pre_state: &BTreeMap<CellRef, CellState>,
         predecessor_closure: &BTreeSet<SealId>,
     ) -> Result<(), ControlMoveReject> {
+        self.verify_recovery_witness_with_digest_suite(
+            event,
+            effects,
+            realm_id,
+            pre_state,
+            predecessor_closure,
+            self.realm_digest_suite(realm_id.as_str()),
+        )
+    }
+
+    pub fn verify_recovery_witness_with_digest_suite(
+        &self,
+        event: &Event,
+        effects: &[arkret_wire::cba::ProjectionEffect],
+        realm_id: &RealmId,
+        pre_state: &BTreeMap<CellRef, CellState>,
+        predecessor_closure: &BTreeSet<SealId>,
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> Result<(), ControlMoveReject> {
         arkret_state::verify_recovery_witness(
             event,
             effects,
@@ -1179,6 +1310,7 @@ impl ProjectionService {
             self.seal_store(),
             self.cell_store(),
             self.cell_registry(),
+            digest_suite,
         )
     }
 
@@ -1202,14 +1334,17 @@ impl ProjectionService {
     where
         F: Fn(&Event) -> Result<(), String> + Copy,
     {
+        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let digest_suites = self.seal_digest_suites(seal)?;
         arkret_state::apply_seal_in_context(
             seal,
             self.control_event_store(),
             self.seal_store(),
             self.cell_store(),
             self.cell_registry(),
-            verify_proofs,
-            |event| self.project_cell_writes(event),
+            digest_suites,
+            |event, _digest_suite| verify_proofs(event),
+            |event, digest_suite| self.project_cell_writes_with_digest_suite(event, digest_suite),
             context,
         )
     }
@@ -1227,27 +1362,148 @@ impl ProjectionService {
     where
         F: Fn(&Event) -> Result<(), String> + Copy,
     {
+        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let digest_suites = self.seal_digest_suites(seal)?;
         arkret_state::apply_accepted_seal_in_context(
             seal,
             self.control_event_store(),
             self.seal_store(),
             self.cell_store(),
             self.cell_registry(),
-            verify_proofs,
-            |event| self.project_accepted_cell_writes(event),
+            digest_suites,
+            |event, _digest_suite| verify_proofs(event),
+            |event, digest_suite| {
+                self.project_accepted_cell_writes_with_digest_suite(event, digest_suite)
+            },
             context,
         )
+    }
+
+    pub fn seal_digest_suites(&self, seal: &Seal) -> Result<SealDigestSuites, SealReject> {
+        self.seal_digest_suites_for_delta(&seal.realm_id, &seal.predecessor_refs, &seal.delta)
+    }
+
+    pub fn seal_digest_suites_for_delta(
+        &self,
+        realm_id: &RealmId,
+        predecessor_refs: &[SealId],
+        delta: &[Hash],
+    ) -> Result<SealDigestSuites, SealReject> {
+        let delta_events = delta
+            .iter()
+            .map(|digest| {
+                self.control_event_store().get(digest)?.ok_or_else(|| {
+                    SealReject::MissingControlEvent {
+                        event_digest: digest.to_string(),
+                    }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if predecessor_refs.is_empty() {
+            let create_events = delta_events
+                .iter()
+                .filter(|event| event.kind == arkret_wire::EventKind::RealmCreate)
+                .collect::<Vec<_>>();
+            let [create] = create_events.as_slice() else {
+                return Err(SealReject::Structural(
+                    "Genesis Seal must contain exactly one ak.realm.create Event".to_owned(),
+                ));
+            };
+            let declared = create
+                .payload
+                .get("object")
+                .and_then(|object| object.get("digest_algorithm"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    SealReject::Structural(
+                        "ak.realm.create payload omits object.digest_algorithm".to_owned(),
+                    )
+                })
+                .and_then(|value| {
+                    arkret_canonical::digest_suite(value)
+                        .map_err(|error| SealReject::Structural(error.to_string()))
+                })?;
+            return Ok(SealDigestSuites::standard(declared));
+        }
+
+        let live_suite = self.predecessor_digest_suite(realm_id, predecessor_refs)?;
+        let transitions = delta_events
+            .iter()
+            .filter(|event| event.kind == arkret_wire::EventKind::RealmDigestSuiteTransition)
+            .collect::<Vec<_>>();
+        match transitions.as_slice() {
+            [] => Ok(SealDigestSuites::standard(live_suite)),
+            [transition] => {
+                let payload = transition
+                    .typed_payload::<arkret_wire::event_spec::RealmDigestSuiteTransition>()
+                    .map_err(|error| SealReject::Structural(error.to_string()))?;
+                if payload.from_digest_algorithm != live_suite {
+                    return Err(SealReject::Structural(
+                        "digest-suite transition does not start at the predecessor live suite"
+                            .to_owned(),
+                    ));
+                }
+                Ok(SealDigestSuites::transition(
+                    live_suite,
+                    payload.to_digest_algorithm,
+                ))
+            }
+            _ => Err(SealReject::Structural(
+                "Seal contains more than one digest-suite transition Move".to_owned(),
+            )),
+        }
+    }
+
+    pub fn predecessor_digest_suite(
+        &self,
+        realm_id: &RealmId,
+        predecessor_refs: &[SealId],
+    ) -> Result<arkret_canonical::DigestSuite, SealReject> {
+        if predecessor_refs.is_empty() {
+            return Err(SealReject::Structural(
+                "Genesis has no predecessor digest-suite state".to_owned(),
+            ));
+        }
+        let predecessor_state = self.effective_state_at(predecessor_refs, realm_id)?;
+        let digest_suite_cell =
+            arkret_wire::null_subject_cell(arkret_wire::CellFamilyId::REALM_DIGEST_SUITE_V1);
+        match predecessor_state
+            .iter()
+            .find(|(cell, _)| cell.as_str() == digest_suite_cell)
+            .map(|(_, state)| state)
+        {
+            Some(CellState::Value(Value::String(value))) => arkret_canonical::digest_suite(value)
+                .map_err(|error| SealReject::Structural(error.to_string())),
+            Some(CellState::Bottom(_)) => {
+                return Err(SealReject::Structural(
+                    "predecessor digest-suite cell is Bottom".to_owned(),
+                ));
+            }
+            Some(_) => {
+                return Err(SealReject::Structural(
+                    "predecessor digest-suite cell has a non-string value".to_owned(),
+                ));
+            }
+            None => {
+                return Err(SealReject::Structural(
+                    "predecessor view omits the live digest-suite cell".to_owned(),
+                ));
+            }
+        }
     }
 
     pub fn commit_event_seal_if_frontier(
         &self,
         seal: &Seal,
+        digest_suite: arkret_canonical::DigestSuite,
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<Hash>,
     ) -> StoreResult<bool> {
+        let _authority_guard = self.history_authority_view_cas_lock.lock();
         self.event_seal_committer().commit_if_frontier(
             seal,
+            digest_suite,
             expected_store_frontier,
             new_ops,
             covered,
@@ -1257,12 +1513,18 @@ impl ProjectionService {
     pub async fn commit_event_seal_if_frontier_with_revocations(
         &self,
         seal: &Seal,
+        digest_suite: arkret_canonical::DigestSuite,
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<Hash>,
     ) -> StoreResult<bool> {
-        let inserted =
-            self.commit_event_seal_if_frontier(seal, expected_store_frontier, new_ops, covered)?;
+        let inserted = self.commit_event_seal_if_frontier(
+            seal,
+            digest_suite,
+            expected_store_frontier,
+            new_ops,
+            covered,
+        )?;
         if inserted && let Some(store) = &self.device_revocations {
             for digest in covered {
                 store
@@ -1275,8 +1537,13 @@ impl ProjectionService {
     }
 
     #[doc(hidden)]
-    pub fn conformance_put_seal(&self, seal: &Seal) -> StoreResult<()> {
-        self.seal_store().put(seal)
+    pub fn conformance_put_seal(
+        &self,
+        seal: &Seal,
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> StoreResult<()> {
+        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        self.seal_store().put(seal, digest_suite)
     }
 
     #[doc(hidden)]
@@ -1301,6 +1568,7 @@ impl ProjectionService {
         genesis: Value,
         reducer_profile: Value,
     ) {
+        let _authority_guard = self.history_authority_view_cas_lock.lock();
         let mut state = self.state.lock();
         for (cell, value) in [
             (arkret_wire::REALM_GENESIS_CELL, genesis),
@@ -1326,8 +1594,12 @@ impl ProjectionService {
 
     #[cfg(feature = "test-support")]
     #[doc(hidden)]
-    pub fn test_put_seal(&self, seal: &Seal) -> StoreResult<()> {
-        self.conformance_put_seal(seal)
+    pub fn test_put_seal(
+        &self,
+        seal: &Seal,
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> StoreResult<()> {
+        self.conformance_put_seal(seal, digest_suite)
     }
 
     #[cfg(feature = "test-support")]
@@ -1348,15 +1620,16 @@ impl ProjectionService {
         event: &Event,
         seal: &Seal,
         ingress: &ControlProposalIngress,
+        digest_suite: arkret_canonical::DigestSuite,
     ) -> StoreResult<()> {
         let digest = Hash::new(
             event
-                .event_digest()
+                .event_digest_with_digest_suite(digest_suite)
                 .map_err(|error| StoreError::Conflict(error.to_string()))?,
         )
         .map_err(|error| StoreError::Conflict(error.to_string()))?;
         self.control_event_store()
-            .put_pending_with_ingress(event, ingress)?;
+            .put_pending_with_ingress(event, ingress, digest_suite)?;
         self.control_event_store().mark_sealed(&digest, seal)
     }
 
@@ -1686,11 +1959,13 @@ impl ProjectionService {
                         display: row.display.clone(),
                         directory_visibility: row.directory_visibility.clone(),
                         join_rule: row.join_rule.clone(),
-                        history_visibility: row.history_visibility.clone(),
+                        history_access: row.history_access.clone(),
                         content_encryption_floor: row.content_encryption_floor.clone(),
                         metadata_encryption_floor: row.metadata_encryption_floor.clone(),
                         encryption_profile: row.encryption_profile.clone(),
+                        content_scheme: row.content_scheme.clone(),
                         mls_group_ref: row.mls_group_ref.clone(),
+                        durability_policy: row.durability_policy.clone(),
                         state: row.state.as_str().to_owned(),
                         state_changed_at: row.state_changed_at,
                         created_by: row.created_by.clone(),
@@ -1839,6 +2114,7 @@ impl ProjectionService {
     }
 
     pub fn install_snapshot(&self, state: ProjectionState) {
+        let _authority_guard = self.history_authority_view_cas_lock.lock();
         *self.state.lock() = state;
     }
 
@@ -1862,6 +2138,7 @@ impl ProjectionService {
         cell_writes: &[ProjectedCellWrite],
         hlc: &ServerHlc,
     ) -> ProjectionEffectView {
+        let _authority_guard = self.history_authority_view_cas_lock.lock();
         self.state
             .lock()
             .apply_projected(operation, cell_writes, hlc)
@@ -1874,6 +2151,7 @@ impl ProjectionService {
         cell_writes: &[ProjectedCellWrite],
         hlc: &ServerHlc,
     ) -> ProjectionEffectView {
+        let _authority_guard = self.history_authority_view_cas_lock.lock();
         let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
         self.state
             .lock()
@@ -1904,6 +2182,7 @@ impl ProjectionService {
         operations: &[(&Operation, &[ProjectedCellWrite])],
         hlc: &ServerHlc,
     ) -> Result<(), String> {
+        let _authority_guard = self.history_authority_view_cas_lock.lock();
         let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
         let mut state = self.state.lock();
         let mut staged = state.clone();
@@ -2151,6 +2430,7 @@ impl ProjectionService {
     }
 
     pub fn cache_cell(&self, cell_id: CellRef, value: Value) {
+        let _authority_guard = self.history_authority_view_cas_lock.lock();
         self.state
             .lock()
             .cells
@@ -2172,6 +2452,7 @@ impl ProjectionService {
         &self,
         realm_id: &RealmId,
     ) -> Result<(), arkret_state::StoreError> {
+        let _authority_guard = self.history_authority_view_cas_lock.lock();
         let mut resolved_cells = Vec::new();
         for cell in self.cell_store().list_cells(realm_id)? {
             let ops = self.cell_store().sealed_ops_for_cell(realm_id, &cell)?;
@@ -2386,6 +2667,7 @@ impl ProjectionService {
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
     ) -> bool {
+        let _authority_guard = self.history_authority_view_cas_lock.lock();
         let mut state = self.state.lock();
         match state.realm_states.get_mut(realm_id) {
             Some(realm) => match realm.owner.as_deref() {
@@ -2429,6 +2711,7 @@ impl ProjectionService {
         recipient_service_id: Option<String>,
         operation: &Operation,
     ) {
+        let _authority_guard = self.history_authority_view_cas_lock.lock();
         let delivery_status = recipient_service_id
             .as_ref()
             .map(|_| "routable".to_owned())
@@ -2496,6 +2779,7 @@ impl ProjectionService {
     }
 
     pub fn project_invite_creation(&self, operation: &Operation, invitee: &str) {
+        let _authority_guard = self.history_authority_view_cas_lock.lock();
         let event_ref = projection_event_ref(operation);
         let mut state = self.state.lock();
         let key = (operation.realm_id.as_str().to_owned(), invitee.to_owned());
@@ -2544,6 +2828,7 @@ impl ProjectionService {
         invitee: &str,
         reason: Option<String>,
     ) -> bool {
+        let _authority_guard = self.history_authority_view_cas_lock.lock();
         let mut state = self.state.lock();
         let key = (operation.realm_id.to_string(), invitee.to_owned());
         let Some(previous) = state.members.get(&key).cloned() else {
@@ -2708,6 +2993,222 @@ fn pending_device_revoke_exists(
     })
 }
 
+impl HistoryAuthorityViewCas for ProjectionService {
+    fn with_current_release_authority(
+        &self,
+        attestation: &HistoryReleaseAttestation,
+        mutation: &mut dyn FnMut() -> PersistenceResult<()>,
+    ) -> PersistenceResult<()> {
+        attestation
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let views = &attestation.accepted_authority_views;
+        let mut expected_bases = BTreeMap::<String, Vec<SealId>>::new();
+        let mut insert_basis = |realm_id: &RealmId, leaves: &[SealId]| -> PersistenceResult<()> {
+            let mut leaves = leaves.to_vec();
+            leaves.sort();
+            leaves.dedup();
+            if let Some(existing) = expected_bases.get(realm_id.as_str()) {
+                if existing != &leaves {
+                    return Err(PersistenceError::SchemaViolation(
+                        "history authority locators disagree on a Realm Seal basis".to_owned(),
+                    ));
+                }
+            } else {
+                expected_bases.insert(realm_id.as_str().to_owned(), leaves);
+            }
+            Ok(())
+        };
+        insert_basis(
+            &views.scope_realm.authority_realm_id,
+            &views.scope_realm.seal_basis.leaves,
+        )?;
+        if let Some(circle) = &views.scope_circle {
+            insert_basis(&circle.authority_realm_id, &circle.seal_basis.leaves)?;
+        }
+        if let Some(pcr) = &views.recipient_pcr_device {
+            insert_basis(&pcr.principal_control_realm_id, &pcr.pcr_seal_basis.leaves)?;
+        }
+        if let Some(agent) = &views.recipient_agent_control_evidence {
+            let mut authority_realm_id = None;
+            for leaf in &agent.control_basis.leaves {
+                let seal = self
+                    .seal_store()
+                    .get(leaf)
+                    .map_err(|error| PersistenceError::Internal(error.to_string()))?
+                    .ok_or_else(|| {
+                        PersistenceError::Conflict(
+                            "failed_precondition: Agent authority Seal is unavailable".to_owned(),
+                        )
+                    })?;
+                if authority_realm_id
+                    .as_ref()
+                    .is_some_and(|realm_id: &RealmId| realm_id != &seal.realm_id)
+                {
+                    return Err(PersistenceError::SchemaViolation(
+                        "Agent authority control basis spans multiple Realms".to_owned(),
+                    ));
+                }
+                authority_realm_id = Some(seal.realm_id);
+            }
+            insert_basis(
+                &authority_realm_id.ok_or_else(|| {
+                    PersistenceError::SchemaViolation(
+                        "Agent authority control basis is empty".to_owned(),
+                    )
+                })?,
+                &agent.control_basis.leaves,
+            )?;
+        }
+        for (realm_id, expected) in expected_bases {
+            let realm_id = RealmId::new(realm_id)
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            let mut current = self
+                .seal_store()
+                .list_leaves(&realm_id)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+            current.sort();
+            current.dedup();
+            if current != expected {
+                return Err(PersistenceError::Conflict(
+                    "failed_precondition: history authority Seal basis is no longer current"
+                        .to_owned(),
+                ));
+            }
+        }
+
+        let snapshot = self.snapshot();
+        let incarnation_is_current =
+            |actor_id: &str, incarnation: &AuthorizationIncarnation| -> bool {
+                let realm_id = match &attestation.effective_scope {
+                    HistoryEffectiveScope::Realm { realm_id }
+                    | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
+                };
+                let realm_membership_ref = snapshot
+                    .member(realm_id.as_str(), actor_id)
+                    .filter(|member| member.state == "join")
+                    .and_then(|member| member.membership_event_ref.as_deref());
+                match (&attestation.effective_scope, incarnation) {
+                    (
+                        HistoryEffectiveScope::Realm { .. },
+                        AuthorizationIncarnation::Realm {
+                            realm_membership_incarnation_ref,
+                        },
+                    ) => realm_membership_ref == Some(realm_membership_incarnation_ref.as_str()),
+                    (
+                        HistoryEffectiveScope::Circle { circle_id, .. },
+                        AuthorizationIncarnation::Circle {
+                            realm_membership_incarnation_ref,
+                            circle_membership_incarnation_ref,
+                        },
+                    ) => {
+                        realm_membership_ref == Some(realm_membership_incarnation_ref.as_str())
+                            && snapshot
+                                .circle_membership(circle_id.as_str(), actor_id)
+                                .is_some_and(|membership| membership.state == "active")
+                            && snapshot
+                                .circle_member_join_refs
+                                .get(&(circle_id.as_str().to_owned(), actor_id.to_owned()))
+                                .is_some_and(|event_id| {
+                                    event_id == circle_membership_incarnation_ref.as_str()
+                                })
+                    }
+                    _ => false,
+                }
+            };
+        if !incarnation_is_current(
+            attestation.recipient_actor_id.as_str(),
+            &attestation.recipient_authorization_incarnation,
+        ) || attestation.source_kind
+            == arkret_models_collaboration::history_key::SourceKind::Member
+            && !attestation
+                .source_authorization_incarnation
+                .as_ref()
+                .is_some_and(|incarnation| {
+                    incarnation_is_current(attestation.source_actor_id.as_str(), incarnation)
+                })
+        {
+            return Err(PersistenceError::Conflict(
+                "failed_precondition: history authority incarnation is no longer current"
+                    .to_owned(),
+            ));
+        }
+        let realm_id = views.scope_realm.authority_realm_id.as_str();
+        let realm = snapshot.realm_states.get(realm_id).ok_or_else(|| {
+            PersistenceError::Conflict(
+                "failed_precondition: history authority Realm projection is unavailable".to_owned(),
+            )
+        })?;
+        let live_history_access = snapshot
+            .realm_history_access(realm_id)
+            .ok_or_else(|| {
+                PersistenceError::Conflict(
+                    "failed_precondition: history_access projection is unavailable".to_owned(),
+                )
+            })?
+            .parse()
+            .map_err(|_| {
+                PersistenceError::Internal(
+                    "projected history_access has an invalid protocol value".to_owned(),
+                )
+            })?;
+        let realm_tombstoned = realm.deleted || realm.terminal_state.is_some();
+        let mut live_realm_projection = views.scope_realm.current_gate_projection.clone();
+        live_realm_projection.history_access = live_history_access;
+        live_realm_projection.realm_tombstoned = realm_tombstoned;
+        let live_realm_digest = CurrentGateProjection::Realm(live_realm_projection.clone())
+            .canonical_digest()
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+        if live_realm_projection != views.scope_realm.current_gate_projection
+            || live_realm_digest != views.scope_realm.current_gate_projection_digest
+        {
+            return Err(PersistenceError::Conflict(
+                "failed_precondition: history Realm current-gate projection changed".to_owned(),
+            ));
+        }
+
+        match (&attestation.effective_scope, &views.scope_circle) {
+            (HistoryEffectiveScope::Realm { .. }, None) => {}
+            (HistoryEffectiveScope::Circle { circle_id, .. }, Some(locator)) => {
+                let circle = snapshot.circle(circle_id.as_str()).ok_or_else(|| {
+                    PersistenceError::Conflict(
+                        "failed_precondition: history Circle projection is unavailable".to_owned(),
+                    )
+                })?;
+                let mut live_circle_projection = locator.current_gate_projection.clone();
+                live_circle_projection.history_access =
+                    circle.history_access.parse().map_err(|_| {
+                        PersistenceError::Internal(
+                            "projected Circle history_access has an invalid protocol value"
+                                .to_owned(),
+                        )
+                    })?;
+                live_circle_projection.realm_tombstoned = realm_tombstoned;
+                live_circle_projection.circle_tombstoned = circle.state.as_str() != "active";
+                let live_circle_digest =
+                    CurrentGateProjection::Circle(live_circle_projection.clone())
+                        .canonical_digest()
+                        .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+                if live_circle_projection != locator.current_gate_projection
+                    || live_circle_digest != locator.current_gate_projection_digest
+                {
+                    return Err(PersistenceError::Conflict(
+                        "failed_precondition: history Circle current-gate projection changed"
+                            .to_owned(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(PersistenceError::SchemaViolation(
+                    "history scope authority locator branch mismatch".to_owned(),
+                ));
+            }
+        }
+        mutation()
+    }
+}
+
 #[cfg(test)]
 mod control_governance_health_tests {
     use arkret_state::state::{
@@ -2723,6 +3224,7 @@ mod control_governance_health_tests {
         fn commit_if_frontier(
             &self,
             _seal: &Seal,
+            _digest_suite: arkret_canonical::DigestSuite,
             _expected_store_frontier: &[SealId],
             _new_ops: &[(CellRef, IssuedOp)],
             _covered: &BTreeSet<Hash>,
@@ -2788,6 +3290,7 @@ mod control_governance_health_tests {
             .put_pending_control_event(
                 &event,
                 &ControlProposalIngress::AcklessSelfPrincipal(ackless_class()),
+                arkret_canonical::DigestSuite::Sha256,
             )
             .unwrap();
         let realm_id = event.realm_id.clone();
@@ -2806,7 +3309,11 @@ mod control_governance_health_tests {
         );
 
         let unrelated = ackless_event("unrelated");
-        let unrelated_digest = arkret_state::state::control_event_digest(&unrelated).unwrap();
+        let unrelated_digest = arkret_state::state::control_event_digest(
+            &unrelated,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
         let unrelated_error = service
             .control_governance_health_with_ackless_authorities(
                 &realm_id,
@@ -2821,7 +3328,11 @@ mod control_governance_health_tests {
                 .contains("missing its Control Proposal Ack")
         );
 
-        let digest = arkret_state::state::control_event_digest(&event).unwrap();
+        let digest = arkret_state::state::control_event_digest(
+            &event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
         let health = service
             .control_governance_health_with_ackless_authorities(
                 &realm_id,

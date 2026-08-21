@@ -6,9 +6,6 @@ use arkret_models_collaboration::account_lifecycle::{
     AccountStatusPublicationRequestBody, AccountStatusPublicationStatus,
     AccountStatusReceiptedPublication, UnsignedAccountStatusReceipt,
 };
-use arkret_models_collaboration::direct_conversation_repair::{
-    DirectConversationRepairEnqueueOutcome, DirectConversationRepairRelayRequest,
-};
 use arkret_models_collaboration::event_query::{
     EventsQueryPostRequestBody, PeerEventsDescribeRequestBody, PeerEventsFrontierRequestBody,
 };
@@ -22,7 +19,7 @@ use arkret_models_collaboration::principal_operations::{
     PcrGenesisSubmitOutcome, PcrGenesisSubmitRequestBody,
 };
 use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
-use arkret_wire::{CbaProofBundle, ServiceKind, SignalRelayOutcome, SignalRelayRequest};
+use arkret_wire::{ServiceKind, SignalRelayOutcome, SignalRelayRequest};
 use chrono::{DateTime, Duration, Utc};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -75,57 +72,12 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("events/frontier").query(peer_events_frontier))
         .push(Router::with_path("principal-genesis").post(peer_principal_genesis))
         .push(Router::with_path("account-status").post(peer_account_status_submit))
-        .push(
-            Router::with_path("direct-conversations/repair-relay")
-                .post(peer_direct_conversation_repair_relay),
-        )
         .push(Router::with_path("snapshot/head").get(peer_snapshot_head))
         .push(
             Router::with_path("device-revocations/check")
                 .post(super::peer_device_revocations::check_device_revocation_gate),
         )
         .push(Router::with_path("signal").post(peer_signal_relay))
-}
-
-#[salvo::oapi::endpoint(
-    operation_id = "ak.peer.direct_conversation.command.repair_relay",
-    tags("events")
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "ak.peer.direct_conversation.command.repair_relay")
-)]
-async fn peer_direct_conversation_repair_relay(
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<DirectConversationRepairEnqueueOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    validate_peer_request(state, req, true).await?;
-    let source_service_id = source_service_id_from_request(req)?;
-    let idempotency_key = required_header(req, "idempotency-key")?;
-    let request = parse_json_body::<DirectConversationRepairRelayRequest>(
-        req,
-        "invalid ak.peer.direct_conversation.command.repair_relay request body",
-    )
-    .await?;
-    if idempotency_key != request.request_id.as_str() {
-        return Err(cross_domain_replay(
-            "Idempotency-Key header does not match repair request_id",
-        ));
-    }
-    let outcome = crate::routing::identity::account::repair::accept_peer_relay(
-        state,
-        &source_service_id,
-        request,
-    )
-    .await?;
-    crate::routing::events::test_chaos::pause_at(
-        state,
-        crate::routing::events::test_chaos::POST_DIRECT_REPAIR_COMMIT_PRE_RESPONSE,
-        outcome.request_id.as_str(),
-    )
-    .await;
-    json_ok(outcome)
 }
 
 #[salvo::oapi::endpoint(
@@ -831,6 +783,11 @@ async fn peer_events_resolve(
     request
         .validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    if request.history_traversal_access.is_some() && request.include_payload == Some(false) {
+        return Err(AppError::param_invalid(
+            "history traversal requires the complete accepted Event payload",
+        ));
+    }
     let source_service_id = source_service_id_from_request(req)?;
     for digest in &request.event_digests {
         if !is_valid_hash_digest(digest.as_str()) {
@@ -850,6 +807,74 @@ async fn peer_events_resolve(
         .iter()
         .map(|digest| digest.as_str())
         .collect::<BTreeSet<_>>();
+    let source_service_core_id = DidCoreId::new(source_service_id.clone()).map_err(|error| {
+        AppError::param_invalid(format!("source-service-id is not a core_id: {error}"))
+    })?;
+    let history = state.persistence().governance_history_service();
+    if let Some(access) = request.history_traversal_access.clone() {
+        let retained = history
+            .resolve_peer_retained_events(
+                &request.realm_id,
+                access,
+                &source_service_core_id,
+                chrono::Utc::now(),
+            )
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("peer history traversal access: {error}"))
+            })?;
+        let mut events = Vec::new();
+        let mut found_ids = BTreeSet::new();
+        let mut found_digests = BTreeSet::new();
+        for event in retained {
+            let digest_suite = arkret::signed_event_digest_claim(&event)
+                .and_then(|digest| digest.digest_suite().map_err(Into::into))
+                .map_err(|error| AppError::internal(error.to_string()))?;
+            let event_digest = arkret_wire::Hash::new(
+                event
+                    .event_digest_with_digest_suite(digest_suite)
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+            )
+            .map_err(|error| AppError::internal(error.to_string()))?;
+            let id_match = requested_ids.contains(event.event_id.as_str());
+            let digest_match = requested_digests.contains(event_digest.as_str());
+            if !id_match && !digest_match {
+                continue;
+            }
+            found_ids.insert(event.event_id.as_str().to_owned());
+            found_digests.insert(event_digest.as_str().to_owned());
+            events.push(event);
+        }
+        events.sort_by(|left, right| left.event_id.as_str().cmp(right.event_id.as_str()));
+        let outcome = PeerEventsResolveOutcome {
+            events,
+            missing_event_ids: request
+                .event_ids
+                .iter()
+                .filter(|event_id| !found_ids.contains(event_id.as_str()))
+                .cloned()
+                .collect(),
+            missing_event_digests: request
+                .event_digests
+                .iter()
+                .filter(|digest| !found_digests.contains(digest.as_str()))
+                .cloned()
+                .collect(),
+        };
+        outcome
+            .validate_structural()
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        let response_bytes = arkret_canonical::canonical_json_bytes(&outcome)
+            .map_err(|error| AppError::internal(format!("peer resolve response: {error}")))?;
+        let budget = request.max_response_bytes.unwrap_or(8 * 1024 * 1024) as usize;
+        if response_bytes.len() > budget {
+            return Err(AppError::new(
+                soland_http::error::ErrorCode::LimitExceeded,
+                "peer dependency response exceeds max_response_bytes",
+            ));
+        }
+        return json_ok(outcome);
+    }
     let records = state
         .event_queries()
         .canonical_events()
@@ -892,36 +917,10 @@ async fn peer_events_resolve(
             missing_event_digests.push(digest.clone());
         }
     }
-    let mut cba_proof_bundles = Vec::new();
-    let mut missing_seal_refs = Vec::new();
-    for seal_ref in &request.seal_refs {
-        if !authz.frontier_visible_for_realm(request.realm_id.as_str()) {
-            missing_seal_refs.push(seal_ref.clone());
-            continue;
-        }
-        match peer_cba_bundle_for_seal(state, seal_ref) {
-            Ok(Some(bundle))
-                if bundle
-                    .seals
-                    .iter()
-                    .all(|seal| seal.realm_id == request.realm_id) =>
-            {
-                cba_proof_bundles.push(bundle);
-            }
-            _ => missing_seal_refs.push(seal_ref.clone()),
-        }
-    }
-    cba_proof_bundles.sort_by(|left, right| {
-        left.target_seal_ref
-            .as_str()
-            .cmp(right.target_seal_ref.as_str())
-    });
     let outcome = PeerEventsResolveOutcome {
         events,
-        cba_proof_bundles,
         missing_event_ids,
         missing_event_digests,
-        missing_seal_refs,
     };
     outcome
         .validate_structural()
@@ -936,40 +935,6 @@ async fn peer_events_resolve(
         ));
     }
     json_ok(outcome)
-}
-
-fn peer_cba_bundle_for_seal(
-    state: &AppState,
-    target_seal_ref: &arkret_identifiers::SealId,
-) -> Result<Option<CbaProofBundle>, AppError> {
-    let mut pending = vec![target_seal_ref.clone()];
-    let mut by_id = BTreeMap::new();
-    while let Some(seal_id) = pending.pop() {
-        if by_id.contains_key(&seal_id) {
-            continue;
-        }
-        let Some(seal) = state.projections().seal_by_id(&seal_id).map_err(|error| {
-            AppError::internal(format!("peer resolve read Seal {seal_id}: {error}"))
-        })?
-        else {
-            return Ok(None);
-        };
-        pending.extend(seal.predecessor_refs.iter().cloned());
-        by_id.insert(seal_id, seal);
-    }
-    if by_id.len() > arkret_wire::cba_proof_bundle::MAX_BUNDLE_SEALS {
-        return Err(AppError::new(
-            soland_http::error::ErrorCode::LimitExceeded,
-            "peer Seal prerequisite closure exceeds the v1 limit",
-        ));
-    }
-    Ok(Some(CbaProofBundle {
-        target_seal_ref: target_seal_ref.clone(),
-        seals: by_id.into_values().collect(),
-        control_moves: Vec::new(),
-        inclusion_proofs: Vec::new(),
-        availability_proofs: Vec::new(),
-    }))
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.frontier", tags("events"))]
@@ -1242,7 +1207,7 @@ struct PendingPeerInvite {
 #[derive(Clone, Debug)]
 struct PeerCircleState {
     realm_id: String,
-    history_visibility: String,
+    history_access: String,
     active: bool,
 }
 
@@ -1269,7 +1234,7 @@ impl PeerReadAuthz {
                     circle_id.clone(),
                     PeerCircleState {
                         realm_id: circle.realm_id.clone(),
-                        history_visibility: circle.history_visibility.clone(),
+                        history_access: circle.history_access.clone(),
                         active: circle.state.as_str() == "active",
                     },
                 )
@@ -1428,7 +1393,7 @@ impl PeerReadAuthz {
     ) -> bool {
         self.realm_members.get(realm_id).is_some_and(|members| {
             members.values().any(|member| {
-                history_visibility_allows(meta.history_visibility.as_str(), member, event_time)
+                history_access_allows(meta.history_access.as_str(), member, event_time)
             })
         })
     }
@@ -1453,11 +1418,8 @@ impl PeerReadAuthz {
         };
         realm_members.iter().any(|(actor, realm_member)| {
             circle_members.get(actor).is_some_and(|circle_member| {
-                history_visibility_allows(
-                    circle.history_visibility.as_str(),
-                    circle_member,
-                    event_time,
-                ) && history_visibility_allows("joined", realm_member, event_time)
+                history_access_allows(circle.history_access.as_str(), circle_member, event_time)
+                    && history_access_allows("since_join", realm_member, event_time)
             })
         })
     }
@@ -1466,9 +1428,6 @@ impl PeerReadAuthz {
         let Some(meta) = self.realm_meta.get(realm_id) else {
             return false;
         };
-        if meta.history_visibility == "world_readable" {
-            return true;
-        }
         if !meta
             .plaintext_visible_services
             .contains(self.source_service_id.as_str())
@@ -1629,15 +1588,14 @@ impl PeerReadAuthz {
     }
 }
 
-fn history_visibility_allows(
-    history_visibility: &str,
+fn history_access_allows(
+    history_access: &str,
     member: &PeerMembership,
     event_time: DateTime<Utc>,
 ) -> bool {
-    match history_visibility {
-        "world_readable" | "shared" => true,
-        "joined" => event_time >= member.joined_at,
-        "invited" => event_time >= member.invited_at.unwrap_or(member.joined_at),
+    match history_access {
+        "all_history_for_current_members" => true,
+        "since_join" => event_time >= member.joined_at,
         _ => false,
     }
 }
@@ -1646,9 +1604,7 @@ fn record_requires_private_plaintext_visibility(
     record: &CanonicalEventRecord,
     meta: &RealmMetaRecord,
 ) -> bool {
-    if meta.history_visibility == "world_readable" {
-        return false;
-    }
+    let _ = meta;
     let Some(payload) = record_payload(record) else {
         return true;
     };
@@ -2042,6 +1998,20 @@ pub(in crate::routing) async fn peer_route_visibility(
     }))
 }
 
+pub(in crate::routing) async fn peer_realm_visibility(
+    state: &AppState,
+    source_service_id: &str,
+    realm_id: &str,
+) -> Result<bool, AppError> {
+    let records = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| AppError::internal(format!("peer Realm visibility: {error}")))?;
+    let authz = PeerReadAuthz::build(state, source_service_id, &records).await?;
+    Ok(authz.frontier_visible_for_realm(realm_id))
+}
+
 fn json_contains_string(value: &Value, expected: &str) -> bool {
     match value {
         Value::String(value) => value == expected,
@@ -2055,7 +2025,7 @@ fn json_contains_string(value: &Value, expected: &str) -> bool {
     }
 }
 
-pub(in crate::routing::events) fn source_service_id_from_request(
+pub(in crate::routing) fn source_service_id_from_request(
     req: &Request,
 ) -> Result<String, AppError> {
     required_header(req, HEADER_SOURCE_SERVICE_ID)

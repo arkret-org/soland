@@ -220,12 +220,11 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
                 "encryption_profile": "mls_rfc9420",
                 "security_class": "standard",
-                "notary_profile": "single_did",
                 "digest_algorithm": "sha256",
-                "notary": {
-                    "kind": "single_did",
-                    "actor_id": "ak:did_core:web:alice.example"
-                }
+                "notary": serde_json::to_value(crate::test_single_signer_notary(
+                    "did:web:alice.example",
+                    32,
+                )).unwrap()
             }}),
             valid: true,
         },

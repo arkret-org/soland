@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_identifiers::{Hash, RealmId, SealId};
 use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
 use arkret_state::state::{SealEffect, SealReject, StoreError, control_event_set_root};
-use arkret_wire::{Event, NotarySig, Seal, SealKind};
+use arkret_wire::{Event, NotarySig, Seal};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -60,6 +60,7 @@ fn app_error_from_seal_reject(reject: SealReject) -> AppError {
         | SealReject::MissingSealBasis { .. }
         | SealReject::SealBasisOutsideClosure { .. }
         | SealReject::ControlEventSetRootMismatch { .. }
+        | SealReject::CompletenessRootMismatch { .. }
         | SealReject::CoveredSetMismatch
         | SealReject::StateRootMismatch { .. } => ErrorCode::SchemaViolation,
         SealReject::Store(_) => ErrorCode::InternalError,
@@ -412,7 +413,11 @@ fn first_seal_signer_matches(
     signer_device_id == required_device_id && signer_public_key == required_public_key
 }
 
-fn verify_device_seal_signature(seal: &Seal, device_public_key: &str) -> Result<(), AppError> {
+fn verify_device_seal_signature(
+    seal: &Seal,
+    device_public_key: &str,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<(), AppError> {
     let NotarySig::Single(signature) = &seal.notary_signature else {
         return Err(device_generation_fenced(
             "B-model Seal requires one identifiable current-generation device signature",
@@ -421,7 +426,7 @@ fn verify_device_seal_signature(seal: &Seal, device_public_key: &str) -> Result<
     let canonical_bytes = seal
         .canonical_bytes_for_id()
         .map_err(|error| seal_admission_error(format!("Seal canonical bytes: {error}")))?;
-    let expected_digest = arkret_canonical::sha256_digest(&canonical_bytes);
+    let expected_digest = arkret_canonical::digest(digest_suite, &canonical_bytes);
     if signature.payload_digest.as_str() != expected_digest {
         return Err(device_generation_fenced(
             "B-model device Seal signature payload_digest mismatch",
@@ -481,7 +486,11 @@ async fn try_apply_device_generation_event_seal(
     state: &AppState,
     seal: &Seal,
 ) -> Result<Option<SealEffect>, AppError> {
-    seal.validate_id()
+    let digest_suites = state
+        .projections()
+        .seal_digest_suites(seal)
+        .map_err(app_error_from_seal_reject)?;
+    seal.validate_id(digest_suites.seal_digest_suite)
         .map_err(|error| seal_admission_error(format!("Seal id: {error}")))?;
     seal.validate_structural()
         .map_err(|error| seal_admission_error(format!("Seal structure: {error}")))?;
@@ -559,8 +568,8 @@ async fn try_apply_device_generation_event_seal(
             "B-model Event Seal covered_event_digests must equal predecessor coverage plus delta",
         ));
     }
-    let expected_control_root =
-        control_event_set_root(&target).map_err(app_error_from_seal_reject)?;
+    let expected_control_root = control_event_set_root(&target, digest_suites.seal_digest_suite)
+        .map_err(app_error_from_seal_reject)?;
     let mut completeness_events = Vec::with_capacity(context.records.len());
     let mut available_digests = BTreeSet::new();
     for record in &context.records {
@@ -570,12 +579,16 @@ async fn try_apply_device_generation_event_seal(
                 record.event_id
             ))
         })?;
-        let parsed_digest = Hash::new(event.event_digest().map_err(|error| {
-            seal_admission_error(format!(
-                "stored B-model Event {} digest failed: {error}",
-                record.event_id
-            ))
-        })?)
+        let parsed_digest = Hash::new(
+            event
+                .event_digest_with_digest_suite(record.digest_suite)
+                .map_err(|error| {
+                    seal_admission_error(format!(
+                        "stored B-model Event {} digest failed: {error}",
+                        record.event_id
+                    ))
+                })?,
+        )
         .map_err(|error| {
             seal_admission_error(format!(
                 "stored B-model Event {} digest is invalid: {error}",
@@ -589,7 +602,7 @@ async fn try_apply_device_generation_event_seal(
             )));
         }
         available_digests.insert(parsed_digest);
-        completeness_events.push(event);
+        completeness_events.push((event, record.digest_suite));
     }
     let missing = target
         .difference(&available_digests)
@@ -612,9 +625,12 @@ async fn try_apply_device_generation_event_seal(
             missing.join(",")
         )));
     }
-    let expected_completeness_root =
-        arkret_state::control_event_completeness_root(&completeness_events, &target)
-            .map_err(app_error_from_seal_reject)?;
+    let expected_completeness_root = arkret_state::control_event_completeness_root(
+        &completeness_events,
+        &target,
+        digest_suites.seal_digest_suite,
+    )
+    .map_err(app_error_from_seal_reject)?;
     if seal.control_event_set_root != expected_control_root
         || seal.completeness_root != expected_completeness_root
     {
@@ -773,7 +789,7 @@ async fn try_apply_device_generation_event_seal(
             "first principal-control Seal must be signed by the bootstrap device",
         ));
     }
-    verify_device_seal_signature(seal, signer_public_key)?;
+    verify_device_seal_signature(seal, signer_public_key, digest_suites.seal_digest_suite)?;
 
     let quarantined =
         crate::routing::identity::device_generation::quarantined_generation_event_digests(
@@ -847,12 +863,27 @@ async fn try_apply_device_generation_event_seal(
                 record.event_id
             ))
         })?;
-        let recomputed = event.event_digest().map_err(|error| {
-            seal_admission_error(format!(
-                "stored Event {} digest failed: {error}",
+        let event_digest_suite = if seal.predecessor_refs.is_empty()
+            && event.kind == arkret_wire::EventKind::RealmCreate
+        {
+            arkret_canonical::DigestSuite::Sha256
+        } else {
+            digest_suites.event_digest_suite
+        };
+        if record.digest_suite != event_digest_suite {
+            return Err(seal_admission_error(format!(
+                "stored Event {} digest suite differs from the verified Seal context",
                 record.event_id
-            ))
-        })?;
+            )));
+        }
+        let recomputed = event
+            .event_digest_with_digest_suite(event_digest_suite)
+            .map_err(|error| {
+                seal_admission_error(format!(
+                    "stored Event {} digest failed: {error}",
+                    record.event_id
+                ))
+            })?;
         if recomputed != record.canonical_digest || recomputed != digest.as_str() {
             return Err(seal_admission_error(format!(
                 "stored Event {} canonical digest mismatch",
@@ -866,14 +897,10 @@ async fn try_apply_device_generation_event_seal(
         }
         // v1 has no producer `effects[]`: whether an Event is control material
         // is decided by its registered contract, not by an envelope array.
-        let projects_writes = arkret_schema::project_registered_cell_writes(
-            &event,
-            state
-                .projections()
-                .realm_digest_suite(seal.realm_id.as_str()),
-        )
-        .map(|writes| !writes.is_empty())
-        .unwrap_or(false);
+        let projects_writes =
+            arkret_schema::project_registered_cell_writes(&event, event_digest_suite)
+                .map(|writes| !writes.is_empty())
+                .unwrap_or(false);
         if !projects_writes && !anchor_event_ids.contains(&record.event_id) {
             return Err(seal_admission_error(
                 "B-model Event Seal delta contains a non-control Event",
@@ -947,6 +974,7 @@ async fn try_apply_device_generation_event_seal(
                 digest,
                 &accumulated,
                 invite_accept_from.as_deref(),
+                event_digest_suite,
             )?,
         );
     }
@@ -976,6 +1004,11 @@ async fn try_apply_device_generation_event_seal(
 
     match state.projections().commit_event_seal_if_frontier(
         seal,
+        state
+            .projections()
+            .seal_digest_suites(seal)
+            .map_err(app_error_from_seal_reject)?
+            .seal_digest_suite,
         &context.cas_frontier_refs,
         &new_ops,
         &target,
@@ -1003,7 +1036,11 @@ pub(crate) async fn apply_managed_agent_event_seal(
     agent_record: &soland_services::identity::AgentPairingState,
     session_device_id: &str,
 ) -> Result<SealEffect, AppError> {
-    seal.validate_id()
+    let digest_suites = state
+        .projections()
+        .seal_digest_suites(seal)
+        .map_err(app_error_from_seal_reject)?;
+    seal.validate_id(digest_suites.seal_digest_suite)
         .map_err(|error| seal_admission_error(format!("managed Agent PCR Seal id: {error}")))?;
     seal.validate_structural().map_err(|error| {
         seal_admission_error(format!("managed Agent PCR Seal structure: {error}"))
@@ -1017,8 +1054,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
     // proves compaction semantics below by requiring exact cumulative coverage,
     // roots, state, and delta, then normalizes the accepted local value so
     // runtime DAG consumers can classify it without trusting an unsigned field.
-    let mut accepted_seal = seal.clone();
-    accepted_seal.kind = SealKind::Compaction;
+    let accepted_seal = seal.clone();
     let seal = &accepted_seal;
     if seal.realm_id.as_str() != agent_record.principal_control_realm_id {
         return Err(seal_admission_error(
@@ -1037,13 +1073,12 @@ pub(crate) async fn apply_managed_agent_event_seal(
             seal.realm_id.as_str(),
         );
     let _guard = admission_lock.lock().await;
-    if let Some(mut existing) = state.projections().seal_by_id(&seal.id).map_err(|error| {
+    if let Some(existing) = state.projections().seal_by_id(&seal.id).map_err(|error| {
         AppError::new(
             ErrorCode::InternalError,
             format!("managed Agent PCR Seal lookup failed: {error}"),
         )
     })? {
-        existing.kind = SealKind::Compaction;
         if existing != *seal {
             return Err(seal_admission_error(
                 "managed Agent PCR Seal id already exists with different signature material",
@@ -1083,6 +1118,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
             )
         })?;
     let mut events = Vec::with_capacity(records.len());
+    let mut event_digest_suites = BTreeMap::new();
     for record in records {
         let event = serde_json::from_value::<Event>(record.envelope).map_err(|error| {
             seal_admission_error(format!(
@@ -1090,22 +1126,31 @@ pub(crate) async fn apply_managed_agent_event_seal(
                 record.event_id
             ))
         })?;
-        let digest = event.event_digest().map_err(|error| {
-            seal_admission_error(format!(
-                "stored managed Agent PCR Event {} digest failed: {error}",
-                event.event_id
-            ))
-        })?;
+        let digest = event
+            .event_digest_with_digest_suite(record.digest_suite)
+            .map_err(|error| {
+                seal_admission_error(format!(
+                    "stored managed Agent PCR Event {} digest failed: {error}",
+                    event.event_id
+                ))
+            })?;
         if digest != record.canonical_digest {
             return Err(seal_admission_error(format!(
                 "stored managed Agent PCR Event {} canonical digest mismatch",
                 event.event_id
             )));
         }
+        event_digest_suites.insert(event.event_id.clone(), record.digest_suite);
         events.push(event);
     }
     let material = arkret_bootstrap::materialize_managed_agent_pcr_control(&events, &|event| {
-        state.projections().project_cell_writes(event)
+        let event_digest_suite = event_digest_suites
+            .get(&event.event_id)
+            .copied()
+            .ok_or_else(|| "managed Agent PCR Event has no frozen digest suite".to_owned())?;
+        state
+            .projections()
+            .project_cell_writes_with_digest_suite(event, event_digest_suite)
     })
     .map_err(|error| {
         let kinds = events
@@ -1165,11 +1210,28 @@ pub(crate) async fn apply_managed_agent_event_seal(
             "managed Agent PCR Seal coverage differs from canonical Event history",
         ));
     }
-    let expected_control_root =
-        control_event_set_root(&target).map_err(app_error_from_seal_reject)?;
-    let expected_completeness_root =
-        arkret_state::control_event_completeness_root(&events, &target)
-            .map_err(app_error_from_seal_reject)?;
+    let expected_control_root = control_event_set_root(&target, digest_suites.seal_digest_suite)
+        .map_err(app_error_from_seal_reject)?;
+    let completeness_events = events
+        .iter()
+        .map(|event| {
+            event_digest_suites
+                .get(&event.event_id)
+                .copied()
+                .map(|digest_suite| (event.clone(), digest_suite))
+                .ok_or_else(|| {
+                    seal_admission_error(
+                        "managed Agent PCR Event has no frozen completeness digest suite",
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let expected_completeness_root = arkret_state::control_event_completeness_root(
+        &completeness_events,
+        &target,
+        digest_suites.seal_digest_suite,
+    )
+    .map_err(app_error_from_seal_reject)?;
     if seal.control_event_set_root != expected_control_root
         || seal.completeness_root != expected_completeness_root
     {
@@ -1272,7 +1334,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
         .get("device_public_key")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| device_generation_fenced("controller device signing key is missing"))?;
-    verify_device_seal_signature(seal, public_key)?;
+    verify_device_seal_signature(seal, public_key, digest_suites.seal_digest_suite)?;
 
     let delta = seal.delta.iter().cloned().collect::<BTreeSet<_>>();
     let new_ops = material
@@ -1281,10 +1343,17 @@ pub(crate) async fn apply_managed_agent_event_seal(
         .filter(|(_, issued)| delta.contains(&issued.op.move_id))
         .cloned()
         .collect::<Vec<_>>();
-    match state
-        .projections()
-        .commit_event_seal_if_frontier(seal, &leaves, &new_ops, &target)
-    {
+    match state.projections().commit_event_seal_if_frontier(
+        seal,
+        state
+            .projections()
+            .seal_digest_suites(seal)
+            .map_err(app_error_from_seal_reject)?
+            .seal_digest_suite,
+        &leaves,
+        &new_ops,
+        &target,
+    ) {
         Ok(true) => {}
         Ok(false) => {
             return Err(seal_admission_error(
@@ -1364,6 +1433,11 @@ pub(crate) async fn apply_inbound_seal(
 }
 
 async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), AppError> {
+    let digest_suite = state
+        .projections()
+        .seal_digest_suites(seal)
+        .map_err(app_error_from_seal_reject)?
+        .seal_digest_suite;
     let notary = crate::notary::NotaryWorker::for_service(state.service_id().clone())
         .notary_value_for_seal(state, seal)
         .map_err(|error| {
@@ -1379,158 +1453,53 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
         )
     })?;
     let signatures = match (&notary, &seal.notary_signature) {
-        (
-            arkret_wire::notary::NotaryValue::SingleDid { actor_id, .. },
-            NotarySig::Single(signature),
-        )
-        | (
-            arkret_wire::notary::NotaryValue::Mixed { actor_id, .. },
-            NotarySig::Single(signature),
-        ) => {
-            let signer = arkret_identity::verification_method_did(&signature.verification_method)
-                .map_err(|error| {
-                AppError::new(
-                    ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-                    format!("Seal signer DID is invalid: {error}"),
-                )
-            })?;
-            let signer_core = arkret_wire::project_full_id_to_core_id(&signer)
-                .map(arkret_wire::DidCoreId::from)
-                .map_err(|error| {
-                    AppError::new(
-                        ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-                        error.to_string(),
-                    )
-                })?;
-            if signer_core != *actor_id {
-                return Err(AppError::new(
-                    ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-                    "Seal signer is not the current primary notary".to_owned(),
-                ));
-            }
-            vec![(signature, signer)]
+        (arkret_wire::notary::NotaryValue::SingleSigner { .. }, NotarySig::Single(signature))
+        | (arkret_wire::notary::NotaryValue::OpenSet { .. }, NotarySig::Single(signature))
+        | (arkret_wire::notary::NotaryValue::Mixed { .. }, NotarySig::Single(signature)) => {
+            std::slice::from_ref(signature)
         }
-        (arkret_wire::notary::NotaryValue::OpenSet { members }, NotarySig::Single(signature)) => {
-            let signer = arkret_identity::verification_method_did(&signature.verification_method)
-                .map_err(|error| {
-                AppError::new(
-                    ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-                    format!("Seal signer DID is invalid: {error}"),
-                )
-            })?;
-            let signer_core = arkret_wire::project_full_id_to_core_id(&signer)
-                .map(arkret_wire::DidCoreId::from)
-                .map_err(|error| {
-                    AppError::new(
-                        ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-                        error.to_string(),
-                    )
-                })?;
-            if !members.contains(&signer_core) {
-                return Err(AppError::new(
-                    ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-                    "Seal signer is outside the current open notary set".to_owned(),
-                ));
-            }
-            vec![(signature, signer)]
-        }
-        (arkret_wire::notary::NotaryValue::OpenSet { members }, NotarySig::Multi(multi)) => {
-            let mut signatures = Vec::with_capacity(multi.signatures.len());
-            for signature in &multi.signatures {
-                let signer =
-                    arkret_identity::verification_method_did(&signature.verification_method)
-                        .map_err(|error| {
-                            AppError::new(
-                                ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-                                format!("Seal signer DID is invalid: {error}"),
-                            )
-                        })?;
-                let signer_core = arkret_wire::project_full_id_to_core_id(&signer)
-                    .map(arkret_wire::DidCoreId::from)
-                    .map_err(|error| {
-                        AppError::new(
-                            ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-                            error.to_string(),
-                        )
-                    })?;
-                if !members.contains(&signer_core) {
-                    return Err(AppError::new(
-                        ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-                        "Seal signer is outside the current open notary set".to_owned(),
-                    ));
-                }
-                signatures.push((signature, signer));
-            }
-            signatures
-        }
-        (
-            arkret_wire::notary::NotaryValue::Threshold {
-                threshold, members, ..
-            },
-            NotarySig::Multi(multi),
-        ) => {
-            let mut signatures = Vec::with_capacity(multi.signatures.len());
-            let mut distinct_signers = BTreeSet::new();
-            for signature in &multi.signatures {
-                let signer =
-                    arkret_identity::verification_method_did(&signature.verification_method)
-                        .map_err(|error| {
-                            AppError::new(
-                                ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-                                format!("Seal signer DID is invalid: {error}"),
-                            )
-                        })?;
-                let signer_core = arkret_wire::project_full_id_to_core_id(&signer)
-                    .map(arkret_wire::DidCoreId::from)
-                    .map_err(|error| {
-                        AppError::new(
-                            ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-                            error.to_string(),
-                        )
-                    })?;
-                if !members.contains(&signer_core) {
-                    return Err(AppError::new(
-                        ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-                        "threshold Seal signer is outside the current committee".to_owned(),
-                    ));
-                }
-                if !distinct_signers.insert(signer.clone()) {
-                    return Err(AppError::new(
-                        ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-                        "threshold Seal repeats a committee signer".to_owned(),
-                    ));
-                }
-                signatures.push((signature, signer));
-            }
-            if distinct_signers.len() < usize::try_from(*threshold).unwrap_or(usize::MAX) {
-                return Err(AppError::new(
-                    ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-                    "threshold Seal does not carry enough distinct committee signatures".to_owned(),
-                ));
-            }
-            signatures
-        }
-        (arkret_wire::notary::NotaryValue::Threshold { .. }, NotarySig::Threshold(_)) => {
-            return Err(AppError::new(
-                ErrorCode::UnsupportedProfile,
-                "opaque threshold Seal proofs have no configured verifier".to_owned(),
-            ));
+        (arkret_wire::notary::NotaryValue::Threshold { .. }, NotarySig::Multi(multi))
+        | (arkret_wire::notary::NotaryValue::Mixed { .. }, NotarySig::Multi(multi)) => {
+            multi.signatures.as_slice()
         }
         _ => {
             return Err(AppError::new(
                 ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-                "Seal signature shape does not match the current notary profile".to_owned(),
+                "Seal signature shape does not match the frozen notary value".to_owned(),
             ));
         }
     };
-    for (signature, signer) in signatures {
-        crate::routing::events::event_log::governance_proof::verify_authoritative_event_seal_signature(
-            state,
+    let methods = signatures
+        .iter()
+        .map(|signature| signature.verification_method.clone())
+        .collect::<BTreeSet<_>>();
+    if !notary.proposal_quorum_met(&methods) {
+        return Err(AppError::new(
+            ErrorCode::DirectoryGovernanceProofSignatureInvalid,
+            "Seal signatures do not satisfy the frozen notary quorum".to_owned(),
+        ));
+    }
+    for signature in signatures {
+        let descriptor = notary
+            .signer_descriptor(&signature.verification_method)
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::DirectoryGovernanceProofSignatureInvalid,
+                    "Seal signature method is absent from the frozen notary value".to_owned(),
+                )
+            })?;
+        arkret_signatures::verify_frozen_notary_signature(
             signature,
-            signer.as_str(),
+            descriptor,
             &canonical_bytes,
+            digest_suite,
         )
-        .await?;
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::DirectoryGovernanceProofSignatureInvalid,
+                error.to_string(),
+            )
+        })?;
     }
     Ok(())
 }
@@ -1776,7 +1745,11 @@ mod seal_delta_tests {
                 &wrong_signer.verifying_key().to_bytes(),
             )
         );
-        let empty_root = arkret_state::state::compute_state_root(&BTreeMap::new()).unwrap();
+        let empty_root = arkret_state::state::compute_state_root(
+            &BTreeMap::new(),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
         let placeholder_id = SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap();
         let placeholder_digest =
             arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
@@ -1794,29 +1767,26 @@ mod seal_delta_tests {
             notary_seq: 0,
             data_view_root: None,
             data_event_set_root: None,
-            availability_root: None,
-            coverage_scope: None,
+            availability_receipt_digests: Vec::new(),
             covered_event_digests: Vec::new(),
             previous_state_root: None,
             previous_digest_algorithm: None,
-            notary_signature: NotarySig::Single(arkret_wire::PayloadSignature {
-                extra: Default::default(),
+            notary_signature: NotarySig::Single(arkret_wire::SealSignature {
                 verification_method: arkret_wire::DidUrl::new(
                     "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
                 )
                 .unwrap(),
                 payload_digest: placeholder_digest,
-                created_at: chrono::Utc::now(),
                 jws: "eyJhbGciOiJFZDI1NTE5In0..AA".to_owned(),
             }),
             sealed_at: chrono::Utc::now(),
             hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
-            kind: arkret_wire::SealKind::Normal,
         };
         let canonical_bytes = seal.canonical_bytes_for_id().unwrap();
-        seal.id = Seal::id_from_canonical_bytes(&canonical_bytes).unwrap();
-        seal.notary_signature = NotarySig::Single(arkret_wire::PayloadSignature {
-            extra: Default::default(),
+        seal.id =
+            Seal::id_from_canonical_bytes(&canonical_bytes, arkret_canonical::DigestSuite::Sha256)
+                .unwrap();
+        seal.notary_signature = NotarySig::Single(arkret_wire::SealSignature {
             verification_method: arkret_wire::DidUrl::new(
                 "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
             )
@@ -1825,15 +1795,26 @@ mod seal_delta_tests {
                 &canonical_bytes,
             ))
             .unwrap(),
-            created_at: chrono::Utc::now(),
             jws: signer.sign_detached_jws(&canonical_bytes),
         });
 
-        verify_device_seal_signature(&seal, &public_key).unwrap();
-        assert!(verify_device_seal_signature(&seal, &wrong_public_key).is_err());
+        verify_device_seal_signature(&seal, &public_key, arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
         assert!(
-            verify_device_seal_signature(&seal, public_key.strip_prefix("did:key:").unwrap(),)
-                .is_err()
+            verify_device_seal_signature(
+                &seal,
+                &wrong_public_key,
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .is_err()
+        );
+        assert!(
+            verify_device_seal_signature(
+                &seal,
+                public_key.strip_prefix("did:key:").unwrap(),
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .is_err()
         );
     }
 
@@ -1955,12 +1936,19 @@ mod seal_delta_tests {
             issued_at,
         )
         .unwrap();
-        let event_digest = Hash::new(event.event_digest().unwrap()).unwrap();
+        let event_digest = Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap();
         let proof = |verification_method: &str| arkret_wire::primitives::Proof {
             kind: "detached_jws".to_owned(),
             verification_method: arkret_wire::DidUrl::new(verification_method.to_owned())
                 .expect("fixture verification method is a DID URL"),
             event_digest: event_digest.clone(),
+            signer_resolution_evidence_ref: None,
+            signer_resolution_evidence_digest: None,
             created_at: issued_at,
             domain: None,
             audience: None,

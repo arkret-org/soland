@@ -13,6 +13,8 @@ struct MultisigPendingRow {
     seal_id: String,
     #[diesel(sql_type = Text)]
     realm_id: String,
+    #[diesel(sql_type = Text)]
+    digest_suite: String,
     #[diesel(sql_type = Integer)]
     threshold_k: i32,
     #[diesel(sql_type = Integer)]
@@ -34,27 +36,28 @@ struct MultisigPendingRow {
     #[diesel(sql_type = BigInt)]
     claim_seq: i64,
 }
-impl From<MultisigPendingRow> for MultisigPendingRecord {
-    fn from(row: MultisigPendingRow) -> Self {
-        let partials = match row.partials {
-            Value::Object(map) => map.into_iter().collect(),
-            _ => BTreeMap::new(),
-        };
-        Self {
-            seal_id: row.seal_id,
-            realm_id: row.realm_id,
-            threshold_k: row.threshold_k as u32,
-            threshold_n: row.threshold_n as u32,
-            members: row.members,
-            canonical_b64: row.canonical_b64,
-            partials,
-            created_at: row.created_at,
-            expires_at: row.expires_at,
-            claimed_by_node_id: row.claimed_by_node_id,
-            claimed_until: row.claimed_until,
-            claim_seq: row.claim_seq,
-        }
-    }
+fn multisig_pending_record(row: MultisigPendingRow) -> PersistenceResult<MultisigPendingRecord> {
+    let partials = match row.partials {
+        Value::Object(map) => map.into_iter().collect(),
+        _ => BTreeMap::new(),
+    };
+    Ok(MultisigPendingRecord {
+        seal_id: row.seal_id,
+        realm_id: row.realm_id,
+        digest_suite: arkret_canonical::digest_suite(&row.digest_suite).map_err(|error| {
+            PersistenceError::Internal(format!("stored multisig digest_suite is invalid: {error}"))
+        })?,
+        threshold_k: row.threshold_k as u32,
+        threshold_n: row.threshold_n as u32,
+        members: row.members,
+        canonical_b64: row.canonical_b64,
+        partials,
+        created_at: row.created_at,
+        expires_at: row.expires_at,
+        claimed_by_node_id: row.claimed_by_node_id,
+        claimed_until: row.claimed_until,
+        claim_seq: row.claim_seq,
+    })
 }
 #[async_trait]
 impl MultisigPendingStore for PgMultisigPendingStore {
@@ -65,10 +68,11 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         crate::realm_identity::ensure_realm_pk(&mut conn, &record.realm_id).await?;
         sql_query(
             "INSERT INTO multisig_pending \
-             (seal_id, realm_id, threshold_k, threshold_n, members, canonical_b64, partials, created_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             (seal_id, realm_id, digest_suite, threshold_k, threshold_n, members, canonical_b64, partials, created_at, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
              ON CONFLICT (seal_id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
+                digest_suite = EXCLUDED.digest_suite, \
                 threshold_k = EXCLUDED.threshold_k, \
                 threshold_n = EXCLUDED.threshold_n, \
                 members = EXCLUDED.members, \
@@ -77,6 +81,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         )
         .bind::<Text, _>(&record.seal_id)
         .bind::<Text, _>(&record.realm_id)
+        .bind::<Text, _>(record.digest_suite.as_str())
         .bind::<Integer, _>(record.threshold_k as i32)
         .bind::<Integer, _>(record.threshold_n as i32)
         .bind::<Array<Text>, _>(&record.members)
@@ -93,8 +98,8 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "SELECT seal_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
+        let row = sql_query(
+            "SELECT seal_id, realm_id, digest_suite, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
              FROM multisig_pending WHERE seal_id = $1",
         )
@@ -102,8 +107,8 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         .get_result::<MultisigPendingRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(MultisigPendingRecord::from))
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?;
+        row.map(multisig_pending_record).transpose()
     }
 
     async fn add_partial(
@@ -141,8 +146,8 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "SELECT seal_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
+        let rows = sql_query(
+            "SELECT seal_id, realm_id, digest_suite, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
              FROM multisig_pending WHERE realm_id = $1 \
              ORDER BY created_at ASC",
@@ -150,8 +155,8 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         .bind::<Text, _>(realm_id)
         .load::<MultisigPendingRow>(&mut *conn)
         .await
-        .map(|rows| rows.into_iter().map(MultisigPendingRecord::from).collect())
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?;
+        rows.into_iter().map(multisig_pending_record).collect()
     }
 
     async fn delete(&self, seal_id: &str) -> PersistenceResult<bool> {
@@ -170,15 +175,15 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "SELECT seal_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
+        let rows = sql_query(
+            "SELECT seal_id, realm_id, digest_suite, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
              FROM multisig_pending ORDER BY created_at ASC",
         )
         .load::<MultisigPendingRow>(&mut *conn)
         .await
-        .map(|rows| rows.into_iter().map(MultisigPendingRecord::from).collect())
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?;
+        rows.into_iter().map(multisig_pending_record).collect()
     }
 
     async fn try_claim(

@@ -13,7 +13,6 @@ pub(crate) use agent_participation::{
     agent_participation_ceiling_record, validate_agent_participation_ceiling,
     validate_agent_reply_participation,
 };
-pub(super) use governance::is_direct_conversation_realm;
 use governance::*;
 #[cfg(test)]
 pub(crate) async fn validate_member_state_policy_for_test(
@@ -61,12 +60,7 @@ pub(crate) fn validate_trusted_sidecar_create_operation(
 }
 
 pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, &'static str) {
-    if message == arkret_wire::ErrorCode::MLS_GENERATION_PROPOSAL_FANOUT_EXCEEDED {
-        (
-            salvo::http::StatusCode::CONFLICT,
-            arkret_wire::ErrorCode::MLS_GENERATION_PROPOSAL_FANOUT_EXCEEDED,
-        )
-    } else if message == "agent_pcr_recovery_not_ready" {
+    if message == "agent_pcr_recovery_not_ready" {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
             "agent_pcr_recovery_not_ready",
@@ -77,7 +71,7 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         || message.starts_with("message_redact_window")
         || message.starts_with("direct_conversation_")
         || message == arkret_wire::ReasonCode::REACTION_SCOPE_MISMATCH
-        || message == arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+        || message == arkret_wire::ReasonCode::HISTORY_ACCESS_REQUIRES_HISTORY_CAPABLE_SCHEME
     {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
@@ -111,23 +105,6 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::UNPROCESSABLE_ENTITY,
             arkret_wire::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED,
         )
-    } else if matches!(
-        message,
-        "read_receipt_visibility_combination_invalid"
-            | "read_receipt_forced_public_world_readable_forbidden"
-    ) {
-        (
-            salvo::http::StatusCode::FORBIDDEN,
-            match message {
-                "read_receipt_visibility_combination_invalid" => {
-                    "read_receipt_visibility_combination_invalid"
-                }
-                "read_receipt_forced_public_world_readable_forbidden" => {
-                    "read_receipt_forced_public_world_readable_forbidden"
-                }
-                _ => "capability_denied",
-            },
-        )
     } else if message == "sidecar_create_denied" {
         (salvo::http::StatusCode::FORBIDDEN, "sidecar_create_denied")
     } else if message == "circle_manage_capability_required" {
@@ -149,8 +126,7 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         )
     } else if matches!(
         message,
-        "history_sharing_policy_missing"
-            | "history_not_visible"
+        "history_not_visible"
             | "not_member"
             | "policy_denied"
             | "device_revoked"
@@ -159,7 +135,6 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         (
             salvo::http::StatusCode::FORBIDDEN,
             match message {
-                "history_sharing_policy_missing" => "history_sharing_policy_missing",
                 "history_not_visible" => "history_not_visible",
                 "not_member" => "not_member",
                 "policy_denied" => "policy_denied",
@@ -195,8 +170,8 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
 /// Per-Event admission commits each batch member before admitting the next,
 /// so re-running the per-operation gates on not-yet-committed siblings would
 /// judge them against a state their own in-batch predecessors have not
-/// landed. Only the batch-aware validators (history_visibility ×
-/// content_scheme, restricted history sharing, read-receipt combinations,
+/// landed. Only the batch-aware validators (history_access × content_scheme,
+/// read-receipt combinations,
 /// accountability profile) receive the full sibling slice; every other gate
 /// sees exactly the Operation being admitted.
 pub(crate) async fn validate_single_operation_policy_in_batch(
@@ -303,10 +278,6 @@ async fn validate_one_operation_policy(
             )?;
         }
         validate_direct_conversation_realm_policy(state, operation)?;
-        crate::routing::identity::account::validate_direct_mls_generation_operation(
-            state, operation,
-        )
-        .await?;
         crate::routing::identity::account::validate_direct_binding_operation(state, operation)
             .await?;
         validate_circle_create_policy(state, operation).await?;
@@ -320,11 +291,8 @@ async fn validate_one_operation_policy(
         validate_realm_policy_server_policy(state, operation).await?;
         validate_set_default_strand_policy(state, operation).await?;
         validate_realm_organization_policy(state, operation).await?;
-        validate_history_visibility_policy(state, operation).await?;
-        validate_history_visibility_content_scheme_policy(state, operations, operation).await?;
-        validate_restricted_history_sharing_policy_present(state, operations, operation).await?;
+        validate_history_access_content_scheme_policy(state, operations, operation).await?;
         validate_read_receipt_policy_combination_write(state, operations, operation).await?;
-        validate_realm_key_share_policy(state, operation).await?;
         validate_realm_moderation_policy(state, operation).await?;
         validate_audience_mention_operation_policy(state, operation).await?;
         validate_message_edit_redact_window_policy(state, operation).await?;
@@ -446,7 +414,7 @@ mod tests {
                 },
                 "directory_visibility": "members",
                 "join_rule": "invite",
-                "history_visibility": "joined",
+                "history_access": "since_join",
                 "content_encryption_floor": "e2ee_required",
                 "metadata_encryption_floor": "e2ee_required",
                 "encryption_profile": "mls_rfc9420",

@@ -7,6 +7,7 @@ pub mod delivery;
 pub mod events;
 pub mod federation;
 pub mod governance;
+pub mod governance_history;
 pub mod hydration;
 pub mod identity;
 pub mod jobs;
@@ -144,6 +145,7 @@ mod boundary_tests {
             include_str!("events.rs"),
             include_str!("federation.rs"),
             include_str!("governance.rs"),
+            include_str!("governance_history.rs"),
             include_str!("hydration.rs"),
             include_str!("identity.rs"),
             include_str!("jobs.rs"),

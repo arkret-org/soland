@@ -1,27 +1,34 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
+use arkret_models_collaboration::governance_dependencies::{
+    GovernanceDependency, MAX_GOVERNANCE_DEPENDENCY_SELECTORS,
+    governance_artifact_selectors_for_snapshot, governance_attester_evidence_selectors,
+};
+use arkret_models_collaboration::objects::realm::DurabilityMode;
 use arkret_models_crypto::{
-    MaterializedMlsGovernanceProofBundle, MlsGovernanceControlStateLeaf,
-    MlsGovernanceControlStateValue, MlsGovernanceProofBundle, MlsGovernanceProofRequestBody,
-    build_mls_governance_proof_chunks, is_mls_membership_frontier_component,
+    MlsContentScheme, MlsDurabilityPolicy, MlsGovernanceProofBundle, MlsGovernanceProofRequestBody,
+    MlsSecurityFrontierLeaf,
 };
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
+use arkret_state::mls_governance_proof::{
+    MlsGovernanceVerificationCheckpoint, MlsGroupGenesisBinding,
+};
 use arkret_state::state::{BottomMode, compute_state_root, control_event_set_root};
 #[cfg(test)]
 use arkret_wire::cba::LatticeOp;
 use arkret_wire::cba::LatticeOpType;
-use arkret_wire::{CORE_REDUCER_PROFILE, CellId, Event, NotarySig, ScopeRef as GovernanceScope};
+use arkret_wire::{Event, NotarySig, ScopeRef as GovernanceScope};
 use salvo::oapi::extract::JsonBody;
 
 use super::*;
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.events.read.mls_governance_proof",
-    tags("events")
+    operation_id = "ak.self.seals.read.mls_governance_proof",
+    tags("seals")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.mls_governance_proof"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.seals.read.mls_governance_proof"))]
 pub(super) async fn mls_governance_proof(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -34,14 +41,15 @@ pub(super) async fn mls_governance_proof(
     request
         .validate()
         .map_err(|error| AppError::param_invalid(format!("invalid proof request: {error}")))?;
-    if request.reducer_profile != CORE_REDUCER_PROFILE {
-        return Err(AppError::new(
-            ErrorCode::UnsupportedProfile,
-            "requested MLS governance reducer profile is unsupported",
-        ));
-    }
+    super::super::require_agent_session_scope(
+        &session,
+        arkret_wire::ServiceOperationId::SELF_SEALS_READ_MLS_GOVERNANCE_PROOF,
+    )?;
 
-    let realm_value = request.realm_id.as_str();
+    let realm_id = request.effective_scope.realm_id_opt().ok_or_else(|| {
+        AppError::param_invalid("MLS governance proof scope does not name a Realm")
+    })?;
+    let realm_value = realm_id.as_str();
     let own_pcr = state
         .projections()
         .snapshot()
@@ -61,26 +69,7 @@ pub(super) async fn mls_governance_proof(
         return Err(AppError::not_found("realm not found"));
     }
 
-    let materialized = materialize_governance_proof(state, &request).await?;
-    let chunks = build_mls_governance_proof_chunks(&request, &materialized).map_err(|error| {
-        let error_code = error.error_code();
-        let message = error.to_string();
-        match error_code {
-            Some(arkret_wire::ErrorCode::StateMismatch) => AppError::new(
-                ErrorCode::FrontierUnavailable,
-                "requested MLS governance proof manifest is no longer available",
-            ),
-            Some(arkret_wire::ErrorCode::MlsGovernanceProofBoundsExceeded) => {
-                AppError::new(ErrorCode::MlsGovernanceProofBoundsExceeded, message)
-            }
-            _ => proof_state_error(message),
-        }
-    })?;
-    let chunk = chunks
-        .get(request.chunk_index as usize)
-        .cloned()
-        .ok_or_else(|| AppError::param_invalid("chunk_index is outside chunk_manifest"))?;
-    json_ok(chunk)
+    json_ok(materialize_governance_frontier(state, &request).await?)
 }
 
 fn scope_visible_to_session(
@@ -99,100 +88,12 @@ fn scope_visible_to_session(
 }
 
 struct MaterializedRealmControl {
-    events: Vec<Event>,
-    joined: BTreeMap<CellRef, CellState>,
     seal_view: crate::notary::MaterializedEventSealView,
-    covered_event_digests: Vec<Hash>,
 }
 
-async fn backfill_authoritative_event_seals(
-    state: &AppState,
-    realm_id: &RealmId,
+fn authoritative_notary(
     joined: &BTreeMap<CellRef, CellState>,
-    event_ops: &[(CellRef, IssuedOp)],
-    available_control_digests: &BTreeSet<Hash>,
-    control_events: &[Event],
-) -> Result<bool, AppError> {
-    if !state.config().development_mode {
-        return Ok(false);
-    }
-    let authority_dids = authoritative_notary_dids(realm_id, joined)?;
-    let Some(peer) = crate::routing::federation::federation::configured_peer_targets(state)
-        .into_iter()
-        .find(|peer| {
-            peer.did != *state.service_id() && authority_dids.iter().any(|did| did == &peer.did)
-        })
-    else {
-        return Ok(false);
-    };
-    let mut url = reqwest::Url::parse(&format!(
-        "{}/_soland/peer/federation/seals",
-        peer.url.trim_end_matches('/')
-    ))
-    .map_err(|error| {
-        AppError::new(
-            ErrorCode::FrontierUnavailable,
-            format!("authoritative Seal backfill URL is invalid: {error}"),
-        )
-    })?;
-    url.query_pairs_mut()
-        .append_pair("realm_id", realm_id.as_str());
-    let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
-        url.as_str(),
-        "authoritative Event Seal backfill",
-        true,
-        std::time::Duration::from_secs(30),
-    )
-    .map_err(|error| {
-        AppError::new(
-            ErrorCode::FrontierUnavailable,
-            format!("authoritative Seal backfill target is unavailable: {error}"),
-        )
-    })?;
-    let response = client.get(url).send().await.map_err(|error| {
-        AppError::new(
-            ErrorCode::FrontierUnavailable,
-            format!("authoritative Seal backfill request failed: {error}"),
-        )
-    })?;
-    if !response.status().is_success() {
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
-            format!(
-                "authoritative Seal backfill returned HTTP {}",
-                response.status()
-            ),
-        ));
-    }
-    let outcome = response
-        .json::<crate::routing::federation::federation::FederationSealsOutcome>()
-        .await
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
-                format!("authoritative Seal backfill response is invalid: {error}"),
-            )
-        })?;
-    if outcome.seals.is_empty() {
-        return Ok(false);
-    }
-    apply_authoritative_event_seal_path(
-        state,
-        realm_id,
-        &authority_dids,
-        event_ops,
-        available_control_digests,
-        control_events,
-        &outcome.seals,
-    )
-    .await?;
-    Ok(true)
-}
-
-fn authoritative_notary_dids(
-    _realm_id: &RealmId,
-    joined: &BTreeMap<CellRef, CellState>,
-) -> Result<Vec<String>, AppError> {
+) -> Result<Option<arkret_wire::notary::NotaryValue>, AppError> {
     // `joined` is the portable control-state map used for Seal state-root
     // verification, so its keys must remain byte-identical to signed Event
     // effects. Realm-singleton cells therefore use the canonical `null` wire
@@ -201,47 +102,34 @@ fn authoritative_notary_dids(
     let notary_cell =
         CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned()).map_err(proof_state_error)?;
     let Some(CellState::Value(value)) = joined.get(&notary_cell) else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     let notary = serde_json::from_value::<arkret_wire::notary::NotaryValue>(value.clone())
         .map_err(|error| {
             proof_state_error(format!("invalid materialized Realm notary: {error}"))
         })?;
-    let authority_dids = match notary {
-        arkret_wire::notary::NotaryValue::SingleDid { actor_id, .. } => {
-            vec![actor_id.to_string()]
-        }
-        arkret_wire::notary::NotaryValue::Threshold { members, .. }
-        | arkret_wire::notary::NotaryValue::OpenSet { members } => {
-            members.into_iter().map(|did| did.to_string()).collect()
-        }
-        arkret_wire::notary::NotaryValue::Mixed {
-            actor_id,
-            recovery_members,
-        } => std::iter::once(actor_id.to_string())
-            .chain(
-                recovery_members
-                    .into_iter()
-                    .map(|member| member.to_string()),
-            )
-            .collect(),
-    };
-    Ok(authority_dids)
+    notary.validate().map_err(proof_state_error)?;
+    Ok(Some(notary))
 }
 
 async fn apply_authoritative_event_seal_path(
     state: &AppState,
     realm_id: &RealmId,
-    authority_dids: &[String],
+    authoritative_notary: &arkret_wire::notary::NotaryValue,
     event_ops: &[(CellRef, IssuedOp)],
     available_control_digests: &BTreeSet<Hash>,
-    control_events: &[Event],
+    control_events: &[(Event, arkret_canonical::DigestSuite)],
     seals: &[arkret_wire::Seal],
 ) -> Result<(), AppError> {
     for seal in seals {
-        seal.validate_id().map_err(|error| {
-            proof_state_error(format!("authoritative Event Seal id is invalid: {error}"))
-        })?;
+        let digest_suites = state
+            .projections()
+            .seal_digest_suites(seal)
+            .map_err(proof_state_error)?;
+        seal.validate_id(digest_suites.seal_digest_suite)
+            .map_err(|error| {
+                proof_state_error(format!("authoritative Event Seal id is invalid: {error}"))
+            })?;
         seal.validate_structural().map_err(|error| {
             proof_state_error(format!(
                 "authoritative Event Seal structure is invalid: {error}"
@@ -314,10 +202,15 @@ async fn apply_authoritative_event_seal_path(
                 "authoritative Event Seal coverage differs from predecessor coverage plus delta",
             ));
         }
-        let expected_control_root = control_event_set_root(&target).map_err(proof_state_error)?;
-        let expected_completeness_root =
-            arkret_state::control_event_completeness_root(control_events, &target)
+        let expected_control_root =
+            control_event_set_root(&target, digest_suites.seal_digest_suite)
                 .map_err(proof_state_error)?;
+        let expected_completeness_root = arkret_state::control_event_completeness_root(
+            control_events,
+            &target,
+            digest_suites.seal_digest_suite,
+        )
+        .map_err(proof_state_error)?;
         if seal.control_event_set_root != expected_control_root
             || seal.completeness_root != expected_completeness_root
         {
@@ -340,7 +233,9 @@ async fn apply_authoritative_event_seal_path(
             .map_err(|error| {
                 proof_state_error(format!("resolve authoritative Event Seal state: {error}"))
             })?;
-        let expected_state_root = compute_state_root(&target_state).map_err(proof_state_error)?;
+        let expected_state_root =
+            compute_state_root(&target_state, digest_suites.seal_digest_suite)
+                .map_err(proof_state_error)?;
         if seal.state_root != expected_state_root {
             return Err(proof_state_error(format!(
                 "authoritative Event Seal state_root mismatch: submitted {}, expected {}",
@@ -375,33 +270,36 @@ async fn apply_authoritative_event_seal_path(
         let signatures = match &seal.notary_signature {
             NotarySig::Single(signature) => std::slice::from_ref(signature),
             NotarySig::Multi(multi) => multi.signatures.as_slice(),
-            NotarySig::Threshold(_) => {
-                return Err(AppError::new(
-                    ErrorCode::UnsupportedProfile,
-                    "threshold authoritative Event Seal backfill is unsupported",
-                ));
-            }
         };
         if signatures.is_empty() {
             return Err(proof_state_error(
                 "authoritative Event Seal has no signatures",
             ));
         }
+        let signature_methods = signatures
+            .iter()
+            .map(|signature| signature.verification_method.clone())
+            .collect::<BTreeSet<_>>();
+        if !authoritative_notary.proposal_quorum_met(&signature_methods) {
+            return Err(proof_state_error(
+                "Event Seal signatures do not satisfy the frozen notary quorum",
+            ));
+        }
         for signature in signatures {
-            let signer = arkret_identity::verification_method_did(&signature.verification_method)
-                .map_err(proof_state_error)?;
-            if !authority_dids.iter().any(|did| did == signer.as_str()) {
-                return Err(proof_state_error(format!(
-                    "Event Seal signer {signer} is not authorized by the Realm notary cell"
-                )));
-            }
-            verify_authoritative_event_seal_signature(
-                state,
+            let descriptor = authoritative_notary
+                .signer_descriptor(&signature.verification_method)
+                .ok_or_else(|| {
+                    proof_state_error(
+                        "Event Seal signature method is absent from the frozen notary authority",
+                    )
+                })?;
+            arkret_signatures::verify_frozen_notary_signature(
                 signature,
-                signer.as_str(),
+                descriptor,
                 &canonical_bytes,
+                digest_suites.seal_digest_suite,
             )
-            .await?;
+            .map_err(proof_state_error)?;
         }
 
         let delta = seal.delta.iter().cloned().collect::<BTreeSet<_>>();
@@ -410,10 +308,17 @@ async fn apply_authoritative_event_seal_path(
             .filter(|(_, issued)| delta.contains(&issued.op.move_id))
             .cloned()
             .collect::<Vec<_>>();
-        match state
-            .projections()
-            .commit_event_seal_if_frontier(seal, &leaves, &new_ops, &target)
-        {
+        match state.projections().commit_event_seal_if_frontier(
+            seal,
+            state
+                .projections()
+                .seal_digest_suites(seal)
+                .map_err(proof_state_error)?
+                .seal_digest_suite,
+            &leaves,
+            &new_ops,
+            &target,
+        ) {
             Ok(true) => {}
             Ok(false) => {
                 return Err(proof_state_error(
@@ -430,57 +335,6 @@ async fn apply_authoritative_event_seal_path(
     Ok(())
 }
 
-pub(crate) async fn verify_authoritative_event_seal_signature(
-    state: &AppState,
-    signature: &arkret_wire::PayloadSignature,
-    signer: &str,
-    canonical_bytes: &[u8],
-) -> Result<(), AppError> {
-    let expected_method = format!("{signer}#notary-key");
-    if signature.verification_method != expected_method {
-        return Err(proof_state_error(
-            "authoritative Event Seal signature is not bound to the notary key",
-        ));
-    }
-    let expected_digest =
-        Hash::new(arkret_canonical::sha256_digest(canonical_bytes)).map_err(proof_state_error)?;
-    if signature.payload_digest != expected_digest {
-        return Err(proof_state_error(
-            "authoritative Event Seal signature payload_digest mismatch",
-        ));
-    }
-
-    let cached_key = state
-        .federation_peer_verification_method_key(&expected_method)
-        .or_else(|| state.federation_peer_verifying_key(signer));
-    let result = if let Some(key) = cached_key {
-        arkret_signatures::Ed25519DetachedJwsVerifier::new()
-            .verify_detached_jws(
-                &signature.jws,
-                canonical_bytes,
-                &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-                    bytes: key.to_bytes().to_vec(),
-                },
-            )
-            .map_err(|error| error.to_string())
-    } else {
-        crate::jws_verify::verify_did_controlled_jws_async(
-            canonical_bytes,
-            &signature.jws,
-            &signature.verification_method,
-            signer,
-            state,
-        )
-        .await
-    };
-    result.map_err(|error| {
-        AppError::new(
-            ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-            format!("verify authoritative Event Seal signature: {error}"),
-        )
-    })
-}
-
 async fn materialize_realm_control(
     state: &AppState,
     realm_id: &RealmId,
@@ -493,27 +347,6 @@ async fn materialize_realm_control_with_transported_seals(
     realm_id: &RealmId,
     transported_seals: Option<&[arkret_wire::Seal]>,
 ) -> Result<MaterializedRealmControl, AppError> {
-    let stats = state
-        .event_queries()
-        .realm_event_stats(realm_id.as_str())
-        .await
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
-                format!("canonical Event bounds preflight unavailable: {error}"),
-            )
-        })?;
-    if stats.count
-        > arkret_models_crypto::mls_governance_proof::MLS_GOVERNANCE_MAX_COVERED_EVENT_DIGESTS
-            as u64
-        || stats.canonical_bytes
-            > arkret_models_crypto::mls_governance_proof::MLS_GOVERNANCE_MAX_TOTAL_ITEM_BYTES as u64
-    {
-        return Err(AppError::new(
-            ErrorCode::MlsGovernanceProofBoundsExceeded,
-            "Realm Event history exceeds MLS governance proof materialization bounds",
-        ));
-    }
     let realm_records = state
         .event_queries()
         .realm_events_newest_first(realm_id.as_str())
@@ -711,7 +544,7 @@ async fn materialize_realm_control_with_transported_seals(
         // array on the envelope.
         let projects_writes = state
             .projections()
-            .project_accepted_cell_writes(&event)
+            .project_accepted_cell_writes_with_digest_suite(&event, record.digest_suite)
             .map(|writes| !writes.is_empty())
             .unwrap_or(false);
         if (!projects_writes
@@ -721,12 +554,14 @@ async fn materialize_realm_control_with_transported_seals(
         {
             continue;
         }
-        let digest = event.event_digest().map_err(|error| {
-            AppError::new(
-                ErrorCode::StateMismatch,
-                format!("stored Event {} digest failed: {error}", event.event_id),
-            )
-        })?;
+        let digest = event
+            .event_digest_with_digest_suite(record.digest_suite)
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::StateMismatch,
+                    format!("stored Event {} digest failed: {error}", event.event_id),
+                )
+            })?;
         if digest != record.canonical_digest {
             return Err(AppError::new(
                 ErrorCode::StateMismatch,
@@ -798,6 +633,7 @@ async fn materialize_realm_control_with_transported_seals(
             &move_id,
             &ops_by_cell,
             invite_accept_from.as_deref(),
+            record.digest_suite,
         )? {
             ops_by_cell
                 .entry(cell.clone())
@@ -826,20 +662,23 @@ async fn materialize_realm_control_with_transported_seals(
                 .any(|digest| digest.as_str() == record.canonical_digest)
         })
         .map(|record| {
-            serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
-                AppError::new(
-                    ErrorCode::StateMismatch,
-                    format!(
-                        "covered Event {} is not a canonical envelope: {error}",
-                        record.event_id
-                    ),
-                )
-            })
+            let event =
+                serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
+                    AppError::new(
+                        ErrorCode::StateMismatch,
+                        format!(
+                            "covered Event {} is not a canonical envelope: {error}",
+                            record.event_id
+                        ),
+                    )
+                })?;
+            Ok::<_, AppError>((event, record.digest_suite))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
     let joined = join_control_state_batches(state, realm_id, &ops_by_cell, &covered)?;
-    let state_root = compute_state_root(&joined).map_err(|error| {
+    let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
+    let state_root = compute_state_root(&joined, digest_suite).map_err(|error| {
         AppError::new(
             ErrorCode::StateMismatch,
             format!("governance state root failed: {error}"),
@@ -847,14 +686,16 @@ async fn materialize_realm_control_with_transported_seals(
     })?;
     let covered_event_digests = covered.iter().cloned().collect::<Vec<_>>();
     let completeness_root =
-        arkret_state::control_event_completeness_root(&completeness_events, &covered)
+        arkret_state::control_event_completeness_root(&completeness_events, &covered, digest_suite)
             .map_err(proof_state_error)?;
     if let Some(seals) = transported_seals {
-        let authority_dids = authoritative_notary_dids(realm_id, &joined)?;
+        let authoritative_notary = authoritative_notary(&joined)?.ok_or_else(|| {
+            proof_state_error("transported Event Seal path has no frozen notary authority")
+        })?;
         apply_authoritative_event_seal_path(
             state,
             realm_id,
-            &authority_dids,
+            &authoritative_notary,
             &event_ops,
             &covered,
             &completeness_events,
@@ -862,7 +703,7 @@ async fn materialize_realm_control_with_transported_seals(
         )
         .await?;
     }
-    let mut seal_view = crate::notary::ensure_materialized_event_seal(
+    let seal_view = crate::notary::ensure_materialized_event_seal(
         state,
         realm_id,
         &covered_event_digests,
@@ -872,28 +713,6 @@ async fn materialize_realm_control_with_transported_seals(
         device_generation_seal_required,
         generation_fence.as_ref(),
     );
-    if matches!(seal_view, Err(crate::notary::NotaryError::NotAuthorized(_)))
-        && backfill_authoritative_event_seals(
-            state,
-            realm_id,
-            &joined,
-            &event_ops,
-            &covered,
-            &completeness_events,
-        )
-        .await?
-    {
-        seal_view = crate::notary::ensure_materialized_event_seal(
-            state,
-            realm_id,
-            &covered_event_digests,
-            &state_root,
-            &completeness_root,
-            &event_ops,
-            device_generation_seal_required,
-            generation_fence.as_ref(),
-        );
-    }
     let seal_view = seal_view.map_err(|error| {
         AppError::new(
             ErrorCode::FrontierUnavailable,
@@ -901,12 +720,7 @@ async fn materialize_realm_control_with_transported_seals(
         )
     })?;
 
-    Ok(MaterializedRealmControl {
-        events,
-        joined,
-        seal_view,
-        covered_event_digests,
-    })
+    Ok(MaterializedRealmControl { seal_view })
 }
 
 fn materialize_managed_agent_realm_control(
@@ -914,7 +728,9 @@ fn materialize_managed_agent_realm_control(
     realm_id: &RealmId,
     records: &[soland_services::events::CanonicalEventRecord],
 ) -> Result<MaterializedRealmControl, AppError> {
+    let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
     let mut events = Vec::with_capacity(records.len());
+    let mut event_digest_suites = BTreeMap::new();
     for record in records {
         let event = serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
             AppError::new(
@@ -940,15 +756,17 @@ fn materialize_managed_agent_realm_control(
                 ),
             ));
         }
-        let digest = event.event_digest().map_err(|error| {
-            AppError::new(
-                ErrorCode::StateMismatch,
-                format!(
-                    "stored managed Agent PCR Event {} digest failed: {error}",
-                    record.event_id
-                ),
-            )
-        })?;
+        let digest = event
+            .event_digest_with_digest_suite(record.digest_suite)
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::StateMismatch,
+                    format!(
+                        "stored managed Agent PCR Event {} digest failed: {error}",
+                        record.event_id
+                    ),
+                )
+            })?;
         if digest != record.canonical_digest {
             return Err(AppError::new(
                 ErrorCode::StateMismatch,
@@ -958,10 +776,18 @@ fn materialize_managed_agent_realm_control(
                 ),
             ));
         }
+        event_digest_suites.insert(event.event_id.clone(), record.digest_suite);
         events.push(event);
     }
     let material = arkret_bootstrap::materialize_managed_agent_pcr_control(&events, &|event| {
-        state.projections().project_accepted_cell_writes(event)
+        let event_digest_suite = event_digest_suites
+            .get(&event.event_id)
+            .copied()
+            .ok_or_else(|| "managed Agent PCR Event has no frozen digest suite".to_owned())?;
+        state
+            .projections()
+            .project_accepted_cell_writes_with_digest_suite(event, event_digest_suite)
+            .map_err(|error| error.to_string())
     })
     .map_err(|error| {
         AppError::new(
@@ -980,9 +806,26 @@ fn materialize_managed_agent_realm_control(
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
-    let completeness_root =
-        arkret_state::control_event_completeness_root(&events, &managed_covered)
-            .map_err(proof_state_error)?;
+    let completeness_events = events
+        .iter()
+        .map(|event| {
+            event_digest_suites
+                .get(&event.event_id)
+                .copied()
+                .map(|event_digest_suite| (event.clone(), event_digest_suite))
+                .ok_or_else(|| {
+                    proof_state_error(
+                        "managed Agent PCR Event has no frozen completeness digest suite",
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let completeness_root = arkret_state::control_event_completeness_root(
+        &completeness_events,
+        &managed_covered,
+        digest_suite,
+    )
+    .map_err(proof_state_error)?;
     let seal_view = crate::notary::ensure_materialized_event_seal(
         state,
         realm_id,
@@ -999,12 +842,7 @@ fn materialize_managed_agent_realm_control(
             format!("accepted managed Agent PCR Seal materialization failed: {error}"),
         )
     })?;
-    Ok(MaterializedRealmControl {
-        events,
-        joined: material.joined,
-        seal_view,
-        covered_event_digests: material.covered_event_digests,
-    })
+    Ok(MaterializedRealmControl { seal_view })
 }
 
 pub(crate) async fn materialize_realm_event_seal(
@@ -1026,119 +864,495 @@ pub(crate) async fn accept_federated_event_seal_path(
     Ok(())
 }
 
-async fn materialize_governance_proof(
+async fn materialize_governance_frontier(
     state: &AppState,
     request: &MlsGovernanceProofRequestBody,
-) -> Result<MaterializedMlsGovernanceProofBundle, AppError> {
-    let MaterializedRealmControl {
-        events,
-        joined,
-        seal_view,
-        covered_event_digests,
-    } = materialize_realm_control(state, &request.realm_id).await?;
-    let control_state = joined
-        .iter()
-        .filter_map(|(cell, state)| match state {
-            CellState::Value(value) => Some(MlsGovernanceControlStateLeaf {
-                cell: cell.clone(),
-                state: MlsGovernanceControlStateValue {
-                    value: value.clone(),
-                },
-            }),
-            CellState::Bottom(_) => None,
-        })
-        .collect::<Vec<_>>();
-    let mut frontier_events = events
-        .into_iter()
-        .filter(|event| {
-            if event.scope_ref == request.effective_scope {
-                return true;
-            }
-            let arkret_wire::ScopeRef::Realm { realm_id } = &request.effective_scope else {
-                return false;
-            };
-            event.kind == arkret_wire::EventKind::RealmCreate
-                && event.scope_ref == arkret_wire::ScopeRef::RealmGenesis
-                && event.realm_id == *realm_id
-                && event.event_id == realm_id.event_id()
-        })
-        .filter(|event| {
-            // The touched cells come from the registered contract, not from a
-            // producer array; only the cell targets matter here, so the
-            // unresolved projection is enough.
-            state
-                .projections()
-                .project_accepted_cell_writes(event)
-                .map(|writes| {
-                    writes.iter().any(|write| {
-                        CellId::from_ref(&write.cell)
-                            .map(|cell| is_mls_membership_frontier_component(cell.component()))
-                            .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(false)
-        })
-        .collect::<Vec<_>>();
-    frontier_events.sort_by(|left, right| left.event_id.as_str().cmp(right.event_id.as_str()));
-    if frontier_events.is_empty() {
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
-            "Realm/scope has no materialized membership frontier Event",
-        ));
-    }
-    let anchor_position = seal_view
-        .seal_path
-        .iter()
-        .position(|seal| seal.id == request.trusted_anchor_seal_id)
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::MlsGovernanceAnchorUnreachable,
-                "requested trusted anchor is not in the accepted Seal ancestry",
+) -> Result<MlsGovernanceProofBundle, AppError> {
+    let leaves = load_group_frontier_leaves(state, request).await?;
+    let checkpoint = load_governance_checkpoint(state, request).await?;
+    let group_genesis_binding = group_genesis_binding(state, &checkpoint.realm_id)?;
+    arkret::materialize_mls_governance_frontier(
+        request,
+        &checkpoint,
+        &group_genesis_binding,
+        &leaves,
+        |event, digest_suite, evidence, dependencies| {
+            arkret::verify_native_agent_historical_event_key(
+                event,
+                digest_suite,
+                evidence,
+                dependencies,
+                |trust_request| verify_native_agent_history_trust(state, trust_request),
             )
-        })?;
-    let seal_path = seal_view.seal_path[anchor_position..].to_vec();
-    let mut prior = BTreeSet::new();
-    for seal in &seal_path {
-        if seal.id != request.trusted_anchor_seal_id
-            && seal.predecessor_refs.iter().any(|predecessor| {
-                predecessor != &request.trusted_anchor_seal_id && !prior.contains(predecessor)
-            })
-        {
+        },
+    )
+    .map_err(map_governance_frontier_error)
+}
+
+async fn load_governance_checkpoint(
+    state: &AppState,
+    request: &MlsGovernanceProofRequestBody,
+) -> Result<MlsGovernanceVerificationCheckpoint, AppError> {
+    let realm_id = request.effective_scope.realm_id_opt().ok_or_else(|| {
+        AppError::param_invalid("MLS governance proof scope does not name a Realm")
+    })?;
+    let mut seals = BTreeMap::new();
+    let mut pending = request.proof_target_basis.leaves.clone();
+    while let Some(seal_id) = pending.pop() {
+        if seals.contains_key(&seal_id) {
+            continue;
+        }
+        let seal = state
+            .projections()
+            .seal_by_id(&seal_id)
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    "requested target Seal closure is unavailable",
+                )
+            })?;
+        if seal.realm_id != *realm_id {
             return Err(AppError::new(
                 ErrorCode::MlsGovernanceAnchorUnreachable,
-                "requested trusted anchor cannot bridge every accepted Seal predecessor",
+                "requested Seal closure crosses the Realm boundary",
             ));
         }
-        prior.insert(seal.id.clone());
+        pending.extend(seal.predecessor_refs.iter().cloned());
+        seals.insert(seal_id, seal);
     }
-    // Validate that the exact trusted anchor bridges the complete accepted
-    // Seal ancestry. The bundle materializes this proof only; the MLS client
-    // owns the current/pending leaf set and combines it with the verified
-    // control state to derive the unique security_frontier_digest.
-    drop(prior);
+    ensure_target_dominates_base(request, &seals)?;
 
-    Ok(MaterializedMlsGovernanceProofBundle {
-        bundle_version: arkret_models_crypto::mls_governance_proof::MLS_GOVERNANCE_PROOF_BUNDLE_VERSION,
-        proof_request_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
-            .expect("zero sha256 digest is valid"),
-        bundle_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
-            .expect("zero sha256 digest is valid"),
-        materialization_profile: arkret_models_crypto::mls_governance_proof::MLS_GOVERNANCE_COMPLETE_MATERIALIZATION_PROFILE
-            .to_owned(),
-        realm_id: request.realm_id.clone(),
-        effective_scope: request.effective_scope.clone(),
-        reducer_profile: request.reducer_profile.clone(),
-        trusted_anchor_seal_id: request.trusted_anchor_seal_id.clone(),
-        accepted_seal_id: seal_view.accepted_seal.id,
-        seal_path,
-        covered_event_digests: covered_event_digests
-            .into_iter()
-            .map(|digest| Hash::new(digest.as_str().to_owned()))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(proof_state_error)?,
-        control_state,
-        frontier_events,
-    })
+    let mut events = BTreeMap::new();
+    for seal in seals.values() {
+        for digest in &seal.delta {
+            let event = state
+                .projections()
+                .control_event_by_digest(digest)
+                .map_err(|error| AppError::internal(error.to_string()))?
+                .ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::FrontierUnavailable,
+                        "requested target checkpoint has a missing Control Event",
+                    )
+                })?;
+            if let Some(previous) = events.insert(digest.clone(), event.clone())
+                && previous != event
+            {
+                return Err(proof_state_error(
+                    "one Control Event digest resolves to different accepted bytes",
+                ));
+            }
+        }
+    }
+    let dependencies = load_checkpoint_dependencies(state, realm_id, &seals, &events).await?;
+    arkret::verify_mls_governance_closure(
+        realm_id,
+        &request.proof_target_basis,
+        &seals.into_values().collect::<Vec<_>>(),
+        &events.into_values().collect::<Vec<_>>(),
+        &dependencies,
+        |event, digest_suite, evidence, dependencies| {
+            arkret::verify_native_agent_historical_event_key(
+                event,
+                digest_suite,
+                evidence,
+                dependencies,
+                |trust_request| verify_native_agent_history_trust(state, trust_request),
+            )
+        },
+    )
+    .map(|verified| verified.checkpoint)
+    .map_err(map_governance_frontier_error)
+}
+
+pub(crate) async fn load_verified_governance_checkpoint(
+    state: &AppState,
+    realm_id: &RealmId,
+    basis: &arkret_wire::SealBasis,
+) -> Result<MlsGovernanceVerificationCheckpoint, AppError> {
+    basis
+        .validate_protocol_bounds()
+        .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
+    let mut seals = BTreeMap::new();
+    let mut pending = basis.leaves.clone();
+    while let Some(seal_id) = pending.pop() {
+        if seals.contains_key(&seal_id) {
+            continue;
+        }
+        let seal = state
+            .projections()
+            .seal_by_id(&seal_id)
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    "trusted RRK base Seal closure is unavailable locally",
+                )
+            })?;
+        if seal.realm_id != *realm_id {
+            return Err(AppError::new(
+                ErrorCode::MlsGovernanceAnchorUnreachable,
+                "trusted RRK base Seal closure crosses the Realm boundary",
+            ));
+        }
+        pending.extend(seal.predecessor_refs.iter().cloned());
+        seals.insert(seal_id, seal);
+    }
+    let mut events = BTreeMap::new();
+    for seal in seals.values() {
+        for digest in &seal.delta {
+            let event = state
+                .projections()
+                .control_event_by_digest(digest)
+                .map_err(|error| AppError::internal(error.to_string()))?
+                .ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::FrontierUnavailable,
+                        "trusted RRK base checkpoint has a missing local Control Event",
+                    )
+                })?;
+            if let Some(previous) = events.insert(digest.clone(), event.clone())
+                && previous != event
+            {
+                return Err(proof_state_error(
+                    "one trusted RRK base Event digest resolves to different local bytes",
+                ));
+            }
+        }
+    }
+    let dependencies = load_checkpoint_dependencies(state, realm_id, &seals, &events).await?;
+    arkret::verify_mls_governance_closure(
+        realm_id,
+        basis,
+        &seals.into_values().collect::<Vec<_>>(),
+        &events.into_values().collect::<Vec<_>>(),
+        &dependencies,
+        |event, digest_suite, evidence, dependencies| {
+            arkret::verify_native_agent_historical_event_key(
+                event,
+                digest_suite,
+                evidence,
+                dependencies,
+                |trust_request| verify_native_agent_history_trust(state, trust_request),
+            )
+        },
+    )
+    .map(|verified| verified.checkpoint)
+    .map_err(map_governance_frontier_error)
+}
+
+fn ensure_target_dominates_base(
+    request: &MlsGovernanceProofRequestBody,
+    seals: &BTreeMap<SealId, arkret_wire::Seal>,
+) -> Result<(), AppError> {
+    let base = request
+        .proof_base_basis
+        .leaves
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut reached = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    let mut pending = request.proof_target_basis.leaves.clone();
+    while let Some(seal_id) = pending.pop() {
+        if !visited.insert(seal_id.clone()) {
+            continue;
+        }
+        if base.contains(&seal_id) {
+            reached.insert(seal_id);
+            continue;
+        }
+        let seal = seals.get(&seal_id).ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FrontierUnavailable,
+                "requested target Seal closure is incomplete",
+            )
+        })?;
+        if seal.predecessor_refs.is_empty() {
+            return Err(AppError::new(
+                ErrorCode::MlsGovernanceAnchorUnreachable,
+                "proof target basis does not dominate proof base basis",
+            ));
+        }
+        pending.extend(seal.predecessor_refs.iter().cloned());
+    }
+    if reached != base {
+        return Err(AppError::new(
+            ErrorCode::MlsGovernanceAnchorUnreachable,
+            "proof target basis does not reach every proof base leaf",
+        ));
+    }
+    Ok(())
+}
+
+async fn load_checkpoint_dependencies(
+    state: &AppState,
+    realm_id: &RealmId,
+    seals: &BTreeMap<SealId, arkret_wire::Seal>,
+    events: &BTreeMap<Hash, Event>,
+) -> Result<Vec<GovernanceDependency>, AppError> {
+    let mut dependencies = BTreeMap::new();
+    let mut queue = Vec::new();
+    for seal in seals.values() {
+        load_source_dependencies(
+            state,
+            realm_id,
+            soland_storage::GovernanceDependencySource::Seal(seal.id.clone()),
+            &mut dependencies,
+            &mut queue,
+        )
+        .await?;
+    }
+    for digest in events.keys() {
+        load_source_dependencies(
+            state,
+            realm_id,
+            soland_storage::GovernanceDependencySource::ControlEvent(digest.clone()),
+            &mut dependencies,
+            &mut queue,
+        )
+        .await?;
+    }
+    let mut cursor = 0;
+    while cursor < queue.len() {
+        let selectors = match &queue[cursor] {
+            GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+                authenticated_signer_resolution_evidence,
+                ..
+            } => governance_attester_evidence_selectors(std::slice::from_ref(
+                authenticated_signer_resolution_evidence,
+            )),
+            GovernanceDependency::GovernanceRegistrySnapshot {
+                governance_registry_snapshot,
+                ..
+            } => governance_artifact_selectors_for_snapshot(governance_registry_snapshot),
+            _ => Ok(Vec::new()),
+        }
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::FrontierUnavailable,
+                format!("governance dependency closure is invalid: {error}"),
+            )
+        })?;
+        cursor += 1;
+        for selector in selectors {
+            let item = state
+                .persistence()
+                .governance_dependency_store()
+                .get(realm_id, &selector)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+                .ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::FrontierUnavailable,
+                        "transitive governance replay dependency is unavailable",
+                    )
+                })?;
+            insert_checkpoint_dependency(&mut dependencies, &mut queue, item)?;
+        }
+    }
+    Ok(dependencies.into_values().collect())
+}
+
+async fn load_source_dependencies(
+    state: &AppState,
+    realm_id: &RealmId,
+    source: soland_storage::GovernanceDependencySource,
+    dependencies: &mut BTreeMap<(String, Vec<u8>), GovernanceDependency>,
+    queue: &mut Vec<GovernanceDependency>,
+) -> Result<(), AppError> {
+    let rows = state
+        .persistence()
+        .governance_dependency_store()
+        .list_for_source(realm_id, &source)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    for row in rows {
+        insert_checkpoint_dependency(dependencies, queue, row.item)?;
+    }
+    Ok(())
+}
+
+fn insert_checkpoint_dependency(
+    dependencies: &mut BTreeMap<(String, Vec<u8>), GovernanceDependency>,
+    queue: &mut Vec<GovernanceDependency>,
+    item: GovernanceDependency,
+) -> Result<(), AppError> {
+    let key = item
+        .selector()
+        .canonical_sort_key()
+        .map(|(kind, bytes)| (kind.to_owned(), bytes))
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if let Some(previous) = dependencies.get(&key) {
+        if previous != &item {
+            return Err(proof_state_error(
+                "one governance dependency selector resolves to different bytes",
+            ));
+        }
+        return Ok(());
+    }
+    if dependencies.len() >= MAX_GOVERNANCE_DEPENDENCY_SELECTORS {
+        return Err(AppError::new(
+            ErrorCode::MlsGovernanceProofBoundsExceeded,
+            "governance dependency closure exceeds the protocol object limit",
+        ));
+    }
+    dependencies.insert(key, item.clone());
+    queue.push(item);
+    Ok(())
+}
+
+async fn load_group_frontier_leaves(
+    _state: &AppState,
+    _request: &MlsGovernanceProofRequestBody,
+) -> Result<Vec<MlsSecurityFrontierLeaf>, AppError> {
+    // The proof materializer requires the exact occupied RFC 9420 tree leaves
+    // with their real tree indexes. Soland currently persists accepted
+    // Genesis/Commit references and claimed KeyPackages, but not the client's
+    // current/pending RFC group state. A KeyPackage row order is not a ratchet
+    // tree and must never be promoted into a synthetic `leaf_index`.
+    //
+    // Keep this boundary fail closed until a standard client-to-service MLS
+    // group-state material input is registered and durably validated. The
+    // proof request itself deliberately carries no leaves or tree bytes.
+    Err(AppError::new(
+        ErrorCode::FrontierUnavailable,
+        "verified RFC 9420 current/pending group-state material is unavailable",
+    ))
+}
+
+fn group_genesis_binding(
+    state: &AppState,
+    realm_id: &RealmId,
+) -> Result<MlsGroupGenesisBinding, AppError> {
+    let projection = state.projections().snapshot();
+    let content_scheme = match projection
+        .realm_content_scheme(realm_id.as_str())
+        .as_deref()
+    {
+        None | Some("mls_rfc9420") => MlsContentScheme::MlsRfc9420,
+        Some("mls_exporter_aead_v1") => MlsContentScheme::MlsExporterAeadV1,
+        Some(_) => {
+            return Err(AppError::new(
+                ErrorCode::FrontierUnavailable,
+                "Realm content scheme is not registered",
+            ));
+        }
+    };
+    let durability_policy = match content_scheme {
+        MlsContentScheme::MlsRfc9420 => None,
+        MlsContentScheme::MlsExporterAeadV1 => Some(
+            match projection.realm_durability_policy(realm_id.as_str()) {
+                None
+                | Some(arkret_models_collaboration::objects::realm::DurabilityPolicy {
+                    mode: DurabilityMode::None,
+                    ..
+                }) => MlsDurabilityPolicy::None,
+                Some(_) => MlsDurabilityPolicy::OrganizationRecoveryKey,
+            },
+        ),
+    };
+    let binding = MlsGroupGenesisBinding {
+        content_scheme,
+        durability_policy,
+    };
+    binding
+        .validate()
+        .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
+    Ok(binding)
+}
+
+fn verify_native_agent_history_trust(
+    state: &AppState,
+    request: arkret::NativeAgentHistoricalTrustRequest<'_>,
+) -> Result<(), arkret_wire::WireError> {
+    match request {
+        arkret::NativeAgentHistoricalTrustRequest::PcrSeal(seal) => {
+            let retained = state
+                .projections()
+                .seal_by_id(&seal.id)
+                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?
+                .ok_or_else(|| {
+                    arkret_wire::WireError::Protocol(
+                        "Native Agent PCR Seal is not locally accepted".to_owned(),
+                    )
+                })?;
+            if retained != *seal {
+                return Err(arkret_wire::WireError::Protocol(
+                    "Native Agent PCR Seal differs from locally accepted bytes".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+        arkret::NativeAgentHistoricalTrustRequest::LifecycleWitness(witness) => {
+            let retained_seal = state
+                .projections()
+                .seal_by_id(&witness.seal_id)
+                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?
+                .ok_or_else(|| {
+                    arkret_wire::WireError::Protocol(
+                        "Native Agent lifecycle Seal is not locally accepted".to_owned(),
+                    )
+                })?;
+            if retained_seal != witness.seal || retained_seal.id != witness.seal_id {
+                return Err(arkret_wire::WireError::Protocol(
+                    "Native Agent lifecycle witness differs from locally accepted history"
+                        .to_owned(),
+                ));
+            }
+            let digest_suites = state
+                .projections()
+                .seal_digest_suites(&retained_seal)
+                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?;
+            let event_digest = Hash::new(
+                witness
+                    .accepted_status_event
+                    .event_digest_with_digest_suite(digest_suites.event_digest_suite)?,
+            )?;
+            if !retained_seal.delta.contains(&event_digest) {
+                return Err(arkret_wire::WireError::Protocol(
+                    "Native Agent lifecycle Event is not covered by its accepted Seal".to_owned(),
+                ));
+            }
+            let retained_event = state
+                .projections()
+                .control_event_by_digest(&event_digest)
+                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?
+                .ok_or_else(|| {
+                    arkret_wire::WireError::Protocol(
+                        "Native Agent lifecycle Event is not locally accepted".to_owned(),
+                    )
+                })?;
+            if retained_event != witness.accepted_status_event {
+                return Err(arkret_wire::WireError::Protocol(
+                    "Native Agent lifecycle Event differs from locally accepted history".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+        arkret::NativeAgentHistoricalTrustRequest::Transparency(_) => {
+            Err(arkret_wire::WireError::Protocol(
+                "Native Agent transparency trust anchor is unavailable".to_owned(),
+            ))
+        }
+    }
+}
+
+fn map_governance_frontier_error(error: arkret_wire::WireError) -> AppError {
+    let code = match error.error_code() {
+        Some(ErrorCode::MlsGovernanceProofBoundsExceeded) => {
+            ErrorCode::MlsGovernanceProofBoundsExceeded
+        }
+        Some(ErrorCode::MlsGovernanceAnchorUnreachable) => {
+            ErrorCode::MlsGovernanceAnchorUnreachable
+        }
+        Some(ErrorCode::FrontierUnavailable | ErrorCode::DependencyMissing) => {
+            ErrorCode::FrontierUnavailable
+        }
+        _ => ErrorCode::StateMismatch,
+    };
+    AppError::new(code, error.to_string())
 }
 
 fn event_signer_device_id(record: &CanonicalEventRecord) -> Option<String> {
@@ -1439,6 +1653,7 @@ pub(crate) fn canonical_event_ops(
     move_id: &Hash,
     accumulated: &BTreeMap<CellRef, Vec<IssuedOp>>,
     invite_accept_from: Option<&str>,
+    digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<Vec<(CellRef, IssuedOp)>, AppError> {
     Ok(canonical_event_sealed_ops(
         state,
@@ -1447,6 +1662,7 @@ pub(crate) fn canonical_event_ops(
         move_id,
         accumulated,
         invite_accept_from,
+        digest_suite,
     )?
     .into_iter()
     .map(|(cell, op)| {
@@ -1503,12 +1719,13 @@ fn canonical_event_sealed_ops(
     move_id: &Hash,
     accumulated: &BTreeMap<CellRef, Vec<IssuedOp>>,
     invite_accept_from: Option<&str>,
+    digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<Vec<(CellRef, SealedOp)>, AppError> {
     // v1 carries no producer `effects[]`: every write is derived from
     // `kind + payload` by the registered contract.
     let projected = state
         .projections()
-        .project_accepted_cell_writes(event)
+        .project_accepted_cell_writes_with_digest_suite(event, digest_suite)
         .map_err(|error| {
             AppError::new(
                 ErrorCode::StateMismatch,
@@ -1646,22 +1863,14 @@ mod tests {
 
     #[test]
     fn authoritative_notary_lookup_uses_canonical_wire_singleton_cell() {
-        let realm_id =
-            RealmId::new("ak:realm:AVxoxV_VZOMmjtC2-4yBLVKc5PxZEVmIkN3giIkafwx2").unwrap();
-        let notary = "ak:did_core:web:notary.example";
+        let notary = crate::test_single_signer_notary("did:web:notary.example", 41);
         let mut joined = BTreeMap::new();
         joined.insert(
             CellRef::new("ak:cell:ak.component.notary.v1:null".to_owned()).unwrap(),
-            CellState::Value(serde_json::json!({
-                "kind": "single_did",
-                "actor_id": notary,
-            })),
+            CellState::Value(serde_json::to_value(&notary).unwrap()),
         );
 
-        assert_eq!(
-            authoritative_notary_dids(&realm_id, &joined).unwrap(),
-            vec![notary.to_owned()]
-        );
+        assert_eq!(authoritative_notary(&joined).unwrap(), Some(notary));
     }
 
     #[test]
@@ -1691,8 +1900,8 @@ mod tests {
             Some(CellState::Bottom(_))
         ));
         assert_eq!(
-            compute_state_root(&joined).unwrap(),
-            compute_state_root(&BTreeMap::new()).unwrap(),
+            compute_state_root(&joined, arkret_canonical::DigestSuite::Sha256).unwrap(),
+            compute_state_root(&BTreeMap::new(), arkret_canonical::DigestSuite::Sha256).unwrap(),
             "an exposed Bottom is omitted from the governance state-root leaves"
         );
     }
@@ -1740,7 +1949,34 @@ mod tests {
         let realm_id =
             RealmId::new("ak:realm:AZiVojGkhKKjoBSA6eV96sZAm4u3Ze_3uMmkr30F6ZQZ").unwrap();
         let actor_id = arkret_identifiers::DidFullId::new("did:web:agent.example").unwrap();
-        let actor_core_id = arkret_wire::project_full_id_to_core_id(&actor_id).unwrap();
+        let genesis =
+            arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
+                arkret_wire::GenesisSalt::new(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+                )
+                .unwrap(),
+                arkret_models_identity::ResolutionCommitment {
+                    full_id: actor_id.clone(),
+                    method_history_head: format!("sha256:{}", "8".repeat(64)),
+                    version_id: "1-Qmfixture".to_owned(),
+                },
+                arkret_identifiers::TrustDomainId::new(
+                    "ak:trust_domain:managed-agent-pcr".to_owned(),
+                )
+                .unwrap(),
+                vec![arkret_wire::ProfileId::PRINCIPAL_CONTROL_REALM_V1.to_owned()],
+                arkret_wire::CORE_REDUCER_PROFILE,
+                arkret_canonical::DigestSuite::Sha256,
+                arkret_wire::SecurityClass::HighAssurance,
+                arkret_wire::EncryptionProfile::MlsRfc9420,
+                crate::test_single_signer_notary("did:web:agent.example", 42),
+                arkret_policy::current_capability_action_registry_digest().unwrap(),
+            )
+            .unwrap();
+        let payload =
+            arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
+                .to_value()
+                .unwrap();
         crate::test_event::raw_event(
             arkret_wire::EventKind::RealmCreate.as_str(),
             arkret_wire::ScopeRef::Realm {
@@ -1749,17 +1985,7 @@ mod tests {
             crate::test_actor_id(&actor_id),
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1").unwrap(),
-            serde_json::json!({
-                "object": {
-                    "id": realm_id,
-                    "created_by": actor_id,
-                    "capability_action_registry_digest":
-                        arkret_policy::current_capability_action_registry_digest().unwrap(),
-                    "fields": {"purpose": "principal_control"},
-                    "notary": {"kind": "single_did", "actor_id": actor_core_id},
-                    "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
-                }
-            }),
+            payload,
         )
         .unwrap()
     }
@@ -1776,8 +2002,16 @@ mod tests {
         let event = managed_agent_pcr_create();
         let realm_id = event.realm_id.clone();
         let move_id = Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
-        let ops = canonical_event_ops(&state, &realm_id, &event, &move_id, &BTreeMap::new(), None)
-            .unwrap();
+        let ops = canonical_event_ops(
+            &state,
+            &realm_id,
+            &event,
+            &move_id,
+            &BTreeMap::new(),
+            None,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
 
         let derived = ops
             .iter()
@@ -1804,8 +2038,16 @@ mod tests {
         event.payload.remove("object");
         let move_id = Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap();
         assert!(
-            canonical_event_ops(&state, &realm_id, &event, &move_id, &BTreeMap::new(), None)
-                .is_err()
+            canonical_event_ops(
+                &state,
+                &realm_id,
+                &event,
+                &move_id,
+                &BTreeMap::new(),
+                None,
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .is_err()
         );
     }
 
@@ -1891,6 +2133,7 @@ mod tests {
                 &move_id,
                 &accumulated,
                 Some(prior_state),
+                arkret_canonical::DigestSuite::Sha256,
             )
             .unwrap();
 

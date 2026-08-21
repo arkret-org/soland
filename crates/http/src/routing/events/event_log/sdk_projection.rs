@@ -217,6 +217,7 @@ fn projection_operation_from_wire(
         arkret_wire::OperationKind::Create,
         None,
         &event,
+        arkret_canonical::DigestSuite::Sha256,
     )
     .map_err(|error| {
         tracing::debug!(
@@ -505,11 +506,13 @@ fn sdk_event_from_record(
         proofs: sdk_event_proofs(record, object, created_at)?,
     };
     if preserves_signed_content {
-        let reconstructed_digest = event.event_digest().map_err(|error| {
-            AppError::internal(format!(
-                "stored Event digest reconstruction failed: {error}"
-            ))
-        })?;
+        let reconstructed_digest = event
+            .event_digest_with_digest_suite(record.digest_suite)
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "stored Event digest reconstruction failed: {error}"
+                ))
+            })?;
         if reconstructed_digest != record.canonical_digest {
             return Err(AppError::internal(format!(
                 "stored Event read reconstruction changed canonical digest: expected {}, got {}",
@@ -661,6 +664,8 @@ fn sdk_event_proofs(
         proof_purpose: None,
         verification_method,
         event_digest,
+        signer_resolution_evidence_ref: None,
+        signer_resolution_evidence_digest: None,
         created_at,
         domain,
         audience,

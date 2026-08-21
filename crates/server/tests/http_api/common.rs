@@ -131,7 +131,10 @@ pub(crate) async fn prepare_self_principal_pcr_initial_submissions(
                 membership_compensation_evidence: None,
             };
             submission
-                .validate_structural_in_context(arkret_wire::EventSubmitContext::Standard)
+                .validate_structural_in_context(
+                    arkret_wire::EventSubmitContext::Standard,
+                    arkret_canonical::DigestSuite::Sha256,
+                )
                 .expect("authority-authored self-principal PCR initial submission");
             submission
         })
@@ -195,7 +198,12 @@ pub(crate) fn seed_seal_with_direct_event_effects(
     let mut event_digests = events
         .iter()
         .map(|event| {
-            arkret_wire::Hash::new(event.event_digest().expect("bootstrap Event digest")).unwrap()
+            arkret_wire::Hash::new(
+                event
+                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                    .expect("bootstrap Event digest"),
+            )
+            .unwrap()
         })
         .collect::<Vec<_>>();
     event_digests.sort_by(|left, right| left.as_str().cmp(right.as_str()));
@@ -206,8 +214,12 @@ pub(crate) fn seed_seal_with_direct_event_effects(
 
     let mut ops = Vec::new();
     for event in events {
-        let digest =
-            arkret_wire::Hash::new(event.event_digest().expect("bootstrap Event digest")).unwrap();
+        let digest = arkret_wire::Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .expect("bootstrap Event digest"),
+        )
+        .unwrap();
         for write in projector(event).expect("bootstrap Event projection") {
             let effect = write
                 .as_direct()
@@ -226,7 +238,9 @@ pub(crate) fn seed_seal_with_direct_event_effects(
         seal.state_root,
         "bootstrap sealed effects must match Seal state_root"
     );
-    state.test_put_seal(seal).expect("bootstrap Seal");
+    state
+        .test_put_seal(seal, arkret_canonical::DigestSuite::Sha256)
+        .expect("bootstrap Seal");
     state
         .test_append_sealed_effects(&seal.realm_id, &seal.id, &ops)
         .expect("bootstrap sealed effects");
@@ -257,7 +271,8 @@ fn fixture_sealed_state_root(
             arkret_state::join_cell(binding.lattice.as_ref(), &cell, &cell_ops),
         );
     }
-    arkret_state::compute_state_root(&post_state).expect("fixture state_root")
+    arkret_state::compute_state_root(&post_state, arkret_canonical::DigestSuite::Sha256)
+        .expect("fixture state_root")
 }
 
 pub(crate) fn app_state_for_postgres(config: AppConfig, db: Db) -> AppState {
@@ -680,9 +695,7 @@ pub(crate) async fn seed_test_realm(
                 owner: owner.to_owned(),
                 deleted: false,
                 discoverability: discoverability.to_owned(),
-                history_visibility: "joined".to_owned(),
-                history_sharing_policy: None,
-                history_sharing_policy_digest: None,
+                history_access: "since_join".to_owned(),
                 preview_policy: None,
                 preview_policy_digest: None,
                 asset_privacy_policy: None,
@@ -698,10 +711,10 @@ pub(crate) async fn seed_test_realm(
         )
         .await
         .unwrap();
-    let seal_signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
-        [21_u8; 32],
-        DidFullId::new(owner.to_owned()).unwrap(),
-        arkret_wire::DidUrl::new(format!("{owner}#test-realm-notary")).unwrap(),
+    let seal_signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
+        state.notary_signing_key().to_bytes(),
+        state.service_full_id(),
+        state.service_verification_method("notary-key").unwrap(),
     );
     let bootstrap_seal = arkret_wire::Seal::sign_single(
         RealmId::new(realm_id.clone()).unwrap(),
@@ -713,10 +726,13 @@ pub(crate) async fn seed_test_realm(
             now.timestamp_millis().max(0) as u64
         ))
         .unwrap(),
+        arkret_canonical::DigestSuite::Sha256,
         &seal_signer,
     )
     .unwrap();
-    state.test_put_seal(&bootstrap_seal).unwrap();
+    state
+        .test_put_seal(&bootstrap_seal, arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
     let seal_basis = bootstrap_seal.seal_basis();
     let owner_core = arkret_wire::project_full_id_to_core_id(
         &DidFullId::new(owner.to_owned()).expect("fixture realm owner full DID"),
@@ -1420,9 +1436,7 @@ pub(crate) async fn authorize_test_plaintext_message_service(
             owner: actor.to_owned(),
             deleted: false,
             discoverability: "invite_only".to_owned(),
-            history_visibility: "joined".to_owned(),
-            history_sharing_policy: None,
-            history_sharing_policy_digest: None,
+            history_access: "since_join".to_owned(),
             preview_policy: None,
             preview_policy_digest: None,
             asset_privacy_policy: None,
@@ -1653,7 +1667,7 @@ pub(crate) async fn project_test_authorized_device(
     .expect("device authorize fixture Event");
     event.prev_refs = vec![genesis.event_id.clone()];
     event
-        .refresh_content_bound_identity()
+        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
         .expect("device authorize fixture identity");
     let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
         arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
@@ -1663,6 +1677,7 @@ pub(crate) async fn project_test_authorized_device(
         arkret_wire::OperationKind::Create,
         None,
         &event,
+        arkret_canonical::DigestSuite::Sha256,
     )
     .expect("projected device authorization");
     let event_id = operation.context.event_id.to_string();
@@ -1838,7 +1853,9 @@ pub(crate) async fn seed_test_realm_basis_seal_for_principal_server(
 ) -> arkret_wire::SealId {
     let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
     let basis = test_realm_basis_for_principal_server(realm_id, subject, principal_server_id);
-    state.test_put_seal(&basis.seal).unwrap();
+    state
+        .test_put_seal(&basis.seal, arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
     state
         .test_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)
         .unwrap();
@@ -1933,7 +1950,9 @@ pub(crate) async fn seed_test_realm_basis_seal(
 ) -> arkret_wire::SealId {
     let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
     let basis = test_realm_basis(realm_id, subject, state.service_id().as_str());
-    state.test_put_seal(&basis.seal).unwrap();
+    state
+        .test_put_seal(&basis.seal, arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
     state
         .test_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)
         .unwrap();
@@ -2173,10 +2192,12 @@ pub(crate) fn seed_test_circle(
             }),
             directory_visibility: "members".to_owned(),
             join_rule: "invite".to_owned(),
-            history_visibility: "joined".to_owned(),
+            history_access: "since_join".to_owned(),
             content_encryption_floor: None,
             metadata_encryption_floor: None,
             encryption_profile: "none".to_owned(),
+            content_scheme: None,
+            durability_policy: None,
             mls_group_ref: None,
             state: soland_domain::reducer::CircleLifecycleState::Active,
             state_changed_at: None,

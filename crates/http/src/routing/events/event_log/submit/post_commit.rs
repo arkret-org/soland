@@ -262,14 +262,17 @@ async fn federation_submissions(
         &arkret_wire::MembershipCompensationSubmissionEvidence,
     >,
 ) -> Result<Vec<arkret_wire::EventFederationSubmission>, String> {
+    let digest_suites = accepted_event_digest_suites(events)?;
     let mut digests = Vec::with_capacity(events.len());
-    for event in events {
-        let digest = event.event_digest().map_err(|error| {
-            format!(
-                "failed to digest Event {} for federation: {error}",
-                event.event_id
-            )
-        })?;
+    for (event, digest_suite) in events.iter().zip(digest_suites.iter().copied()) {
+        let digest = event
+            .event_digest_with_digest_suite(digest_suite)
+            .map_err(|error| {
+                format!(
+                    "failed to digest Event {} for federation: {error}",
+                    event.event_id
+                )
+            })?;
         digests.push(digest);
     }
     let evidence = state
@@ -425,6 +428,7 @@ pub(super) async fn peer_event_batch_fanout_records(
     // The Realm genesis path stores its ingress receipts before it gets here
     // (`mint_and_store_ingress_receipt`), so the store is the only source.
     let submissions = federation_submissions(state, &events, None, &[], &[], None).await?;
+    let digest_suites = accepted_event_digest_suites(&events)?;
     let binding_payload = json!({
         "domain": arkret_wire::DomainSeparationId::PEER_EVENTS_COMMAND_SUBMIT_SERVICE_BINDING_V1,
         "realm_id": first.realm_id,
@@ -460,12 +464,13 @@ pub(super) async fn peer_event_batch_fanout_records(
             events: submissions.clone(),
             cba_proof_bundles: cba_proof_bundles.clone(),
         };
-        body.validate_federation_transport().map_err(|error| {
-            format!(
-                "peer Event batch for {} violates the federation transport contract: {error}",
-                peer.service_id
-            )
-        })?;
+        body.validate_federation_transport(&digest_suites)
+            .map_err(|error| {
+                format!(
+                    "peer Event batch for {} violates the federation transport contract: {error}",
+                    peer.service_id
+                )
+            })?;
         let payload_json = canonical::canonical_json_bytes(&body)
             .ok()
             .and_then(|bytes| String::from_utf8(bytes).ok())
@@ -769,12 +774,13 @@ pub(super) async fn peer_event_fanout_records(
             membership_compensation_evidence,
         )
         .await?;
+        let digest_suites = accepted_event_digest_suites(&peer_events)?;
         let body = EventsSubmitFederationBatchRequestBody {
             service_binding_ref,
             events: submissions,
             cba_proof_bundles,
         };
-        body.validate_federation_transport().map_err(|error| {
+        body.validate_federation_transport(&digest_suites).map_err(|error| {
             format!(
                 "dynamic peer Event {event_id} violates the federation transport contract: {error}"
             )
@@ -1008,6 +1014,7 @@ async fn realm_bootstrap_fanout_record(
     // This prerequisite is a *stored* Realm genesis unit, so its evidence is
     // already durable — nothing pending to fold in.
     let submissions = federation_submissions(state, &events, None, &[], &[], None).await?;
+    let digest_suites = accepted_event_digest_suites(&events)?;
     let body = EventsSubmitFederationBatchRequestBody {
         service_binding_ref,
         events: submissions,
@@ -1015,7 +1022,7 @@ async fn realm_bootstrap_fanout_record(
         // no CBA basis of its own.
         cba_proof_bundles: Vec::new(),
     };
-    body.validate_federation_transport().map_err(|error| {
+    body.validate_federation_transport(&digest_suites).map_err(|error| {
         format!(
             "Realm {} bootstrap prerequisite violates the federation transport contract: {error}",
             parsed.realm_id

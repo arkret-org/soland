@@ -15,7 +15,7 @@ use arkret_wire::{
     ControlProposalAck, ControlProposalDecision, ControlProposalDecisionPolicy, Event, LatticeOp,
     Seal,
 };
-use diesel::sql_types::{BigInt, Bool, Jsonb, Nullable, Text, Timestamptz};
+use diesel::sql_types::{Array, BigInt, Binary, Bool, Jsonb, Nullable, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::pooled_connection::deadpool::Object;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -35,6 +35,7 @@ pub trait EventSealCommitStore: Send + Sync {
     fn commit_if_frontier(
         &self,
         seal: &Seal,
+        digest_suite: arkret_canonical::DigestSuite,
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
@@ -164,10 +165,12 @@ struct TextRow {
 
 #[derive(QueryableByName)]
 struct SealedControlEventRow {
+    #[diesel(sql_type = Text)]
+    digest_suite: String,
     #[diesel(sql_type = Jsonb)]
     event_json: Value,
-    #[diesel(sql_type = Text)]
-    sealed_by: String,
+    #[diesel(sql_type = Array<Text>)]
+    covering_seal_ids: Vec<String>,
     #[diesel(sql_type = Nullable<Jsonb>)]
     control_proposal_ack: Option<Value>,
     #[diesel(sql_type = Jsonb)]
@@ -180,6 +183,8 @@ struct SealedControlEventRow {
 
 #[derive(QueryableByName)]
 struct PendingControlEventRow {
+    #[diesel(sql_type = Text)]
+    digest_suite: String,
     #[diesel(sql_type = Jsonb)]
     event_json: Value,
     #[diesel(sql_type = Nullable<Jsonb>)]
@@ -196,20 +201,34 @@ struct ControlProposalStateRow {
     control_proposal_ack: Option<Value>,
     #[diesel(sql_type = Jsonb)]
     proposal_decisions: Value,
-    #[diesel(sql_type = Nullable<Text>)]
-    sealed_by: Option<String>,
+    #[diesel(sql_type = Bool)]
+    is_sealed: bool,
 }
 
 #[derive(QueryableByName)]
-struct ControlProposalSnapshotRow {
+struct ControlEventSealStateRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
     #[diesel(sql_type = Jsonb)]
     event_json: Value,
     #[diesel(sql_type = Nullable<Jsonb>)]
     control_proposal_ack: Option<Value>,
     #[diesel(sql_type = Jsonb)]
     proposal_decisions: Value,
-    #[diesel(sql_type = Nullable<Text>)]
-    sealed_by: Option<String>,
+}
+
+#[derive(QueryableByName)]
+struct ControlProposalSnapshotRow {
+    #[diesel(sql_type = Text)]
+    digest_suite: String,
+    #[diesel(sql_type = Jsonb)]
+    event_json: Value,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    control_proposal_ack: Option<Value>,
+    #[diesel(sql_type = Jsonb)]
+    proposal_decisions: Value,
+    #[diesel(sql_type = Array<Text>)]
+    covering_seal_ids: Vec<String>,
     #[diesel(sql_type = Bool)]
     decision_overdue: bool,
 }
@@ -221,15 +240,51 @@ struct OptionalJsonRow {
 }
 
 #[derive(QueryableByName)]
-struct OptionalTextRow {
-    #[diesel(sql_type = Nullable<Text>)]
-    value: Option<String>,
-}
-
-#[derive(QueryableByName)]
 struct CountRow {
     #[diesel(sql_type = BigInt)]
     value: i64,
+}
+
+#[derive(QueryableByName)]
+struct StoredSealRow {
+    #[diesel(sql_type = Text)]
+    digest_suite: String,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Binary)]
+    seal_id_preimage_bytes: Vec<u8>,
+    #[diesel(sql_type = Binary)]
+    accepted_seal_bytes: Vec<u8>,
+    #[diesel(sql_type = Jsonb)]
+    seal_json: Value,
+    #[diesel(sql_type = Jsonb)]
+    predecessor_refs: Value,
+    #[diesel(sql_type = Bool)]
+    is_genesis: bool,
+    #[diesel(sql_type = Bool)]
+    quarantined: bool,
+}
+
+#[derive(QueryableByName)]
+struct StoredSealCollisionVariantRow {
+    #[diesel(sql_type = Text)]
+    digest_suite: String,
+    #[diesel(sql_type = Binary)]
+    seal_id_preimage_bytes: Vec<u8>,
+    #[diesel(sql_type = Binary)]
+    accepted_seal_bytes: Vec<u8>,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Jsonb)]
+    seal_json: Value,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SealInsertOutcome {
+    Inserted,
+    ExactRetry,
+    Collision,
+    FrontierMismatch,
 }
 
 #[derive(QueryableByName)]
@@ -256,6 +311,20 @@ struct EventCellOpRow {
     op_json: Value,
 }
 
+#[derive(QueryableByName)]
+struct SealControlEventBindingRow {
+    #[diesel(sql_type = BigInt)]
+    delta_index: i64,
+    #[diesel(sql_type = Text)]
+    accepted_event_bytes_digest: String,
+    #[diesel(sql_type = Binary)]
+    accepted_event_bytes: Vec<u8>,
+    #[diesel(sql_type = Timestamptz)]
+    sealed_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Bool)]
+    decision_overdue: bool,
+}
+
 async fn pg_conn(pool: &PgPool) -> StoreResult<Object<AsyncPgConnection>> {
     pool.get()
         .await
@@ -266,29 +335,46 @@ async fn mark_control_event_sealed_in_transaction(
     conn: &mut AsyncPgConnection,
     digest: &str,
     seal_id: &str,
+    realm_id: &str,
+    delta_index: i64,
     sealed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), EventSealCommitError> {
     let row = sql_query(
-        "SELECT control_proposal_ack, proposal_decisions, sealed_by \
+        "SELECT realm_id, event_json, control_proposal_ack, proposal_decisions \
          FROM state_control_events WHERE event_digest = $1 FOR UPDATE",
     )
     .bind::<Text, _>(digest)
-    .get_result::<ControlProposalStateRow>(conn)
+    .get_result::<ControlEventSealStateRow>(conn)
     .await
     .optional()
     .map_err(diesel_to_store)?
     .ok_or_else(|| StoreError::NotFound(format!("control Event {digest} not in store")))?;
-    if let Some(stored_seal) = row.sealed_by {
-        if stored_seal == seal_id {
-            return Ok(());
-        }
+    if row.realm_id != realm_id {
         return Err(StoreError::Conflict(format!(
-            "control Event {digest} is already sealed by {stored_seal}"
+            "Control Event {digest} Realm {} does not match Seal {seal_id} Realm {realm_id}",
+            row.realm_id
         ))
         .into());
     }
     let decisions = serde_json::from_value::<Vec<ControlProposalDecision>>(row.proposal_decisions)
         .map_err(serde_to_store)?;
+    let event = control_event_from_value(row.event_json)?;
+    let availability_preimage =
+        arkret_wire::AvailabilityReceipt::event_bytes_digest_preimage(&event).map_err(|error| {
+            StoreError::Backend(format!(
+                "accepted Control Event availability projection failed: {error}"
+            ))
+        })?;
+    let accepted_event_bytes = availability_preimage
+        .strip_prefix(b"ak.availability-event-bytes-v1\0")
+        .ok_or_else(|| {
+            StoreError::Backend(
+                "accepted Control Event availability projection has an invalid domain separator"
+                    .to_owned(),
+            )
+        })?
+        .to_vec();
+    let accepted_event_bytes_digest = arkret_canonical::sha256_digest(&availability_preimage);
     if decisions.iter().any(ControlProposalDecision::is_reject) {
         return Err(StoreError::Conflict(format!(
             "signed-rejected control Event {digest} cannot be sealed"
@@ -305,18 +391,46 @@ async fn mark_control_event_sealed_in_transaction(
         }
         overdue |= sealed_at > previous_due_at;
     }
-    sql_query(
-        "UPDATE state_control_events \
-         SET sealed_by = $2, sealed_at = COALESCE(sealed_at, $4), \
-             decision_overdue = decision_overdue OR $3 \
-         WHERE event_digest = $1",
+    let affected = sql_query(
+        "INSERT INTO state_seal_control_events \
+         (seal_id, realm_id, event_digest, delta_index, accepted_event_bytes_digest, \
+          accepted_event_bytes, sealed_at, decision_overdue) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+         ON CONFLICT (seal_id, event_digest) DO NOTHING",
     )
-    .bind::<Text, _>(digest)
     .bind::<Text, _>(seal_id)
-    .bind::<Bool, _>(overdue)
+    .bind::<Text, _>(realm_id)
+    .bind::<Text, _>(digest)
+    .bind::<BigInt, _>(delta_index)
+    .bind::<Text, _>(&accepted_event_bytes_digest)
+    .bind::<Binary, _>(&accepted_event_bytes)
     .bind::<Timestamptz, _>(sealed_at)
+    .bind::<Bool, _>(overdue)
     .execute(conn)
     .await?;
+    if affected == 0 {
+        let binding = sql_query(
+            "SELECT delta_index, accepted_event_bytes_digest, accepted_event_bytes, \
+                    sealed_at, decision_overdue \
+             FROM state_seal_control_events WHERE seal_id = $1 AND event_digest = $2",
+        )
+        .bind::<Text, _>(seal_id)
+        .bind::<Text, _>(digest)
+        .get_result::<SealControlEventBindingRow>(&mut *conn)
+        .await?;
+        if binding.delta_index != delta_index
+            || binding.accepted_event_bytes_digest != accepted_event_bytes_digest
+            || binding.accepted_event_bytes != accepted_event_bytes
+            || binding.sealed_at != sealed_at
+            || binding.decision_overdue != overdue
+        {
+            return Err(StoreError::Conflict(format!(
+                "duplicate_conflict: Seal {seal_id} coverage binding for {digest} differs"
+            ))
+            .into());
+        }
+        return Ok(());
+    }
     crate::stage_sealed_revocation_in_transaction(conn, digest, seal_id, sealed_at)
         .await
         .map_err(|error| StoreError::Backend(error.to_string()))?;
@@ -372,25 +486,181 @@ async fn lock_seal_realm(
         .map(|_| ())
 }
 
-async fn insert_state_seal(
+async fn lock_seal_identity(
+    conn: &mut AsyncPgConnection,
+    seal_id: &str,
+) -> Result<(), diesel::result::Error> {
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 1935764581))")
+        .bind::<Text, _>(seal_id)
+        .execute(conn)
+        .await
+        .map(|_| ())
+}
+
+async fn preflight_state_seal(
     conn: &mut AsyncPgConnection,
     id: &str,
+    digest_suite: arkret_canonical::DigestSuite,
     realm_id: &str,
+    seal_id_preimage_bytes: &[u8],
+    accepted_seal_bytes: &[u8],
+    seal_json: &Value,
+    predecessor_refs: &Value,
+    is_genesis: bool,
+) -> Result<SealInsertOutcome, EventSealCommitError> {
+    let stored = sql_query(
+        "SELECT s.digest_suite, s.realm_id, s.seal_id_preimage_bytes, s.accepted_seal_bytes, s.seal_json, \
+                s.predecessor_refs, s.is_genesis, \
+                EXISTS (SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = s.id) AS quarantined \
+         FROM state_seals s WHERE s.id = $1 FOR UPDATE",
+    )
+    .bind::<Text, _>(id)
+    .get_result::<StoredSealRow>(&mut *conn)
+    .await
+    .optional()?;
+    let Some(stored) = stored else {
+        return Ok(SealInsertOutcome::Inserted);
+    };
+    if stored.digest_suite == digest_suite.as_str()
+        && stored.seal_id_preimage_bytes == seal_id_preimage_bytes
+        && stored.accepted_seal_bytes == accepted_seal_bytes
+    {
+        if stored.realm_id != realm_id
+            || stored.seal_json != *seal_json
+            || stored.predecessor_refs != *predecessor_refs
+            || stored.is_genesis != is_genesis
+        {
+            return Err(StoreError::Backend(format!(
+                "immutable Seal {id} metadata differs from its canonical bytes"
+            ))
+            .into());
+        }
+        return Ok(if stored.quarantined {
+            SealInsertOutcome::Collision
+        } else {
+            SealInsertOutcome::ExactRetry
+        });
+    }
+    let reason_code = if stored.seal_id_preimage_bytes == seal_id_preimage_bytes {
+        "seal_wrapper_conflict"
+    } else {
+        "seal_hash_collision"
+    };
+    let mut affected_realms = vec![stored.realm_id.as_str(), realm_id];
+    affected_realms.sort_unstable();
+    affected_realms.dedup();
+    for affected_realm in affected_realms {
+        lock_seal_realm(conn, affected_realm).await?;
+    }
+    for (
+        variant_digest_suite,
+        variant_id_bytes,
+        variant_accepted_bytes,
+        variant_realm,
+        variant_json,
+    ) in [
+        (
+            stored.digest_suite.as_str(),
+            stored.seal_id_preimage_bytes.as_slice(),
+            stored.accepted_seal_bytes.as_slice(),
+            stored.realm_id.as_str(),
+            &stored.seal_json,
+        ),
+        (
+            digest_suite.as_str(),
+            seal_id_preimage_bytes,
+            accepted_seal_bytes,
+            realm_id,
+            seal_json,
+        ),
+    ] {
+        let variants = sql_query(
+            "SELECT digest_suite, seal_id_preimage_bytes, accepted_seal_bytes, realm_id, seal_json \
+             FROM state_seal_collision_variants WHERE seal_id = $1 ORDER BY variant_id",
+        )
+        .bind::<Text, _>(id)
+        .load::<StoredSealCollisionVariantRow>(&mut *conn)
+        .await?;
+        if let Some(existing) = variants.iter().find(|existing| {
+            existing.digest_suite == variant_digest_suite
+                && existing.seal_id_preimage_bytes == variant_id_bytes
+                && existing.accepted_seal_bytes == variant_accepted_bytes
+        }) {
+            if existing.realm_id != variant_realm || existing.seal_json != *variant_json {
+                return Err(StoreError::Backend(format!(
+                    "stored Seal {id} collision variant metadata differs from its exact bytes"
+                ))
+                .into());
+            }
+            continue;
+        }
+        sql_query(
+            "INSERT INTO state_seal_collision_variants \
+             (seal_id, digest_suite, seal_id_preimage_bytes, accepted_seal_bytes, realm_id, seal_json) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind::<Text, _>(id)
+        .bind::<Text, _>(variant_digest_suite)
+        .bind::<Binary, _>(variant_id_bytes)
+        .bind::<Binary, _>(variant_accepted_bytes)
+        .bind::<Text, _>(variant_realm)
+        .bind::<Jsonb, _>(variant_json)
+        .execute(&mut *conn)
+        .await?;
+    }
+    sql_query(
+        "INSERT INTO state_seal_quarantine (seal_id, reason_code) VALUES ($1, $2) \
+         ON CONFLICT (seal_id) DO NOTHING",
+    )
+    .bind::<Text, _>(id)
+    .bind::<Text, _>(reason_code)
+    .execute(&mut *conn)
+    .await?;
+    for affected_realm in [stored.realm_id.as_str(), realm_id] {
+        sql_query(
+            "INSERT INTO state_seal_quarantine_realms (seal_id, realm_id) VALUES ($1, $2) \
+             ON CONFLICT (seal_id, realm_id) DO NOTHING",
+        )
+        .bind::<Text, _>(id)
+        .bind::<Text, _>(affected_realm)
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(SealInsertOutcome::Collision)
+}
+
+async fn realm_has_seal_collision(
+    conn: &mut AsyncPgConnection,
+    realm_id: &str,
+) -> Result<bool, diesel::result::Error> {
+    sql_query("SELECT COUNT(*) AS value FROM state_seal_quarantine_realms WHERE realm_id = $1")
+        .bind::<Text, _>(realm_id)
+        .get_result::<CountRow>(conn)
+        .await
+        .map(|row| row.value != 0)
+}
+
+async fn insert_new_state_seal(
+    conn: &mut AsyncPgConnection,
+    id: &str,
+    digest_suite: arkret_canonical::DigestSuite,
+    realm_id: &str,
+    seal_id_preimage_bytes: &[u8],
+    accepted_seal_bytes: &[u8],
     seal_json: &Value,
     predecessor_refs: &Value,
     is_genesis: bool,
 ) -> Result<(), diesel::result::Error> {
     sql_query(
         "INSERT INTO state_seals \
-         (id, realm_id, seal_json, predecessor_refs, is_genesis) \
-         VALUES ($1, $2, $3, $4, $5) \
-         ON CONFLICT (id) DO UPDATE SET \
-           seal_json = EXCLUDED.seal_json, \
-           predecessor_refs = EXCLUDED.predecessor_refs, \
-           is_genesis = EXCLUDED.is_genesis",
+         (id, digest_suite, realm_id, seal_id_preimage_bytes, accepted_seal_bytes, seal_json, predecessor_refs, is_genesis) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind::<Text, _>(id)
+    .bind::<Text, _>(digest_suite.as_str())
     .bind::<Text, _>(realm_id)
+    .bind::<Binary, _>(seal_id_preimage_bytes)
+    .bind::<Binary, _>(accepted_seal_bytes)
     .bind::<Jsonb, _>(seal_json)
     .bind::<Jsonb, _>(predecessor_refs)
     .bind::<Bool, _>(is_genesis)
@@ -514,17 +784,24 @@ fn seal_predecessor_refs_json(seal: &Seal) -> Value {
     )
 }
 
+fn covering_seal_ids(ids: Vec<String>) -> StoreResult<Vec<SealId>> {
+    ids.into_iter()
+        .map(|id| SealId::new(id).map_err(|error| StoreError::Backend(error.to_string())))
+        .collect()
+}
+
 impl ControlEventStore for PgControlEventStore {
     fn put_pending_with_ingress(
         &self,
         event: &Event,
         ingress: &ControlProposalIngress,
+        digest_suite: arkret_canonical::DigestSuite,
     ) -> StoreResult<()> {
         let pool = self.pool.clone();
         let value = serde_json::to_value(event).map_err(serde_to_store)?;
         // A Control Move has no identity of its own in v1: it is an Event, and
         // the control log is keyed by its canonical control-event digest.
-        let digest = control_event_digest(event)
+        let digest = control_event_digest(event, digest_suite)
             .map_err(|error| StoreError::Backend(error.to_string()))?
             .as_str()
             .to_owned();
@@ -548,36 +825,49 @@ impl ControlEventStore for PgControlEventStore {
         let ingress_class = serde_json::to_value(ingress.class()).map_err(serde_to_store)?;
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
-            let affected = sql_query(
-                "INSERT INTO state_control_events \
-                 (event_digest, realm_id, event_json, control_proposal_ack, ingress_class) \
-                 VALUES ($1, $2, $3, $4, $5) \
-                 ON CONFLICT (event_digest) DO UPDATE SET \
-                   control_proposal_ack = COALESCE( \
-                     state_control_events.control_proposal_ack, EXCLUDED.control_proposal_ack \
-                   ) \
-                 WHERE state_control_events.realm_id = EXCLUDED.realm_id \
-                   AND state_control_events.event_json = EXCLUDED.event_json \
-                   AND state_control_events.ingress_class = EXCLUDED.ingress_class \
-                   AND (state_control_events.control_proposal_ack IS NULL \
-                     OR EXCLUDED.control_proposal_ack IS NULL \
-                     OR state_control_events.control_proposal_ack = EXCLUDED.control_proposal_ack)",
-            )
-            .bind::<Text, _>(&digest)
-            .bind::<Text, _>(&realm_id)
-            .bind::<Jsonb, _>(&value)
-            .bind::<Nullable<Jsonb>, _>(control_proposal_ack.as_ref())
-            .bind::<Jsonb, _>(&ingress_class)
-            .execute(&mut *conn)
+            conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
+                lock_seal_realm(conn, &realm_id).await?;
+                if realm_has_seal_collision(conn, &realm_id).await? {
+                    return Err(StoreError::Conflict(format!(
+                        "seal_collision_quarantine: Realm {realm_id} is blocked"
+                    ))
+                    .into());
+                }
+                let affected = sql_query(
+                    "INSERT INTO state_control_events \
+                     (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class) \
+                     VALUES ($1, $2, $3, $4, $5, $6) \
+                     ON CONFLICT (event_digest) DO UPDATE SET \
+                       control_proposal_ack = COALESCE( \
+                         state_control_events.control_proposal_ack, EXCLUDED.control_proposal_ack \
+                       ) \
+                     WHERE state_control_events.realm_id = EXCLUDED.realm_id \
+                       AND state_control_events.digest_suite = EXCLUDED.digest_suite \
+                       AND state_control_events.event_json = EXCLUDED.event_json \
+                       AND state_control_events.ingress_class = EXCLUDED.ingress_class \
+                       AND (state_control_events.control_proposal_ack IS NULL \
+                         OR EXCLUDED.control_proposal_ack IS NULL \
+                         OR state_control_events.control_proposal_ack = EXCLUDED.control_proposal_ack)",
+                )
+                .bind::<Text, _>(&digest)
+                .bind::<Text, _>(digest_suite.as_str())
+                .bind::<Text, _>(&realm_id)
+                .bind::<Jsonb, _>(&value)
+                .bind::<Nullable<Jsonb>, _>(control_proposal_ack.as_ref())
+                .bind::<Jsonb, _>(&ingress_class)
+                .execute(&mut *conn)
+                .await?;
+                if affected == 0 {
+                    return Err(StoreError::Conflict(
+                        "pending Control Move already has different canonical bytes, ingress class or Control Proposal Ack"
+                            .to_owned(),
+                    )
+                    .into());
+                }
+                Ok(())
+            })
             .await
-            .map_err(diesel_to_store)?;
-            if affected == 0 {
-                return Err(StoreError::Conflict(
-                    "pending Control Move already has different canonical bytes, ingress class or Control Proposal Ack"
-                        .to_owned(),
-                ));
-            }
-            Ok(())
+            .map_err(EventSealCommitError::into_store)
         })
     }
 
@@ -585,12 +875,37 @@ impl ControlEventStore for PgControlEventStore {
         let pool = self.pool.clone();
         let digest = event_digest.as_str().to_owned();
         let seal_id = seal.id.as_str().to_owned();
+        let realm_id = seal.realm_id.as_str().to_owned();
+        let delta_index = seal
+            .delta
+            .iter()
+            .position(|candidate| candidate == event_digest)
+            .ok_or_else(|| {
+                StoreError::Conflict(format!(
+                    "Seal {seal_id} does not include control Event {digest} in delta"
+                ))
+            })? as i64;
         let sealed_at = seal.sealed_at;
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
-                mark_control_event_sealed_in_transaction(conn, &digest, &seal_id, sealed_at)
-                    .await?;
+                lock_seal_identity(conn, &seal_id).await?;
+                lock_seal_realm(conn, &realm_id).await?;
+                if realm_has_seal_collision(conn, &realm_id).await? {
+                    return Err(StoreError::Conflict(format!(
+                        "seal_collision_quarantine: Realm {realm_id} is blocked"
+                    ))
+                    .into());
+                }
+                mark_control_event_sealed_in_transaction(
+                    conn,
+                    &digest,
+                    &seal_id,
+                    &realm_id,
+                    delta_index,
+                    sealed_at,
+                )
+                .await?;
                 Ok(())
             })
             .await
@@ -616,24 +931,46 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    fn sealed_by(&self, event_digest: &Hash) -> StoreResult<Option<SealId>> {
+    fn digest_suite(
+        &self,
+        event_digest: &Hash,
+    ) -> StoreResult<Option<arkret_canonical::DigestSuite>> {
         let pool = self.pool.clone();
         let digest = event_digest.as_str().to_owned();
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
-            let row = sql_query(
-                "SELECT sealed_by AS value FROM state_control_events WHERE event_digest = $1",
+            sql_query(
+                "SELECT digest_suite AS value FROM state_control_events WHERE event_digest = $1",
             )
             .bind::<Text, _>(&digest)
-            .get_result::<OptionalTextRow>(&mut *conn)
+            .get_result::<TextRow>(&mut *conn)
             .await
             .optional()
+            .map_err(diesel_to_store)?
+            .map(|row| {
+                arkret_canonical::digest_suite(&row.value)
+                    .map_err(|error| StoreError::Backend(error.to_string()))
+            })
+            .transpose()
+        })
+    }
+
+    fn covering_seals(&self, event_digest: &Hash) -> StoreResult<Vec<SealId>> {
+        let pool = self.pool.clone();
+        let digest = event_digest.as_str().to_owned();
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            let rows = sql_query(
+                "SELECT b.seal_id AS value FROM state_seal_control_events b \
+                 WHERE b.event_digest = $1 AND NOT EXISTS ( \
+                   SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = b.seal_id \
+                 ) ORDER BY b.seal_id",
+            )
+            .bind::<Text, _>(&digest)
+            .load::<TextRow>(&mut *conn)
+            .await
             .map_err(diesel_to_store)?;
-            row.and_then(|row| row.value)
-                .map(|seal_id| {
-                    SealId::new(seal_id).map_err(|error| StoreError::Backend(error.to_string()))
-                })
-                .transpose()
+            covering_seal_ids(rows.into_iter().map(|row| row.value).collect())
         })
     }
 
@@ -666,8 +1003,20 @@ impl ControlEventStore for PgControlEventStore {
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             let row = sql_query(
-                "SELECT event_json, control_proposal_ack, proposal_decisions, sealed_by, \
-                        decision_overdue FROM state_control_events WHERE event_digest=$1",
+                "SELECT c.digest_suite, c.event_json, c.control_proposal_ack, c.proposal_decisions, \
+                        COALESCE( \
+                          array_agg(b.seal_id ORDER BY b.seal_id) \
+                            FILTER (WHERE b.seal_id IS NOT NULL), \
+                          ARRAY[]::text[] \
+                        ) AS covering_seal_ids, \
+                        COALESCE(bool_or(b.decision_overdue), false) AS decision_overdue \
+                 FROM state_control_events c \
+                 LEFT JOIN state_seal_control_events b ON b.event_digest = c.event_digest \
+                   AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                                   WHERE q.seal_id = b.seal_id) \
+                 WHERE c.event_digest=$1 \
+                 GROUP BY c.event_digest, c.digest_suite, c.event_json, c.control_proposal_ack, \
+                          c.proposal_decisions",
             )
             .bind::<Text, _>(&digest)
             .get_result::<ControlProposalSnapshotRow>(&mut *conn)
@@ -676,6 +1025,8 @@ impl ControlEventStore for PgControlEventStore {
             .map_err(diesel_to_store)?;
             row.map(|row| {
                 Ok(ControlProposalSnapshot {
+                    digest_suite: arkret_canonical::digest_suite(&row.digest_suite)
+                        .map_err(|error| StoreError::Backend(error.to_string()))?,
                     event: serde_json::from_value(row.event_json).map_err(serde_to_store)?,
                     control_proposal_ack: row
                         .control_proposal_ack
@@ -683,11 +1034,7 @@ impl ControlEventStore for PgControlEventStore {
                         .transpose()?,
                     decisions: serde_json::from_value(row.proposal_decisions)
                         .map_err(serde_to_store)?,
-                    sealed_by: row
-                        .sealed_by
-                        .map(SealId::new)
-                        .transpose()
-                        .map_err(|error| StoreError::Backend(error.to_string()))?,
+                    covering_seals: covering_seal_ids(row.covering_seal_ids)?,
                     decision_overdue: row.decision_overdue,
                 })
             })
@@ -708,7 +1055,9 @@ impl ControlEventStore for PgControlEventStore {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
                 let row = sql_query(
-                    "SELECT control_proposal_ack, proposal_decisions, sealed_by \
+                    "SELECT control_proposal_ack, proposal_decisions, \
+                            EXISTS (SELECT 1 FROM state_seal_control_events b \
+                                    WHERE b.event_digest = state_control_events.event_digest) AS is_sealed \
                      FROM state_control_events WHERE event_digest = $1 FOR UPDATE",
                 )
                 .bind::<Text, _>(&digest)
@@ -719,7 +1068,7 @@ impl ControlEventStore for PgControlEventStore {
                 .ok_or_else(|| {
                     StoreError::NotFound(format!("control Event {digest} not in store"))
                 })?;
-                if row.sealed_by.is_some() {
+                if row.is_sealed {
                     return Err(StoreError::Conflict(format!(
                         "sealed control Event {digest} cannot receive another proposal decision"
                     ))
@@ -776,9 +1125,11 @@ impl ControlEventStore for PgControlEventStore {
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
-                "SELECT event_json, control_proposal_ack, proposal_decisions, ingress_class \
-                 FROM state_control_events \
-                 WHERE realm_id = $1 AND sealed_by IS NULL \
+                "SELECT digest_suite, event_json, control_proposal_ack, proposal_decisions, ingress_class \
+                 FROM state_control_events c \
+                 WHERE realm_id = $1 \
+                   AND NOT EXISTS (SELECT 1 FROM state_seal_control_events b \
+                                   WHERE b.event_digest = c.event_digest) \
                    AND NOT (proposal_decisions @> '[{\"kind\":\"signed_reject\"}]'::jsonb) \
                  ORDER BY inserted_at ASC, event_digest ASC LIMIT $2",
             )
@@ -790,6 +1141,8 @@ impl ControlEventStore for PgControlEventStore {
             rows.into_iter()
                 .map(|row| {
                     Ok(PendingControlEventRecord {
+                        digest_suite: arkret_canonical::digest_suite(&row.digest_suite)
+                            .map_err(|error| StoreError::Backend(error.to_string()))?,
                         event: control_event_from_value(row.event_json)?,
                         control_proposal_ack: row
                             .control_proposal_ack
@@ -812,8 +1165,9 @@ impl ControlEventStore for PgControlEventStore {
             let mut conn = pg_conn(&pool).await?;
             sql_query(
                 "SELECT DISTINCT realm_id AS value \
-                 FROM state_control_events \
-                 WHERE sealed_by IS NULL \
+                 FROM state_control_events c \
+                 WHERE NOT EXISTS (SELECT 1 FROM state_seal_control_events b \
+                                   WHERE b.event_digest = c.event_digest) \
                    AND NOT (proposal_decisions @> '[{\"kind\":\"signed_reject\"}]'::jsonb) \
                  ORDER BY realm_id \
                  LIMIT $1",
@@ -846,13 +1200,14 @@ impl ControlEventStore for PgControlEventStore {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
                 "SELECT event_json AS value \
-                 FROM state_control_events \
+                 FROM state_control_events c \
                  WHERE realm_id = $1 \
-                   AND sealed_by IS NULL \
+                   AND NOT EXISTS (SELECT 1 FROM state_seal_control_events b \
+                                   WHERE b.event_digest = c.event_digest) \
                    AND NOT (proposal_decisions @> '[{\"kind\":\"signed_reject\"}]'::jsonb) \
                    AND ( \
                      $2 IS NULL OR \
-                     (inserted_at, event_digest) > ( \
+                     (c.inserted_at, c.event_digest) > ( \
                        SELECT inserted_at, event_digest FROM state_control_events \
                        WHERE event_digest = $2 \
                      ) \
@@ -885,18 +1240,24 @@ impl ControlEventStore for PgControlEventStore {
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
-                "SELECT event_json, sealed_by, control_proposal_ack, proposal_decisions, decision_overdue, ingress_class \
-                 FROM state_control_events \
-                 WHERE realm_id = $1 \
-                   AND sealed_by IS NOT NULL \
+                "SELECT c.digest_suite, c.event_json, array_agg(b.seal_id ORDER BY b.seal_id) AS covering_seal_ids, \
+                        c.control_proposal_ack, c.proposal_decisions, \
+                        bool_or(b.decision_overdue) AS decision_overdue, c.ingress_class \
+                 FROM state_control_events c \
+                 JOIN state_seal_control_events b ON b.event_digest = c.event_digest \
+                 WHERE c.realm_id = $1 \
+                   AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                                   WHERE q.seal_id = b.seal_id) \
                    AND ( \
                      $2 IS NULL OR \
-                     (inserted_at, event_digest) > ( \
+                     (c.inserted_at, c.event_digest) > ( \
                        SELECT inserted_at, event_digest FROM state_control_events \
                        WHERE event_digest = $2 \
                      ) \
                    ) \
-                 ORDER BY inserted_at ASC, event_digest ASC \
+                 GROUP BY c.event_digest, c.digest_suite, c.event_json, c.control_proposal_ack, \
+                          c.proposal_decisions, c.ingress_class, c.inserted_at \
+                 ORDER BY c.inserted_at ASC, c.event_digest ASC \
                  LIMIT $3",
             )
             .bind::<Text, _>(&realm_id)
@@ -908,11 +1269,11 @@ impl ControlEventStore for PgControlEventStore {
             rows.into_iter()
                 .map(|row| {
                     let event = control_event_from_value(row.event_json)?;
-                    let seal = SealId::new(row.sealed_by)
-                        .map_err(|error| StoreError::Backend(error.to_string()))?;
                     Ok(SealedControlEventRecord {
+                        digest_suite: arkret_canonical::digest_suite(&row.digest_suite)
+                            .map_err(|error| StoreError::Backend(error.to_string()))?,
                         event,
-                        seal,
+                        covering_seals: covering_seal_ids(row.covering_seal_ids)?,
                         control_proposal_ack: row
                             .control_proposal_ack
                             .map(|value| serde_json::from_value(value).map_err(serde_to_store))
@@ -939,10 +1300,24 @@ impl ControlEventStore for PgControlEventStore {
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
-                "SELECT event_json, sealed_by, control_proposal_ack, proposal_decisions, decision_overdue, ingress_class \
-                 FROM state_control_events \
-                 WHERE realm_id = $1 AND sealed_by IS NOT NULL AND decision_overdue \
-                 ORDER BY sealed_at ASC, event_digest ASC LIMIT $2",
+                "SELECT c.digest_suite, c.event_json, array_agg(b.seal_id ORDER BY b.seal_id) AS covering_seal_ids, \
+                        c.control_proposal_ack, c.proposal_decisions, \
+                        bool_or(b.decision_overdue) AS decision_overdue, c.ingress_class \
+                 FROM state_control_events c \
+                 JOIN state_seal_control_events b ON b.event_digest = c.event_digest \
+                 WHERE c.realm_id = $1 \
+                   AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                                   WHERE q.seal_id = b.seal_id) \
+                   AND EXISTS ( \
+                     SELECT 1 FROM state_seal_control_events overdue \
+                     WHERE overdue.event_digest = c.event_digest AND overdue.decision_overdue \
+                       AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                                       WHERE q.seal_id = overdue.seal_id) \
+                   ) \
+                 GROUP BY c.event_digest, c.digest_suite, c.event_json, c.control_proposal_ack, \
+                          c.proposal_decisions, c.ingress_class \
+                 ORDER BY MIN(b.sealed_at) FILTER (WHERE b.decision_overdue) ASC, \
+                          c.event_digest ASC LIMIT $2",
             )
             .bind::<Text, _>(&realm_id)
             .bind::<BigInt, _>(limit)
@@ -952,9 +1327,10 @@ impl ControlEventStore for PgControlEventStore {
             rows.into_iter()
                 .map(|row| {
                     Ok(SealedControlEventRecord {
-                        event: control_event_from_value(row.event_json)?,
-                        seal: SealId::new(row.sealed_by)
+                        digest_suite: arkret_canonical::digest_suite(&row.digest_suite)
                             .map_err(|error| StoreError::Backend(error.to_string()))?,
+                        event: control_event_from_value(row.event_json)?,
+                        covering_seals: covering_seal_ids(row.covering_seal_ids)?,
                         control_proposal_ack: row
                             .control_proposal_ack
                             .map(|value| serde_json::from_value(value).map_err(serde_to_store))
@@ -1054,54 +1430,136 @@ impl SealStore for PgSealStore {
         })
     }
 
-    fn put(&self, seal: &Seal) -> StoreResult<()> {
+    fn put(&self, seal: &Seal, digest_suite: arkret_canonical::DigestSuite) -> StoreResult<()> {
+        seal.validate_id(digest_suite)
+            .map_err(|error| StoreError::Conflict(error.to_string()))?;
         let pool = self.pool.clone();
         let seal_json = serde_json::to_value(seal).map_err(serde_to_store)?;
+        let seal_id_preimage_bytes = seal.canonical_bytes_for_id().map_err(|error| {
+            StoreError::Backend(format!("Seal ID canonical encoding failed: {error}"))
+        })?;
+        let accepted_seal_bytes =
+            arkret_canonical::canonical_json_bytes(seal).map_err(|error| {
+                StoreError::Backend(format!("accepted Seal canonical encoding failed: {error}"))
+            })?;
         let predecessor_refs = seal_predecessor_refs_json(seal);
         let id = seal.id.as_str().to_owned();
+        let error_id = id.clone();
         let realm_id = seal.realm_id.as_str().to_owned();
         let is_genesis = seal.predecessor_refs.is_empty();
-        run_blocking(async move {
+        let outcome = run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
-            conn.transaction::<_, diesel::result::Error, _>(async move |conn| {
-                lock_seal_realm(conn, &realm_id).await?;
-                insert_state_seal(
+            conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
+                lock_seal_identity(conn, &id).await?;
+                let outcome = preflight_state_seal(
                     conn,
                     &id,
+                    digest_suite,
                     &realm_id,
+                    &seal_id_preimage_bytes,
+                    &accepted_seal_bytes,
                     &seal_json,
                     &predecessor_refs,
                     is_genesis,
                 )
-                .await
+                .await?;
+                if outcome == SealInsertOutcome::Inserted {
+                    lock_seal_realm(conn, &realm_id).await?;
+                    if realm_has_seal_collision(conn, &realm_id).await? {
+                        return Err(StoreError::Conflict(format!(
+                            "seal_collision_quarantine: Realm {realm_id} is blocked"
+                        ))
+                        .into());
+                    }
+                    insert_new_state_seal(
+                        conn,
+                        &id,
+                        digest_suite,
+                        &realm_id,
+                        &seal_id_preimage_bytes,
+                        &accepted_seal_bytes,
+                        &seal_json,
+                        &predecessor_refs,
+                        is_genesis,
+                    )
+                    .await?;
+                }
+                Ok(outcome)
             })
             .await
-            .map_err(diesel_to_store)
-        })
+            .map_err(EventSealCommitError::into_store)
+        })?;
+        if outcome == SealInsertOutcome::Collision {
+            return Err(StoreError::Conflict(format!(
+                "seal_hash_collision: Seal {error_id} is quarantined"
+            )));
+        }
+        Ok(())
     }
 
-    fn put_if_frontier(&self, seal: &Seal, expected_leaves: &[SealId]) -> StoreResult<bool> {
+    fn put_if_frontier(
+        &self,
+        seal: &Seal,
+        expected_leaves: &[SealId],
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> StoreResult<bool> {
+        seal.validate_id(digest_suite)
+            .map_err(|error| StoreError::Conflict(error.to_string()))?;
         let pool = self.pool.clone();
         let seal_json = serde_json::to_value(seal).map_err(serde_to_store)?;
+        let seal_id_preimage_bytes = seal.canonical_bytes_for_id().map_err(|error| {
+            StoreError::Backend(format!("Seal ID canonical encoding failed: {error}"))
+        })?;
+        let accepted_seal_bytes =
+            arkret_canonical::canonical_json_bytes(seal).map_err(|error| {
+                StoreError::Backend(format!("accepted Seal canonical encoding failed: {error}"))
+            })?;
         let predecessor_refs = seal_predecessor_refs_json(seal);
         let id = seal.id.as_str().to_owned();
+        let error_id = id.clone();
         let realm_id = seal.realm_id.as_str().to_owned();
         let is_genesis = seal.predecessor_refs.is_empty();
         let expected = expected_leaves
             .iter()
             .map(|leaf| leaf.as_str().to_owned())
             .collect::<BTreeSet<_>>();
-        run_blocking(async move {
+        let outcome = run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
-            conn.transaction::<_, diesel::result::Error, _>(async move |conn| {
+            conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
+                lock_seal_identity(conn, &id).await?;
+                let outcome = preflight_state_seal(
+                    conn,
+                    &id,
+                    digest_suite,
+                    &realm_id,
+                    &seal_id_preimage_bytes,
+                    &accepted_seal_bytes,
+                    &seal_json,
+                    &predecessor_refs,
+                    is_genesis,
+                )
+                .await?;
+                if outcome != SealInsertOutcome::Inserted {
+                    return Ok(outcome);
+                }
                 lock_seal_realm(conn, &realm_id).await?;
+                if realm_has_seal_collision(conn, &realm_id).await? {
+                    return Err(StoreError::Conflict(format!(
+                        "seal_collision_quarantine: Realm {realm_id} is blocked"
+                    ))
+                    .into());
+                }
                 let rows = sql_query(
                     "SELECT parent.id AS value \
                      FROM state_seals parent \
                      WHERE parent.realm_id = $1 \
+                       AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                                       WHERE q.seal_id = parent.id) \
                        AND NOT EXISTS ( \
                          SELECT 1 FROM state_seals child \
                          WHERE child.realm_id = parent.realm_id \
+                           AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                                           WHERE q.seal_id = child.id) \
                            AND child.predecessor_refs ? parent.id \
                        ) \
                      ORDER BY parent.id ASC",
@@ -1114,22 +1572,32 @@ impl SealStore for PgSealStore {
                     .map(|row| row.value)
                     .collect::<BTreeSet<_>>();
                 if actual != expected {
-                    return Ok(false);
+                    return Ok(SealInsertOutcome::FrontierMismatch);
                 }
-                insert_state_seal(
+                insert_new_state_seal(
                     conn,
                     &id,
+                    digest_suite,
                     &realm_id,
+                    &seal_id_preimage_bytes,
+                    &accepted_seal_bytes,
                     &seal_json,
                     &predecessor_refs,
                     is_genesis,
                 )
                 .await?;
-                Ok(true)
+                Ok(SealInsertOutcome::Inserted)
             })
             .await
-            .map_err(diesel_to_store)
-        })
+            .map_err(EventSealCommitError::into_store)
+        })?;
+        match outcome {
+            SealInsertOutcome::Inserted | SealInsertOutcome::ExactRetry => Ok(true),
+            SealInsertOutcome::FrontierMismatch => Ok(false),
+            SealInsertOutcome::Collision => Err(StoreError::Conflict(format!(
+                "seal_hash_collision: Seal {error_id} is quarantined"
+            ))),
+        }
     }
 
     fn get(&self, id: &SealId) -> StoreResult<Option<Seal>> {
@@ -1137,14 +1605,43 @@ impl SealStore for PgSealStore {
         let id = id.as_str().to_owned();
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
-            sql_query("SELECT seal_json AS value FROM state_seals WHERE id = $1")
-                .bind::<Text, _>(&id)
-                .get_result::<JsonRow>(&mut *conn)
-                .await
-                .optional()
-                .map_err(diesel_to_store)?
-                .map(|row| seal_from_value(row.value))
-                .transpose()
+            sql_query(
+                "SELECT s.seal_json AS value FROM state_seals s \
+                 WHERE s.id = $1 AND NOT EXISTS ( \
+                   SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = s.id \
+                 )",
+            )
+            .bind::<Text, _>(&id)
+            .get_result::<JsonRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(diesel_to_store)?
+            .map(|row| seal_from_value(row.value))
+            .transpose()
+        })
+    }
+
+    fn digest_suite(&self, id: &SealId) -> StoreResult<Option<arkret_canonical::DigestSuite>> {
+        let pool = self.pool.clone();
+        let id = id.as_str().to_owned();
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            let row = sql_query(
+                "SELECT s.digest_suite AS value FROM state_seals s \
+                 WHERE s.id = $1 AND NOT EXISTS ( \
+                   SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = s.id \
+                 )",
+            )
+            .bind::<Text, _>(&id)
+            .get_result::<TextRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(diesel_to_store)?;
+            row.map(|row| {
+                arkret_canonical::digest_suite(&row.value)
+                    .map_err(|error| StoreError::Backend(error.to_string()))
+            })
+            .transpose()
         })
     }
 
@@ -1153,13 +1650,25 @@ impl SealStore for PgSealStore {
         let realm_id = realm_id.as_str().to_owned();
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
+            if realm_has_seal_collision(&mut conn, &realm_id)
+                .await
+                .map_err(diesel_to_store)?
+            {
+                return Err(StoreError::Conflict(format!(
+                    "seal_collision_quarantine: Realm {realm_id} is blocked"
+                )));
+            }
             let rows = sql_query(
                 "SELECT parent.id AS value \
                  FROM state_seals parent \
                  WHERE parent.realm_id = $1 \
+                   AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                                   WHERE q.seal_id = parent.id) \
                    AND NOT EXISTS ( \
                      SELECT 1 FROM state_seals child \
                      WHERE child.realm_id = $1 \
+                       AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                                       WHERE q.seal_id = child.id) \
                        AND child.predecessor_refs ? parent.id \
                    ) \
                  ORDER BY parent.id ASC",
@@ -1185,12 +1694,16 @@ impl SealStore for PgSealStore {
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             for id in refs {
-                let count = sql_query("SELECT COUNT(*) AS value FROM state_seals WHERE id = $1")
-                    .bind::<Text, _>(&id)
-                    .get_result::<CountRow>(&mut *conn)
-                    .await
-                    .map_err(diesel_to_store)?
-                    .value;
+                let count = sql_query(
+                    "SELECT COUNT(*) AS value FROM state_seals s WHERE s.id = $1 \
+                     AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                                     WHERE q.seal_id = s.id)",
+                )
+                .bind::<Text, _>(&id)
+                .get_result::<CountRow>(&mut *conn)
+                .await
+                .map_err(diesel_to_store)?
+                .value;
                 if count == 0 {
                     return Ok(false);
                 }
@@ -1208,6 +1721,8 @@ impl SealStore for PgSealStore {
                 "SELECT id AS value \
                  FROM state_seals \
                  WHERE realm_id = $1 AND is_genesis \
+                   AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                                   WHERE q.seal_id = state_seals.id) \
                  ORDER BY inserted_at ASC, id ASC \
                  LIMIT 1",
             )
@@ -1233,6 +1748,8 @@ impl SealStore for PgSealStore {
                 "SELECT id AS value \
                  FROM state_seals \
                  WHERE realm_id = $1 AND predecessor_refs ? $2 \
+                   AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                                   WHERE q.seal_id = state_seals.id) \
                  ORDER BY id ASC",
             )
             .bind::<Text, _>(&realm_id)
@@ -1247,103 +1764,32 @@ impl SealStore for PgSealStore {
                 .collect()
         })
     }
-
-    fn prune_predecessor(&self, realm_id: &RealmId, seal_id: &SealId) -> StoreResult<Vec<SealId>> {
-        let pool = self.pool.clone();
-        let realm_id = realm_id.as_str().to_owned();
-        let seal_id = seal_id.as_str().to_owned();
-        run_blocking(async move {
-            let mut conn = pg_conn(&pool).await?;
-            conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
-                lock_seal_realm(conn, &realm_id).await?;
-                let pruned = sql_query("SELECT seal_json AS value FROM state_seals WHERE id = $1")
-                    .bind::<Text, _>(&seal_id)
-                    .get_result::<JsonRow>(&mut *conn)
-                    .await
-                    .optional()
-                    .map_err(diesel_to_store)?
-                    .map(|row| seal_from_value(row.value))
-                    .transpose()?
-                    .ok_or_else(|| StoreError::NotFound(format!("seal {seal_id} not in store")))?;
-
-                let successor_rows = sql_query(
-                    "SELECT seal_json AS value \
-                 FROM state_seals \
-                 WHERE realm_id = $1 AND predecessor_refs ? $2 \
-                 ORDER BY id ASC",
-                )
-                .bind::<Text, _>(&realm_id)
-                .bind::<Text, _>(&seal_id)
-                .load::<JsonRow>(&mut *conn)
-                .await
-                .map_err(diesel_to_store)?;
-                if successor_rows.is_empty() {
-                    return Err(StoreError::Conflict(format!(
-                        "seal {seal_id} has no successors; can't prune a leaf via prune_predecessor"
-                    ))
-                    .into());
-                }
-
-                let mut rewired_ids = Vec::with_capacity(successor_rows.len());
-                for row in successor_rows {
-                    let mut successor = seal_from_value(row.value)?;
-                    successor
-                        .predecessor_refs
-                        .retain(|id| id.as_str() != seal_id);
-                    for parent in &pruned.predecessor_refs {
-                        if !successor.predecessor_refs.iter().any(|seen| seen == parent) {
-                            successor.predecessor_refs.push(parent.clone());
-                        }
-                    }
-                    successor
-                        .predecessor_refs
-                        .sort_by(|a, b| a.as_str().cmp(b.as_str()));
-                    let successor_json =
-                        serde_json::to_value(&successor).map_err(serde_to_store)?;
-                    let predecessor_refs = seal_predecessor_refs_json(&successor);
-                    sql_query(
-                        "UPDATE state_seals \
-                     SET seal_json = $3, predecessor_refs = $4 \
-                     WHERE realm_id = $1 AND id = $2",
-                    )
-                    .bind::<Text, _>(&realm_id)
-                    .bind::<Text, _>(successor.id.as_str())
-                    .bind::<Jsonb, _>(&successor_json)
-                    .bind::<Jsonb, _>(&predecessor_refs)
-                    .execute(&mut *conn)
-                    .await
-                    .map_err(diesel_to_store)?;
-                    rewired_ids.push(successor.id);
-                }
-
-                sql_query("DELETE FROM state_seals WHERE realm_id = $1 AND id = $2")
-                    .bind::<Text, _>(&realm_id)
-                    .bind::<Text, _>(&seal_id)
-                    .execute(&mut *conn)
-                    .await
-                    .map_err(diesel_to_store)?;
-
-                Ok(rewired_ids)
-            })
-            .await
-            .map_err(EventSealCommitError::into_store)
-        })
-    }
 }
 
 impl EventSealCommitStore for PgEventSealCommitStore {
     fn commit_if_frontier(
         &self,
         seal: &Seal,
+        digest_suite: arkret_canonical::DigestSuite,
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
     ) -> StoreResult<bool> {
+        seal.validate_id(digest_suite)
+            .map_err(|error| StoreError::Conflict(error.to_string()))?;
         let pool = self.pool.clone();
         let cell_registry = self.cell_registry.clone();
         let seal_json = serde_json::to_value(seal).map_err(serde_to_store)?;
+        let seal_id_preimage_bytes = seal.canonical_bytes_for_id().map_err(|error| {
+            StoreError::Backend(format!("Seal ID canonical encoding failed: {error}"))
+        })?;
+        let accepted_seal_bytes =
+            arkret_canonical::canonical_json_bytes(seal).map_err(|error| {
+                StoreError::Backend(format!("accepted Seal canonical encoding failed: {error}"))
+            })?;
         let predecessor_refs = seal_predecessor_refs_json(seal);
         let seal_id = seal.id.as_str().to_owned();
+        let error_seal_id = seal_id.clone();
         let realm_id = seal.realm_id.as_str().to_owned();
         let delta = seal
             .delta
@@ -1373,17 +1819,43 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 ))
             })
             .collect::<StoreResult<Vec<_>>>()?;
-        run_blocking(async move {
+        let outcome = run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
+                lock_seal_identity(conn, &seal_id).await?;
+                let outcome = preflight_state_seal(
+                    conn,
+                    &seal_id,
+                    digest_suite,
+                    &realm_id,
+                    &seal_id_preimage_bytes,
+                    &accepted_seal_bytes,
+                    &seal_json,
+                    &predecessor_refs,
+                    is_genesis,
+                )
+                .await?;
+                if outcome != SealInsertOutcome::Inserted {
+                    return Ok(outcome);
+                }
                 lock_seal_realm(conn, &realm_id).await?;
+                if realm_has_seal_collision(conn, &realm_id).await? {
+                    return Err(StoreError::Conflict(format!(
+                        "seal_collision_quarantine: Realm {realm_id} is blocked"
+                    ))
+                    .into());
+                }
                 let leaves = sql_query(
                     "SELECT parent.id AS value \
                      FROM state_seals parent \
                      WHERE parent.realm_id = $1 \
+                       AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                                       WHERE q.seal_id = parent.id) \
                        AND NOT EXISTS ( \
                          SELECT 1 FROM state_seals child \
                          WHERE child.realm_id = parent.realm_id \
+                           AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                                           WHERE q.seal_id = child.id) \
                            AND child.predecessor_refs ? parent.id \
                        ) \
                      ORDER BY parent.id ASC",
@@ -1395,7 +1867,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 .map(|row| row.value)
                 .collect::<BTreeSet<_>>();
                 if leaves != expected {
-                    return Ok(false);
+                    return Ok(SealInsertOutcome::FrontierMismatch);
                 }
                 let existing_ops = sql_query(
                     "SELECT COUNT(*) AS value FROM state_cell_ops WHERE seal_id = $1",
@@ -1426,12 +1898,18 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     .await?;
                 }
                 let rows = sql_query(
-                    "SELECT cell_id, seal_id, op_json \
-                     FROM state_cell_ops \
-                     WHERE realm_id = $1 \
-                     ORDER BY cell_id ASC, seq ASC",
+                    "SELECT op.cell_id, op.seal_id, op.op_json \
+                     FROM state_cell_ops op \
+                     WHERE op.realm_id = $1 AND (op.seal_id = $2 OR EXISTS ( \
+                       SELECT 1 FROM state_seals s \
+                       WHERE s.id = op.seal_id AND NOT EXISTS ( \
+                         SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = s.id \
+                       ) \
+                     )) \
+                     ORDER BY op.cell_id ASC, op.seq ASC",
                 )
                 .bind::<Text, _>(&realm_id)
+                .bind::<Text, _>(&seal_id)
                 .load::<EventCellOpRow>(&mut *conn)
                 .await?;
                 let mut batches_by_cell =
@@ -1471,7 +1949,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                         ),
                     );
                 }
-                let recomputed = compute_state_root(&joined)
+                let recomputed = compute_state_root(&joined, digest_suite)
                     .map_err(|error| StoreError::Backend(error.to_string()))?;
                 if recomputed != declared_state_root {
                     return Err(StoreError::Conflict(format!(
@@ -1484,29 +1962,41 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 // marker must commit in this same transaction; otherwise a
                 // covered Event remains visible in the pending queue and can
                 // be proposed repeatedly after a restart.
-                for digest in &delta {
-                    mark_control_event_sealed_in_transaction(
-                        conn,
-                        digest,
-                        &seal_id,
-                        sealed_at,
-                    )
-                    .await?;
-                }
-                insert_state_seal(
+                insert_new_state_seal(
                     conn,
                     &seal_id,
+                    digest_suite,
                     &realm_id,
+                    &seal_id_preimage_bytes,
+                    &accepted_seal_bytes,
                     &seal_json,
                     &predecessor_refs,
                     is_genesis,
                 )
                 .await?;
-                Ok(true)
+                for (delta_index, digest) in delta.iter().enumerate() {
+                    mark_control_event_sealed_in_transaction(
+                        conn,
+                        digest,
+                        &seal_id,
+                        &realm_id,
+                        delta_index as i64,
+                        sealed_at,
+                    )
+                    .await?;
+                }
+                Ok(SealInsertOutcome::Inserted)
             })
             .await
             .map_err(EventSealCommitError::into_store)
-        })
+        })?;
+        match outcome {
+            SealInsertOutcome::Inserted | SealInsertOutcome::ExactRetry => Ok(true),
+            SealInsertOutcome::FrontierMismatch => Ok(false),
+            SealInsertOutcome::Collision => Err(StoreError::Conflict(format!(
+                "seal_hash_collision: Seal {error_seal_id} is quarantined"
+            ))),
+        }
     }
 }
 
@@ -1514,6 +2004,7 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
     fn commit_if_frontier(
         &self,
         seal: &Seal,
+        digest_suite: arkret_canonical::DigestSuite,
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
@@ -1538,7 +2029,7 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             covered,
             new_ops,
         )?;
-        let state_root = compute_state_root(&post_state)
+        let state_root = compute_state_root(&post_state, digest_suite)
             .map_err(|error| StoreError::Backend(format!("state_root recompute: {error}")))?;
         if state_root != seal.state_root {
             return Err(StoreError::Conflict(format!(
@@ -1550,7 +2041,7 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             .append_sealed_effects(&seal.realm_id, &seal.id, new_ops)?;
         match self
             .seal_store
-            .put_if_frontier(seal, expected_store_frontier)
+            .put_if_frontier(seal, expected_store_frontier, digest_suite)
         {
             Ok(true) => {
                 // Match the PostgreSQL transaction: accepted delta Events
@@ -1582,10 +2073,13 @@ impl CellStore for PgCellStore {
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
-                "SELECT DISTINCT cell_id AS value \
-                 FROM state_cell_ops \
-                 WHERE realm_id = $1 \
-                 ORDER BY cell_id ASC",
+                "SELECT DISTINCT op.cell_id AS value \
+                 FROM state_cell_ops op \
+                 JOIN state_seals s ON s.id = op.seal_id \
+                 WHERE op.realm_id = $1 AND NOT EXISTS ( \
+                   SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = s.id \
+                 ) \
+                 ORDER BY op.cell_id ASC",
             )
             .bind::<Text, _>(&realm_id)
             .load::<TextRow>(&mut *conn)
@@ -1610,10 +2104,13 @@ impl CellStore for PgCellStore {
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
-                "SELECT op_json \
-                 FROM state_cell_ops \
-                 WHERE realm_id = $1 AND cell_id = $2 \
-                 ORDER BY seq ASC",
+                "SELECT op.op_json \
+                 FROM state_cell_ops op \
+                 JOIN state_seals s ON s.id = op.seal_id \
+                 WHERE op.realm_id = $1 AND op.cell_id = $2 AND NOT EXISTS ( \
+                   SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = s.id \
+                 ) \
+                 ORDER BY op.seq ASC",
             )
             .bind::<Text, _>(&realm_id)
             .bind::<Text, _>(&cell)
@@ -1637,10 +2134,13 @@ impl CellStore for PgCellStore {
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
-                "SELECT seal_id, op_json \
-                 FROM state_cell_ops \
-                 WHERE realm_id = $1 AND cell_id = $2 \
-                 ORDER BY seq ASC",
+                "SELECT op.seal_id, op.op_json \
+                 FROM state_cell_ops op \
+                 JOIN state_seals s ON s.id = op.seal_id \
+                 WHERE op.realm_id = $1 AND op.cell_id = $2 AND NOT EXISTS ( \
+                   SELECT 1 FROM state_seal_quarantine q WHERE q.seal_id = s.id \
+                 ) \
+                 ORDER BY op.seq ASC",
             )
             .bind::<Text, _>(&realm_id)
             .bind::<Text, _>(&cell)
@@ -1739,12 +2239,15 @@ impl CellStore for PgCellStore {
         let seal = seal.as_str().to_owned();
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
-            sql_query("DELETE FROM state_cell_ops WHERE realm_id = $1 AND seal_id = $2")
-                .bind::<Text, _>(&realm_id)
-                .bind::<Text, _>(&seal)
-                .execute(&mut *conn)
-                .await
-                .map_err(diesel_to_store)?;
+            sql_query(
+                "DELETE FROM state_cell_ops op WHERE realm_id = $1 AND seal_id = $2 \
+                 AND NOT EXISTS (SELECT 1 FROM state_seals s WHERE s.id = op.seal_id)",
+            )
+            .bind::<Text, _>(&realm_id)
+            .bind::<Text, _>(&seal)
+            .execute(&mut *conn)
+            .await
+            .map_err(diesel_to_store)?;
             Ok(())
         })
     }
@@ -1875,7 +2378,7 @@ mod event_seal_commit_tests {
     use arkret_state::SealStore;
     use arkret_state::lattice::CellState;
     use arkret_state::state::store::{AcklessSelfPrincipalIngress, ControlProposalIngress};
-    use arkret_wire::{LatticeOpType, NotarySig, PayloadSignature, SealKind};
+    use arkret_wire::{LatticeOpType, NotarySig, SealSignature};
     use chrono::Utc;
     use serde_json::json;
 
@@ -1953,7 +2456,11 @@ mod event_seal_commit_tests {
             Utc::now(),
         )
         .unwrap();
-        let move_id = arkret_state::state::control_event_digest(&event).unwrap();
+        let move_id = arkret_state::state::control_event_digest(
+            &event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
         let cell = CellRef::new(
             "ak:cell:ak.component.agent.selector_claim.v1:ak.selector.seal_admission".to_owned(),
         )
@@ -1976,8 +2483,12 @@ mod event_seal_commit_tests {
         let covered = std::iter::once(move_id.clone()).collect::<BTreeSet<_>>();
         let state =
             effective_state_with_new_ops(cell_store, registry, realm, &covered, &ops).unwrap();
-        let state_root = compute_state_root(&state).unwrap();
-        let control_root = arkret_state::state::control_event_set_root(&covered).unwrap();
+        let state_root = compute_state_root(&state, arkret_canonical::DigestSuite::Sha256).unwrap();
+        let control_root = arkret_state::state::control_event_set_root(
+            &covered,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
         let placeholder_hash = Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
         let mut seal = Seal {
             id: SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap(),
@@ -1990,24 +2501,22 @@ mod event_seal_commit_tests {
             notary_seq: 0,
             data_view_root: None,
             data_event_set_root: None,
-            availability_root: None,
-            coverage_scope: None,
-            covered_event_digests: covered.iter().cloned().collect(),
+            availability_receipt_digests: Vec::new(),
+            covered_event_digests: Vec::new(),
             previous_state_root: None,
             previous_digest_algorithm: None,
-            notary_signature: NotarySig::Single(PayloadSignature {
+            notary_signature: NotarySig::Single(SealSignature {
                 verification_method: arkret_wire::DidUrl::new("did:key:z6MkFixture#z6MkFixture")
                     .unwrap(),
                 payload_digest: placeholder_hash,
-                created_at: Utc::now(),
                 jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
-                extra: Default::default(),
             }),
             sealed_at: Utc::now(),
             hlc: Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
-            kind: SealKind::Normal,
         };
-        seal.id = seal.derive_id().unwrap();
+        seal.id = seal
+            .derive_id(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
         (seal, ops, covered, event)
     }
 
@@ -2080,10 +2589,10 @@ mod event_seal_commit_tests {
             seal_basis_digest: "sha256:fixture".to_owned(),
         });
         control_event_store
-            .put_pending_with_ingress(&left.3, &ackless)
+            .put_pending_with_ingress(&left.3, &ackless, arkret_canonical::DigestSuite::Sha256)
             .unwrap();
         control_event_store
-            .put_pending_with_ingress(&right.3, &ackless)
+            .put_pending_with_ingress(&right.3, &ackless, arkret_canonical::DigestSuite::Sha256)
             .unwrap();
         let barrier = Arc::new(Barrier::new(3));
         let spawn = |candidate: (
@@ -2097,7 +2606,13 @@ mod event_seal_commit_tests {
             std::thread::spawn(move || {
                 barrier.wait();
                 let accepted = committer
-                    .commit_if_frontier(&candidate.0, &[], &candidate.1, &candidate.2)
+                    .commit_if_frontier(
+                        &candidate.0,
+                        arkret_canonical::DigestSuite::Sha256,
+                        &[],
+                        &candidate.1,
+                        &candidate.2,
+                    )
                     .unwrap();
                 (candidate.0, candidate.1, accepted)
             })
@@ -2123,15 +2638,15 @@ mod event_seal_commit_tests {
         assert!(seal_store.get(&loser.0.id).unwrap().is_none());
         assert_eq!(
             control_event_store
-                .sealed_by(&winner.1[0].1.op.move_id)
+                .covering_seals(&winner.1[0].1.op.move_id)
                 .unwrap(),
-            Some(winner.0.id.clone())
+            vec![winner.0.id.clone()]
         );
         assert!(
             control_event_store
-                .sealed_by(&loser.1[0].1.op.move_id)
+                .covering_seals(&loser.1[0].1.op.move_id)
                 .unwrap()
-                .is_none()
+                .is_empty()
         );
         assert!(
             control_event_store
@@ -2139,7 +2654,8 @@ mod event_seal_commit_tests {
                 .unwrap()
                 .iter()
                 .all(|record| {
-                    arkret_state::state::control_event_digest(&record.event).unwrap()
+                    arkret_state::state::control_event_digest(&record.event, record.digest_suite)
+                        .unwrap()
                         == loser.1[0].1.op.move_id
                 })
         );

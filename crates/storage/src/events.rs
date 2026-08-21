@@ -186,10 +186,11 @@ pub fn stage_identity_anchor_events(
     records: Vec<CanonicalEventRecord>,
 ) -> PersistenceResult<()> {
     for record in records {
-        crate::ids::validated_event_identity_parts(
+        crate::ids::validated_event_identity_parts_for_suite(
             &record.event_id,
             &record.canonical_digest,
             &record.canonical_bytes,
+            record.digest_suite,
         )?;
         if let Some(existing) = staged.get(&record.event_id) {
             if existing.canonical_bytes == record.canonical_bytes {

@@ -307,11 +307,13 @@ fn defer_due_proposals_after_failed_signing(
         .map_err(|error| error.to_string())?;
     for record in records {
         let Some(ack) = record.control_proposal_ack.as_ref() else {
-            if soland_storage::has_self_principal_pcr_device_authorized_shape(&record.event)
-                && state
-                    .projections()
-                    .snapshot()
-                    .realm_is_principal_control(record.event.realm_id.as_str())
+            if soland_storage::has_self_principal_pcr_device_authorized_shape(
+                &record.event,
+                record.digest_suite,
+            ) && state
+                .projections()
+                .snapshot()
+                .realm_is_principal_control(record.event.realm_id.as_str())
             {
                 // Device-authorized Human PCR moves have no external proposal
                 // deadline and therefore never receive coordinator defers.
@@ -321,7 +323,7 @@ fn defer_due_proposals_after_failed_signing(
                 "pending Control Move {} has no Control Proposal Ack",
                 record
                     .event
-                    .event_digest()
+                    .event_digest_with_digest_suite(record.digest_suite)
                     .map_err(|error| error.to_string())?
             ));
         };
@@ -342,7 +344,7 @@ fn defer_due_proposals_after_failed_signing(
             continue;
         }
         let (notary, _) = crate::notary::NotaryWorker::for_service(state.service_id().clone())
-            .current_notary_profile_for_events(state, realm_id, std::slice::from_ref(&record.event))
+            .current_notary_value_for_events(state, realm_id, std::slice::from_ref(&record.event))
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "current proposal notary profile is unavailable".to_owned())?;
         let decision = crate::control_proposal::sign_control_proposal_defer(
@@ -358,7 +360,7 @@ fn defer_due_proposals_after_failed_signing(
         let digest = arkret_identifiers::Hash::new(
             record
                 .event
-                .event_digest()
+                .event_digest_with_digest_suite(record.digest_suite)
                 .map_err(|error| error.to_string())?,
         )
         .map_err(|error| error.to_string())?;

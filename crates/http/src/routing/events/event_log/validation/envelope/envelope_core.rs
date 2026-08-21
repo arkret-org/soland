@@ -16,16 +16,92 @@ pub(crate) fn validate_event_envelope<'a>(
     validate_event_envelope_with_context(state, session, envelope, &[], None)
 }
 
-fn require_verified_mls_commit_frontier_material(kind: &str) -> Result<(), EventValidationError> {
+fn validate_mls_commit_digest(kind: &str, payload: &Value) -> Result<(), EventValidationError> {
     if kind != arkret_wire::event_kind_str::MLS_COMMIT {
         return Ok(());
     }
-    Err(EventValidationError {
-        status: StatusCode::SERVICE_UNAVAILABLE,
-        code: arkret_wire::ErrorCode::FRONTIER_UNAVAILABLE,
-        message: "verified RFC 9420 group-state material is unavailable for MLS Commit security-frontier admission".to_owned(),
-        reason_code: Some(arkret_wire::ReasonCode::MLS_GOVERNANCE_BINDING_STALE),
-    })
+    let commit_bytes = payload
+        .get("commit_bytes_b64")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+                "MLS Commit is missing commit_bytes_b64",
+            )
+        })?;
+    let commit_bytes = URL_SAFE_NO_PAD.decode(commit_bytes).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+            "MLS Commit commit_bytes_b64 is not canonical unpadded base64url",
+        )
+    })?;
+    let carried_digest = payload
+        .get("commit_digest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+                "MLS Commit is missing commit_digest",
+            )
+        })?;
+    if canonical::sha256_digest(&commit_bytes) != carried_digest {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+            "MLS Commit commit_digest does not match commit_bytes_b64",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_canonical_mls_group_id(
+    kind: &str,
+    payload: &Value,
+) -> Result<(), EventValidationError> {
+    if !matches!(
+        kind,
+        arkret_wire::event_kind_str::MLS_GENESIS
+            | arkret_wire::event_kind_str::MLS_COMMIT
+            | arkret_wire::event_kind_str::MLS_PROPOSAL
+            | arkret_wire::event_kind_str::MLS_WELCOME
+    ) {
+        return Ok(());
+    }
+    let Some(group_id) = crate::routing::mls::payload_fields::mls_group_id(payload) else {
+        return Ok(());
+    };
+    let Some(scope) = crate::routing::mls::payload_fields::group_state_effective_scope(payload)
+    else {
+        // A proposal without a governance binding is resolved against its
+        // already-admitted group by the reducer; it carries no scope to check
+        // at this layer.
+        return Ok(());
+    };
+    let scope = serde_json::from_value::<arkret_wire::ScopeRef>(scope).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+            "MLS effective_scope is invalid",
+        )
+    })?;
+    let expected = scope.canonical_mls_group_id().map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+            "MLS effective_scope cannot identify a canonical group",
+        )
+    })?;
+    if group_id != expected {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+            "MLS group id does not match the canonical effective_scope-derived id",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_event_envelope_with_context<'a>(
@@ -578,15 +654,17 @@ async fn validate_event_envelope_with_ingress(
         object,
         is_self_principal_pcr_bootstrap_create,
     )?;
-    // Commit admission requires a receiver-owned RFC 9420 public-group view:
-    // accepted GroupInfo + ratchet-tree bytes establish the actual leaf
-    // indexes, and the candidate Commit advances that verified tree before the
-    // SDK projector compares security_frontier_digest. The current registered
-    // carrier exposes only genesis digests, so deriving leaves from claimed
-    // KeyPackage iteration order would invent tree positions. Stay fail-closed
-    // until the standard digest-verified group-state material operation is
-    // available; do not accept the producer-supplied digest on shape alone.
-    require_verified_mls_commit_frontier_material(&kind)?;
+    // The Principal Server owns only deterministic wire admission and epoch
+    // CAS. RFC 9420 group-state/frontier verification remains receiver-owned;
+    // accepting a durable Commit never authorizes a member to apply it.
+    validate_mls_commit_digest(
+        &kind,
+        object.get("payload").expect("payload required above"),
+    )?;
+    validate_canonical_mls_group_id(
+        &kind,
+        object.get("payload").expect("payload required above"),
+    )?;
     capability_grant::validate_capability_grant_body(&kind, actor_id.as_str(), object)?;
 
     // The capability gate needs the write set, and v1 carries none on the wire:
@@ -627,7 +705,7 @@ async fn validate_event_envelope_with_ingress(
         bootstrap_unit_member,
         realm_bootstrap_contexts,
     )?;
-    let data_event_cells = derived_data_event_cells(envelope, object)?;
+    let data_event_cells = derived_data_event_cells(envelope, object, typed_digest_suite)?;
     validate_data_event_capability_refs(
         state,
         actor_id.as_str(),
@@ -773,7 +851,7 @@ async fn validate_event_envelope_with_ingress(
     } else {
         arkret_schema::EventCellContractContext::Standard
     };
-    enforce_registered_cell_contract(envelope, &kind, cba_context)?;
+    enforce_registered_cell_contract(envelope, &kind, cba_context, typed_digest_suite)?;
     enforce_ordered_log_cell_contract(
         state,
         envelope,
@@ -810,6 +888,7 @@ async fn validate_event_envelope_with_ingress(
         schema_id,
         prev_refs,
         canonical_digest,
+        digest_suite: typed_digest_suite,
         canonical_bytes,
         producer_signing_key: Some(producer_signing_key),
     })
@@ -1095,6 +1174,7 @@ fn is_realm_bootstrap_unit_member(
 fn derived_data_event_cells(
     envelope: &Value,
     object: &serde_json::Map<String, Value>,
+    digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<Vec<String>, EventValidationError> {
     if !object.contains_key("seal_ref") && !object.contains_key("auth_context") {
         return Ok(Vec::new());
@@ -1107,17 +1187,14 @@ fn derived_data_event_cells(
                 format!("DataEvent is not a valid Event Envelope: {error}"),
             )
         })?;
-    let projected = arkret_schema::project_registered_cell_writes(
-        &event,
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .map_err(|error| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            error.reason_code(),
-            error.to_string(),
-        )
-    })?;
+    let projected =
+        arkret_schema::project_registered_cell_writes(&event, digest_suite).map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                error.reason_code(),
+                error.to_string(),
+            )
+        })?;
     Ok(projected
         .into_iter()
         .map(|write| write.cell.as_str().to_owned())
@@ -1128,6 +1205,7 @@ fn enforce_registered_cell_contract(
     envelope: &Value,
     kind: &str,
     context: arkret_schema::EventCellContractContext,
+    digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<(), EventValidationError> {
     let event_kind = arkret_wire::EventKind::from(kind);
     let Some(descriptor) = event_kind.descriptor() else {
@@ -1160,7 +1238,7 @@ fn enforce_registered_cell_contract(
         // mandatory at this shape-only stage.
         arkret_schema::validate_registered_cell_plane_in_context(&event, context)
     } else {
-        arkret_schema::validate_registered_cell_writes_in_context(&event, context)
+        arkret_schema::validate_registered_cell_writes_in_context(&event, context, digest_suite)
     };
     contract_validation.map_err(|error| {
         event_validation_error(
@@ -1175,17 +1253,15 @@ fn enforce_registered_cell_contract(
         // asserted: the lattice ops come from the registered
         // `effect_projection`, and restating them here would rebuild the
         // producer-side effect table v1 removed.
-        let derived = arkret_schema::project_registered_cell_writes(
-            &event,
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                error.reason_code(),
-                error.to_string(),
-            )
-        })?;
+        let derived = arkret_schema::project_registered_cell_writes(&event, digest_suite).map_err(
+            |error| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    error.reason_code(),
+                    error.to_string(),
+                )
+            },
+        )?;
         let expected = arkret_bootstrap::expected_realm_create_cells(&event);
         let actual: std::collections::BTreeSet<String> = derived
             .iter()
@@ -1209,7 +1285,7 @@ fn enforce_registered_cell_contract(
 /// producer-selected `effects[].cell` or an arbitrary `op.value` — the
 /// authority for a reducer target. This is the general hook: it applies to
 /// every kind whose registry row declares an ordered-log single-target
-/// contract with a value projection, not just the realm-key delivery family
+/// contract with a value projection, not only one historical carrier family
 /// that first exposed the gap.
 fn enforce_ordered_log_cell_contract(
     state: &AppState,
@@ -1336,22 +1412,56 @@ mod security_frontier_material_tests {
     }
 
     #[test]
-    fn mls_commit_fails_closed_without_verified_group_state_material() {
-        let error = require_verified_mls_commit_frontier_material(
-            arkret_wire::EventKind::MlsCommit.as_str(),
-        )
-        .unwrap_err();
-        assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(error.code, arkret_wire::ErrorCode::FRONTIER_UNAVAILABLE);
-        assert_eq!(
-            error.reason_code,
-            Some(arkret_wire::ReasonCode::MLS_GOVERNANCE_BINDING_STALE)
-        );
+    fn mls_commit_digest_is_recomputed_from_inline_bytes() {
+        let bytes = b"accepted MLS commit bytes";
+        let payload = serde_json::json!({
+            "commit_bytes_b64": URL_SAFE_NO_PAD.encode(bytes),
+            "commit_digest": canonical::sha256_digest(bytes)
+        });
+        validate_mls_commit_digest(arkret_wire::EventKind::MlsCommit.as_str(), &payload).unwrap();
+
+        let mut forged = payload;
+        forged["commit_digest"] = serde_json::json!(canonical::sha256_digest(b"other bytes"));
+        let error = validate_mls_commit_digest(arkret_wire::EventKind::MlsCommit.as_str(), &forged)
+            .unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.code, arkret_wire::ErrorCode::SCHEMA_VIOLATION);
     }
 
     #[test]
-    fn non_commit_events_do_not_use_the_commit_material_gate() {
-        require_verified_mls_commit_frontier_material(arkret_wire::EventKind::MlsGenesis.as_str())
+    fn non_commit_events_do_not_use_the_commit_digest_gate() {
+        validate_mls_commit_digest(
+            arkret_wire::EventKind::MlsGenesis.as_str(),
+            &serde_json::json!({}),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn mls_group_id_must_match_effective_scope() {
+        let realm_id = arkret_wire::RealmId::new(
+            "ak:realm:AY789mrKRCQEVlbVgiTgLdjVO5oCMJiUCrF-D-JlRNxI".to_owned(),
+        )
+        .unwrap();
+        let scope = arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let group_id = scope.canonical_mls_group_id().unwrap();
+        let payload = serde_json::json!({
+            "mls_group_id": group_id,
+            "effective_scope": scope
+        });
+        validate_canonical_mls_group_id(arkret_wire::EventKind::MlsGenesis.as_str(), &payload)
             .unwrap();
+
+        let mut mismatched = payload;
+        mismatched["mls_group_id"] = serde_json::json!("wrong-group");
+        assert!(
+            validate_canonical_mls_group_id(
+                arkret_wire::EventKind::MlsGenesis.as_str(),
+                &mismatched,
+            )
+            .is_err()
+        );
     }
 }

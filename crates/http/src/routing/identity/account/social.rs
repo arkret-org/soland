@@ -8,7 +8,6 @@ pub(crate) mod direct;
 pub(crate) use direct::{
     active_direct_binding, direct_binding_conflict, direct_binding_matches_projection,
     direct_pair_key, project_canonical_direct_binding, validate_direct_binding_operation,
-    validate_direct_mls_generation_operation,
 };
 
 mod contact_write;

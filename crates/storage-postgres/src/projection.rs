@@ -895,7 +895,7 @@ struct CircleProjectionRow {
     #[diesel(sql_type = Text)]
     join_rule: String,
     #[diesel(sql_type = Text)]
-    history_visibility: String,
+    history_access: String,
     #[diesel(sql_type = Nullable<Text>)]
     content_encryption_floor: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -903,7 +903,11 @@ struct CircleProjectionRow {
     #[diesel(sql_type = Text)]
     encryption_profile: String,
     #[diesel(sql_type = Nullable<Text>)]
+    content_scheme: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
     mls_group_ref: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    durability_policy: Option<String>,
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -929,11 +933,13 @@ impl From<CircleProjectionRow> for CircleProjectionRecord {
             display: row.display,
             directory_visibility: row.directory_visibility,
             join_rule: row.join_rule,
-            history_visibility: row.history_visibility,
+            history_access: row.history_access,
             content_encryption_floor: row.content_encryption_floor,
             metadata_encryption_floor: row.metadata_encryption_floor,
             encryption_profile: row.encryption_profile,
+            content_scheme: row.content_scheme,
             mls_group_ref: row.mls_group_ref,
+            durability_policy: row.durability_policy,
             state: row.state,
             state_changed_at: row.state_changed_at,
             created_by: row.created_by,
@@ -945,8 +951,9 @@ impl From<CircleProjectionRow> for CircleProjectionRecord {
 }
 
 const CIRCLE_PROJECTION_COLUMNS: &str = "id AS circle_id, realm_id, profile_ref, title, summary, display, \
-     directory_visibility, join_rule, history_visibility, content_encryption_floor, \
-     metadata_encryption_floor, encryption_profile, mls_group_ref, state, state_changed_at, \
+     directory_visibility, join_rule, history_access, content_encryption_floor, \
+     metadata_encryption_floor, encryption_profile, content_scheme, mls_group_ref, \
+     durability_policy, state, state_changed_at, \
      created_by_id AS created_by, updated_by_id AS updated_by, created_at, updated_at";
 
 #[derive(QueryableByName)]
@@ -1003,10 +1010,11 @@ impl CircleProjectionStore for PgCircleProjectionStore {
         sql_query(
             "INSERT INTO projection_circles \
              (id, realm_id, profile_ref, title, summary, display, directory_visibility, join_rule, \
-              history_visibility, content_encryption_floor, metadata_encryption_floor, \
-              encryption_profile, mls_group_ref, state, state_changed_at, created_by_id, \
+              history_access, content_encryption_floor, metadata_encryption_floor, \
+              encryption_profile, content_scheme, mls_group_ref, durability_policy, state, \
+              state_changed_at, created_by_id, \
               updated_by_id, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 profile_ref = EXCLUDED.profile_ref, \
@@ -1015,11 +1023,13 @@ impl CircleProjectionStore for PgCircleProjectionStore {
                 display = EXCLUDED.display, \
                 directory_visibility = EXCLUDED.directory_visibility, \
                 join_rule = EXCLUDED.join_rule, \
-                history_visibility = EXCLUDED.history_visibility, \
+                history_access = EXCLUDED.history_access, \
                 content_encryption_floor = EXCLUDED.content_encryption_floor, \
                 metadata_encryption_floor = EXCLUDED.metadata_encryption_floor, \
                 encryption_profile = EXCLUDED.encryption_profile, \
+                content_scheme = EXCLUDED.content_scheme, \
                 mls_group_ref = EXCLUDED.mls_group_ref, \
+                durability_policy = EXCLUDED.durability_policy, \
                 state = EXCLUDED.state, \
                 state_changed_at = EXCLUDED.state_changed_at, \
                 updated_by_id = EXCLUDED.updated_by_id, \
@@ -1033,11 +1043,13 @@ impl CircleProjectionStore for PgCircleProjectionStore {
         .bind::<Jsonb, _>(&record.display)
         .bind::<Text, _>(&record.directory_visibility)
         .bind::<Text, _>(&record.join_rule)
-        .bind::<Text, _>(&record.history_visibility)
+        .bind::<Text, _>(&record.history_access)
         .bind::<Nullable<Text>, _>(&record.content_encryption_floor)
         .bind::<Nullable<Text>, _>(&record.metadata_encryption_floor)
         .bind::<Text, _>(&record.encryption_profile)
+        .bind::<Nullable<Text>, _>(&record.content_scheme)
         .bind::<Nullable<Text>, _>(&record.mls_group_ref)
+        .bind::<Nullable<Text>, _>(&record.durability_policy)
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
         .bind::<Text, _>(&record.created_by)
@@ -1231,9 +1243,8 @@ impl StrandWatchProjectionStore for PgStrandWatchProjectionStore {
     }
 }
 
-const REALM_META_COLUMNS: &str = "realm_id, owner, deleted, discoverability, history_visibility, \
-     history_sharing_policy, history_sharing_policy_digest, preview_policy, preview_policy_digest, \
-     asset_privacy_policy, asset_privacy_policy_digest, encryption_profile, \
+const REALM_META_COLUMNS: &str = "realm_id, owner, deleted, discoverability, history_access, \
+     preview_policy, preview_policy_digest, asset_privacy_policy, asset_privacy_policy_digest, encryption_profile, \
      plaintext_visible_services, plaintext_visible_service_classes, minimal_metadata_realm, \
      aad_visibility_ceiling, created_at, updated_at";
 
@@ -1252,11 +1263,7 @@ struct RealmMetaRow {
     #[diesel(sql_type = Text)]
     discoverability: String,
     #[diesel(sql_type = Text)]
-    history_visibility: String,
-    #[diesel(sql_type = Nullable<Jsonb>)]
-    history_sharing_policy: Option<Value>,
-    #[diesel(sql_type = Nullable<Text>)]
-    history_sharing_policy_digest: Option<String>,
+    history_access: String,
     #[diesel(sql_type = Nullable<Jsonb>)]
     preview_policy: Option<Value>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -1287,9 +1294,7 @@ impl From<RealmMetaRow> for RealmMetaRecord {
             owner: row.owner,
             deleted: row.deleted,
             discoverability: row.discoverability,
-            history_visibility: row.history_visibility,
-            history_sharing_policy: row.history_sharing_policy,
-            history_sharing_policy_digest: row.history_sharing_policy_digest,
+            history_access: row.history_access,
             preview_policy: row.preview_policy,
             preview_policy_digest: row.preview_policy_digest,
             asset_privacy_policy: row.asset_privacy_policy,
@@ -1351,19 +1356,16 @@ impl RealmMetaStore for PgRealmMetaStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO realm_meta \
-             (realm_id, owner, deleted, discoverability, history_visibility, \
-              history_sharing_policy, history_sharing_policy_digest, preview_policy, \
-              preview_policy_digest, asset_privacy_policy, asset_privacy_policy_digest, \
+             (realm_id, owner, deleted, discoverability, history_access, \
+              preview_policy, preview_policy_digest, asset_privacy_policy, asset_privacy_policy_digest, \
               encryption_profile, plaintext_visible_services, plaintext_visible_service_classes, \
               minimal_metadata_realm, aad_visibility_ceiling, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
              ON CONFLICT (realm_id) DO UPDATE SET \
                 owner = EXCLUDED.owner, \
                 deleted = EXCLUDED.deleted, \
                 discoverability = EXCLUDED.discoverability, \
-                history_visibility = EXCLUDED.history_visibility, \
-                history_sharing_policy = EXCLUDED.history_sharing_policy, \
-                history_sharing_policy_digest = EXCLUDED.history_sharing_policy_digest, \
+                history_access = EXCLUDED.history_access, \
                 preview_policy = EXCLUDED.preview_policy, \
                 preview_policy_digest = EXCLUDED.preview_policy_digest, \
                 asset_privacy_policy = EXCLUDED.asset_privacy_policy, \
@@ -1380,9 +1382,7 @@ impl RealmMetaStore for PgRealmMetaStore {
         .bind::<Text, _>(&record.owner)
         .bind::<Bool, _>(record.deleted)
         .bind::<Text, _>(&record.discoverability)
-        .bind::<Text, _>(&record.history_visibility)
-        .bind::<Nullable<Jsonb>, _>(&record.history_sharing_policy)
-        .bind::<Nullable<Text>, _>(&record.history_sharing_policy_digest)
+        .bind::<Text, _>(&record.history_access)
         .bind::<Nullable<Jsonb>, _>(&record.preview_policy)
         .bind::<Nullable<Text>, _>(&record.preview_policy_digest)
         .bind::<Nullable<Jsonb>, _>(&record.asset_privacy_policy)

@@ -1147,6 +1147,7 @@ mod tests {
             arkret_wire::OperationKind::Create,
             None,
             &event,
+            arkret_canonical::DigestSuite::Sha256,
         )
         .unwrap()
     }
@@ -1428,6 +1429,7 @@ mod tests {
             arkret_wire::OperationKind::Create,
             None,
             &event,
+            arkret_canonical::DigestSuite::Sha256,
         )
         .unwrap();
 

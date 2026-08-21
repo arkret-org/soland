@@ -2,9 +2,10 @@ use soland_storage::contract_tests::{
     EventCommitContractStores, assert_atomic_batch_outbox_rollback_contract,
     assert_control_proposal_authority_ack_store_contract,
     assert_device_message_snapshot_guard_contract, assert_event_commit_unit_of_work_contract,
-    assert_federation_outbox_store_contract, assert_idempotency_store_contract,
-    assert_last_resort_claim_ledger_contract, assert_mimi_consent_correlation_store_contract,
-    assert_mls_keypackage_retirement_contract, assert_organization_registration_store_contract,
+    assert_federation_outbox_store_contract, assert_governance_unscoped_signer_evidence_contract,
+    assert_idempotency_store_contract, assert_last_resort_claim_ledger_contract,
+    assert_mimi_consent_correlation_store_contract, assert_mls_keypackage_retirement_contract,
+    assert_organization_registration_store_contract,
     assert_service_route_handover_plan_store_contract,
 };
 use soland_storage::{
@@ -14,9 +15,10 @@ use soland_storage::{
 use soland_storage_postgres::{
     Db, PgAccountDataStore, PgContactStore, PgControlProposalAuthorityAckStore,
     PgDeviceInventoryStore, PgDeviceMessageStore, PgEventCommitUnitOfWork, PgEventStore,
-    PgFederationOutboxStore, PgIdempotencyStore, PgInviteReceivePolicyStore,
-    PgMimiConsentCorrelationStore, PgMlsKeyPackageStore, PgOrganizationRegistrationStore, PgPool,
-    PgProjectionEventStore, PgServiceRouteHandoverPlanStore,
+    PgFederationOutboxStore, PgGovernanceDependencyStore, PgIdempotencyStore,
+    PgInviteReceivePolicyStore, PgMimiConsentCorrelationStore, PgMlsKeyPackageStore,
+    PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
+    PgServiceRouteHandoverPlanStore,
 };
 
 #[tokio::test]
@@ -89,6 +91,17 @@ async fn postgres_adapter_satisfies_shared_idempotency_contract_when_configured(
     let store = PgIdempotencyStore { pool };
     let namespace = format!("postgres-contract-{}", uuid::Uuid::now_v7());
     assert_idempotency_store_contract(&store, &namespace).await;
+}
+
+#[tokio::test]
+async fn postgres_adapter_satisfies_unscoped_signer_evidence_contract_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let store = PgGovernanceDependencyStore { pool };
+    let namespace = format!("postgres-unscoped-signer-{}", uuid::Uuid::now_v7());
+    assert_governance_unscoped_signer_evidence_contract(&store, &namespace).await;
 }
 
 #[tokio::test]
@@ -195,7 +208,12 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
     .unwrap();
     let event_id = event.event_id.clone();
     assert!(event.seal_basis.is_none());
-    let proposal_digest = arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
+    let proposal_digest = arkret_identifiers::Hash::new(
+        event
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap(),
+    )
+    .unwrap();
     let authority_set_ref =
         arkret_identifiers::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
     let ack = arkret_wire::ControlProposalAck {
@@ -223,6 +241,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
                 realm_id: Some(realm_id.to_string()),
                 kind: arkret_wire::EventKind::RealmCreate.as_str().to_owned(),
                 schema_id: "ak.schema.realm.v1".to_owned(),
+                digest_suite: arkret_canonical::DigestSuite::Sha256,
                 canonical_digest: proposal_digest.to_string(),
                 canonical_bytes,
                 envelope,
@@ -301,6 +320,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
         realm_id: Some(realm_id.clone()),
         kind: "ak.test.data".to_owned(),
         schema_id: "arkret://events/test/v1".to_owned(),
+        digest_suite: arkret_canonical::DigestSuite::Sha256,
         canonical_digest: canonical_digest.clone(),
         canonical_bytes: preimage,
         envelope: serde_json::json!({"variant": "incoming", "proofs": [{"jws": "full-evidence"}]}),
@@ -385,11 +405,32 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     assert_eq!(projections, 0, "unsealed projection must be withdrawn");
     sql_query(
         "INSERT INTO state_control_events \
-         (event_digest, realm_id, event_json, ingress_class, sealed_by, sealed_at) \
-         VALUES ($1, $2, '{}'::jsonb, '{\"class\":\"ack_required\"}'::jsonb, 'ak:seal:test', $3)",
+         (event_digest, digest_suite, realm_id, event_json, ingress_class) \
+         VALUES ($1, 'sha256', $2, '{}'::jsonb, '{\"class\":\"ack_required\"}'::jsonb)",
     )
     .bind::<Text, _>(&canonical_digest)
     .bind::<Text, _>(&realm_id)
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    sql_query(
+        "INSERT INTO state_seals \
+         (id, digest_suite, realm_id, seal_id_preimage_bytes, accepted_seal_bytes, seal_json, predecessor_refs, is_genesis) \
+         VALUES ('ak:seal:test', 'sha256', $1, decode('00', 'hex'), decode('00', 'hex'), \
+                 '{}'::jsonb, '[]'::jsonb, true)",
+    )
+    .bind::<Text, _>(&realm_id)
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    sql_query(
+        "INSERT INTO state_seal_control_events \
+         (seal_id, realm_id, event_digest, delta_index, accepted_event_bytes_digest, \
+          accepted_event_bytes, sealed_at, decision_overdue) \
+         VALUES ('ak:seal:test', $1, $2, 0, $2, decode('00', 'hex'), $3, false)",
+    )
+    .bind::<Text, _>(&realm_id)
+    .bind::<Text, _>(&canonical_digest)
     .bind::<diesel::sql_types::Timestamptz, _>(now)
     .execute(&mut conn)
     .await

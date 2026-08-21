@@ -18,7 +18,9 @@ use arkret_wire::{
     AuthoredEvent, Base64UrlString, DidUrl, Event, IdempotencyKey, ProtocolOperationId,
     ProtocolSignature, ReservationHandle,
 };
-use ed25519_dalek::Signature;
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use ed25519_dalek::{Signature, Signer as _};
 use serde::de::DeserializeOwned;
 
 use super::*;
@@ -304,9 +306,13 @@ async fn validate_request_acceptance_receipt(
         })?;
     let request_event = serde_json::from_value::<Event>(stored.envelope)
         .map_err(|error| AppError::internal(format!("stored Contact request Event: {error}")))?;
-    let request_digest = Hash::new(request_event.event_digest().map_err(|error| {
-        AppError::internal(format!("stored Contact request Event digest: {error}"))
-    })?)
+    let request_digest = Hash::new(
+        request_event
+            .event_digest_with_digest_suite(stored.digest_suite)
+            .map_err(|error| {
+                AppError::internal(format!("stored Contact request Event digest: {error}"))
+            })?,
+    )
     .map_err(|error| AppError::internal(format!("stored Contact request digest: {error}")))?;
     let requested_payload = serde_json::from_value::<ContactRequestedPayload>(
         serde_json::to_value(&request_event.payload)
@@ -387,6 +393,7 @@ fn new_unsigned_contact_event<K: arkret_event_draft::EventSpec>(
     seal_basis: arkret_wire::SealBasis,
     created_at: chrono::DateTime<chrono::Utc>,
     payload: K::Payload,
+    digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<AuthoredEvent, AppError> {
     arkret_event_draft::TypedEventDraft::<K>::new(
         arkret_wire::ScopeRef::Realm { realm_id },
@@ -395,11 +402,14 @@ fn new_unsigned_contact_event<K: arkret_event_draft::EventSpec>(
         payload,
     )
     .map(|draft| draft.with_prev_refs(prev_refs).with_seal_basis(seal_basis))
-    .and_then(|draft| draft.author(actor_seq, hlc, created_at))
+    .and_then(|draft| draft.author_with_digest_suite(actor_seq, hlc, created_at, digest_suite))
     .map_err(|error| AppError::internal(format!("Contact typed Event draft invalid: {error}")))
 }
 
-fn contact_event_draft(event: &Event) -> Result<ContactPreparedEventDraft, AppError> {
+fn contact_event_draft(
+    event: &Event,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<ContactPreparedEventDraft, AppError> {
     let digest_payload = event
         .digest_payload()
         .map_err(|error| AppError::internal(format!("Contact Event draft: {error}")))?;
@@ -412,7 +422,7 @@ fn contact_event_draft(event: &Event) -> Result<ContactPreparedEventDraft, AppEr
             .map_err(|error| AppError::internal(format!("Contact draft encode: {error}")))?,
         event_digest: Hash::new(
             event
-                .event_digest()
+                .event_digest_with_digest_suite(digest_suite)
                 .map_err(|error| AppError::internal(format!("Contact Event digest: {error}")))?,
         )
         .map_err(|error| AppError::internal(format!("Contact Event digest invalid: {error}")))?,
@@ -616,6 +626,7 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
     let created_at = now();
     let principal_server_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service id invalid: {error}")))?;
+    let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
     let event = new_unsigned_contact_event::<K>(
         &holder,
         principal_server_id,
@@ -627,6 +638,7 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
         seal_basis,
         created_at,
         payload,
+        digest_suite,
     )?;
     let reservation = ContactReservation {
         operation_id,
@@ -635,7 +647,7 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
             .map_err(AppError::internal)?,
         holder,
         branch,
-        event_draft: contact_event_draft(&event)?,
+        event_draft: contact_event_draft(&event, digest_suite)?,
         expires_at: created_at + chrono::Duration::minutes(CONTACT_RESERVATION_TTL_MINUTES),
     };
     store_prepare(
@@ -771,9 +783,13 @@ fn validate_signed_event(event: &Event, draft: &ContactPreparedEventDraft) -> Re
     let expected = URL_SAFE_NO_PAD
         .decode(draft.unsigned_event_bytes.as_str())
         .map_err(|_| AppError::internal("stored Contact draft bytes are invalid"))?;
+    let digest_suite = draft
+        .event_digest
+        .digest_suite()
+        .map_err(|error| AppError::internal(format!("stored Contact digest suite: {error}")))?;
     let digest = Hash::new(
         event
-            .event_digest()
+            .event_digest_with_digest_suite(digest_suite)
             .map_err(|error| AppError::param_invalid(format!("signed Contact Event: {error}")))?,
     )
     .map_err(|error| AppError::param_invalid(format!("signed Contact digest: {error}")))?;
@@ -849,10 +865,11 @@ fn sign_request_receipt(
     state: &AppState,
     reservation: &ContactReservation,
     event: &Event,
+    digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<RequestAcceptanceReceipt, AppError> {
-    let request_digest = Hash::new(event.event_digest().map_err(|error| {
-        AppError::internal(format!("accepted Contact request digest: {error}"))
-    })?)
+    let request_digest = Hash::new(event.event_digest_with_digest_suite(digest_suite).map_err(
+        |error| AppError::internal(format!("accepted Contact request digest: {error}")),
+    )?)
     .map_err(|error| AppError::internal(format!("accepted request digest invalid: {error}")))?;
     let core = RequestAcceptanceReceiptCore {
         holder: reservation.holder.clone(),
@@ -931,6 +948,7 @@ fn signed_current_proof(
     state: &AppState,
     contact_round_id: Hash,
     event: &Event,
+    digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<ContactCurrentProof, AppError> {
     let _issuer_full_id = event
         .proofs
@@ -952,7 +970,7 @@ fn signed_current_proof(
     let terminal = event.kind == arkret_wire::EventKind::ContactTombstone;
     let head_digest = Hash::new(
         event
-            .event_digest()
+            .event_digest_with_digest_suite(digest_suite)
             .map_err(|error| AppError::internal(format!("Contact head digest: {error}")))?,
     )
     .map_err(|error| AppError::internal(format!("Contact head digest invalid: {error}")))?;
@@ -998,11 +1016,20 @@ async fn local_requester_current_proof(
             "accepted Contact request Event is invalid: {error}"
         ))
     })?;
+    let request_digest_suite = request_receipt
+        .core
+        .request_digest
+        .digest_suite()
+        .map_err(|error| AppError::internal(format!("Contact request digest suite: {error}")))?;
     if request_event.kind != arkret_wire::EventKind::ContactRequested
         || request_event.actor_id != request_receipt.core.holder.contact_actor_id()
-        || Hash::new(request_event.event_digest().map_err(|error| {
-            AppError::internal(format!("accepted Contact request digest: {error}"))
-        })?)
+        || Hash::new(
+            request_event
+                .event_digest_with_digest_suite(request_digest_suite)
+                .map_err(|error| {
+                    AppError::internal(format!("accepted Contact request digest: {error}"))
+                })?,
+        )
         .map_err(|error| AppError::internal(format!("Contact request digest invalid: {error}")))?
             != request_receipt.core.request_digest
     {
@@ -1026,7 +1053,13 @@ async fn local_requester_current_proof(
     {
         return Ok(None);
     }
-    signed_current_proof(state, contact_round_id.clone(), &request_event).map(Some)
+    signed_current_proof(
+        state,
+        contact_round_id.clone(),
+        &request_event,
+        request_digest_suite,
+    )
+    .map(Some)
 }
 
 async fn commit(
@@ -1155,6 +1188,11 @@ async fn plan_contact_commit(
         .as_str()
         .to_owned();
     let contacts = state.contacts();
+    let digest_suite = reservation
+        .event_draft
+        .event_digest
+        .digest_suite()
+        .map_err(|error| AppError::internal(format!("stored Contact digest suite: {error}")))?;
     let projection;
     let outcome = match &reservation.branch {
         ContactReservationBranch::Request {
@@ -1164,7 +1202,7 @@ async fn plan_contact_commit(
             introduction_evidence,
             ..
         } => {
-            let request_receipt = sign_request_receipt(state, reservation, event)?;
+            let request_receipt = sign_request_receipt(state, reservation, event, digest_suite)?;
             let peer_service_id = contact_request_delivery_address(
                 state,
                 reservation.holder.contact_actor_id(),
@@ -1362,9 +1400,13 @@ async fn plan_contact_commit(
                 ));
             }
             let expected_updated_at = record.updated_at;
-            let response_digest = Hash::new(event.event_digest().map_err(|error| {
-                AppError::internal(format!("Contact response digest: {error}"))
-            })?)
+            let response_digest = Hash::new(
+                event
+                    .event_digest_with_digest_suite(digest_suite)
+                    .map_err(|error| {
+                        AppError::internal(format!("Contact response digest: {error}"))
+                    })?,
+            )
             .map_err(|error| AppError::internal(format!("response digest invalid: {error}")))?;
             let outgoing_slot_absence_digest = contact_hash(
                 arkret_wire::DomainSeparationId::CONTACT_NO_OUTGOING_SLOT_V1,
@@ -1392,7 +1434,8 @@ async fn plan_contact_commit(
                 issuer,
                 signature: service_signature(state, &unsigned_receipt)?,
             };
-            let current_proof = signed_current_proof(state, contact_round_id.clone(), event)?;
+            let current_proof =
+                signed_current_proof(state, contact_round_id.clone(), event, digest_suite)?;
             let requester_current_proof =
                 local_requester_current_proof(state, contact_round_id, request_receipt).await?;
             record.status = "accepted".to_owned();
@@ -1487,11 +1530,14 @@ async fn plan_contact_commit(
                 conflict_code: "contact_lineage_conflict".to_owned(),
                 invite_policy: None,
             });
-            let reject_digest =
-                Hash::new(event.event_digest().map_err(|error| {
-                    AppError::internal(format!("Contact reject digest: {error}"))
-                })?)
-                .map_err(|error| AppError::internal(format!("reject digest invalid: {error}")))?;
+            let reject_digest = Hash::new(
+                event
+                    .event_digest_with_digest_suite(digest_suite)
+                    .map_err(|error| {
+                        AppError::internal(format!("Contact reject digest: {error}"))
+                    })?,
+            )
+            .map_err(|error| AppError::internal(format!("reject digest invalid: {error}")))?;
             let accepted_at = now();
             let issuer = arkret_identifiers::DidCoreId::new(holder)
                 .map_err(|error| AppError::internal(format!("holder DID invalid: {error}")))?;
@@ -1546,7 +1592,8 @@ async fn plan_contact_commit(
             // heads, so an empty intersection grants nothing.
             record.status = "accepted".to_owned();
             set_holder_head(&mut record, &holder, event.event_id.to_string());
-            let current_proof = signed_current_proof(state, contact_round_id.clone(), event)?;
+            let current_proof =
+                signed_current_proof(state, contact_round_id.clone(), event, digest_suite)?;
             if let Some(bundle) = record.contact_round_evidence.as_mut() {
                 bundle
                     .current_proofs
@@ -1607,7 +1654,8 @@ async fn plan_contact_commit(
             record.request_mirror_receipts.clear();
             record.tombstone_event_ref = Some(event.event_id.to_string());
             record.updated_at = contact_revision_after(expected_updated_at, event.created_at);
-            let current_proof = signed_current_proof(state, contact_round_id.clone(), event)?;
+            let current_proof =
+                signed_current_proof(state, contact_round_id.clone(), event, digest_suite)?;
             if let Some(bundle) = record.contact_round_evidence.as_mut() {
                 bundle
                     .current_proofs

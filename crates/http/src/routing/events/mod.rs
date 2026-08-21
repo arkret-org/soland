@@ -37,9 +37,9 @@ use super::{
     device_message_envelopes_after, is_realm_deleted, is_valid_discoverability,
     is_valid_hash_digest, now, query_param, query_param_all,
     realm_allows_plaintext_service_for_data_class, realm_discoverability,
-    realm_event_visible_to_session, realm_has_member, realm_history_visibility,
-    realm_id_accessible, realm_visible_to, render_error, sha256_hex, snapshot_manifest_for_realm,
-    touch_realm, validate_did, validate_space_id,
+    realm_event_visible_to_session, realm_has_member, realm_history_access, realm_id_accessible,
+    realm_visible_to, render_error, sha256_hex, snapshot_manifest_for_realm, touch_realm,
+    validate_did, validate_space_id,
 };
 
 pub fn router() -> Router {

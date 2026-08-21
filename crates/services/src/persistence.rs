@@ -35,6 +35,15 @@ pub struct PersistenceHandle {
 }
 
 impl PersistenceHandle {
+    pub fn bind_history_authority_view_cas(
+        &self,
+        authority_view_cas: Arc<dyn soland_storage::HistoryAuthorityViewCas>,
+    ) {
+        self.persistence
+            .history_mailboxes()
+            .bind_authority_view_cas(authority_view_cas);
+    }
+
     pub async fn append_account_status_record(
         &self,
         record: &arkret_models_collaboration::account_lifecycle::AccountStatusRecord,
@@ -60,6 +69,20 @@ impl PersistenceHandle {
             .persistence
             .account_status_replicas()
             .resolve(account_authority_id, account_id, from_status_seq, limit)
+            .await?)
+    }
+
+    pub async fn current_account_status_record(
+        &self,
+        account_authority_id: &str,
+        account_id: &str,
+    ) -> crate::ServiceResult<
+        Option<arkret_models_collaboration::account_lifecycle::AccountStatusRecord>,
+    > {
+        Ok(self
+            .persistence
+            .account_status_replicas()
+            .current(account_authority_id, account_id)
             .await?)
     }
 
@@ -600,9 +623,7 @@ impl PersistenceHandle {
                     owner: account.did,
                     deleted: false,
                     discoverability: "public".to_owned(),
-                    history_visibility: "shared".to_owned(),
-                    history_sharing_policy: None,
-                    history_sharing_policy_digest: None,
+                    history_access: "all_history_for_current_members".to_owned(),
                     preview_policy: None,
                     preview_policy_digest: None,
                     asset_privacy_policy: None,
@@ -638,6 +659,10 @@ impl PersistenceHandle {
     /// and rebuilds its in-memory registry from it during startup hydration.
     pub fn member_identity_store(&self) -> &dyn soland_storage::MemberIdentityStore {
         self.persistence.member_identity()
+    }
+
+    pub fn governance_dependency_store(&self) -> &dyn soland_storage::GovernanceDependencyStore {
+        self.persistence.governance_dependencies()
     }
 
     pub fn event_services(&self) -> PersistenceEventServices {
@@ -679,6 +704,12 @@ impl PersistenceHandle {
 
     pub fn join_application_service(&self) -> JoinApplicationService {
         JoinApplicationService::new(self.persistence.clone())
+    }
+
+    pub fn governance_history_service(
+        &self,
+    ) -> crate::governance_history::GovernanceHistoryService {
+        crate::governance_history::GovernanceHistoryService::new(self.persistence.clone())
     }
 
     pub async fn hydrate_realm_directory(&self) -> RealmDirectoryIndex {

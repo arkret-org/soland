@@ -498,8 +498,8 @@ fn canonical_event_read_operation(req: &Request) -> Option<&'static str> {
         ("QUERY", "/_arkret/self/events/resolve") => {
             Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_RESOLVE)
         }
-        ("QUERY", "/_arkret/self/events/mls-governance-proof") => {
-            Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_MLS_GOVERNANCE_PROOF)
+        ("POST", "/_arkret/self/seals/mls-governance-proof") => {
+            Some(arkret_wire::ServiceOperationId::SELF_SEALS_READ_MLS_GOVERNANCE_PROOF)
         }
         ("QUERY", "/_arkret/peer/events/describe") => {
             Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_DESCRIBE)

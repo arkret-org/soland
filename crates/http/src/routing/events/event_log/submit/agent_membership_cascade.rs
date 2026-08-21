@@ -516,7 +516,11 @@ async fn finalize_prepared_batch(
             })?;
         state
             .projections()
-            .put_pending_control_event_with_ack(&event.control_event, &control_proposal_ack)
+            .put_pending_control_event_with_ack(
+                &event.control_event,
+                &control_proposal_ack,
+                event.digest_suite,
+            )
             .map_err(|error| {
                 cascade_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1038,7 +1042,11 @@ async fn prepare_federated_transition(
         verification_method.clone(),
         signing_key.clone(),
     );
-    prepare_agent_membership_federated_event(state, &session, submission, &admission).await
+    let digest_suite = state
+        .projections()
+        .realm_digest_suite(submission.event.realm_id.as_str());
+    prepare_agent_membership_federated_event(state, &session, submission, &admission, digest_suite)
+        .await
 }
 
 async fn submit_federated_cascade_after_transport_validation(
@@ -1361,6 +1369,13 @@ pub(super) async fn submit_agent_membership_cascade_federation(
         .iter()
         .map(|transition| &transition.event)
         .collect::<Vec<_>>();
+    let digest_suites = match trusted_federated_event_digest_suites(state, &events) {
+        Ok(value) => value,
+        Err(error) => {
+            render_error(res, StatusCode::BAD_REQUEST, "schema_violation", &error);
+            return;
+        }
+    };
     let trust_headers =
         match crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(
             req,
@@ -1501,7 +1516,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
             }
         };
     let mut admitted_producers = BTreeMap::new();
-    for event in &events {
+    for (event, digest_suite) in events.iter().zip(digest_suites.iter().copied()) {
         if event.realm_id.as_str() != realm_id || event.principal_server_id != source_service_id {
             render_error(
                 res,
@@ -1545,7 +1560,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
             );
             return;
         }
-        match verify_federated_event_admission(state, event).await {
+        match verify_federated_event_admission(state, event, digest_suite).await {
             Ok(producer) => {
                 admitted_producers.insert(event.event_id.to_string(), producer);
             }
@@ -1614,7 +1629,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
         (left.notary_seq, left.id.as_str()).cmp(&(right.notary_seq, right.id.as_str()))
     });
     seals.dedup_by(|left, right| left.id == right.id);
-    for event in &events {
+    for (event, digest_suite) in events.iter().zip(digest_suites.iter().copied()) {
         let envelope = typed_event_to_canonical_value((*event).clone())
             .expect("validated federated cascade Event canonicalizes");
         if let Err(error) = accept_federated_seal_prerequisite(
@@ -1622,6 +1637,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
             &submission.service_binding_ref.realm_id,
             &envelope,
             &seals,
+            digest_suite,
         )
         .await
         {
@@ -1640,11 +1656,15 @@ pub(super) async fn submit_agent_membership_cascade_federation(
     }
     let inbound_publication_evidence = transitions
         .iter()
-        .filter_map(|transition| {
+        .zip(digest_suites.iter().copied())
+        .filter_map(|(transition, digest_suite)| {
             Some((
                 transition.event.event_id.to_string(),
                 InboundPublicationEvidence {
-                    event_digest: transition.event.event_digest().ok()?,
+                    event_digest: transition
+                        .event
+                        .event_digest_with_digest_suite(digest_suite)
+                        .ok()?,
                     realm_id: transition.event.realm_id.to_string(),
                     authorization_lease: transition.authorization_lease.clone()?,
                     ingress_receipts: transition.ingress_receipts.clone(),
@@ -1717,8 +1737,15 @@ mod tests {
         )
         .unwrap();
         event.executed_by = Some(initiator);
-        event.refresh_content_bound_identity().unwrap();
-        let event_digest = arkret_wire::Hash::new(event.event_digest().unwrap()).unwrap();
+        event
+            .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        let event_digest = arkret_wire::Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap();
         let device_id = "ak:device:01904100-0000-7000-8000-000000000001";
         event.proofs = vec![
             arkret_wire::Proof {
@@ -1729,6 +1756,8 @@ mod tests {
                 ))
                 .unwrap(),
                 event_digest,
+                signer_resolution_evidence_ref: None,
+                signer_resolution_evidence_digest: None,
                 created_at: event.created_at,
                 domain: None,
                 audience: None,

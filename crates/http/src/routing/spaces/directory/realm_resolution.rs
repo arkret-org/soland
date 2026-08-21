@@ -380,7 +380,7 @@ fn realm_preview_from_directory_entry_with_alias(
         owning_organizations: Vec::new(),
         preview_ref: None,
         discoverability: Some(discoverability.to_owned()),
-        history_visibility: None,
+        history_access: None,
         join_candidates: Vec::new(),
         as_of: entry.as_of,
         source_refs: entry.source_refs.clone(),
@@ -652,10 +652,10 @@ pub(super) async fn realm_preview_for_policy(
             json!(realm_join_rule(state, realm_entry.realm_id.as_str())),
         );
     }
-    if fields.contains(&"history_visibility") {
+    if fields.contains(&"history_access") {
         preview.insert(
-            "history_visibility".to_owned(),
-            json!(realm_history_visibility(state, realm_entry.realm_id.as_str()).await),
+            "history_access".to_owned(),
+            json!(realm_history_access(state, realm_entry.realm_id.as_str()).await),
         );
     }
     if fields.contains(&"member_count_bucket") && !realm_entry.members.is_empty() {
@@ -772,27 +772,46 @@ pub(super) async fn join_candidates_for_resolved_realm(
     // this deployment holds no accepted Seal for the Realm (e.g. it does not
     // host it / cannot notarize), it must not advertise itself as a submit
     // candidate.
-    let Ok(seal_view) =
-        crate::routing::events::event_log::governance_proof::materialize_realm_event_seal(
-            state,
-            &realm_id_typed,
-        )
-        .await
+    let Ok(mut leaves) = state.projections().realm_seal_leaves(&realm_id_typed) else {
+        return Vec::new();
+    };
+    leaves.sort();
+    let seal_basis = arkret_wire::SealBasis { leaves };
+    if seal_basis.validate_protocol_bounds().is_err() {
+        return Vec::new();
+    }
+    let Ok(digest_algorithm) = state
+        .projections()
+        .predecessor_digest_suite(&realm_id_typed, &seal_basis.leaves)
     else {
         return Vec::new();
     };
-    let seal = seal_view.accepted_seal;
-    let seal_basis = arkret_wire::SealBasis {
-        leaves: vec![seal.id.clone()],
-    };
+    let mut source_refs = state
+        .projections()
+        .snapshot()
+        .members_of_realm(realm_id)
+        .into_iter()
+        .filter(|member| {
+            member.state == "join"
+                && member.delivery_status.as_deref() == Some("routable")
+                && member.recipient_service_id.as_deref() == Some(state.service_id())
+        })
+        .filter_map(|member| member.delivery_binding_frontier.as_deref())
+        .filter_map(|event_ref| arkret_wire::EventId::new(event_ref.to_owned()).ok())
+        .collect::<Vec<_>>();
+    source_refs.sort();
+    source_refs.dedup();
+    if source_refs.is_empty() {
+        return Vec::new();
+    }
     let authority_service_ids: BTreeSet<String> =
         crate::notary::NotaryWorker::for_service(state.service_id().clone())
-            .current_notary_profile_for_events(state, &realm_id_typed, &[])
+            .current_notary_value_for_events(state, &realm_id_typed, &[])
             .ok()
             .flatten()
             .map(|(profile, _)| match profile {
-                arkret_wire::notary::NotaryValue::SingleDid { actor_id, .. } => {
-                    normalize_join_candidate_service_id(actor_id.as_str())
+                arkret_wire::notary::NotaryValue::SingleSigner { signer, .. } => {
+                    normalize_join_candidate_service_id(signer.actor_id.as_str())
                         .into_iter()
                         .map(|service_id| service_id.to_string())
                         .collect()
@@ -800,21 +819,22 @@ pub(super) async fn join_candidates_for_resolved_realm(
                 arkret_wire::notary::NotaryValue::Threshold { members, .. }
                 | arkret_wire::notary::NotaryValue::OpenSet { members } => members
                     .into_iter()
-                    .filter_map(|member| normalize_join_candidate_service_id(member.as_str()))
+                    .filter_map(|member| {
+                        normalize_join_candidate_service_id(member.actor_id.as_str())
+                    })
                     .map(|service_id| service_id.to_string())
                     .collect(),
                 arkret_wire::notary::NotaryValue::Mixed {
-                    actor_id,
+                    signer,
                     recovery_members,
-                } => {
-                    normalize_join_candidate_service_id(actor_id.as_str())
-                        .into_iter()
-                        .chain(recovery_members.into_iter().filter_map(|member| {
-                            normalize_join_candidate_service_id(member.as_str())
-                        }))
-                        .map(|service_id| service_id.to_string())
-                        .collect()
-                }
+                    ..
+                } => normalize_join_candidate_service_id(signer.actor_id.as_str())
+                    .into_iter()
+                    .chain(recovery_members.into_iter().filter_map(|member| {
+                        normalize_join_candidate_service_id(member.actor_id.as_str())
+                    }))
+                    .map(|service_id| service_id.to_string())
+                    .collect(),
             })
             .unwrap_or_default();
     if authority_service_ids.is_empty() {
@@ -834,16 +854,17 @@ pub(super) async fn join_candidates_for_resolved_realm(
                 inline: own_resolution,
             },
             service_kind: RealmJoinCandidateServiceKind::PrincipalServer,
-            role: RealmJoinCandidateRole::Primary,
+            role: RealmJoinCandidateRole::JoinedMemberPrincipalServer,
             endpoint: None,
             operations: vec![
-                arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT.to_owned(),
+                arkret_wire::ServiceOperationId::PEER_EVENTS_COMMAND_SUBMIT.to_owned(),
             ],
             join_methods,
             encryption_profile,
+            digest_algorithm,
             priority: Some(0),
-            source: RealmJoinCandidateSource::DirectoryIngest,
-            source_refs: Vec::new(),
+            source: RealmJoinCandidateSource::MemberDeliveryBinding,
+            source_refs,
             frontier_ref: None,
             seal_basis,
             as_of: observed_at,

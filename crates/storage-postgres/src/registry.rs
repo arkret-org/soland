@@ -43,6 +43,10 @@ pub struct PgPersistenceStore {
     organization_policies: PgOrganizationPolicyStore,
     realm_organizations: PgRealmOrganizationStore,
     realm_organization_statements: PgRealmOrganizationStatementStore,
+    governance_dependencies: PgGovernanceDependencyStore,
+    history_traversal_retentions: PgHistoryTraversalRetentionStore,
+    history_mailboxes: PgHistoryMailboxStore,
+    pending_rrk_acquisitions: PgPendingRrkAcquisitionStore,
     push_bridge_cache: PgPushBridgeCacheStore,
     multisig_pending: PgMultisigPendingStore,
     audit: PgAuditStore,
@@ -121,6 +125,10 @@ impl PgPersistenceStore {
             organization_policies: PgOrganizationPolicyStore { pool: pool.clone() },
             realm_organizations: PgRealmOrganizationStore { pool: pool.clone() },
             realm_organization_statements: PgRealmOrganizationStatementStore { pool: pool.clone() },
+            governance_dependencies: PgGovernanceDependencyStore { pool: pool.clone() },
+            history_traversal_retentions: PgHistoryTraversalRetentionStore { pool: pool.clone() },
+            history_mailboxes: PgHistoryMailboxStore { pool: pool.clone() },
+            pending_rrk_acquisitions: PgPendingRrkAcquisitionStore { pool: pool.clone() },
             push_bridge_cache: PgPushBridgeCacheStore { pool: pool.clone() },
             multisig_pending: PgMultisigPendingStore { pool: pool.clone() },
             audit: PgAuditStore { pool: pool.clone() },
@@ -302,6 +310,22 @@ impl DevicePairingCommitUnitOfWork for PgPersistenceStore {
 }
 
 impl FederationGovernanceStoreRegistry for PgPersistenceStore {
+    fn governance_dependencies(&self) -> &dyn GovernanceDependencyStore {
+        &self.governance_dependencies
+    }
+
+    fn history_traversal_retentions(&self) -> &dyn HistoryTraversalRetentionStore {
+        &self.history_traversal_retentions
+    }
+
+    fn pending_rrk_acquisitions(&self) -> &dyn PendingRrkAcquisitionStore {
+        &self.pending_rrk_acquisitions
+    }
+
+    fn history_mailboxes(&self) -> &dyn HistoryMailboxStore {
+        &self.history_mailboxes
+    }
+
     fn federation_outbox(&self) -> &dyn FederationOutboxStore {
         &self.federation_outbox
     }

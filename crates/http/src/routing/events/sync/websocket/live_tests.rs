@@ -266,7 +266,9 @@ async fn install_alice_device_authority(
         format!("sha256:{}", "1".repeat(64)),
         "did_inception",
     )];
-    genesis.refresh_content_bound_identity().unwrap();
+    genesis
+        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
     let mut authorize = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::DeviceAuthorize.as_str(),
         arkret_wire::ScopeRef::Realm {
@@ -281,7 +283,9 @@ async fn install_alice_device_authority(
     )
     .unwrap();
     authorize.prev_refs = vec![genesis.event_id.clone()];
-    authorize.refresh_content_bound_identity().unwrap();
+    authorize
+        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
 
     for event in [&genesis, &authorize] {
         state
@@ -294,7 +298,10 @@ async fn install_alice_device_authority(
                 realm_id: Some(event.realm_id.to_string()),
                 kind: event.kind.to_string(),
                 schema_id: "ak.schema.event.v1".to_owned(),
-                canonical_digest: event.event_digest().unwrap(),
+                digest_suite: arkret_canonical::DigestSuite::Sha256,
+                canonical_digest: event
+                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                    .unwrap(),
                 canonical_bytes: arkret_canonical::canonical_json_bytes(
                     &event.digest_payload().unwrap(),
                 )

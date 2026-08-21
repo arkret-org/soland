@@ -4,9 +4,8 @@
 //! variants — `Event` / `EpochRotation` / `Frontier` / `ResyncRequired` /
 //! `Unauthorized` — onto NDJSON frames. The first three have natural
 //! triggers wired through the projection / Move-Seal pipeline; the last
-//! two need explicit ops triggers (a session got revoked, a snapshot got
-//! corrupted, a server-side compaction means clients MUST drop their
-//! local cache).
+//! two need explicit ops triggers (a session got revoked or a locally
+//! materialized projection was found to be corrupted).
 //!
 //! Endpoints:
 //! - `POST /_soland/admin/events/resync-required` — emit a `resync_required` frame to all
@@ -69,8 +68,7 @@ pub struct AdminControlFrameOutcome {
 /// `POST /_soland/admin/events/resync-required` — emit a
 /// `resync_required` mid-stream control frame to subscribers of one
 /// Space. Use cases:
-/// - Server-side compaction or recovery rewrote the Seal DAG and client-cached cursors are no
-///   longer valid.
+/// - Operator detected a corrupted local projection and invalidated client-cached cursors.
 /// - Operator detected per-subscriber drift via out-of-band monitoring.
 ///
 /// Clients receiving this frame MUST drop their local cache and
@@ -179,7 +177,7 @@ mod tests {
         let n = EventNotification {
             realm_id: "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
             kind: EventNotificationKind::ResyncRequired {
-                reason: "compaction".to_owned(),
+                reason: "projection_corrupted".to_owned(),
                 reconnect_after_ms: Some(7_500),
             },
         };
@@ -194,7 +192,7 @@ mod tests {
                 reason,
                 reconnect_after_ms,
             } => {
-                assert_eq!(reason, "compaction");
+                assert_eq!(reason, "projection_corrupted");
                 assert_eq!(reconnect_after_ms, Some(7_500));
             }
             other => panic!("expected ResyncRequired, got {other:?}"),

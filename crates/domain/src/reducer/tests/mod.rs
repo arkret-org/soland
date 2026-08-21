@@ -14,11 +14,29 @@ mod pin_rsvp_encryption;
 mod pin_scope_safety;
 mod read_cursor;
 mod realm_authority;
-mod realm_key_share;
 mod redaction_message;
 mod security_genesis;
 mod space_container;
 mod strand_morph;
+
+pub(super) fn test_single_signer_notary(full_did: &str) -> arkret_wire::NotaryValue {
+    let full_id = arkret_identifiers::DidFullId::new(full_did.to_owned()).unwrap();
+    let descriptor = arkret_wire::NotarySignerDescriptor {
+        actor_id: arkret_wire::project_full_id_to_core_id(&full_id).unwrap(),
+        verification_method: arkret_wire::DidUrl::new(format!("{full_did}#notary-key")).unwrap(),
+        key_kind: arkret_wire::NotaryKeyKind::Ed25519Raw32,
+        jose_algorithm: arkret_wire::NotaryJoseAlgorithm::Ed25519,
+        // RFC 8032 test-vector public key; the matching private fixture is
+        // intentionally not needed by pure reducer tests.
+        frozen_public_key_b64u: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo".to_owned(),
+        frozen_public_key_digest: arkret_identifiers::Hash::new(
+            "sha256:21fe31dfa154a261626bf854046fd2271b7bed4b6abe45aa58877ef47f9721b9",
+        )
+        .unwrap(),
+    };
+    descriptor.validate().unwrap();
+    arkret_wire::NotaryValue::single_signer(descriptor)
+}
 
 /// Materialize the registered genesis authority-root cell for a Realm.
 ///

@@ -265,6 +265,7 @@ pub(in crate::routing) struct ValidatedEventEnvelope {
     pub(in crate::routing) schema_id: String,
     pub(in crate::routing) prev_refs: Vec<EventId>,
     pub(in crate::routing) canonical_digest: String,
+    pub(in crate::routing) digest_suite: arkret_canonical::DigestSuite,
     pub(in crate::routing) canonical_bytes: Vec<u8>,
     pub(in crate::routing) producer_signing_key: Option<arkret_wire::DidKey>,
 }
@@ -1009,8 +1010,11 @@ async fn submit_initial_event_batch_outcome_inner(
         } else {
             arkret_wire::EventSubmitContext::Standard
         };
-    for submission in submissions {
-        validate_initial_submission_in_context(&submission, submit_context)?;
+    let event_refs = typed_events.iter().collect::<Vec<_>>();
+    let digest_suites = trusted_federated_event_digest_suites(state, &event_refs)
+        .map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", error))?;
+    for (submission, digest_suite) in submissions.into_iter().zip(digest_suites.iter().copied()) {
+        validate_initial_submission_in_context(&submission, submit_context, digest_suite)?;
         validate_initial_publication_session_context(session, &submission)?;
         if let Some(lease) = &submission.authorization_lease {
             validate_authorization_lease_for_event(state, Some(session), &submission.event, lease)
@@ -1041,15 +1045,18 @@ async fn submit_initial_event_batch_outcome_inner(
                     "an anchor unit cannot mix online and delayed submissions",
                 )
             })?;
-        arkret_wire::validate_anchor_unit_lease_bindings(&typed_events, &complete_leases).map_err(
-            |error| {
-                SubmitOneError::new(
-                    StatusCode::BAD_REQUEST,
-                    "schema_violation",
-                    format!("anchor-unit publication evidence is invalid: {error}"),
-                )
-            },
-        )?;
+        arkret_wire::validate_anchor_unit_lease_bindings(
+            &typed_events,
+            &complete_leases,
+            &digest_suites,
+        )
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("anchor-unit publication evidence is invalid: {error}"),
+            )
+        })?;
     }
     submit_event_batch_outcome_with_leases(
         state,
@@ -1660,8 +1667,14 @@ pub(in crate::routing) async fn submit_initial_identity_anchor_batch(
     } else {
         arkret_wire::EventSubmitContext::Standard
     };
-    for submission in &submissions {
-        validate_initial_submission_in_context(submission, submit_context)?;
+    let event_refs = submissions
+        .iter()
+        .map(|submission| &submission.event)
+        .collect::<Vec<_>>();
+    let digest_suites = trusted_federated_event_digest_suites(state, &event_refs)
+        .map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", error))?;
+    for (submission, digest_suite) in submissions.iter().zip(digest_suites.iter().copied()) {
+        validate_initial_submission_in_context(submission, submit_context, digest_suite)?;
         validate_initial_publication_session_context(session, submission)?;
     }
     let envelopes = submissions
@@ -1962,6 +1975,7 @@ async fn accept_federated_seal_prerequisite(
     realm_id: &arkret_identifiers::RealmId,
     envelope: &Value,
     seals: &[arkret_wire::Seal],
+    digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<(), AppError> {
     let mut roots = Vec::new();
     if let Some(seal_ref) = envelope.get("seal_ref").and_then(Value::as_str) {
@@ -2080,19 +2094,22 @@ async fn accept_federated_seal_prerequisite(
             ))
         })?;
     if !event_is_local {
-        let event_digest =
-            arkret_identifiers::Hash::new(event.event_digest().map_err(|error| {
-                AppError::new(
-                    ErrorCode::SchemaViolation,
-                    format!("federated Event digest failed: {error}"),
-                )
-            })?)
-            .map_err(|error| {
-                AppError::new(
-                    ErrorCode::SchemaViolation,
-                    format!("federated Event digest is not a canonical Move digest: {error}"),
-                )
-            })?;
+        let event_digest = arkret_identifiers::Hash::new(
+            event
+                .event_digest_with_digest_suite(digest_suite)
+                .map_err(|error| {
+                    AppError::new(
+                        ErrorCode::SchemaViolation,
+                        format!("federated Event digest failed: {error}"),
+                    )
+                })?,
+        )
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::SchemaViolation,
+                format!("federated Event digest is not a canonical Move digest: {error}"),
+            )
+        })?;
         if relevant.iter().any(|seal| {
             seal.delta.contains(&event_digest) || seal.covered_event_digests.contains(&event_digest)
         }) {
@@ -2129,9 +2146,10 @@ async fn accept_federated_seal_prerequisite(
 async fn verify_federated_event_admission(
     state: &AppState,
     event: &arkret_wire::Event,
+    digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<(arkret_wire::DidUrl, arkret_wire::DidKey), String> {
     event
-        .validate_principal_server_admission_binding()
+        .validate_principal_server_admission_binding(digest_suite)
         .map_err(|error| error.to_string())?;
     let [
         arkret_wire::EventProof::Producer(producer),
@@ -2163,6 +2181,57 @@ async fn verify_federated_event_admission(
         producer.verification_method.clone(),
         admission.producer_signing_key.clone(),
     ))
+}
+
+pub(super) fn trusted_federated_event_digest_suites(
+    state: &AppState,
+    events: &[&arkret_wire::Event],
+) -> Result<Vec<arkret_canonical::DigestSuite>, String> {
+    let first = events
+        .first()
+        .copied()
+        .ok_or_else(|| "federated Event unit is empty".to_owned())?;
+    if events.iter().any(|event| event.realm_id != first.realm_id) {
+        return Err("federated Event unit crosses Realm boundaries".to_owned());
+    }
+    if first.kind == arkret_wire::EventKind::RealmCreate {
+        let genesis_live_digest_suite = arkret::declared_genesis_live_digest_suite(first)
+            .map_err(|error| format!("federated Realm genesis digest suite is invalid: {error}"))?;
+        Ok(events
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                if index == 0 {
+                    arkret_canonical::DigestSuite::Sha256
+                } else {
+                    genesis_live_digest_suite
+                }
+            })
+            .collect())
+    } else {
+        let digest_suite = state
+            .projections()
+            .realm_digest_suite(first.realm_id.as_str());
+        Ok(vec![digest_suite; events.len()])
+    }
+}
+
+pub(crate) fn accepted_event_digest_suites(
+    events: &[arkret_wire::Event],
+) -> Result<Vec<arkret_canonical::DigestSuite>, String> {
+    events
+        .iter()
+        .map(|event| {
+            arkret::signed_event_digest_claim(event)
+                .and_then(|digest| digest.digest_suite().map_err(Into::into))
+                .map_err(|error| {
+                    format!(
+                        "accepted Event {} has no valid frozen digest-suite claim: {error}",
+                        event.event_id
+                    )
+                })
+        })
+        .collect()
 }
 
 /// Verify an admitted producer proof through the SDK's strict Event profile.
@@ -2341,7 +2410,15 @@ pub(crate) async fn submit_federation_events(
             return;
         }
     };
-    if let Err(error) = submit.validate_federation_transport() {
+    let transport_events = submit.transported_events().collect::<Vec<_>>();
+    let digest_suites = match trusted_federated_event_digest_suites(state, &transport_events) {
+        Ok(value) => value,
+        Err(error) => {
+            render_error(res, StatusCode::BAD_REQUEST, "schema_violation", &error);
+            return;
+        }
+    };
+    if let Err(error) = submit.validate_federation_transport(&digest_suites) {
         tracing::debug!(%error, "federation transport contract rejected");
         render_error(
             res,
@@ -2383,8 +2460,12 @@ pub(crate) async fn submit_federation_events(
     // Event itself is accepted.
     let inbound_publication_evidence: BTreeMap<String, InboundPublicationEvidence> = submissions
         .iter()
-        .filter_map(|submission| {
-            let event_digest = submission.event.event_digest().ok()?;
+        .zip(digest_suites.iter().copied())
+        .filter_map(|(submission, digest_suite)| {
+            let event_digest = submission
+                .event
+                .event_digest_with_digest_suite(digest_suite)
+                .ok()?;
             Some((
                 submission.event.event_id.as_str().to_owned(),
                 InboundPublicationEvidence {
@@ -2411,8 +2492,8 @@ pub(crate) async fn submit_federation_events(
         .map(|submission| submission.event.clone())
         .collect();
     let mut admitted_producers = BTreeMap::new();
-    for event in &events {
-        match verify_federated_event_admission(state, event).await {
+    for (event, digest_suite) in events.iter().zip(digest_suites.iter().copied()) {
+        match verify_federated_event_admission(state, event, digest_suite).await {
             Ok((verification_method, signing_key)) => {
                 admitted_producers.insert(
                     event.event_id.as_str().to_owned(),
@@ -2449,7 +2530,8 @@ pub(crate) async fn submit_federation_events(
             return;
         }
         if !leases.is_empty()
-            && let Err(error) = arkret_wire::validate_anchor_unit_lease_bindings(&events, &leases)
+            && let Err(error) =
+                arkret_wire::validate_anchor_unit_lease_bindings(&events, &leases, &digest_suites)
         {
             render_error(
                 res,
@@ -2951,6 +3033,9 @@ pub(crate) async fn submit_federation_events(
             &service_binding_ref.realm_id,
             &envelope,
             &seals,
+            state
+                .projections()
+                .realm_digest_suite(service_binding_ref.realm_id.as_str()),
         )
         .await
         {
@@ -3224,9 +3309,26 @@ async fn submit_direct_conversation_federation(
         );
         return;
     }
+    let founding_events = submission
+        .events
+        .iter()
+        .map(|item| &item.event)
+        .collect::<Vec<_>>();
+    let founding_digest_suites =
+        match trusted_federated_event_digest_suites(state, &founding_events) {
+            Ok(value) => value,
+            Err(error) => {
+                render_error(res, StatusCode::BAD_REQUEST, "schema_violation", &error);
+                return;
+            }
+        };
     let mut admitted_producers = BTreeMap::new();
-    for item in &submission.events {
-        match verify_federated_event_admission(state, &item.event).await {
+    for (item, digest_suite) in submission
+        .events
+        .iter()
+        .zip(founding_digest_suites.iter().copied())
+    {
+        match verify_federated_event_admission(state, &item.event, digest_suite).await {
             Ok(producer) => {
                 admitted_producers.insert(item.event.event_id.to_string(), producer);
             }
@@ -3480,8 +3582,7 @@ mod managed_agent_pcr_batch_tests {
                 arkret_canonical::DigestSuite::Sha256,
                 arkret_wire::SecurityClass::HighAssurance,
                 arkret_wire::EncryptionProfile::MlsRfc9420,
-                arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-                arkret_wire::notary::NotaryValue::single_did(agent_actor_id.clone()),
+                crate::test_single_signer_notary("did:webvh:z6mkfixtureagent:agent.example", 43),
                 arkret_policy::current_capability_action_registry_digest().unwrap(),
             )
             .unwrap();

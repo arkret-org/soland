@@ -911,7 +911,7 @@ mod tests {
             .push("ak.profile.chat_mvp.v1".to_owned());
         apply_claim_level_partition(&mut description, &[], false, false);
         for feature in [
-            "discussion_history_visibility",
+            "discussion_history_access",
             "supported_event_kinds",
             "supported_sync_profiles",
         ] {

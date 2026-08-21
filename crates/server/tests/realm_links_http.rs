@@ -89,7 +89,7 @@ fn alice_core_id() -> String {
 }
 
 /// Bootstrap a Realm through the real `ak.realm.create` genesis batch, with this
-/// deployment as its `single_did` notary, and grant the caller `ak.realm.link`.
+/// deployment as its frozen `single_signer` notary, and grant the caller `ak.realm.link`.
 ///
 /// The Realm id is derived from the genesis Event (`realm-and-space.md` section
 /// 2.5.0), so it is read back off the Event rather than chosen here.

@@ -7,66 +7,74 @@ use super::bottom::bottom_entry_from;
 use super::notary::notary_value_from_cell;
 use super::notary_cell_for;
 
+fn signer_descriptor(did: &str, seed: u8) -> arkret_wire::NotarySignerDescriptor {
+    let full_id = arkret_identifiers::DidFullId::new(did.to_owned()).unwrap();
+    let actor_id = arkret_wire::project_full_id_to_core_id(&full_id).unwrap();
+    let verification_method = arkret_wire::DidUrl::new(format!("{did}#notary-key")).unwrap();
+    let verifying_key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]).verifying_key();
+    soland_services::identity::ed25519_notary_signer_descriptor(
+        actor_id,
+        verification_method,
+        verifying_key.as_bytes(),
+    )
+    .unwrap()
+}
+
 #[test]
 fn notary_value_from_cell_defaults_to_service_id_when_absent() {
-    let service_id = arkret_identifiers::DidCoreId::new(
-        "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-    )
-    .unwrap();
-    let resp = notary_value_from_cell(None, &service_id).unwrap();
-    assert_eq!(resp.kind_raw, "single_did");
-    assert_eq!(
-        resp.single_actor_id.as_deref(),
-        Some(
-            "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
-        )
+    let signer = signer_descriptor(
+        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+        11,
     );
+    let resp = notary_value_from_cell(None, &signer).unwrap();
+    assert_eq!(resp.kind_label(), "single_signer");
+    assert_eq!(resp.notary, arkret_wire::NotaryValue::single_signer(signer));
     assert!(!resp.paused);
 }
 
 #[test]
-fn notary_value_from_cell_reads_authoritative_single_did_form() {
-    let v = json!({
-        "kind": "single_did",
-        "actor_id": "ak:did_core:web:alice.example",
-        "revocation_freshness_window_ms": 60000,
-        "paused": false,
-    });
-    let service_id = arkret_identifiers::DidCoreId::new("ak:did_core:web:server").unwrap();
-    let resp = notary_value_from_cell(Some(&v), &service_id).unwrap();
-    assert_eq!(resp.kind_raw, "single_did");
-    assert_eq!(
-        resp.single_actor_id.as_deref(),
-        Some("ak:did_core:web:alice.example")
-    );
+fn notary_value_from_cell_reads_authoritative_single_signer_form() {
+    let signer = signer_descriptor("did:web:alice.example", 12);
+    let default_signer = signer_descriptor("did:web:server.example", 13);
+    let mut v =
+        serde_json::to_value(arkret_wire::NotaryValue::single_signer(signer.clone())).unwrap();
+    v.as_object_mut()
+        .unwrap()
+        .insert("revocation_freshness_window_ms".to_owned(), json!(60000));
+    v.as_object_mut()
+        .unwrap()
+        .insert("paused".to_owned(), json!(false));
+    let resp = notary_value_from_cell(Some(&v), &default_signer).unwrap();
+    assert_eq!(resp.kind_label(), "single_signer");
+    assert_eq!(resp.notary, arkret_wire::NotaryValue::single_signer(signer));
     assert_eq!(resp.revocation_freshness_window_ms, Some(60000));
     assert!(!resp.paused);
-    // Serialized admin shape carries the shared DTO field names.
     let j = serde_json::to_value(&resp).unwrap();
-    assert_eq!(j["kind_raw"], "single_did");
-    assert_eq!(j["single_actor_id"], "ak:did_core:web:alice.example");
+    assert_eq!(j["notary"]["kind"], "single_signer");
+    assert_eq!(
+        j["notary"]["signer"]["actor_id"],
+        "ak:did_core:web:alice.example"
+    );
     assert_eq!(j["revocation_freshness_window_ms"], 60000);
 }
 
 #[test]
 fn notary_value_from_cell_reads_authoritative_threshold_form() {
-    let v = json!({
-        "kind": "threshold",
-        "threshold": 2,
-        "members": [
-            "ak:did_core:web:a.example",
-            "ak:did_core:web:b.example",
-            "ak:did_core:web:c.example"
-        ],
-        "forensic_attribution": "quorum_intersection",
-    });
-    let service_id = arkret_identifiers::DidCoreId::new("ak:did_core:web:s").unwrap();
-    let resp = notary_value_from_cell(Some(&v), &service_id).unwrap();
-    assert_eq!(resp.kind_raw, "threshold");
-    assert_eq!(resp.threshold_k, Some(2));
-    // `n` is derived from the committee size now (no wire `n`).
-    assert_eq!(resp.threshold_n, Some(3));
-    assert_eq!(resp.threshold_actor_ids.len(), 3);
+    let members = vec![
+        signer_descriptor("did:web:a.example", 21),
+        signer_descriptor("did:web:b.example", 22),
+        signer_descriptor("did:web:c.example", 23),
+    ];
+    let notary = arkret_wire::NotaryValue::Threshold {
+        members,
+        threshold: 2,
+        forensic_attribution: arkret_wire::ForensicAttribution::QuorumIntersection,
+    };
+    let v = serde_json::to_value(&notary).unwrap();
+    let default_signer = signer_descriptor("did:web:s.example", 24);
+    let resp = notary_value_from_cell(Some(&v), &default_signer).unwrap();
+    assert_eq!(resp.kind_label(), "threshold");
+    assert_eq!(resp.notary, notary);
 }
 
 #[test]

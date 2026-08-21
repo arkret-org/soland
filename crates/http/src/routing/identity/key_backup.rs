@@ -175,6 +175,35 @@ mod tests {
             body["encryption"]["key_commitment"] =
                 json!("sha256:2222222222222222222222222222222222222222222222222222222222222222");
         }
+        if item_kind == "history_secret_segment" {
+            let scope = arkret_wire::ScopeRef::Realm {
+                realm_id: arkret_wire::RealmId::new(
+                    "ak:realm:Aa1JCF6pnQnSgl8DnT6vNtPcFGPCxLnEY130o2lmyDSh".to_owned(),
+                )
+                .unwrap(),
+            };
+            let mls_group_id = scope.canonical_mls_group_id().unwrap();
+            body["contents"][0] = json!({
+                "item_kind": "history_secret_segment",
+                "effective_scope": scope,
+                "mls_group_id": mls_group_id,
+                "from_epoch": 0,
+                "to_epoch": 0,
+                "group_state_ref": "ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM",
+                "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "membership_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+            });
+        }
+        if body["encryption"]["recipient_method"].as_str() == Some("recovery_public_key") {
+            body["recovery_policy_ref"] = json!({
+                "policy_id": "ak:policy:01964137-0000-7000-8000-000000000001",
+                "policy_version": 1
+            });
+            body["auth_data"]["signed_fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("recovery_policy_ref"));
+        }
         body
     }
 
@@ -230,7 +259,7 @@ mod tests {
     fn mls_history_accepts_secret_storage_key() {
         let body = key_backup_body(
             "mls_history",
-            "mls_group_state",
+            "history_secret_segment",
             secret_storage_key_encryption(),
         );
 
@@ -242,7 +271,7 @@ mod tests {
     fn mls_history_accepts_recovery_public_key() {
         let body = key_backup_body(
             "mls_history",
-            "mls_group_state",
+            "history_secret_segment",
             recovery_public_key_encryption(),
         );
 
@@ -325,7 +354,11 @@ mod tests {
 
     #[test]
     fn mls_history_rejects_passphrase_kdf() {
-        let body = key_backup_body("mls_history", "mls_group_state", passphrase_encryption());
+        let body = key_backup_body(
+            "mls_history",
+            "history_secret_segment",
+            passphrase_encryption(),
+        );
 
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("MLS history passphrase KDF backups are no longer supported");
@@ -337,7 +370,7 @@ mod tests {
     fn mls_history_rejects_plaintext_fields() {
         let mut body = key_backup_body(
             "mls_history",
-            "mls_group_state",
+            "history_secret_segment",
             secret_storage_key_encryption(),
         );
         body["plaintext"] = json!("raw group state");

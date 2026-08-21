@@ -1538,10 +1538,8 @@ impl ProjectionState {
 
     /// Whether the Realm declared `ak.profile.principal_control_realm.v1`.
     ///
-    /// A PCR's effective `ak.realm.history_sharing_policy` is fixed by that
-    /// profile rather than projected from a facet Event
-    /// (`models/realm-and-space.md` §2.8.1), so key-share and admission paths
-    /// need to recognise the profile before concluding a policy is missing.
+    /// PCR and managed-Agent control Realms permanently pin history access to
+    /// `since_join`.
     pub fn realm_is_principal_control(&self, realm_id: &str) -> bool {
         self.realm_states.get(realm_id).is_some_and(|realm| {
             realm

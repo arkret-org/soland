@@ -163,9 +163,6 @@ pub fn admin_router() -> Router {
         )
         .push(Router::with_path("realms/{realm_id}/seal-dag").get(seal::admin_get_seal_dag))
         .push(
-            Router::with_path("realms/{realm_id}/seal-dag/prune").post(seal::admin_prune_seal_dag),
-        )
-        .push(
             Router::with_path("realms/{realm_id}/multisig/pending")
                 .get(seal::admin_list_multisig_pending),
         )

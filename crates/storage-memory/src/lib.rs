@@ -57,10 +57,8 @@ pub(crate) use soland_storage::{
     RetentionPolicyRecord, RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore,
     SIGNAL_RELAY_MAX_PER_REALM, SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
     SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, ServiceIdentityStore,
-    ServiceRegistrationCommitOutcome, ServiceRouteHandoverNoticeCommit,
-    ServiceRouteHandoverNoticeRecord, ServiceRouteHandoverPlan, ServiceRouteHandoverPlanState,
-    ServiceRouteHandoverPlanStore, ServiceRouteHandoverPlanWrite, ServiceRouteStore, SessionRecord,
-    SessionStore, SidecarStore, SignalRelayRecord, SignalRelayStore,
+    ServiceRegistrationCommitOutcome, ServiceRouteHandoverPlanStore, ServiceRouteStore,
+    SessionRecord, SessionStore, SidecarStore, SignalRelayRecord, SignalRelayStore,
     SpaceContainerProjectionRecord, SpaceContainerProjectionStore, StrandProjectionRecord,
     StrandProjectionStore, StrandWatchProjectionRecord, StrandWatchProjectionStore,
     SyncCursorRecord, SyncCursorStore, WebsocketAuthStore, WebvhDocumentRecord,
@@ -96,6 +94,8 @@ mod events;
 mod fault_injection;
 mod federation;
 mod governance;
+mod governance_history;
+mod history_mailbox;
 mod idempotency;
 mod invite_locators;
 mod join_applications;
@@ -158,6 +158,11 @@ pub(crate) use governance::{
     MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore,
     MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
 };
+pub(crate) use governance_history::{
+    MemoryGovernanceDependencyStore, MemoryHistoryTraversalRetentionStore,
+    MemoryPendingRrkAcquisitionStore,
+};
+pub(crate) use history_mailbox::MemoryHistoryMailboxStore;
 pub(crate) use idempotency::MemoryIdempotencyStore;
 pub(crate) use invite_locators::MemoryInviteLocatorStore;
 pub(crate) use join_applications::MemoryJoinApplicationStore;

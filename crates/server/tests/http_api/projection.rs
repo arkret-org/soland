@@ -340,7 +340,7 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
         .await
         .unwrap()
         .expect("demo Realm metadata");
-    realm_meta.history_visibility = "world_readable".to_owned();
+    realm_meta.history_access = "all_history_for_current_members".to_owned();
     state
         .test_persistence()
         .realm_meta()
@@ -368,10 +368,12 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
                 display: serde_json::json!({"short_name":"Need","color_token":"slate","symbol":{"glyph":"ring"}}),
                 directory_visibility: "members".to_owned(),
                 join_rule: "invite".to_owned(),
-                history_visibility: "joined".to_owned(),
+                history_access: "since_join".to_owned(),
                 content_encryption_floor: None,
                 metadata_encryption_floor: None,
                 encryption_profile: "none".to_owned(),
+                content_scheme: None,
+                durability_policy: None,
                 mls_group_ref: None,
                 state: soland_domain::reducer::CircleLifecycleState::Active,
                 state_changed_at: None,

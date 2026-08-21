@@ -1,9 +1,8 @@
 //! Read-oriented notary, Bottom, Seal DAG, and multisig admin surface.
 //!
 //! Endpoints:
-//! - `GET  /_soland/admin/realms/{realm_id}/notary` — typed notary cell value (`{kind,
-//!   single_actor_id?|threshold_*?|open_set_members?|mixed_*?, revocation_freshness_window_ms?,
-//!   paused}`).
+//! - `GET  /_soland/admin/realms/{realm_id}/notary` — typed notary cell value (`{kind, notary:
+//!   NotaryValue, revocation_freshness_window_ms?, paused}`).
 //! - `GET  /_soland/admin/realms/{realm_id}/bottom` — list cells whose join produced a `Bottom`
 //!   diagnostic.
 //! - `GET  /_soland/admin/bottom` — global cross-Realm list.
@@ -32,7 +31,7 @@ mod notary;
 mod tests;
 
 pub(super) use bottom::{admin_list_bottom_global, admin_list_realm_bottom, admin_repair_bottom};
-pub(super) use dag::{admin_get_seal_dag, admin_prune_seal_dag};
+pub(super) use dag::admin_get_seal_dag;
 pub(super) use gc::admin_list_gc_candidates;
 pub(super) use multisig::admin_list_multisig_pending;
 pub(super) use notary::admin_get_notary;

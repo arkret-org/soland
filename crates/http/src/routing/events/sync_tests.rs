@@ -18,7 +18,12 @@ fn ordered_log_message(actor_seq: u64, hlc: &str, body: &str) -> arkret_wire::Ev
         }),
     )
     .unwrap();
-    let event_digest = arkret_wire::Hash::new(event.event_digest().unwrap()).unwrap();
+    let event_digest = arkret_wire::Hash::new(
+        event
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap(),
+    )
+    .unwrap();
     event.proofs = vec![arkret_wire::EventProof::Producer(arkret_wire::Proof {
         kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
         verification_method: arkret_wire::DidUrl::new(
@@ -26,6 +31,8 @@ fn ordered_log_message(actor_seq: u64, hlc: &str, body: &str) -> arkret_wire::Ev
         )
         .unwrap(),
         event_digest,
+        signer_resolution_evidence_ref: None,
+        signer_resolution_evidence_digest: None,
         created_at: event.created_at,
         domain: None,
         audience: None,
@@ -136,7 +143,7 @@ fn initial_security_baseline_is_limited_to_current_create_and_policy_facets() {
         &arkret_wire::EventKind::MessageCreate
     ));
     assert!(!required_security_baseline_kind(
-        &arkret_wire::EventKind::RealmHistoryVisibility
+        &arkret_wire::EventKind::RealmHistoryAccess
     ));
 }
 
@@ -600,6 +607,7 @@ fn accepted_sync_test_operation_at(
         arkret_wire::OperationKind::Create,
         None,
         &event,
+        arkret_canonical::DigestSuite::Sha256,
     )
     .expect("accepted sync fixture operation")
 }
@@ -674,9 +682,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
                 owner: ROSTER_ACTOR.to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
-                history_visibility: "joined".to_owned(),
-                history_sharing_policy: None,
-                history_sharing_policy_digest: None,
+                history_access: "since_join".to_owned(),
                 preview_policy: None,
                 preview_policy_digest: None,
                 asset_privacy_policy: None,
@@ -848,7 +854,10 @@ fn canonical_event_record_received_at(
         realm_id: Some(ROSTER_REALM.to_owned()),
         kind: kind.to_owned(),
         schema_id: "ak.event.v1".to_owned(),
-        canonical_digest: event.event_digest().unwrap(),
+        digest_suite: arkret_canonical::DigestSuite::Sha256,
+        canonical_digest: event
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap(),
         canonical_bytes,
         envelope,
         received_at,
@@ -889,9 +898,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
                 owner: ROSTER_ACTOR.to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
-                history_visibility: "joined".to_owned(),
-                history_sharing_policy: None,
-                history_sharing_policy_digest: None,
+                history_access: "since_join".to_owned(),
                 preview_policy: None,
                 preview_policy_digest: None,
                 asset_privacy_policy: None,
@@ -1527,9 +1534,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
                 owner: ROSTER_ACTOR.to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
-                history_visibility: "shared".to_owned(),
-                history_sharing_policy: None,
-                history_sharing_policy_digest: None,
+                history_access: "all_history_for_current_members".to_owned(),
                 preview_policy: None,
                 preview_policy_digest: None,
                 asset_privacy_policy: None,
@@ -1667,9 +1672,7 @@ async fn membership_only_projection_advances_incremental_roster() {
                 owner: ROSTER_ACTOR.to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
-                history_visibility: "shared".to_owned(),
-                history_sharing_policy: None,
-                history_sharing_policy_digest: None,
+                history_access: "all_history_for_current_members".to_owned(),
                 preview_policy: None,
                 preview_policy_digest: None,
                 asset_privacy_policy: None,
@@ -1759,7 +1762,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
                 "created_by": ROSTER_ACTOR,
                 "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "default_join_rule": "invite",
-                "history_visibility": "joined",
+                "history_access": "since_join",
                 "encryption_profile": "none"
             }
         }),
@@ -1909,7 +1912,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
                 "created_by": ROSTER_ACTOR,
                 "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "default_join_rule": "invite",
-                "history_visibility": "joined",
+                "history_access": "since_join",
                 "encryption_profile": "none"
             }
         }),

@@ -440,9 +440,11 @@ async fn submit_formal_install_event(
             AppError::internal(format!("applet fan-out recovery lookup failed: {error}"))
         })?
     {
-        let submitted_digest = event.event_digest().map_err(|error| {
-            AppError::internal(format!("applet fan-out Event digest failed: {error}"))
-        })?;
+        let submitted_digest = event
+            .event_digest_with_digest_suite(existing.digest_suite)
+            .map_err(|error| {
+                AppError::internal(format!("applet fan-out Event digest failed: {error}"))
+            })?;
         if existing.canonical_digest != submitted_digest {
             return Err(AppError::conflict(
                 "applet install Event id is already bound to different canonical content",

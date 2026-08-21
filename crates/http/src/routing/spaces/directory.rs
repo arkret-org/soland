@@ -82,7 +82,7 @@ use soland_services::projection::ProjectionSnapshot;
 use super::{
     authenticated_session, device_inventory_to_json, handle_for_did, invite_token_matches_realm,
     invite_token_realm_id, is_realm_deleted, now, realm_discoverability, realm_has_member,
-    realm_history_visibility, realm_resolvable_to, realm_search_visible_to, sha256_hex,
+    realm_history_access, realm_resolvable_to, realm_search_visible_to, sha256_hex,
 };
 use crate::ids;
 use crate::routing::organizations;

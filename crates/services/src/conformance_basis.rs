@@ -9,15 +9,12 @@ use std::collections::BTreeMap;
 use arkret_identifiers::{CellRef, DidCoreId, DidFullId, Hash, Hlc, RealmId};
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::compute_state_root;
-use arkret_wire::Seal;
+use arkret_wire::{NotarySignerDescriptor, Seal};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::projection::ProjectionService;
 
-const FIXTURE_NOTARY_SEED: [u8; 32] = [0x53; 32];
-const FIXTURE_NOTARY_DID: &str = "did:web:alice.example";
-pub const FIXTURE_NOTARY_VERIFICATION_METHOD: &str = "did:web:alice.example#fixture-notary";
 const FIXTURE_BASIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
 const CONFORMANCE_FIXTURE_ID_DOMAIN: &str = "soland:conformance:realm-basis:";
 
@@ -42,9 +39,42 @@ const FIXTURE_FIELD_SCOPED_WRITE_FIELDS: [&str; 6] = [
 /// Explicit inputs that distinguish one synthetic Realm basis from another.
 pub struct RealmBasisFixtureOptions<'a> {
     pub principal_server_id: &'a str,
-    pub notary_authority: Option<&'a str>,
+    pub notary_signer: &'a ConformanceNotarySigner,
+    pub install_notary: bool,
     pub data_plane_actions: &'a [String],
     pub fixture_id_domain: &'a str,
+}
+
+/// Exact signer material used by the development-only basis builder.
+///
+/// Keeping the frozen descriptor beside its private signing seed prevents a
+/// fixture from declaring one notary while signing its Seal with another.
+pub struct ConformanceNotarySigner {
+    pub descriptor: NotarySignerDescriptor,
+    pub signer_did: DidFullId,
+    pub signing_seed: [u8; 32],
+}
+
+impl ConformanceNotarySigner {
+    pub fn ed25519(
+        signer_did: DidFullId,
+        verification_method: arkret_wire::DidUrl,
+        signing_seed: [u8; 32],
+    ) -> Result<Self, String> {
+        let actor_id = arkret_wire::project_full_id_to_core_id(&signer_did)
+            .map_err(|error| error.to_string())?;
+        let verifying_key = ed25519_dalek::SigningKey::from_bytes(&signing_seed).verifying_key();
+        let descriptor = crate::identity::ed25519_notary_signer_descriptor(
+            actor_id,
+            verification_method,
+            verifying_key.as_bytes(),
+        )?;
+        Ok(Self {
+            descriptor,
+            signer_did,
+            signing_seed,
+        })
+    }
 }
 
 /// A capability grant materialized by a synthetic Realm basis.
@@ -80,11 +110,10 @@ pub struct ConformanceRealmBasis {
 /// registry's `grant_authority_actions`, so this set is exactly what the owner
 /// would sign for itself as its first governance act. It is fixture
 /// convenience, not a protocol constant.
-pub const OWNER_BOOTSTRAP_GRANT_ACTIONS: [&str; 5] = [
+pub const OWNER_BOOTSTRAP_GRANT_ACTIONS: [&str; 4] = [
     arkret_wire::CapabilityActionId::REALM_ADMIN,
     arkret_wire::CapabilityActionId::CAPABILITY_GRANT,
     arkret_wire::CapabilityActionId::CAPABILITY_REVOKE,
-    arkret_wire::CapabilityActionId::REALM_KEY_SHARE,
     arkret_wire::CapabilityActionId::MESSAGE_CREATE,
 ];
 
@@ -97,7 +126,8 @@ pub fn build_conformance_realm_basis(
     realm_id: &str,
     subject: &str,
     principal_server_id: &str,
-    notary_authority: Option<&str>,
+    notary_signer: &ConformanceNotarySigner,
+    install_notary: bool,
     data_plane_actions: &[String],
 ) -> Result<ConformanceRealmBasis, String> {
     build_realm_basis(
@@ -105,7 +135,8 @@ pub fn build_conformance_realm_basis(
         subject,
         RealmBasisFixtureOptions {
             principal_server_id,
-            notary_authority,
+            notary_signer,
+            install_notary,
             data_plane_actions,
             fixture_id_domain: CONFORMANCE_FIXTURE_ID_DOMAIN,
         },
@@ -122,7 +153,8 @@ pub fn build_realm_basis(
 ) -> Result<ConformanceRealmBasis, String> {
     let RealmBasisFixtureOptions {
         principal_server_id,
-        notary_authority,
+        notary_signer,
+        install_notary,
         data_plane_actions,
         fixture_id_domain,
     } = options;
@@ -294,9 +326,7 @@ pub fn build_realm_basis(
             },
         ),
     ));
-    if let Some(notary_authority) = notary_authority {
-        let notary_authority =
-            DidCoreId::new(notary_authority.to_owned()).map_err(|error| error.to_string())?;
+    if install_notary {
         ops.push((
             CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
                 .map_err(|error| error.to_string())?,
@@ -307,8 +337,8 @@ pub fn build_realm_basis(
                     op_type: arkret_wire::LatticeOpType::Set,
                     tag: None,
                     value: Some(
-                        serde_json::to_value(arkret_wire::notary::NotaryValue::single_did(
-                            notary_authority,
+                        serde_json::to_value(arkret_wire::NotaryValue::single_signer(
+                            notary_signer.descriptor.clone(),
                         ))
                         .map_err(|error| error.to_string())?,
                     ),
@@ -389,11 +419,10 @@ pub fn build_realm_basis(
         });
     }
 
-    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
-        FIXTURE_NOTARY_SEED,
-        DidFullId::new(FIXTURE_NOTARY_DID.to_owned()).map_err(|error| error.to_string())?,
-        arkret_wire::DidUrl::new(FIXTURE_NOTARY_VERIFICATION_METHOD)
-            .map_err(|error| error.to_string())?,
+    let signer = crate::identity::FrozenEd25519NotarySigner::from_seed(
+        notary_signer.signing_seed,
+        notary_signer.signer_did.clone(),
+        notary_signer.descriptor.verification_method.clone(),
     );
     let mut delta = vec![
         genesis_move,
@@ -407,7 +436,7 @@ pub fn build_realm_basis(
     if !field_scoped_actions.is_empty() {
         delta.push(field_scoped_move.clone());
     }
-    if notary_authority.is_some() {
+    if install_notary {
         delta.push(notary_move);
     }
     delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
@@ -417,6 +446,7 @@ pub fn build_realm_basis(
         delta,
         sealed_state_root(&realm, &ops)?,
         Hlc::new(FIXTURE_BASIS_HLC).map_err(|error| error.to_string())?,
+        arkret_canonical::DigestSuite::Sha256,
         &signer,
     )
     .map_err(|error| error.to_string())?;
@@ -446,7 +476,8 @@ fn sealed_state_root(realm: &RealmId, ops: &[(CellRef, IssuedOp)]) -> Result<Has
             arkret_state::join_cell(binding.lattice.as_ref(), &cell, &cell_ops),
         );
     }
-    compute_state_root(&post_state).map_err(|error| error.to_string())
+    compute_state_root(&post_state, arkret_canonical::DigestSuite::Sha256)
+        .map_err(|error| error.to_string())
 }
 
 fn capability_grant_cell(grant_id: &str) -> Result<CellRef, String> {
@@ -574,33 +605,40 @@ mod tests {
     use serde_json::{Value, json};
     use soland_domain::reducer::engine_grant_from_capability_cell_state;
 
-    use super::{RealmBasisFixtureOptions, build_realm_basis, grant_body};
+    use super::{ConformanceNotarySigner, RealmBasisFixtureOptions, build_realm_basis, grant_body};
+
+    fn test_notary() -> ConformanceNotarySigner {
+        ConformanceNotarySigner::ed25519(
+            arkret_identifiers::DidFullId::new("did:web:notary.example".to_owned()).unwrap(),
+            arkret_wire::DidUrl::new("did:web:notary.example#notary-key").unwrap(),
+            [42; 32],
+        )
+        .unwrap()
+    }
 
     #[test]
     fn shared_builder_honors_fixture_identity_inputs_and_fails_closed() {
         let realm_id = "ak:realm:AZvHex1PY66SV1ktwvanY5DTtObiifOGrVl1LHL80p-_";
         let subject = "ak:did_core:web:fixture.example";
         let actions = vec!["ak.strand.create".to_owned()];
-        let build = |domain: &str, notary: Option<&str>| {
+        let notary = test_notary();
+        let build = |domain: &str, install_notary: bool| {
             build_realm_basis(
                 realm_id,
                 subject,
                 RealmBasisFixtureOptions {
                     principal_server_id: "ak:did_core:web:principal-server.example",
-                    notary_authority: notary,
+                    notary_signer: &notary,
+                    install_notary,
                     data_plane_actions: &actions,
                     fixture_id_domain: domain,
                 },
             )
         };
 
-        let first = build("soland:test:first:", Some("ak:did_core:web:notary.example"))
-            .expect("shared basis");
-        let second = build(
-            "soland:test:second:",
-            Some("ak:did_core:web:notary.example"),
-        )
-        .expect("shared basis with distinct identity inputs");
+        let first = build("soland:test:first:", true).expect("shared basis");
+        let second =
+            build("soland:test:second:", true).expect("shared basis with distinct identity inputs");
 
         assert_ne!(first.seal.id, second.seal.id);
         assert_eq!(first.grants.len(), 2);
@@ -621,7 +659,14 @@ mod tests {
                 .iter()
                 .any(|(cell, _)| { cell.as_str() == arkret_wire::REALM_REDUCER_PROFILE_CELL })
         );
-        assert!(build("soland:test:first:", Some("not a DID")).is_err());
+        assert!(
+            ConformanceNotarySigner::ed25519(
+                arkret_identifiers::DidFullId::new("did:web:notary.example".to_owned()).unwrap(),
+                arkret_wire::DidUrl::new("did:web:other.example#notary-key").unwrap(),
+                [42; 32],
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -679,7 +724,8 @@ mod tests {
             subject,
             RealmBasisFixtureOptions {
                 principal_server_id: "ak:did_core:web:principal-server.example",
-                notary_authority: Some("ak:did_core:web:notary.example"),
+                notary_signer: &test_notary(),
+                install_notary: true,
                 data_plane_actions: &actions,
                 fixture_id_domain: "soland:test:field-scoped:",
             },

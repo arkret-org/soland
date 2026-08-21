@@ -11,7 +11,7 @@ fn is_policy_frontier_component(component: &str) -> bool {
             || matches!(
                 component,
                 arkret_wire::CellFamilyId::REALM_JOIN_RULE_V1
-                    | arkret_wire::CellFamilyId::REALM_HISTORY_VISIBILITY_V1
+                    | arkret_wire::CellFamilyId::REALM_HISTORY_ACCESS_V1
                     | arkret_wire::CellFamilyId::REALM_MEDIA_SERVICE_V1
                     | arkret_wire::CellFamilyId::REALM_POLICY_BUNDLE_V1
                     | arkret_wire::CellFamilyId::REALM_PLAINTEXT_VISIBLE_SERVICES_V1
@@ -847,7 +847,7 @@ impl ProjectionState {
     /// verifier has to be able to recompute the same number from the same Seal
     /// view.
     ///
-    /// `⊥` cells are excluded: §5 says "全部 non-`⊥` policy control cell".
+    /// Bottom cells are excluded: §5 covers every non-bottom policy control cell.
     pub fn realm_policy_control_cells(
         &self,
         realm_id: &str,
@@ -898,7 +898,9 @@ impl ProjectionState {
                     .unwrap_or(false)
             })
             .collect::<BTreeMap<_, _>>();
-        arkret_state::compute_state_root(&cells).ok()
+        self.realm_digest_algorithm(realm_id)
+            .and_then(|algorithm| arkret_canonical::digest_suite(&algorithm).ok())
+            .and_then(|suite| arkret_state::compute_state_root(&cells, suite).ok())
     }
 
     pub fn realm_digest_algorithm(&self, realm_id: &str) -> Option<String> {
@@ -944,19 +946,19 @@ impl ProjectionState {
     /// Effective Realm `content_scheme` projected from the
     /// `ak.component.realm.policy_bundle.v1` cell. `None` means no scheme has been negotiated
     /// yet — callers treat that as the application-message default
-    /// (`mls_rfc9420`). Drives the one-way `content_scheme` ratchet in
-    /// `apply_realm_policy_bundle`.
+    /// (`mls_rfc9420`). Once a related Realm/Circle MLS Genesis exists,
+    /// `apply_realm_policy_bundle` treats this effective selection as immutable.
     pub fn realm_content_scheme(&self, realm_id: &str) -> Option<String> {
         self.realm_policy_bundle_cell_value(realm_id)
             .and_then(content_scheme_field)
             .map(ToOwned::to_owned)
     }
 
-    /// Effective Realm `history_visibility` projected from its dedicated cell.
-    pub fn realm_history_visibility(&self, realm_id: &str) -> Option<String> {
+    /// Effective Realm `history_access` projected from its dedicated cell.
+    pub fn realm_history_access(&self, realm_id: &str) -> Option<String> {
         self.realm_null_subject_cell_value(
             realm_id,
-            arkret_wire::CellFamilyId::REALM_HISTORY_VISIBILITY_V1,
+            arkret_wire::CellFamilyId::REALM_HISTORY_ACCESS_V1,
         )
         .and_then(|value| {
             value

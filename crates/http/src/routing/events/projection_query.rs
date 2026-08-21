@@ -32,14 +32,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{
-    CellRef, DidCoreId, MorphId, RealmId, RelationId, SealId, SpaceId, StrandId,
-};
-use arkret_models_collaboration::events_payloads::HistorySharingPolicyPayloadValue;
-use arkret_models_collaboration::governance::history_visibility::{
-    HistoryRangeContext, HistoryReaderContext, HistoryReaderEventState,
-    HistorySharingRestrictedScopeRef, HistorySharingScopeKind,
-};
+use arkret_identifiers::{DidCoreId, MorphId, RealmId, RelationId, SpaceId, StrandId};
 use arkret_models_collaboration::http_bodies::{
     ProjectionAssignedToRelation, ProjectionMorphList, ProjectionMorphRow, ProjectionObjectState,
     ProjectionSpaceList, ProjectionSpaceRow, ProjectionSpaceState, ProjectionStrandList,
@@ -48,8 +41,6 @@ use arkret_models_collaboration::http_bodies::{
 use arkret_models_collaboration::objects::query_projection::{
     DocumentMorphProjectionOutcome, ReferenceProjectionState,
 };
-use arkret_policy::history_visibility::{event_time_history_visible, matching_restricted_rules};
-use arkret_wire::HistoryVisibility;
 use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{PathParam, QueryParam};
@@ -65,7 +56,7 @@ use soland_services::projection::{
     SpaceContainerLifecycle as SpaceContainerLifecycleState, morph_document_body,
 };
 
-use super::{realm_history_visibility, realm_id_accessible};
+use super::{realm_history_access, realm_id_accessible};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
@@ -108,34 +99,6 @@ fn validate_realm_id(realm_id: String) -> Result<String, AppError> {
     Ok(realm_id)
 }
 
-async fn realm_history_sharing_policy(
-    state: &AppState,
-    realm_id: &str,
-) -> Option<HistorySharingPolicyPayloadValue> {
-    let meta = state
-        .realms()
-        .realm_metadata(realm_id)
-        .await
-        .ok()
-        .flatten()?;
-    let policy = if let Some(policy_value) = meta.history_sharing_policy {
-        serde_json::from_value::<HistorySharingPolicyPayloadValue>(policy_value).ok()?
-    } else {
-        let projection = state.projections().snapshot();
-        if projection.realm_is_principal_control(realm_id) {
-            arkret_policy::history_visibility::principal_control_realm_history_sharing_policy()
-                .ok()?
-        } else if projection.realm_is_direct_conversation(realm_id) {
-            arkret_policy::history_visibility::direct_conversation_realm_history_sharing_policy()
-                .ok()?
-        } else {
-            return None;
-        }
-    };
-    arkret_policy::history_visibility::validate_history_sharing_policy(&policy).ok()?;
-    Some(policy)
-}
-
 fn projection_space_state(state: SpaceContainerLifecycleState) -> ProjectionSpaceState {
     match state {
         SpaceContainerLifecycleState::Active => ProjectionSpaceState::Active,
@@ -167,29 +130,25 @@ fn total_count(len: usize) -> Result<u64, AppError> {
 }
 
 fn projection_row_visible_to_session(
-    state: &AppState,
+    _state: &AppState,
     projection: &ProjectionState,
     realm_id: &str,
     session: &SessionRecord,
     sender: &str,
     created_at: DateTime<Utc>,
-    history_basis_seals: &[String],
+    _history_basis_seals: &[String],
     scope_circle_id: Option<&str>,
-    history_visibility: &str,
-    history_policy: Option<&HistorySharingPolicyPayloadValue>,
+    history_access: &str,
 ) -> bool {
     if sender == session.actor {
         return true;
     }
     if !projection_realm_history_allows(
-        state,
         projection,
         realm_id,
         &session.actor,
-        history_basis_seals,
-        scope_circle_id,
-        history_visibility,
-        history_policy,
+        history_access,
+        created_at,
     ) {
         return false;
     }
@@ -199,106 +158,22 @@ fn projection_row_visible_to_session(
 }
 
 fn projection_realm_history_allows(
-    state: &AppState,
     projection: &ProjectionState,
     realm_id: &str,
     actor: &str,
-    history_basis_seals: &[String],
-    scope_circle_id: Option<&str>,
-    history_visibility: &str,
-    history_policy: Option<&HistorySharingPolicyPayloadValue>,
+    history_access: &str,
+    created_at: DateTime<Utc>,
 ) -> bool {
-    let Ok(visibility) = history_visibility.parse::<HistoryVisibility>() else {
+    let Some(member) = projection.member(realm_id, actor) else {
         return false;
     };
-    let member_state_at_t0 =
-        member_state_at_history_basis(state, realm_id, actor, history_basis_seals);
-    let event_state = history_reader_event_state(member_state_at_t0.as_deref());
-    let reader = HistoryReaderContext {
-        current_active_member: projection
-            .member(realm_id, actor)
-            .is_some_and(|member| member.state == "join"),
-        event_state,
-        has_discoverability: true,
-        has_preview_token: false,
-    };
-    let range = HistoryRangeContext::from_membership(
-        matches!(
-            event_state,
-            HistoryReaderEventState::Invited | HistoryReaderEventState::Joined
-        ),
-        event_state == HistoryReaderEventState::Joined,
-    );
-    if visibility != HistoryVisibility::Restricted {
-        return event_time_history_visible(visibility, reader, range, history_policy).allowed;
-    }
-    let Some(policy) = history_policy else {
+    if member.state != "join" {
         return false;
-    };
-    let Some(receiver_class) = reader.receiver_class() else {
-        return false;
-    };
-    let scope = HistorySharingRestrictedScopeRef {
-        kind: if scope_circle_id.is_some() {
-            HistorySharingScopeKind::Circle
-        } else {
-            HistorySharingScopeKind::Realm
-        },
-        circle_id: scope_circle_id,
-    };
-    !matching_restricted_rules(
-        policy,
-        receiver_class,
-        visibility,
-        range,
-        None,
-        Some(&scope),
-    )
-    .is_empty()
-}
-
-fn history_reader_event_state(member_state: Option<&str>) -> HistoryReaderEventState {
-    match member_state {
-        Some("invite") => HistoryReaderEventState::Invited,
-        Some("join") => HistoryReaderEventState::Joined,
-        Some("leave" | "ban" | "remove" | "revoked" | "rejected" | "expired") => {
-            HistoryReaderEventState::Removed
-        }
-        _ => HistoryReaderEventState::None,
     }
-}
-
-fn member_state_at_history_basis(
-    state: &AppState,
-    realm_id: &str,
-    actor: &str,
-    history_basis_seals: &[String],
-) -> Option<String> {
-    if history_basis_seals.is_empty() {
-        return None;
-    }
-    let realm = RealmId::new(realm_id.to_owned()).ok()?;
-    let seals = history_basis_seals
-        .iter()
-        .filter_map(|seal| SealId::new(seal.clone()).ok())
-        .collect::<Vec<_>>();
-    if seals.is_empty() {
-        return None;
-    }
-    let cell = CellRef::new(format!("ak:cell:ak.component.member.state.v1:{actor}")).ok()?;
-    let state_at_basis = state
-        .projections()
-        .effective_state_at(&seals, &realm)
-        .ok()?;
-    match state_at_basis.get(&cell) {
-        Some(arkret_state::lattice::CellState::Value(Value::String(member_state))) => {
-            Some(member_state.clone())
-        }
-        Some(arkret_state::lattice::CellState::Value(Value::Object(object))) => object
-            .get("state")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        _ => None,
+    match history_access {
+        "all_history_for_current_members" => true,
+        "since_join" => created_at >= member.joined_at,
+        _ => false,
     }
 }
 
@@ -726,8 +601,7 @@ async fn document_relation_target_row_visible(
     let Some(row) = snapshot.target_row_visibility.as_ref() else {
         return true;
     };
-    let history_visibility = realm_history_visibility(state, target_realm_id).await;
-    let history_policy = realm_history_sharing_policy(state, target_realm_id).await;
+    let history_access = realm_history_access(state, target_realm_id).await;
     let projection = state.projections().snapshot();
     projection_row_visible_to_session(
         state,
@@ -738,8 +612,7 @@ async fn document_relation_target_row_visible(
         row.created_at,
         &row.history_basis_seals,
         row.scope_circle_id.as_deref(),
-        &history_visibility,
-        history_policy.as_ref(),
+        &history_access,
     )
 }
 
@@ -942,8 +815,7 @@ fn document_projection_comments(
     morph: &MorphProjection,
     body: &Value,
     session: &SessionRecord,
-    history_visibility: &str,
-    history_policy: Option<&HistorySharingPolicyPayloadValue>,
+    history_access: &str,
 ) -> Vec<BTreeMap<String, Value>> {
     let mut comments = projection
         .messages
@@ -965,8 +837,7 @@ fn document_projection_comments(
                 message.created_at,
                 &message.history_basis_seals,
                 message_scope_circle_id(message),
-                history_visibility,
-                history_policy,
+                history_access,
             )
         })
         .map(|(message, anchor_range, body_text)| {
@@ -1019,8 +890,7 @@ async fn list_space_container_projections(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
-    let history_visibility = realm_history_visibility(state, &realm_id).await;
-    let history_policy = realm_history_sharing_policy(state, &realm_id).await;
+    let history_access = realm_history_access(state, &realm_id).await;
     let proj = state.projections().snapshot();
     let spaces: Vec<ProjectionSpaceRow> = proj
         .space_containers
@@ -1036,8 +906,7 @@ async fn list_space_container_projections(
                 p.created_at,
                 &p.history_basis_seals,
                 p.scope_circle_id.as_deref(),
-                &history_visibility,
-                history_policy.as_ref(),
+                &history_access,
             )
         })
         .filter(|p| include_terminal || p.state != SpaceContainerLifecycleState::Tombstoned)
@@ -1103,8 +972,7 @@ async fn list_strand_projections(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
-    let history_visibility = realm_history_visibility(state, &realm_id).await;
-    let history_policy = realm_history_sharing_policy(state, &realm_id).await;
+    let history_access = realm_history_access(state, &realm_id).await;
     let proj = state.projections().snapshot();
     // COT-06-004 — the Realm's default-Strand pointer drives each row's
     // derived `is_default` flag (no per-Strand stored column).
@@ -1126,8 +994,7 @@ async fn list_strand_projections(
                 f.created_at,
                 &f.history_basis_seals,
                 f.scope_circle_id.as_deref(),
-                &history_visibility,
-                history_policy.as_ref(),
+                &history_access,
             )
         })
         .filter(|f| include_terminal || !is_object_terminal(f.state))
@@ -1320,8 +1187,7 @@ async fn get_strand_projection(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
-    let history_visibility = realm_history_visibility(state, &realm_id).await;
-    let history_policy = realm_history_sharing_policy(state, &realm_id).await;
+    let history_access = realm_history_access(state, &realm_id).await;
     let proj = state.projections().snapshot();
     let Some(strand) = proj.strands.get(&strand_id).cloned() else {
         return Err(AppError::not_found("strand not found"));
@@ -1335,8 +1201,7 @@ async fn get_strand_projection(
         strand.created_at,
         &strand.history_basis_seals,
         strand.scope_circle_id.as_deref(),
-        &history_visibility,
-        history_policy.as_ref(),
+        &history_access,
     ) {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
@@ -1504,8 +1369,7 @@ async fn get_document_projection(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
-    let history_visibility = realm_history_visibility(state, &realm_id).await;
-    let history_policy = realm_history_sharing_policy(state, &realm_id).await;
+    let history_access = realm_history_access(state, &realm_id).await;
     let (document, versions, comments) = {
         let proj = state.projections().snapshot();
         let Some(morph) = proj.morphs.get(&morph_id).cloned() else {
@@ -1523,8 +1387,7 @@ async fn get_document_projection(
             morph.created_at,
             &morph.history_basis_seals,
             morph.scope_circle_id.as_deref(),
-            &history_visibility,
-            history_policy.as_ref(),
+            &history_access,
         ) {
             return Err(AppError::new(
                 ErrorCode::CapabilityDenied,
@@ -1535,15 +1398,8 @@ async fn get_document_projection(
         let body = morph_document_body(&morph.fields).unwrap_or(Value::Null);
         let document = document_projection_document(&morph, body.clone())?;
         let versions = document_projection_versions(&morph);
-        let comments = document_projection_comments(
-            state,
-            &proj,
-            &morph,
-            &body,
-            &session,
-            &history_visibility,
-            history_policy.as_ref(),
-        );
+        let comments =
+            document_projection_comments(state, &proj, &morph, &body, &session, &history_access);
         (document, versions, comments)
     };
     let relations = document_projection_relations(state, &morph_id, &realm_id, &session).await?;
@@ -1579,8 +1435,7 @@ async fn list_morph_projections(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
-    let history_visibility = realm_history_visibility(state, &realm_id).await;
-    let history_policy = realm_history_sharing_policy(state, &realm_id).await;
+    let history_access = realm_history_access(state, &realm_id).await;
     let proj = state.projections().snapshot();
     let morphs: Vec<ProjectionMorphRow> = proj
         .morphs
@@ -1596,8 +1451,7 @@ async fn list_morph_projections(
                 m.created_at,
                 &m.history_basis_seals,
                 m.scope_circle_id.as_deref(),
-                &history_visibility,
-                history_policy.as_ref(),
+                &history_access,
             )
         })
         .filter(|m| include_terminal || !is_object_terminal(m.state))

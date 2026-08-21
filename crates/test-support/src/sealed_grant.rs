@@ -31,7 +31,6 @@
 use std::collections::BTreeMap;
 
 use arkret_identifiers::{CellRef, DidFullId, EventId, GrantId, Hash, Hlc, RealmId, SealId};
-use arkret_signatures::Ed25519PayloadSigner;
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::compute_state_root;
 use arkret_wire::{Seal, SealBasis};
@@ -41,11 +40,6 @@ use soland_http::state::AppState;
 use soland_services::projection::ProjectionService;
 
 use crate::AppStateTestExt as _;
-
-/// The notary identity fixture grant Seals are signed with.
-const FIXTURE_NOTARY_SEED: [u8; 32] = [0x21; 32];
-const FIXTURE_NOTARY_DID: &str = "did:web:alice.example";
-const FIXTURE_NOTARY_VERIFICATION_METHOD: &str = "did:web:alice.example#extension-test-notary";
 
 /// What a caller wants granted. Everything the protocol requires is derived;
 /// nothing here is a digest or an id the caller has to invent.
@@ -130,7 +124,9 @@ pub async fn seed_sealed_capability_grant(
         json!({ "object": body.clone() }),
     )
     .expect("fixture capability grant Event");
-    let canonical_digest = event.event_digest().expect("fixture Event digest");
+    let canonical_digest = event
+        .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .expect("fixture Event digest");
     let move_id = Hash::new(canonical_digest.clone()).expect("fixture Move digest");
 
     persist_canonical_event(state, &event, fixture.realm_id, &canonical_digest).await;
@@ -139,11 +135,10 @@ pub async fn seed_sealed_capability_grant(
     let (cell, op) = grant_cell_op(fixture.grant_id, fixture.issuer, &move_id, body);
     let state_root = state_root_for(&realm, &cell, &op);
 
-    let signer = Ed25519PayloadSigner::from_did_key_seed(
-        FIXTURE_NOTARY_SEED,
-        DidFullId::new(FIXTURE_NOTARY_DID.to_owned()).expect("fixture notary DID"),
-        arkret_wire::DidUrl::new(FIXTURE_NOTARY_VERIFICATION_METHOD)
-            .expect("fixture notary verification method"),
+    let signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
+        state.notary_signing_key().to_bytes(),
+        state.service_full_id(),
+        state.service_verification_method("notary-key").unwrap(),
     );
     let seal = Seal::sign_single(
         realm.clone(),
@@ -151,11 +146,14 @@ pub async fn seed_sealed_capability_grant(
         vec![move_id.clone()],
         state_root,
         fixture_hlc(&format!("{}:seal", fixture.grant_id)),
+        arkret_canonical::DigestSuite::Sha256,
         &signer,
     )
     .expect("fixture grant Seal");
 
-    state.test_put_seal(&seal).expect("fixture grant Seal put");
+    state
+        .test_put_seal(&seal, arkret_canonical::DigestSuite::Sha256)
+        .expect("fixture grant Seal put");
     state
         .test_append_sealed_effects(&realm, &seal.id, &[(cell, op)])
         .expect("fixture grant sealed effects");
@@ -205,7 +203,7 @@ pub async fn seal_accepted_capability_grant(
     assert_eq!(event.event_id, event_id);
 
     let canonical_digest = event
-        .event_digest()
+        .event_digest_with_digest_suite(record.digest_suite)
         .expect("accepted capability grant Event digest");
     assert_eq!(canonical_digest, record.canonical_digest);
     let move_id = Hash::new(canonical_digest).expect("fixture Move digest");
@@ -242,11 +240,10 @@ pub async fn seal_accepted_capability_grant(
     };
     let state_root = state_root_for(&realm, &expected_cell, &op);
 
-    let signer = Ed25519PayloadSigner::from_did_key_seed(
-        FIXTURE_NOTARY_SEED,
-        DidFullId::new(FIXTURE_NOTARY_DID.to_owned()).expect("fixture notary DID"),
-        arkret_wire::DidUrl::new(FIXTURE_NOTARY_VERIFICATION_METHOD)
-            .expect("fixture notary verification method"),
+    let signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
+        state.notary_signing_key().to_bytes(),
+        state.service_full_id(),
+        state.service_verification_method("notary-key").unwrap(),
     );
     let seal = Seal::sign_single(
         realm.clone(),
@@ -254,12 +251,13 @@ pub async fn seal_accepted_capability_grant(
         vec![move_id.clone()],
         state_root,
         fixture_hlc_after(event.created_at, &format!("{grant_id}:accepted-seal")),
+        arkret_canonical::DigestSuite::Sha256,
         &signer,
     )
     .expect("fixture accepted grant Seal");
 
     state
-        .test_put_seal(&seal)
+        .test_put_seal(&seal, arkret_canonical::DigestSuite::Sha256)
         .expect("fixture accepted grant Seal put");
     state
         .test_append_sealed_effects(&realm, &seal.id, &[(expected_cell, op)])
@@ -291,11 +289,10 @@ pub fn seed_historical_capability_grant(
     let (cell, op) = grant_cell_op(fixture.grant_id, fixture.issuer, &move_id, body);
     let state_root = state_root_for(&realm, &cell, &op);
 
-    let signer = Ed25519PayloadSigner::from_did_key_seed(
-        FIXTURE_NOTARY_SEED,
-        DidFullId::new(FIXTURE_NOTARY_DID.to_owned()).expect("fixture notary DID"),
-        arkret_wire::DidUrl::new(FIXTURE_NOTARY_VERIFICATION_METHOD)
-            .expect("fixture notary verification method"),
+    let signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
+        state.notary_signing_key().to_bytes(),
+        state.service_full_id(),
+        state.service_verification_method("notary-key").unwrap(),
     );
     let seal = Seal::sign_single(
         realm.clone(),
@@ -303,12 +300,13 @@ pub fn seed_historical_capability_grant(
         vec![move_id.clone()],
         state_root,
         fixture_hlc(&format!("{}:historical", fixture.grant_id)),
+        arkret_canonical::DigestSuite::Sha256,
         &signer,
     )
     .expect("fixture historical grant Seal");
 
     state
-        .test_put_seal(&seal)
+        .test_put_seal(&seal, arkret_canonical::DigestSuite::Sha256)
         .expect("fixture historical grant Seal put");
     state
         .test_append_sealed_effects(&realm, &seal.id, &[(cell, op)])
@@ -380,7 +378,11 @@ fn state_root_for(realm: &RealmId, cell: &CellRef, op: &IssuedOp) -> Hash {
         .resolve(realm, cell)
         .expect("capability grant cell family is registered");
     let joined = arkret_state::join_cell(binding.lattice.as_ref(), cell, std::slice::from_ref(op));
-    compute_state_root(&BTreeMap::from([(cell.clone(), joined)])).expect("fixture grant state root")
+    compute_state_root(
+        &BTreeMap::from([(cell.clone(), joined)]),
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture grant state root")
 }
 
 async fn persist_canonical_event(
@@ -400,6 +402,7 @@ async fn persist_canonical_event(
             realm_id: Some(realm_id.to_owned()),
             kind: arkret_wire::EventKind::CapabilityGrant.as_str().to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
             canonical_digest: canonical_digest.to_owned(),
             canonical_bytes: arkret_canonical::canonical_json_bytes(
                 &event

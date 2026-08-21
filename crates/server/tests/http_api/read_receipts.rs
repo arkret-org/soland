@@ -20,8 +20,6 @@ const BOB: &str = "did:web:bob.example";
 const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b000000001";
 const CAROL: &str = "did:web:carol.example";
 const CAROL_DEVICE: &str = "ak:device:01904100-0000-7000-8000-ca0010000001";
-const DAVE: &str = "did:web:dave.example";
-const DAVE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-da0010000001";
 
 fn canonical_body(value: &impl serde::Serialize) -> Vec<u8> {
     arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
@@ -40,11 +38,7 @@ async fn post_canonical_signal(
         .await
 }
 
-async fn set_demo_realm_visibility(
-    state: &AppState,
-    discoverability: &str,
-    history_visibility: &str,
-) {
+async fn set_demo_realm_visibility(state: &AppState, discoverability: &str, history_access: &str) {
     let now = chrono::Utc::now();
     let mut meta = state
         .test_persistence()
@@ -56,9 +50,7 @@ async fn set_demo_realm_visibility(
             owner: ALICE.to_owned(),
             deleted: false,
             discoverability: discoverability.to_owned(),
-            history_visibility: history_visibility.to_owned(),
-            history_sharing_policy: None,
-            history_sharing_policy_digest: None,
+            history_access: history_access.to_owned(),
             preview_policy: None,
             preview_policy_digest: None,
             asset_privacy_policy: None,
@@ -79,7 +71,7 @@ async fn set_demo_realm_visibility(
             updated_at: now,
         });
     meta.discoverability = discoverability.to_owned();
-    meta.history_visibility = history_visibility.to_owned();
+    meta.history_access = history_access.to_owned();
     meta.encryption_profile = Some("none".to_owned());
     meta.plaintext_visible_services =
         std::collections::BTreeSet::from([state.service_id().clone()]);
@@ -96,21 +88,8 @@ async fn set_demo_realm_visibility(
         .unwrap();
 }
 
-async fn set_read_receipt_policy(
-    state: AppState,
-    token: &str,
-    visibility: &str,
-    allow_public_world_readable: bool,
-) {
-    let response = submit_read_receipt_policy(
-        state,
-        token,
-        "optional",
-        visibility,
-        allow_public_world_readable,
-        false,
-    )
-    .await;
+async fn set_read_receipt_policy(state: AppState, token: &str, visibility: &str) {
+    let response = submit_read_receipt_policy(state, token, "optional", visibility).await;
     assert!(
         response["status"] == "accepted"
             || response["accepted"]
@@ -125,8 +104,6 @@ async fn submit_read_receipt_policy(
     token: &str,
     disclosure: &str,
     visibility: &str,
-    allow_public_world_readable: bool,
-    allow_forced_public_world_readable: bool,
 ) -> Value {
     submit_actor_private_event(
         state,
@@ -138,80 +115,16 @@ async fn submit_read_receipt_policy(
         serde_json::json!({
             "disclosure": disclosure,
             "visibility": visibility,
-            "scope_overrides_allowed": true,
-            "receipt_compliance_opt_in": {
-                "public_receipts_on_world_readable": allow_public_world_readable,
-                "forced_public_world_readable_receipts": allow_forced_public_world_readable
-            }
+            "scope_overrides_allowed": true
         }),
     )
     .await
 }
 
-#[tokio::test]
-async fn read_receipt_policy_rejects_public_world_readable_without_opt_in() {
-    let state = soland_test_support::app_state(test_config());
-    let alice_token = dev_token(state.clone()).await;
-    set_demo_realm_visibility(&state, "public", "world_readable").await;
-
-    let response = submit_read_receipt_policy(
-        state.clone(),
-        &alice_token,
-        "optional",
-        "public",
-        false,
-        false,
-    )
-    .await;
-
-    assert_ne!(
-        response["status"], "accepted",
-        "public world_readable policy must be rejected: {response}"
-    );
-    let encoded = serde_json::to_string(&response).unwrap();
-    assert!(
-        encoded.contains("read_receipt_visibility_combination_invalid"),
-        "response must include read_receipt_visibility_combination_invalid: {response}"
-    );
-}
-
-#[tokio::test]
-async fn read_receipt_policy_rejects_forced_public_world_readable_without_second_opt_in() {
-    let state = soland_test_support::app_state(test_config());
-    let alice_token = dev_token(state.clone()).await;
-    set_demo_realm_visibility(&state, "public", "world_readable").await;
-
-    let response = submit_read_receipt_policy(
-        state.clone(),
-        &alice_token,
-        "required",
-        "public",
-        true,
-        false,
-    )
-    .await;
-
-    assert_ne!(
-        response["status"], "accepted",
-        "forced public world_readable policy must be rejected: {response}"
-    );
-    let encoded = serde_json::to_string(&response).unwrap();
-    assert!(
-        encoded.contains("read_receipt_forced_public_world_readable_forbidden"),
-        "response must include read_receipt_forced_public_world_readable_forbidden: {response}"
-    );
-}
-
 /// The Strand the demo Realm's fixture messages are authored into.
 const TARGET_STRAND_ID: &str = "ak:strand:AcbFC8Nil95DfV11kMMMvRtzRdEC3g-tFtBE8_VQQ74j";
 
-/// The pre-migration plaintext ephemeral receipt envelope, kept as a negative.
-///
-/// `read-receipts.md` §2.1 is explicit that this exact shape — receipt target
-/// and precise kind on the outer envelope — MUST be rejected with
-/// `schema_violation` or `signal_plaintext_forbidden`, so the fixture keeps
-/// earning its place as the input the Signal rail refuses to interpret. It is a
-/// raw `Value` rather than a strong type on purpose: no SDK type can express it.
+/// Build the obsolete plaintext envelope retained as a negative fixture.
 fn legacy_plaintext_read_receipt_envelope(actor: &str, device_id: &str, event_id: &str) -> Value {
     let sent_at = chrono::Utc::now();
     let expires_at = sent_at + chrono::Duration::seconds(30);
@@ -244,13 +157,6 @@ fn legacy_plaintext_read_receipt_envelope(actor: &str, device_id: &str, event_id
     envelope
 }
 
-/// The `ak.schema.read_receipt.v1` Signal plaintext.
-///
-/// The closed profile carries `kind` + `payload_sequence` plus the reader,
-/// target and scope. Realm id and send time are NOT here: §2.1 forbids
-/// duplicating what the signed envelope already carries, and the AAD binds the
-/// Realm into the ciphertext. `payload_sequence` is the sender-device sequence
-/// the receiver dedupe triple needs.
 fn read_receipt_plaintext(actor: &str, event_id: &str, payload_sequence: u64) -> String {
     let receipt = ReadReceipt::new(
         payload_sequence,
@@ -263,12 +169,6 @@ fn read_receipt_plaintext(actor: &str, event_id: &str, payload_sequence: u64) ->
     String::from_utf8(seal_signal_plaintext(&receipt).unwrap()).unwrap()
 }
 
-/// Recover the receipt a receiving client would see after decrypting.
-///
-/// The fixture's `ciphertext` is base64url of the canonical plaintext rather
-/// than a real MLS-exporter AEAD output; what this asserts is the placement of
-/// the receipt object, not the AEAD construction (which `signal.md` §1 pins and
-/// `validate_structural` enforces through `aad_digest`).
 fn decrypted_receipt(envelope: &arkret_wire::SignalEnvelope) -> ReadReceipt {
     let plaintext = URL_SAFE_NO_PAD
         .decode(&envelope.encrypted_payload.ciphertext)
@@ -279,7 +179,6 @@ fn decrypted_receipt(envelope: &arkret_wire::SignalEnvelope) -> ReadReceipt {
     }
 }
 
-/// Everything about the delivered envelope the Sync Service is allowed to read.
 fn server_visible_header(envelope: &arkret_wire::SignalEnvelope) -> Value {
     let mut header = serde_json::to_value(envelope).unwrap();
     header["encrypted_payload"]
@@ -302,7 +201,6 @@ fn circle_scope(circle_id: &str) -> arkret_wire::ScopeRef {
     }
 }
 
-/// A receipt Signal from Bob. `signal_class` is fixed to `session` by §2.1.
 fn bob_receipt_signal(
     scope_ref: arkret_wire::ScopeRef,
     seal_ref: &arkret_wire::SealId,
@@ -339,26 +237,6 @@ async fn submit_alice_target_message(state: AppState, token: &str, body: &str) -
     message["event_id"].as_str().unwrap().to_owned()
 }
 
-/// Restates `private_read_receipt_visible_only_to_target_sender`.
-///
-/// The old premise was a server-side crop: the service read the receipt's
-/// `event_id`, resolved that Event's sender and fanned the receipt out to that
-/// actor alone. `read-receipts.md` §2.1 removed the input that crop needed —
-/// `ak.receipt.read`, the read target, the Event id, the HLC and the actor are
-/// all inside `encrypted_payload`, which the Sync Service may neither see nor
-/// route on — and §2.5 rule 1 classifies the policy as a soft compliance
-/// declaration rather than a cryptographically enforced, service-side gate. So
-/// what survives is asserted here instead:
-///
-/// 1. the pre-migration plaintext envelope is refused, not reinterpreted (§2.1);
-/// 2. the only narrowing the rail can enforce is the signed `scope_ref`, so a Circle-scoped receipt
-///    reaches the Circle and not a Realm member outside it;
-/// 3. the delivered header names no receipt field at all, and the receipt object is recoverable
-///    only from the ciphertext, whose `actor_id` MUST equal the outer `sender_actor_id` (§2.1).
-///
-/// Per-receipt `visibility=private` fanout is *not* asserted: it is unevaluable
-/// on this rail, and the two spec sentences that describe it contradict each
-/// other. See the module report rather than inventing a rule here.
 #[tokio::test]
 async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_target() {
     let state = soland_test_support::app_state(test_config());
@@ -370,11 +248,11 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
     let carol_token =
         verified_dev_token_for_device(state.clone(), CAROL, CAROL_DEVICE, "Carol Desktop").await;
     let seal_ref = seed_signal_basis_seal(&state, demo_realm_id(), ALICE).await;
-    set_demo_realm_visibility(&state, "invite_only", "shared").await;
+    set_demo_realm_visibility(&state, "invite_only", "all_history_for_current_members").await;
 
     let target_event_id =
         submit_alice_target_message(state.clone(), &alice_token, "private receipt target").await;
-    set_read_receipt_policy(state.clone(), &alice_token, "private", false).await;
+    set_read_receipt_policy(state.clone(), &alice_token, "private").await;
 
     // (1) §2.1 — the legacy plaintext ephemeral receipt is refused outright.
     let legacy_body = legacy_plaintext_read_receipt_envelope(BOB, BOB_DEVICE, &target_event_id);
@@ -465,109 +343,6 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
     );
 }
 
-/// Restates `members_and_public_read_receipts_are_cropped`.
-///
-/// The `members` half survives verbatim in its observable form: a non-member
-/// sees nothing. The `public` half inverts. The old test asserted that once the
-/// Realm is `world_readable`, the policy is `visibility=public` and the
-/// `public_receipts_on_world_readable` opt-in is set, a non-member observer
-/// (Dave) receives the receipt — which §2.5.1's fanout-containment clause
-/// discourages (the Sync Service SHOULD keep fanout inside the active member
-/// set) and, for the forced combination, forbids outright by raising that SHOULD
-/// to a MUST NOT. On the Signal rail that containment is
-/// structural rather than advisory: `signal/subscribe` only walks Realms the
-/// subscriber is a member of, so widening the policy cannot widen the fanout.
-#[tokio::test]
-async fn read_receipt_fanout_stays_inside_the_realm_member_set_even_when_policy_is_public() {
-    let state = soland_test_support::app_state(test_config());
-    let alice_token = dev_token(state.clone()).await;
-    add_test_realm_member(&state, demo_realm_id(), BOB);
-    let (bob_token, bob_key) =
-        seed_signal_sender_device(&state, BOB, BOB_DEVICE, "Bob Desktop").await;
-    // Dave is deliberately not a member of the demo Realm.
-    let dave_token =
-        verified_dev_token_for_device(state.clone(), DAVE, DAVE_DEVICE, "Dave Desktop").await;
-    let seal_ref = seed_signal_basis_seal(&state, demo_realm_id(), ALICE).await;
-    set_demo_realm_visibility(&state, "public", "world_readable").await;
-
-    let target_event_id =
-        submit_alice_target_message(state.clone(), &alice_token, "members public crop").await;
-
-    set_read_receipt_policy(state.clone(), &alice_token, "members", false).await;
-    let members_sent_at = chrono::Utc::now();
-    let members_receipt = bob_receipt_signal(
-        realm_scope(),
-        &seal_ref,
-        members_sent_at,
-        30,
-        &read_receipt_plaintext(BOB, &target_event_id, 1),
-        &bob_key,
-    );
-    let mut members_submit =
-        post_canonical_signal(state.clone(), &bob_token, &members_receipt).await;
-    assert_eq!(members_submit.status_code, Some(StatusCode::OK));
-    let members_outcome: arkret_models_collaboration::http_bodies::SignalSubmitOutcome =
-        members_submit.take_json().await.unwrap();
-    assert_eq!(
-        members_outcome.dispatched_recipient_count,
-        Some(1),
-        "eligibility is the Realm member set minus the sender; Dave is not in it"
-    );
-
-    assert_eq!(
-        signal_subscribe_envelopes(state.clone(), &alice_token, 400).await,
-        vec![members_receipt]
-    );
-    assert!(
-        signal_subscribe_envelopes(state.clone(), &dave_token, 400)
-            .await
-            .is_empty(),
-        "a non-member receives no receipt under visibility=members"
-    );
-
-    // Widen the policy as far as §2.5.1 permits: public receipts on a
-    // world_readable Realm, unlocked by the first compliance opt-in.
-    set_read_receipt_policy(state.clone(), &alice_token, "public", true).await;
-    let public_sent_at = chrono::Utc::now() + chrono::Duration::seconds(1);
-    let public_receipt = bob_receipt_signal(
-        realm_scope(),
-        &seal_ref,
-        public_sent_at,
-        30,
-        &read_receipt_plaintext(BOB, &target_event_id, 2),
-        &bob_key,
-    );
-    assert_eq!(
-        post_canonical_signal(state.clone(), &bob_token, &public_receipt)
-            .await
-            .status_code,
-        Some(StatusCode::OK)
-    );
-
-    assert_eq!(
-        signal_subscribe_envelopes(state.clone(), &alice_token, 400).await,
-        vec![public_receipt],
-        "members still receive the receipt"
-    );
-    assert!(
-        signal_subscribe_envelopes(state.clone(), &dave_token, 400)
-            .await
-            .is_empty(),
-        "§2.5.1 fanout containment — a non-member observer is never pushed a receipt, \
-         however permissive the Realm policy is"
-    );
-}
-
-/// Restates `read_receipt_ttl_expiry_suppresses_sync_and_event_view`.
-///
-/// The TTL premise is unchanged; both of its old observation points moved.
-/// `expires_at` is now a signed member of the envelope, `read-receipts.md` §2.1
-/// fixes a receipt's `signal_class` to `session`, and `signal.md` §2 caps that
-/// class at 30 seconds — so an over-long receipt fails closed at admission with
-/// `signal_ttl_out_of_range`, which the old millisecond-TTL rail had no way to
-/// express. The "and event view" half is gone with the rail: §1.1 says a receipt
-/// never enters durable Event history, so there is no per-Event receipt view to
-/// suppress. That is asserted directly instead.
 #[tokio::test]
 async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable() {
     let state = soland_test_support::app_state(test_config());
@@ -576,7 +351,7 @@ async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable() {
     let (bob_token, bob_key) =
         seed_signal_sender_device(&state, BOB, BOB_DEVICE, "Bob Desktop").await;
     let seal_ref = seed_signal_basis_seal(&state, demo_realm_id(), ALICE).await;
-    set_demo_realm_visibility(&state, "invite_only", "shared").await;
+    set_demo_realm_visibility(&state, "invite_only", "all_history_for_current_members").await;
 
     let target_event_id =
         submit_alice_target_message(state.clone(), &alice_token, "ttl receipt target").await;

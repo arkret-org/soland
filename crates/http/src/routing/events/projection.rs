@@ -89,9 +89,9 @@ mod tests {
             arkret_wire::EventKind::RealmDiscovery,
             json!({"value": "listed"}),
         );
-        let history_visibility = op(
-            arkret_wire::EventKind::RealmHistoryVisibility,
-            json!({"value": "shared"}),
+        let history_access = op(
+            arkret_wire::EventKind::RealmHistoryAccess,
+            json!({"from": "all_history_for_current_members", "to": "since_join"}),
         );
         let create = op(
             arkret_wire::EventKind::RealmCreate,
@@ -107,8 +107,8 @@ mod tests {
         assert_eq!(operation_realm_summary(&profile), Some("Planning space"));
         assert_eq!(operation_realm_discoverability(&discovery), Some("listed"));
         assert_eq!(
-            operation_realm_history_visibility(&history_visibility),
-            Some("shared")
+            operation_realm_history_access(&history_access),
+            Some("since_join")
         );
         assert_eq!(
             operation_realm_encryption_profile(&create),

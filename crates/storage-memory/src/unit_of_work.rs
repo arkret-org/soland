@@ -213,11 +213,13 @@ fn stage_control_proposal_ack(
         }
         return Ok(());
     }
-    let event_digest = event.event_digest().map_err(|error| {
-        PersistenceError::Conflict(format!(
-            "schema_violation: accepted Control Move digest failed: {error}"
-        ))
-    })?;
+    let event_digest = event
+        .event_digest_with_digest_suite(request.event.digest_suite)
+        .map_err(|error| {
+            PersistenceError::Conflict(format!(
+                "schema_violation: accepted Control Move digest failed: {error}"
+            ))
+        })?;
     if event_digest != request.event.canonical_digest {
         return Err(PersistenceError::Conflict(
             "schema_violation: canonical digest differs from Control Move digest".to_owned(),
@@ -232,7 +234,10 @@ fn stage_control_proposal_ack(
     let ack = match ingress {
         arkret_state::state::store::ControlProposalIngress::AcklessSelfPrincipal(_) => {
             if event.kind == arkret_wire::EventKind::DeviceRevoke
-                || !soland_storage::has_self_principal_pcr_device_authorized_shape(&event)
+                || !soland_storage::has_self_principal_pcr_device_authorized_shape(
+                    &event,
+                    request.event.digest_suite,
+                )
             {
                 return Err(PersistenceError::Conflict(
                     "schema_violation: invalid self-principal PCR device-authorized Control Move"
@@ -301,10 +306,11 @@ fn stage_canonical_event(
     staged: &mut std::collections::BTreeMap<String, soland_storage::CanonicalEventRecord>,
     event: soland_storage::CanonicalEventRecord,
 ) -> PersistenceResult<()> {
-    ids::validated_event_identity_parts(
+    ids::validated_event_identity_parts_for_suite(
         &event.event_id,
         &event.canonical_digest,
         &event.canonical_bytes,
+        event.digest_suite,
     )?;
     if let Some(existing) = staged.get(&event.event_id) {
         let reason = if existing.canonical_bytes == event.canonical_bytes {
@@ -458,10 +464,11 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             request.device_pairing_authorization.as_ref(),
         )?;
 
-        ids::validated_event_identity_parts(
+        ids::validated_event_identity_parts_for_suite(
             &request.event.event_id,
             &request.event.canonical_digest,
             &request.event.canonical_bytes,
+            request.event.digest_suite,
         )?;
         if quarantined.contains_key(&request.event.event_id) {
             if collision_variants
@@ -677,10 +684,11 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 &event_request.event.event_id,
                 event_request.device_pairing_authorization.as_ref(),
             )?;
-            ids::validated_event_identity_parts(
+            ids::validated_event_identity_parts_for_suite(
                 &event_request.event.event_id,
                 &event_request.event.canonical_digest,
                 &event_request.event.canonical_bytes,
+                event_request.event.digest_suite,
             )?;
             if quarantined.contains_key(&event_request.event.event_id) {
                 if collision_variants
@@ -933,7 +941,9 @@ mod tests {
         )
         .unwrap();
         let event_id = event.event_id.as_str().to_owned();
-        let canonical_digest = event.event_digest().unwrap();
+        let canonical_digest = event
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
         let envelope = serde_json::to_value(&event).unwrap();
         let canonical_bytes =
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
@@ -947,6 +957,7 @@ mod tests {
                 realm_id: Some(realm_id),
                 kind: "ak.test.data".to_owned(),
                 schema_id: "arkret://events/profile/create/v1".to_owned(),
+                digest_suite: arkret_canonical::DigestSuite::Sha256,
                 canonical_digest,
                 canonical_bytes,
                 envelope,
@@ -985,9 +996,13 @@ mod tests {
             arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap();
         event.executed_by =
             Some(arkret_wire::DidCoreId::new("ak:did_core:web:moderator.example").unwrap());
-        event.refresh_content_bound_identity().unwrap();
+        event
+            .refresh_content_bound_identity_with_digest_suite(request.event.digest_suite)
+            .unwrap();
         request.event.event_id = event.event_id.to_string();
-        request.event.canonical_digest = event.event_digest().unwrap();
+        request.event.canonical_digest = event
+            .event_digest_with_digest_suite(request.event.digest_suite)
+            .unwrap();
         request.event.canonical_bytes =
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         request.event.envelope = serde_json::to_value(event).unwrap();
@@ -1082,8 +1097,15 @@ mod tests {
                 arkret_wire::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
             ],
         });
-        event.event_id = event.derive_event_id().unwrap();
-        let event_digest = arkret_wire::Hash::new(event.event_digest().unwrap()).unwrap();
+        event.event_id = event
+            .derive_event_id_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        let event_digest = arkret_wire::Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap();
         let producer = arkret_wire::Proof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             proof_purpose: None,
@@ -1092,6 +1114,8 @@ mod tests {
             ))
             .unwrap(),
             event_digest: event_digest.clone(),
+            signer_resolution_evidence_ref: None,
+            signer_resolution_evidence_digest: None,
             created_at,
             domain: None,
             audience: None,
@@ -1109,12 +1133,22 @@ mod tests {
                     .unwrap(),
             producer_verification_method: producer.verification_method.clone(),
             producer_signing_key: arkret_wire::DidKey::new("did:key:z6Mkhfixture").unwrap(),
+            signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
+                "ak:signer_evidence:sha256:{}",
+                "11".repeat(32)
+            ))
+            .unwrap(),
+            signer_resolution_evidence_digest: arkret_wire::Hash::new(format!(
+                "sha256:{}",
+                "11".repeat(32)
+            ))
+            .unwrap(),
             accepted_at: created_at,
             jws: "fixture.admission.signature".to_owned(),
         };
         event.proofs = vec![producer.into(), admission.into()];
         event
-            .validate_principal_server_admission_binding()
+            .validate_principal_server_admission_binding(arkret_canonical::DigestSuite::Sha256)
             .expect("fixture accepted Event proof set");
         let event_id = event.event_id.to_string();
         let canonical_bytes =
@@ -1129,6 +1163,7 @@ mod tests {
                 realm_id: Some(realm_id),
                 kind: event.kind.to_string(),
                 schema_id: "arkret://events/contact/requested/v1".to_owned(),
+                digest_suite: arkret_canonical::DigestSuite::Sha256,
                 canonical_digest: event_digest.to_string(),
                 canonical_bytes,
                 envelope: serde_json::to_value(event).unwrap(),
@@ -1177,7 +1212,12 @@ mod tests {
             created_at,
         )
         .unwrap();
-        let event_digest = arkret_wire::Hash::new(event.event_digest().unwrap()).unwrap();
+        let event_digest = arkret_wire::Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap();
         let policy = arkret_wire::ControlProposalDecisionPolicy::default();
         let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
             realm_id: event.realm_id.clone(),
@@ -1230,6 +1270,7 @@ mod tests {
                     realm_id: Some(realm_id),
                     kind: event.kind.to_string(),
                     schema_id: "arkret://events/device/revoke/v1".to_owned(),
+                    digest_suite: arkret_canonical::DigestSuite::Sha256,
                     canonical_digest,
                     canonical_bytes,
                     envelope: serde_json::to_value(event).unwrap(),
@@ -1278,7 +1319,9 @@ mod tests {
             )
             .unwrap(),
         ));
-        delegated.event.canonical_digest = event.event_digest().unwrap();
+        delegated.event.canonical_digest = event
+            .event_digest_with_digest_suite(delegated.event.digest_suite)
+            .unwrap();
         delegated.event.envelope = serde_json::to_value(event).unwrap();
         assert!(matches!(
             stage_control_proposal_ack(&mut staged, &delegated),

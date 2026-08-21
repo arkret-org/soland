@@ -36,7 +36,7 @@ use rand::RngExt as _;
 use super::*;
 use crate::routing::identity::device_signing::decode_ed25519_key;
 
-/// §7.8.1: "TTL 不超过 300 秒".
+/// Section 7.8.1 limits the TTL to 300 seconds.
 pub(super) const DELETE_CHALLENGE_TTL_SECONDS: i64 = 300;
 
 /// The operation every delete challenge and transcript is bound to.

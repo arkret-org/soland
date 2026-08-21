@@ -153,11 +153,22 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
                     seal_basis_digest: "sha256:fixture".to_owned(),
                 },
             ),
+            arkret_canonical::DigestSuite::Sha256,
         )
         .unwrap();
 
-    let create_digest = arkret_wire::Hash::new(genesis.event_digest().unwrap()).unwrap();
-    let authorize_digest = arkret_wire::Hash::new(authorize.event_digest().unwrap()).unwrap();
+    let create_digest = arkret_wire::Hash::new(
+        genesis
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap(),
+    )
+    .unwrap();
+    let authorize_digest = arkret_wire::Hash::new(
+        authorize
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap(),
+    )
+    .unwrap();
     let fixture_hash =
         |byte: &str| arkret_wire::Hash::new(format!("sha256:{}", byte.repeat(64))).unwrap();
     let mut receipt = arkret_wire::EventBatchReceipt {

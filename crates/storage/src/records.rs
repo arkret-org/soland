@@ -321,15 +321,9 @@ pub struct RealmMetaRecord {
     pub owner: String,
     pub deleted: bool,
     pub discoverability: String,
-    /// One of `world_readable` / `shared` / `invited` / `joined` /
-    /// `restricted`. `restricted` is fail-closed unless
-    /// `history_sharing_policy` has an explicit matching rule.
-    pub history_visibility: String,
-    /// Effective `ak.realm.history_sharing_policy.value` plus its canonical
-    /// digest. The policy gates E2EE history key shares and restricted history
-    /// reads; history visibility alone never grants old epoch keys.
-    pub history_sharing_policy: Option<Value>,
-    pub history_sharing_policy_digest: Option<String>,
+    /// Current one-way history policy: `all_history_for_current_members` may
+    /// tighten to `since_join`; widening is permanently forbidden.
+    pub history_access: String,
     /// Effective `ak.realm.preview_policy.value` plus its canonical digest.
     /// Directory/object preview must fail closed when this is missing.
     pub preview_policy: Option<Value>,
@@ -338,9 +332,8 @@ pub struct RealmMetaRecord {
     /// digest. Blob presign/download re-checks this at response time.
     pub asset_privacy_policy: Option<Value>,
     pub asset_privacy_policy_digest: Option<String>,
-    /// Optional encryption profile (`mls_rfc9420` / `plaintext`). Cross-checked
-    /// against `history_visibility` at create time — `mls_rfc9420` is
-    /// incompatible with `world_readable` (realm-and-space.md §3.1.3).
+    /// Optional encryption profile (`mls_rfc9420` / `plaintext`). Standard MLS
+    /// is permanently pinned to `history_access=since_join`.
     pub encryption_profile: Option<String>,
     pub plaintext_visible_services: BTreeSet<String>,
     pub plaintext_visible_service_classes: BTreeMap<String, BTreeSet<PlaintextDataClassKind>>,
@@ -400,6 +393,7 @@ pub struct CanonicalEventRecord {
     pub realm_id: Option<String>,
     pub kind: String,
     pub schema_id: String,
+    pub digest_suite: arkret_canonical::DigestSuite,
     pub canonical_digest: String,
     /// Canonical bytes of the Event digest payload (the exact hash preimage),
     /// not canonical encoding of the whole envelope. Fields excluded from the
@@ -983,6 +977,7 @@ pub struct OutboundPushBridgeCacheRecord {
 pub struct MultisigPendingRecord {
     pub seal_id: String,
     pub realm_id: String,
+    pub digest_suite: arkret_canonical::DigestSuite,
     pub threshold_k: u32,
     pub threshold_n: u32,
     pub members: Vec<String>,

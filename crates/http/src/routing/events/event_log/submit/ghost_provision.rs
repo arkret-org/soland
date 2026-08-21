@@ -187,7 +187,7 @@ async fn prepare_ghost_event(
         let realm_id = parsed.realm_id.clone();
         let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
         let (_, authority_set_ref) = worker
-            .current_notary_profile_for_events(state, &realm_id, std::slice::from_ref(event))
+            .current_notary_value_for_events(state, &realm_id, std::slice::from_ref(event))
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -291,6 +291,7 @@ async fn prepare_ghost_event(
             realm_id: Some(parsed.realm_id.to_string()),
             kind: parsed.kind,
             schema_id: parsed.schema_id,
+            digest_suite: parsed.digest_suite,
             canonical_digest: parsed.canonical_digest,
             canonical_bytes: parsed.canonical_bytes,
             envelope,

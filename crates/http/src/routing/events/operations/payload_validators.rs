@@ -424,30 +424,21 @@ pub(crate) fn validate_read_marker_payload(operation: &Operation) -> Result<(), 
     Ok(())
 }
 
-pub(crate) fn validate_history_visibility_payload(
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    let value = operation
+pub(crate) fn validate_history_access_payload(operation: &Operation) -> Result<(), &'static str> {
+    let from = operation.payload.get("from").and_then(Value::as_str);
+    let to = operation
         .payload
-        .get("value")
+        .get("to")
         .and_then(Value::as_str)
-        .ok_or("ak.realm.history_visibility requires string value")?;
-    match value {
-        "world_readable" | "shared" | "invited" | "joined" => Ok(()),
-        "restricted" => {
-            if operation
-                .payload
-                .get("restricted_policy_digest")
-                .and_then(Value::as_str)
-                .is_some_and(|digest| digest.starts_with("sha256:"))
-            {
-                Ok(())
-            } else {
-                Err("history_sharing_policy_missing")
-            }
-        }
-        _ => Err("ak.realm.history_visibility value is unknown"),
+        .ok_or("ak.realm.history_access requires to")?;
+    if !matches!(
+        (from, to),
+        (Some("all_history_for_current_members"), "since_join")
+            | (Some("since_join"), "since_join")
+    ) {
+        return Err("history_access_widening_forbidden");
     }
+    Ok(())
 }
 
 pub(crate) fn validate_observed_dots_payload(operation: &Operation) -> Result<(), &'static str> {

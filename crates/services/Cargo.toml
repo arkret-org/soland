@@ -30,6 +30,7 @@ arkret-wire.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 chrono = { workspace = true, features = ["serde"] }
+ed25519-dalek.workspace = true
 futures-util.workspace = true
 hex.workspace = true
 parking_lot.workspace = true

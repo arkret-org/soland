@@ -221,6 +221,7 @@ pub(crate) async fn seed_active_controller_device_generation(
             principal_full_id: actor.clone(),
             principal_server_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
                 .unwrap(),
+            notary: soland_test_support::cba_basis::test_single_signer_notary(actor.as_str()),
             initial_resolution: initial_resolution.clone(),
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -367,9 +368,7 @@ pub(crate) async fn seed_active_controller_device_generation(
                 owner: controller_id.to_string(),
                 deleted: false,
                 discoverability: "private".to_owned(),
-                history_visibility: "restricted".to_owned(),
-                history_sharing_policy: None,
-                history_sharing_policy_digest: None,
+                history_access: "since_join".to_owned(),
                 preview_policy: None,
                 preview_policy_digest: None,
                 asset_privacy_policy: None,
@@ -505,9 +504,7 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
                 owner: controller_id.to_string(),
                 deleted: false,
                 discoverability: "private".to_owned(),
-                history_visibility: "joined".to_owned(),
-                history_sharing_policy: None,
-                history_sharing_policy_digest: None,
+                history_access: "since_join".to_owned(),
                 preview_policy: None,
                 preview_policy_digest: None,
                 asset_privacy_policy: None,
@@ -734,6 +731,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     let create_payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
         arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
             agent_id: agent_id.clone(),
+            notary: soland_test_support::cba_basis::test_single_signer_notary(full_id.as_str()),
             initial_resolution: initial_resolution.clone(),
             controller_id: controller_id.clone(),
             genesis_salt: arkret_wire::GenesisSalt::generate().unwrap(),
@@ -760,7 +758,9 @@ async fn provision_agent_sdk_commit_attempt_inner(
     pcr_genesis.executed_by = Some(controller_id.clone());
     pcr_genesis.authorization_ref = Some(controller_authorization_ref.clone().into());
     pcr_genesis.refs.clear();
-    pcr_genesis.refresh_content_bound_identity().unwrap();
+    pcr_genesis
+        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
     let mut pcr_genesis = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
         pcr_genesis,
         arkret_canonical::DigestSuite::Sha256,
@@ -906,7 +906,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     )
     .unwrap();
     let controller_seal_body = arkret_canonical::canonical_json_bytes(&controller_seal).unwrap();
-    let mut controller_seal_response = TestClient::post("http://server/_arkret/self/events/seals")
+    let mut controller_seal_response = TestClient::post("http://server/_arkret/self/seals")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
         .body(controller_seal_body)
@@ -932,7 +932,12 @@ async fn provision_agent_sdk_commit_attempt_inner(
     let proposal_policy = arkret_wire::ControlProposalDecisionPolicy::default();
     let proposal_member = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
         pcr_genesis.realm_id.clone(),
-        arkret_wire::Hash::new(pcr_genesis.event_digest().unwrap()).unwrap(),
+        arkret_wire::Hash::new(
+            pcr_genesis
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap(),
         genesis_authority.authority_set_ref().clone(),
         now,
         proposal_policy,
@@ -945,7 +950,10 @@ async fn provision_agent_sdk_commit_attempt_inner(
             .unwrap(),
     );
     genesis_submission
-        .validate_structural_in_context(arkret_wire::EventSubmitContext::AnchorUnit)
+        .validate_structural_in_context(
+            arkret_wire::EventSubmitContext::AnchorUnit,
+            arkret_canonical::DigestSuite::Sha256,
+        )
         .unwrap();
     let accepted_genesis = genesis_submission.event.clone();
     let genesis_body = arkret_wire::EventsSubmitBatchRequestBody {
@@ -980,7 +988,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     )
     .unwrap();
     let genesis_seal_body = arkret_canonical::canonical_json_bytes(&genesis_seal).unwrap();
-    let mut seal_response = TestClient::post("http://server/_arkret/self/events/seals")
+    let mut seal_response = TestClient::post("http://server/_arkret/self/seals")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
         .body(genesis_seal_body)
@@ -1148,7 +1156,9 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
             &event,
         )
         .unwrap();
-        event.validate_proof_bindings().unwrap();
+        event
+            .validate_proof_bindings_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
         assert_eq!(event.proofs.len(), 2);
         assert_eq!(
             event

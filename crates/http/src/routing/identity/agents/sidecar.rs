@@ -600,7 +600,10 @@ fn sidecar_context_for_realm(
     }
 }
 
-fn sidecar_event_draft(event: &arkret_wire::Event) -> Result<SidecarPreparedEventDraft, AppError> {
+fn sidecar_event_draft(
+    event: &arkret_wire::Event,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<SidecarPreparedEventDraft, AppError> {
     let unsigned_bytes = arkret_canonical::canonical_json_bytes(
         &event
             .digest_payload()
@@ -609,7 +612,7 @@ fn sidecar_event_draft(event: &arkret_wire::Event) -> Result<SidecarPreparedEven
     .map_err(|error| AppError::internal(format!("Sidecar draft canonicalize: {error}")))?;
     let event_digest = Hash::new(
         event
-            .event_digest()
+            .event_digest_with_digest_suite(digest_suite)
             .map_err(|error| AppError::internal(format!("Sidecar draft digest: {error}")))?,
     )
     .map_err(|error| AppError::internal(format!("Sidecar draft digest invalid: {error}")))?;
@@ -634,10 +637,11 @@ fn author_typed_sidecar_event<K: arkret_event_draft::EventSpec>(
     refs: Vec<arkret_wire::EventRef>,
     created_at: chrono::DateTime<chrono::Utc>,
     payload: K::Payload,
+    digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<arkret_wire::AuthoredEvent, AppError> {
     TypedEventDraft::<K>::new(scope_ref, actor_id, principal_server_id, payload)
         .map(|draft| draft.with_prev_refs(prev_refs).with_refs(refs))
-        .and_then(|draft| draft.author(actor_seq, hlc, created_at))
+        .and_then(|draft| draft.author_with_digest_suite(actor_seq, hlc, created_at, digest_suite))
         .map_err(|error| AppError::internal(format!("Sidecar typed Event draft: {error}")))
 }
 
@@ -778,6 +782,9 @@ async fn prepare_sidecar(
         .map_err(|error| AppError::internal(format!("controller id invalid: {error}")))?;
     let principal_server_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service id invalid: {error}")))?;
+    let digest_suite = state
+        .projections()
+        .realm_digest_suite(body.source_realm_id.as_str());
     let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
         state,
         body.source_realm_id.clone(),
@@ -803,6 +810,7 @@ async fn prepare_sidecar(
             SidecarCreatePayload {
                 encryption_profile: SidecarEncryptionProfile::MlsRfc9420,
             },
+            digest_suite,
         )?)
     } else {
         None
@@ -847,9 +855,10 @@ async fn prepare_sidecar(
             version: 1,
             predecessor_event_ref: None,
         },
+        digest_suite,
     )?;
     let context_attach_event_id = attach_event.event_id.clone();
-    let context_attach_event_draft = sidecar_event_draft(&attach_event)?;
+    let context_attach_event_draft = sidecar_event_draft(&attach_event, digest_suite)?;
     let reservation_handle = arkret_wire::ReservationHandle::new(ids::generate("reservation"))
         .map_err(AppError::internal)?;
     let expires_at = created_at + chrono::Duration::minutes(10);
@@ -861,7 +870,7 @@ async fn prepare_sidecar(
             sidecar_id,
             create_event_id: create_event.event_id.clone(),
             context_attach_event_id,
-            create_event_draft: sidecar_event_draft(&create_event)?,
+            create_event_draft: sidecar_event_draft(&create_event, digest_suite)?,
             context_attach_event_draft,
         }
     } else {
@@ -901,9 +910,13 @@ fn validate_signed_sidecar_draft(
     let expected_unsigned = URL_SAFE_NO_PAD
         .decode(draft.unsigned_event_bytes.as_str())
         .map_err(|_| AppError::internal("stored Sidecar draft bytes are invalid"))?;
+    let digest_suite = draft
+        .event_digest
+        .digest_suite()
+        .map_err(|error| AppError::internal(format!("stored Sidecar digest suite: {error}")))?;
     let digest = Hash::new(
         signed_event
-            .event_digest()
+            .event_digest_with_digest_suite(digest_suite)
             .map_err(|error| AppError::param_invalid(format!("signed Sidecar Event: {error}")))?,
     )
     .map_err(|error| AppError::param_invalid(format!("signed Sidecar Event digest: {error}")))?;
@@ -1315,9 +1328,14 @@ mod tests {
             SidecarCreatePayload {
                 encryption_profile: SidecarEncryptionProfile::MlsRfc9420,
             },
+            arkret_canonical::DigestSuite::Sha256,
         )
         .unwrap();
-        event.verify_event_id_matches_content().unwrap();
+        event
+            .verify_event_id_matches_content_with_digest_suite(
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap();
         let sidecar_id = SidecarId::from_event_id(&event.event_id);
         assert_eq!(
             sidecar_id.as_str().strip_prefix("ak:sidecar:"),

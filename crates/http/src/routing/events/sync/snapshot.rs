@@ -957,7 +957,10 @@ pub(crate) fn annotate_message_ordered_log_siblings(
         let mut resolved = Vec::with_capacity(candidates.len());
         for index in candidates {
             let event = &entries[index].1;
-            if let Ok(digest) = event.event_digest() {
+            if let Ok(digest_suite) = arkret::signed_event_digest_claim(event)
+                .and_then(|digest| digest.digest_suite().map_err(Into::into))
+                && let Ok(digest) = event.event_digest_with_digest_suite(digest_suite)
+            {
                 resolved.push((event.event_id.clone(), digest));
             }
         }
@@ -1005,7 +1008,7 @@ async fn state_events_for_realm(
             tracing::error!(%error, realm_id, "failed to load Realm projection events for sync");
             Vec::new()
         });
-    // `history_visibility=joined` limits historical data-plane Events.  It
+    // `history_access=since_join` limits historical data-plane Events.  It
     // must not hide the current encryption contract from an active member:
     // without the create-locked mechanism and effective policy-components
     // event a late joiner cannot validate the Realm's content scheme or emit

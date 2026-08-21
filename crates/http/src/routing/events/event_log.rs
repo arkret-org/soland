@@ -104,6 +104,7 @@ use realm_index::{
 
 mod submit;
 pub(crate) use endpoints::load_realm_actor_frontier;
+pub(crate) use submit::accepted_event_digest_suites;
 pub(super) use submit::submit_federation_events;
 pub(in crate::routing) use submit::{
     DevicePairingAdmission, EventCommitIdempotency, ValidatedEventEnvelope,

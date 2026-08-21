@@ -32,13 +32,7 @@ use arkret_models_collaboration::direct_conversation_ops::{
     DirectConversationCoordinates, DirectConversationResolveOutcome,
     DirectConversationResolveRequestBody, DirectConversationSendBlocker,
 };
-use arkret_models_collaboration::direct_conversation_repair::{
-    DirectConversationRepairAuthorization, DirectConversationRepairDispatchRequest,
-    DirectConversationRepairEnqueueOutcome,
-};
-use arkret_models_collaboration::events_payloads::{
-    ActorProfileCreatePayload, MemberRepairRequester,
-};
+use arkret_models_collaboration::events_payloads::ActorProfileCreatePayload;
 use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
 use arkret_models_collaboration::http_bodies::{
     ContactAgentProjection, ContactList, ContactListRow, ContactState, DirectConversationSummary,
@@ -62,9 +56,6 @@ use arkret_models_identity::{
 };
 use arkret_state::lattice::CellState;
 use arkret_wire::ErrorCode;
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -81,7 +72,7 @@ use soland_services::identity::{
     DirectConversationBindingRecord, SessionIdentityState as SessionRecord,
 };
 
-use self::social::direct::{direct_active_generation_cell, direct_founder_for_pair};
+use self::social::direct::{direct_founder_for_pair, direct_group_state_for_realm};
 use super::auth::{
     active_delegated_sessions_for_actor, purge_device_delivery_state, revoke_devices_for_actor,
     revoke_sessions_for_actor,
@@ -207,12 +198,10 @@ use social::*;
 pub(crate) use social::{
     accepted_contact_for_pair, canonical_contact_digest, direct_binding_conflict,
     direct_binding_matches_projection, project_canonical_direct_binding,
-    validate_direct_binding_operation, validate_direct_mls_generation_operation,
-    validate_request_receipt_cryptography, verify_contact_service_signature,
-    verify_contact_service_signature_bytes,
+    validate_direct_binding_operation, validate_request_receipt_cryptography,
+    verify_contact_service_signature, verify_contact_service_signature_bytes,
 };
 pub(crate) mod lifecycle;
-pub(in crate::routing) mod repair;
 // Re-export the lifecycle surface used by sibling routing modules.
 pub(crate) use lifecycle::{
     AccountLifecycleChange, deactivation_peer_service_targets_for_actor,
@@ -283,7 +272,6 @@ fn contact_routes() -> Router {
 fn direct_conversation_routes() -> Router {
     Router::with_path("direct-conversations")
         .push(Router::with_path("resolve").post(direct_conversation_resolve))
-        .push(Router::with_path("repair-dispatch").post(direct_conversation_repair_dispatch))
 }
 
 #[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -1281,21 +1269,24 @@ async fn update_profile(
         ))
     })?;
     let pcr_realm_id = event.realm_id.clone();
+    let digest_suite = state
+        .projections()
+        .realm_digest_suite(pcr_realm_id.as_str());
     require_current_profile_authority(state, &principal_id, &pcr_realm_id).await?;
     let accepted = accepted_account_profile_in_realm(state, &principal_id, &pcr_realm_id).await?;
     let profile_id = body
-        .profile_id()
+        .profile_id(digest_suite)
         .map_err(|error| AppError::param_invalid(format!("profile_event: {error}")))?;
     let accepted_basis = profile_context_validation_basis(
         accepted.as_ref().map(|accepted| &accepted.basis),
         &event.kind,
         &profile_id,
     );
-    body.validate_authoring_context(&principal_id, &pcr_realm_id, accepted_basis)
+    body.validate_authoring_context(&principal_id, &pcr_realm_id, accepted_basis, digest_suite)
         .map_err(|error| AppError::param_invalid(format!("profile_event: {error}")))?;
-    let event_digest = Hash::new(event.event_digest().map_err(|error| {
-        AppError::param_invalid(format!("profile_event: invalid Event digest: {error}"))
-    })?)
+    let event_digest = Hash::new(event.event_digest_with_digest_suite(digest_suite).map_err(
+        |error| AppError::param_invalid(format!("profile_event: invalid Event digest: {error}")),
+    )?)
     .map_err(|error| {
         AppError::param_invalid(format!("profile_event: invalid Event digest: {error}"))
     })?;
@@ -1560,9 +1551,13 @@ async fn resolved_actor_profile_evidence(
         else {
             continue;
         };
-        let event_digest = Hash::new(event.event_digest().map_err(|error| {
-            AppError::internal(format!("Actor Profile Event digest failed: {error}"))
-        })?)
+        let event_digest = Hash::new(
+            event
+                .event_digest_with_digest_suite(candidate.digest_suite)
+                .map_err(|error| {
+                    AppError::internal(format!("Actor Profile Event digest failed: {error}"))
+                })?,
+        )
         .map_err(|error| AppError::internal(format!("Actor Profile digest invalid: {error}")))?;
         let Some(accepted_seal) = state
             .projections()
@@ -1725,9 +1720,14 @@ async fn read_principal_resolution_audit(
         .into_iter()
         .next()
         .ok_or_else(|| AppError::not_found("principal resolution audit unavailable"))?;
-    let current_digest = Hash::new(record.current_event.event_digest().map_err(|error| {
-        AppError::internal(format!("current resolution Event digest failed: {error}"))
-    })?)
+    let current_digest = Hash::new(
+        record
+            .current_event
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .map_err(|error| {
+                AppError::internal(format!("current resolution Event digest failed: {error}"))
+            })?,
+    )
     .map_err(|error| AppError::internal(format!("current resolution digest invalid: {error}")))?;
     let accepted_seal = state
         .projections()
@@ -1832,26 +1832,21 @@ async fn direct_conversation_resolve(
         && let Some(bindings) = state.contacts().direct_bindings_for_pair(&pair_key)
         && let Some(record) = bindings.any_endorsed()
     {
-        let active_generation = direct_active_generation_cell(state, &pair_key, &record).await?;
+        let (group_state_ref, group_state_digest) =
+            direct_group_state_for_realm(state, &record.realm_id)
+                .await?
+                .unzip();
         return json_ok(DirectConversationResolveOutcome::Suspended {
             coordinates: direct_coordinates(pair_key_hash, &record)?,
             blockers: vec![DirectConversationSendBlocker::PairMaterializationConflict],
-            active_mls_generation_ref: active_generation
-                .as_ref()
-                .map(|(event_ref, _)| event_ref.clone()),
-            active_mls_generation_value_digest: active_generation
-                .map(|(_, value_digest)| value_digest),
+            group_state_ref,
+            group_state_digest,
         });
     }
     if let Some(binding) = raw_binding {
         let coordinates = direct_coordinates(pair_key_hash, &binding)?;
-        let active_generation = direct_active_generation_cell(state, &pair_key, &binding).await?;
-        let active_mls_generation_ref = active_generation
-            .as_ref()
-            .map(|(event_ref, _)| event_ref.clone());
-        let active_mls_generation_value_digest = active_generation
-            .as_ref()
-            .map(|(_, value_digest)| value_digest.clone());
+        let group_state = direct_group_state_for_realm(state, &binding.realm_id).await?;
+        let (group_state_ref, group_state_digest) = group_state.clone().unzip();
         let projection = state.projections().snapshot();
         if projection.realm_is_destroyed(&binding.realm_id)
             || projection.realm_is_tombstoned(&binding.realm_id)
@@ -1859,8 +1854,8 @@ async fn direct_conversation_resolve(
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::RealmTerminalFault],
-                active_mls_generation_ref,
-                active_mls_generation_value_digest,
+                group_state_ref,
+                group_state_digest,
             });
         }
         if contact
@@ -1870,16 +1865,16 @@ async fn direct_conversation_resolve(
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::ContactScopeStale],
-                active_mls_generation_ref,
-                active_mls_generation_value_digest,
+                group_state_ref,
+                group_state_digest,
             });
         }
         if !direct_binding_matches_projection(state, &binding) {
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::MlsReconcileRequired],
-                active_mls_generation_ref,
-                active_mls_generation_value_digest,
+                group_state_ref,
+                group_state_digest,
             });
         }
         if projection
@@ -1892,8 +1887,8 @@ async fn direct_conversation_resolve(
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::PeerNotJoinedMls],
-                active_mls_generation_ref,
-                active_mls_generation_value_digest,
+                group_state_ref,
+                group_state_digest,
             });
         }
         if state.account_lifecycle_state(&session.actor) != "active"
@@ -1902,20 +1897,10 @@ async fn direct_conversation_resolve(
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::PolicyStale],
-                active_mls_generation_ref,
-                active_mls_generation_value_digest,
+                group_state_ref,
+                group_state_digest,
             });
         }
-        let Some(active_mls_generation_ref) = active_mls_generation_ref else {
-            return json_ok(DirectConversationResolveOutcome::Suspended {
-                coordinates,
-                blockers: vec![DirectConversationSendBlocker::MlsReconcileRequired],
-                active_mls_generation_ref: None,
-                active_mls_generation_value_digest: None,
-            });
-        };
-        let active_mls_generation_value_digest = active_mls_generation_value_digest
-            .expect("accepted active generation fields are paired");
         let mut send_blockers = Vec::new();
         if projection.realm_is_frozen_at(&binding.realm_id, now()) {
             send_blockers.push(DirectConversationSendBlocker::PolicyStale);
@@ -1955,7 +1940,7 @@ async fn direct_conversation_resolve(
         let realm_id = RealmId::new(binding.realm_id.clone())
             .map_err(|error| AppError::internal(format!("direct Realm id invalid: {error}")))?;
         let notary_available = crate::notary::NotaryWorker::for_service(state.service_id().clone())
-            .current_notary_profile_for_events(state, &realm_id, &[])
+            .current_notary_value_for_events(state, &realm_id, &[])
             .ok()
             .flatten()
             .is_some();
@@ -1971,10 +1956,18 @@ async fn direct_conversation_resolve(
         }
         send_blockers.sort_by_key(|blocker| format!("{blocker:?}"));
         send_blockers.dedup();
+        let Some((group_state_ref, group_state_digest)) = group_state else {
+            return json_ok(DirectConversationResolveOutcome::Suspended {
+                coordinates,
+                blockers: vec![DirectConversationSendBlocker::MlsReconcileRequired],
+                group_state_ref: None,
+                group_state_digest: None,
+            });
+        };
         return json_ok(DirectConversationResolveOutcome::Found {
             coordinates,
-            active_mls_generation_ref,
-            active_mls_generation_value_digest,
+            group_state_ref,
+            group_state_digest,
             send_blockers,
         });
     }
@@ -2000,6 +1993,10 @@ async fn direct_conversation_resolve(
             })?
         {
             let coordinates = direct_slot_coordinates(pair_key_hash, &slot)?;
+            let (group_state_ref, group_state_digest) =
+                direct_group_state_for_realm(state, coordinates.realm_id.as_str())
+                    .await?
+                    .unzip();
             if contact
                 .as_ref()
                 .is_some_and(|contact| contact.status != "accepted")
@@ -2007,14 +2004,14 @@ async fn direct_conversation_resolve(
                 return json_ok(DirectConversationResolveOutcome::Suspended {
                     coordinates,
                     blockers: vec![DirectConversationSendBlocker::ContactScopeStale],
-                    active_mls_generation_ref: None,
-                    active_mls_generation_value_digest: None,
+                    group_state_ref,
+                    group_state_digest,
                 });
             }
             return json_ok(DirectConversationResolveOutcome::Provisional {
                 coordinates,
-                active_mls_generation_ref: None,
-                active_mls_generation_value_digest: None,
+                group_state_ref,
+                group_state_digest,
             });
         }
     }
@@ -2040,267 +2037,6 @@ async fn direct_conversation_resolve(
             retry_after_ms: None,
         }),
     }
-}
-
-/// Validate and durably freeze one repair request, relay its exact bytes to
-/// the peer Principal Server, and return only its durable enqueue outcome.
-#[salvo::oapi::endpoint(
-    operation_id = "ak.self.direct_conversation.command.repair_dispatch",
-    tags("identity")
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "ak.self.direct_conversation.command.repair_dispatch")
-)]
-async fn direct_conversation_repair_dispatch(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    body: JsonBody<DirectConversationRepairDispatchRequest>,
-) -> JsonResult<DirectConversationRepairEnqueueOutcome> {
-    repair::dispatch(aa, depot, req, body).await
-}
-
-fn session_actor_core_id(actor: &str) -> Result<DidCoreId, AppError> {
-    DidCoreId::new(actor.to_owned()).map_err(|error| {
-        AppError::param_invalid(format!("session principal core id is invalid: {error}"))
-    })
-}
-
-async fn validate_direct_conversation_repair_state(
-    state: &AppState,
-    request: &DirectConversationRepairDispatchRequest,
-) -> Result<(), AppError> {
-    let content = &request.content;
-    let requester = content.requester_principal_id.as_str();
-    let binding = state
-        .contacts()
-        .settled_direct_binding_for_realm(content.realm_id.as_str())
-        .filter(|binding| direct_binding_matches_projection(state, binding))
-        .ok_or_else(|| {
-            direct_repair_precondition("accepted Direct Conversation binding is unavailable")
-        })?;
-    if binding.participants_unordered.len() != 2
-        || !binding
-            .participants_unordered
-            .iter()
-            .any(|value| value == requester)
-    {
-        return Err(direct_repair_precondition(
-            "repair requester is not a participant of the immutable pair",
-        ));
-    }
-    let peer = binding
-        .participants_unordered
-        .iter()
-        .find(|value| value.as_str() != requester)
-        .ok_or_else(|| direct_repair_precondition("repair pair has no distinct peer"))?;
-    for (directional_requester, directional_target) in
-        [(requester, peer.as_str()), (peer.as_str(), requester)]
-    {
-        let contact = state
-            .contacts()
-            .contact_any(directional_requester, directional_target)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?
-            .filter(|contact| {
-                contact.status == "accepted"
-                    && contact_has_scope_for_both(contact, "direct_message")
-                    && accepted_contact_has_fact_refs(contact)
-            });
-        if contact.is_none() {
-            return Err(direct_repair_precondition(
-                "both current directional Contact authorities are required",
-            ));
-        }
-    }
-    let pair_key = direct_pair_key(state, requester, peer)?;
-    let (_, current_digest) = direct_active_generation_cell(state, &pair_key, &binding)
-        .await?
-        .ok_or_else(|| direct_repair_precondition("active MLS generation is unavailable"))?;
-    if current_digest != content.observed_active_generation_value_digest {
-        return Err(direct_repair_precondition(
-            "observed active MLS generation digest is stale",
-        ));
-    }
-
-    let accepted = state
-        .event_queries()
-        .accepted_event(content.rejoin_event_id.as_str())
-        .await
-        .map_err(|error| AppError::internal(format!("repair rejoin lookup failed: {error}")))?
-        .ok_or_else(|| direct_repair_precondition("repair rejoin Event is not accepted"))?;
-    let event: arkret_wire::Event = serde_json::from_value(accepted.envelope).map_err(|error| {
-        AppError::internal(format!("accepted repair rejoin Event is invalid: {error}"))
-    })?;
-    let self_rejoin = event.event_id == content.rejoin_event_id
-        && event.kind == arkret_wire::EventKind::MemberState
-        && event.realm_id == content.realm_id
-        && event.actor_id.as_str() == requester
-        && event.authorization_ref.as_ref().map(|value| value.as_str())
-            == Some(arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_REPAIR_V1)
-        && event.payload.get("actor_id").and_then(Value::as_str) == Some(requester)
-        && event.payload.get("membership").and_then(Value::as_str) == Some("join");
-    if !self_rejoin {
-        return Err(direct_repair_precondition(
-            "rejoin_event_id is not the requester's accepted repair self-rejoin",
-        ));
-    }
-    Ok(())
-}
-
-async fn validate_direct_conversation_repair_signature(
-    state: &AppState,
-    request: &DirectConversationRepairDispatchRequest,
-) -> Result<(), AppError> {
-    let signing_input = request
-        .signing_input()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    match (&request.requester_authorization, &request.content.requester) {
-        (
-            DirectConversationRepairAuthorization::Device {
-                requester_device_id,
-                verification_method,
-                device_authorize_event_id,
-                signature,
-                ..
-            },
-            MemberRepairRequester::Device { .. },
-        ) => {
-            let facet = crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
-                state,
-                request.content.requester_principal_id.as_str(),
-                requester_device_id.as_str(),
-            )
-            .await
-            .map_err(|error| AppError::internal(format!("repair device directory lookup failed: {error}")))?;
-            if !matches!(facet.status, arkret_models_crypto::DeviceStatus::Active)
-                || facet.device_authorize_event_id.as_ref() != Some(device_authorize_event_id)
-            {
-                return Err(direct_repair_precondition(
-                    "repair requester device authorization is not current",
-                ));
-            }
-            let key_did = facet.signing_key_did.ok_or_else(|| {
-                direct_repair_precondition("repair requester device key is unavailable")
-            })?;
-            if !verification_method_controls_core_or_key(
-                verification_method.as_str(),
-                &request.content.requester_principal_id,
-                &key_did,
-            ) {
-                return Err(direct_repair_precondition(
-                    "repair device verification method does not match the requester",
-                ));
-            }
-            let key =
-                crate::routing::identity::device_signing::decode_ed25519_key(&key_did, "multibase")
-                    .map_err(|_| {
-                        direct_repair_precondition("repair requester device key is invalid")
-                    })?;
-            if !crate::routing::identity::device_signing::ed25519_verify(
-                &key,
-                &signing_input,
-                signature.jws.as_str(),
-            ) {
-                return Err(direct_repair_precondition(
-                    "repair requester signature is invalid",
-                ));
-            }
-        }
-        (
-            DirectConversationRepairAuthorization::NativeAgent {
-                requester_agent_id,
-                verification_method,
-                agent_key_authorize_event_id,
-                signature,
-                ..
-            },
-            MemberRepairRequester::NativeAgent { .. },
-        ) => {
-            let record = state
-                .agent_pairings()
-                .agent(requester_agent_id.as_str())
-                .await
-                .map_err(|error| {
-                    AppError::internal(format!("repair Agent lookup failed: {error}"))
-                })?
-                .filter(|record| record.state == AgentLifecycleState::Active)
-                .ok_or_else(|| direct_repair_precondition("repair Agent is not active"))?;
-            let active = record
-                .runtime_bindings()
-                .map_err(|error| {
-                    AppError::internal(format!("repair Agent binding is invalid: {error}"))
-                })?
-                .active_binding
-                .ok_or_else(|| direct_repair_precondition("repair Agent signer is unavailable"))?;
-            if &active.verification_method != verification_method
-                || &active.authorized_event_ref != agent_key_authorize_event_id
-                || active.signing_key_binding.core.agent_id.as_str() != requester_agent_id.as_str()
-            {
-                return Err(direct_repair_precondition(
-                    "repair Agent authorization is not current",
-                ));
-            }
-            let raw = URL_SAFE_NO_PAD
-                .decode(
-                    active
-                        .signing_key_binding
-                        .core
-                        .public_key
-                        .key
-                        .as_str()
-                        .as_bytes(),
-                )
-                .map_err(|_| direct_repair_precondition("repair Agent signing key is invalid"))?;
-            let bytes: [u8; 32] = raw
-                .as_slice()
-                .try_into()
-                .map_err(|_| direct_repair_precondition("repair Agent signing key is invalid"))?;
-            let key = ed25519_dalek::VerifyingKey::from_bytes(&bytes)
-                .map_err(|_| direct_repair_precondition("repair Agent signing key is invalid"))?;
-            if !crate::routing::identity::device_signing::ed25519_verify(
-                &key,
-                &signing_input,
-                signature.jws.as_str(),
-            ) {
-                return Err(direct_repair_precondition(
-                    "repair requester signature is invalid",
-                ));
-            }
-        }
-        _ => {
-            return Err(AppError::param_invalid(
-                "repair requester branch is inconsistent",
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn verification_method_controls_core_or_key(
-    verification_method: &str,
-    requester: &DidCoreId,
-    key_did: &str,
-) -> bool {
-    let controller = verification_method
-        .split_once('?')
-        .map_or(verification_method, |(head, _)| head)
-        .split_once('#')
-        .map_or(verification_method, |(head, _)| head);
-    if controller == key_did {
-        return true;
-    }
-    DidFullId::new(controller.to_owned())
-        .ok()
-        .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id).ok())
-        .as_ref()
-        == Some(requester)
-}
-
-fn direct_repair_precondition(message: &'static str) -> AppError {
-    AppError::new(soland_http::error::ErrorCode::FailedPrecondition, message)
-        .with_status(StatusCode::PRECONDITION_FAILED)
 }
 
 async fn direct_contact_for_pair(

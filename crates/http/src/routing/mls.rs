@@ -1099,8 +1099,7 @@ async fn peer_claim_policy_authorized(
                 return Ok(false);
             }
         }
-        PeerKeyPackageClaimPurpose::DirectConversation
-        | PeerKeyPackageClaimPurpose::DirectConversationRepair => {
+        PeerKeyPackageClaimPurpose::DirectConversation => {
             let scope = "direct_message";
             let contact = crate::routing::identity::account::accepted_contact_for_pair(
                 state,
@@ -2123,15 +2122,24 @@ async fn validate_direct_keypackage_consume(
         )
     })?;
     let welcome_ref = body.welcome_ref.as_str();
-    // The binding no longer pins a founding MLS group: it is written once and never retired, and
-    // participant authority always reads the *current* active generation. So the consume request is
-    // checked against the active-generation cell for this Realm, not against a frozen binding
-    // field.
-    let active_group_id = direct_active_generation_group_id(state, realm_id.as_str()).await?;
-    if body.mls_group_id.as_deref() != Some(active_group_id.as_str()) {
+    let realm_scope = arkret_wire::ScopeRef::Realm {
+        realm_id: RealmId::new(realm_id.clone()).map_err(|error| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                format!("direct conversation Realm id is invalid: {error}"),
+            )
+        })?,
+    };
+    let group_id = realm_scope.canonical_mls_group_id().map_err(|error| {
+        AppError::new(
+            ErrorCode::FailedPrecondition,
+            format!("direct conversation MLS group id derivation failed: {error}"),
+        )
+    })?;
+    if body.mls_group_id.as_deref() != Some(group_id.as_str()) {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
-            "KeyPackage consume does not reference the active direct conversation MLS generation",
+            "KeyPackage consume does not reference the scope-derived direct conversation MLS group",
         ));
     }
     if binding_payload.realm_id.as_str() != realm_id.as_str() {
@@ -2178,7 +2186,7 @@ async fn validate_direct_keypackage_consume(
     if welcome.recipient_principal_id.as_str() != session.actor
         || welcome_recipient_device_id(&welcome)
             .is_none_or(|device_id| device_id.as_str() != session.device_id)
-        || welcome.mls_group_id.as_str() != active_group_id.as_str()
+        || welcome.mls_group_id.as_str() != group_id.as_str()
         || Some(welcome.epoch) != body.epoch
         || !direct_welcome_claim_matches_consume(
             key_package_id,
@@ -3231,49 +3239,6 @@ pub(crate) async fn has_claimable_realm_membership_keypackage(
         })
 }
 
-/// Re-resolve every leaf credential represented by the durable claims for an
-/// MLS group against the current device/Agent authorization state. Activation
-/// gates use this instead of trusting the historical claim row alone: a leaf
-/// whose authorization has since expired or been revoked is not a current
-/// authorized leaf.
-pub(crate) async fn current_authorized_claimed_group_actors(
-    state: &AppState,
-    mls_group_id: &str,
-    intended_realm_id: &str,
-) -> Result<(BTreeSet<String>, BTreeSet<String>), String> {
-    let rows = state
-        .mls_key_packages()
-        .key_packages_claimed_by_group(mls_group_id)
-        .await
-        .map_err(|error| format!("claimed KeyPackage lookup failed: {error}"))?;
-    if rows.is_empty() {
-        return Err("selected MLS group has no durable claimed leaves".to_owned());
-    }
-    let now_secs = now().timestamp();
-    let mut actors = BTreeSet::new();
-    let mut locally_consumed_welcome_actors = BTreeSet::new();
-    for row in &rows {
-        let principal = arkret_wire::DidCoreId::new(row.actor_id.clone())
-            .map_err(|error| format!("claimed KeyPackage actor invalid: {error}"))?;
-        let selector = current_keypackage_claim_trust_selector(
-            state,
-            &principal,
-            &BTreeSet::new(),
-            Some(intended_realm_id),
-        )
-        .await
-        .map_err(|error| format!("claimed KeyPackage trust unavailable: {error}"))?;
-        if !selector.matches_keypackage(row) || row.lifetime_not_after <= now_secs {
-            return Err("selected MLS group contains a non-current authorized leaf".to_owned());
-        }
-        actors.insert(row.actor_id.clone());
-        if row.consumed_at.is_some() {
-            locally_consumed_welcome_actors.insert(row.actor_id.clone());
-        }
-    }
-    Ok((actors, locally_consumed_welcome_actors))
-}
-
 fn ordinary_keypackage_is_available(keypackage: &MlsKeyPackageRow) -> bool {
     keypackage.lifecycle().is_ok_and(|lifecycle| {
         matches!(
@@ -3483,7 +3448,9 @@ mod trust_binding_tests {
         let authorize_envelope = serde_json::to_value(&authorize_event).unwrap();
         let authorize_canonical_bytes =
             crate::routing::events::event_log::event_canonical_bytes(&authorize_envelope).unwrap();
-        let authorize_canonical_digest = authorize_event.event_digest().unwrap();
+        let authorize_canonical_digest = authorize_event
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
         state
             .event_queries()
             .store_canonical_event(soland_services::events::CanonicalEventRecord {
@@ -3495,6 +3462,7 @@ mod trust_binding_tests {
                     .as_str()
                     .to_owned(),
                 schema_id: "ak.schema.event.v1".to_owned(),
+                digest_suite: arkret_canonical::DigestSuite::Sha256,
                 canonical_digest: authorize_canonical_digest,
                 canonical_bytes: authorize_canonical_bytes,
                 envelope: authorize_envelope,
@@ -3529,55 +3497,4 @@ mod trust_binding_tests {
         .await
         .unwrap();
     }
-}
-
-/// MLS group id of the Realm's current active Direct Conversation generation.
-///
-/// Reading the active-generation cell rather than a binding field is what lets a pair rekey or
-/// repair into a new generation without ever rewriting or retiring the immutable binding.
-async fn direct_active_generation_group_id(
-    state: &AppState,
-    realm_id: &str,
-) -> Result<String, AppError> {
-    let active_value = state
-        .projections()
-        .snapshot()
-        .realm_null_subject_cell_value(
-            realm_id,
-            arkret_wire::CellFamilyId::DIRECT_CONVERSATION_ACTIVE_MLS_GENERATION_V1,
-        )
-        .cloned()
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
-                "direct conversation active MLS generation is unset or conflicted",
-            )
-        })?;
-    let matching_count = state
-        .event_queries()
-        .projected_events_for_realm(realm_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .into_iter()
-        .filter(|event| {
-            event.event_kind == arkret_wire::EventKind::DirectConversationMlsGenerationActivate
-                && event.payload == active_value
-        })
-        .count();
-    if matching_count != 1 {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "direct conversation active MLS generation has no unique accepted Event",
-        ));
-    }
-    active_value
-        .get("mls_group_id")
-        .and_then(serde_json::Value::as_str)
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
-                "direct conversation active MLS generation is malformed",
-            )
-        })
 }

@@ -173,8 +173,6 @@ impl ProjectionState {
                 &kind,
                 arkret_wire::EventKind::RealmAlias
                     | arkret_wire::EventKind::RealmJoinRule
-                    | arkret_wire::EventKind::RealmHistoryVisibility
-                    | arkret_wire::EventKind::RealmHistorySharingPolicy
                     | arkret_wire::EventKind::RealmDiscovery
                     | arkret_wire::EventKind::RealmDeliveryBindingPolicy
                     | arkret_wire::EventKind::RealmPlaintextVisibleServices
@@ -228,31 +226,6 @@ impl ProjectionState {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
             };
-        }
-        // `encryption-and-audit.md` §2.10 — the linkage is a reducer
-        // invariant, not only an admission preflight: a history_visibility
-        // facet landing on an MLS-backed Realm is rejected unless the
-        // effective content scheme at this point in the unit is
-        // history-capable. The create has already projected its genesis cell
-        // (it is always the unit head), and a policy_bundle earlier in wire
-        // order has already projected its cell, so both reads see the
-        // effective pre-write combination.
-        if kind == arkret_wire::EventKind::RealmHistoryVisibility
-            && self.realm_encryption_profile(&realm_cell_key.0).as_deref() == Some("mls_rfc9420")
-        {
-            let history_visibility = value
-                .get("value")
-                .and_then(Value::as_str)
-                .or_else(|| value.as_str())
-                .unwrap_or("joined");
-            if let Err(reason) = arkret_models_collaboration::governance::history_visibility::validate_history_visibility_content_scheme_values(
-                history_visibility,
-                self.realm_content_scheme(&realm_cell_key.0).as_deref(),
-            ) {
-                return ProjectionEffect::Rejected {
-                    reason: reason.to_owned(),
-                };
-            }
         }
         if kind == arkret_wire::EventKind::RealmJoinRule {
             // `realm_join_rule_payload` is `{"value": <enum>}` and the
@@ -381,7 +354,7 @@ impl ProjectionState {
     /// wrapper unrepresentable on the wire.
     pub(crate) fn apply_realm_policy_bundle(&mut self, operation: &Operation) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
-        let value = operation.payload.clone();
+        let mut value = operation.payload.clone();
         let Ok(bundle) = operation.typed_payload::<arkret_wire::event_spec::RealmPolicyBundle>()
         else {
             return ProjectionEffect::Rejected {
@@ -468,42 +441,37 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::METADATA_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
             };
         }
-        // One-way `content_scheme` ratchet (realm-and-space.md history-sharing):
-        // the negotiated content scheme MUST be monotonically non-decreasing
-        // (`mls_rfc9420` < `mls_exporter_aead_v1`). A present-but-unknown enum
-        // value is rejected outright. Like the encryption floors, a lower rank
-        // — including dropping a previously-committed scheme by omission
-        // (incoming rank 0 against a higher projected rank) — is a downgrade.
+        // encryption-and-audit.md §2.10.6: policy may select a scheme until the
+        // first ordinary Realm/Circle MLS Genesis. Once a group exists, its
+        // genesis-selected scheme is immutable; a later policy write cannot
+        // silently turn that group into a different encryption construction.
         let incoming_scheme = content_scheme_field(&value);
         if let Some(scheme) = incoming_scheme
             && !content_scheme_is_known(scheme)
         {
             return ProjectionEffect::Rejected {
-                reason: CONTENT_SCHEME_DOWNGRADE.to_owned(),
-            };
-        }
-        if content_scheme_rank(incoming_scheme)
-            < content_scheme_rank(self.realm_content_scheme(&realm_id).as_deref())
-        {
-            return ProjectionEffect::Rejected {
-                reason: CONTENT_SCHEME_DOWNGRADE.to_owned(),
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
         }
         let projected_scheme = self.realm_content_scheme(&realm_id);
-        let effective_scheme = incoming_scheme.or(projected_scheme.as_deref());
-        if self.realm_encryption_profile(&realm_id).as_deref() == Some("mls_rfc9420") {
-            let effective_history_visibility = self
-                .realm_history_visibility(&realm_id)
-                .unwrap_or_else(|| "joined".to_owned());
-            if let Err(reason) = arkret_models_collaboration::governance::history_visibility::validate_history_visibility_content_scheme_values(
-                &effective_history_visibility,
-                effective_scheme,
-            ) {
-                return ProjectionEffect::Rejected {
-                    reason: reason.to_owned(),
-                };
-            }
+        let current_effective_scheme = projected_scheme.as_deref().unwrap_or("mls_rfc9420");
+        let incoming_effective_scheme = incoming_scheme.unwrap_or(current_effective_scheme);
+        let realm_has_mls_group = self.mls_commit_epochs.values().any(|epoch| {
+            matches!(
+                serde_json::from_value::<arkret_wire::ScopeRef>(epoch.effective_scope.clone()),
+                Ok(arkret_wire::ScopeRef::Realm { realm_id: scope_realm_id })
+                    | Ok(arkret_wire::ScopeRef::Circle {
+                        realm_id: scope_realm_id,
+                        ..
+                    }) if scope_realm_id.as_str() == realm_id
+            )
+        });
+        if realm_has_mls_group && incoming_effective_scheme != current_effective_scheme {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::MLS_CONTENT_SCHEME_IMMUTABLE.to_owned(),
+            };
         }
+        let effective_scheme = incoming_scheme.or(projected_scheme.as_deref());
         // realm-and-space.md §2.3.1 — `durability_policy` (Realm Recovery Key)
         // is reducer-derived from `ak.realm.policy_bundle`. Validate its
         // structural invariants and that `mode != none` is only declared on a
@@ -516,6 +484,17 @@ impl ProjectionState {
             return ProjectionEffect::Rejected {
                 reason: reason.to_owned(),
             };
+        }
+        // An omitted optional selector means "retain the established
+        // selection", not "reset to the RFC default". Preserve it in the
+        // derived snapshot so a later write cannot bypass immutability by
+        // first omitting the field.
+        if realm_has_mls_group
+            && incoming_scheme.is_none()
+            && let Some(projected_scheme) = projected_scheme
+            && let Some(object) = value.as_object_mut()
+        {
+            object.insert("content_scheme".to_owned(), Value::String(projected_scheme));
         }
         self.realm_policy_bundle_cells
             .insert(realm_id.clone(), CellState::Value(value));

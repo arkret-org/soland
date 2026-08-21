@@ -240,10 +240,11 @@ pub(crate) async fn insert_canonical_event(
     conn: &mut AsyncPgConnection,
     record: &CanonicalEventRecord,
 ) -> PersistenceResult<CanonicalInsertOutcome> {
-    let identity = ids::validated_event_identity_parts(
+    let identity = ids::validated_event_identity_parts_for_suite(
         &record.event_id,
         &record.canonical_digest,
         &record.canonical_bytes,
+        record.digest_suite,
     )?;
     sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
         .bind::<Binary, _>(identity.id.to_vec())
@@ -330,8 +331,8 @@ pub(crate) async fn insert_canonical_event(
             .map_err(PersistenceError::database)?;
         sql_query(
             "DELETE FROM projection_events WHERE event_pk = $1 AND NOT EXISTS ( \
-               SELECT 1 FROM state_control_events \
-               WHERE event_digest = $2 AND sealed_by IS NOT NULL \
+               SELECT 1 FROM state_seal_control_events \
+               WHERE event_digest = $2 \
              )",
         )
         .bind::<BigInt, _>(stored.pk)
@@ -353,11 +354,15 @@ pub(crate) async fn insert_canonical_event(
         .execute(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
-        sql_query("DELETE FROM state_control_events WHERE event_digest = $1 AND sealed_by IS NULL")
-            .bind::<Text, _>(&record.canonical_digest)
-            .execute(&mut *conn)
-            .await
-            .map_err(PersistenceError::database)?;
+        sql_query(
+            "DELETE FROM state_control_events c WHERE event_digest = $1 AND NOT EXISTS ( \
+               SELECT 1 FROM state_seal_control_events b WHERE b.event_digest = c.event_digest \
+             )",
+        )
+        .bind::<Text, _>(&record.canonical_digest)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
         return Ok(CanonicalInsertOutcome::Collision);
     }
     let realm_pk =
@@ -392,10 +397,11 @@ async fn preflight_canonical_events(
     let mut ordered = records.iter().collect::<Vec<_>>();
     ordered.sort_by(|left, right| left.event_id.cmp(&right.event_id));
     for record in &ordered {
-        let identity = ids::validated_event_identity_parts(
+        let identity = ids::validated_event_identity_parts_for_suite(
             &record.event_id,
             &record.canonical_digest,
             &record.canonical_bytes,
+            record.digest_suite,
         )?;
         sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
             .bind::<Binary, _>(identity.id.to_vec())
@@ -405,10 +411,11 @@ async fn preflight_canonical_events(
     }
     let mut incoming = BTreeMap::<String, &CanonicalEventRecord>::new();
     for record in ordered {
-        let identity = ids::validated_event_identity_parts(
+        let identity = ids::validated_event_identity_parts_for_suite(
             &record.event_id,
             &record.canonical_digest,
             &record.canonical_bytes,
+            record.digest_suite,
         )?;
         let stored = sql_query("SELECT canonical_bytes, state FROM canonical_events WHERE id = $1")
             .bind::<Binary, _>(identity.id.to_vec())
@@ -519,11 +526,13 @@ async fn insert_pending_control_event(
                 "schema_violation: accepted anchor Event is not canonical wire: {error}"
             ))
         })?;
-    let digest = event.event_digest().map_err(|error| {
-        PersistenceError::Conflict(format!(
-            "schema_violation: accepted anchor digest failed: {error}"
-        ))
-    })?;
+    let digest = event
+        .event_digest_with_digest_suite(record.digest_suite)
+        .map_err(|error| {
+            PersistenceError::Conflict(format!(
+                "schema_violation: accepted anchor digest failed: {error}"
+            ))
+        })?;
     if digest != record.canonical_digest {
         return Err(PersistenceError::Conflict(
             "schema_violation: canonical digest differs from anchor Event digest".to_owned(),
@@ -557,13 +566,14 @@ async fn insert_pending_control_event(
             })?;
     sql_query(
         "INSERT INTO state_control_events \
-         (event_digest, realm_id, event_json, control_proposal_ack, ingress_class) \
-         VALUES ($1, $2, $3, $4, $5) \
+         (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class) \
+         VALUES ($1, $2, $3, $4, $5, $6) \
          ON CONFLICT (event_digest) DO UPDATE SET \
            control_proposal_ack = COALESCE( \
              state_control_events.control_proposal_ack, EXCLUDED.control_proposal_ack \
            ) \
          WHERE state_control_events.realm_id = EXCLUDED.realm_id \
+           AND state_control_events.digest_suite = EXCLUDED.digest_suite \
            AND state_control_events.event_json = EXCLUDED.event_json \
            AND state_control_events.ingress_class = EXCLUDED.ingress_class \
            AND (state_control_events.control_proposal_ack IS NULL \
@@ -571,6 +581,7 @@ async fn insert_pending_control_event(
              OR state_control_events.control_proposal_ack = EXCLUDED.control_proposal_ack)",
     )
     .bind::<Text, _>(&digest)
+    .bind::<Text, _>(record.digest_suite.as_str())
     .bind::<Text, _>(event.realm_id.as_str())
     .bind::<Jsonb, _>(&record.envelope)
     .bind::<Jsonb, _>(&control_proposal_ack)
@@ -603,13 +614,29 @@ async fn assert_identity_anchor_frontier(
         .execute(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
+    let quarantined = sql_query(
+        "SELECT EXISTS (SELECT 1 FROM state_seal_quarantine_realms WHERE realm_id = $1) AS present",
+    )
+    .bind::<Text, _>(&expected.realm_id)
+    .get_result::<ExistsRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if quarantined.present {
+        return Err(PersistenceError::Conflict(
+            "seal_collision_quarantine".to_owned(),
+        ));
+    }
     let rows = sql_query(
         "SELECT candidate.id \
          FROM state_seals candidate \
          WHERE candidate.realm_id = $1 \
+           AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                           WHERE q.seal_id = candidate.id) \
            AND NOT EXISTS ( \
              SELECT 1 FROM state_seals successor \
              WHERE successor.realm_id = candidate.realm_id \
+               AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                               WHERE q.seal_id = successor.id) \
                AND successor.predecessor_refs @> to_jsonb(ARRAY[candidate.id]::text[]) \
            ) \
          ORDER BY candidate.id",
@@ -727,6 +754,11 @@ impl From<CanonicalEventRow> for CanonicalEventRecord {
             realm_id: row.realm_id,
             kind: row.kind,
             schema_id: row.schema_id,
+            digest_suite: match row.digest_suite {
+                1 => arkret_canonical::DigestSuite::Sha256,
+                2 => arkret_canonical::DigestSuite::Blake3,
+                _ => unreachable!("canonical_events.digest_suite must be active"),
+            },
             canonical_digest: ids::format_event_digest(row.digest_suite as u8, &digest)
                 .expect("canonical_events.digest_suite must be active"),
             canonical_bytes: row.canonical_bytes,

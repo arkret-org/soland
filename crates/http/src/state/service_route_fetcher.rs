@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use arkret_models_identity::{
     AuthenticatedServiceResolution, DidDocument, ResolutionDidBindingEvidenceKind,
-    ResolutionDidBindingEvidenceReceipt, ResolutionDidBindingMethodProof,
-    ResolutionDidBindingMethodProofKind, ResolutionMethodEvidenceBoundary,
+    ResolutionDidBindingEvidenceReceipt, ResolutionMethodEvidenceBoundary,
     ResolutionMethodHistoryEvidence, ServiceResolutionCarrier, ServiceRouteHandoverState,
 };
 use arkret_wire::{BindingKind, DidCoreId, DidFullId, Hash, ServiceKind};
@@ -91,7 +90,8 @@ impl VerifiedBindingRouteFetcher {
             .materialize(carrier, service_id)
             .await
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-        let record = materialized.into_record();
+        let fetched_authenticated = materialized.authenticated_resolution().cloned();
+        let record = materialized.record().clone();
         if record.record.service_kind != service_kind {
             return Err(ServiceError::SchemaViolation(
                 "service resolution kind does not match the business binding".to_owned(),
@@ -100,45 +100,28 @@ impl VerifiedBindingRouteFetcher {
         validate_route_binding(&record, self.development_mode)?;
         let full_id = DidFullId::new(record.record.full_id.to_string())
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        if let Some(authenticated) = fetched_authenticated {
+            arkret_identity::verify_authenticated_service_resolution_history(
+                &authenticated,
+                service_id,
+                Utc::now(),
+            )
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+            if full_id.method() == "webvh" {
+                self.confirm_webvh_resolution_against_independent_state(
+                    &record,
+                    &authenticated.normalized_did_document,
+                )
+                .await?;
+            }
+            return self.finish_verified_candidate(record, service_kind).await;
+        }
         let (document, method_history_evidence) = match full_id.method() {
             "webvh" => {
-                let history_head = Hash::new(record.record.method_history_head.clone())
-                    .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-                let history_hex =
-                    history_head
-                        .as_str()
-                        .strip_prefix("sha256:")
-                        .ok_or_else(|| {
-                            ServiceError::SchemaViolation(
-                                "webvh service history head is not sha256".to_owned(),
-                            )
-                        })?;
-                if record.record.resolution_event_ref
-                    != format!("did-webvh-entry-sha256:{history_hex}")
-                {
-                    return Err(ServiceError::SchemaViolation(
-                        "webvh service resolution event ref does not match its history head"
-                            .to_owned(),
-                    ));
-                }
-                let pinned = self
-                    .dids
-                    .resolve_pinned_webvh_state(&full_id, &record.record.version_id, &history_head)
-                    .await
-                    .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-                if pinned.status != PinnedDidVersionStatus::Current {
-                    return Err(ServiceError::SchemaViolation(
-                        "service resolution is not at the current verified method-history head"
-                            .to_owned(),
-                    ));
-                }
-                let document: DidDocument = serde_json::from_value(pinned.document)
-                    .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-                let document_digest = canonical_document_digest(&document)?;
-                (
-                    document,
-                    webvh_evidence(&record, document_digest, empty_witness_digest()?),
-                )
+                return Err(ServiceError::SchemaViolation(
+                    "inline WebVH service resolution omits complete method-history evidence"
+                        .to_owned(),
+                ));
             }
             "web" => {
                 let resolved = self
@@ -207,6 +190,61 @@ impl VerifiedBindingRouteFetcher {
             Utc::now(),
         )
         .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        self.finish_verified_candidate(record, service_kind).await
+    }
+
+    async fn confirm_webvh_resolution_against_independent_state(
+        &self,
+        record: &arkret_models_identity::ServiceResolutionRecord,
+        embedded_document: &DidDocument,
+    ) -> ServiceResult<()> {
+        let full_id = DidFullId::new(record.record.full_id.to_string())
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        let history_head = Hash::new(record.record.method_history_head.clone())
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        let history_hex = history_head
+            .as_str()
+            .strip_prefix("sha256:")
+            .ok_or_else(|| {
+                ServiceError::SchemaViolation("webvh service history head is not sha256".to_owned())
+            })?;
+        if record.record.resolution_event_ref != format!("did-webvh-entry-sha256:{history_hex}") {
+            return Err(ServiceError::SchemaViolation(
+                "webvh service resolution event ref does not match its history head".to_owned(),
+            ));
+        }
+        let Ok(pinned) = self
+            .dids
+            .resolve_pinned_webvh_state(&full_id, &record.record.version_id, &history_head)
+            .await
+        else {
+            return Ok(());
+        };
+        if pinned.status != PinnedDidVersionStatus::Current {
+            return Err(ServiceError::SchemaViolation(
+                "service resolution is not at the current verified method-history head".to_owned(),
+            ));
+        }
+        let independently_resolved: DidDocument = serde_json::from_value(pinned.document)
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        if arkret_canonical::canonical_json_bytes(&independently_resolved)
+            .map_err(|error| ServiceError::Internal(error.to_string()))?
+            != arkret_canonical::canonical_json_bytes(embedded_document)
+                .map_err(|error| ServiceError::Internal(error.to_string()))?
+        {
+            return Err(ServiceError::SchemaViolation(
+                "embedded service DID document disagrees with independently verified history"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn finish_verified_candidate(
+        &self,
+        record: arkret_models_identity::ServiceResolutionRecord,
+        service_kind: &str,
+    ) -> ServiceResult<VerifiedRouteCandidate> {
         let registered_kind = ServiceKind::ALL
             .iter()
             .copied()
@@ -384,14 +422,6 @@ fn validate_route_binding(
     Ok(())
 }
 
-fn empty_witness_digest() -> ServiceResult<Hash> {
-    Hash::new(
-        arkret_canonical::canonical_sha256(&Vec::<serde_json::Value>::new())
-            .map_err(|error| ServiceError::Internal(error.to_string()))?,
-    )
-    .map_err(|error| ServiceError::Internal(error.to_string()))
-}
-
 fn evidence_boundary(
     record: &arkret_models_identity::ServiceResolutionRecord,
 ) -> ResolutionMethodEvidenceBoundary {
@@ -400,28 +430,6 @@ fn evidence_boundary(
         from_version_id: record.record.version_id.clone(),
         to_method_history_head: record.record.method_history_head.clone(),
         to_version_id: record.record.version_id.clone(),
-    }
-}
-
-fn webvh_evidence(
-    record: &arkret_models_identity::ServiceResolutionRecord,
-    document_digest: Hash,
-    witness_proofs_digest: Hash,
-) -> ResolutionMethodHistoryEvidence {
-    ResolutionMethodHistoryEvidence::WebvhLog {
-        adapter_version: "did:webvh:1.0".to_owned(),
-        boundary: evidence_boundary(record),
-        evidence: ResolutionDidBindingEvidenceReceipt {
-            kind: ResolutionDidBindingEvidenceKind::AkDidBindingEvidenceV1,
-            method: "webvh".to_owned(),
-            document_digest,
-            method_proofs: vec![ResolutionDidBindingMethodProof {
-                kind: ResolutionDidBindingMethodProofKind::WebvhLog,
-                history_head: record.record.method_history_head.clone(),
-                witnesses: Vec::new(),
-                witness_proofs_digest,
-            }],
-        },
     }
 }
 

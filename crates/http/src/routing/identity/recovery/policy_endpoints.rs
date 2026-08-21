@@ -215,7 +215,10 @@ pub(super) async fn recovery_policy_put(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let request = body.into_inner();
-    request.validate_structural().map_err(|error| {
+    let digest_suite = state
+        .projections()
+        .realm_digest_suite(request.event.realm_id.as_str());
+    request.validate_structural(digest_suite).map_err(|error| {
         AppError::param_invalid(format!("invalid recovery policy publication: {error}"))
             .with_wire_code("schema_violation")
     })?;

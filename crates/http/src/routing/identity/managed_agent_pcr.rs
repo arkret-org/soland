@@ -920,11 +920,19 @@ pub(crate) fn validate_agent_pcr_genesis_object(
             "managed_agent_initial_resolution_mismatch",
         ));
     }
+    let notary = serde_json::from_value::<arkret_wire::NotaryValue>(
+        object
+            .get("notary")
+            .cloned()
+            .ok_or_else(|| schema_error("managed Agent PCR notary is missing"))?,
+    )
+    .map_err(|error| schema_error(format!("managed Agent PCR notary is invalid: {error}")))?;
     let agent_id = arkret_identifiers::DidCoreId::new(agent_id.to_owned())
         .map_err(|error| schema_error(format!("managed Agent core id is invalid: {error}")))?;
     let expected = arkret_bootstrap::build_managed_agent_pcr_create_payload(
         arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
             agent_id,
+            notary,
             initial_resolution: expected_initial_resolution.clone(),
             controller_id: managed_controller_core_id(controller_id)?,
             genesis_salt: arkret_wire::GenesisSalt::new(genesis_salt.to_owned()).map_err(
@@ -1289,6 +1297,7 @@ mod tests {
         let payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
             arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
                 agent_id: arkret_identifiers::DidCoreId::new(AGENT).unwrap(),
+                notary: crate::test_single_signer_notary(AGENT_FULL, 42),
                 initial_resolution: arkret_models_identity::ResolutionCommitment {
                     full_id: arkret_identifiers::DidFullId::new(AGENT_FULL).unwrap(),
                     method_history_head: format!("sha256:{}", "8".repeat(64)),
@@ -1348,7 +1357,7 @@ mod tests {
         .expect("strict Agent PCR genesis must pass");
 
         let mut ordinary_realm = pcr_genesis();
-        ordinary_realm["history_visibility"] = json!("shared");
+        ordinary_realm["history_access"] = json!("all_history_for_current_members");
         ordinary_realm["encryption_profile"] = json!("none");
         assert!(
             validate_agent_pcr_genesis_object(
@@ -1396,7 +1405,9 @@ mod tests {
         )
         .unwrap();
         event.refs.clear();
-        event.refresh_content_bound_identity().unwrap();
+        event
+            .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
         let realm_id = event.realm_id.clone();
         let envelope = serde_json::to_value(&event).unwrap();
         validate_agent_pcr_genesis_effect(envelope.as_object().unwrap(), &realm_id)

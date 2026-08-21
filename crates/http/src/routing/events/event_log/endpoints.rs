@@ -40,20 +40,21 @@ pub(crate) async fn frontier_control_governance_health(
         })?;
     let mut ackless_authorized = std::collections::BTreeSet::new();
     let mut ackless_rejections = Vec::new();
-    for (event, ingress_class) in pending
+    for (event, ingress_class, digest_suite) in pending
         .iter()
         .filter(|record| record.control_proposal_ack.is_none())
-        .map(|record| (&record.event, &record.ingress_class))
+        .map(|record| (&record.event, &record.ingress_class, record.digest_suite))
         .chain(
             sealed
                 .iter()
                 .filter(|record| record.control_proposal_ack.is_none())
-                .map(|record| (&record.event, &record.ingress_class)),
+                .map(|record| (&record.event, &record.ingress_class, record.digest_suite)),
         )
     {
-        let digest = arkret_state::state::control_event_digest(event).map_err(|error| {
-            AppError::internal(format!("Ack-less Control Move digest invalid: {error}"))
-        })?;
+        let digest =
+            arkret_state::state::control_event_digest(event, digest_suite).map_err(|error| {
+                AppError::internal(format!("Ack-less Control Move digest invalid: {error}"))
+            })?;
         let rejection = match ingress_class {
             // An Ack-required row without its Ack is the impossible durable
             // state the ingress invariant forbids; surface it as a diagnostic
@@ -129,16 +130,16 @@ pub(in crate::routing::events) fn router() -> Router {
         )
         .push(Router::with_path("events/resolve").query(resolve_events))
         .push(Router::with_path("events/frontier").query(events_frontier))
-        .push(Router::with_path("events/seals").post(submit_event_seal))
+        .push(Router::with_path("seals").post(submit_event_seal))
         .push(
-            Router::with_path("events/mls-governance-proof")
-                .query(super::governance_proof::mls_governance_proof),
+            Router::with_path("seals/mls-governance-proof")
+                .post(super::governance_proof::mls_governance_proof),
         )
         .push(Router::with_path("events/{event_id}").get(get_event))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.command.submit_seal", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.command.submit_seal"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.seals.command.submit", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.seals.command.submit"))]
 async fn submit_event_seal(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -149,7 +150,7 @@ async fn submit_event_seal(
     let session = aa.authenticated_session(state, req).await?;
     super::super::require_agent_session_scope(
         &session,
-        arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_SEAL,
+        arkret_wire::ServiceOperationId::SELF_SEALS_COMMAND_SUBMIT,
     )?;
     let seal = body.into_inner();
     let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
@@ -855,19 +856,6 @@ async fn caller_can_read_delivery_target_service(
     false
 }
 
-/// The stored canonical digest of an accepted Event, typed.
-///
-/// This is the same digest a Seal carries in `delta[]`, so it is the join key
-/// between a resolved Event and the Seal that covers it.
-fn canonical_digest_of(record: &CanonicalEventRecord) -> Result<Hash, AppError> {
-    Hash::new(record.canonical_digest.clone()).map_err(|error| {
-        AppError::internal(format!(
-            "events resolve: stored canonical digest for {} is malformed: {error}",
-            record.event_id
-        ))
-    })
-}
-
 async fn verified_contact_mirror_event(
     state: &AppState,
     session: &SessionRecord,
@@ -875,13 +863,18 @@ async fn verified_contact_mirror_event(
 ) -> Result<Option<(Event, Hash)>, AppError> {
     let event: Event = serde_json::from_slice(&mirror.canonical_event_bytes)
         .map_err(|error| AppError::internal(format!("Contact mirror Event decode: {error}")))?;
+    let request_digest = Hash::new(mirror.request_digest.clone())
+        .map_err(|error| AppError::internal(format!("Contact mirror digest invalid: {error}")))?;
+    let digest_suite = request_digest
+        .digest_suite()
+        .map_err(|error| AppError::internal(format!("Contact mirror digest suite: {error}")))?;
     if canonical::canonical_json_bytes(&event).map_err(|error| {
         AppError::internal(format!("Contact mirror Event canonicalize: {error}"))
     })? != mirror.canonical_event_bytes
         || event.kind != arkret_wire::EventKind::ContactRequested
         || event.event_id.as_str() != mirror.request_event_id
         || event
-            .event_digest()
+            .event_digest_with_digest_suite(digest_suite)
             .map_err(|error| AppError::internal(format!("Contact mirror Event digest: {error}")))?
             != mirror.request_digest
         || mirror.target_holder_id != session.actor
@@ -922,9 +915,7 @@ async fn verified_contact_mirror_event(
     if !receipt_matches {
         return Ok(None);
     }
-    let digest = Hash::new(mirror.request_digest)
-        .map_err(|error| AppError::internal(format!("Contact mirror digest invalid: {error}")))?;
-    Ok(Some((event, digest)))
+    Ok(Some((event, request_digest)))
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.events.read.resolve", tags("events"))]
@@ -940,23 +931,76 @@ async fn resolve_events(
     let body = body.into_inner();
     body.validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    // `max_resolve` is advertised as one selector budget, so every selector
-    // kind spends from it. Leaving `seal_refs` out let a caller draw the full
-    // event budget and 64 Seal lookups on top of it.
-    if body.event_ids.len() + body.event_digests.len() + body.seal_refs.len() > MAX_EVENT_RESOLVE {
+    if body.history_traversal_access.is_some() && body.include_payload == Some(false) {
+        return Err(AppError::param_invalid(
+            "history traversal requires the complete accepted Event payload",
+        ));
+    }
+    if body.event_ids.len() + body.event_digests.len() > MAX_EVENT_RESOLVE {
         return Err(AppError::new(
             ErrorCode::QuotaExceeded,
             "too many events requested",
         ));
     }
+    if let Some(access) = body.history_traversal_access.clone() {
+        let caller = arkret_wire::DidCoreId::new(session.actor.clone())
+            .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
+        let retained = state
+            .persistence()
+            .governance_history_service()
+            .resolve_self_retained_events_for_access(access, &caller, now())
+            .await
+            .map_err(|error| AppError::internal(format!("history traversal access: {error}")))?;
+        let mut found = Vec::new();
+        let mut missing = Vec::new();
+        for event_id in &body.event_ids {
+            match retained.iter().find(|event| event.event_id == *event_id) {
+                Some(event) => found.push(event.clone()),
+                None => missing.push(event_id.to_string()),
+            }
+        }
+        for digest in &body.event_digests {
+            let event = retained.iter().find(|event| {
+                arkret::signed_event_digest_claim(event).is_ok_and(|retained_digest| {
+                    retained_digest == *digest
+                        && retained_digest.digest_suite().is_ok_and(|digest_suite| {
+                            event
+                                .event_digest_with_digest_suite(digest_suite)
+                                .is_ok_and(|actual| actual == digest.as_str())
+                        })
+                })
+            });
+            match event {
+                Some(event)
+                    if !found.iter().any(|found_event: &arkret_wire::Event| {
+                        found_event.event_id == event.event_id
+                    }) =>
+                {
+                    found.push(event.clone());
+                }
+                Some(_) => {}
+                None => missing.push(digest.to_string()),
+            }
+        }
+        let outcome = EventsResolveOutcome {
+            events: found,
+            missing,
+            unauthorized: Vec::new(),
+        };
+        let encoded = arkret_canonical::canonical_json_bytes(&outcome)
+            .map_err(|error| AppError::internal(format!("events resolve outcome: {error}")))?;
+        let byte_limit = body.max_response_bytes.unwrap_or(8 * 1024 * 1024) as usize;
+        if encoded.len() > byte_limit {
+            return Err(AppError::new(
+                ErrorCode::LimitExceeded,
+                "events resolve outcome exceeds max_response_bytes",
+            ));
+        }
+        return json_ok(outcome);
+    }
     let service = state.event_queries();
     let mut found = Vec::new();
-    let mut seals = Vec::new();
     let mut missing = Vec::new();
-    // Canonical digest per returned Event, kept from the record we already
-    // read so the derived `seals[]` pass below never re-canonicalizes.
-    let mut event_digests: BTreeMap<String, Hash> = BTreeMap::new();
-    let mut contact_mirror_event_ids = std::collections::BTreeSet::new();
     let include_payload = body.include_payload.unwrap_or(true);
     for event_id in &body.event_ids {
         let event_id_string = event_id.to_string();
@@ -967,11 +1011,9 @@ async fn resolve_events(
             .map_err(|error| {
                 AppError::internal(format!("events resolve Contact mirror: {error}"))
             })?
-            && let Some((event, digest)) =
+            && let Some((event, _digest)) =
                 verified_contact_mirror_event(state, &session, mirror).await?
         {
-            contact_mirror_event_ids.insert(event.event_id.as_str().to_owned());
-            event_digests.insert(event.event_id.as_str().to_owned(), digest);
             found.push(event);
             continue;
         }
@@ -982,12 +1024,10 @@ async fn resolve_events(
             .flatten()
         {
             Some(record) if event_visible_to_session(state, &record, &session).await => {
-                let digest = canonical_digest_of(&record)?;
                 let mut event = sdk_event_for_state(state, &record)?;
                 if !include_payload {
                     event.payload.clear();
                 }
-                event_digests.insert(event.event_id.as_str().to_owned(), digest);
                 found.push(event);
             }
             _ => missing.push(event_id_string),
@@ -1006,15 +1046,13 @@ async fn resolve_events(
                 .map_err(|error| {
                     AppError::internal(format!("events resolve Contact mirror: {error}"))
                 })?
-                && let Some((event, canonical_digest)) =
+                && let Some((event, _canonical_digest)) =
                     verified_contact_mirror_event(state, &session, mirror).await?
             {
                 if !found
                     .iter()
                     .any(|found_event| found_event.event_id == event.event_id)
                 {
-                    contact_mirror_event_ids.insert(event.event_id.as_str().to_owned());
-                    event_digests.insert(event.event_id.as_str().to_owned(), canonical_digest);
                     found.push(event);
                 }
                 continue;
@@ -1034,62 +1072,29 @@ async fn resolve_events(
                 .iter()
                 .any(|event| event.event_id.as_str() == record.event_id)
             {
-                let digest = canonical_digest_of(record)?;
                 let mut event = sdk_event_for_state(state, record)?;
                 if !include_payload {
                     event.payload.clear();
                 }
-                event_digests.insert(event.event_id.as_str().to_owned(), digest);
                 found.push(event);
             }
         }
     }
-    for seal_ref in &body.seal_refs {
-        match state.projections().seal_by_id(seal_ref) {
-            Ok(Some(seal))
-                if realm_has_member(state, seal.realm_id.as_str(), &session.actor).await =>
-            {
-                seals.push(seal);
-            }
-            _ => missing.push(seal_ref.to_string()),
-        }
-    }
-    // `seals[]` is a closed derived set, not just the answer to `seal_refs[]`:
-    // for every Event returned above, the accepted Seal whose `delta[]` carries
-    // that Event's `event_digest`. A creator bootstrapping an MLS governance
-    // anchor (`encryption-and-audit.md` §2.5.4 T1) resolves its own
-    // `ak.realm.create` and has no way to name the genesis Seal id in advance;
-    // without this it received an empty `seals[]` and could never pin an
-    // anchor, so every encrypted write in the Realm failed forever.
-    //
-    // The covering Seal only — never a later descendant — and an Event that is
-    // accepted but not yet sealed contributes nothing. A DataEvent never
-    // appears in a `delta[]`, so it simply yields no entry.
-    for event in &found {
-        if contact_mirror_event_ids.contains(event.event_id.as_str()) {
-            continue;
-        }
-        let digest = event_digests
-            .get(event.event_id.as_str())
-            .cloned()
-            .ok_or_else(|| AppError::internal("events resolve: resolved Event has no digest"))?;
-        let Some(seal) = state
-            .projections()
-            .seal_covering_event(&digest)
-            .map_err(|error| AppError::internal(format!("events resolve: {error}")))?
-        else {
-            continue;
-        };
-        seals.push(seal);
-    }
-    seals.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
-    seals.dedup_by(|left, right| left.id == right.id);
-    json_ok(EventsResolveOutcome {
+    let outcome = EventsResolveOutcome {
         events: found,
-        seals,
         missing,
         unauthorized: Vec::new(),
-    })
+    };
+    let encoded = arkret_canonical::canonical_json_bytes(&outcome)
+        .map_err(|error| AppError::internal(format!("events resolve outcome: {error}")))?;
+    let byte_limit = body.max_response_bytes.unwrap_or(8 * 1024 * 1024) as usize;
+    if encoded.len() > byte_limit {
+        return Err(AppError::new(
+            ErrorCode::LimitExceeded,
+            "events resolve outcome exceeds max_response_bytes",
+        ));
+    }
+    json_ok(outcome)
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.events.read.frontier", tags("events"))]

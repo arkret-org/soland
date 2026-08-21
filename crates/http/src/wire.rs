@@ -931,7 +931,6 @@ pub fn describe(
         rate_limits: None,
         supported_features: vec![
             arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_ROLE_FEATURE.to_owned(),
-            arkret_models_collaboration::governance::history_visibility::DISCUSSION_HISTORY_VISIBILITY_FEATURE.to_owned(),
             "org.arkret.soland.feature.auth.logout".to_owned(),
             "org.arkret.soland.feature.contacts.request".to_owned(),
             "org.arkret.soland.feature.contacts.respond".to_owned(),
@@ -998,15 +997,6 @@ pub fn describe(
             "org.arkret.soland.feature.mimi.proxy_download_policy".to_owned(),
             "org.arkret.soland.feature.registry.artifacts".to_owned(),
             "org.arkret.soland.feature.plaintext_visible_services".to_owned(),
-            // realm-and-space.md history-sharing — advertise the three
-            // `ak.realm_key.request` / `ak.realm_key.share` retrieval modes the
-            // server relays history keys through: backup-derived retrieval,
-            // device-to-device peer relay (the ephemeral `ak.realm_key.request`
-            // accepted by `routing::events::sync::ephemeral`), and
-            // archive retrieval.
-            "ak.feature.realm_key.backup_retrieval.v1".to_owned(),
-            "ak.feature.realm_key.peer_relay.v1".to_owned(),
-            "ak.feature.realm_key.archive_retrieval.v1".to_owned(),
         ],
         supported_operations,
         // service-surface.md §3 documents `base_url` (typed `format: uri` in
@@ -1310,33 +1300,6 @@ mod tests {
             full_id: arkret_wire::DidFullId::new("did:web:soland.example").unwrap(),
             method_history_head: "fixture-history-head".to_owned(),
             version_id: "fixture-v1".to_owned(),
-        }
-    }
-
-    #[test]
-    fn service_describe_advertises_realm_key_history_features() {
-        let description = describe(
-            &fixture_service_resolution(),
-            "memory",
-            &crate::config::AppConfig {
-                public_base_url: "https://soland.example/".to_owned(),
-                development_mode: true,
-                ..crate::config::AppConfig::test_default()
-            },
-        );
-        let value = serde_json::to_value(description).expect("description serializes");
-        let features = value["supported_features"]
-            .as_array()
-            .expect("features array");
-        for feature in [
-            "ak.feature.realm_key.backup_retrieval.v1",
-            "ak.feature.realm_key.peer_relay.v1",
-            "ak.feature.realm_key.archive_retrieval.v1",
-        ] {
-            assert!(
-                features.contains(&json!(feature)),
-                "describe must advertise {feature}"
-            );
         }
     }
 

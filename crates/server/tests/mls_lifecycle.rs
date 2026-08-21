@@ -363,7 +363,9 @@ async fn project_authorized_principal_device(
     )
     .unwrap();
     authorize.prev_refs = vec![genesis.event_id.clone()];
-    authorize.refresh_content_bound_identity().unwrap();
+    authorize
+        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
     let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
         arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
             "ak:operation:",
@@ -372,6 +374,7 @@ async fn project_authorized_principal_device(
         arkret_wire::OperationKind::Create,
         None,
         &authorize,
+        arkret_canonical::DigestSuite::Sha256,
     )
     .unwrap();
     let authorize_event_id = authorize.event_id.to_string();

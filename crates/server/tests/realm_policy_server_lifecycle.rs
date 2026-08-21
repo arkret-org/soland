@@ -84,7 +84,7 @@ async fn prepare_alice(state: &AppState) -> String {
 }
 
 /// Bootstrap a Realm through the real `ak.realm.create` genesis batch, with this
-/// deployment as its `single_did` notary, so the Realm ends up with a genuine
+/// deployment as its frozen `single_signer` notary, so the Realm ends up with a genuine
 /// accepted governance Seal the policy-server Control Moves can cite.
 ///
 /// The Realm id is not chosen here: `realm-and-space.md` section 2.5.0 derives it

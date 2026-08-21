@@ -469,39 +469,6 @@ pub struct AppConfig {
     /// `describe.limits.resumable_upload_incomplete_ttl_seconds`.
     /// Env: `SOLAND_RESUMABLE_UPLOAD_TTL_SECS` (default 86_400 = 24h).
     pub resumable_upload_incomplete_ttl_seconds: u64,
-    /// MAL-11 compaction: minimum age (seconds) before a Seal is
-    /// prune-eligible. Younger Seals must not be pruned even when a
-    /// compaction Seal has witnessed them — gives slow federation peers
-    /// time to backfill before history is dropped.
-    /// Env: `SOLAND_COMPACTION_MIN_SEAL_AGE_SECS` (default 604_800 = 7 days).
-    pub seal_compaction_min_age_seconds: u64,
-    /// MAL-11 compaction: minimum number of compaction Seals between
-    /// the prune candidate and the current leaf set.
-    /// Env: `SOLAND_COMPACTION_MIN_WITNESSES` (default 1).
-    pub compaction_min_witnesses: u32,
-    /// MAL-11 compaction: refuse to prune the genesis Seal when true.
-    /// Env: `SOLAND_COMPACTION_PRESERVE_GENESIS` (default true).
-    pub compaction_preserve_genesis: bool,
-    /// MAL-11 compaction: refuse to prune fork-point Seals (more than
-    /// one direct successor) when true. Keeps the prune walk
-    /// conservative by default.
-    /// Env: `SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS` (default true).
-    pub compaction_prune_only_singleton_successors: bool,
-    /// MAL-11 compaction prune walk: interval between background prune
-    /// passes, in seconds. Zero (or unset) disables the worker entirely —
-    /// MAL-11 prune then runs only via the explicit
-    /// `POST /_soland/admin/realms/{realm_id}/seal-dag/prune?seal_id=...`
-    /// endpoint. When enabled, the worker walks every live Realm's
-    /// seal DAG, evaluates each candidate against
-    /// [`compaction_policy`], and prunes eligible Seals up to
-    /// `compaction_prune_walk_per_realm_limit` per Realm per pass.
-    /// Env: `SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS` (default 0 = disabled).
-    pub compaction_prune_walk_interval_seconds: u64,
-    /// MAL-11 compaction prune walk: maximum number of prunes the worker
-    /// will perform per Realm per pass. Bounds I/O against very large
-    /// DAGs; further candidates are picked up on subsequent ticks.
-    /// Env: `SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT` (default 50).
-    pub compaction_prune_walk_per_realm_limit: usize,
     /// Deployment trust domain id, used to bind peer authorization and
     /// recovery transcripts to this Principal Server so the same proof bytes
     /// cannot be replayed cross-domain. Loaded from
@@ -925,12 +892,6 @@ impl AppConfig {
             push_bridge_trusted_service_ids: Vec::new(),
             resumable_upload_dir: PathBuf::from("./soland-resumable-uploads"),
             resumable_upload_incomplete_ttl_seconds: 86_400,
-            seal_compaction_min_age_seconds: 604_800,
-            compaction_min_witnesses: 1,
-            compaction_preserve_genesis: true,
-            compaction_prune_only_singleton_successors: true,
-            compaction_prune_walk_interval_seconds: 0,
-            compaction_prune_walk_per_realm_limit: 50,
             seed_demo_data: false,
             trust_domain: TrustDomainId::new("ak:trust_domain:soland.local")
                 .expect("static trust domain"),
@@ -1166,29 +1127,6 @@ impl AppConfig {
                 .and_then(|value| value.trim().parse::<u64>().ok())
                 .unwrap_or(86_400)
                 .max(60);
-        let seal_compaction_min_age_seconds = lookup(values, "SOLAND_COMPACTION_MIN_SEAL_AGE_SECS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .unwrap_or(604_800);
-        let compaction_min_witnesses = lookup(values, "SOLAND_COMPACTION_MIN_WITNESSES")
-            .ok()
-            .and_then(|value| value.trim().parse::<u32>().ok())
-            .unwrap_or(1);
-        let compaction_preserve_genesis =
-            env_bool(values, "SOLAND_COMPACTION_PRESERVE_GENESIS")?.unwrap_or(true);
-        let compaction_prune_only_singleton_successors =
-            env_bool(values, "SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS")?.unwrap_or(true);
-        let compaction_prune_walk_interval_seconds =
-            lookup(values, "SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS")
-                .ok()
-                .and_then(|value| value.trim().parse::<u64>().ok())
-                .unwrap_or(0);
-        let compaction_prune_walk_per_realm_limit =
-            lookup(values, "SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT")
-                .ok()
-                .and_then(|value| value.trim().parse::<usize>().ok())
-                .unwrap_or(50)
-                .max(1);
         let seed_demo_data = env_bool(values, "SOLAND_SEED_DEMO_DATA")?.unwrap_or(false);
         // G3.S9 — sovereign enclave toggle + outbound host allow-list.
         //
@@ -1300,12 +1238,6 @@ impl AppConfig {
             push_bridge_trusted_service_ids,
             resumable_upload_dir,
             resumable_upload_incomplete_ttl_seconds,
-            seal_compaction_min_age_seconds,
-            compaction_min_witnesses,
-            compaction_preserve_genesis,
-            compaction_prune_only_singleton_successors,
-            compaction_prune_walk_interval_seconds,
-            compaction_prune_walk_per_realm_limit,
             seed_demo_data,
             trust_domain,
             receive_policy_constraints,
@@ -1370,18 +1302,6 @@ impl AppConfig {
             "development"
         } else {
             "production"
-        }
-    }
-
-    /// MAL-11 compaction policy assembled from the four env-driven config
-    /// fields. Callers use this when evaluating prune candidates via
-    /// [`arkret_state::CompactionPolicy::is_eligible`].
-    pub fn compaction_policy(&self) -> arkret_state::CompactionPolicy {
-        arkret_state::CompactionPolicy {
-            min_seal_age_seconds: self.seal_compaction_min_age_seconds,
-            min_compaction_witnesses: self.compaction_min_witnesses,
-            preserve_genesis: self.compaction_preserve_genesis,
-            prune_only_singleton_successors: self.compaction_prune_only_singleton_successors,
         }
     }
 

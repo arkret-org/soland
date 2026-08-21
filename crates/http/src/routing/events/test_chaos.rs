@@ -12,11 +12,6 @@ use serde::Deserialize;
 use crate::state::AppState;
 
 pub(crate) const PRE_IDENTITY_ANCHOR_COMMIT: &str = "pre_identity_anchor_commit";
-pub(crate) const PRE_DIRECT_REPAIR_DEVICE_BATCH_COMMIT: &str =
-    "pre_direct_repair_device_batch_commit";
-pub(crate) const POST_DIRECT_REPAIR_COMMIT_PRE_RESPONSE: &str =
-    "post_direct_repair_commit_pre_response";
-
 const ENABLE_ENV: &str = "SOLAND_ENABLE_TEST_ENDPOINTS";
 const CONTROL_FILE_ENV: &str = "SOLAND_TEST_CHAOS_CONTROL_FILE";
 const BREAKPOINT_ENV: &str = "SOLAND_TEST_CHAOS_BREAKPOINT";

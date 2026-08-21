@@ -267,21 +267,15 @@ pub(super) async fn bootstrap_realm_member_index(
         .and_then(Value::as_str)
         .unwrap_or("invite_only")
         .to_owned();
-    let history_visibility = payload_object
-        .and_then(|create_object| create_object.get("history_visibility"))
+    let history_access = payload_object
+        .and_then(|create_object| create_object.get("history_access"))
         .and_then(Value::as_str)
-        .unwrap_or("shared")
+        .unwrap_or("since_join")
         .to_owned();
     let encryption_profile = payload_object
         .and_then(|create_object| create_object.get("encryption_profile"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
-    let history_sharing_policy = payload_object
-        .and_then(|create_object| create_object.get("history_sharing_policy"))
-        .cloned();
-    let history_sharing_policy_digest = history_sharing_policy
-        .as_ref()
-        .and_then(canonical_value_digest);
     let preview_policy = payload_object
         .and_then(|create_object| create_object.get("preview_policy"))
         .cloned();
@@ -330,9 +324,7 @@ pub(super) async fn bootstrap_realm_member_index(
         owner: actor.to_owned(),
         deleted: false,
         discoverability,
-        history_visibility,
-        history_sharing_policy,
-        history_sharing_policy_digest,
+        history_access,
         preview_policy,
         preview_policy_digest,
         asset_privacy_policy,

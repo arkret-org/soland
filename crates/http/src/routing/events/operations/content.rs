@@ -237,11 +237,10 @@ pub async fn known_realm_denies_plaintext_service(state: &AppState, realm_id: &s
         .ok()
         .flatten()
         .is_some_and(|record| {
-            !(record.allows_plaintext_data_class(
+            !record.allows_plaintext_data_class(
                 state.service_id(),
                 arkret_wire::PlaintextDataClassKind::MessageContent,
-            ) || record.discoverability == "public"
-                && record.history_visibility == "world_readable")
+            )
         })
 }
 

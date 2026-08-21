@@ -38,6 +38,7 @@ fn accepted_device_authorize_operation(
         arkret_wire::OperationKind::Create,
         None,
         &event,
+        arkret_canonical::DigestSuite::Sha256,
     )
     .unwrap()
 }

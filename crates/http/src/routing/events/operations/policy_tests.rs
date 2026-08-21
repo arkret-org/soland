@@ -17,6 +17,17 @@ const AGENT_CORE_ID: &str = "ak:did_core:webvh:z6mkfixtureagent";
 const AGENT_CONTROLLER_MEMBERSHIP_EVENT_ID: &str =
     "ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim";
 
+fn alice_notary() -> arkret_wire::NotaryValue {
+    let verifying_key = SigningKey::from_bytes(&[17; 32]).verifying_key();
+    let descriptor = soland_services::identity::ed25519_notary_signer_descriptor(
+        crate::test_actor_id_str("did:webvh:z6mkalice:alice.example"),
+        arkret_wire::DidUrl::new("did:webvh:z6mkalice:alice.example#notary-key").unwrap(),
+        verifying_key.as_bytes(),
+    )
+    .unwrap();
+    arkret_wire::NotaryValue::single_signer(descriptor)
+}
+
 fn test_config() -> crate::config::AppConfig {
     crate::config::AppConfig {
         object_storage: crate::config::ObjectStorageConfig::local(
@@ -49,8 +60,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         serde_json::to_value(arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
             arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
             state.config().trust_domain.clone(),
-            arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-            arkret_wire::notary::NotaryValue::single_did(alice.clone()),
+            alice_notary(),
             arkret_policy::current_capability_action_registry_digest().unwrap(),
             now,
         ).unwrap())
@@ -174,6 +184,7 @@ fn registered_projection_inputs(
         operation.operation_kind.clone(),
         operation.object_id.clone(),
         &event,
+        arkret_canonical::DigestSuite::Sha256,
     )
     .unwrap();
     let writes = arkret_schema::project_registered_cell_writes(
@@ -1034,6 +1045,7 @@ async fn register_native_agent_membership_context(
             realm_id: Some("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned()),
             kind: "ak.identity.accountability_grant".to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
             canonical_digest: accountability_digest,
             canonical_bytes: accountability_bytes,
             envelope: accountability_envelope,
@@ -1050,9 +1062,7 @@ async fn register_native_agent_membership_context(
                 owner: controller.to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
-                history_visibility: "joined".to_owned(),
-                history_sharing_policy: None,
-                history_sharing_policy_digest: None,
+                history_access: "since_join".to_owned(),
                 preview_policy: None,
                 preview_policy_digest: None,
                 asset_privacy_policy: None,
@@ -1137,6 +1147,7 @@ async fn register_native_agent_membership_context(
                 .as_str()
                 .to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
             canonical_digest: authorize_canonical_digest,
             canonical_bytes: authorize_canonical_bytes,
             envelope: authorize_envelope,
@@ -2257,6 +2268,7 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
             realm_id: Some(realm_id.to_string()),
             kind: "ak.identity.accountability_grant".to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
             canonical_digest: grant_digest,
             canonical_bytes: grant_bytes,
             envelope: grant_envelope,
@@ -2521,10 +2533,12 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
                 display: serde_json::json!({"short_name":"Private","color_token":"slate","symbol":{"glyph":"ring"}}),
                 directory_visibility: "private".to_owned(),
                 join_rule: "invite".to_owned(),
-                history_visibility: "joined".to_owned(),
+                history_access: "since_join".to_owned(),
                 content_encryption_floor: None,
                 metadata_encryption_floor: None,
                 encryption_profile: "none".to_owned(),
+                content_scheme: None,
+                durability_policy: None,
                 mls_group_ref: None,
                 state: soland_domain::reducer::CircleLifecycleState::Active,
                 state_changed_at: None,
@@ -2863,459 +2877,5 @@ async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id
             .await
             .unwrap_err(),
         arkret_wire::ErrorCode::SCHEMA_VIOLATION
-    );
-}
-
-#[tokio::test]
-async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:ASAnmWDtY3OTo77OiPg3GqeghKefJ_tQffOq_LTR6JRP".to_owned(),
-    )
-    .unwrap();
-    let create = op(
-        realm_id.clone(),
-        "00000000c101",
-        arkret_wire::EventKind::RealmCreate,
-        json!({
-            "object": {
-                "id": realm_id.as_str(),
-                "title": "Prejoin history",
-                "history_visibility": "shared",
-                "encryption_profile": "mls_rfc9420"
-            }
-        }),
-    );
-    let strict_scheme = op(
-        realm_id,
-        "00000000c102",
-        arkret_wire::EventKind::RealmPolicyBundle,
-        json!({
-            "policy_revision": 1,
-            "content_scheme": "mls_rfc9420"
-        }),
-    );
-
-    let reason = validate_operation_policy(&state, &[create, strict_scheme])
-        .await
-        .unwrap_err();
-    assert_eq!(
-        reason,
-        arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
-    );
-    assert_eq!(
-        operation_policy_reason_code(reason),
-        (
-            salvo::http::StatusCode::PRECONDITION_FAILED,
-            "failed_precondition"
-        )
-    );
-}
-
-#[tokio::test]
-async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:Adn4myr04NNzApPCuwFYPkPb4gyi37eacqboukmzpWy_".to_owned(),
-    )
-    .unwrap();
-    let create = op(
-        realm_id.clone(),
-        "00000000c201",
-        arkret_wire::EventKind::RealmCreate,
-        json!({
-            "object": {
-                "id": realm_id.as_str(),
-                "title": "Prejoin history",
-                "history_visibility": "shared",
-                "encryption_profile": "mls_rfc9420"
-            }
-        }),
-    );
-    let exporter_scheme = op(
-        realm_id,
-        "00000000c202",
-        arkret_wire::EventKind::RealmPolicyBundle,
-        json!({
-            "policy_revision": 1,
-            "content_scheme": "mls_exporter_aead_v1"
-        }),
-    );
-
-    validate_operation_policy(&state, &[create, exporter_scheme])
-        .await
-        .expect("pre-join history is valid when the MLS realm declares exporter-AEAD");
-}
-
-#[tokio::test]
-async fn mls_prejoin_history_accepts_create_object_exporter_aead_content_scheme() {
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:AW2U7U6ZnE5lEu9swBXj0abSIg2MUGft9XAX-S-ADm_6".to_owned(),
-    )
-    .unwrap();
-    let create = op(
-        realm_id.clone(),
-        "00000000c211",
-        arkret_wire::EventKind::RealmCreate,
-        json!({
-            "object": {
-                "id": realm_id.as_str(),
-                "title": "Prejoin history",
-                "history_visibility": "shared",
-                "encryption_profile": "mls_rfc9420",
-                "content_scheme": "mls_exporter_aead_v1"
-            }
-        }),
-    );
-
-    validate_operation_policy(&state, &[create])
-        .await
-        .expect("pre-join history is valid when ak.realm.create declares exporter-AEAD");
-}
-
-#[tokio::test]
-async fn mls_prejoin_history_rejects_create_object_strict_content_scheme() {
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:AXL6DJpgz_9X_LYgOHyNrOeH-bhp9kH0i97n3OlavYdA".to_owned(),
-    )
-    .unwrap();
-    let create = op(
-        realm_id.clone(),
-        "00000000c221",
-        arkret_wire::EventKind::RealmCreate,
-        json!({
-            "object": {
-                "id": realm_id.as_str(),
-                "title": "Prejoin history",
-                "history_visibility": "shared",
-                "encryption_profile": "mls_rfc9420",
-                "content_scheme": "mls_rfc9420"
-            }
-        }),
-    );
-
-    let reason = validate_operation_policy(&state, &[create])
-        .await
-        .unwrap_err();
-    assert_eq!(
-        reason,
-        arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
-    );
-}
-
-#[tokio::test]
-async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
-    use arkret_state::lattice::CellState;
-
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:AURHN1jBw6BjkPcuVTL89ylRp2BLpjBYUaSMpx4hoZMO".to_owned(),
-    )
-    .unwrap();
-    let now = chrono::Utc::now();
-    state
-        .realms()
-        .store_realm_metadata(
-            realm_id.as_str(),
-            soland_services::events::RealmMetadata {
-                owner: "did:web:alice.example".to_owned(),
-                deleted: false,
-                discoverability: "invite_only".to_owned(),
-                history_visibility: "joined".to_owned(),
-                history_sharing_policy: None,
-                history_sharing_policy_digest: None,
-                preview_policy: None,
-                preview_policy_digest: None,
-                asset_privacy_policy: None,
-                asset_privacy_policy_digest: None,
-                encryption_profile: Some("mls_rfc9420".to_owned()),
-                plaintext_visible_services: std::collections::BTreeSet::new(),
-                plaintext_visible_service_classes: std::collections::BTreeMap::new(),
-                minimal_metadata_realm: false,
-                aad_visibility_ceiling: Default::default(),
-                created_at: now,
-                updated_at: now,
-            },
-        )
-        .await
-        .expect("realm meta stored");
-    {
-        let mut projection = state.test_projection().lock();
-        projection.realm_policy_bundle_cells.insert(
-            realm_id.to_string(),
-            CellState::Value(json!({
-                "policy_revision": 1,
-                "content_scheme": "mls_rfc9420"
-            })),
-        );
-    }
-    let history_visibility = op(
-        realm_id,
-        "00000000c301",
-        arkret_wire::EventKind::RealmHistoryVisibility,
-        json!({
-            "value": "shared"
-        }),
-    );
-
-    assert_eq!(
-        validate_operation_policy(&state, &[history_visibility])
-            .await
-            .unwrap_err(),
-        arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
-    );
-}
-
-// encryption-and-audit.md §2.10.8 — an RRK-targeted `ak.realm_key.share` (to a
-// declared recovery recipient) is accepted by the share-policy gate even though
-// the recipient is NOT a member and the realm carries no history-sharing policy.
-// The discriminator is structural: `recipient_principal_id` is a current
-// `durability_policy.recovery_recipients[].principal_id`.
-#[tokio::test]
-async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
-    use arkret_state::lattice::CellState;
-
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:AZquEEE7ly4W-MA4shMoS_Jwvj_0MhqLDtIVHmnlPP4X".to_owned(),
-    )
-    .unwrap();
-    let recovery_principal = "ak:did_core:webvh:z6mkfixturehr";
-    let recovery_verification_method = "did:webvh:z6mkfixturehr:hr.example#rrk-1";
-
-    // Seed the projected policy_bundle cell with an exporter-AEAD scheme +
-    // org RRK durability policy naming `recovery_principal` as a recipient.
-    {
-        let mut projection = state.test_projection().lock();
-        projection.realm_policy_bundle_cells.insert(
-            realm_id.to_string(),
-            CellState::Value(json!({
-                "policy_revision": 1,
-                "content_scheme": "mls_exporter_aead_v1",
-                "durability_policy": {
-                    "mode": "org_recovery_key",
-                    "recovery_recipients": [{
-                        "recipient_id": "rrk-1",
-                        "principal_id": recovery_principal,
-                        "verification_method": recovery_verification_method
-                    }]
-                }
-            })),
-        );
-    }
-
-    let share = op(
-        realm_id.clone(),
-        "00000000d100",
-        arkret_wire::EventKind::RealmKeyShare,
-        json!({
-            "share_kind": "realm_recovery_key",
-            "recipient_principal_id": recovery_principal,
-            "recipient_verification_method": recovery_verification_method,
-            "recovery_recipient_id": "rrk-1",
-            "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d1d2",
-            "source_authorization_ref": "ak:event:ASvPdNAOWXf8kk2Jd-FbnlIFnNiMFE5H2L2hHGSmQP4_",
-            "sender_device_signature": {"signature_algorithm": "Ed25519", "kid": "k", "sig": "s"},
-            "key_scope": {
-                "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
-                "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-                "from_epoch": 1,
-                "to_epoch": 3
-            },
-            "ciphertext": "hpke-sealed-history-secret",
-            "created_at": "2026-06-25T00:00:00.000Z"
-        }),
-    );
-
-    validate_realm_key_share_policy(&state, &share)
-        .await
-        .expect("RRK-targeted share to a recovery recipient must be accepted");
-}
-
-#[tokio::test]
-async fn realm_key_share_member_device_accepts_projection_metadata() {
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:Aa1JCF6pnQnSgl8DnT6vNtPcFGPCxLnEY130o2lmyDSh".to_owned(),
-    )
-    .unwrap();
-    let now = chrono::DateTime::parse_from_rfc3339("2026-07-05T00:00:00.000Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
-    let bob = "ak:did_core:web:bob.example";
-    let bob_device = "ak:device:01904100-0000-7000-8000-00000000d3d1";
-
-    state
-        .realms()
-        .store_realm_metadata(
-            realm_id.as_str(),
-            soland_services::events::RealmMetadata {
-                owner: "did:web:alice.example".to_owned(),
-                deleted: false,
-                discoverability: "invite_only".to_owned(),
-                history_visibility: "shared".to_owned(),
-                history_sharing_policy: Some(json!({
-                    "version": 1,
-                    "default_key_share": "event_time_visibility",
-                    "pre_join_history": "visibility_condition_allowed",
-                    "allowed_key_sources": ["verified_member_device"],
-                    "allowed_receiver_states": ["active_member"],
-                    "audit": {
-                        "share_audit_event_required": false,
-                        "access_audit_required": false
-                    }
-                })),
-                history_sharing_policy_digest: Some(
-                    "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-                        .to_owned(),
-                ),
-                preview_policy: None,
-                preview_policy_digest: None,
-                asset_privacy_policy: None,
-                asset_privacy_policy_digest: None,
-                encryption_profile: Some("mls_rfc9420".to_owned()),
-                plaintext_visible_services: std::collections::BTreeSet::new(),
-                plaintext_visible_service_classes: std::collections::BTreeMap::new(),
-                minimal_metadata_realm: false,
-                aad_visibility_ceiling: Default::default(),
-                created_at: now,
-                updated_at: now,
-            },
-        )
-        .await
-        .expect("realm meta stored");
-    state
-        .identities()
-        .save_device(soland_services::identity::SaveDeviceCommand {
-            actor_id: bob.to_owned(),
-            device_id: bob_device.to_owned(),
-            display_name: None,
-            device: soland_services::identity::DeviceIdentity {
-                actor_id: bob.to_owned(),
-                device_id: bob_device.to_owned(),
-                display_name: None,
-                verification_state: "verified".to_owned(),
-                payload: json!({"algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1"]}),
-                created_at: now,
-                updated_at: now,
-                revoked_at: None,
-            },
-        })
-        .await
-        .expect("device stored");
-    {
-        let mut projection = state.test_projection().lock();
-        projection.members.insert(
-            (realm_id.to_string(), bob.to_owned()),
-            soland_domain::reducer::SolandMembershipState {
-                member: bob.to_owned(),
-                realm_id: realm_id.to_string(),
-                state: "join".to_owned(),
-                role: "member".to_owned(),
-                delivery_status: Some("routable".to_owned()),
-                recipient_service_id: Some("ak:did_core:web:local.host".to_owned()),
-                recipient_service_resolution: Some(json!({
-                    "current_record_url": "https://local.host/_arkret/open/services/ak%3Adid_core%3Aweb%3Alocal.host/resolution"
-                })),
-                membership_event_ref: Some(
-                    "ak:event:Aen872J0_GJsInIbyMOsXR2xbw27ZfJY2H6f96pYsgUC".to_owned(),
-                ),
-                delivery_binding_frontier: None,
-                invited_at: Some(now),
-                joined_at: now,
-                updated_at: now,
-                reason: None,
-            },
-        );
-    }
-
-    let share = op(
-        realm_id.clone(),
-        "00000000d300",
-        arkret_wire::EventKind::RealmKeyShare,
-        json!({
-            "share_kind": "member_device",
-            "recipient_principal_id": bob,
-            "recipient_device_id": bob_device,
-            "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d3d2",
-            "source_authorization_ref": "ak:event:AefFLnGCxWP_cx9pZCZR5OTqQnHHI1ubt8-iDlcMP-ZP",
-            "sender_device_signature": {"signature_algorithm": "Ed25519", "kid": "k", "sig": "s"},
-            "key_scope": {
-                "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
-                "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-                "from_epoch": 1,
-                "to_epoch": 3
-            },
-            "ciphertext": "sealed-history-secret",
-            "created_at": "2026-07-05T00:00:00.000Z",
-            "event_id": "ak:event:AbmoMmPKDs6imtvD716Jo6SMuqoQBREkaSd3-lTFdVED",
-            "sender": "ak:did_core:web:alice.example"
-        }),
-    );
-
-    validate_realm_key_share_policy(&state, &share)
-        .await
-        .expect("projected member-device share metadata must not poison policy parsing");
-}
-
-// A non-recovery, non-member recipient with no history-sharing policy still
-// fails closed — the RRK branch only applies to declared recovery recipients.
-#[tokio::test]
-async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
-    use arkret_state::lattice::CellState;
-
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:AfjxQq9gX4KN0dq1wVuvCK-hy0kd5l2V1heQq4f3eqiB".to_owned(),
-    )
-    .unwrap();
-    {
-        let mut projection = state.test_projection().lock();
-        projection.realm_policy_bundle_cells.insert(
-            realm_id.to_string(),
-            CellState::Value(json!({
-                "policy_revision": 1,
-                "content_scheme": "mls_exporter_aead_v1",
-                "durability_policy": {
-                    "mode": "org_recovery_key",
-                    "recovery_recipients": [{
-                        "recipient_id": "rrk-1",
-                        "principal_id": "ak:did_core:webvh:z6mkfixturehr",
-                        "verification_method": "did:webvh:z6mkfixturehr:hr.example#rrk-1"
-                    }]
-                }
-            })),
-        );
-    }
-
-    let share = op(
-        realm_id.clone(),
-        "00000000d200",
-        arkret_wire::EventKind::RealmKeyShare,
-        json!({
-            "share_kind": "member_device",
-            "recipient_principal_id": "ak:did_core:web:stranger.example",
-            "recipient_device_id": "ak:device:01904100-0000-7000-8000-00000000d2d1",
-            "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d2d2",
-            "source_authorization_ref": "ak:event:ARj82v99exuqCarIqXhrBbP7-PnlaJkPBbkwanCUgGwc",
-            "sender_device_signature": {"signature_algorithm": "Ed25519", "kid": "k", "sig": "s"},
-            "key_scope": {
-                "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
-                "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-                "from_epoch": 1,
-                "to_epoch": 3
-            },
-            "ciphertext": "sealed",
-            "created_at": "2026-06-25T00:00:00.000Z"
-        }),
-    );
-
-    let result = validate_realm_key_share_policy(&state, &share).await;
-    assert_eq!(
-        result,
-        Err("history_sharing_policy_missing"),
-        "a non-recovery recipient with no history-sharing policy must fail closed"
     );
 }

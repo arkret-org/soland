@@ -22,13 +22,13 @@ pub(super) fn event_digest_suite(
     state: &AppState,
     kind: &str,
     realm_id: &str,
-    object: &serde_json::Map<String, Value>,
+    _object: &serde_json::Map<String, Value>,
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
 ) -> Result<String, EventValidationError> {
     let suite = if kind == arkret_wire::event_kind_str::REALM_CREATE {
-        // Genesis has no materialized Realm cell yet; omission means the
-        // protocol baseline suite and is itself covered by the signed Event.
-        realm_create_digest_algorithm(object).unwrap_or_else(|| "sha256".to_owned())
+        // The Realm-create bridge is always SHA-256. Its declared suite
+        // governs the remaining founding Events and the Genesis Seal.
+        "sha256".to_owned()
     } else {
         state
             .projections()
@@ -51,19 +51,6 @@ pub(super) fn event_digest_suite(
     arkret_canonical::digest_suite(&suite)
         .map(|_| suite.clone())
         .map_err(|_| unsupported_digest_algorithm_error(&suite))
-}
-
-fn realm_create_digest_algorithm(object: &serde_json::Map<String, Value>) -> Option<String> {
-    object
-        .get("payload")
-        .and_then(|payload| {
-            payload
-                .get("object")
-                .and_then(|object| object.get("digest_algorithm"))
-                .or_else(|| payload.get("digest_algorithm"))
-        })
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
 }
 
 pub(super) fn event_digest_for_suite(
@@ -215,37 +202,3 @@ pub(crate) use features_schema::{
     validate_event_schema_and_payload, validate_event_time_fields, validate_member_identity_proof,
 };
 pub(crate) use proofs::validate_event_proofs;
-
-#[cfg(test)]
-mod control_move_seal_basis_tests {
-    use super::*;
-
-    fn control_move_with_effects(kind: &str) -> serde_json::Map<String, Value> {
-        serde_json::json!({
-            "kind": kind,
-            "effects": [{"cell": "ak:cell:ak.component.test.envelope.v1:x", "op": {"type": "set", "value": 1}}],
-        })
-        .as_object()
-        .unwrap()
-        .clone()
-    }
-
-    #[test]
-    fn realm_history_sharing_policy_is_a_bootstrap_followup() {
-        // Regression: inkson's restricted-history bootstrap emits a
-        // ak.realm.history_sharing_policy Control Move in the same ordered
-        // batch (no Seal exists yet, so it carries no seal_basis). soland
-        // MUST accept it as a genesis followup alongside the other realm.*
-        // policy moves, else the whole create batch is `status=partial`.
-        assert!(is_realm_bootstrap_followup_kind(
-            arkret_wire::EventKind::RealmHistorySharingPolicy.as_str()
-        ));
-        let obj =
-            control_move_with_effects(arkret_wire::EventKind::RealmHistorySharingPolicy.as_str());
-        // As a recognized bootstrap followup it passes without seal_basis…
-        validate_control_move_seal_basis(&obj, true).unwrap();
-        // …but a non-bootstrap effects-bearing Control Move still requires it.
-        let err = validate_control_move_seal_basis(&obj, false).unwrap_err();
-        assert!(format!("{err:?}").contains("seal_basis.leaves"));
-    }
-}

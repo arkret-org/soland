@@ -81,11 +81,19 @@ impl ProjectionState {
             .and_then(Value::as_str)
             .unwrap_or("invite")
             .to_owned();
-        let history_visibility = object
-            .get("history_visibility")
+        let history_access = object
+            .get("history_access")
             .and_then(Value::as_str)
-            .unwrap_or("invited")
+            .unwrap_or("since_join")
             .to_owned();
+        if !matches!(
+            history_access.as_str(),
+            "since_join" | "all_history_for_current_members"
+        ) {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        }
         let profile_ref = object
             .get("profile_ref")
             .and_then(Value::as_str)
@@ -103,6 +111,33 @@ impl ProjectionState {
             .and_then(Value::as_str)
             .unwrap_or("mls_rfc9420")
             .to_owned();
+        let content_scheme = object
+            .get("content_scheme")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let durability_policy = object
+            .get("durability_policy")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let scheme_valid = match (encryption_profile.as_str(), content_scheme.as_deref()) {
+            ("none", None) => durability_policy.is_none(),
+            ("mls_rfc9420", Some("mls_rfc9420")) => durability_policy.is_none(),
+            ("mls_rfc9420", Some("mls_exporter_aead_v1")) => matches!(
+                durability_policy.as_deref(),
+                Some("none" | "organization_recovery_key")
+            ),
+            _ => false,
+        };
+        if !scheme_valid {
+            return ProjectionEffect::Rejected {
+                reason: "circle_content_scheme_invalid".to_owned(),
+            };
+        }
+        if content_scheme.as_deref() == Some("mls_rfc9420") && history_access != "since_join" {
+            return ProjectionEffect::Rejected {
+                reason: "history_access_requires_history_capable_scheme".to_owned(),
+            };
+        }
         if !encryption_profile_requires_content_encryption(Some(encryption_profile.as_str()))
             && self.realm_requires_content_encryption(&realm_id)
         {
@@ -140,10 +175,12 @@ impl ProjectionState {
             display,
             directory_visibility,
             join_rule,
-            history_visibility,
+            history_access: history_access.clone(),
             content_encryption_floor,
             metadata_encryption_floor,
             encryption_profile,
+            content_scheme,
+            durability_policy,
             mls_group_ref: None,
             state: CircleLifecycleState::Active,
             state_changed_at: None,
@@ -154,6 +191,12 @@ impl ProjectionState {
             members: BTreeSet::new(),
         };
         self.circles.insert(circle_id.to_owned(), projection);
+        if let Ok(cell) = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.circle.history_access.v1:{circle_id}"
+        )) {
+            self.cells
+                .insert(cell, CellState::Value(Value::String(history_access)));
+        }
         ProjectionEffect::CircleLifecycle {
             circle_id: circle_id.to_owned(),
             new_state: CircleLifecycleState::Active,
@@ -199,6 +242,11 @@ impl ProjectionState {
         // Validate the patched floors against the parent Realm floor and the
         // one-way ratchet (circle.md §7) before applying any mutation.
         if let Some(patch) = payload.get("patch").and_then(Value::as_object) {
+            if patch.contains_key("history_access") {
+                return ProjectionEffect::Rejected {
+                    reason: "history_access_requires_dedicated_transition".to_owned(),
+                };
+            }
             if let Some(new_floor) = patch
                 .get("content_encryption_floor")
                 .map(|v| v.as_str().map(ToOwned::to_owned))
@@ -253,9 +301,6 @@ impl ProjectionState {
             }
             if let Some(join_rule) = patch.get("join_rule").and_then(Value::as_str) {
                 circle.join_rule = join_rule.to_owned();
-            }
-            if let Some(history) = patch.get("history_visibility").and_then(Value::as_str) {
-                circle.history_visibility = history.to_owned();
             }
             if let Some(floor) = patch.get("content_encryption_floor") {
                 circle.content_encryption_floor = floor.as_str().map(ToOwned::to_owned);
@@ -614,11 +659,7 @@ impl ProjectionState {
         if membership.state != "join" {
             return false;
         }
-        circle_history_visibility_allows(
-            circle.history_visibility.as_str(),
-            membership,
-            event_created_at,
-        )
+        circle_history_access_allows(circle.history_access.as_str(), membership, event_created_at)
     }
 
     fn update_circle_membership_projection(
@@ -698,15 +739,14 @@ impl ProjectionState {
     }
 }
 
-fn circle_history_visibility_allows(
-    history_visibility: &str,
+fn circle_history_access_allows(
+    history_access: &str,
     membership: &CircleMembershipState,
     event_created_at: chrono::DateTime<chrono::Utc>,
 ) -> bool {
-    match history_visibility {
-        "world_readable" | "shared" => true,
-        "invited" => event_created_at >= membership.invited_at.unwrap_or(membership.joined_at),
-        "joined" => event_created_at >= membership.joined_at,
+    match history_access {
+        "all_history_for_current_members" => true,
+        "since_join" => event_created_at >= membership.joined_at,
         _ => false,
     }
 }

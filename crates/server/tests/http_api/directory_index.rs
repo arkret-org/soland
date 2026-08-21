@@ -611,7 +611,7 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
     let policy = serde_json::json!({
         "mode": "stripped_state",
         "audiences": ["link_token_holder"],
-        "fields": ["title", "summary", "join_rule", "history_visibility", "member_count_bucket"]
+        "fields": ["title", "summary", "join_rule", "history_access", "member_count_bucket"]
     });
     let policy_digest = arkret_canonical::canonical_sha256(&policy).unwrap();
     let mut meta = state
@@ -653,7 +653,7 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
     // discovery-directory.md §9 resolve_target reuses resolve_realm's flat
     // realm_preview; fields are top-level with no `preview` nesting.
     assert_eq!(resolved["realm_preview"]["title"], "Preview realm");
-    assert_eq!(resolved["realm_preview"]["history_visibility"], "joined");
+    assert_eq!(resolved["realm_preview"]["history_access"], "since_join");
     assert_eq!(resolved["object_preview"]["object_id"], strand_id);
     assert_eq!(resolved["object_preview"]["object_kind"], "strand");
     // discovery-directory.md §9: join_candidates[] is produced only for

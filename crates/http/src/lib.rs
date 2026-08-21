@@ -7,7 +7,6 @@ extern crate self as soland_http;
 pub mod account_erasure_worker;
 pub mod authz;
 pub mod canonical_body;
-pub mod compactor;
 pub mod config;
 pub mod content_encoding;
 mod control_proposal;
@@ -74,6 +73,19 @@ pub(crate) fn test_actor_id_str(full_id: &str) -> arkret_identifiers::DidCoreId 
     let full_id = arkret_identifiers::DidFullId::new(full_id.to_owned())
         .expect("test actor must be an explicit bare full_id");
     test_actor_id(&full_id)
+}
+
+#[cfg(test)]
+pub(crate) fn test_single_signer_notary(full_id: &str, seed: u8) -> arkret_wire::NotaryValue {
+    let verifying_key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]).verifying_key();
+    let descriptor = soland_services::identity::ed25519_notary_signer_descriptor(
+        test_actor_id_str(full_id),
+        arkret_wire::DidUrl::new(format!("{full_id}#notary-key"))
+            .expect("test notary verification method"),
+        verifying_key.as_bytes(),
+    )
+    .expect("test notary descriptor");
+    arkret_wire::NotaryValue::single_signer(descriptor)
 }
 
 #[cfg(test)]

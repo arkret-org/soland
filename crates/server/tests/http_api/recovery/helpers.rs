@@ -43,10 +43,12 @@ fn seed_local_notary_authority(state: &AppState, realm_id: &RealmId, seal: &arkr
             arkret_wire::LatticeOp {
                 op_type: arkret_wire::LatticeOpType::Set,
                 tag: None,
-                value: Some(serde_json::json!({
-                    "kind": "single_did",
-                    "actor_id": state.service_id(),
-                })),
+                value: Some(
+                    serde_json::to_value(arkret_wire::NotaryValue::single_signer(
+                        state.service_notary_signer_descriptor().unwrap(),
+                    ))
+                    .unwrap(),
+                ),
                 from: None,
                 to: None,
                 reason: None,
@@ -606,15 +608,20 @@ pub(crate) async fn post_recovery_policy(
             covered.extend(seal.delta);
             pending.extend(seal.predecessor_refs);
         }
-        let event_digest = Hash::new(event.event_digest().unwrap()).unwrap();
+        let event_digest = Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap();
         covered.insert(event_digest.clone());
         let control_root =
-            arkret_state::control_event_set_root(&covered).expect("recovery policy control root");
-        let notary_full_id = state.service_full_id();
-        let seal_signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
-            [0x62; 32],
-            notary_full_id.clone(),
-            arkret_wire::DidUrl::new(format!("{notary_full_id}#recovery-policy-notary")).unwrap(),
+            arkret_state::control_event_set_root(&covered, arkret_canonical::DigestSuite::Sha256)
+                .expect("recovery policy control root");
+        let seal_signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
+            state.notary_signing_key().to_bytes(),
+            state.service_full_id(),
+            state.service_verification_method("notary-key").unwrap(),
         );
         let successor = arkret_wire::Seal::sign_single_kind_with_control_root(
             realm,
@@ -628,10 +635,13 @@ pub(crate) async fn post_recovery_policy(
             ))
             .unwrap(),
             arkret_wire::SealKind::Normal,
+            arkret_canonical::DigestSuite::Sha256,
             &seal_signer,
         )
         .unwrap();
-        state.test_put_seal(&successor).unwrap();
+        state
+            .test_put_seal(&successor, arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
 
         let mut retry = TestClient::post("http://server/_arkret/root/identity/recovery-policy")
             .add_header("authorization", format!("Bearer {token}"), true)

@@ -2382,6 +2382,7 @@ mod invite_locator_security_tests {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
             kind: arkret_wire::EventKind::InviteCreate.as_str().to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
             prev_refs: Vec::new(),
             canonical_digest: format!("sha256:{}", "b".repeat(64)),
             canonical_bytes: Vec::new(),

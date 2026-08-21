@@ -38,17 +38,25 @@ async fn open_principal_resolution(
     let principal_server_id = DidCoreId::new(principal_server_id.into_inner())
         .map_err(|_| AppError::param_invalid("invalid principal_server_id"))?;
     let authority = PrincipalAuthorityKey::new(principal_id.clone(), principal_server_id);
+    let (evidence, _) = current_public_principal_resolution(state, &authority).await?;
+    json_ok(evidence)
+}
+
+pub(crate) async fn current_public_principal_resolution(
+    state: &AppState,
+    authority: &PrincipalAuthorityKey,
+) -> Result<(PublicPrincipalResolution, DidDocument), AppError> {
     let record = state
         .persistence()
-        .principal_resolution_by_authority_key(&authority)
+        .principal_resolution_by_authority_key(authority)
         .await
         .map_err(|error| AppError::internal(format!("principal resolution store failed: {error}")))?
         .ok_or_else(|| AppError::not_found("principal resolution not found"))?;
-    if record.authority_key != authority {
+    if &record.authority_key != authority {
         return Err(AppError::not_found("principal resolution not found"));
     }
 
-    let method_history_evidence =
+    let (method_history_evidence, normalized_did_document) =
         principal_method_history_evidence(state, &record.projection).await?;
     let issued_at = chrono::Utc::now();
     let method_history_evidence_digest = Hash::new(
@@ -64,7 +72,7 @@ async fn open_principal_resolution(
     let projection_attestation =
         arkret_signatures::service_resolution::sign_principal_resolution_projection_attestation(
             PrincipalResolutionProjectionAttestationCore {
-                principal_id: principal_id.clone(),
+                principal_id: authority.principal_id.clone(),
                 principal_server_id: authority.principal_server_id.clone(),
                 resolution_projection: record.projection.clone(),
                 method_history_evidence_digest,
@@ -79,8 +87,8 @@ async fn open_principal_resolution(
             AppError::internal(format!("principal resolution attestation failed: {error}"))
         })?;
     let evidence = PublicPrincipalResolution {
-        principal_id,
-        principal_server_id: authority.principal_server_id,
+        principal_id: authority.principal_id.clone(),
+        principal_server_id: authority.principal_server_id.clone(),
         resolution_projection: record.projection,
         method_history_evidence,
         projection_attestation,
@@ -90,13 +98,22 @@ async fn open_principal_resolution(
             "principal resolution attestation binding is invalid: {error}"
         ))
     })?;
-    json_ok(evidence)
+    let response_bytes = arkret_canonical::canonical_json_bytes(&evidence).map_err(|error| {
+        AppError::internal(format!("principal resolution encoding failed: {error}"))
+    })?;
+    if response_bytes.len() > 1_048_576 {
+        return Err(AppError::new(
+            ErrorCode::LimitExceeded,
+            "principal resolution evidence exceeds 1 MiB",
+        ));
+    }
+    Ok((evidence, normalized_did_document))
 }
 
 async fn principal_method_history_evidence(
     state: &AppState,
     projection: &PrincipalResolutionProjection,
-) -> Result<ResolutionMethodHistoryEvidence, AppError> {
+) -> Result<(ResolutionMethodHistoryEvidence, DidDocument), AppError> {
     let full_id = DidFullId::new(projection.full_id.to_string()).map_err(|error| {
         AppError::internal(format!("stored principal full_id is invalid: {error}"))
     })?;
@@ -137,22 +154,84 @@ async fn principal_method_history_evidence(
                     ))
                 })?;
             let document_digest = canonical_document_digest(&document)?;
+            let mut events = state
+                .dids()
+                .log_events(full_id.as_str())
+                .await
+                .map_err(|error| {
+                    AppError::new(
+                        ErrorCode::TemporarilyUnavailable,
+                        format!("durable principal WebVH history unavailable: {error}"),
+                    )
+                })?;
+            events.sort_by(|left, right| {
+                (left.seq, left.event_digest.as_str())
+                    .cmp(&(right.seq, right.event_digest.as_str()))
+            });
+            let terminal = events
+                .iter()
+                .position(|event| {
+                    event.event_digest == projection.method_history_head
+                        && event
+                            .operation
+                            .get("versionId")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(projection.version_id.as_str())
+                })
+                .ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::TemporarilyUnavailable,
+                        "durable principal WebVH history does not contain the projected head",
+                    )
+                })?;
+            let log_entries = events
+                .into_iter()
+                .take(terminal + 1)
+                .map(|event| event.operation)
+                .collect::<Vec<_>>();
+            for entry in &log_entries {
+                let parameters = entry.get("parameters").ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::TemporarilyUnavailable,
+                        "durable principal WebVH history has invalid parameters",
+                    )
+                })?;
+                if arkret_identity::parse_did_webvh_witness_policy(parameters)
+                    .map_err(|error| {
+                        AppError::new(
+                            ErrorCode::TemporarilyUnavailable,
+                            format!("principal WebVH witness policy is invalid: {error}"),
+                        )
+                    })?
+                    .is_some()
+                {
+                    return Err(AppError::new(
+                        ErrorCode::TemporarilyUnavailable,
+                        "principal WebVH witness records are unavailable",
+                    ));
+                }
+            }
             let witness_proofs_digest = canonical_digest(&Vec::<serde_json::Value>::new())?;
-            Ok(ResolutionMethodHistoryEvidence::WebvhLog {
-                adapter_version: "did:webvh:1.0".to_owned(),
-                boundary,
-                evidence: ResolutionDidBindingEvidenceReceipt {
-                    kind: ResolutionDidBindingEvidenceKind::AkDidBindingEvidenceV1,
-                    method: "webvh".to_owned(),
-                    document_digest,
-                    method_proofs: vec![ResolutionDidBindingMethodProof {
-                        kind: ResolutionDidBindingMethodProofKind::WebvhLog,
-                        history_head: projection.method_history_head.clone(),
-                        witnesses: Vec::new(),
-                        witness_proofs_digest,
-                    }],
+            Ok((
+                ResolutionMethodHistoryEvidence::WebvhLog {
+                    adapter_version: "did:webvh:1.0".to_owned(),
+                    boundary,
+                    evidence: ResolutionDidBindingEvidenceReceipt {
+                        kind: ResolutionDidBindingEvidenceKind::AkDidBindingEvidenceV1,
+                        method: "webvh".to_owned(),
+                        document_digest,
+                        method_proofs: vec![ResolutionDidBindingMethodProof {
+                            kind: ResolutionDidBindingMethodProofKind::WebvhLog,
+                            history_head: projection.method_history_head.clone(),
+                            witnesses: Vec::new(),
+                            witness_proofs_digest,
+                        }],
+                    },
+                    log_entries,
+                    witness_records: Vec::new(),
                 },
-            })
+                document,
+            ))
         }
         "web" | "key" => {
             let resolved = state.dids().resolve_did(&full_id).await.map_err(|error| {
@@ -179,18 +258,24 @@ async fn principal_method_history_evidence(
             };
             if full_id.method() == "web" {
                 validate_did_web_coordinates(projection, &evidence.document_digest)?;
-                Ok(ResolutionMethodHistoryEvidence::DidWebDocument {
-                    adapter_version: "did:web:1".to_owned(),
-                    boundary,
-                    evidence,
-                })
+                Ok((
+                    ResolutionMethodHistoryEvidence::DidWebDocument {
+                        adapter_version: "did:web:1".to_owned(),
+                        boundary,
+                        evidence,
+                    },
+                    document,
+                ))
             } else {
                 validate_did_key_coordinates(projection, &projection.full_id)?;
-                Ok(ResolutionMethodHistoryEvidence::DidKeyExpansion {
-                    adapter_version: "did:key:1".to_owned(),
-                    boundary,
-                    evidence,
-                })
+                Ok((
+                    ResolutionMethodHistoryEvidence::DidKeyExpansion {
+                        adapter_version: "did:key:1".to_owned(),
+                        boundary,
+                        evidence,
+                    },
+                    document,
+                ))
             }
         }
         method => Err(AppError::new(

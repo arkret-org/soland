@@ -24,13 +24,13 @@ use super::{
     DeviceMessageBatchItemRecord, DeviceMessageBatchRecord, DeviceMessageRecord,
     DeviceMessageStore, DeviceMessageTargetSnapshotGuard, DevicePairingAuthorizationCommit,
     DevicePairingRecord, DevicePairingStore, DeviceRevocationGateSelector, EventCommitRequest,
-    EventCommitUnitOfWork, EventStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
-    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
-    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
-    FederationOutboxTransition, HandleClaimEvidenceRecord, IdempotencyRecord, IdempotencyStore,
-    InviteReceivePolicyStore, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
-    MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord, MessageStore,
-    MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsKeyPackageClaim,
+    EventCommitUnitOfWork, EventStore, ExactWriteOutcome, FederationOutboxClaim,
+    FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
+    FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
+    FederationOutboxTransition, GovernanceDependencyStore, HandleClaimEvidenceRecord,
+    IdempotencyRecord, IdempotencyStore, InviteReceivePolicyStore, MemberIdentityEventRecord,
+    MemberIdentityReplacementEdge, MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord,
+    MessageStore, MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsKeyPackageClaim,
     MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, OneTimeKeyStore,
     OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
     OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
@@ -40,6 +40,208 @@ use super::{
     ServiceRouteHandoverNoticeCommit, ServiceRouteHandoverNoticeRecord, ServiceRouteHandoverPlan,
     ServiceRouteHandoverPlanState, ServiceRouteHandoverPlanStore, ServiceRouteHandoverPlanWrite,
 };
+
+pub fn minimal_history_signer_evidence(
+    namespace: &str,
+) -> arkret_models_collaboration::governance_dependencies::GovernanceDependency {
+    use arkret_models_collaboration::governance_dependencies::{
+        GovernanceDependency, GovernanceDependencySelector,
+    };
+    use arkret_models_collaboration::history_key::{
+        AuthorizationIncarnation, HistoryEffectiveScope, MinimalMetadataMlsLeafSignerEvidence,
+    };
+    use base64::Engine as _;
+
+    let effective_scope = HistoryEffectiveScope::Realm {
+        realm_id: RealmId::new("ak:realm:AfjSiYTXJZS-0ifVfy1f_uzsmJIBjDyN11_-dxnne50e")
+            .expect("fixture Realm ID"),
+    };
+    let response_key = arkret_canonical::sha256_bytes(namespace.as_bytes());
+    let leaf_node = format!("leaf-node:{namespace}").into_bytes();
+    let b64 = |bytes: &[u8]| {
+        arkret_wire::Base64UrlString::new(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
+        )
+        .expect("fixture base64url")
+    };
+    let digest = |bytes: &[u8]| {
+        Hash::new(arkret_canonical::sha256_digest(bytes)).expect("fixture SHA-256 digest")
+    };
+    let pairwise_actor_id =
+        DidCoreId::new("ak:did_core:key:z6MkfixtureService").expect("fixture actor");
+    let verification_method =
+        DidUrl::new("did:key:z6MkfixtureService#history-response").expect("fixture method");
+    let mut identity_link =
+        arkret_models_collaboration::objects::profiles::IdentityLink {
+            schema: arkret_wire::SchemaId::IDENTITY_LINK_V1.to_owned(),
+            status: arkret_models_collaboration::objects::profiles::IdentityLinkStatus::Active,
+            pairwise_actor_id: pairwise_actor_id.clone(),
+            principal_id: DidCoreId::new("ak:did_core:web:alice.example")
+                .expect("fixture principal"),
+            device_id: arkret_wire::DeviceId::new(
+                "ak:device:01904100-0000-7000-8000-000000000001",
+            )
+            .expect("fixture device"),
+            realm_id: match &effective_scope {
+                HistoryEffectiveScope::Realm { realm_id }
+                | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id.clone(),
+            },
+            trust_domain: arkret_wire::TrustDomainId::new("ak:trust_domain:example.test")
+                .expect("fixture trust domain"),
+            strand_id: None,
+            track: None,
+            mls_group_id: Some(
+                effective_scope
+                    .canonical_mls_group_id()
+                    .expect("fixture MLS group"),
+            ),
+            mls_leaf_index: 1,
+            mls_epoch: 7,
+            response_signing_verification_method: verification_method.clone(),
+            response_signing_algorithm: arkret_models_collaboration::objects::profiles::IdentityLinkResponseSigningAlgorithm::Ed25519,
+            response_signing_public_key_b64u: b64(&response_key),
+            response_signing_public_key_digest: digest(&response_key),
+            effective_at: Utc::now(),
+            expires_at: None,
+            disclosure_policy_id: None,
+            proof: arkret_models_collaboration::objects::profiles::IdentityLinkProof {
+                verification_method: DidUrl::new("did:web:alice.example#identity-link")
+                    .expect("fixture IdentityLink proof method"),
+                signature_algorithm: "Ed25519".to_owned(),
+                payload_digest: digest(b"placeholder IdentityLink payload"),
+                signature: "fixture.signature".to_owned(),
+            },
+        };
+    identity_link.proof.payload_digest = identity_link
+        .canonical_payload_digest()
+        .expect("fixture IdentityLink payload digest");
+    identity_link
+        .validate_minimal()
+        .expect("valid fixture IdentityLink");
+    let identity_link = arkret_canonical::canonical_json_bytes(&identity_link)
+        .expect("fixture IdentityLink canonical bytes");
+    let identity_link_signer_evidence_digest = digest(b"fixture IdentityLink signer evidence");
+    let identity_link_signer_evidence_ref = arkret_wire::SignerEvidenceRef::new(format!(
+        "ak:signer_evidence:{}",
+        identity_link_signer_evidence_digest.as_ref()
+    ))
+    .expect("fixture IdentityLink signer evidence ref");
+    let evidence = MinimalMetadataMlsLeafSignerEvidence {
+        mls_group_id: effective_scope
+            .canonical_mls_group_id()
+            .expect("fixture MLS group"),
+        effective_scope,
+        epoch: 7,
+        leaf_index: 1,
+        pairwise_actor_id: pairwise_actor_id.clone(),
+        source_actor_id: pairwise_actor_id,
+        verification_method,
+        response_signing_public_key_b64u: b64(&response_key),
+        response_signing_public_key_digest: digest(&response_key),
+        identity_link_canonical_bytes_b64u: b64(&identity_link),
+        identity_link_digest: digest(&identity_link),
+        identity_link_signer_evidence_ref,
+        identity_link_signer_evidence_digest,
+        leaf_node_canonical_bytes_b64u: b64(&leaf_node),
+        leaf_node_digest: digest(&leaf_node),
+        winning_group_state_transition_ref: arkret_wire::EventId::new(
+            "ak:event:ARrXzX07X_prHPMAeOGPMrI4_sUFneJW2aYSvHN_-9aQ",
+        )
+        .expect("fixture transition Event"),
+        winning_group_state_event_digest: digest(b"fixture group-state event"),
+        winning_mls_transition_digest: digest(b"fixture MLS transition"),
+        target_basis: arkret_wire::SealBasis {
+            leaves: vec![arkret_wire::SealId::new(
+                "ak:seal:sha256:272847e37a778e5a559a9d39a039350d544051b28227f016a5f4248ffec154a6",
+            )
+            .expect("fixture Seal")],
+        },
+        authorization_incarnation: AuthorizationIncarnation::Realm {
+            realm_membership_incarnation_ref: arkret_wire::EventId::new(
+                "ak:event:AWYr1ucW0vOccjnC8XMFGQK8PjKzaha_YpYb8B0uDY_y",
+            )
+            .expect("fixture incarnation Event"),
+        },
+    };
+    evidence.validate().expect("valid minimal signer evidence");
+    let content_digest = evidence
+        .canonical_sha256_digest()
+        .expect("fixture evidence digest");
+    GovernanceDependency::MinimalMetadataMlsLeafSignerEvidence {
+        selector: GovernanceDependencySelector::MinimalMetadataMlsLeafSignerEvidence {
+            content_digest,
+        },
+        minimal_metadata_mls_leaf_signer_evidence: evidence,
+    }
+}
+
+pub async fn assert_governance_unscoped_signer_evidence_contract(
+    store: &dyn GovernanceDependencyStore,
+    namespace: &str,
+) {
+    let item = minimal_history_signer_evidence(namespace);
+    let selector = item.selector().clone();
+    assert_eq!(
+        store
+            .put_unscoped_signer_evidence_exact(item.clone())
+            .await
+            .expect("insert unscoped signer evidence"),
+        ExactWriteOutcome::Inserted
+    );
+    assert_eq!(
+        store
+            .put_unscoped_signer_evidence_exact(item.clone())
+            .await
+            .expect("exact retry unscoped signer evidence"),
+        ExactWriteOutcome::ExactReplay
+    );
+    assert_eq!(
+        store
+            .get_unscoped_signer_evidence(&selector)
+            .await
+            .expect("read unscoped signer evidence"),
+        Some(item.clone())
+    );
+    let realm_id = RealmId::new("ak:realm:AfjSiYTXJZS-0ifVfy1f_uzsmJIBjDyN11_-dxnne50e")
+        .expect("fixture Realm ID");
+    assert_eq!(
+        store
+            .put_realm_object_exact(&realm_id, item.clone())
+            .await
+            .expect("link signer evidence to Realm"),
+        ExactWriteOutcome::Inserted
+    );
+    assert_eq!(
+        store
+            .put_realm_object_exact(&realm_id, item.clone())
+            .await
+            .expect("exact retry Realm signer evidence"),
+        ExactWriteOutcome::ExactReplay
+    );
+    assert_eq!(
+        store
+            .get(&realm_id, &selector)
+            .await
+            .expect("read Realm signer evidence"),
+        Some(item.clone())
+    );
+    let mut changed = item;
+    let arkret_models_collaboration::governance_dependencies::GovernanceDependency::MinimalMetadataMlsLeafSignerEvidence {
+        minimal_metadata_mls_leaf_signer_evidence,
+        ..
+    } = &mut changed
+    else {
+        unreachable!("fixture branch")
+    };
+    minimal_metadata_mls_leaf_signer_evidence.epoch += 1;
+    assert!(
+        store
+            .put_unscoped_signer_evidence_exact(changed)
+            .await
+            .is_err(),
+        "same selector digest with different bytes must fail closed"
+    );
+}
 
 pub async fn assert_device_message_snapshot_guard_contract(
     inventory: &dyn DeviceInventoryStore,
@@ -953,7 +1155,9 @@ fn canonical_wire_event_record(
         now,
     )
     .expect("contract wire event");
-    let canonical_digest = event.event_digest().expect("contract event digest");
+    let canonical_digest = event
+        .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .expect("contract event digest");
     let envelope = serde_json::to_value(&event).expect("contract wire event encodes");
     let canonical_bytes = arkret_canonical::canonical_json_bytes(
         &event.digest_payload().expect("contract digest payload"),
@@ -966,6 +1170,7 @@ fn canonical_wire_event_record(
         realm_id: Some(realm_id.to_owned()),
         kind: "ak.message.create".to_owned(),
         schema_id: "arkret://events/message/create/v1".to_owned(),
+        digest_suite: arkret_canonical::DigestSuite::Sha256,
         canonical_digest,
         canonical_bytes,
         envelope,
@@ -3207,9 +3412,7 @@ pub async fn assert_realm_meta_store_contract(store: &dyn RealmMetaStore, namesp
         owner: format!("did:web:{namespace}-owner.example"),
         deleted: false,
         discoverability: "public".to_owned(),
-        history_visibility: "shared".to_owned(),
-        history_sharing_policy: Some(serde_json::json!({"rule": "members"})),
-        history_sharing_policy_digest: Some(format!("sha256:{}", "1".repeat(64))),
+        history_access: "all_history_for_current_members".to_owned(),
         preview_policy: Some(serde_json::json!({"enabled": true})),
         preview_policy_digest: Some(format!("sha256:{}", "2".repeat(64))),
         asset_privacy_policy: Some(serde_json::json!({"presign": "members"})),

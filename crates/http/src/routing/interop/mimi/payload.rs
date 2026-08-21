@@ -361,7 +361,7 @@ pub(super) fn mimi_provider_directory_value(
             .collect(),
             room_policy_components: [
                 "asset_privacy",
-                "history_visibility",
+                "history_access",
                 "join_rule",
                 "membership",
                 "message_expiration",

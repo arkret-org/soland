@@ -656,6 +656,7 @@ fn application_multisig_pending(
     crate::governance::MultisigPendingRecord {
         seal_id: row.seal_id,
         realm_id: row.realm_id,
+        digest_suite: row.digest_suite,
         threshold_k: row.threshold_k,
         threshold_n: row.threshold_n,
         members: row.members,
@@ -675,6 +676,7 @@ fn persistence_multisig_pending(
     soland_storage::MultisigPendingRecord {
         seal_id: row.seal_id,
         realm_id: row.realm_id,
+        digest_suite: row.digest_suite,
         threshold_k: row.threshold_k,
         threshold_n: row.threshold_n,
         members: row.members,

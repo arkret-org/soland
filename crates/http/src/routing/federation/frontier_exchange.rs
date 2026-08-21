@@ -207,7 +207,7 @@ impl FrontierExchangeWorker {
     }
 }
 
-fn signed_query_headers(
+pub(crate) fn signed_query_headers(
     state: &AppState,
     peer_did: &str,
     peer_trust_domain: &str,

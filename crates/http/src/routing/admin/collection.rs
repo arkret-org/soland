@@ -330,9 +330,7 @@ async fn admin_realm_item_value(
         member_count: realm.members.len(),
         members: realm.members.iter().map(ToString::to_string).collect(),
         created_by: realm_meta.as_ref().map(|meta| meta.owner.clone()),
-        history_visibility: realm_meta
-            .as_ref()
-            .map(|meta| meta.history_visibility.clone()),
+        history_access: realm_meta.as_ref().map(|meta| meta.history_access.clone()),
         is_encrypted: realm_meta
             .as_ref()
             .and_then(|meta| meta.encryption_profile.as_deref())

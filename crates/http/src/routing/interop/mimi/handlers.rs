@@ -1392,7 +1392,10 @@ mod consent_proof_tests {
             realm_id: Some(event.realm_id.to_string()),
             kind: event.kind.to_string(),
             schema_id: "ak.schema.event.v1".to_owned(),
-            canonical_digest: event.event_digest().unwrap(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
+            canonical_digest: event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
             canonical_bytes: arkret_canonical::canonical_json_bytes(
                 &event.digest_payload().unwrap(),
             )
@@ -1562,7 +1565,7 @@ mod consent_proof_tests {
         request
             .consent_event
             .event
-            .refresh_content_bound_identity()
+            .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
             .unwrap();
 
         let error = verify_mimi_consent_actor_proof(&state, &request)

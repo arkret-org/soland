@@ -200,6 +200,16 @@ fn resign_federation_event_as(event: Value, actor_full_id: &str) -> Value {
             )
         ))
         .expect("fixture producer signing key is a did:key"),
+        signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
+            "ak:signer_evidence:sha256:{}",
+            "11".repeat(32)
+        ))
+        .expect("fixture signer evidence ref"),
+        signer_resolution_evidence_digest: arkret_wire::Hash::new(format!(
+            "sha256:{}",
+            "11".repeat(32)
+        ))
+        .expect("fixture signer evidence digest"),
         accepted_at: event.created_at,
         jws: String::new(),
     };
@@ -221,7 +231,7 @@ fn resign_federation_event_as(event: Value, actor_full_id: &str) -> Value {
     .expect("fixture admission signature verifies against the installed peer key");
     event.proofs.push(admission.into());
     event
-        .validate_principal_server_admission_binding()
+        .validate_principal_server_admission_binding(arkret_canonical::DigestSuite::Sha256)
         .expect("fixture admission proof binds the accepted Event");
     serde_json::to_value(event).expect("federation fixture serializes")
 }
@@ -814,9 +824,12 @@ async fn self_events_reject_federation_wire() {
 fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmission {
     let event: arkret_wire::Event =
         serde_json::from_value(event.clone()).expect("federation fixture is a typed Event");
-    let event_digest =
-        arkret_identifiers::Hash::new(event.event_digest().expect("fixture Event digest"))
-            .expect("fixture Event digest is a Hash");
+    let event_digest = arkret_identifiers::Hash::new(
+        event
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .expect("fixture Event digest"),
+    )
+    .expect("fixture Event digest is a Hash");
     // The lease window has to contain the moment the origin ingress signed its
     // receipt, so both are anchored on one instant here.
     let issued_at = chrono::DateTime::from_timestamp_millis(Utc::now().timestamp_millis())
@@ -1079,9 +1092,7 @@ async fn seed_peer_read_authorization(state: &AppState, source_service_id: &str,
             owner: "did:web:alice.example".to_owned(),
             deleted: false,
             discoverability: "public".to_owned(),
-            history_visibility: "shared".to_owned(),
-            history_sharing_policy: None,
-            history_sharing_policy_digest: None,
+            history_access: "all_history_for_current_members".to_owned(),
             preview_policy: None,
             preview_policy_digest: None,
             asset_privacy_policy: None,
@@ -1279,10 +1290,12 @@ fn install_test_circle(state: &AppState, circle_id: &str, members: &[&str]) {
             display: serde_json::json!({"short_name":"Need","color_token":"slate","symbol":{"glyph":"ring"}}),
             directory_visibility: "members".to_owned(),
             join_rule: "invite".to_owned(),
-            history_visibility: "joined".to_owned(),
+            history_access: "since_join".to_owned(),
             content_encryption_floor: None,
             metadata_encryption_floor: None,
             encryption_profile: "none".to_owned(),
+            content_scheme: None,
+            durability_policy: None,
             mls_group_ref: None,
             state: CircleLifecycleState::Active,
             state_changed_at: None,

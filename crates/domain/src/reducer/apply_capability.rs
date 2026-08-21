@@ -3521,12 +3521,11 @@ mod realm_owner_authority_tests {
     fn owner_signs_the_core_actions_its_grant_authority_set_names() {
         let mut state = realm(Some(OWNER), None);
         // An Event-plane action, a non-Event surface, a key-distribution
-        // action, and the aggregate itself: all four are owner-grantable.
+        // action and the aggregate itself are owner-grantable.
         for (slot, action) in [
             ("a1", "ak.strand.create"),
             ("a2", "ak.strand.admin"),
             ("a3", "ak.audit.export"),
-            ("a4", "ak.realm_key.share"),
         ] {
             let id = grant_id(slot);
             let effect = issue(

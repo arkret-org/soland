@@ -107,7 +107,6 @@ fn install_event_read_query_bindings(doc: &mut Value) {
         "/_arkret/self/events/frontier",
         "/_arkret/self/events",
         "/_arkret/self/events/resolve",
-        "/_arkret/self/events/mls-governance-proof",
         "/_arkret/peer/events/describe",
         "/_arkret/peer/events/frontier",
         "/_arkret/peer/events",
@@ -120,6 +119,13 @@ fn install_event_read_query_bindings(doc: &mut Value) {
         );
         doc["paths"][path]["query"] = operation;
     }
+    let proof_path = "/_arkret/self/seals/mls-governance-proof";
+    let proof_operation = canonical["paths"][proof_path]["post"].clone();
+    assert!(
+        proof_operation.is_object(),
+        "canonical OpenAPI missing POST {proof_path}"
+    );
+    doc["paths"][proof_path]["post"] = proof_operation;
 }
 
 type RegisteredRoutes = BTreeMap<String, BTreeSet<String>>;

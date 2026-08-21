@@ -166,11 +166,10 @@ pub fn app_state_with_identity(
         cell_store: cell_store.clone(),
         cell_registry: cell_registry.clone(),
     });
-    let service_id = service_identity
+    let serving_identity = service_identity
         .identity()
-        .expect("fixture has a serving identity")
-        .service_id
-        .to_string();
+        .expect("fixture has a serving identity");
+    let service_id = serving_identity.service_id.to_string();
     let service_resolution_commitment = {
         let identity = service_identity
             .identity()
@@ -190,7 +189,12 @@ pub fn app_state_with_identity(
         &service_id,
     );
     let projection = Box::leak(Box::new(projections.test_state().clone()));
-    let realm_directory = soland_http::state::build_realm_directory(&config);
+    let realm_directory = soland_http::state::build_realm_directory(
+        &config,
+        &serving_identity.full_id,
+        &serving_identity.service_id,
+        resolved_signing_seed,
+    );
     let realms = Box::leak(Box::new(realm_directory.test_index().clone()));
     let state = AppState::from_runtime(
         config,
@@ -225,7 +229,11 @@ pub trait AppStateTestExt {
     fn test_persistence(&self) -> Arc<dyn PersistenceStore>;
     fn test_projection(&self) -> &'static Arc<Mutex<ProjectionSnapshot>>;
     fn test_realms(&self) -> &'static Arc<Mutex<RealmDirectoryIndex>>;
-    fn test_put_seal(&self, seal: &Seal) -> StoreResult<()>;
+    fn test_put_seal(
+        &self,
+        seal: &Seal,
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> StoreResult<()>;
     fn test_seal(&self, seal_id: &SealId) -> StoreResult<Option<Seal>>;
     fn test_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>>;
 
@@ -283,13 +291,17 @@ impl AppStateTestExt for AppState {
             .expect("test Realm directory is unavailable for this AppState")
     }
 
-    fn test_put_seal(&self, seal: &Seal) -> StoreResult<()> {
+    fn test_put_seal(
+        &self,
+        seal: &Seal,
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> StoreResult<()> {
         state_test_registry()
             .lock()
             .get(&app_state_key(self))
             .and_then(|resources| resources.seal_store.clone())
             .expect("test Seal store is unavailable for this AppState")
-            .put(seal)
+            .put(seal, digest_suite)
     }
 
     fn test_seal(&self, seal_id: &SealId) -> StoreResult<Option<Seal>> {
@@ -591,6 +603,7 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
     fn commit_if_frontier(
         &self,
         seal: &Seal,
+        digest_suite: arkret_canonical::DigestSuite,
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
@@ -615,7 +628,7 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
             covered,
             new_ops,
         )?;
-        let state_root = compute_state_root(&post_state)
+        let state_root = compute_state_root(&post_state, digest_suite)
             .map_err(|error| StoreError::Backend(format!("state_root recompute: {error}")))?;
         if state_root != seal.state_root {
             return Err(StoreError::Conflict(format!(
@@ -627,7 +640,7 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
             .append_sealed_effects(&seal.realm_id, &seal.id, new_ops)?;
         match self
             .seal_store
-            .put_if_frontier(seal, expected_store_frontier)
+            .put_if_frontier(seal, expected_store_frontier, digest_suite)
         {
             Ok(true) => Ok(true),
             Ok(false) => {
@@ -754,7 +767,9 @@ pub async fn project_authorized_principal_device(
     )
     .unwrap();
     authorize.prev_refs = vec![genesis.event_id.clone()];
-    authorize.refresh_content_bound_identity().unwrap();
+    authorize
+        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
     let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
         arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
             "ak:operation:",
@@ -763,6 +778,7 @@ pub async fn project_authorized_principal_device(
         arkret_wire::OperationKind::Create,
         None,
         &authorize,
+        arkret_canonical::DigestSuite::Sha256,
     )
     .unwrap();
     let authorize_event_id = authorize.event_id.to_string();

@@ -44,7 +44,10 @@ pub fn canonical_event_record(
         realm_id: realm_id.map(str::to_owned),
         kind: event.kind.to_string(),
         schema_id: "ak.schema.event.v1".to_owned(),
-        canonical_digest: event.event_digest().expect("fixture Event digest"),
+        digest_suite: arkret_canonical::DigestSuite::Sha256,
+        canonical_digest: event
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .expect("fixture Event digest"),
         canonical_bytes: arkret_canonical::canonical_json_bytes(
             &event
                 .digest_payload()
@@ -79,10 +82,6 @@ pub fn complete_realm_bootstrap_unit(
         (
             arkret_wire::EventKind::RealmJoinRule,
             serde_json::json!({"value": "invite"}),
-        ),
-        (
-            arkret_wire::EventKind::RealmHistoryVisibility,
-            serde_json::json!({"value": "joined"}),
         ),
         (
             arkret_wire::EventKind::RealmDiscovery,

@@ -619,7 +619,7 @@ pub struct CircleProjection {
     pub display: Value,
     pub directory_visibility: String,
     pub join_rule: String,
-    pub history_visibility: String,
+    pub history_access: String,
     /// Optional Circle-local content-encryption floor; `None` inherits the
     /// parent Realm `content_encryption_floor`. effective = max(parent Realm,
     /// Circle). Reducer enforces "MAY only tighten" + one-way ratchet, and
@@ -630,6 +630,8 @@ pub struct CircleProjection {
     /// projected Realm floor.
     pub metadata_encryption_floor: Option<String>,
     pub encryption_profile: String,
+    pub content_scheme: Option<String>,
+    pub durability_policy: Option<String>,
     /// Reducer-derived MLS group binding. Populated when the independent
     /// Circle MLS group is set up; the wire actor MUST NOT submit this.
     pub mls_group_ref: Option<String>,
@@ -1025,8 +1027,8 @@ pub struct SolandMembershipState {
     /// frontier.
     pub delivery_binding_frontier: Option<String>,
     /// First effective invite frontier retained after a later join so
-    /// `history_visibility=invited` can start at the invite boundary while
-    /// `history_visibility=joined` starts at the join boundary.
+    /// `history_access=since_join` can start at the invite boundary while
+    /// `history_access=since_join` starts at the join boundary.
     pub invited_at: Option<chrono::DateTime<chrono::Utc>>,
     pub joined_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,

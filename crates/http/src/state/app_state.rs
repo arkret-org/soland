@@ -256,9 +256,6 @@ pub const DEVELOPMENT_DEMO_SUBJECT_DID: &str = "did:web:alice.example";
 const DEVELOPMENT_DEMO_TRUST_DOMAIN: &str = "ak:trust_domain:soland.test";
 const DEVELOPMENT_DEMO_GENESIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
 const DEVELOPMENT_DEMO_GENESIS_CREATED_AT: &str = "2026-01-01T00:00:00Z";
-const DEVELOPMENT_DEMO_NOTARY_RECOVERY_MEMBER: &str = "ak:did_core:web:recovery.notary.example";
-const DEVELOPMENT_DEMO_NOTARY_RECOVERY_ORGANIZATION: &str =
-    "ak:did_core:web:recovery.organization.example";
 
 fn development_service_core_id() -> DidCoreId {
     DidCoreId::from(
@@ -270,21 +267,16 @@ fn development_service_core_id() -> DidCoreId {
 }
 
 /// Canonical `ak.realm.create` payload for a deterministic Realm genesis.
-///
-/// `realm_genesis.notary` requires non-empty `recovery_members` and
-/// `recovery_controller_organizations`, and the reducer requires at least one
-/// recovery controller organization to differ from `controller_organization` —
-/// a single-organization recovery setup is exactly what that rule rejects.
 #[must_use]
 pub fn realm_genesis_payload(
-    subject: &str,
-    notary_actor_id: &DidCoreId,
+    _subject: &str,
+    notary_signer: &arkret_wire::NotarySignerDescriptor,
     trust_domain: &str,
 ) -> Value {
-    let controller_organization = arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(subject.to_owned()).expect("Realm genesis controller DID"),
-    )
-    .expect("Realm genesis controller core id");
+    let notary = arkret_wire::NotaryValue::single_signer(notary_signer.clone());
+    notary
+        .validate()
+        .expect("Realm genesis notary descriptor must be canonical");
     serde_json::json!({
         "object": {
             "schema": "ak.schema.realm_genesis.v1",
@@ -295,20 +287,35 @@ pub fn realm_genesis_payload(
             "schema_refs": ["ak.schema.realm.v1"],
             "encryption_profile": "none",
             "security_class": "standard",
-            "notary_profile": "single_did",
             "digest_algorithm": "sha256",
             "capability_action_registry_digest":
                 arkret_policy::current_capability_action_registry_digest()
                     .expect("capability action registry digest"),
-            "notary": {
-                "kind": "single_did",
-                "actor_id": notary_actor_id,
-                "recovery_members": [DEVELOPMENT_DEMO_NOTARY_RECOVERY_MEMBER],
-                "controller_organization": controller_organization,
-                "recovery_controller_organizations": [DEVELOPMENT_DEMO_NOTARY_RECOVERY_ORGANIZATION]
-            }
+            "notary": notary
         }
     })
+}
+
+fn demo_notary_signer_descriptor(
+    service_full_id: &DidFullId,
+    service_id: &DidCoreId,
+    signing_seed: [u8; 32],
+) -> arkret_wire::NotarySignerDescriptor {
+    let verifying_key = ed25519_dalek::SigningKey::from_bytes(&signing_seed).verifying_key();
+    soland_services::identity::ed25519_notary_signer_descriptor(
+        service_id.clone(),
+        arkret_wire::DidUrl::new(format!("{service_full_id}#notary-key"))
+            .expect("development notary verification method"),
+        verifying_key.as_bytes(),
+    )
+    .expect("development notary signer descriptor")
+}
+
+fn development_default_notary_signing_seed() -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"soland:test-fixture-notary:");
+    hasher.update(development_service_core_id().as_str().as_bytes());
+    hasher.finalize().into()
 }
 
 /// The development demo Realm's canonical genesis Event.
@@ -318,14 +325,26 @@ pub fn realm_genesis_payload(
 /// `arkret-spec` artifacts.
 #[must_use]
 pub fn development_demo_genesis_event() -> arkret_wire::AuthoredEvent {
+    development_demo_genesis_event_with_notary(
+        &DidFullId::new(DEVELOPMENT_SERVICE_DID.to_owned()).expect("development service DID"),
+        &development_service_core_id(),
+        development_default_notary_signing_seed(),
+    )
+}
+
+fn development_demo_genesis_event_with_notary(
+    service_full_id: &DidFullId,
+    service_id: &DidCoreId,
+    signing_seed: [u8; 32],
+) -> arkret_wire::AuthoredEvent {
     let created_at = chrono::DateTime::parse_from_rfc3339(DEVELOPMENT_DEMO_GENESIS_CREATED_AT)
         .expect("development demo genesis timestamp")
         .with_timezone(&chrono::Utc);
-    let service_id = development_service_core_id();
+    let notary_signer = demo_notary_signer_descriptor(service_full_id, service_id, signing_seed);
     let payload: arkret_models_collaboration::events_payloads::RealmCreatePayload =
         serde_json::from_value(realm_genesis_payload(
             DEVELOPMENT_DEMO_SUBJECT_DID,
-            &service_id,
+            &notary_signer,
             DEVELOPMENT_DEMO_TRUST_DOMAIN,
         ))
         .expect("development demo genesis payload");
@@ -338,15 +357,16 @@ pub fn development_demo_genesis_event() -> arkret_wire::AuthoredEvent {
             )
             .expect("development demo subject projection"),
         ),
-        service_id,
+        service_id.clone(),
         payload,
     )
     .expect("development demo genesis draft")
-    .author(
+    .author_with_digest_suite(
         0,
         arkret_identifiers::Hlc::new(DEVELOPMENT_DEMO_GENESIS_HLC)
             .expect("development demo genesis HLC"),
         created_at,
+        arkret_canonical::DigestSuite::Sha256,
     )
     .expect("development demo genesis Event")
 }
@@ -363,11 +383,23 @@ pub fn development_demo_realm_id() -> RealmId {
     RealmId::from_event_id(development_demo_genesis_event().event_id())
 }
 
-pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
+pub fn build_realm_directory(
+    config: &AppConfig,
+    service_full_id: &DidFullId,
+    service_id: &DidCoreId,
+    resolved_signing_seed: [u8; 32],
+) -> RealmDirectoryService {
     let mut realms = RealmDirectoryIndex::new();
     if config.seed_demo_data {
         let mut demo = RealmDirectoryEntry::new(
-            development_demo_realm_id(),
+            RealmId::from_event_id(
+                development_demo_genesis_event_with_notary(
+                    service_full_id,
+                    service_id,
+                    resolved_signing_seed,
+                )
+                .event_id(),
+            ),
             "Arkret Demo Realm",
             // Seeded locally, not projected from an Event.
             soland_services::events::DirectoryProvenance::LocalOnly,
@@ -518,7 +550,15 @@ mod test_construction {
                 event_seal_committer,
                 &service_id,
             );
-            let realm_directory = build_realm_directory(&config);
+            let identity = service_identity
+                .identity()
+                .expect("fixture has a serving identity");
+            let realm_directory = build_realm_directory(
+                &config,
+                &identity.full_id,
+                &identity.service_id,
+                resolved_signing_seed,
+            );
             Self::from_runtime(
                 config,
                 AppStateRuntime {
@@ -560,6 +600,7 @@ mod test_construction {
         fn commit_if_frontier(
             &self,
             seal: &arkret_wire::Seal,
+            digest_suite: arkret_canonical::DigestSuite,
             expected_store_frontier: &[arkret_identifiers::SealId],
             new_ops: &[(
                 arkret_identifiers::CellRef,
@@ -567,8 +608,13 @@ mod test_construction {
             )],
             covered: &BTreeSet<arkret_identifiers::Hash>,
         ) -> arkret_state::state::StoreResult<bool> {
-            self.0
-                .commit_if_frontier(seal, expected_store_frontier, new_ops, covered)
+            self.0.commit_if_frontier(
+                seal,
+                digest_suite,
+                expected_store_frontier,
+                new_ops,
+                covered,
+            )
         }
     }
 
@@ -697,6 +743,16 @@ impl AppState {
     ) -> Result<arkret_wire::DidUrl, String> {
         arkret_wire::DidUrl::new(format!("{}#{fragment}", self.service_full_id()))
             .map_err(|error| format!("service verification method is invalid: {error}"))
+    }
+
+    pub fn service_notary_signer_descriptor(
+        &self,
+    ) -> Result<arkret_wire::NotarySignerDescriptor, String> {
+        soland_services::identity::ed25519_notary_signer_descriptor(
+            DidCoreId::new(self.service_id().clone()).map_err(|error| error.to_string())?,
+            self.service_verification_method("notary-key")?,
+            self.notary_verifying_key().as_bytes(),
+        )
     }
 
     pub fn storage_mode(&self) -> &'static str {
@@ -900,6 +956,7 @@ impl AppState {
             event_broadcast,
             storage_mode,
         } = runtime;
+        persistence.bind_history_authority_view_cas(Arc::new(projections.clone()));
         let now = chrono::Utc::now();
 
         let service_id = service_identity
@@ -2164,6 +2221,7 @@ mod membership_hydration_tests {
             realm_id: Some(realm_id.to_owned()),
             kind: kind.to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
             canonical_digest,
             canonical_bytes,
             envelope,
@@ -2798,9 +2856,7 @@ mod membership_hydration_tests {
                     owner: owner.to_owned(),
                     deleted: false,
                     discoverability: "invite_only".to_owned(),
-                    history_visibility: "shared".to_owned(),
-                    history_sharing_policy: None,
-                    history_sharing_policy_digest: None,
+                    history_access: "all_history_for_current_members".to_owned(),
                     preview_policy: None,
                     preview_policy_digest: None,
                     asset_privacy_policy: None,

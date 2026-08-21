@@ -801,7 +801,10 @@ async fn moderation_report(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    body.validate()
+    let digest_suite = state
+        .projections()
+        .realm_digest_suite(body.report_event.event.realm_id.as_str());
+    body.validate(digest_suite)
         .map_err(|error| AppError::param_invalid(format!("report_event: {error}")))?;
     let event = &body.report_event.event;
     let payload: arkret_models_collaboration::events_payloads::moderation::ModerationReportPayload =
@@ -862,10 +865,10 @@ async fn moderation_report(
             target_ref: payload.target_ref.to_string(),
             effective_scope: event.scope_ref.clone(),
         };
-    body.validate_authoring_context(&principal_id, &accepted_target)
+    body.validate_authoring_context(&principal_id, &accepted_target, digest_suite)
         .map_err(|error| AppError::param_invalid(format!("report_event: {error}")))?;
     let report_id = body
-        .report_id()
+        .report_id(digest_suite)
         .map_err(|error| AppError::param_invalid(format!("report_event: {error}")))?;
     crate::routing::events::event_log::submit_initial_event_submission(
         state,
@@ -1063,6 +1066,7 @@ mod report_safety_tests {
                 realm_id: Some(REALM.to_owned()),
                 kind: "ak.message.create".to_owned(),
                 schema_id: "ak.schema.event.v1".to_owned(),
+                digest_suite: arkret_canonical::DigestSuite::Sha256,
                 canonical_digest,
                 canonical_bytes,
                 envelope: json!({

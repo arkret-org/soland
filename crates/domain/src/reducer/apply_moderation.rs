@@ -415,7 +415,7 @@ impl ProjectionState {
     /// `content-moderation.md` §2.6 makes the removal set **byte-equal** to
     /// `payload.observed_dots[]`, and requires each dot's `event_id` segment to
     /// equal the `decision_ref` uuid — that pair is the machine-readable form of
-    /// "解除一条 review 不得隐式 lift 其它 issuer 的 decision". This used to
+    /// "lifting one review must not implicitly lift another issuer's decision". This used to
     /// select by `decision_id` and mark every matching add lifted, which is the
     /// `or_set_remove_observed` shape §2.6 forbids by name for exactly that
     /// reason. Idempotent: re-lifting an already-removed dot converges.

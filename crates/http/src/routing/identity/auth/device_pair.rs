@@ -25,9 +25,13 @@ async fn authorize_account_device_pair(
     session: &SessionRecord,
     body: AccountDevicePairRequestBody,
 ) -> Result<AccountDevicePairOutcome, AppError> {
-    body.validate_authorize_event_binding().map_err(|error| {
-        AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
-    })?;
+    let digest_suite = state
+        .projections()
+        .realm_digest_suite(body.authorize_event.event.realm_id.as_str());
+    body.validate_authorize_event_binding(digest_suite)
+        .map_err(|error| {
+            AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
+        })?;
     let authorizing_device = ensure_authorizing_device_verified(state, session).await?;
     let active_generation = crate::routing::identity::device_generation::current_device_generation(
         state,
@@ -198,7 +202,7 @@ async fn authorize_account_device_pair(
             device_signature: authorize_payload.device_signature.clone(),
         };
     target_attestation
-        .validate_against_pair_request(&body)
+        .validate_against_pair_request(&body, digest_suite)
         .map_err(|error| {
             AppError::param_invalid(format!(
                 "pairing target attestation does not bind the exact authorize Event: {error}"

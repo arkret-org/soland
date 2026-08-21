@@ -27,10 +27,12 @@ pub(super) fn batch_contains_identity_anchor(envelopes: &[Value]) -> bool {
     })
 }
 
-fn event_digests(events: &[&arkret_wire::Event]) -> Result<Vec<String>, anyhow::Error> {
+fn event_digests(
+    events: &[(&arkret_wire::Event, arkret_canonical::DigestSuite)],
+) -> Result<Vec<String>, anyhow::Error> {
     events
         .iter()
-        .map(|event| Ok(event.event_digest()?))
+        .map(|(event, digest_suite)| Ok(event.event_digest_with_digest_suite(*digest_suite)?))
         .collect()
 }
 
@@ -216,7 +218,11 @@ pub(super) async fn submit_identity_anchor_batch(
         .collect::<Vec<_>>();
     if let Some(mut outcome) = identical_historical_retry(state, &retry_candidates).await? {
         if authorization_leases.is_some_and(|leases| leases.iter().any(Option::is_some)) {
-            let digests = event_digests(&[&typed_create, &typed_authorize]).map_err(|error| {
+            let digests = event_digests(&[
+                (&typed_create, first.digest_suite),
+                (&typed_authorize, second.digest_suite),
+            ])
+            .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::BAD_REQUEST,
                     "schema_violation",
@@ -339,20 +345,36 @@ pub(super) async fn submit_identity_anchor_batch(
             .iter()
             .zip(authority_set_refs)
             .map(|(event, authority_set_ref)| {
-                let proposal_digest = Hash::new(event.event_digest().map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("PCR genesis Event digest failed: {error}"),
-                    )
-                })?)
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("PCR genesis Event digest is invalid: {error}"),
-                    )
-                })?;
+                let digest_suite = if event.kind == arkret_wire::EventKind::RealmCreate {
+                    arkret_canonical::DigestSuite::Sha256
+                } else {
+                    arkret::declared_genesis_live_digest_suite(&typed_control_events[0]).map_err(
+                        |error| {
+                            SubmitOneError::new(
+                                StatusCode::BAD_REQUEST,
+                                "schema_violation",
+                                format!("PCR genesis digest suite is invalid: {error}"),
+                            )
+                        },
+                    )?
+                };
+                let proposal_digest =
+                    Hash::new(event.event_digest_with_digest_suite(digest_suite).map_err(
+                        |error| {
+                            SubmitOneError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "internal_error",
+                                format!("PCR genesis Event digest failed: {error}"),
+                            )
+                        },
+                    )?)
+                    .map_err(|error| {
+                        SubmitOneError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "internal_error",
+                            format!("PCR genesis Event digest is invalid: {error}"),
+                        )
+                    })?;
                 crate::control_proposal::mint_control_proposal_ack(
                     state,
                     event.realm_id.clone(),
@@ -628,15 +650,20 @@ pub(super) async fn submit_identity_anchor_batch(
     }
 
     if !reanchor_conflict {
-        let accepted_control_events = [&accepted_create_event, &accepted_authorize_event];
-        for event in accepted_control_events {
-            let digest = event.event_digest().map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("accepted identity anchor digest failed: {error}"),
-                )
-            })?;
+        let accepted_control_events = [
+            (&accepted_create_event, first.digest_suite),
+            (&accepted_authorize_event, second.digest_suite),
+        ];
+        for (event, digest_suite) in accepted_control_events {
+            let digest = event
+                .event_digest_with_digest_suite(digest_suite)
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("accepted identity anchor digest failed: {error}"),
+                    )
+                })?;
             // A committed anchor unit minted exactly one Ack per Control
             // Move above; a miss here means the durable Event+Ack+pending
             // atomicity is already broken, so fail instead of writing an
@@ -653,7 +680,7 @@ pub(super) async fn submit_identity_anchor_batch(
                 })?;
             state
                 .projections()
-                .put_pending_control_event_with_ack(event, ack)
+                .put_pending_control_event_with_ack(event, ack, digest_suite)
                 .map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -1027,7 +1054,7 @@ pub(super) async fn identical_historical_retry(
                 })?;
             state
                 .projections()
-                .put_pending_control_event_with_ack(&event, &ack)
+                .put_pending_control_event_with_ack(&event, &ack, record.digest_suite)
                 .map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -1623,6 +1650,7 @@ pub(super) fn canonical_record(
         realm_id: Some(parsed.realm_id.to_string()),
         kind: parsed.kind.clone(),
         schema_id: parsed.schema_id.clone(),
+        digest_suite: parsed.digest_suite,
         canonical_digest: parsed.canonical_digest.clone(),
         canonical_bytes: parsed.canonical_bytes.clone(),
         envelope,
@@ -1975,7 +2003,12 @@ mod tests {
     }
 
     fn attach_bootstrap_fixture_proof(event: &mut arkret_wire::Event, verification_method: &str) {
-        let digest = arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
+        let digest = arkret_identifiers::Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap();
         event.proofs = vec![
             arkret_wire::Proof {
                 kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
@@ -1983,6 +2016,8 @@ mod tests {
                 verification_method: arkret_wire::DidUrl::new(verification_method.to_owned())
                     .expect("fixture verification method is a DID URL"),
                 event_digest: digest,
+                signer_resolution_evidence_ref: None,
+                signer_resolution_evidence_digest: None,
                 created_at: event.created_at,
                 domain: None,
                 audience: None,
@@ -2072,6 +2107,7 @@ mod tests {
                     "ak:did_core:webvh:z6mkfixture".to_owned(),
                 )
                 .unwrap(),
+                notary: crate::test_single_signer_notary(principal_full_id.as_str(), 43),
                 initial_resolution: arkret_models_identity::ResolutionCommitment {
                     full_id: principal_full_id.clone(),
                     method_history_head: format!("sha256:{}", "8".repeat(64)),
@@ -2215,6 +2251,8 @@ mod tests {
                         "a".repeat(64)
                     ))
                     .unwrap(),
+                    signer_resolution_evidence_ref: None,
+                    signer_resolution_evidence_digest: None,
                     created_at: event.created_at,
                     domain: None,
                     audience: None,
@@ -2223,7 +2261,9 @@ mod tests {
                 .into(),
             );
         }
-        event.event_id = event.derive_event_id().unwrap();
+        event.event_id = event
+            .derive_event_id_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
         serde_json::to_value(event).unwrap()
     }
 
@@ -2274,6 +2314,7 @@ mod tests {
             realm_id: Some("ak:realm:AdZf1JIkIqUGbzF-sa3XnY2sN0Lumj76eBVunzVt_-yX".to_owned()),
             kind: envelope["kind"].as_str().unwrap().to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
             canonical_digest,
             canonical_bytes,
             envelope,
@@ -2500,7 +2541,12 @@ mod tests {
                 .unwrap()
                 .expect("canonical anchor Event must remain stored");
             let event: arkret_wire::Event = serde_json::from_value(stored.envelope).unwrap();
-            let digest = Hash::new(event.event_digest().unwrap()).unwrap();
+            let digest = Hash::new(
+                event
+                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                    .unwrap(),
+            )
+            .unwrap();
             assert_eq!(
                 state
                     .projections()

@@ -79,11 +79,13 @@ fn load_snapshot(
         })?
         .ok_or_else(proposal_not_found)?;
     let stored_digest =
-        arkret_state::state::control_event_digest(&snapshot.event).map_err(|error| {
-            AppError::internal(format!(
-                "stored control proposal digest is invalid: {error}"
-            ))
-        })?;
+        arkret_state::state::control_event_digest(&snapshot.event, snapshot.digest_suite).map_err(
+            |error| {
+                AppError::internal(format!(
+                    "stored control proposal digest is invalid: {error}"
+                ))
+            },
+        )?;
     if snapshot.event.realm_id != *realm_id || stored_digest != *proposal_digest {
         return Err(AppError::internal(
             "control proposal snapshot does not bind its durable selector",
@@ -147,7 +149,16 @@ fn read_outcome(
             "ak.device.revoke durable snapshot omits its canonical Ack",
         ));
     }
-    if snapshot.sealed_by.is_some() && terminal_reject.is_some() {
+    let accepted_seal_id = match snapshot.covering_seals.as_slice() {
+        [] => None,
+        [seal_id] => Some(seal_id.clone()),
+        _ => {
+            return Err(AppError::internal(
+                "control proposal decision read cannot represent multiple direct covering Seals",
+            ));
+        }
+    };
+    if accepted_seal_id.is_some() && terminal_reject.is_some() {
         return Err(AppError::internal(
             "control proposal snapshot has conflicting terminal states",
         ));
@@ -160,7 +171,7 @@ fn read_outcome(
                 .unwrap_or(ack.decision_due_at);
             observed_at >= current_due_at
         });
-    let proposal_state = if snapshot.sealed_by.is_some() {
+    let proposal_state = if accepted_seal_id.is_some() {
         ControlProposalState::Sealed
     } else if terminal_reject.is_some() {
         ControlProposalState::Rejected
@@ -182,7 +193,7 @@ fn read_outcome(
         terminal_reject,
         fault_reason: (proposal_state == ControlProposalState::Overdue)
             .then_some(ControlProposalDecisionFaultReason::DecisionOverdue),
-        accepted_seal_id: snapshot.sealed_by,
+        accepted_seal_id,
     };
     outcome.validate_for_request(request).map_err(|error| {
         AppError::internal(format!("stored control proposal state is invalid: {error}"))
@@ -267,7 +278,7 @@ pub(super) async fn submit_control_proposal_decision(
             ControlProposalDecisionSubmitStatus::Duplicate,
         )?);
     }
-    if snapshot.sealed_by.is_some() {
+    if !snapshot.covering_seals.is_empty() {
         return Err(AppError::conflict("control proposal is already sealed")
             .with_wire_code("duplicate_conflict"));
     }
@@ -294,6 +305,7 @@ pub(super) async fn submit_control_proposal_decision(
     crate::control_proposal::verify_control_proposal_decision(
         state,
         &snapshot.event,
+        snapshot.digest_suite,
         ack,
         &snapshot.decisions,
         decision,

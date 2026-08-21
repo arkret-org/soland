@@ -205,10 +205,11 @@ fn preflight_memory_events(
 ) -> PersistenceResult<()> {
     let mut seen = accepted.clone();
     for record in records {
-        ids::validated_event_identity_parts(
+        ids::validated_event_identity_parts_for_suite(
             &record.event_id,
             &record.canonical_digest,
             &record.canonical_bytes,
+            record.digest_suite,
         )?;
         if quarantined.contains_key(&record.event_id) {
             let known = variants.get(&record.event_id).is_some_and(|items| {
@@ -346,10 +347,11 @@ fn stage_control_proposal_acks(
 #[async_trait]
 impl EventStore for MemoryEventStore {
     async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
-        ids::validated_event_identity_parts(
+        ids::validated_event_identity_parts_for_suite(
             &record.event_id,
             &record.canonical_digest,
             &record.canonical_bytes,
+            record.digest_suite,
         )?;
         let mut data = self.data.lock();
         let mut quarantined = self.quarantined.lock();
@@ -907,6 +909,7 @@ mod tests {
             realm_id: Some("ak:realm:AYcO0aKZZvKELI-s58wUjRHsrz5v8Y51T0_sGUTciDVw".to_owned()),
             kind: "ak.realm.join_rule".to_owned(),
             schema_id: "arkret://events/realm/join-rule/v1".to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
             canonical_digest: ids::format_event_digest(0x01, &digest).unwrap(),
             canonical_bytes: canonical_bytes.to_vec(),
             envelope: serde_json::json!({"event_id": event_id}),

@@ -13,6 +13,9 @@ use arkret_models_collaboration::governance::erasure::{
     ErasureReceiptSubmitRequestBody, ErasureScope, ErasureStorageBoundary, ErasureSubject,
     ErasureSubjectKind,
 };
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use ed25519_dalek::Signer as _;
 
 use super::*;
 

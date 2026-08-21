@@ -1654,11 +1654,18 @@ async fn continue_submit_reanchor_unit(
             "prepared re-anchor unit digest changed after preparation",
         ));
     }
-    let reanchor_event_digest =
-        Hash::new(batch.events[0].event.event_digest().map_err(|error| {
-            AppError::internal(format!("prepared re-anchor Event digest failed: {error}"))
-        })?)
-        .map_err(|error| AppError::internal(error.to_string()))?;
+    let reanchor_digest_suite = state
+        .projections()
+        .realm_digest_suite(batch.events[0].event.realm_id.as_str());
+    let reanchor_event_digest = Hash::new(
+        batch.events[0]
+            .event
+            .event_digest_with_digest_suite(reanchor_digest_suite)
+            .map_err(|error| {
+                AppError::internal(format!("prepared re-anchor Event digest failed: {error}"))
+            })?,
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
 
     state
         .security_transactions()

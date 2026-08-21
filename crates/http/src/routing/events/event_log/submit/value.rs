@@ -5,6 +5,7 @@ use super::*;
 pub(super) struct PreparedAgentMembershipEvent {
     pub(super) command: soland_services::events::CommitAcceptedEventCommand,
     pub(super) control_event: Event,
+    pub(super) digest_suite: arkret_canonical::DigestSuite,
     pub(super) operation: arkret_event_draft::ProjectedEventOperation,
     pub(super) projected_cell_writes: Vec<arkret_wire::cba::ProjectedCellWrite>,
     pub(super) projected_event: soland_services::events::ProjectedEvent,
@@ -104,7 +105,7 @@ pub(super) enum SubmitMode<'a> {
 /// Classify a failed origin-selector derivation on the origin Principal
 /// Server's own `/_arkret/self/*` write path.
 ///
-/// `device-lifecycle.md` §"派生的定义域与缺失结论" separates this surface from
+/// The derivation-domain section of `device-lifecycle.md` separates this surface from
 /// the peer gate: locally the write MUST fail closed with `device_unauthorized`
 /// *before* the revocation record is consulted and before any business effect
 /// lands, rather than answering with a signed anti-enumeration receipt. A row
@@ -461,7 +462,14 @@ async fn submit_initial_event_submission_with_commit_extensions(
     } else {
         arkret_wire::EventSubmitContext::Standard
     };
-    validate_initial_submission_in_context(&submission, submit_context)?;
+    let digest_suite = if submission.event.kind == arkret_wire::EventKind::RealmCreate {
+        arkret_canonical::DigestSuite::Sha256
+    } else {
+        state
+            .projections()
+            .realm_digest_suite(submission.event.realm_id.as_str())
+    };
+    validate_initial_submission_in_context(&submission, submit_context, digest_suite)?;
     validate_initial_publication_session_context(session, &submission)?;
     if let Some(lease) = &submission.authorization_lease {
         validate_authorization_lease_for_event(state, Some(session), &submission.event, lease)
@@ -527,7 +535,14 @@ pub(super) async fn prepare_agent_membership_initial_event(
     session: &SessionRecord,
     submission: arkret_wire::EventInitialSubmission,
 ) -> Result<PreparedAgentMembershipEvent, SubmitOneError> {
-    validate_initial_submission_in_context(&submission, arkret_wire::EventSubmitContext::Standard)?;
+    let digest_suite = state
+        .projections()
+        .realm_digest_suite(submission.event.realm_id.as_str());
+    validate_initial_submission_in_context(
+        &submission,
+        arkret_wire::EventSubmitContext::Standard,
+        digest_suite,
+    )?;
     validate_initial_publication_session_context(session, &submission)?;
     if submission.membership_compensation_evidence.is_some() {
         return Err(SubmitOneError::new(
@@ -588,14 +603,17 @@ pub(super) async fn prepare_agent_membership_federated_event(
     session: &SessionRecord,
     submission: &arkret_wire::EventFederationSubmission,
     admission: &InternalEventAdmission,
+    digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<PreparedAgentMembershipEvent, SubmitOneError> {
-    submission.validate_structural().map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            format!("federated agent membership transition is invalid: {error}"),
-        )
-    })?;
+    submission
+        .validate_structural(digest_suite)
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("federated agent membership transition is invalid: {error}"),
+            )
+        })?;
     if submission.membership_compensation_evidence.is_some() {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
@@ -860,6 +878,7 @@ async fn stored_control_proposal_ack(
     state: &AppState,
     existing: &soland_services::events::CanonicalEventRecord,
     digest: &Hash,
+    digest_suite: arkret_canonical::DigestSuite,
     submitted: Option<&arkret_wire::ControlProposalAck>,
 ) -> Result<arkret_wire::ControlProposalAck, SubmitOneError> {
     if let Some(ack) = state
@@ -916,13 +935,15 @@ async fn stored_control_proposal_ack(
             "accepted device revoke is missing its mandatory Control Proposal Ack",
         ));
     }
-    let recovered_digest = Hash::new(event.event_digest().map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("stored Control Move digest is invalid: {error}"),
-        )
-    })?)
+    let recovered_digest = Hash::new(event.event_digest_with_digest_suite(digest_suite).map_err(
+        |error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("stored Control Move digest is invalid: {error}"),
+            )
+        },
+    )?)
     .map_err(|error| {
         SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -964,7 +985,7 @@ async fn stored_control_proposal_ack(
         })?;
     state
         .projections()
-        .put_pending_control_event_with_ack(&event, submitted)
+        .put_pending_control_event_with_ack(&event, submitted, digest_suite)
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1097,7 +1118,7 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
     let Some((notary, _)) = worker
         // The exemption is based on accepted authority, never on a notary
         // mutation proposed by this Event itself.
-        .current_notary_profile_for_events(state, &realm_id, &[])
+        .current_notary_value_for_events(state, &realm_id, &[])
         .map_err(|error| format!("self-principal PCR authority is unavailable: {error}"))?
     else {
         return Ok(SelfPrincipalPcrAuthority::Rejected(
@@ -1106,11 +1127,11 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
     };
     if !matches!(
         notary,
-        arkret_wire::notary::NotaryValue::SingleDid { ref actor_id, .. }
-            if actor_id == &event.actor_id
+        arkret_wire::notary::NotaryValue::SingleSigner { ref signer, .. }
+            if signer.actor_id == event.actor_id
     ) {
         return Ok(SelfPrincipalPcrAuthority::Rejected(
-            "current notary is not single_did == principal",
+            "current notary is not single_signer with principal actor authority",
         ));
     }
 
@@ -1351,6 +1372,73 @@ pub(super) async fn accepted_event_envelope(
                 error.to_string(),
             )
         })?;
+    let service_id = arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("Principal Server id is invalid: {error}"),
+        )
+    })?;
+    let authenticated_resolution =
+        crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "temporarily_unavailable",
+                    format!("Principal Server signer evidence is unavailable: {error}"),
+                )
+            })?;
+    let signer_evidence = arkret_identity::service_signer_evidence_from_authenticated_resolution(
+        authenticated_resolution,
+        &service_id,
+        accepted_at,
+    )
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "temporarily_unavailable",
+            format!("Principal Server signer evidence is invalid: {error}"),
+        )
+    })?;
+    let signer_resolution_evidence_digest =
+        signer_evidence.canonical_sha256_digest().map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("Principal Server signer evidence digest failed: {error}"),
+            )
+        })?;
+    let signer_resolution_evidence_ref = signer_evidence.evidence_ref().map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("Principal Server signer evidence ref failed: {error}"),
+        )
+    })?;
+    let dependency = arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+        selector: arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+            content_digest: signer_resolution_evidence_digest.clone(),
+        },
+        authenticated_signer_resolution_evidence: signer_evidence,
+    };
+    state
+        .persistence()
+        .governance_dependency_store()
+        .put_exact(soland_storage::GovernanceDependencyWrite {
+            realm_id: event.realm_id.clone(),
+            source: soland_storage::GovernanceDependencySource::ControlEvent(event_digest.clone()),
+            edge_index: 0,
+            item: dependency,
+        })
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("Principal Server signer evidence retention failed: {error}"),
+            )
+        })?;
     let mut admission = arkret_wire::PrincipalServerAdmissionProof {
         kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
         verification_method,
@@ -1367,6 +1455,8 @@ pub(super) async fn accepted_event_envelope(
         })?,
         producer_verification_method: producer.verification_method.clone(),
         producer_signing_key,
+        signer_resolution_evidence_ref,
+        signer_resolution_evidence_digest,
         accepted_at,
         jws: String::new(),
     };
@@ -1381,7 +1471,7 @@ pub(super) async fn accepted_event_envelope(
         URL_SAFE_NO_PAD.encode(state.notary_signing_key().sign(&signing_input).to_bytes());
     event.proofs.push(admission.into());
     event
-        .validate_principal_server_admission_binding()
+        .validate_principal_server_admission_binding(parsed.digest_suite)
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1463,7 +1553,7 @@ pub(super) async fn submit_event_value_with_context(
     context: SubmitEventContext<'_>,
     mode: SubmitMode<'_>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    let (commit_options, mut deferred_agent_membership) = match mode {
+    let (commit_options, deferred_agent_membership) = match mode {
         SubmitMode::Commit(options) => (Some(options), None),
         SubmitMode::PrepareAgentMembership(slot) => (None, Some(slot)),
     };
@@ -1650,7 +1740,6 @@ pub(super) async fn submit_event_value_with_context(
             None => None,
         };
     let received_at = now();
-    let mut envelope_for_bootstrap = envelope.clone();
     let control_event_for_proposal = Some(submitted_event.clone()).filter(|event| {
         event.kind.is_reducer_input() && event.seal_ref.is_none() && event.auth_context.is_none()
     });
@@ -1664,7 +1753,14 @@ pub(super) async fn submit_event_value_with_context(
                 SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
             })? {
             SelfPrincipalPcrAuthority::Authorized(class) => Some(class),
-            SelfPrincipalPcrAuthority::Rejected(_) => None,
+            SelfPrincipalPcrAuthority::Rejected(reason) => {
+                tracing::debug!(
+                    reason,
+                    event_id = %event.event_id,
+                    "self-principal PCR authority rejected the Control Event"
+                );
+                None
+            }
         }
     } else {
         None
@@ -1746,6 +1842,7 @@ pub(super) async fn submit_event_value_with_context(
                     state,
                     &existing,
                     &digest,
+                    parsed.digest_suite,
                     context.control_proposal_ack,
                 )
                 .await?;
@@ -2410,11 +2507,7 @@ pub(super) async fn submit_event_value_with_context(
             if let Some(ack) = context.control_proposal_ack {
                 let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
                 let (_, authority_set_ref) = worker
-                    .current_notary_profile_for_events(
-                        state,
-                        &realm_id,
-                        std::slice::from_ref(event),
-                    )
+                    .current_notary_value_for_events(state, &realm_id, std::slice::from_ref(event))
                     .map_err(|error| {
                         SubmitOneError::new(
                             StatusCode::SERVICE_UNAVAILABLE,
@@ -2464,6 +2557,7 @@ pub(super) async fn submit_event_value_with_context(
                     state,
                     &realm_id,
                     std::slice::from_ref(event),
+                    std::slice::from_ref(&parsed.digest_suite),
                     received_at,
                     Some(bootstrap_authority),
                 )
@@ -2480,11 +2574,7 @@ pub(super) async fn submit_event_value_with_context(
             } else {
                 let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
                 let (_, authority_set_ref) = worker
-                    .current_notary_profile_for_events(
-                        state,
-                        &realm_id,
-                        std::slice::from_ref(event),
-                    )
+                    .current_notary_value_for_events(state, &realm_id, std::slice::from_ref(event))
                     .map_err(|error| {
                         SubmitOneError::new(
                             StatusCode::SERVICE_UNAVAILABLE,
@@ -2600,7 +2690,7 @@ pub(super) async fn submit_event_value_with_context(
         received_at,
     )
     .await?;
-    envelope_for_bootstrap = envelope.clone();
+    let envelope_for_bootstrap = envelope.clone();
     let accepted_control_event_for_proposal = control_event_for_proposal
         .is_some()
         .then(|| accepted_event.clone());
@@ -2761,6 +2851,7 @@ pub(super) async fn submit_event_value_with_context(
             realm_id: Some(parsed.realm_id.to_string()),
             kind: parsed.kind.clone(),
             schema_id: parsed.schema_id.clone(),
+            digest_suite: parsed.digest_suite,
             canonical_digest: parsed.canonical_digest.clone(),
             canonical_bytes: accepted_canonical_bytes.clone(),
             envelope,
@@ -2858,6 +2949,7 @@ pub(super) async fn submit_event_value_with_context(
         *slot = Some(PreparedAgentMembershipEvent {
             command,
             control_event,
+            digest_suite: parsed.digest_suite,
             operation,
             projected_cell_writes,
             projected_event,
@@ -2985,6 +3077,7 @@ pub(super) async fn submit_event_value_with_context(
                             state,
                             &existing,
                             &digest,
+                            parsed.digest_suite,
                             context.control_proposal_ack,
                         )
                         .await?;
@@ -3051,7 +3144,7 @@ pub(super) async fn submit_event_value_with_context(
         };
         state
             .projections()
-            .put_pending_control_event(control_event, &ingress)
+            .put_pending_control_event(control_event, &ingress, parsed.digest_suite)
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -3321,6 +3414,8 @@ mod local_device_authorization_tests {
             .unwrap(),
             event_digest: arkret_wire::Hash::new(format!("sha256:{}", "11".repeat(32)))
                 .unwrap(),
+            signer_resolution_evidence_ref: None,
+            signer_resolution_evidence_digest: None,
             created_at: chrono::DateTime::parse_from_rfc3339("2026-08-18T00:00:00Z")
                 .unwrap()
                 .to_utc(),
@@ -3347,6 +3442,16 @@ mod local_device_authorization_tests {
             producer_signing_key: arkret_wire::DidKey::new(
                 "did:key:z6MkvLM6yK9N3Z1GYikAQLnhdjZoFQv4u4sRZNzgmwLkYsXx",
             )
+            .unwrap(),
+            signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
+                "ak:signer_evidence:sha256:{}",
+                "11".repeat(32)
+            ))
+            .unwrap(),
+            signer_resolution_evidence_digest: arkret_wire::Hash::new(format!(
+                "sha256:{}",
+                "11".repeat(32)
+            ))
             .unwrap(),
             accepted_at: producer.created_at,
             jws: "admission-signature".to_owned(),

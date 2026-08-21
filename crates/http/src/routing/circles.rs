@@ -123,7 +123,7 @@ fn circle_view_from_with_pending(
         display: parse_sdk_field("display", &c.display)?,
         directory_visibility: parse_sdk_field("directory_visibility", &c.directory_visibility)?,
         join_rule: parse_sdk_field("join_rule", &c.join_rule)?,
-        history_visibility: parse_sdk_field("history_visibility", &c.history_visibility)?,
+        history_access: parse_sdk_field("history_access", &c.history_access)?,
         content_encryption_floor: c
             .content_encryption_floor
             .as_ref()
@@ -136,7 +136,13 @@ fn circle_view_from_with_pending(
             .transpose()?,
         agent_participation: None,
         encryption_profile: parse_sdk_field("encryption_profile", &c.encryption_profile)?,
-        mls_group_ref: c.mls_group_ref.clone(),
+        content_scheme: c.content_scheme.clone(),
+        mls_group_id: c.mls_group_ref.clone(),
+        durability_policy: c
+            .durability_policy
+            .as_ref()
+            .map(|policy| parse_sdk_field("durability_policy", policy))
+            .transpose()?,
         pending_mls_removals,
         state: parse_sdk_field("state", c.state.as_str())?,
         member_count: include_member_details
@@ -740,7 +746,7 @@ async fn post_scope_rotate(
     json_ok(CircleScopeRotateOutcome {
         circle_id: CircleId::new(circle_id)
             .map_err(|e| AppError::param_invalid(format!("circle_id: {e}")))?,
-        mls_group_ref,
+        mls_group_id: mls_group_ref,
         note: Some("mls scope rotation accepted via canonical ak.mls events".to_owned()),
     })
 }
@@ -917,7 +923,7 @@ mod tests {
             },
             "directory_visibility": "members",
             "join_rule": "invite",
-            "history_visibility": "joined",
+            "history_access": "since_join",
             "encryption_profile": "mls_rfc9420",
             "state": "active",
             "created_by": ACTOR,

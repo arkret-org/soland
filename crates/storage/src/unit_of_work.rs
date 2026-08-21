@@ -55,13 +55,16 @@ pub struct EventCommitRequest {
 /// Static persistence-side guard for the one Ack-less Control-Move class.
 ///
 /// The HTTP admission layer additionally proves the PCR profile, current
-/// `single_did == principal` authority and active accepted device generation.
+/// `single_signer.actor_id == principal` authority and active accepted device generation.
 /// Persistence cannot resolve those live projections, but it still refuses an
 /// exemption whose immutable Event shape is not a self-principal PCR device
 /// Move. This keeps the explicit commit flag from becoming a generic Ack
 /// bypass.
 #[must_use]
-pub fn has_self_principal_pcr_device_authorized_shape(event: &arkret_wire::Event) -> bool {
+pub fn has_self_principal_pcr_device_authorized_shape(
+    event: &arkret_wire::Event,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> bool {
     if !event.kind.is_reducer_input()
         || event.seal_ref.is_some()
         || event.auth_context.is_some()
@@ -90,7 +93,10 @@ pub fn has_self_principal_pcr_device_authorized_shape(event: &arkret_wire::Event
     if admissions.next().is_some() || event.proofs.len() != 2 {
         return false;
     }
-    if event.validate_principal_server_admission_binding().is_err() {
+    if event
+        .validate_principal_server_admission_binding(digest_suite)
+        .is_err()
+    {
         return false;
     }
     let Some((controller, fragment)) = producer.verification_method.as_str().split_once('#') else {
@@ -131,7 +137,12 @@ mod tests {
                 arkret_wire::SealId::new(format!("ak:seal:sha256:{}", "1".repeat(64))).unwrap(),
             ],
         });
-        let event_digest = arkret_wire::Hash::new(event.event_digest().unwrap()).unwrap();
+        let event_digest = arkret_wire::Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap();
         let producer = arkret_wire::Proof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             verification_method: arkret_wire::DidUrl::new(
@@ -139,6 +150,8 @@ mod tests {
             )
             .unwrap(),
             event_digest: event_digest.clone(),
+            signer_resolution_evidence_ref: None,
+            signer_resolution_evidence_digest: None,
             created_at: event.created_at,
             domain: None,
             audience: None,
@@ -155,6 +168,16 @@ mod tests {
                     .unwrap(),
             producer_verification_method: producer.verification_method.clone(),
             producer_signing_key: arkret_wire::DidKey::new("did:key:z6Mkhfixture").unwrap(),
+            signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
+                "ak:signer_evidence:sha256:{}",
+                "11".repeat(32)
+            ))
+            .unwrap(),
+            signer_resolution_evidence_digest: arkret_wire::Hash::new(format!(
+                "sha256:{}",
+                "11".repeat(32)
+            ))
+            .unwrap(),
             accepted_at: event.created_at,
             jws: "admission..signature".to_owned(),
         };
@@ -165,24 +188,30 @@ mod tests {
     #[test]
     fn pcr_device_authorized_shape_requires_exact_bound_producer_and_admission() {
         let event = accepted_pcr_device_event();
-        assert!(has_self_principal_pcr_device_authorized_shape(&event));
+        assert!(has_self_principal_pcr_device_authorized_shape(
+            &event,
+            arkret_canonical::DigestSuite::Sha256
+        ));
 
         let mut missing_admission = event.clone();
         missing_admission.proofs.pop();
         assert!(!has_self_principal_pcr_device_authorized_shape(
-            &missing_admission
+            &missing_admission,
+            arkret_canonical::DigestSuite::Sha256
         ));
 
         let mut duplicate_producer = event.clone();
         duplicate_producer.proofs.push(event.proofs[0].clone());
         assert!(!has_self_principal_pcr_device_authorized_shape(
-            &duplicate_producer
+            &duplicate_producer,
+            arkret_canonical::DigestSuite::Sha256
         ));
 
         let mut reversed_proofs = event.clone();
         reversed_proofs.proofs.reverse();
         assert!(!has_self_principal_pcr_device_authorized_shape(
-            &reversed_proofs
+            &reversed_proofs,
+            arkret_canonical::DigestSuite::Sha256
         ));
 
         let mut wrong_binding = event;
@@ -193,7 +222,8 @@ mod tests {
                 arkret_wire::Hash::new(format!("sha256:{}", "9".repeat(64))).unwrap();
         }
         assert!(!has_self_principal_pcr_device_authorized_shape(
-            &wrong_binding
+            &wrong_binding,
+            arkret_canonical::DigestSuite::Sha256
         ));
     }
 }

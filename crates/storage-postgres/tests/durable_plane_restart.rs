@@ -9,15 +9,16 @@
 use soland_storage::contract_tests::{
     assert_device_key_store_contract, assert_member_identity_store_contract,
     assert_message_store_contract, assert_one_time_key_store_contract,
-    assert_realm_meta_store_contract,
+    assert_realm_meta_store_contract, minimal_history_signer_evidence,
 };
 use soland_storage::{
-    DeviceKeyStore, MemberIdentityEventRecord, MemberIdentityStore, MemberIdentitySubjectKey,
-    MessageRecord, MessageStore, OneTimeKeyStore, RealmMetaRecord, RealmMetaStore,
+    DeviceKeyStore, GovernanceDependencyStore, MemberIdentityEventRecord, MemberIdentityStore,
+    MemberIdentitySubjectKey, MessageRecord, MessageStore, OneTimeKeyStore, RealmMetaRecord,
+    RealmMetaStore,
 };
 use soland_storage_postgres::{
-    Db, PgDeviceKeyStore, PgMemberIdentityStore, PgMessageStore, PgOneTimeKeyStore, PgPool,
-    PgRealmMetaStore,
+    Db, PgDeviceKeyStore, PgGovernanceDependencyStore, PgMemberIdentityStore, PgMessageStore,
+    PgOneTimeKeyStore, PgPool, PgRealmMetaStore,
 };
 
 /// Build a fresh pool against the configured database. Migrations are
@@ -62,9 +63,7 @@ async fn postgres_realm_meta_survives_restart_when_configured() {
         owner: format!("did:web:{namespace}-owner.example"),
         deleted: false,
         discoverability: "public".to_owned(),
-        history_visibility: "shared".to_owned(),
-        history_sharing_policy: None,
-        history_sharing_policy_digest: None,
+        history_access: "shared".to_owned(),
         preview_policy: None,
         preview_policy_digest: None,
         asset_privacy_policy: None,
@@ -259,5 +258,38 @@ async fn postgres_member_identity_survives_restart_when_configured() {
     assert!(
         events.iter().any(|event| event == &restart_event),
         "accepted member identity events must survive restart"
+    );
+}
+
+#[tokio::test]
+async fn postgres_unscoped_signer_evidence_survives_restart_when_configured() {
+    let _db_guard = DB_GUARD.lock().await;
+    let Some(pool) = fresh_pool().await else {
+        return;
+    };
+    let namespace = format!("postgres-signer-evidence-{}", uuid::Uuid::now_v7());
+    let item = minimal_history_signer_evidence(&namespace);
+    let selector = item.selector().clone();
+    let store = PgGovernanceDependencyStore { pool: pool.clone() };
+    store
+        .put_unscoped_signer_evidence_exact(item.clone())
+        .await
+        .expect("write signer evidence before restart");
+    drop(store);
+    drop(pool);
+
+    let Some(restarted_pool) = fresh_pool().await else {
+        return;
+    };
+    let restarted = PgGovernanceDependencyStore {
+        pool: restarted_pool,
+    };
+    assert_eq!(
+        restarted
+            .get_unscoped_signer_evidence(&selector)
+            .await
+            .expect("read signer evidence after restart"),
+        Some(item),
+        "signer evidence CAS must survive restart"
     );
 }

@@ -49,6 +49,18 @@ use soland_http::result::{JsonResult, json_ok};
 use soland_services::identity::ContactRecord;
 use uuid::Uuid;
 
+fn event_digest_for_frozen_claim(event: &Event, claim: &Hash) -> Result<Hash, AppError> {
+    let digest_suite = claim
+        .digest_suite()
+        .map_err(|error| AppError::internal(format!("Contact digest suite: {error}")))?;
+    Hash::new(
+        event
+            .event_digest_with_digest_suite(digest_suite)
+            .map_err(|error| AppError::internal(format!("Contact Event digest: {error}")))?,
+    )
+    .map_err(|error| AppError::internal(format!("Contact Event digest invalid: {error}")))
+}
+
 fn core_id_matches_actor(
     core_id: &arkret_wire::DidCoreId,
     actor_id: &arkret_wire::DidCoreId,
@@ -249,12 +261,10 @@ async fn peer_contacts_submit(
                 )
                 || request_receipt.core.issuer.as_str() != source_service_id
                 || request_receipt.core.request_digest
-                    != Hash::new(signed_event.event_digest().map_err(|error| {
-                        AppError::internal(format!("Contact request Event digest: {error}"))
-                    })?)
-                    .map_err(|error| {
-                        AppError::internal(format!("Contact request digest invalid: {error}"))
-                    })?
+                    != event_digest_for_frozen_claim(
+                        signed_event,
+                        &request_receipt.core.request_digest,
+                    )?
             {
                 return Err(super::super::events::peer::schema_violation(
                     "Contact request receipt does not bind signed_event",
@@ -300,12 +310,10 @@ async fn peer_contacts_submit(
             if response_receipt.response_event_ref != signed_event.event_id
                 || !core_id_matches_actor(&response_receipt.issuer, &signed_event.actor_id)
                 || response_receipt.response_digest
-                    != Hash::new(signed_event.event_digest().map_err(|error| {
-                        AppError::internal(format!("Contact response Event digest: {error}"))
-                    })?)
-                    .map_err(|error| {
-                        AppError::internal(format!("Contact response digest invalid: {error}"))
-                    })?
+                    != event_digest_for_frozen_claim(
+                        signed_event,
+                        &response_receipt.response_digest,
+                    )?
             {
                 return Err(super::super::events::peer::schema_violation(
                     "Contact response receipt does not bind signed_event",
@@ -351,12 +359,7 @@ async fn peer_contacts_submit(
             if reject_receipt.reject_event_ref != signed_event.event_id
                 || !core_id_matches_actor(&reject_receipt.issuer, &signed_event.actor_id)
                 || reject_receipt.reject_digest
-                    != Hash::new(signed_event.event_digest().map_err(|error| {
-                        AppError::internal(format!("Contact reject Event digest: {error}"))
-                    })?)
-                    .map_err(|error| {
-                        AppError::internal(format!("Contact reject digest invalid: {error}"))
-                    })?
+                    != event_digest_for_frozen_claim(signed_event, &reject_receipt.reject_digest)?
             {
                 return Err(super::super::events::peer::schema_violation(
                     "Contact reject receipt does not bind signed_event",
@@ -467,10 +470,7 @@ async fn peer_contacts_submit(
         if !core_id_matches_actor(&current_proof.issuer, &signed_event.actor_id)
             || current_proof.head_event_ref != signed_event.event_id
             || current_proof.head_digest
-                != Hash::new(signed_event.event_digest().map_err(|error| {
-                    AppError::internal(format!("Contact carrier Event digest: {error}"))
-                })?)
-                .map_err(|error| AppError::internal(format!("Contact digest invalid: {error}")))?
+                != event_digest_for_frozen_claim(signed_event, &current_proof.head_digest)?
             || !current_proof
                 .accepted_frontier
                 .contains(&signed_event.event_id)
@@ -527,9 +527,9 @@ async fn peer_contacts_submit(
             canonical::canonical_json_bytes(&signed_event).map_err(|error| {
                 AppError::internal(format!("Contact mirror canonical Event: {error}"))
             })?;
-        let request_digest = signed_event
-            .event_digest()
-            .map_err(|error| AppError::internal(format!("Contact mirror Event digest: {error}")))?;
+        let request_digest =
+            event_digest_for_frozen_claim(signed_event, &request_receipt.core.request_digest)?
+                .to_string();
         state
             .persistence()
             .put_contact_verified_mirror(&soland_storage::ContactVerifiedMirrorRecord {
@@ -2305,12 +2305,9 @@ fn sign_contact_mirror_receipt(
             .map_err(|error| AppError::internal(format!("Contact request digest: {error}")))?,
     )
     .map_err(|error| AppError::internal(format!("Contact request digest invalid: {error}")))?;
-    let signed_event_digest = Hash::new(
-        event
-            .event_digest()
-            .map_err(|error| AppError::internal(format!("Contact Event digest: {error}")))?,
-    )
-    .map_err(|error| AppError::internal(format!("Contact Event digest invalid: {error}")))?;
+    let signed_digest_claim = arkret::signed_event_digest_claim(event)
+        .map_err(|error| AppError::internal(format!("Contact Event digest claim: {error}")))?;
+    let signed_event_digest = event_digest_for_frozen_claim(event, &signed_digest_claim)?;
     let received_at = now();
     let issuer = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
@@ -2889,10 +2886,10 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
         )
         || outcome.mirror_receipt.signed_event_ref != signed_event.event_id
         || outcome.mirror_receipt.signed_event_digest
-            != Hash::new(signed_event.event_digest().map_err(|error| {
-                AppError::internal(format!("outbound Contact Event digest: {error}"))
-            })?)
-            .map_err(|error| AppError::internal(format!("Contact digest invalid: {error}")))?
+            != event_digest_for_frozen_claim(
+                signed_event,
+                &outcome.mirror_receipt.signed_event_digest,
+            )?
     {
         return Err(super::super::events::peer::schema_violation(
             "Contact Event outcome does not bind the outbound signed Event",
@@ -3997,10 +3994,6 @@ mod tests {
             did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: std::collections::BTreeMap::new(),
-            seal_compaction_min_age_seconds: 0,
-            compaction_min_witnesses: 0,
-            compaction_preserve_genesis: false,
-            compaction_prune_only_singleton_successors: false,
             trust_domain: arkret_identifiers::TrustDomainId::new("ak:trust_domain:recipient.local")
                 .unwrap(),
             ..AppConfig::test_default()

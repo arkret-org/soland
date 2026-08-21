@@ -360,7 +360,8 @@ fn operation_extra_validator_for_kind(kind: &arkret_wire::EventKind) -> Option<O
         arkret_wire::EventKind::InviteCancel | arkret_wire::EventKind::InviteRevoke => {
             Some(validate_invite_ref_payload)
         }
-        arkret_wire::EventKind::RealmHistoryVisibility => Some(validate_history_visibility_payload),
+        arkret_wire::EventKind::RealmHistoryAccess
+        | arkret_wire::EventKind::CircleHistoryAccess => Some(validate_history_access_payload),
         arkret_wire::EventKind::RealmReadReceiptPolicy => {
             Some(validate_read_receipt_policy_payload)
         }
@@ -440,10 +441,10 @@ mod tests {
             arkret_wire::EventKind::RealmNotary,
             serde_json::json!({
                 "realm_id": "ak:realm:Ab-zkG-9qydcyuk0bIAwMd1Op6VQjpOjQ1PbK_fCMMmz",
-                "notary": {
-                    "kind": "single_did",
-                    "actor_id": "ak:did_core:web:notary.example"
-                }
+                "notary": serde_json::to_value(crate::test_single_signer_notary(
+                    "did:web:notary.example",
+                    31,
+                )).unwrap()
             }),
         );
         assert_eq!(

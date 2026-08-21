@@ -396,6 +396,7 @@ mod tests {
             .unwrap(),
             kind: kind.to_owned(),
             schema_id: arkret_wire::SchemaId::EVENT_V1.to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
             prev_refs: Vec::new(),
             canonical_digest:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),

@@ -494,6 +494,22 @@ fn apply_circle_member_state_dispatch(
     s.apply_circle_member_state(op, projection_received_at(op))
 }
 
+fn apply_realm_history_access_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_history_access(op)
+}
+
+fn apply_circle_history_access_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_circle_history_access(op)
+}
+
 fn apply_sidecar_create_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -893,14 +909,6 @@ fn apply_mls_commit_dispatch(
     mls::apply_commit_epoch(s, op)
 }
 
-fn apply_realm_key_share_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_realm_key_share(op)
-}
-
 // G3.S2: dispatch adapter for `ak.realm.policy_server`. The reducer
 // helper lives in the dedicated `reducer::realm_policy_server` module;
 // this adapter normalises its `(state, op) -> effect` signature to the
@@ -1000,6 +1008,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::RealmCreate,
         apply_realm_create_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::RealmHistoryAccess,
+        apply_realm_history_access_dispatch,
     );
     m.insert(
         arkret_wire::EventKind::IdentityResolutionUpdate,
@@ -1162,6 +1174,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::CircleMemberState,
         apply_circle_member_state_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::CircleHistoryAccess,
+        apply_circle_history_access_dispatch,
     );
     m.insert(
         arkret_wire::EventKind::SidecarCreate,
@@ -1343,10 +1359,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         apply_mls_proposal_dispatch,
     );
     m.insert(arkret_wire::EventKind::MlsCommit, apply_mls_commit_dispatch);
-    m.insert(
-        arkret_wire::EventKind::RealmKeyShare,
-        apply_realm_key_share_dispatch,
-    );
     // G3.S2: policy server cell
     m.insert(
         arkret_wire::EventKind::RealmPolicyServer,

@@ -12,7 +12,7 @@ use soland_storage::{
 use crate::events::{
     CanonicalEventRow, CanonicalInsertOutcome, insert_canonical_event, realm_actor_lock_key,
 };
-use crate::{PgPool, PgTransactionError, pg_conn};
+use crate::{ExistsRow, PgPool, PgTransactionError, pg_conn};
 
 #[derive(diesel::QueryableByName)]
 struct EventPreflightRow {
@@ -456,10 +456,11 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             let mut ordered = request.events.iter().collect::<Vec<_>>();
             ordered.sort_by(|left, right| left.event.event_id.cmp(&right.event.event_id));
             for item in &ordered {
-                let identity = ids::validated_event_identity_parts(
+                let identity = ids::validated_event_identity_parts_for_suite(
                     &item.event.event_id,
                     &item.event.canonical_digest,
                     &item.event.canonical_bytes,
+                    item.event.digest_suite,
                 )?;
                 sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
                     .bind::<Binary, _>(identity.id.to_vec())
@@ -467,15 +468,49 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     .await
                     .map_err(PersistenceError::database)?;
             }
+            let mut admission_realms = std::collections::BTreeSet::new();
+            for item in &ordered {
+                let event = serde_json::from_value::<arkret_wire::Event>(
+                    item.event.envelope.clone(),
+                )
+                .map_err(|error| {
+                    PersistenceError::Conflict(format!(
+                        "schema_violation: accepted Event envelope is not canonical wire: {error}"
+                    ))
+                })?;
+                admission_realms.insert(event.realm_id.as_str().to_owned());
+            }
+            for realm_id in admission_realms {
+                sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                    .bind::<Text, _>(&realm_id)
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(PersistenceError::database)?;
+                let quarantined = sql_query(
+                    "SELECT EXISTS (SELECT 1 FROM state_seal_quarantine_realms \
+                     WHERE realm_id = $1) AS present",
+                )
+                .bind::<Text, _>(&realm_id)
+                .get_result::<ExistsRow>(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+                if quarantined.present {
+                    return Err(PersistenceError::Conflict(format!(
+                        "seal_collision_quarantine: Realm {realm_id} is blocked"
+                    ))
+                    .into());
+                }
+            }
             let mut incoming = std::collections::BTreeMap::<
                 String,
                 &CanonicalEventRecord,
             >::new();
             for item in ordered {
-                let identity = ids::validated_event_identity_parts(
+                let identity = ids::validated_event_identity_parts_for_suite(
                     &item.event.event_id,
                     &item.event.canonical_digest,
                     &item.event.canonical_bytes,
+                    item.event.digest_suite,
                 )?;
                 let stored = sql_query(
                     "SELECT canonical_bytes, state FROM canonical_events WHERE id = $1",
@@ -573,10 +608,11 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     .into());
                 }
             }
-            let identity = ids::validated_event_identity_parts(
+            let identity = ids::validated_event_identity_parts_for_suite(
                 &request.event.event_id,
                 &request.event.canonical_digest,
                 &request.event.canonical_bytes,
+                request.event.digest_suite,
             )?;
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
                 .bind::<Binary, _>(identity.id.to_vec())
@@ -678,7 +714,9 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 && typed_event.seal_ref.is_none()
                 && typed_event.auth_context.is_none();
             if is_control_move {
-                let event_digest = typed_event.event_digest().map_err(|error| {
+                let event_digest = typed_event
+                    .event_digest_with_digest_suite(request.event.digest_suite)
+                    .map_err(|error| {
                     PersistenceError::Conflict(format!(
                         "schema_violation: accepted Control Move digest failed: {error}"
                     ))
@@ -703,6 +741,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                         if typed_event.kind == arkret_wire::EventKind::DeviceRevoke
                             || !soland_storage::has_self_principal_pcr_device_authorized_shape(
                                 &typed_event,
+                                request.event.digest_suite,
                             )
                         {
                             return Err(PersistenceError::Conflict(
@@ -739,13 +778,14 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 })?;
                 sql_query(
                     "INSERT INTO state_control_events \
-                     (event_digest, realm_id, event_json, control_proposal_ack, ingress_class) \
-                     VALUES ($1, $2, $3, $4, $5) \
+                     (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class) \
+                     VALUES ($1, $2, $3, $4, $5, $6) \
                      ON CONFLICT (event_digest) DO UPDATE SET \
                        control_proposal_ack = COALESCE( \
                          state_control_events.control_proposal_ack, EXCLUDED.control_proposal_ack \
                        ) \
                      WHERE state_control_events.realm_id = EXCLUDED.realm_id \
+                       AND state_control_events.digest_suite = EXCLUDED.digest_suite \
                        AND state_control_events.event_json = EXCLUDED.event_json \
                        AND state_control_events.ingress_class = EXCLUDED.ingress_class \
                        AND (state_control_events.control_proposal_ack IS NULL \
@@ -753,6 +793,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                          OR state_control_events.control_proposal_ack = EXCLUDED.control_proposal_ack)",
                 )
                 .bind::<Text, _>(&event_digest)
+                .bind::<Text, _>(request.event.digest_suite.as_str())
                 .bind::<Text, _>(typed_event.realm_id.as_str())
                 .bind::<Jsonb, _>(&request.event.envelope)
                 .bind::<Nullable<Jsonb>, _>(control_proposal_ack.as_ref())

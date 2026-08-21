@@ -430,9 +430,10 @@ fn publication_reject(message: String) -> SubmitOneError {
 pub(super) fn validate_initial_submission_in_context(
     submission: &arkret_wire::EventInitialSubmission,
     context: arkret_wire::EventSubmitContext,
+    digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<(), SubmitOneError> {
     submission
-        .validate_structural_in_context(context)
+        .validate_structural_in_context(context, digest_suite)
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::BAD_REQUEST,

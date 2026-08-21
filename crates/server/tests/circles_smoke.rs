@@ -171,7 +171,7 @@ fn circle_create_writes_projection() {
                     "title": "Ops",
                     "directory_visibility": "members",
                     "join_rule": "invite",
-                    "history_visibility": "joined",
+                    "history_access": "since_join",
                     "encryption_profile": "mls_rfc9420",
                     "created_by": ALICE,
                     "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),

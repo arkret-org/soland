@@ -23,7 +23,6 @@ mod wire;
 // resolving the helpers it exercises after the structural split.
 // Imports re-exported for `federation_tests.rs` (`use super::*`) which relies
 // on these names resolving through the module that hosts `mod tests`.
-pub(crate) use endpoints::FederationSealsOutcome;
 pub(super) use endpoints::{
     federation_actor_events, federation_realm_members, federation_seals_pull,
     federation_verify_actor,

@@ -234,12 +234,12 @@ pub(super) async fn submit_realm_bootstrap_batch(
         .projections()
         .stage_realm_bootstrap(&projected_operations, context.direct_conversation_founding)
         .map_err(|error| {
-            // `encryption-and-audit.md` §2.10 — the history_visibility ×
+            // `encryption-and-audit.md` §2.10 — the history_access ×
             // content_scheme linkage reason is the wire reason verbatim,
             // matching the single-Event admission path
             // (`operation_policy_reason_code`).
             if error.reason
-                == arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
+                == arkret_wire::ReasonCode::HISTORY_ACCESS_REQUIRES_HISTORY_CAPABLE_SCHEME
             {
                 return SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -267,6 +267,10 @@ pub(super) async fn submit_realm_bootstrap_batch(
         state,
         &bootstrap_realm_id,
         &typed_events,
+        &validated
+            .iter()
+            .map(|parsed| parsed.digest_suite)
+            .collect::<Vec<_>>(),
         received_at,
         authorization_leases
             .and_then(|leases| leases.first())
@@ -420,10 +424,14 @@ pub(super) async fn submit_realm_bootstrap_batch(
             ));
         }
     }
-    for (event, ack) in accepted_typed_events.iter().zip(&control_proposal_acks) {
+    for ((event, ack), parsed) in accepted_typed_events
+        .iter()
+        .zip(&control_proposal_acks)
+        .zip(&validated)
+    {
         state
             .projections()
-            .put_pending_control_event_with_ack(event, ack)
+            .put_pending_control_event_with_ack(event, ack, parsed.digest_suite)
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,

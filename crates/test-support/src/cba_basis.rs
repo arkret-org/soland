@@ -41,12 +41,21 @@ const FIXTURE_BASIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
 const FIXTURE_BASIS_ID_DOMAIN: &str = "soland:test-support:realm-basis:";
 /// Stable MLS group id used by E2EE fixture payloads.
 pub const FIXTURE_MLS_GROUP_ID: &str = "fixtureMlsGroup01";
-/// The recovery notary a fixture Realm names, and the organization controlling
-/// it. The organization is deliberately not the Realm creator's: `single_did`
-/// recovery diversity is only satisfied when they differ.
-
 /// One fixture Realm's accepted authorization basis for one subject.
 pub type RealmBasis = soland_services::conformance_basis::ConformanceRealmBasis;
+
+/// Build a frozen single-signer fixture from a real deterministic Ed25519 key.
+#[must_use]
+pub fn test_single_signer_notary(full_did: &str) -> arkret_wire::NotaryValue {
+    let signer = soland_services::conformance_basis::ConformanceNotarySigner::ed25519(
+        DidFullId::new(full_did.to_owned()).expect("fixture notary full DID"),
+        arkret_wire::DidUrl::new(format!("{full_did}#notary-key"))
+            .expect("fixture notary verification method"),
+        [0x53; 32],
+    )
+    .expect("fixture notary signer");
+    arkret_wire::NotaryValue::single_signer(signer.descriptor)
+}
 
 /// One fixture family's basis identity.
 ///
@@ -125,12 +134,14 @@ pub fn realm_basis_for_principal_server(
         .expect("fixture basis cache")
         .entry(key)
         .or_insert_with(|| {
+            let notary_signer = fixture_notary_signer(notary);
             soland_services::conformance_basis::build_realm_basis(
                 realm_id,
                 subject,
                 soland_services::conformance_basis::RealmBasisFixtureOptions {
                     principal_server_id,
-                    notary_authority: Some(notary),
+                    notary_signer: &notary_signer,
+                    install_notary: true,
                     data_plane_actions: &actions,
                     fixture_id_domain: basis.id_domain,
                 },
@@ -173,6 +184,21 @@ pub fn basis_seal_with_id(seal_id: &SealId) -> Option<Seal> {
 /// the Realm's notary profile names the service.
 fn fixture_notary_did() -> String {
     crate::app_state(crate::app_config()).service_id().clone()
+}
+
+fn fixture_notary_signer(
+    expected_actor_id: &str,
+) -> soland_services::conformance_basis::ConformanceNotarySigner {
+    let state = crate::app_state(crate::app_config());
+    assert_eq!(state.service_id(), expected_actor_id);
+    soland_services::conformance_basis::ConformanceNotarySigner::ed25519(
+        state.service_full_id(),
+        state
+            .service_verification_method("notary-key")
+            .expect("fixture notary verification method"),
+        state.notary_signing_key().to_bytes(),
+    )
+    .expect("fixture notary signer")
 }
 
 fn fixture_pcr_founding_device_descriptor(
@@ -260,6 +286,7 @@ pub fn fixture_principal_control_realm_create(principal_id: &str) -> arkret_wire
             principal_id: principal.clone(),
             principal_full_id: principal_full_id.clone(),
             principal_server_id: crate::fixture_principal_server_id(),
+            notary: test_single_signer_notary(principal_full_id.as_str()),
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             )
@@ -312,7 +339,7 @@ pub async fn seed_realm_basis(
     .expect("fixture basis subject projection");
     let basis = realm_basis(realm_id, &subject_core, state.service_id(), fixture_basis);
     state
-        .test_put_seal(&basis.seal)
+        .test_put_seal(&basis.seal, arkret_canonical::DigestSuite::Sha256)
         .expect("fixture basis Seal");
     state
         .test_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)
@@ -352,9 +379,8 @@ pub fn realm_genesis_payload(
     trust_domain: &str,
     _created_at: chrono::DateTime<chrono::Utc>,
 ) -> serde_json::Value {
-    let notary_actor_id = arkret_identifiers::DidCoreId::new(notary_actor_id.to_owned())
-        .expect("fixture notary core id");
-    soland_http::state::realm_genesis_payload(subject, &notary_actor_id, trust_domain)
+    let notary_signer = fixture_notary_signer(notary_actor_id);
+    soland_http::state::realm_genesis_payload(subject, &notary_signer.descriptor, trust_domain)
 }
 
 /// Store the Realm's canonical `ak.realm.create`.
@@ -392,7 +418,6 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
             arkret_wire::EventKind::RealmProfile,
             arkret_wire::EventKind::RealmPolicyBundle,
             arkret_wire::EventKind::RealmJoinRule,
-            arkret_wire::EventKind::RealmHistoryVisibility,
             arkret_wire::EventKind::RealmDiscovery,
             arkret_wire::EventKind::RealmDeliveryBindingPolicy,
             arkret_wire::EventKind::MemberState,
@@ -509,6 +534,7 @@ async fn project_fixture_genesis_event(
             arkret_wire::OperationKind::Create,
             None,
             &event,
+            arkret_canonical::DigestSuite::Sha256,
         )
         .expect("fixture PCR genesis projected Operation");
         let effect = projection.apply_projected(&operation, &writes, state.test_hlc());
@@ -601,10 +627,6 @@ async fn persist_and_project_realm_genesis_event(
             serde_json::json!({"value": "invite"}),
         ),
         (
-            arkret_wire::EventKind::RealmHistoryVisibility,
-            serde_json::json!({"value": "joined"}),
-        ),
-        (
             arkret_wire::EventKind::RealmDiscovery,
             serde_json::json!({"value": "invite_only"}),
         ),
@@ -648,7 +670,7 @@ async fn persist_and_project_realm_genesis_event(
         }
         followup.prev_refs = vec![previous_event_id];
         followup
-            .refresh_content_bound_identity()
+            .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
             .expect("fixture bootstrap follow-up identity");
         previous_event_id = followup.event_id.clone();
         bootstrap_events.push(followup);
@@ -688,6 +710,7 @@ async fn persist_and_project_realm_genesis_event(
             arkret_wire::OperationKind::Create,
             None,
             &event,
+            arkret_canonical::DigestSuite::Sha256,
         )
         .expect("fixture genesis projected Operation");
         let effect = projection.apply_projected(&operation, &writes, state.test_hlc());

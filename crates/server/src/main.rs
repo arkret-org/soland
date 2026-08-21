@@ -236,20 +236,6 @@ async fn run() -> anyhow::Result<()> {
         "background worker configured"
     );
 
-    // MAL-11 compaction prune walk worker. No-op when
-    // `SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS=0` (the default) — the
-    // explicit `POST /_soland/admin/realms/{realm_id}/seal-dag/prune`
-    // endpoint stays operator-driven. Set the env var to enable periodic
-    // walking; see `compactor.rs` for the policy and "when to enable"
-    // rationale.
-    let _compactor = soland_http::compactor::spawn(state.clone());
-    tracing::info!(
-        worker = "compactor",
-        enabled = state.config().compaction_prune_walk_interval_seconds > 0,
-        interval_seconds = state.config().compaction_prune_walk_interval_seconds,
-        "background worker configured"
-    );
-
     let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     tracing::info!(
         worker = "control_seal_coordinator",
@@ -302,6 +288,12 @@ async fn run() -> anyhow::Result<()> {
     tracing::info!(
         worker = "federation_frontier_exchange",
         enabled = state.config().federation_outbound_enabled,
+        "background worker configured"
+    );
+    let _rrk_acquisition = soland_http::routing::federation::rrk_acquisition::spawn(state.clone());
+    tracing::info!(
+        worker = "rrk_acquisition",
+        enabled = _rrk_acquisition.is_some(),
         "background worker configured"
     );
 

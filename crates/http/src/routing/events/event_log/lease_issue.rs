@@ -368,16 +368,28 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
             Some(unit.authority_root),
         )
     };
+    let genesis_live_digest_suite = arkret::declared_genesis_live_digest_suite(&events[0])
+        .map_err(|error| {
+            AppError::new(ErrorCode::SchemaViolation, error.to_string())
+                .with_status(StatusCode::BAD_REQUEST)
+        })?;
     let event_digests = events
         .iter()
         .map(|event| {
-            let digest = event.event_digest().map_err(|error| {
-                AppError::new(
-                    ErrorCode::SchemaViolation,
-                    format!("anchor Event digest failed: {error}"),
-                )
-                .with_status(StatusCode::BAD_REQUEST)
-            })?;
+            let digest_suite = if event.kind == arkret_wire::EventKind::RealmCreate {
+                arkret_canonical::DigestSuite::Sha256
+            } else {
+                genesis_live_digest_suite
+            };
+            let digest = event
+                .event_digest_with_digest_suite(digest_suite)
+                .map_err(|error| {
+                    AppError::new(
+                        ErrorCode::SchemaViolation,
+                        format!("anchor Event digest failed: {error}"),
+                    )
+                    .with_status(StatusCode::BAD_REQUEST)
+                })?;
             arkret_identifiers::Hash::new(digest).map_err(|error| {
                 AppError::new(
                     ErrorCode::SchemaViolation,
@@ -764,8 +776,10 @@ mod tests {
                 "digest_algorithm": "sha256",
                 "security_class": "standard",
                 "encryption_profile": "none",
-                "notary_profile": "single_did",
-                "notary": {"kind": "single_did", "actor_id": ACTOR_CORE},
+                "notary": serde_json::to_value(crate::test_single_signer_notary(
+                    ACTOR,
+                    33,
+                )).unwrap(),
                 "capability_action_registry_digest": REGISTRY_DIGEST
             }}),
         );
@@ -800,18 +814,13 @@ mod tests {
             ),
             event(EventKind::RealmJoinRule, 3, json!({"value": "invite"})),
             event(
-                EventKind::RealmHistoryVisibility,
-                4,
-                json!({"value": "shared"}),
-            ),
-            event(
                 EventKind::RealmDiscovery,
-                5,
+                4,
                 json!({"value": "invite_only"}),
             ),
             event(
                 EventKind::RealmDeliveryBindingPolicy,
-                6,
+                5,
                 json!({"allow_unroutable_members": true}),
             ),
             creator_member,

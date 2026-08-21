@@ -44,6 +44,8 @@ mod devices;
 mod events;
 mod federation;
 mod governance;
+mod governance_history;
+mod history_mailbox;
 mod idempotency;
 #[doc(hidden)]
 pub mod ids;
@@ -88,6 +90,8 @@ pub use devices::*;
 pub use events::*;
 pub use federation::*;
 pub use governance::*;
+pub use governance_history::*;
+pub use history_mailbox::*;
 pub use idempotency::*;
 pub use invite_locators::*;
 pub use join_applications::*;
@@ -385,6 +389,10 @@ pub trait FederationGovernanceStoreRegistry: Send + Sync {
     fn realm_organization_statements(&self) -> &dyn RealmOrganizationStatementStore;
     fn audit(&self) -> &dyn AuditStore;
     fn join_applications(&self) -> &dyn JoinApplicationStore;
+    fn governance_dependencies(&self) -> &dyn GovernanceDependencyStore;
+    fn history_traversal_retentions(&self) -> &dyn HistoryTraversalRetentionStore;
+    fn pending_rrk_acquisitions(&self) -> &dyn PendingRrkAcquisitionStore;
+    fn history_mailboxes(&self) -> &dyn HistoryMailboxStore;
 }
 
 /// Delivery, policy, recovery, and service identity persistence registry.

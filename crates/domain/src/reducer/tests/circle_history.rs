@@ -7,7 +7,7 @@ const CIRCLE: &str = "ak:circle:AUiSHUfqumU5_UtRrOIga2jjSmucw5MpSQdam3TtzPQu";
 const ALICE: &str = "ak:did_core:web:alice";
 const BOB: &str = "ak:did_core:web:bob";
 
-fn seed_state(history_visibility: &str) -> (ProjectionState, ServerHlc, chrono::DateTime<Utc>) {
+fn seed_state(history_access: &str) -> (ProjectionState, ServerHlc, chrono::DateTime<Utc>) {
     let mut state = ProjectionState::new();
     let base = Utc.with_ymd_and_hms(2026, 6, 19, 8, 0, 0).unwrap();
     for actor in [ALICE, BOB] {
@@ -41,10 +41,12 @@ fn seed_state(history_visibility: &str) -> (ProjectionState, ServerHlc, chrono::
             display: serde_json::json!({"short_name":"Ops","color_token":"slate","symbol":{"glyph":"ring"}}),
             directory_visibility: "members".to_owned(),
             join_rule: "invite".to_owned(),
-            history_visibility: history_visibility.to_owned(),
+            history_access: history_access.to_owned(),
             content_encryption_floor: None,
             metadata_encryption_floor: None,
             encryption_profile: "mls_rfc9420".to_owned(),
+            content_scheme: Some("mls_rfc9420".to_owned()),
+            durability_policy: None,
             mls_group_ref: None,
             state: CircleLifecycleState::Active,
             state_changed_at: None,
@@ -59,8 +61,8 @@ fn seed_state(history_visibility: &str) -> (ProjectionState, ServerHlc, chrono::
 }
 
 #[test]
-fn circle_history_uses_invite_and_join_boundaries() {
-    let (mut state, hlc, base) = seed_state("invited");
+fn circle_history_uses_current_join_boundary() {
+    let (mut state, hlc, base) = seed_state("since_join");
     let invite_at = base + Duration::minutes(10);
     let join_at = base + Duration::minutes(20);
     let mut invite = make_operation(
@@ -96,17 +98,13 @@ fn circle_history_uses_invite_and_join_boundaries() {
         ProjectionEffect::CircleMemberStateChanged { .. }
     ));
 
-    assert!(!state.circle_scope_visible_to_actor_at(CIRCLE, BOB, invite_at - Duration::seconds(1)));
-    assert!(state.circle_scope_visible_to_actor_at(CIRCLE, BOB, invite_at));
-
-    state.circles.get_mut(CIRCLE).unwrap().history_visibility = "joined".to_owned();
     assert!(!state.circle_scope_visible_to_actor_at(CIRCLE, BOB, join_at - Duration::seconds(1)));
     assert!(state.circle_scope_visible_to_actor_at(CIRCLE, BOB, join_at));
 }
 
 #[test]
 fn realm_leave_cascades_to_circle_history_membership() {
-    let (mut state, hlc, base) = seed_state("joined");
+    let (mut state, hlc, base) = seed_state("since_join");
     let join_at = base + Duration::minutes(5);
     let leave_at = base + Duration::minutes(30);
     let mut join = make_operation(
@@ -154,14 +152,14 @@ fn realm_leave_cascades_to_circle_history_membership() {
 
 #[test]
 fn realm_leave_enqueues_realm_default_mls_remove_obligation() {
-    let (mut state, hlc, base) = seed_state("joined");
+    let (mut state, hlc, base) = seed_state("since_join");
     let group_id = "mls-group-01904100-0000-7000-8000-dddddddddddd";
     let effective_scope = serde_json::json!({
         "kind": "realm",
         "realm_id": REALM,
     });
     state.mls_commit_epochs.insert(
-        MlsCommitEpochKey::new(format!("realm\0{REALM}"), group_id),
+        MlsCommitEpochKey::new(REALM, group_id),
         MlsCommitEpoch {
             group_id: group_id.to_owned(),
             effective_scope,
@@ -212,7 +210,7 @@ fn realm_leave_enqueues_realm_default_mls_remove_obligation() {
 
 #[test]
 fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
-    let (mut state, _hlc, base) = seed_state("joined");
+    let (mut state, _hlc, base) = seed_state("since_join");
     let controller_generation =
         arkret_identifiers::EventId::new("ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim")
             .unwrap();
@@ -285,7 +283,7 @@ fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
 
 #[test]
 fn circle_member_leave_enqueues_mls_remove_obligation() {
-    let (mut state, hlc, base) = seed_state("joined");
+    let (mut state, hlc, base) = seed_state("since_join");
     state.circles.get_mut(CIRCLE).unwrap().mls_group_ref = Some("ak:mls:group:circle".to_owned());
     let join_at = base + Duration::minutes(5);
     let leave_at = base + Duration::minutes(30);
@@ -337,7 +335,7 @@ fn circle_member_leave_enqueues_mls_remove_obligation() {
 
 #[test]
 fn circle_tombstone_enqueues_mls_remove_obligations_for_active_members() {
-    let (mut state, hlc, base) = seed_state("joined");
+    let (mut state, hlc, base) = seed_state("since_join");
     {
         let circle = state.circles.get_mut(CIRCLE).unwrap();
         circle.mls_group_ref = Some("ak:mls:group:circle".to_owned());

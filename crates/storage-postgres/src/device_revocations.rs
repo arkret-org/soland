@@ -23,9 +23,9 @@ struct TargetStateRow {
     #[diesel(sql_type = Bool)]
     decision_overdue: bool,
     #[diesel(sql_type = Nullable<Text>)]
-    sealed_by: Option<String>,
+    covering_seal_id: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
-    sealed_at: Option<chrono::DateTime<Utc>>,
+    covered_at: Option<chrono::DateTime<Utc>>,
 }
 
 #[derive(QueryableByName)]
@@ -66,8 +66,8 @@ struct DecisionCommitRow {
     control_proposal_ack: Value,
     #[diesel(sql_type = Jsonb)]
     proposal_decisions: Value,
-    #[diesel(sql_type = Nullable<Text>)]
-    sealed_by: Option<String>,
+    #[diesel(sql_type = Bool)]
+    is_sealed: bool,
 }
 
 #[derive(QueryableByName)]
@@ -146,10 +146,20 @@ async fn target_rows(
 ) -> PersistenceResult<Vec<TargetStateRow>> {
     sql_query(
         "SELECT t.proposal_digest, t.proposal_event_id, t.accepted_at, t.acceptance_seq, \
-                t.control_proposal_ack, c.proposal_decisions, c.decision_overdue, \
-                c.sealed_by, c.sealed_at \
+                t.control_proposal_ack, c.proposal_decisions, \
+                COALESCE(b.decision_overdue, false) AS decision_overdue, \
+                b.seal_id AS covering_seal_id, b.sealed_at AS covered_at \
          FROM device_revocation_targets t \
          JOIN state_control_events c ON c.event_digest = t.proposal_digest \
+         LEFT JOIN LATERAL ( \
+             SELECT binding.seal_id, binding.sealed_at, \
+                    bool_or(binding.decision_overdue) OVER () AS decision_overdue \
+             FROM state_seal_control_events binding \
+             WHERE binding.event_digest = c.event_digest \
+               AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                               WHERE q.seal_id = binding.seal_id) \
+             ORDER BY binding.sealed_at, binding.seal_id LIMIT 1 \
+         ) b ON true \
          WHERE t.principal_id = $1 AND t.principal_server_id = $2 AND t.device_id = $3 \
            AND t.target_device_authorize_event_id = $4 \
            AND t.target_device_generation_ref = $5 \
@@ -185,7 +195,7 @@ fn terminal_reject(
 
 fn status_from_rows(rows: &[TargetStateRow]) -> DeviceRevocationGateStatus {
     if let Some(sealed) = rows.iter().find_map(|row| {
-        row.sealed_by
+        row.covering_seal_id
             .as_ref()
             .map(|seal| (row.acceptance_seq, &row.proposal_digest, seal))
     }) {
@@ -194,7 +204,7 @@ fn status_from_rows(rows: &[TargetStateRow]) -> DeviceRevocationGateStatus {
         };
     }
     rows.iter()
-        .filter(|row| row.sealed_by.is_none() && !is_rejected(&row.proposal_decisions))
+        .filter(|row| row.covering_seal_id.is_none() && !is_rejected(&row.proposal_decisions))
         .map(|row| row.proposal_digest.as_str())
         .min()
         .map_or(DeviceRevocationGateStatus::Active, |digest| {
@@ -243,10 +253,21 @@ pub(crate) async fn insert_transition_in_transaction(
     .await?;
     let existing = sql_query(
         "SELECT t.proposal_digest, t.proposal_event_id, t.accepted_at, t.acceptance_seq, \
-                t.control_proposal_ack, c.proposal_decisions, c.decision_overdue, \
-                c.sealed_by, c.sealed_at \
+                t.control_proposal_ack, c.proposal_decisions, \
+                COALESCE(b.decision_overdue, false) AS decision_overdue, \
+                b.seal_id AS covering_seal_id, b.sealed_at AS covered_at \
          FROM device_revocation_targets t JOIN state_control_events c \
-           ON c.event_digest = t.proposal_digest WHERE t.proposal_digest = $1 FOR UPDATE",
+           ON c.event_digest = t.proposal_digest \
+         LEFT JOIN LATERAL ( \
+             SELECT binding.seal_id, binding.sealed_at, \
+                    bool_or(binding.decision_overdue) OVER () AS decision_overdue \
+             FROM state_seal_control_events binding \
+             WHERE binding.event_digest = c.event_digest \
+               AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
+                               WHERE q.seal_id = binding.seal_id) \
+             ORDER BY binding.sealed_at, binding.seal_id LIMIT 1 \
+         ) b ON true \
+         WHERE t.proposal_digest = $1 FOR UPDATE OF t, c",
     )
     .bind::<Text, _>(&transition.proposal_digest)
     .get_result::<TargetStateRow>(&mut *conn)
@@ -354,10 +375,10 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
                     serde_json::from_value(row.control_proposal_ack).map_err(|error| {
                         PersistenceError::Internal(format!("stored revoke Ack: {error}"))
                     })?;
-                let status = if let Some(seal) = row.sealed_by {
+                let status = if let Some(seal) = row.covering_seal_id {
                     DeviceRevocationTargetStatus::Revoked {
                         covering_seal_id: seal,
-                        sealed_at: row.sealed_at.ok_or_else(|| {
+                        sealed_at: row.covered_at.ok_or_else(|| {
                             PersistenceError::Internal(
                                 "sealed device revocation target lacks sealed_at".to_owned(),
                             )
@@ -503,14 +524,16 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
         let decision = decision.clone();
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             let row = sql_query(
-                "SELECT c.control_proposal_ack,c.proposal_decisions,c.sealed_by \
+                "SELECT c.control_proposal_ack,c.proposal_decisions, \
+                        EXISTS (SELECT 1 FROM state_seal_control_events b \
+                                WHERE b.event_digest = c.event_digest) AS is_sealed \
                  FROM state_control_events c WHERE c.event_digest=$1 FOR UPDATE",
             )
             .bind::<Text, _>(proposal_digest)
             .get_result::<DecisionCommitRow>(&mut *conn)
             .await
             .map_err(PersistenceError::database)?;
-            if row.sealed_by.is_some() {
+            if row.is_sealed {
                 return Err(PersistenceError::Conflict(format!(
                     "failed_precondition: sealed control Event {proposal_digest} cannot receive another proposal decision"
                 ))

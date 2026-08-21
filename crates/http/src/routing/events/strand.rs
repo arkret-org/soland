@@ -62,7 +62,7 @@ pub fn discussion_track_for_projection_event(
     Some(default_discussion_track(strand_id, track_id))
 }
 
-pub async fn strand_history_visibility_for_realm(state: &AppState, realm_id: &str) -> &'static str {
+pub async fn strand_history_access_for_realm(state: &AppState, realm_id: &str) -> &'static str {
     if realm_discoverability(state, realm_id).await == "public" {
         "shared"
     } else {
@@ -91,7 +91,7 @@ pub async fn strand_projection_for_realm(
         .map(|meta| meta.updated_at)
         .unwrap_or(created_at);
     let deleted = meta.as_ref().is_some_and(|meta| meta.deleted);
-    let history_visibility = strand_history_visibility_for_realm(state, realm_id).await;
+    let history_access = strand_history_access_for_realm(state, realm_id).await;
     // `kind: "room"` and `room_kind` were removed in revision 0a5ab85; Realm
     // is the v1 boundary and the Strand.kind discriminator MUST be a v1 value
     // (e.g. "discussion").
@@ -114,7 +114,7 @@ pub async fn strand_projection_for_realm(
             "discussion": {
                 "enabled": true,
                 "track_kind": "discussion",
-                "history_visibility": history_visibility,
+                "history_access": history_access,
                 "fields": {}
             }
         },
