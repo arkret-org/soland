@@ -272,7 +272,9 @@ async fn public_pairing_ceremony_verifies_controller_proofs_up_to_the_recovery_g
     authorize.executed_by = Some(controller_core.clone());
     authorize.authorization_ref = Some(record.controller_authorization_ref.clone().into());
     authorize.seal_basis = Some(genesis_seal.seal_basis());
-    authorize.refresh_content_bound_identity().unwrap();
+    authorize
+        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
     let mut authorize = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
         authorize,
         arkret_canonical::DigestSuite::Sha256,
@@ -344,6 +346,8 @@ async fn public_pairing_ceremony_verifies_controller_proofs_up_to_the_recovery_g
                 verification_method: controller_verification_method.clone(),
                 event_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                     .unwrap(),
+                signer_resolution_evidence_ref: None,
+                signer_resolution_evidence_digest: None,
                 created_at,
                 domain: None,
                 audience: None,

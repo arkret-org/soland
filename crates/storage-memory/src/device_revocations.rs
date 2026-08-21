@@ -150,7 +150,7 @@ impl MemoryDeviceRevocationStore {
     /// Derive each pending target's terminal state from the bound generic
     /// Control Event store, mirroring the Postgres adapter's
     /// `device_revocation_targets JOIN state_control_events` semantics:
-    /// `sealed_by` promotes the target to `Revoked` (and stages the same
+    /// the first canonical covering Seal promotes the target to `Revoked` (and stages the same
     /// cleanup intent `stage_sealed_revocation_in_transaction` would), a
     /// terminal signed reject settles `Rejected`, and interim decisions are
     /// mirrored into the pending record. Without a bound store (durable
@@ -181,7 +181,7 @@ impl MemoryDeviceRevocationStore {
                     .targets
                     .get_mut(&proposal_digest)
                     .expect("target stays present under the held lock");
-                if let Some(covering_seal_id) = snapshot.sealed_by {
+                if let Some(covering_seal_id) = snapshot.covering_seals.first().cloned() {
                     // The snapshot carries the covering Seal id but not the
                     // Seal's own timestamp, so the settlement observation time
                     // becomes the durable sealed_at, exactly once.

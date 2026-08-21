@@ -23,10 +23,12 @@ use super::{
     DeviceInventoryStore, DeviceKeyStore, DeviceMessageBatchCommitOutcome,
     DeviceMessageBatchItemRecord, DeviceMessageBatchRecord, DeviceMessageRecord,
     DeviceMessageStore, DeviceMessageTargetSnapshotGuard, DevicePairingAuthorizationCommit,
-    DevicePairingRecord, DevicePairingStore, DeviceRevocationGateSelector, EventCommitRequest,
-    EventCommitUnitOfWork, EventStore, ExactWriteOutcome, FederationOutboxClaim,
-    FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
-    FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
+    DevicePairingRecord, DevicePairingStore, DeviceRevocationGateSelector,
+    DeviceRevocationGateStatus, DeviceRevocationStore, DeviceRevocationTargetStatus,
+    DeviceRevocationTransition, EventCommitRequest, EventCommitUnitOfWork, EventStore,
+    ExactWriteOutcome, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
+    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
+    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
     FederationOutboxTransition, GovernanceDependencyStore, HandleClaimEvidenceRecord,
     IdempotencyRecord, IdempotencyStore, InviteReceivePolicyStore, MemberIdentityEventRecord,
     MemberIdentityReplacementEdge, MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord,
@@ -3798,7 +3800,10 @@ fn contract_device_revoke_fixture(
         created_at,
     )
     .expect("contract device revoke event");
-    let canonical_digest = event.event_digest().expect("contract event digest");
+    let digest_suite = arkret_canonical::DigestSuite::Sha256;
+    let canonical_digest = event
+        .event_digest_with_digest_suite(digest_suite)
+        .expect("contract event digest");
     let canonical_bytes = arkret_canonical::canonical_json_bytes(
         &event.digest_payload().expect("contract digest payload"),
     )
@@ -3810,6 +3815,7 @@ fn contract_device_revoke_fixture(
         realm_id: Some(realm_id.clone()),
         kind: event.kind.to_string(),
         schema_id: "arkret://events/device/revoke/v1".to_owned(),
+        digest_suite,
         canonical_digest: canonical_digest.clone(),
         canonical_bytes,
         envelope: serde_json::to_value(&event).expect("contract wire event encodes"),
@@ -3879,9 +3885,10 @@ fn contract_covering_seal(
         }),
         sealed_at,
         hlc: arkret_wire::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).expect("fixture HLC"),
-        kind: Default::default(),
     };
-    seal.id = seal.derive_id().expect("derive fixture Seal id");
+    seal.id = seal
+        .derive_id(arkret_canonical::DigestSuite::Sha256)
+        .expect("derive fixture Seal id");
     seal
 }
 
@@ -3901,7 +3908,7 @@ pub async fn assert_device_revocation_seal_settlement_contract(
 
     stores
         .control_events
-        .put_pending_with_ingress(&event, &ingress)
+        .put_pending_with_ingress(&event, &ingress, arkret_canonical::DigestSuite::Sha256)
         .expect("admit pending Control Move");
     let outcome = stores
         .unit_of_work

@@ -1434,7 +1434,9 @@ mod consent_proof_tests {
             format!("sha256:{}", "1".repeat(64)),
             "did_inception",
         )];
-        genesis.refresh_content_bound_identity().unwrap();
+        genesis
+            .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
         let pcr_realm_id = genesis.realm_id.clone();
         let signing_key = arkret_signatures::development_signing_key(
             request.signature.verification_method.as_str(),
@@ -1466,7 +1468,9 @@ mod consent_proof_tests {
         )
         .unwrap();
         authorize.prev_refs = vec![genesis.event_id.clone()];
-        authorize.refresh_content_bound_identity().unwrap();
+        authorize
+            .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
         state
             .test_persistence()
             .events()

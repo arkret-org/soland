@@ -1478,32 +1478,6 @@ impl ProjectionService {
         )
     }
 
-    pub async fn commit_event_seal_if_frontier_with_revocations(
-        &self,
-        seal: &Seal,
-        digest_suite: arkret_canonical::DigestSuite,
-        expected_store_frontier: &[SealId],
-        new_ops: &[(CellRef, IssuedOp)],
-        covered: &std::collections::BTreeSet<Hash>,
-    ) -> StoreResult<bool> {
-        let inserted = self.commit_event_seal_if_frontier(
-            seal,
-            digest_suite,
-            expected_store_frontier,
-            new_ops,
-            covered,
-        )?;
-        if inserted && let Some(store) = &self.device_revocations {
-            for digest in covered {
-                store
-                    .mark_sealed(digest.as_str(), seal.id.as_str(), seal.sealed_at)
-                    .await
-                    .map_err(|error| StoreError::Backend(error.to_string()))?;
-            }
-        }
-        Ok(inserted)
-    }
-
     #[doc(hidden)]
     pub fn conformance_put_seal(
         &self,

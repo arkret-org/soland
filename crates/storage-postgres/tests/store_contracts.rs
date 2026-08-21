@@ -2,7 +2,8 @@ use soland_storage::contract_tests::{
     DeviceRevocationSealSettlementStores, EventCommitContractStores,
     assert_atomic_batch_outbox_rollback_contract,
     assert_control_proposal_authority_ack_store_contract,
-    assert_device_message_snapshot_guard_contract, assert_event_commit_unit_of_work_contract,
+    assert_device_message_snapshot_guard_contract,
+    assert_device_revocation_seal_settlement_contract, assert_event_commit_unit_of_work_contract,
     assert_federation_outbox_store_contract, assert_governance_unscoped_signer_evidence_contract,
     assert_idempotency_store_contract, assert_last_resort_claim_ledger_contract,
     assert_mimi_consent_correlation_store_contract, assert_mls_keypackage_retirement_contract,
@@ -798,7 +799,11 @@ mod control_move_ingress_negatives {
         )
         .unwrap();
         let realm_id = event.realm_id.clone();
-        let proposal_digest = arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
+        let digest_suite = arkret_canonical::DigestSuite::Sha256;
+        let proposal_digest = arkret_identifiers::Hash::new(
+            event.event_digest_with_digest_suite(digest_suite).unwrap(),
+        )
+        .unwrap();
         let authority_set_ref =
             arkret_identifiers::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
         // The durable ingress path validates the aggregate Ack's protocol
@@ -861,6 +866,7 @@ mod control_move_ingress_negatives {
                     realm_id: Some(self.realm_id.to_string()),
                     kind: arkret_wire::EventKind::RealmCreate.as_str().to_owned(),
                     schema_id: "ak.schema.realm.v1".to_owned(),
+                    digest_suite: arkret_canonical::DigestSuite::Sha256,
                     canonical_digest: self.proposal_digest.to_string(),
                     canonical_bytes: self.canonical_bytes.clone(),
                     envelope: serde_json::to_value(&self.event).unwrap(),
@@ -1036,6 +1042,7 @@ mod control_move_ingress_negatives {
             .put_pending_with_ingress(
                 &fixture.event,
                 &ControlProposalIngress::AckRequired(fixture.ack.clone()),
+                arkret_canonical::DigestSuite::Sha256,
             )
             .unwrap();
         let ackless = ControlProposalIngress::AcklessSelfPrincipal(AcklessSelfPrincipalIngress {
@@ -1046,9 +1053,11 @@ mod control_move_ingress_negatives {
         });
         assert!(
             matches!(
-                stores
-                    .control_event_store
-                    .put_pending_with_ingress(&fixture.event, &ackless),
+                stores.control_event_store.put_pending_with_ingress(
+                    &fixture.event,
+                    &ackless,
+                    arkret_canonical::DigestSuite::Sha256,
+                ),
                 Err(StoreError::Conflict(_))
             ),
             "an Ack-required Move cannot be replayed as Ack-less"
@@ -1058,6 +1067,7 @@ mod control_move_ingress_negatives {
             .put_pending_with_ingress(
                 &fixture.event,
                 &ControlProposalIngress::AckRequired(fixture.ack.clone()),
+                arkret_canonical::DigestSuite::Sha256,
             )
             .expect("the byte-identical class and Ack remain idempotent");
     }
