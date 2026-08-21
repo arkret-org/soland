@@ -40,15 +40,15 @@ fn projected_cell_targets(envelope: &Value) -> std::collections::BTreeSet<String
 // presented together with a DPoP proof (`enforce_agent_session_authority`), so
 // a locally seeded bearer SessionRecord can no longer stand in for one. The
 // fixture below runs the real prepare/commit provisioning ceremony over HTTP,
-// then writes the runtime-key activation through the storage port: the public
-// pairing ceremony still cannot complete end-to-end because
-// `active_series_pointer_is_current` is an unconditional fail-closed stub, so
-// the `agent_key_pair` PCR recovery gate refuses every caller (the wire
-// verification in front of that gate is covered over real HTTP by
-// `agent_pairing_ceremony.rs`). Every binding digest and the controller-proof
-// JWS are still produced by the real SDK functions, so the chain under test —
-// introspection, DPoP binding, Agent authority enforcement, scope gate —
-// stays fully real.
+// then writes the runtime-key activation through the storage port. That
+// shortcut is deliberate: what these tests exercise is session-grant
+// semantics, not the pairing ceremony, and skipping the controller-side
+// recovery-backup and Seal steps keeps the fixture to the state the grant
+// tests actually need. The full public ceremony through to runtime activation
+// is covered over real HTTP by `agent_pairing_ceremony.rs`. Every binding
+// digest and the controller-proof JWS are still produced by the real SDK
+// functions, so the chain under test — introspection, DPoP binding, Agent
+// authority enforcement, scope gate — stays fully real.
 
 /// A presented Agent SessionGrant: the bearer JWT plus the holder (DPoP) key
 /// the introspected grant's `cnf_jkt` is bound to.

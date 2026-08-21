@@ -351,9 +351,9 @@ pub fn verify_jws_with_pinned_document(
 
 /// Principal-authorization verification error.
 ///
-/// Generic principal authorization is fail-closed until the caller supplies
-/// an exact `(principal_id, principal_server_id)` account authority context
-/// and accepted local device evidence. The sole current-DID path below is
+/// Principal authorization has no core-only entry point: every verifier below
+/// takes an exact `(principal_id, principal_server_id)` account authority
+/// context plus accepted local device evidence. The sole current-DID path is
 /// restricted to registered identity-resolution updates.
 #[derive(Debug)]
 pub enum PrincipalAuthorizedJwsError {
@@ -417,18 +417,6 @@ async fn principal_verification_source(
     Ok((
         method_did,
         PrincipalVerificationSource::AuthorityDocument(Box::new(document)),
-    ))
-}
-
-pub async fn verify_principal_authorized_jws_ed25519_async(
-    _canonical_bytes: &[u8],
-    _jws: &str,
-    _verification_method: &str,
-    _principal_id: &str,
-    _state: &AppState,
-) -> Result<(), PrincipalAuthorizedJwsError> {
-    Err(PrincipalAuthorizedJwsError::Verification(
-        "principal authorization requires an explicit account authority context".to_owned(),
     ))
 }
 
@@ -852,9 +840,9 @@ pub fn verify_principal_authorized_control_ack_jws_async<'a>(
     })
 }
 
-/// Event-proof counterpart of [`verify_principal_authorized_jws_ed25519_async`].
+/// Event-proof verifier for principal-authorized Events.
 ///
-/// # Why Event proofs may not use the generic entry point
+/// # Why Event proofs may not use a generic detached-JWS entry point
 ///
 /// An Event proof's JWS does not sign the bytes handed to a generic detached-JWS
 /// verifier: per `encoding.md` §6 it signs the canonical **proof binding
@@ -1774,8 +1762,8 @@ mod did_binding_tests {
         .expect_err("an Event proof protected header may not carry `kid`");
     }
 
-    /// Both Event and generic Ed25519 profiles reject a protected header that
-    /// selects a different algorithm.
+    /// The Event Ed25519 profile rejects a protected header that selects a
+    /// different algorithm.
     #[tokio::test]
     async fn an_event_proof_with_an_unsupported_protected_algorithm_is_rejected() {
         let state = state_without_any_resolver();
@@ -1787,19 +1775,8 @@ mod did_binding_tests {
         let binding_bytes = proof
             .canonical_binding_bytes(&actor_id)
             .expect("binding bytes");
-        let jws =
+        proof.jws =
             detached_jws_with_header(&key, &serde_json::json!({"alg": "ES256"}), &binding_bytes);
-        proof.jws = jws.clone();
-
-        verify_principal_authorized_jws_ed25519_async(
-            &binding_bytes,
-            &jws,
-            &verification_method,
-            did.as_str(),
-            &state,
-        )
-        .await
-        .expect_err("the generic Ed25519 profile must reject ES256");
 
         verify_registered_identity_resolution_event_proof_async(
             &proof,

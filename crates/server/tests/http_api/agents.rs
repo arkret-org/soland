@@ -6,6 +6,11 @@ use super::common::*;
 
 pub(crate) const CONTROLLER_DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 pub(crate) const CONTROLLER_DEVICE_SIGNING_SEED: [u8; 32] = [91u8; 32];
+/// Fragment of the controller's backup-HPKE key agreement seeded by
+/// [`seed_agent_provision_prerequisites`]. Managed-Agent PCR key backups must
+/// name it as `encryption.recipient_key_ref`.
+pub(crate) const CONTROLLER_BACKUP_HPKE_FRAGMENT: &str = "backup-hpke-1";
+const CONTROLLER_BACKUP_HPKE_PUBLIC_KEY: &str = "z6LSriWhVBzW9Vz2PvqbieSz7Aa2hPLzTKJuDwXTMKFeomeW";
 
 /// Genesis-context registry projector: a bootstrap unit has no accepted Realm
 /// yet, so there is no digest-suite cell to read and the protocol baseline
@@ -420,6 +425,23 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
     )
     .unwrap();
     let policy_id = new_prefixed_uuid7("ak:policy:");
+    let backup_hpke_agreement = arkret_models_crypto::RecoveryKeyAgreementEntry {
+        key_agreement_ref: arkret_wire::DidUrl::new(format!(
+            "{controller}#{CONTROLLER_BACKUP_HPKE_FRAGMENT}"
+        ))
+        .unwrap(),
+        key_agreement_algorithm:
+            arkret_models_crypto::key_backup::RecoveryKeyAgreementAlgorithm::X25519,
+        public_key_multibase: arkret_wire::NonEmptyString::new(
+            CONTROLLER_BACKUP_HPKE_PUBLIC_KEY.to_owned(),
+        )
+        .unwrap(),
+        hpke_suites: vec![arkret_models_crypto::RecoveryHpkeSuite::X25519ChaCha20Poly1305],
+        usage: arkret_models_crypto::RecoveryKeyAgreementUse::BackupHpke,
+        not_before: now - chrono::Duration::minutes(1),
+        expires_at: now + chrono::Duration::days(30),
+        revoked_at: None,
+    };
     state
         .test_persistence()
         .recovery_policies()
@@ -453,9 +475,12 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
                     }],
                     "threshold": 1
                 }],
+                "recovery_key_agreements": [
+                    serde_json::to_value(&backup_hpke_agreement).unwrap()
+                ],
                 "supersedes": null,
-                "issued_at": now,
-                "expires_at": now + chrono::Duration::days(30),
+                "issued_at": canonical_timestamp(now),
+                "expires_at": canonical_timestamp(now + chrono::Duration::days(30)),
                 "auth_data": {
                     "verification_method": format!("{controller}#controller-key"),
                     "signature_algorithm": "Ed25519",
@@ -469,6 +494,7 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
                         "trust_domain",
                         "allowed_proof_kinds",
                         "publication_authorization_rules",
+                        "recovery_key_agreements",
                         "issued_at",
                         "expires_at"
                     ]

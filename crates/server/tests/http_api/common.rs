@@ -67,6 +67,13 @@ pub(crate) fn fixture_actor_core_id(actor: &str) -> DidCoreId {
     )
     .expect("fixture actor full DID projects to a core id")
 }
+/// Render a timestamp exactly as the SDK's canonical wire serializer does
+/// (fixed milliseconds, `Z` suffix). The canonical deserializer rejects every
+/// other RFC 3339 spelling, so hand-built fixture JSON must use this.
+pub(crate) fn canonical_timestamp(at: chrono::DateTime<chrono::Utc>) -> String {
+    at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
 pub(crate) fn test_config() -> AppConfig {
     AppConfig {
         ice: IceServersConfig {

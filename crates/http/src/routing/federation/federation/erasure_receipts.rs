@@ -58,12 +58,27 @@ async fn submit(
             AppError::param_invalid(format!("invalid erasure receipt proof digest: {error}"))
                 .with_wire_code("erasure_receipt_proof_invalid")
         })?;
+    // `identity/account-lifecycle.md` requires every `proofs[]` entry to verify
+    // and at least one of them to come from the issuer's currently valid
+    // verification method. An erasure receipt is issued by a peer Principal
+    // Server, so each proof is verified against the DID document its own
+    // verification method resolves to; a proof from a co-signing party is
+    // still verified, but only an issuer-controlled one satisfies the
+    // authority requirement.
+    let mut issuer_signed = false;
     for proof in &body.package.receipt.proofs {
-        crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
+        let proof_signer = arkret_identity::verification_method_did(
+            proof.verification_method.as_str(),
+        )
+        .map_err(|error| {
+            AppError::param_invalid(format!("erasure receipt proof method is invalid: {error}"))
+                .with_wire_code("erasure_receipt_proof_invalid")
+        })?;
+        crate::jws_verify::verify_did_controlled_jws_async(
             &proof_input,
             &proof.signature,
-            &proof.verification_method,
-            body.package.receipt.issuer.as_str(),
+            proof.verification_method.as_str(),
+            proof_signer.as_str(),
             state,
         )
         .await
@@ -73,6 +88,17 @@ async fn submit(
             ))
             .with_wire_code("erasure_receipt_proof_invalid")
         })?;
+        issuer_signed |= crate::jws_verify::validate_verification_method_controller(
+            body.package.receipt.issuer.as_str(),
+            proof.verification_method.as_str(),
+        )
+        .is_ok();
+    }
+    if !issuer_signed {
+        return Err(AppError::param_invalid(
+            "erasure receipt has no proof signed by the issuer's verification method",
+        )
+        .with_wire_code("erasure_receipt_authority_invalid"));
     }
 
     let request_hash = arkret_canonical::canonical_sha256(&body)

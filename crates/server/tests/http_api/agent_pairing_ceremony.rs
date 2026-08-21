@@ -3,20 +3,18 @@
 //! Walks the open pairing surface end to end with SDK-produced material:
 //! provisioning (real ceremony) → `POST /_arkret/open/agent-pairing/
 //! runtime-key-requests` → open status poll → `POST /_arkret/gate/account/
-//! agent-key-pair`. Unlike the storage-port fixture in `events.rs` (which
-//! seeds runtime activation directly to test session-grant semantics), every
-//! step here goes over the HTTP surface.
+//! agent-key-pair` → successor managed-Agent PCR Seal → idempotent retry that
+//! activates the runtime. Unlike the storage-port fixture in `events.rs`
+//! (which seeds runtime activation directly to test session-grant semantics),
+//! every protocol step here goes over the HTTP surface.
 //!
-//! Coverage stops at the managed-Agent PCR recovery gate:
-//! `active_series_pointer_is_current` is an unconditional fail-closed stub
-//! (commit 771da401, same batch as the since-fixed
-//! `verify_principal_authorized_jws_ed25519_async` stub), so
-//! `project_agent_pcr_recovery` can never report `Ready` and `agent_key_pair`
-//! terminates with `agent_pcr_recovery_not_ready` for every caller. The test
-//! asserts that exact refusal: reaching it proves the whole wire-verification
-//! chain in front of it — verification-method projection, runtime-key proof
-//! of possession, and the controller signing-key-binding JWS verified against
-//! the explicit account authority — accepted real SDK material.
+//! The one direct-write fixture is the controller-side recovery material the
+//! ceremony presupposes but does not itself produce: the Agent PCR MLS group,
+//! the `mls_history` key backup binding the Agent to the current sealed
+//! frontier, and the controller-signed `ak.key_backup.active_series` pointer
+//! selecting that backup's series (`identity/key-management.md` §7.4.1 /
+//! §7.6). Its signature is real, so the recovery gate verifies it exactly as
+//! it would a client-published pointer.
 
 use super::common::*;
 
@@ -37,8 +35,219 @@ fn ceremony_requested_scope() -> Value {
     })
 }
 
+/// Seed the controller-side managed-Agent PCR recovery material the pairing
+/// commit gate requires: the Agent PCR MLS group, an `mls_history` key backup
+/// binding this Agent to `seal`, and the controller-signed active-series
+/// pointer that selects the backup's series.
+///
+/// The active-series record is signed with the controller's accepted device
+/// key over the SDK's canonical transcript, so the server-side currency check
+/// (`identity/key-management.md` §7.6: accepted signing device, current
+/// device generation, matching `device_authorize_event_id`) runs for real.
+async fn seed_agent_pcr_recovery_material(
+    state: &AppState,
+    controller: &str,
+    controller_core: &arkret_wire::DidCoreId,
+    agent_id: &arkret_wire::DidCoreId,
+    agent_pcr_realm: &arkret_identifiers::RealmId,
+    authorization_ref: &str,
+    seal: &arkret_wire::Seal,
+    controller_device_key: &SigningKey,
+) {
+    let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .unwrap();
+    let persistence = state.test_persistence();
+
+    // 1/3 — the Agent PCR MLS group. `current_managed_frontier` refuses to
+    // report a frontier for a control Realm with no uncontested group.
+    let effective_scope = arkret_wire::ScopeRef::Realm {
+        realm_id: agent_pcr_realm.clone(),
+    };
+    let governance_binding = arkret_models_crypto::MlsGovernanceBindingPayload::realm(
+        agent_pcr_realm.clone(),
+        FIXTURE_MLS_GROUP_ID,
+        0,
+        0,
+        arkret_identifiers::Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap(),
+        arkret_models_crypto::MlsContentScheme::MlsRfc9420,
+        None,
+        arkret_wire::ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
+        arkret_wire::CORE_REDUCER_PROFILE,
+    )
+    .expect("Agent PCR governance binding builds");
+    persistence
+        .mls_commits()
+        .initialize_genesis(soland_storage::MlsCommitGenesis {
+            effective_scope: &serde_json::to_value(&effective_scope).unwrap(),
+            group_id: FIXTURE_MLS_GROUP_ID,
+            leader_actor_id: agent_id.as_str(),
+            creator_device_id: super::agents::CONTROLLER_DEVICE_ID,
+            genesis_event_ref: seal.id.as_str(),
+            governance_binding: &serde_json::to_value(&governance_binding).unwrap(),
+            committed_at: now.timestamp_millis(),
+        })
+        .await
+        .unwrap()
+        .expect("Agent PCR MLS group initializes");
+
+    // 2/3 — the controller's `mls_history` backup covering this Agent PCR at
+    // the current sealed frontier.
+    let policy = persistence
+        .recovery_policies()
+        .get_active_for_principal(controller_core.as_str())
+        .await
+        .unwrap()
+        .expect("seeded controller recovery policy");
+    let series_id =
+        arkret_identifiers::BackupSeriesId::new(new_prefixed_uuid7("ak:backup_series:")).unwrap();
+    let backup_id = arkret_identifiers::BackupId::new(new_prefixed_uuid7("ak:backup:")).unwrap();
+    let recipient_key_ref = format!(
+        "{controller}#{}",
+        super::agents::CONTROLLER_BACKUP_HPKE_FRAGMENT
+    );
+    let managed_principal_binding = arkret_models_crypto::ManagedPrincipalBinding {
+        managed_principal_id: agent_id.clone(),
+        controller_id: controller_core.clone(),
+        principal_control_realm_id: agent_pcr_realm.clone(),
+        authorization_ref: authorization_ref.to_owned(),
+        managed_frontier_ref: arkret_models_crypto::ManagedFrontierRef {
+            frontier_digest: seal.control_event_set_root.clone(),
+            seal_ref: seal.id.as_str().to_owned(),
+            mls_epoch: 0,
+        },
+    };
+    let backup = serde_json::json!({
+        "backup_id": backup_id,
+        "actor_id": controller_core,
+        "backup_kind": "mls_history",
+        "backup_version": "1",
+        "created_at": canonical_timestamp(now),
+        "encryption": {
+            "recipient_method": "recovery_public_key",
+            "recipient_key_ref": recipient_key_ref,
+            "aead": {
+                "name": "chacha20_poly1305",
+                "enc": "QUFB"
+            }
+        },
+        "domain_separation": {
+            "hkdf_info": "ak.key_backup.mls_history/v1",
+            "subdomain": "mls_history",
+            "aead_aad": {
+                "schema": arkret_wire::SchemaId::KEY_BACKUP_V1,
+                "actor_id": controller_core,
+                "device_id": super::agents::CONTROLLER_DEVICE_ID,
+                "backup_kind": "mls_history",
+                "backup_version": "1",
+                "created_at": canonical_timestamp(now),
+                "item_kinds": ["mls_group_state"],
+                "managed_principal_bindings": [managed_principal_binding],
+                "recipient_method": "recovery_public_key",
+                "recipient_key_ref": recipient_key_ref
+            }
+        },
+        "contents": [{
+            "item_kind": "mls_group_state",
+            "realm_id": agent_pcr_realm,
+            "managed_principal_binding": managed_principal_binding,
+            "mls_group_id": FIXTURE_MLS_GROUP_ID,
+            "epoch": 0
+        }],
+        "ciphertext": "QUFB",
+        "ciphertext_digest": format!("sha256:{}", "3".repeat(64)),
+        "series_id": series_id,
+        "series_seq": 0,
+        "recovery_policy_ref": {
+            "policy_id": policy.policy_id,
+            "policy_version": policy.version
+        }
+    });
+    serde_json::from_value::<arkret_models_crypto::KeyBackup>(backup.clone())
+        .expect("fixture backup matches the SDK key-backup envelope");
+    persistence
+        .key_backups()
+        .put(backup_id.as_str().to_owned(), backup)
+        .await
+        .unwrap();
+
+    // 3/3 — the signed active-series pointer selecting that series.
+    let controller_device = persistence
+        .devices()
+        .get(
+            controller_core.as_str(),
+            super::agents::CONTROLLER_DEVICE_ID,
+        )
+        .await
+        .unwrap()
+        .expect("seeded controller device");
+    let device_authorize_event_id = arkret_wire::EventId::new(
+        controller_device.payload["device_authorize_event_id"]
+            .as_str()
+            .expect("seeded controller device authorization")
+            .to_owned(),
+    )
+    .unwrap();
+    let unsigned =
+        arkret_models_collaboration::events_payloads::UnsignedKeyBackupActiveSeries::new(
+            controller_core.clone(),
+            arkret_models_crypto::BackupKind::MlsHistory,
+            series_id,
+            1,
+            Vec::new(),
+            seal.control_event_set_root.clone(),
+            Some(seal.id.clone()),
+            now,
+            arkret_wire::DidUrl::new(format!(
+                "{controller}#{}",
+                super::agents::CONTROLLER_DEVICE_ID
+            ))
+            .unwrap(),
+            arkret_models_collaboration::events_payloads::ControllerBackupTrustAnchor {
+                authorize_event_id: device_authorize_event_id,
+                generation_ref: 1,
+            },
+        )
+        .expect("unsigned active-series record builds");
+    let signature = arkret_canonical::base64url_encode(
+        controller_device_key
+            .sign(&unsigned.signing_payload_bytes().unwrap())
+            .to_bytes(),
+    );
+    let pointer = unsigned
+        .attach_signature(arkret_wire::Base64UrlString::new(signature).unwrap())
+        .expect("active-series record signs");
+    let head =
+        arkret_models_collaboration::events_payloads::key_backup_active_series_head(&pointer)
+            .expect("active-series head");
+    state
+        .test_projection()
+        .lock()
+        .key_backup_active_series
+        .insert(
+            (
+                controller_core.as_str().to_owned(),
+                "mls_history".to_owned(),
+            ),
+            soland_domain::reducer::SolandKeyBackupActiveSeries {
+                actor_id: controller_core.as_str().to_owned(),
+                backup_kind: "mls_history".to_owned(),
+                active_series_id: head.active_series_id.as_str().to_owned(),
+                series_pointer_version: head.series_pointer_version,
+                previous_series_ids: Vec::new(),
+                record_digest: head.record_digest,
+                frontier_ref: pointer.frontier_ref.clone(),
+                issued_at: pointer.issued_at,
+                auth_data: pointer.auth_data.clone(),
+                extra: pointer.extra.clone(),
+                event_id: format!("ak:event:{}", "A".repeat(44)),
+            },
+        );
+}
+
 #[tokio::test]
-async fn public_pairing_ceremony_verifies_controller_proofs_up_to_the_recovery_gate() {
+async fn public_pairing_ceremony_activates_the_agent_runtime() {
     let state = soland_test_support::app_state(test_config());
     let app = app_from_state(state.clone());
     let controller = "did:web:alice.example";
@@ -403,9 +612,43 @@ async fn public_pairing_ceremony_verifies_controller_proofs_up_to_the_recovery_g
         "{forged_outcome}"
     );
 
-    // ── 4/4b — the genuine controller proof passes the whole verification
-    // chain and the request terminates at the PCR recovery gate, the one
-    // remaining fail-closed stub on this path (`active_series_pointer_is_current`).
+    // ── 4/4b — the recovery gate is fail-closed until the controller has a
+    // ready managed-Agent PCR recovery backup. Reaching this refusal already
+    // proves every wire-verification step in front of it accepted real SDK
+    // material. ────────────────────────────────────────────────────────
+    let mut not_ready = TestClient::post("http://server/_arkret/gate/account/agent-key-pair")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("idempotency-key", event_id.as_str(), true)
+        .json(&serde_json::to_value(&key_pair_body).unwrap())
+        .send(&app)
+        .await;
+    let not_ready_status = not_ready.status_code;
+    let not_ready_outcome: Value = not_ready.take_json().await.unwrap();
+    assert_eq!(
+        not_ready_status,
+        Some(StatusCode::PRECONDITION_FAILED),
+        "{not_ready_outcome}"
+    );
+    assert_eq!(
+        not_ready_outcome["error"]["code"], "agent_pcr_recovery_not_ready",
+        "{not_ready_outcome}"
+    );
+
+    seed_agent_pcr_recovery_material(
+        &state,
+        controller,
+        &controller_core,
+        &outcome.agent_id,
+        &agent_pcr_realm,
+        record.controller_authorization_ref.as_str(),
+        &genesis_seal,
+        &controller_device_key,
+    )
+    .await;
+
+    // ── 4/4c — with the recovery backup ready the same request commits the
+    // controller-signed authorize Event. Durable storage is only the proposal
+    // half: activation waits for the successor PCR Seal. ─────────────────
     let mut pair_response = TestClient::post("http://server/_arkret/gate/account/agent-key-pair")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("idempotency-key", event_id.as_str(), true)
@@ -414,14 +657,84 @@ async fn public_pairing_ceremony_verifies_controller_proofs_up_to_the_recovery_g
         .await;
     let pair_status = pair_response.status_code;
     let pair_outcome: Value = pair_response.take_json().await.unwrap();
+    assert_eq!(pair_status, Some(StatusCode::OK), "{pair_outcome}");
     assert_eq!(
-        pair_status,
-        Some(StatusCode::PRECONDITION_FAILED),
+        pair_outcome["activation_state"], "awaiting_accepted_frontier",
         "{pair_outcome}"
     );
+    assert_eq!(pair_outcome["authorize_event_ref"], event_id.as_str());
+
+    // ── 5/5 — the controller publishes the successor managed-Agent PCR Seal
+    // covering the authorize Event, then replays the exact idempotent request.
+    // Only accepted Seal application makes the authorization portable, so this
+    // is the step that flips the runtime to `active`. ──────────────────
+    let mut pcr_events = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(agent_pcr_realm.as_str())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|record| serde_json::from_value::<arkret_wire::Event>(record.envelope).unwrap())
+        .collect::<Vec<_>>();
+    pcr_events.sort_by(|left, right| {
+        left.actor_seq
+            .cmp(&right.actor_seq)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    assert!(
+        pcr_events.iter().any(|event| event.event_id == event_id),
+        "the committed authorize Event must be durable in the Agent PCR"
+    );
+    let successor_seal = arkret_bootstrap::build_managed_agent_pcr_event_seal(
+        &pcr_events,
+        Some(&genesis_seal),
+        arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0009-a13f9c2e")).unwrap(),
+        &controller_signer,
+        &super::agents::genesis_projector,
+    )
+    .expect("successor Agent PCR Seal builds");
+    let mut seal_response = TestClient::post("http://server/_arkret/self/seals")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&successor_seal).unwrap())
+        .send(&app)
+        .await;
+    let seal_status = seal_response.status_code;
+    let seal_body = seal_response.take_string().await.unwrap_or_default();
+    assert_eq!(seal_status, Some(StatusCode::OK), "{seal_body}");
+
+    let mut activated = TestClient::post("http://server/_arkret/gate/account/agent-key-pair")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("idempotency-key", event_id.as_str(), true)
+        .json(&serde_json::to_value(&key_pair_body).unwrap())
+        .send(&app)
+        .await;
+    let activated_status = activated.status_code;
+    let activated_outcome: Value = activated.take_json().await.unwrap();
     assert_eq!(
-        pair_outcome["error"]["code"], "agent_pcr_recovery_not_ready",
-        "the pairing request must clear every wire-verification step and stop only at \
-         the recovery-readiness gate: {pair_outcome}"
+        activated_status,
+        Some(StatusCode::OK),
+        "{activated_outcome}"
+    );
+    assert_eq!(
+        activated_outcome["activation_state"], "active",
+        "the public pairing ceremony must terminate in an active Agent runtime: \
+         {activated_outcome}"
+    );
+    let activated_record = state
+        .test_persistence()
+        .agents()
+        .get(outcome.agent_id.as_str())
+        .await
+        .unwrap()
+        .expect("activated Agent record");
+    assert_eq!(
+        activated_record.authorized_event_ref.as_deref(),
+        Some(event_id.as_str())
+    );
+    assert_eq!(
+        activated_record.authorized_verification_method.as_deref(),
+        Some(verification_method.as_str())
     );
 }

@@ -447,19 +447,58 @@ pub(crate) async fn project_agent_pcr_recovery(
     })
 }
 
-/// Whether `pointer` is the controller's current accepted active-series head.
+/// Whether `pointer` carries the controller's current accepted active-series
+/// authority (`identity/key-management.md` §7.6).
 ///
-/// The `ak.key_backup.active_series` record does not carry a
-/// account authority pair, so neither the controller Seal frontier nor
-/// the signing device can be selected without a core-only lookup that another
-/// PCR of the same principal core would satisfy just as well. The pointer
-/// therefore cannot be proven current and every caller fails closed here.
+/// The record only names a Core `actor_id`, so the account instance is
+/// supplied by the evaluating server rather than read out of the record: a
+/// local controller is exactly the `(controller core id, local Principal
+/// Server id)` authority pair, and that pair selects one durably accepted PCR
+/// lineage. Rollback, fork and chain-gap rejection belong to the reducer
+/// transition check; what §7.6 leaves to this gate is the record signature,
+/// its accepted signing device, and the current device generation.
 pub(crate) async fn active_series_pointer_is_current(
-    _state: &AppState,
-    _controller_id: &str,
-    _pointer: &arkret_models_collaboration::events_payloads::KeyBackupActiveSeries,
+    state: &AppState,
+    controller_id: &str,
+    pointer: &arkret_models_collaboration::events_payloads::KeyBackupActiveSeries,
 ) -> Result<bool, AppError> {
-    Ok(false)
+    let controller_core = managed_controller_core_id(controller_id)?;
+    if pointer.actor_id != controller_core {
+        return Ok(false);
+    }
+    let principal_server_id = DidCoreId::new(state.service_id().clone()).map_err(|error| {
+        AppError::internal(format!("local Principal Server id is invalid: {error}"))
+    })?;
+    let authority = arkret_wire::PrincipalAuthorityKey::new(controller_core, principal_server_id);
+    let verification_method = pointer.auth_data.verification_method.as_str();
+    let Some((_, device_fragment)) = verification_method.rsplit_once('#') else {
+        return Ok(false);
+    };
+    let Ok(device_id) = arkret_identifiers::DeviceId::new(device_fragment.to_owned()) else {
+        return Ok(false);
+    };
+    let canonical_bytes = pointer.signing_payload_bytes().map_err(|error| {
+        schema_error(format!(
+            "active-series signing transcript cannot be rebuilt: {error}"
+        ))
+    })?;
+    let Ok(binding) = crate::jws_verify::
+        verify_principal_authorized_ed25519_signature_with_account_authority_async(
+            &canonical_bytes,
+            pointer.auth_data.signature.as_str(),
+            verification_method,
+            &authority,
+            &device_id,
+            state,
+        )
+        .await
+    else {
+        return Ok(false);
+    };
+    Ok(
+        binding.authorization_event_id == pointer.auth_data.device_authorize_event_id
+            && binding.generation_ref == pointer.frontier_ref.device_generation_ref,
+    )
 }
 
 pub(crate) async fn validate_active_series_operation_authority(
