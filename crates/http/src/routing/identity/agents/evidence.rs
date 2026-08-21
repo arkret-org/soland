@@ -15,8 +15,8 @@ use arkret_models_identity::agent_signer_evidence::{
     AGENT_KEY_COMPONENT, AGENT_STATUS_COMPONENT, AgentAdmissionEvidence, AgentAuthoritySnapshot,
     AgentAuthoritySnapshotCore, AgentAuthorizationEvidence, AgentAuthorizationStateWitness,
     AgentAuthorizationStatus, AgentCurrentObservation, AgentDetachedJws,
-    AgentEvidenceOuterAttestation, AgentKeyCellEntry, AgentLifecycleProvenance,
-    AgentLifecycleStatus, AgentLifecycleWitness, AgentSignerEvidence,
+    AgentEvidenceOuterAttestation, AgentHistoricalEvidenceOuterAttestation, AgentKeyCellEntry,
+    AgentLifecycleProvenance, AgentLifecycleStatus, AgentLifecycleWitness, AgentSignerEvidence,
     AgentSignerEvidenceQueryFailure, AgentSignerEvidenceQueryFailureReason,
     AgentSignerEvidenceQueryOutcome, AgentSignerEvidenceQueryRequestBody,
     AgentSignerEvidenceQuerySelector, AgentSnapshotLease, ControllerAccountGateAttestation,
@@ -83,6 +83,23 @@ pub(crate) async fn current_agent_signer_evidence(
 ) -> Result<CurrentAgentSignerEvidence, AgentSignerEvidenceQueryFailureReason> {
     let gate = preflight_controller_gate(state, selector).await?;
     produce_current_agent_signer_evidence(state, selector, gate).await
+}
+
+pub(crate) async fn freeze_current_agent_signer_evidence(
+    state: &AppState,
+    selector: &AgentSignerEvidenceQuerySelector,
+) -> Result<(arkret_wire::SignerEvidenceRef, Hash), AppError> {
+    let (root, dependencies) = current_authenticated_agent_signer_evidence(state, selector)
+        .await
+        .map_err(|reason| AppError::internal(format!("{reason:?}")))?;
+    persist_agent_signer_evidence_closure(state, &root, &dependencies).await?;
+    let digest = root
+        .canonical_sha256_digest()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let reference = root
+        .evidence_ref()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    Ok((reference, digest))
 }
 
 async fn current_authenticated_agent_signer_evidence(
@@ -314,7 +331,7 @@ async fn current_controller_signer_evidence(
     Ok(evidence)
 }
 
-async fn fetch_service_signer_evidence(
+pub(crate) async fn fetch_service_signer_evidence(
     state: &AppState,
     service_id: &DidCoreId,
     base_url: Option<&str>,
@@ -356,13 +373,173 @@ async fn fetch_service_signer_evidence(
     .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)
 }
 
+pub(crate) async fn materialize_historical_agent_signer_evidence(
+    state: &AppState,
+    receipt: arkret_models_identity::agent_signer_evidence::AgentEventAdmissionReceipt,
+    receiver_base_url: &str,
+) -> Result<(), AppError> {
+    let store = state.persistence().governance_dependency_store();
+    let original_selector = GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+        content_digest: receipt.producer_signer_resolution_evidence_digest.clone(),
+    };
+    let original_item = store
+        .get_unscoped_signer_evidence(&original_selector)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::internal("origin-frozen Agent signer evidence is missing"))?;
+    let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+        authenticated_signer_resolution_evidence: original_root,
+        ..
+    } = original_item
+    else {
+        return Err(AppError::internal(
+            "origin-frozen signer dependency has the wrong kind",
+        ));
+    };
+    if original_root
+        .evidence_ref()
+        .map_err(|error| AppError::internal(error.to_string()))?
+        != receipt.producer_signer_resolution_evidence_ref
+    {
+        return Err(AppError::internal(
+            "receipt producer evidence ref/digest does not resolve byte-exactly",
+        ));
+    }
+    let AuthenticatedSignerResolutionEvidence::NativeAgent {
+        signer_id,
+        verification_method,
+        agent_signer_evidence:
+            AgentSignerEvidence::CurrentAdmission {
+                schema,
+                admission_evidence,
+                transparency,
+                ..
+            },
+        attester_signer_evidence_digest,
+        controller_signer_evidence_digest,
+        account_authority_signer_evidence_digest,
+        ..
+    } = original_root
+    else {
+        return Err(AppError::internal(
+            "receipt producer evidence is not a Native Agent CurrentAdmission root",
+        ));
+    };
+    if signer_id != receipt.agent_id || verification_method != receipt.verification_method {
+        return Err(AppError::internal(
+            "receipt Agent identity does not match the frozen producer evidence",
+        ));
+    }
+    async fn dependency_by_digest(
+        store: &dyn soland_storage::GovernanceDependencyStore,
+        digest: &Hash,
+    ) -> Result<AuthenticatedSignerResolutionEvidence, AppError> {
+        let item = store
+            .get_unscoped_signer_evidence(
+                &GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+                    content_digest: digest.clone(),
+                },
+            )
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .ok_or_else(|| AppError::internal("Agent signer dependency is missing"))?;
+        let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+            authenticated_signer_resolution_evidence,
+            ..
+        } = item
+        else {
+            return Err(AppError::internal(
+                "Agent signer dependency has the wrong kind",
+            ));
+        };
+        Ok(authenticated_signer_resolution_evidence)
+    }
+    let authority_evidence = dependency_by_digest(store, &attester_signer_evidence_digest).await?;
+    let controller_evidence =
+        dependency_by_digest(store, &controller_signer_evidence_digest).await?;
+    let account_authority_evidence =
+        dependency_by_digest(store, &account_authority_signer_evidence_digest).await?;
+    let receiver_evidence =
+        fetch_service_signer_evidence(state, &receipt.receiver_service_id, Some(receiver_base_url))
+            .await
+            .map_err(|reason| AppError::internal(format!("{reason:?}")))?;
+    let AuthenticatedSignerResolutionEvidence::Service {
+        authenticated_resolution,
+        ..
+    } = &receiver_evidence
+    else {
+        return Err(AppError::internal(
+            "receiver signer evidence is not authenticated service evidence",
+        ));
+    };
+    let receipt_method =
+        arkret_signatures::agent_evidence::historical_receipt_verification_method(&receipt)
+            .map_err(|reason| AppError::internal(reason.as_str()))?;
+    let receiver_key = arkret_identity::jws::resolve_ed25519_pubkey_from_document(
+        &authenticated_resolution.normalized_did_document,
+        receipt_method.as_str(),
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    arkret_signatures::agent_evidence::verify_agent_event_admission_receipt(
+        &receipt,
+        &PublicKeyMaterial::Ed25519Raw {
+            bytes: receiver_key.to_bytes().to_vec(),
+        },
+    )
+    .map_err(|reason| AppError::internal(reason.as_str()))?;
+    let attested_at = chrono::Utc::now();
+    let mut historical = AgentSignerEvidence::HistoricalEvent {
+        schema,
+        admission_evidence,
+        event_admission_receipt: receipt,
+        outer_attestation: AgentHistoricalEvidenceOuterAttestation {
+            domain: non_empty("ak.agent-signer-evidence.v1")
+                .map_err(|reason| AppError::internal(format!("{reason:?}")))?,
+            core_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
+                .map_err(|error| AppError::internal(error.to_string()))?,
+            source_service_id: authority_evidence.signer_id().clone(),
+            verification_method: authority_evidence.verification_method().clone(),
+            attested_at,
+            proof: empty_proof().map_err(|reason| AppError::internal(format!("{reason:?}")))?,
+        },
+        transparency,
+    };
+    arkret_signatures::agent_evidence::sign_agent_historical_evidence_outer_attestation(
+        &mut historical,
+        state.notary_signing_key().as_ref(),
+    )
+    .map_err(|reason| AppError::internal(reason.as_str()))?;
+    let historical_root = arkret::build_native_agent_signer_resolution_evidence(
+        historical,
+        &authority_evidence,
+        &controller_evidence,
+        &account_authority_evidence,
+        &receiver_evidence,
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    persist_agent_signer_evidence_closure(
+        state,
+        &historical_root,
+        &[
+            authority_evidence,
+            controller_evidence,
+            account_authority_evidence,
+            receiver_evidence,
+        ],
+    )
+    .await
+}
+
 async fn persist_agent_signer_evidence_closure(
     state: &AppState,
     root: &AuthenticatedSignerResolutionEvidence,
     dependencies: &[AuthenticatedSignerResolutionEvidence],
 ) -> Result<(), AppError> {
     let store = state.persistence().governance_dependency_store();
-    for evidence in std::iter::once(root).chain(dependencies) {
+    // Dependency CAS objects are immutable. Publish every leaf first and the
+    // selector-indexed root last, so a crash can leave only harmless orphan
+    // leaves and can never expose a root whose recursive closure is missing.
+    for evidence in dependencies.iter().chain(std::iter::once(root)) {
         let content_digest = evidence
             .canonical_sha256_digest()
             .map_err(|error| AppError::internal(error.to_string()))?;
