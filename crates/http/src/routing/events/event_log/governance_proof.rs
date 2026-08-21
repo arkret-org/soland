@@ -8,7 +8,6 @@ use arkret_models_collaboration::governance_dependencies::{
 use arkret_models_collaboration::objects::realm::DurabilityMode;
 use arkret_models_crypto::{
     MlsContentScheme, MlsDurabilityPolicy, MlsGovernanceProofBundle, MlsGovernanceProofRequestBody,
-    MlsSecurityFrontierLeaf,
 };
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
@@ -868,7 +867,10 @@ async fn materialize_governance_frontier(
     state: &AppState,
     request: &MlsGovernanceProofRequestBody,
 ) -> Result<MlsGovernanceProofBundle, AppError> {
-    let leaves = load_group_frontier_leaves(state, request).await?;
+    // Public LeafNode coordinates are query-bound. The SDK materializer checks
+    // them against replayed governance, and the receiver independently checks
+    // the outcome against its own RFC 9420 current or pending group state.
+    let leaves = request.local_mls_leaves.clone();
     let checkpoint = load_governance_checkpoint(state, request).await?;
     let group_genesis_binding = group_genesis_binding(state, &checkpoint.realm_id)?;
     arkret::materialize_mls_governance_frontier(
@@ -1201,25 +1203,6 @@ fn insert_checkpoint_dependency(
     dependencies.insert(key, item.clone());
     queue.push(item);
     Ok(())
-}
-
-async fn load_group_frontier_leaves(
-    _state: &AppState,
-    _request: &MlsGovernanceProofRequestBody,
-) -> Result<Vec<MlsSecurityFrontierLeaf>, AppError> {
-    // The proof materializer requires the exact occupied RFC 9420 tree leaves
-    // with their real tree indexes. Soland currently persists accepted
-    // Genesis/Commit references and claimed KeyPackages, but not the client's
-    // current/pending RFC group state. A KeyPackage row order is not a ratchet
-    // tree and must never be promoted into a synthetic `leaf_index`.
-    //
-    // Keep this boundary fail closed until a standard client-to-service MLS
-    // group-state material input is registered and durably validated. The
-    // proof request itself deliberately carries no leaves or tree bytes.
-    Err(AppError::new(
-        ErrorCode::FrontierUnavailable,
-        "verified RFC 9420 current/pending group-state material is unavailable",
-    ))
 }
 
 fn group_genesis_binding(
