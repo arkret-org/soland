@@ -780,8 +780,7 @@ fn validate_bundle_key_custody(
     let signing_seed =
         load_signing_seed(config, key_store, &stored.identity.active_signing_key_ref)?;
     validate_service_signing_binding(stored, &signing_seed)?;
-    validate_registration_receipt_signature(stored, &signing_seed)?;
-    validate_registration_receipt_signature(stored, &signing_seed)?;
+    validate_registration_receipt_signature(stored)?;
     let key_store = required_key_store(key_store)?;
     load_seed(key_store, &stored.identity.control_key_ref)?;
     load_seed(
@@ -812,10 +811,7 @@ fn validate_signed_service_inception(
     })
 }
 
-fn validate_registration_receipt_signature(
-    stored: &StoredDidCoreIdentity,
-    _signing_seed: &[u8; 32],
-) -> anyhow::Result<()> {
+fn validate_registration_receipt_signature(stored: &StoredDidCoreIdentity) -> anyhow::Result<()> {
     let receipt = &stored.registration_receipt;
     if receipt.provider_service_id != stored.identity.service_id {
         anyhow::bail!("self-hosted identity bundle receipt was issued by a different service DID");
