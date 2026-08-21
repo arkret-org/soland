@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::EventPayloadExt as _;
 use arkret_identifiers::{CircleId, DidCoreId, RealmId};
-use arkret_models_collaboration::events_payloads::RealmPurpose;
+use arkret_models_collaboration::events_payloads::{ContentBlock, RealmPurpose};
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
 use arkret_wire::{Event, PlaintextDataClassKind};
@@ -832,6 +832,17 @@ pub async fn hydrate_projections_from_persistence(
                 );
                 continue;
             };
+            let content = match record.content.map(ContentBlock::from_value).transpose() {
+                Ok(content) => content,
+                Err(error) => {
+                    tracing::warn!(
+                        morph_id = %record.morph_id,
+                        error = %error,
+                        "skipping morph projection row with undecodable content during hydrate"
+                    );
+                    continue;
+                }
+            };
             proj.morphs.insert(
                 record.morph_id.clone(),
                 MorphProjection {
@@ -844,7 +855,7 @@ pub async fn hydrate_projections_from_persistence(
                     schema_refs: serde_json::from_value(record.schema_refs).unwrap_or_default(),
                     facets: serde_json::from_value(record.facets).unwrap_or_default(),
                     versions: serde_json::from_value(record.versions).unwrap_or_default(),
-                    content: record.content,
+                    content,
                     encrypted_content: record.encrypted_content,
                     state,
                     state_changed_at: record.state_changed_at,

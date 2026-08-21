@@ -834,7 +834,11 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
             schema_refs: encode_mls_contract(&record.schema_refs, "Morph schema_refs")?,
             facets: encode_mls_contract(&record.facets, "Morph facets")?,
             versions: encode_mls_contract(&record.versions, "Morph versions")?,
-            content: record.content.clone(),
+            content: record
+                .content
+                .as_ref()
+                .map(|content| encode_mls_contract(content, "Morph content"))
+                .transpose()?,
             encrypted_content: record.encrypted_content.clone(),
             state: record.state.clone(),
             state_changed_at: record.state_changed_at,

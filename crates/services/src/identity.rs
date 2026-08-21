@@ -2458,6 +2458,20 @@ impl IdentityService {
         self.account_lifecycle_status(actor_id).as_str().to_owned()
     }
 
+    /// Snapshot of every non-`active` account lifecycle record.
+    ///
+    /// The map is hydrated from durable storage at boot
+    /// ([`Self::hydrate_account_lifecycles`]) and kept current by the save /
+    /// delete paths, so reconciliation workers (e.g. the deactivation push
+    /// fanout) can enumerate deactivated accounts without a storage scan.
+    pub fn account_lifecycles_snapshot(&self) -> Vec<(String, AccountLifecycleState)> {
+        self.account_lifecycles
+            .lock()
+            .iter()
+            .map(|(actor_id, lifecycle)| (actor_id.clone(), lifecycle.clone()))
+            .collect()
+    }
+
     pub async fn list_active_device_actors(
         &self,
         _query: ListActiveDeviceActorsQuery,

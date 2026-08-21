@@ -89,7 +89,7 @@ type DeviceMessageIntent = (String, bool, chrono::DateTime<Utc>);
 #[derive(Default)]
 pub(crate) struct MemoryDeviceMessageStore {
     inventory: Option<Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>>,
-    revocations: Option<Arc<Mutex<crate::MemoryDeviceRevocationState>>>,
+    revocations: Option<crate::MemoryDeviceRevocationStore>,
     queue: Mutex<VecDeque<DeviceMessageRecord>>,
     txns: Mutex<BTreeMap<String, DeviceMessageTransaction>>,
     message_intents: Mutex<BTreeMap<String, DeviceMessageIntent>>,
@@ -99,7 +99,7 @@ pub(crate) struct MemoryDeviceMessageStore {
 impl MemoryDeviceMessageStore {
     pub(crate) fn with_inventory_and_revocations(
         inventory: Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>,
-        revocations: Arc<Mutex<crate::MemoryDeviceRevocationState>>,
+        revocations: crate::MemoryDeviceRevocationStore,
     ) -> Self {
         Self {
             inventory: Some(inventory),
@@ -118,7 +118,8 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         let _revocations = if let (Some(selector), Some(revocations)) =
             (device_revocation_gate, &self.revocations)
         {
-            let guard = revocations.lock();
+            revocations.settle_from_control_events();
+            let guard = revocations.state.lock();
             guard.status(selector).ensure_allowed()?;
             Some(guard)
         } else {
@@ -179,7 +180,8 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         let _revocations = if let (Some(selector), Some(revocations)) =
             (batch.device_revocation_gate.as_ref(), &self.revocations)
         {
-            let guard = revocations.lock();
+            revocations.settle_from_control_events();
+            let guard = revocations.state.lock();
             match guard.status(selector) {
                 DeviceRevocationGateStatus::Active => Some(guard),
                 DeviceRevocationGateStatus::Pending { .. } => {

@@ -139,6 +139,52 @@ RUST_LOG=soland=info,salvo=info,warn
 1 MiB body cap; requests above the cap return `413 Payload Too Large` before
 the route handler reads JSON or form data.
 
+### Embedded webvh provider: deployment-profile gate
+
+The embedded webvh provider (`SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED=true`)
+is only suitable for `ak.profile.personal_node.v1` and
+`ak.profile.small_team.v1` deployments. Those profiles accept a single
+witness proof with no distinct-controlling-organization requirement, so a
+self-hosted provider is a conformant — though explicitly degraded —
+identity bootstrap for them.
+
+`ak.profile.organization.v1` and every higher profile MUST NOT bootstrap the
+service identity from the embedded (local) provider. The spec witness
+baseline (arkret-spec `spec/v1/zh/identity/identity-did.md` §3.4.2) requires
+at least 2 valid witness proofs from at least 2 distinct controlling
+organizations for those profiles, and forbids host self-witnessing as the
+sole basis for high-risk control decisions. soland's local/embedded provider
+path performs no witness verification at all (see the trust-root layering
+note below), so it can never satisfy that baseline. For `organization` and
+above, provision the service identity through an external webvh provider
+(`SOLAND_EXTERNAL_WEBVH_PROVIDER_URL` +
+`SOLAND_EXTERNAL_WEBVH_REGISTRATION_BEARER`) whose DID log carries the
+required independent witness proofs.
+
+### Witness verification is layered by trust root
+
+The describe payload advertises `"webvh_witness_quorum": "unsupported"` only
+under the `soland.local_identity_store` trust root
+(`crates/http/src/routing/identity/did/webvh.rs`). The flag is scoped, not
+global — soland has two distinct did:webvh paths:
+
+- **Local / embedded provider path — always rejects (fail-closed).** DID
+  logs handled through the local identity store are validated by
+  `webvh_validation::validate_witness_policy_for_log`
+  (`crates/http/src/routing/identity/webvh_validation.rs`), which rejects
+  any log entry that declares a witness policy with `WitnessQuorumNotMet`.
+  No witness proof is ever evaluated on this path. The rejection is
+  intentional fail-closed behavior matching the advertised `"unsupported"`;
+  it must not be relaxed into unconditional acceptance.
+- **External resolution path — real witness verification.**
+  Pinned/historical did:webvh resolution
+  (`crates/http/src/did_resolver_chain.rs`, `fetch_verified_webvh_history`)
+  fetches `did-witness.json` whenever the log declares a witness policy and
+  calls the SDK `verify_did_webvh_v1_chain_and_witness_bytes`, performing
+  full chain + witness verification. The spec §3.4 requirement that every
+  v1 core principal_server MUST support did:webvh witness verification is
+  satisfied by this external resolution path, not by the local store.
+
 ### Advanced environment reference
 
 Most deployments only need the variables in the sample above. The table below

@@ -215,6 +215,13 @@ async fn run_account_deactivation_fanout(
     let capability_cache_invalidated = state
         .authorization()
         .mark_projected_grants_revoked_for_subject(did, Some(state.service_id()));
+    // §7.1 Push-route completion criterion: when a push gateway independently
+    // holds registration/delivery state, the local purge above does NOT
+    // complete the Push-route row — the gateway must be notified over the
+    // registered internal channel and report a processing result. A gateway
+    // failure raises `deactivation_partial` (retried by the reconciliation
+    // worker) instead of failing the deactivation.
+    crate::deactivation_push_fanout::ensure_fanout(state, did).await;
     Ok(AccountDeactivationFanout {
         sessions_revoked,
         devices_revoked,

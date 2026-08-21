@@ -195,10 +195,20 @@ impl PersistenceHandle {
             .await?)
     }
 
-    #[must_use]
-    pub fn device_revocation_store(&self) -> Arc<dyn soland_storage::DeviceRevocationStore> {
-        Arc::new(self.clone())
+    /// Attach the projection's generic Control Event store to the durable
+    /// device-revocation adapter. The memory adapter derives seal-settled
+    /// (`revoked`) targets and their cleanup obligations from this exact
+    /// store; durable adapters read the shared `state_control_events` table
+    /// in a JOIN and ignore the hook.
+    pub fn bind_device_revocation_control_events(
+        &self,
+        control_events: Arc<dyn arkret_state::state::ControlEventStore>,
+    ) {
+        self.persistence
+            .device_revocations()
+            .bind_control_event_store(control_events);
     }
+
     pub async fn device_revocation_gate_status(
         &self,
         selector: &soland_storage::DeviceRevocationGateSelector,
@@ -252,18 +262,6 @@ impl PersistenceHandle {
             .persistence
             .device_revocations()
             .complete_material_cleanup(proposal_digest, completed_at)
-            .await?)
-    }
-
-    pub async fn complete_device_revocation_mls_obligation(
-        &self,
-        proposal_digest: &str,
-        completed_at: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ServiceResult<bool> {
-        Ok(self
-            .persistence
-            .device_revocations()
-            .complete_mls_obligation(proposal_digest, completed_at)
             .await?)
     }
 

@@ -41,12 +41,14 @@ fn projected_cell_targets(envelope: &Value) -> std::collections::BTreeSet<String
 // a locally seeded bearer SessionRecord can no longer stand in for one. The
 // fixture below runs the real prepare/commit provisioning ceremony over HTTP,
 // then writes the runtime-key activation through the storage port: the public
-// pairing ceremony is currently not executable end-to-end
-// (`verify_principal_authorized_jws_ed25519_async` is an unconditional stub,
-// and `submit_agent_runtime_key_request` compares a full DID against a core
-// id). Every binding digest and the controller-proof JWS are still produced by
-// the real SDK functions, so the chain under test — introspection, DPoP
-// binding, Agent authority enforcement, scope gate — stays fully real.
+// pairing ceremony still cannot complete end-to-end because
+// `active_series_pointer_is_current` is an unconditional fail-closed stub, so
+// the `agent_key_pair` PCR recovery gate refuses every caller (the wire
+// verification in front of that gate is covered over real HTTP by
+// `agent_pairing_ceremony.rs`). Every binding digest and the controller-proof
+// JWS are still produced by the real SDK functions, so the chain under test —
+// introspection, DPoP binding, Agent authority enforcement, scope gate —
+// stays fully real.
 
 /// A presented Agent SessionGrant: the bearer JWT plus the holder (DPoP) key
 /// the introspected grant's `cnf_jkt` is bound to.
@@ -57,7 +59,8 @@ struct AgentGrantPresentation {
 
 /// Build the `Authorization`/`DPoP` header pair for one request. `htu` is the
 /// configured origin plus the bare path — the query string is excluded, exactly
-/// as the server's verifier reconstructs it.
+/// as the server's verifier reconstructs it. The grant rides the RFC 9449
+/// `DPoP` authorization scheme; `Bearer` is reserved for local dev sessions.
 fn agent_grant_headers(
     presentation: &AgentGrantPresentation,
     method: &str,
@@ -70,7 +73,7 @@ fn agent_grant_headers(
     )
     .expect("DPoP proof builds");
     (
-        format!("Bearer {}", presentation.grant_jwt),
+        format!("DPoP {}", presentation.grant_jwt),
         proof.header_value,
     )
 }
@@ -1543,6 +1546,48 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(filter_changed.status_code.unwrap().as_u16(), 400);
+}
+
+#[tokio::test]
+async fn cursor_syntax_failures_pin_param_invalid_with_invalid_cursor_reason() {
+    // encoding.md §8.3 closed set: a token that carries the `ak:cursor:`
+    // prefix but fails base64url/JSON/schema decoding MUST be rejected with
+    // top-level `param_invalid` and reason `invalid_cursor` — never
+    // `cursor_integrity_invalid` (reserved for handle lookup / binding
+    // failures).
+    let state = soland_test_support::app_state(test_config());
+    let token = dev_token(state.clone()).await;
+    let actor_core = fixture_actor_core_id("did:web:alice.example");
+
+    // ak.self.events.read.scan — `after` in canonical QUERY content.
+    let mut rejected = TestClient::query("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "actors": [actor_core],
+            "after": "ak:cursor:!!!not-base64url"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(rejected.status_code.unwrap(), StatusCode::BAD_REQUEST);
+    let body: Value = rejected.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "param_invalid", "{body}");
+    assert_eq!(
+        body["error"]["details"]["reason_code"], "invalid_cursor",
+        "{body}"
+    );
+
+    // ak.self.account.stream.subscribe — `after=` reconnect parameter.
+    let frame = account_subscribe_frame(
+        state.clone(),
+        Some(&token),
+        "catchup=true&after=ak:cursor:!!!not-base64url",
+    )
+    .await;
+    assert_eq!(frame["error"]["code"], "param_invalid", "{frame}");
+    assert_eq!(
+        frame["error"]["details"]["reason_code"], "invalid_cursor",
+        "{frame}"
+    );
 }
 
 #[tokio::test]

@@ -1,5 +1,6 @@
 use soland_storage::contract_tests::{
-    EventCommitContractStores, assert_atomic_batch_outbox_rollback_contract,
+    DeviceRevocationSealSettlementStores, EventCommitContractStores,
+    assert_atomic_batch_outbox_rollback_contract,
     assert_control_proposal_authority_ack_store_contract,
     assert_device_message_snapshot_guard_contract, assert_event_commit_unit_of_work_contract,
     assert_federation_outbox_store_contract, assert_governance_unscoped_signer_evidence_contract,
@@ -158,6 +159,32 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract_when_configured
 }
 
 #[tokio::test]
+async fn postgres_adapter_settles_sealed_device_revocations_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let cell_registry: std::sync::Arc<dyn arkret_state::state::CellRegistry> = std::sync::Arc::new(
+        soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry()
+            .expect("validated SDK cell registry"),
+    );
+    let stores =
+        soland_storage_postgres::build_state_resolution_stores(Some(pool.clone()), cell_registry);
+    let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
+    let revocations = soland_storage_postgres::PgDeviceRevocationStore { pool };
+    let namespace = format!("pgrevseal{}", uuid::Uuid::now_v7().simple());
+    assert_device_revocation_seal_settlement_contract(
+        DeviceRevocationSealSettlementStores {
+            unit_of_work: &unit_of_work,
+            revocations: &revocations,
+            control_events: stores.control_event_store.as_ref(),
+        },
+        &namespace,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured() {
     use diesel::sql_types::Text;
     use diesel::{QueryableByName, sql_query};
@@ -183,16 +210,11 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
     let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id)
         .map(arkret_identifiers::DidCoreId::from)
         .unwrap();
-    let realm_id =
-        arkret_identifiers::RealmId::from_event_id(&arkret_identifiers::EventId::from_digest(
-            arkret_canonical::DigestSuite::Sha256,
-            [0x33; 32],
-        ));
+    // A genesis scope names no Realm; the Realm id is derived from this
+    // Event's own id, so the fixture reads it back after construction.
     let event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::RealmCreate.as_str(),
-        arkret_wire::ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        },
+        arkret_wire::ScopeRef::RealmGenesis,
         actor_id,
         arkret_identifiers::DidCoreId::from(
             arkret_wire::project_full_id_to_core_id(
@@ -207,6 +229,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
     )
     .unwrap();
     let event_id = event.event_id.clone();
+    let realm_id = event.realm_id.clone();
     assert!(event.seal_basis.is_none());
     let proposal_digest = arkret_identifiers::Hash::new(
         event
@@ -303,7 +326,11 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
         return;
     };
     let _db_guard = DB_GUARD.lock().await;
-    let preimage = b"validated-digest-preimage".to_vec();
+    // The colliding event, its realm row and the quarantine evidence all stay
+    // in the database by design, so every run needs its own identities or a
+    // rerun collides with the previous run's residue.
+    let run_id = uuid::Uuid::now_v7();
+    let preimage = format!("validated-digest-preimage-{run_id}").into_bytes();
     let digest = arkret_canonical::sha256_bytes(&preimage);
     let mut id = [0_u8; ids::EVENT_ID_BYTES];
     id[0] = 0x01;
@@ -311,8 +338,9 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     let event_id = ids::format_event_id(&id);
     let canonical_digest = ids::format_event_digest(0x01, &digest).unwrap();
     let now = chrono::Utc::now();
-    let realm_id = event_derived_realm_id(b"postgres-collision-contract-realm");
-    let actor_id = format!("did:web:collision-{}.example", uuid::Uuid::now_v7());
+    let realm_id =
+        event_derived_realm_id(format!("postgres-collision-contract-realm-{run_id}").as_bytes());
+    let actor_id = format!("did:web:collision-{run_id}.example");
     let incoming = CanonicalEventRecord {
         event_id: event_id.clone(),
         actor_id: actor_id.clone(),
@@ -376,14 +404,19 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     let outbox_id = format!("collision-outbox:{}", uuid::Uuid::now_v7());
     sql_query(
         "INSERT INTO federation_outbox \
-         (id, event_pk, peer_id, peer_url, endpoint, idempotency_key, payload_json, next_attempt_at, created_at) \
-         VALUES ($1, $2, 'did:web:peer.example', 'https://peer.example', '/events', $1, '{}', 0, 0)",
+         (id, peer_id, peer_url, endpoint, idempotency_key, payload_json, next_attempt_at, created_at) \
+         VALUES ($1, 'did:web:peer.example', 'https://peer.example', '/events', $1, '{}', 0, 0)",
     )
     .bind::<Text, _>(&outbox_id)
-    .bind::<BigInt, _>(event_pk)
     .execute(&mut conn)
     .await
     .unwrap();
+    sql_query("INSERT INTO event_federation_outbox (event_pk, outbox_id) VALUES ($1, $2)")
+        .bind::<BigInt, _>(event_pk)
+        .bind::<Text, _>(&outbox_id)
+        .execute(&mut conn)
+        .await
+        .unwrap();
     drop(conn);
 
     let store = PgEventStore { pool: pool.clone() };
@@ -698,4 +731,334 @@ async fn postgres_account_data_cas_treats_an_absent_key_as_revision_zero_when_co
         store.compare_and_set(&created, 0).await.unwrap(),
         AccountDataCasResult::Conflict(Some(record)) if record.revision == 1
     ));
+}
+
+// ── S2 durable-ingress atomicity negatives ───────────────────────────────────
+//
+// A Control Move commits as one indivisible triple: the accepted Event row,
+// its Control Proposal Ack (for the Ack-required class), and the pending
+// `state_control_events` row. These cases prove against a real database that
+// no partial shape — Event-only, Ack-only, pending-only — can be committed,
+// and that a replay under a different ingress class is a Conflict.
+
+mod control_move_ingress_negatives {
+    use diesel::sql_types::{BigInt, Binary, Jsonb, Text};
+    use diesel::{QueryableByName, sql_query};
+    use diesel_async::RunQueryDsl;
+    use soland_storage::{CanonicalEventRecord, EventCommitRequest, EventCommitUnitOfWork, ids};
+    use soland_storage_postgres::PgEventCommitUnitOfWork;
+
+    use super::{DB_GUARD, test_pool};
+
+    #[derive(QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = BigInt)]
+        value: i64,
+    }
+
+    struct ControlAnchorFixture {
+        event: arkret_wire::Event,
+        realm_id: arkret_identifiers::RealmId,
+        proposal_digest: arkret_identifiers::Hash,
+        ack: arkret_wire::ControlProposalAck,
+        canonical_bytes: Vec<u8>,
+    }
+
+    /// A basis-free genesis anchor (a Control Move), built exactly as the
+    /// positive anchor-commit case above does.
+    fn control_anchor_fixture(seed: &str) -> ControlAnchorFixture {
+        let now = chrono::Utc::now();
+        let actor_full_id = arkret_identifiers::DidFullId::new(format!(
+            "did:web:ingress-negative-{seed}-{}.example",
+            uuid::Uuid::now_v7()
+        ))
+        .unwrap();
+        let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id)
+            .map(arkret_identifiers::DidCoreId::from)
+            .unwrap();
+        // A genesis scope names no Realm; the Realm id is derived from this
+        // Event's own id, so the fixture reads it back after construction.
+        // Anything the commit path re-parses from the envelope resolves the
+        // same id, which is what the Ack must bind.
+        let event = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::RealmCreate.as_str(),
+            arkret_wire::ScopeRef::RealmGenesis,
+            actor_id,
+            arkret_identifiers::DidCoreId::from(
+                arkret_wire::project_full_id_to_core_id(
+                    &arkret_identifiers::DidFullId::new("did:web:service.example".to_owned())
+                        .unwrap(),
+                )
+                .unwrap(),
+            ),
+            0,
+            arkret_identifiers::Hlc::new("019c00000000-0000-aabbccdd").unwrap(),
+            serde_json::json!({"object": {"fields": {"purpose": "principal_control"}}}),
+            now,
+        )
+        .unwrap();
+        let realm_id = event.realm_id.clone();
+        let proposal_digest = arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
+        let authority_set_ref =
+            arkret_identifiers::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
+        // The durable ingress path validates the aggregate Ack's protocol
+        // bounds, so the fixture needs one well-formed authority Ack: its
+        // signature digest must cover the member's canonical bytes, though the
+        // JWS itself is not verified at admission.
+        let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
+            realm_id: realm_id.clone(),
+            proposal_digest: proposal_digest.clone(),
+            received_at: now,
+            decision_due_at: now + chrono::Duration::hours(1),
+            absolute_due_at: now + chrono::Duration::hours(2),
+            authority_set_ref: authority_set_ref.clone(),
+            signature: arkret_wire::PayloadSignature {
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:web:authority.example#notary-1".to_owned(),
+                )
+                .unwrap(),
+                payload_digest: authority_set_ref.clone(),
+                created_at: now,
+                jws: "fixture-jws".to_owned(),
+                extra: Default::default(),
+            },
+        };
+        authority_ack.signature.payload_digest = authority_ack.authority_ack_digest().unwrap();
+        let ack = arkret_wire::ControlProposalAck {
+            kind: arkret_wire::ControlProposalAckKind::SignedAck,
+            realm_id: realm_id.clone(),
+            proposal_digest: proposal_digest.clone(),
+            received_at: now,
+            decision_due_at: now + chrono::Duration::hours(1),
+            absolute_due_at: now + chrono::Duration::hours(2),
+            defer_count: 0,
+            authority_set_ref,
+            authority_acks: vec![authority_ack],
+        };
+        let canonical_bytes =
+            arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+        ControlAnchorFixture {
+            event,
+            realm_id,
+            proposal_digest,
+            ack,
+            canonical_bytes,
+        }
+    }
+
+    impl ControlAnchorFixture {
+        fn commit_request(
+            &self,
+            ingress: Option<arkret_state::state::store::ControlProposalIngress>,
+        ) -> EventCommitRequest {
+            EventCommitRequest {
+                device_pairing_authorization: None,
+                contact_projection: None,
+                event: CanonicalEventRecord {
+                    event_id: self.event.event_id.to_string(),
+                    actor_id: self.event.actor_id.to_string(),
+                    actor_seq: 0,
+                    realm_id: Some(self.realm_id.to_string()),
+                    kind: arkret_wire::EventKind::RealmCreate.as_str().to_owned(),
+                    schema_id: "ak.schema.realm.v1".to_owned(),
+                    canonical_digest: self.proposal_digest.to_string(),
+                    canonical_bytes: self.canonical_bytes.clone(),
+                    envelope: serde_json::to_value(&self.event).unwrap(),
+                    received_at: chrono::Utc::now(),
+                },
+                control_proposal_ingress: ingress,
+                device_revocation_transition: None,
+                device_revocation_gate: None,
+                projections: Vec::new(),
+                idempotency: None,
+                outbox: Vec::new(),
+            }
+        }
+
+        async fn canonical_event_rows(&self, pool: &soland_storage_postgres::PgPool) -> i64 {
+            let identity = ids::validated_event_identity_parts(
+                self.event.event_id.as_str(),
+                self.proposal_digest.as_str(),
+                &self.canonical_bytes,
+            )
+            .unwrap();
+            let mut conn = pool.get().await.unwrap();
+            sql_query("SELECT COUNT(*) AS value FROM canonical_events WHERE id = $1")
+                .bind::<Binary, _>(identity.id.to_vec())
+                .get_result::<CountRow>(&mut *conn)
+                .await
+                .unwrap()
+                .value
+        }
+
+        async fn pending_rows(&self, pool: &soland_storage_postgres::PgPool) -> i64 {
+            let mut conn = pool.get().await.unwrap();
+            sql_query("SELECT COUNT(*) AS value FROM state_control_events WHERE event_digest = $1")
+                .bind::<Text, _>(self.proposal_digest.as_str())
+                .get_result::<CountRow>(&mut *conn)
+                .await
+                .unwrap()
+                .value
+        }
+    }
+
+    /// Event-only: a Control Move presented without its durable ingress
+    /// classification commits nothing at all.
+    #[tokio::test]
+    async fn postgres_control_move_without_ingress_commits_nothing_when_configured() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let _db_guard = DB_GUARD.lock().await;
+        let fixture = control_anchor_fixture("event-only");
+
+        let error = PgEventCommitUnitOfWork::new(pool.clone())
+            .commit_event(fixture.commit_request(None))
+            .await
+            .expect_err("a Control Move without ingress classification must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("missing its durable ingress classification"),
+            "unexpected rejection: {error}"
+        );
+        assert_eq!(fixture.canonical_event_rows(&pool).await, 0);
+        assert_eq!(fixture.pending_rows(&pool).await, 0);
+    }
+
+    /// Ack-only: an Ack that does not bind the Control Move's digest commits
+    /// nothing at all.
+    #[tokio::test]
+    async fn postgres_control_move_with_unbound_ack_commits_nothing_when_configured() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let _db_guard = DB_GUARD.lock().await;
+        let fixture = control_anchor_fixture("ack-only");
+        let mut ack = fixture.ack.clone();
+        ack.proposal_digest =
+            arkret_identifiers::Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap();
+
+        let error = PgEventCommitUnitOfWork::new(pool.clone())
+            .commit_event(fixture.commit_request(Some(
+                arkret_state::state::store::ControlProposalIngress::AckRequired(ack),
+            )))
+            .await
+            .expect_err("an Ack that does not bind the Control Move must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("Control Proposal Ack does not bind"),
+            "unexpected rejection: {error}"
+        );
+        assert_eq!(fixture.canonical_event_rows(&pool).await, 0);
+        assert_eq!(fixture.pending_rows(&pool).await, 0);
+    }
+
+    /// Pending-only: when the pending-row leg cannot land (a conflicting
+    /// durable row for the same digest), the accepted-Event leg rolls back
+    /// with it; the pre-existing row is left untouched.
+    #[tokio::test]
+    async fn postgres_control_move_pending_conflict_rolls_back_the_event_when_configured() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let _db_guard = DB_GUARD.lock().await;
+        let fixture = control_anchor_fixture("pending-only");
+        {
+            let mut conn = pool.get().await.unwrap();
+            sql_query(
+                "INSERT INTO state_control_events \
+                 (event_digest, realm_id, event_json, control_proposal_ack, ingress_class) \
+                 VALUES ($1, $2, $3, NULL, $4)",
+            )
+            .bind::<Text, _>(fixture.proposal_digest.as_str())
+            .bind::<Text, _>(fixture.realm_id.as_str())
+            .bind::<Jsonb, _>(serde_json::json!({"variant": "conflicting-canonical-bytes"}))
+            .bind::<Jsonb, _>(serde_json::json!({"class": "ack_required"}))
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        }
+
+        let error = PgEventCommitUnitOfWork::new(pool.clone())
+            .commit_event(fixture.commit_request(Some(
+                arkret_state::state::store::ControlProposalIngress::AckRequired(
+                    fixture.ack.clone(),
+                ),
+            )))
+            .await
+            .expect_err("a pending-row conflict must reject the whole commit");
+        assert!(
+            error.to_string().contains("duplicate_conflict"),
+            "unexpected rejection: {error}"
+        );
+        assert_eq!(
+            fixture.canonical_event_rows(&pool).await,
+            0,
+            "the Event row must roll back with its failed pending leg"
+        );
+        assert_eq!(fixture.pending_rows(&pool).await, 1);
+        let mut conn = pool.get().await.unwrap();
+        let ackless = sql_query(
+            "SELECT COUNT(*) AS value FROM state_control_events \
+             WHERE event_digest = $1 AND control_proposal_ack IS NULL",
+        )
+        .bind::<Text, _>(fixture.proposal_digest.as_str())
+        .get_result::<CountRow>(&mut *conn)
+        .await
+        .unwrap()
+        .value;
+        assert_eq!(ackless, 1, "the conflicting row must not absorb the Ack");
+    }
+
+    /// Class mismatch: the first admission's ingress class is part of the
+    /// durable basis; replaying the same digest under the other class is a
+    /// Conflict, while a byte-identical replay stays idempotent.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn postgres_control_move_ingress_class_mismatch_is_conflict_when_configured() {
+        use arkret_state::state::store::{
+            AcklessSelfPrincipalIngress, ControlProposalIngress, StoreError,
+        };
+
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let _db_guard = DB_GUARD.lock().await;
+        let fixture = control_anchor_fixture("class-mismatch");
+        let stores = soland_storage_postgres::build_state_resolution_stores(
+            Some(pool),
+            std::sync::Arc::new(arkret_state::state::MemoryCellRegistry::default()),
+        );
+
+        stores
+            .control_event_store
+            .put_pending_with_ingress(
+                &fixture.event,
+                &ControlProposalIngress::AckRequired(fixture.ack.clone()),
+            )
+            .unwrap();
+        let ackless = ControlProposalIngress::AcklessSelfPrincipal(AcklessSelfPrincipalIngress {
+            device_id: "ak:device:fixture".to_owned(),
+            device_authorize_event_id: "ak:event:fixture".to_owned(),
+            device_generation_ref: 1,
+            seal_basis_digest: "sha256:fixture".to_owned(),
+        });
+        assert!(
+            matches!(
+                stores
+                    .control_event_store
+                    .put_pending_with_ingress(&fixture.event, &ackless),
+                Err(StoreError::Conflict(_))
+            ),
+            "an Ack-required Move cannot be replayed as Ack-less"
+        );
+        stores
+            .control_event_store
+            .put_pending_with_ingress(
+                &fixture.event,
+                &ControlProposalIngress::AckRequired(fixture.ack.clone()),
+            )
+            .expect("the byte-identical class and Ack remain idempotent");
+    }
 }

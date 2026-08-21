@@ -226,7 +226,7 @@ impl SolandMemoryPersistenceStore {
             applets: MemoryAppletStore::new(),
             device_messages: MemoryDeviceMessageStore::with_inventory_and_revocations(
                 device_inventory_data,
-                device_revocations.state.clone(),
+                device_revocations.clone(),
             ),
             device_keys: MemoryDeviceKeyStore::new(),
             one_time_keys: MemoryOneTimeKeyStore::new(),
@@ -242,7 +242,7 @@ impl SolandMemoryPersistenceStore {
             ),
             // G3.S1: MLS lifecycle stores.
             mls_key_packages: MemoryMlsKeyPackageStore::with_revocations(
-                device_revocations.state.clone(),
+                device_revocations.clone(),
             ),
             mls_welcomes: MemoryMlsWelcomeStore::new(),
             mls_commits: MemoryMlsCommitStore::new(),

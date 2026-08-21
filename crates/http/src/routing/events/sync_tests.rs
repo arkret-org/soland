@@ -125,9 +125,59 @@ fn derive_cursor_handle_is_deterministic_and_spec_shaped() {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
         "handle is base64url alphabet"
     );
+}
+
+/// Wire-form token whose body carries `handle` as `h`, bypassing the encode-side
+/// validation so the decode chain is exercised with out-of-schema handles.
+fn cursor_token_with_handle(handle: &str, now: chrono::DateTime<chrono::Utc>) -> String {
+    let issued_at = arkret_canonical::normalize_timestamp_canonical(now);
+    let expires_at =
+        chrono::DateTime::from_timestamp_millis(issued_at.timestamp_millis() + 60 * 60 * 1000)
+            .unwrap();
+    let cursor = arkret_hlc::Cursor {
+        v: "1".to_owned(),
+        purpose: arkret_hlc::CursorPurpose::Stream,
+        issued_at,
+        expires_at,
+        h: handle.to_owned(),
+    };
+    let bytes =
+        arkret_canonical::canonical::canonical_json_bytes(&cursor).expect("cursor body serializes");
+    format!(
+        "ak:cursor:{}",
+        arkret_canonical::base64url::base64url_encode(&bytes)
+    )
+}
+
+/// Migrated from the deleted `soland_http::cursor` local copy: the ≥22-char
+/// base64url handle floor (≥128-bit entropy, `encoding.md` §8.3.1) MUST be
+/// enforced by the real production parse chain (SDK `Cursor::decode_at`),
+/// not by a soland-local validator.
+#[test]
+fn sync_cursor_decode_rejects_low_entropy_or_padded_handles() {
+    let now = chrono::Utc::now();
+    let now_ms = now.timestamp_millis();
+
+    // Positive control: a 22-char base64url handle decodes cleanly.
     assert!(
-        validate_cursor_handle(&h1).is_ok(),
-        "derived handle passes schema validation"
+        arkret_hlc::Cursor::decode_at(&cursor_token_with_handle(&"a".repeat(22), now), now_ms)
+            .is_ok(),
+        "22-char base64url handle passes the SDK decode chain"
+    );
+    // 21 chars < 128-bit entropy floor -> reject.
+    assert!(
+        arkret_hlc::Cursor::decode_at(&cursor_token_with_handle(&"a".repeat(21), now), now_ms)
+            .is_err(),
+        "21-char handle is below the 128-bit entropy floor"
+    );
+    // `=` padding is outside the unpadded base64url handle alphabet -> reject.
+    assert!(
+        arkret_hlc::Cursor::decode_at(
+            &cursor_token_with_handle("aaaaaaaaaaaaaaaaaaaaa=", now),
+            now_ms
+        )
+        .is_err(),
+        "padded handle is not unpadded base64url"
     );
 }
 

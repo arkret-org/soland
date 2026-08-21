@@ -149,7 +149,6 @@ pub struct ProjectionService {
     cell_store: Arc<dyn CellStore>,
     cell_registry: Arc<dyn CellRegistry>,
     event_seal_committer: Arc<dyn EventSealCommitPort>,
-    device_revocations: Option<Arc<dyn soland_storage::DeviceRevocationStore>>,
     control_decision_commit_lock: Arc<Mutex<()>>,
     history_authority_view_cas_lock: Arc<Mutex<()>>,
     clock: Arc<ServiceClock>,
@@ -398,21 +397,10 @@ impl ProjectionService {
             cell_store,
             cell_registry,
             event_seal_committer,
-            device_revocations: None,
             control_decision_commit_lock: Arc::new(Mutex::new(())),
             history_authority_view_cas_lock: Arc::new(Mutex::new(())),
             clock: Arc::new(ServiceClock::new(clock_node)),
         }
-    }
-
-    #[must_use]
-    pub fn with_device_revocation_store(
-        mut self,
-        store: Arc<dyn soland_storage::DeviceRevocationStore>,
-    ) -> Self {
-        store.bind_control_event_store(self.control_event_store.clone());
-        self.device_revocations = Some(store);
-        self
     }
 
     pub async fn hydrate_from_persistence(
@@ -583,26 +571,6 @@ impl ProjectionService {
         decision: &ControlProposalDecision,
         policy: ControlProposalDecisionPolicy,
     ) -> StoreResult<soland_storage::ControlProposalDecisionCommitOutcome> {
-        if let Some(store) = &self.device_revocations {
-            return store
-                .commit_decision(event_digest.as_str(), decision, policy.clone())
-                .await
-                .map_err(|error| match error {
-                    soland_storage::PersistenceError::NotFound(detail) => {
-                        StoreError::NotFound(detail)
-                    }
-                    soland_storage::PersistenceError::Conflict(detail) => {
-                        StoreError::Conflict(detail)
-                    }
-                    soland_storage::PersistenceError::SchemaViolation(detail) => {
-                        StoreError::Conflict(format!("schema_violation: {detail}"))
-                    }
-                    soland_storage::PersistenceError::Database(detail)
-                    | soland_storage::PersistenceError::Internal(detail) => {
-                        StoreError::Backend(detail)
-                    }
-                });
-        }
         let _guard = self.control_decision_commit_lock.lock();
         if self
             .control_event_store()
@@ -1627,7 +1595,7 @@ impl ProjectionService {
                 .event_digest_with_digest_suite(digest_suite)
                 .map_err(|error| StoreError::Conflict(error.to_string()))?,
         )
-        .map_err(|error| StoreError::Conflict(error.to_string()))?;
+        .map_err(|error| arkret_state::state::StoreError::Conflict(error.to_string()))?;
         self.control_event_store()
             .put_pending_with_ingress(event, ingress, digest_suite)?;
         self.control_event_store().mark_sealed(&digest, seal)

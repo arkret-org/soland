@@ -387,7 +387,13 @@ pub async fn assert_organization_registration_store_contract(
     // millisecond wire format, so a sub-millisecond `now` would compare
     // unequal after a durable JSON round-trip.
     let now = arkret_canonical::normalize_timestamp_canonical(database_timestamp_now());
-    let organization_full_id = test_full_id("zOrg", namespace);
+    // `project_full_id_to_core_id` drops the domain — and the namespace hash
+    // it carries — so the namespace must also reach the SCID slot, or a rerun
+    // on the same database reads the previous run's state as its own.
+    let organization_full_id = test_full_id(
+        &format!("zOrg{}", &test_hash_hex(namespace)[..12]),
+        namespace,
+    );
     let organization_id = project_full_id_to_core_id(&organization_full_id)
         .expect("organization full DID projects through the registered adapter");
     let first_admin = test_did("zAdmin", namespace);
@@ -3130,7 +3136,9 @@ pub async fn assert_service_route_handover_plan_store_contract(
     store: &dyn ServiceRouteHandoverPlanStore,
     service_id: &DidCoreId,
 ) {
-    let now = Utc::now();
+    // timestamptz is microsecond-precision; a nanosecond `now` would read back
+    // unequal and turn an identical re-open into a rejection.
+    let now = database_timestamp_now();
     let service_kind = "principal_server";
     let basis = digest_of("basis-record");
     let other_basis = digest_of("other-basis-record");
@@ -3748,5 +3756,248 @@ pub async fn assert_member_identity_store_contract(
             .expect("snapshot handle claims after invalidate")
             .iter()
             .all(|row| row.subject_id != claim.subject_id)
+    );
+}
+
+pub struct DeviceRevocationSealSettlementStores<'a> {
+    pub unit_of_work: &'a dyn EventCommitUnitOfWork,
+    pub revocations: &'a dyn DeviceRevocationStore,
+    pub control_events: &'a dyn arkret_state::state::ControlEventStore,
+}
+
+fn contract_device_revoke_fixture(
+    namespace: &str,
+) -> (
+    EventCommitRequest,
+    DeviceRevocationGateSelector,
+    arkret_wire::Event,
+    ControlProposalIngress,
+) {
+    let realm_id = contract_realm_id(&format!("device-revocation-seal:{namespace}"));
+    let actor_id = arkret_wire::DidCoreId::new(format!("ak:did_core:web:{namespace}.example"))
+        .expect("contract actor core id");
+    let principal_server_id = arkret_wire::DidCoreId::new("ak:did_core:web:soland.example")
+        .expect("contract principal server core id");
+    let created_at = database_timestamp_now();
+    let event = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::DeviceRevoke.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_wire::RealmId::new(realm_id.clone()).expect("contract realm id"),
+        },
+        actor_id.clone(),
+        principal_server_id.clone(),
+        0,
+        arkret_wire::Hlc::new("019f00000000-0000-00000002").expect("contract HLC"),
+        serde_json::json!({
+            "principal_id": actor_id,
+            "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
+            "revoked_by": actor_id,
+            "revoked_at": created_at,
+            "reason": "seal settlement contract"
+        }),
+        created_at,
+    )
+    .expect("contract device revoke event");
+    let canonical_digest = event.event_digest().expect("contract event digest");
+    let canonical_bytes = arkret_canonical::canonical_json_bytes(
+        &event.digest_payload().expect("contract digest payload"),
+    )
+    .expect("contract canonical bytes");
+    let record = CanonicalEventRecord {
+        event_id: event.event_id.as_str().to_owned(),
+        actor_id: actor_id.to_string(),
+        actor_seq: event.actor_seq,
+        realm_id: Some(realm_id.clone()),
+        kind: event.kind.to_string(),
+        schema_id: "arkret://events/device/revoke/v1".to_owned(),
+        canonical_digest: canonical_digest.clone(),
+        canonical_bytes,
+        envelope: serde_json::to_value(&event).expect("contract wire event encodes"),
+        received_at: created_at,
+    };
+    let control_proposal_ack = contract_control_proposal_ack(&record, &realm_id, created_at);
+    let selector = DeviceRevocationGateSelector {
+        principal_id: actor_id.to_string(),
+        principal_server_id: principal_server_id.to_string(),
+        device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+        target_device_authorize_event_id: "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD"
+            .to_owned(),
+        target_device_generation_ref: 7,
+    };
+    let transition = DeviceRevocationTransition {
+        selector: selector.clone(),
+        proposal_event_id: record.event_id.clone(),
+        proposal_digest: canonical_digest,
+        control_proposal_ack: control_proposal_ack.clone(),
+    };
+    let ingress = ControlProposalIngress::AckRequired(control_proposal_ack);
+    (
+        EventCommitRequest {
+            device_pairing_authorization: None,
+            contact_projection: None,
+            event: record,
+            control_proposal_ingress: Some(ingress.clone()),
+            device_revocation_transition: Some(transition),
+            device_revocation_gate: None,
+            projections: Vec::new(),
+            idempotency: None,
+            outbox: Vec::new(),
+        },
+        selector,
+        event,
+        ingress,
+    )
+}
+
+fn contract_covering_seal(
+    realm_id: &str,
+    delta: Hash,
+    sealed_at: chrono::DateTime<Utc>,
+) -> arkret_wire::Seal {
+    let placeholder = Hash::new(format!("sha256:{}", "0".repeat(64))).expect("placeholder hash");
+    let mut seal = arkret_wire::Seal {
+        id: arkret_wire::SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64)))
+            .expect("placeholder Seal id"),
+        realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).expect("contract realm id"),
+        predecessor_refs: Vec::new(),
+        delta: vec![delta],
+        control_event_set_root: placeholder.clone(),
+        state_root: placeholder.clone(),
+        completeness_root: placeholder.clone(),
+        notary_seq: 0,
+        data_view_root: None,
+        data_event_set_root: None,
+        availability_root: None,
+        coverage_scope: None,
+        covered_event_digests: Vec::new(),
+        previous_state_root: None,
+        previous_digest_algorithm: None,
+        notary_signature: arkret_wire::NotarySig::Single(arkret_wire::PayloadSignature {
+            verification_method: DidUrl::new("did:key:z6MkFixture#z6MkFixture")
+                .expect("fixture verification method"),
+            payload_digest: placeholder,
+            created_at: sealed_at,
+            jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
+            extra: Default::default(),
+        }),
+        sealed_at,
+        hlc: arkret_wire::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).expect("fixture HLC"),
+        kind: Default::default(),
+    };
+    seal.id = seal.derive_id().expect("derive fixture Seal id");
+    seal
+}
+
+/// Accepting a Seal over a pending device revocation must settle the gate to
+/// `revoked` and stage the erase / MLS cleanup obligations — on both backends
+/// through the same observable surface: the Postgres adapter derives this via
+/// its `state_control_events` JOIN, and the memory adapter must derive the
+/// identical view from its bound generic Control Event store.
+pub async fn assert_device_revocation_seal_settlement_contract(
+    stores: DeviceRevocationSealSettlementStores<'_>,
+    namespace: &str,
+) {
+    let (request, selector, event, ingress) = contract_device_revoke_fixture(namespace);
+    let proposal_digest = request.event.canonical_digest.clone();
+    let proposal_event_id = request.event.event_id.clone();
+    let realm_id = request.event.realm_id.clone().expect("revoke has a Realm");
+
+    stores
+        .control_events
+        .put_pending_with_ingress(&event, &ingress)
+        .expect("admit pending Control Move");
+    let outcome = stores
+        .unit_of_work
+        .commit_event(request)
+        .await
+        .expect("commit accepted device revoke");
+    assert!(outcome.event_inserted);
+    assert!(matches!(
+        stores
+            .revocations
+            .gate_status(&selector)
+            .await
+            .expect("gate status while pending"),
+        DeviceRevocationGateStatus::Pending { ref blocking_proposal_digest }
+            if blocking_proposal_digest == &proposal_digest
+    ));
+
+    let digest = Hash::new(proposal_digest.clone()).expect("typed proposal digest");
+    let seal = contract_covering_seal(&realm_id, digest.clone(), database_timestamp_now());
+    stores
+        .control_events
+        .mark_sealed(&digest, &seal)
+        .expect("seal the accepted revoke");
+
+    match stores
+        .revocations
+        .gate_status(&selector)
+        .await
+        .expect("gate status after seal")
+    {
+        DeviceRevocationGateStatus::Revoked { covering_seal_id } => {
+            assert_eq!(covering_seal_id, seal.id.as_str());
+        }
+        other => panic!("sealed revocation gate must derive Revoked, got {other:?}"),
+    }
+    let targets = stores
+        .revocations
+        .list_targets(&selector)
+        .await
+        .expect("list targets after seal");
+    assert_eq!(targets.len(), 1);
+    match &targets[0].status {
+        DeviceRevocationTargetStatus::Revoked {
+            covering_seal_id, ..
+        } => assert_eq!(covering_seal_id, seal.id.as_str()),
+        other => panic!("sealed target must be Revoked, got {other:?}"),
+    }
+
+    let intent = stores
+        .revocations
+        .pending_cleanup_intents(usize::MAX)
+        .await
+        .expect("pending cleanup intents after seal")
+        .into_iter()
+        .find(|intent| intent.proposal_digest == proposal_digest)
+        .expect("sealed revocation must stage a cleanup intent");
+    assert_eq!(intent.proposal_event_id, proposal_event_id);
+    assert_eq!(intent.covering_seal_id, seal.id.as_str());
+    assert_eq!(intent.selector, selector);
+    assert!(intent.material_cleanup_completed_at.is_none());
+    assert!(intent.mls_obligation_completed_at.is_none());
+
+    assert!(
+        stores
+            .revocations
+            .complete_material_cleanup(&proposal_digest, database_timestamp_now())
+            .await
+            .expect("complete material cleanup")
+    );
+    assert!(
+        stores
+            .revocations
+            .pending_cleanup_intents(usize::MAX)
+            .await
+            .expect("pending cleanup intents after material cleanup")
+            .iter()
+            .any(|intent| intent.proposal_digest == proposal_digest),
+        "the durable task remains until the MLS step is acknowledged"
+    );
+    assert!(
+        stores
+            .revocations
+            .complete_mls_obligation_by_event_id(&proposal_event_id, database_timestamp_now())
+            .await
+            .expect("complete MLS obligation by revoke Event id")
+    );
+    assert!(
+        stores
+            .revocations
+            .pending_cleanup_intents(usize::MAX)
+            .await
+            .expect("pending cleanup intents after both completions")
+            .iter()
+            .all(|intent| intent.proposal_digest != proposal_digest)
     );
 }

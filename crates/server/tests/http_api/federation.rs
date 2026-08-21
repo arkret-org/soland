@@ -368,6 +368,40 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
 }
 
 #[tokio::test]
+async fn peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason() {
+    // encoding.md §8.3 closed set on the federation read path
+    // (`ak.peer.events.read.scan`): an `ak:cursor:`-prefixed token that fails
+    // base64url/JSON/schema decoding MUST return top-level `param_invalid`
+    // with reason `invalid_cursor`.
+    let state = soland_test_support::app_state(test_config());
+    seed_peer_read_authorization(&state, PEER_SOURCE_ID, "did:web:alice.example").await;
+
+    let read_body = serde_json::json!({
+        "realms": [test_realm_id()],
+        "after": "ak:cursor:!!!not-base64url"
+    });
+    let query_target = "http://server/_arkret/peer/events";
+    let mut query = TestClient::query(query_target).json(&read_body);
+    for (name, value) in signed_federation_query_headers(
+        PEER_SOURCE_DID,
+        SERVICE_ID,
+        DESTINATION_TRUST_DOMAIN,
+        query_target,
+        &read_body,
+    ) {
+        query = query.add_header(name, value, true);
+    }
+    let mut rejected = query.send(&app_from_state(state)).await;
+    assert_eq!(rejected.status_code.unwrap(), StatusCode::BAD_REQUEST);
+    let body: Value = rejected.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "param_invalid", "{body}");
+    assert_eq!(
+        body["error"]["details"]["reason_code"], "invalid_cursor",
+        "{body}"
+    );
+}
+
+#[tokio::test]
 async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
     let state = soland_test_support::app_state(test_config());
     seed_peer_delivery_binding(&state).await;

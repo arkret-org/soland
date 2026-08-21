@@ -27,11 +27,21 @@ claim that a third-party reviewer has completed an assessment.
 - MLS KeyPackage/Welcome/Commit stores are implemented for memory and
   PostgreSQL; commits now require governance quorum and covered-frontier
   tracking.
-- did:webvh resolution revalidates chain, SCID, witness quorum, and rotation
-  witness fail-closed behavior. There is no degraded-no-witness relaxation
-  window: every `did-freshness-profile-registry.json` profile is high risk and
+- did:webvh handling is layered by trust root (see `DEPLOYMENT.md`,
+  "Witness verification is layered by trust root"). The local/embedded
+  provider path revalidates chain, SCID, and controller proofs but performs
+  **no** witness verification: any log entry declaring a witness policy is
+  rejected fail-closed with `WitnessQuorumNotMet`
+  (`webvh_validation::validate_witness_policy_for_log`), and describe
+  advertises `webvh_witness_quorum: "unsupported"` for the
+  `soland.local_identity_store` trust root. Real witness verification runs
+  only on the external resolution path
+  (`did_resolver_chain.rs::fetch_verified_webvh_history` → SDK
+  `verify_did_webvh_v1_chain_and_witness_bytes`). There is no
+  degraded-no-witness relaxation window: every
+  `did-freshness-profile-registry.json` profile is high risk and
   synchronous-refresh-or-fail-closed, so a declared witness policy with no
-  verified witness signatures is always a quorum failure.
+  verified witness signatures is always a quorum failure on either path.
 
 ## Review checklist
 

@@ -16,12 +16,10 @@ struct MemoryMlsKeyPackageState {
 #[derive(Default)]
 pub(crate) struct MemoryMlsKeyPackageStore {
     state: Mutex<MemoryMlsKeyPackageState>,
-    revocations: Option<std::sync::Arc<Mutex<crate::MemoryDeviceRevocationState>>>,
+    revocations: Option<crate::MemoryDeviceRevocationStore>,
 }
 impl MemoryMlsKeyPackageStore {
-    pub(crate) fn with_revocations(
-        revocations: std::sync::Arc<Mutex<crate::MemoryDeviceRevocationState>>,
-    ) -> Self {
+    pub(crate) fn with_revocations(revocations: crate::MemoryDeviceRevocationStore) -> Self {
         Self {
             state: Mutex::default(),
             revocations: Some(revocations),
@@ -79,7 +77,8 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             &self.revocations,
         ) {
             (true, Some(selector), Some(revocations)) => {
-                let guard = revocations.lock();
+                revocations.settle_from_control_events();
+                let guard = revocations.state.lock();
                 guard.status(selector).ensure_allowed()?;
                 Some(guard)
             }
@@ -234,7 +233,8 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             &self.revocations,
         ) {
             (true, Some(selector), Some(revocations)) => {
-                let guard = revocations.lock();
+                revocations.settle_from_control_events();
+                let guard = revocations.state.lock();
                 match guard.status(selector) {
                     DeviceRevocationGateStatus::Active => Some(guard),
                     DeviceRevocationGateStatus::Pending { .. }

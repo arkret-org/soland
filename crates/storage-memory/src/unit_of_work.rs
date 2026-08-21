@@ -434,6 +434,9 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         #[cfg(feature = "fault-injection")]
         self.fault_injector
             .check(FaultPoint::EventCommit, FaultTiming::Before)?;
+        // Settle seal-derived revocation state first so the staged gate
+        // check below observes `Revoked` exactly like the Postgres JOIN does.
+        self.device_revocations.settle_from_control_events();
         let mut events = self.events.data.lock();
         let mut quarantined = self.events.quarantined.lock();
         let mut collision_variants = self.events.collision_variants.lock();
@@ -641,6 +644,8 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 "schema_violation: empty event batch".to_owned(),
             ));
         }
+        // Same seal-derived settlement as `commit_event` above.
+        self.device_revocations.settle_from_control_events();
         let mut events = self.events.data.lock();
         let mut quarantined = self.events.quarantined.lock();
         let mut collision_variants = self.events.collision_variants.lock();

@@ -1,5 +1,6 @@
 use soland_storage::contract_tests::{
-    EventCommitContractStores, assert_account_status_replica_decision_table_contract,
+    DeviceRevocationSealSettlementStores, EventCommitContractStores,
+    assert_account_status_replica_decision_table_contract,
     assert_atomic_batch_outbox_rollback_contract,
     assert_control_proposal_authority_ack_store_contract, assert_device_key_store_contract,
     assert_device_message_snapshot_guard_contract, assert_event_commit_unit_of_work_contract,
@@ -89,6 +90,25 @@ async fn memory_adapter_satisfies_shared_event_commit_contract() {
             invite_policies: store.invite_receive_policies(),
         },
         "memory-event-commit",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn memory_adapter_settles_sealed_device_revocations_from_control_events() {
+    let store = SolandMemoryPersistenceStore::new();
+    let control_events =
+        std::sync::Arc::new(arkret_state::state::MemoryControlEventStore::default());
+    store
+        .device_revocations()
+        .bind_control_event_store(control_events.clone());
+    assert_device_revocation_seal_settlement_contract(
+        DeviceRevocationSealSettlementStores {
+            unit_of_work: &store,
+            revocations: store.device_revocations(),
+            control_events: control_events.as_ref(),
+        },
+        "memory-device-revocation-seal",
     )
     .await;
 }

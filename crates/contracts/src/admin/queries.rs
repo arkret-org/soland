@@ -66,6 +66,16 @@ pub struct AdminActor {
     /// account is not deactivated or the fanout state is unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deactivation_federation_incomplete: Option<bool>,
+    /// The spec's `deactivation_partial` service-side flag
+    /// (`account-lifecycle.md` §3/§7.1): `Some(true)` while a local
+    /// deactivation fanout leg (currently the push-gateway notification) has
+    /// failed and is still being retried; `Some(false)` once every leg
+    /// completed. `None` when the account is not deactivated (or
+    /// erasure_pending, whose erasure runs the same fanout) or the fanout
+    /// state is unknown. Orthogonal to
+    /// [`Self::deactivation_federation_incomplete`] — never merged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deactivation_partial: Option<bool>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -324,6 +334,7 @@ mod tests {
         assert_eq!(actor.status, None);
         assert_eq!(actor.is_admin, None);
         assert_eq!(actor.deactivation_federation_incomplete, None);
+        assert_eq!(actor.deactivation_partial, None);
         assert_eq!(actor.device_count, None);
     }
 

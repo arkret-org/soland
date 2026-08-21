@@ -90,9 +90,11 @@ pub(super) async fn submit_agent_runtime_key_request(
     if body.verification_method.trim().is_empty() {
         return Err(AppError::param_invalid("verification_method is required"));
     }
-    if verification_method_principal(&body.verification_method) != agent_id {
+    if verification_method_principal(&body.verification_method)
+        .is_none_or(|principal| principal.as_str() != agent_id)
+    {
         return Err(AppError::param_invalid(
-            "verification_method DID must match agent_id",
+            "verification_method DID must project to agent_id",
         ));
     }
     if verification_method_agent_endpoint(&body.verification_method, agent_id).is_none() {
@@ -677,9 +679,11 @@ pub(super) async fn agent_key_pair(
     if body.verification_method.trim().is_empty() {
         return Err(AppError::param_invalid("verification_method is required"));
     }
-    if verification_method_principal(&body.verification_method) != agent_id {
+    if verification_method_principal(&body.verification_method)
+        .is_none_or(|principal| principal.as_str() != agent_id)
+    {
         return Err(AppError::param_invalid(
-            "verification_method DID must match agent_id",
+            "verification_method DID must project to agent_id",
         ));
     }
     if verification_method_agent_endpoint(&body.verification_method, agent_id).is_none() {
@@ -1072,20 +1076,47 @@ async fn validate_agent_signing_key_binding_parts(
     let signing_bytes =
         arkret_signatures::agent_evidence::agent_signing_key_binding_signing_bytes(binding)
             .map_err(|reason| AppError::param_invalid(reason.as_str()))?;
-    let verification = crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
-        &signing_bytes,
-        binding.controller_proof.jws.as_str(),
-        binding.controller_proof.verification_method.as_str(),
-        controller_id,
-        state,
-    )
-    .await;
-    verification.map_err(|error| {
+    let proof_invalid = |reason: String| {
         AppError::param_invalid(format!(
-            "signing_key_binding controller proof invalid: {error}"
+            "signing_key_binding controller proof invalid: {reason}"
         ))
         .with_wire_code("agent_signing_key_mismatch")
-    })
+    };
+    // The controller proof is a principal-device detached JWS. Verify it
+    // against the controller's explicit local account authority: the pairing
+    // endpoint runs on the controller's Principal Server (the session was
+    // already bound to the local controller account), so the authority
+    // coordinate is `(controller_id, this service)` and the signer device is
+    // the fragment of the controller proof's verification method.
+    let controller_proof_method = binding.controller_proof.verification_method.as_str();
+    let controller_device_id = controller_proof_method
+        .rsplit_once('#')
+        .map(|(_, fragment)| fragment)
+        .ok_or_else(|| {
+            proof_invalid("controller verification method has no device fragment".to_owned())
+        })?;
+    let controller_device_id = arkret_identifiers::DeviceId::new(controller_device_id.to_owned())
+        .map_err(|error| {
+        proof_invalid(format!(
+            "controller verification method device fragment is invalid: {error}"
+        ))
+    })?;
+    let authority = arkret_wire::PrincipalAuthorityKey::new(
+        binding.controller_id.clone(),
+        arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(|error| {
+            AppError::internal(format!("configured service_id invalid: {error}"))
+        })?,
+    );
+    crate::jws_verify::verify_principal_authorized_jws_with_account_authority_async(
+        &signing_bytes,
+        binding.controller_proof.jws.as_str(),
+        controller_proof_method,
+        &authority,
+        &controller_device_id,
+        state,
+    )
+    .await
+    .map_err(|error| proof_invalid(error.to_string()))
 }
 
 async fn validate_requested_scope_disclosure(

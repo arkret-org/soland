@@ -290,10 +290,16 @@ pub(crate) async fn build_sync_snapshot(
         Vec::new()
     };
 
-    // Actor-private account data: hydrate every `(actor, account_data_key)` row
-    // owned by the authenticated session so the client can join e.g.
-    // `ak.contacts.realm.<realm_id>` Realm remarks against the public
-    // Realm title during render. Spec: discovery/client-preferences.md
+    // Actor-private account data: rebuilt exclusively from canonical
+    // `ak.account_data.set` Events authored by (or for) the session actor —
+    // NOT from `AccountDataStore` rows. CAS-only cells written directly
+    // through `AccountDataStore::compare_and_set` (e.g.
+    // `ak.account.invite_delivery` / `ak.account.invite_quarantine`) never
+    // appear in this stream; today they are readable only via the
+    // `GET /_arkret/self/account_data` list endpoint. Whether the subscribe
+    // stream must also carry them is tracked in
+    // arkret-work work/active 2026-08-19-2035 (consent-model.md §6.1.1).
+    // Spec for the Event-backed part: discovery/client-preferences.md
     // §2 (storage model) / §3.7 (Realm remarks).
     let account_data = account_data_events(state, session).await;
     let agent_signer_evidence_bundle =

@@ -14,6 +14,9 @@ use arkret_models_collaboration::governance::join_policy::{
     JoinApplicationPrivateBody, JoinApplicationReviewRequestBody, JoinApplicationStatus,
     JoinApplicationSubmitRequestBody, join_application_revision_digest,
 };
+use arkret_server::{
+    CursorAuthority, CursorAuthorityError, CursorBindingContext, cursor_filter_digest,
+};
 use arkret_wire::{CapabilityActionId, Hash};
 use chrono::{Duration, Utc};
 use salvo::oapi::endpoint;
@@ -74,6 +77,110 @@ fn idempotency_key(req: &Request) -> Result<String, AppError> {
 
 fn parse_application_ref(value: String) -> Result<Hash, AppError> {
     Hash::new(value).map_err(|error| AppError::param_invalid(error.to_string()))
+}
+
+// ── List-pagination cursor (api-conventions.md §7 / encoding.md §8) ─────────
+//
+// `ak.self.realm.join_application.read.list` paginates with the single opaque
+// `ak:cursor:` type. The continuation position (`after_application_ref`) is
+// bound server-side to the cursor's `h` handle; the wire body carries only the
+// canonical `{v, purpose, issued_at, expires_at, h}` fields.
+
+const JOIN_APPLICATION_LIST_CURSOR_TTL_MS: i64 = 60 * 60 * 1000;
+
+fn join_application_cursor_error(error: CursorAuthorityError) -> AppError {
+    match error {
+        // encoding.md §8.3 closed set: syntax/schema failures pin the top-level
+        // `param_invalid` code with reason `invalid_cursor`.
+        CursorAuthorityError::ParamInvalid(message) => AppError::param_invalid(message)
+            .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR),
+        CursorAuthorityError::Expired => {
+            AppError::new(ErrorCode::CursorExpired, "cursor has expired")
+        }
+        CursorAuthorityError::IntegrityInvalid => AppError::new(
+            ErrorCode::CursorIntegrityInvalid,
+            "cursor integrity check failed",
+        ),
+    }
+}
+
+fn join_application_list_cursor_context(
+    state: &AppState,
+    realm_id: &RealmId,
+    actor: &str,
+    device_id: &str,
+) -> Result<CursorBindingContext, AppError> {
+    let filter_digest = cursor_filter_digest(&json!({
+        "operation": "ak.self.realm.join_application.read.list",
+        "realm_id": realm_id.as_str(),
+    }))
+    .map_err(|error| AppError::internal(format!("cursor filter digest failed: {error}")))?;
+    Ok(CursorBindingContext::new(
+        actor,
+        Some(device_id.to_owned()),
+        state.service_id().clone(),
+        filter_digest,
+    ))
+}
+
+async fn join_application_list_cursor_after(
+    state: &AppState,
+    cursor: Option<&str>,
+    context: &CursorBindingContext,
+) -> Result<Option<String>, AppError> {
+    let Some(cursor) = cursor else {
+        return Ok(None);
+    };
+    let cursor =
+        CursorAuthority::decode_stream(cursor.trim()).map_err(join_application_cursor_error)?;
+    let stored =
+        state.sync().cursor(&cursor.h).await.map_err(|error| {
+            AppError::internal(format!("cursor binding lookup failed: {error}"))
+        })?;
+    let record = stored
+        .map(soland_http::util::cursor_binding_record_from_state)
+        .transpose()
+        .map_err(join_application_cursor_error)?;
+    let positions = CursorAuthority::resolve_stream(&cursor, context, record.as_ref())
+        .map_err(join_application_cursor_error)?;
+    positions
+        .get("after_application_ref")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .map(Some)
+        .ok_or_else(|| join_application_cursor_error(CursorAuthorityError::IntegrityInvalid))
+}
+
+async fn mint_join_application_list_cursor(
+    state: &AppState,
+    context: CursorBindingContext,
+    after_application_ref: &str,
+) -> Result<String, AppError> {
+    let (token, record) = CursorAuthority::mint_stream(
+        context,
+        json!({ "after_application_ref": after_application_ref }),
+        JOIN_APPLICATION_LIST_CURSOR_TTL_MS,
+    )
+    .map_err(join_application_cursor_error)?;
+    state
+        .sync()
+        .upsert_cursor(&soland_services::sync::CursorState {
+            handle: record.handle,
+            principal_id: Some(record.context.principal_id),
+            device_id: record.context.device_id,
+            service_id: record.context.service_id,
+            filter_digest: Some(record.context.filter_digest),
+            purpose: "stream".to_owned(),
+            positions: Some(record.positions),
+            target: None,
+            issued_at_ms: record.issued_at_ms,
+            expires_at_ms: record.expires_at_ms,
+        })
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("cursor binding persistence failed: {error}"))
+        })?;
+    Ok(token)
 }
 
 fn schema_error(error: impl std::fmt::Display) -> AppError {
@@ -600,6 +707,10 @@ async fn list_join_applications(
         return Err(AppError::param_invalid("limit must be in 1..=200"));
     }
     let (reviewer, _, member) = viewer_context(state, &realm_id, &session.actor);
+    let cursor_context =
+        join_application_list_cursor_context(state, &realm_id, &session.actor, &session.device_id)?;
+    let after_application_ref =
+        join_application_list_cursor_after(state, cursor.as_deref(), &cursor_context).await?;
     let mut records = state
         .join_applications()
         .list(realm_id.as_str(), Utc::now())
@@ -612,20 +723,24 @@ async fn list_join_applications(
             reviewer || member || record.receipt.applicant_actor_id.as_str() == session.actor
         })
         .filter(|record| {
-            cursor
+            after_application_ref
                 .as_deref()
-                .is_none_or(|cursor| record.application_ref.as_str() > cursor)
+                .is_none_or(|after| record.application_ref.as_str() > after)
         })
         .collect::<Vec<_>>();
     let has_more = visible.len() > usize::from(limit);
     visible.truncate(usize::from(limit));
-    let next_cursor = has_more
-        .then(|| {
-            visible
-                .last()
-                .map(|record| record.application_ref.to_string())
-        })
-        .flatten();
+    let next_cursor = match (has_more, visible.last()) {
+        (true, Some(record)) => Some(
+            mint_join_application_list_cursor(
+                state,
+                cursor_context,
+                record.application_ref.as_str(),
+            )
+            .await?,
+        ),
+        _ => None,
+    };
     let mut applications = Vec::with_capacity(visible.len());
     for record in visible {
         let (entry, body_visible) = application_entry(&record, &session.actor, reviewer);

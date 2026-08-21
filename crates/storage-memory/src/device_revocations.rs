@@ -146,6 +146,90 @@ impl MemoryDeviceRevocationStore {
             control_events: Arc::new(Mutex::new(None)),
         }
     }
+
+    /// Derive each pending target's terminal state from the bound generic
+    /// Control Event store, mirroring the Postgres adapter's
+    /// `device_revocation_targets JOIN state_control_events` semantics:
+    /// `sealed_by` promotes the target to `Revoked` (and stages the same
+    /// cleanup intent `stage_sealed_revocation_in_transaction` would), a
+    /// terminal signed reject settles `Rejected`, and interim decisions are
+    /// mirrored into the pending record. Without a bound store (durable
+    /// adapters, isolated fixtures) this is a no-op.
+    pub(crate) fn settle_from_control_events(&self) {
+        let Some(control_events) = self.control_events.lock().clone() else {
+            return;
+        };
+        let mut sealed_devices: Vec<(String, String, chrono::DateTime<Utc>)> = Vec::new();
+        {
+            let mut state = self.state.lock();
+            let pending: Vec<String> = state
+                .targets
+                .iter()
+                .filter(|(_, record)| {
+                    matches!(record.status, DeviceRevocationTargetStatus::Pending { .. })
+                })
+                .map(|(digest, _)| digest.clone())
+                .collect();
+            for proposal_digest in pending {
+                let Ok(digest) = arkret_wire::Hash::new(proposal_digest.clone()) else {
+                    continue;
+                };
+                let Ok(Some(snapshot)) = control_events.control_proposal_snapshot(&digest) else {
+                    continue;
+                };
+                let record = state
+                    .targets
+                    .get_mut(&proposal_digest)
+                    .expect("target stays present under the held lock");
+                if let Some(covering_seal_id) = snapshot.sealed_by {
+                    // The snapshot carries the covering Seal id but not the
+                    // Seal's own timestamp, so the settlement observation time
+                    // becomes the durable sealed_at, exactly once.
+                    let sealed_at = Utc::now();
+                    record.status = DeviceRevocationTargetStatus::Revoked {
+                        covering_seal_id: covering_seal_id.as_str().to_owned(),
+                        sealed_at,
+                    };
+                    let selector = record.selector.clone();
+                    let proposal_event_id = record.proposal_event_id.clone();
+                    state
+                        .cleanup_intents
+                        .entry(proposal_digest.clone())
+                        .or_insert_with(|| DeviceRevocationCleanupIntent {
+                            proposal_digest: proposal_digest.clone(),
+                            proposal_event_id,
+                            selector: selector.clone(),
+                            covering_seal_id: covering_seal_id.as_str().to_owned(),
+                            created_at: sealed_at,
+                            material_cleanup_completed_at: None,
+                            mls_obligation_completed_at: None,
+                        });
+                    sealed_devices.push((selector.principal_id, selector.device_id, sealed_at));
+                } else if let Some(terminal_decision) = snapshot
+                    .decisions
+                    .iter()
+                    .find(|decision| decision.is_reject())
+                {
+                    record.status = DeviceRevocationTargetStatus::Rejected {
+                        terminal_decision: terminal_decision.clone(),
+                    };
+                } else if let DeviceRevocationTargetStatus::Pending {
+                    decisions,
+                    decision_overdue,
+                } = &mut record.status
+                {
+                    *decisions = snapshot.decisions;
+                    *decision_overdue |= snapshot.decision_overdue;
+                }
+            }
+        }
+        for (principal_id, device_id, sealed_at) in sealed_devices {
+            if let Some(device) = self.inventory.lock().get_mut(&(principal_id, device_id)) {
+                device.revoked_at.get_or_insert(sealed_at);
+                device.updated_at = device.updated_at.max(sealed_at);
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -161,6 +245,7 @@ impl DeviceRevocationStore for MemoryDeviceRevocationStore {
         &self,
         selector: &DeviceRevocationGateSelector,
     ) -> PersistenceResult<DeviceRevocationGateStatus> {
+        self.settle_from_control_events();
         Ok(self.state.lock().status(selector))
     }
 
@@ -168,6 +253,7 @@ impl DeviceRevocationStore for MemoryDeviceRevocationStore {
         &self,
         selector: &DeviceRevocationGateSelector,
     ) -> PersistenceResult<Vec<DeviceRevocationTargetRecord>> {
+        self.settle_from_control_events();
         let mut records = self
             .state
             .lock()
@@ -201,6 +287,7 @@ impl DeviceRevocationStore for MemoryDeviceRevocationStore {
         &self,
         request: DeviceRevocationGateLinearizationRequest,
     ) -> PersistenceResult<DeviceRevocationGateLinearization> {
+        self.settle_from_control_events();
         let key = (
             (
                 request.principal_id.clone(),
@@ -243,6 +330,7 @@ impl DeviceRevocationStore for MemoryDeviceRevocationStore {
         proposal_digest: &str,
         terminal_decision: &arkret_wire::ControlProposalDecision,
     ) -> PersistenceResult<bool> {
+        self.settle_from_control_events();
         let mut state = self.state.lock();
         let Some(record) = state.targets.get_mut(proposal_digest) else {
             return Ok(false);
@@ -277,6 +365,7 @@ impl DeviceRevocationStore for MemoryDeviceRevocationStore {
         decision: &arkret_wire::ControlProposalDecision,
         policy: arkret_wire::ControlProposalDecisionPolicy,
     ) -> PersistenceResult<ControlProposalDecisionCommitOutcome> {
+        self.settle_from_control_events();
         let mut state = self.state.lock();
         let digest = arkret_wire::Hash::new(proposal_digest.to_owned())
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
@@ -324,6 +413,7 @@ impl DeviceRevocationStore for MemoryDeviceRevocationStore {
         covering_seal_id: &str,
         sealed_at: chrono::DateTime<Utc>,
     ) -> PersistenceResult<bool> {
+        self.settle_from_control_events();
         let mut state = self.state.lock();
         let Some(record) = state.targets.get_mut(proposal_digest) else {
             return Ok(false);
@@ -383,6 +473,7 @@ impl DeviceRevocationStore for MemoryDeviceRevocationStore {
         &self,
         limit: usize,
     ) -> PersistenceResult<Vec<DeviceRevocationCleanupIntent>> {
+        self.settle_from_control_events();
         Ok(self
             .state
             .lock()

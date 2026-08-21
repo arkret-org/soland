@@ -424,7 +424,7 @@ pub(crate) async fn dispatch_assignment_notifications(
     operation: &arkret_event_draft::ProjectedEventOperation,
 ) {
     let payload = &operation.payload;
-    if relation_field(payload, "kind") != Some("assigned_to") {
+    if relation_field(payload, "relation_kind") != Some("assigned_to") {
         return;
     }
     let Some(strand_id) =
@@ -921,7 +921,7 @@ mod tests {
                 "sender": sender,
                 "event_id": event_id,
                 "relation": {
-                    "kind": "assigned_to",
+                    "relation_kind": "assigned_to",
                     "from_ref": strand_id,
                     "to_ref": assignee,
                 }

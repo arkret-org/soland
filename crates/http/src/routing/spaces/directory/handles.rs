@@ -691,7 +691,7 @@ pub(super) async fn signed_handle_claim(
         claim_scope: BTreeMap::new(),
         member_delivery_binding: Some(member_delivery_binding),
         claims: Vec::new(),
-        created_at: Some(created_at),
+        created_at,
         expires_at: Some(expires_at),
         verified_at: None,
         source_refs: Vec::new(),
@@ -920,7 +920,7 @@ async fn list_handles_cursor_start(
             AppError::internal(format!("cursor binding lookup failed: {error}"))
         })?;
     let record = stored
-        .map(cursor_binding_record)
+        .map(soland_http::util::cursor_binding_record_from_state)
         .transpose()
         .map_err(cursor_app_error)?;
     let positions = CursorAuthority::resolve_stream(&cursor, context, record.as_ref())
@@ -959,35 +959,6 @@ async fn mint_list_handles_cursor(
             AppError::internal(format!("cursor binding persistence failed: {error}"))
         })?;
     Ok(token)
-}
-
-fn cursor_binding_record(
-    record: soland_services::sync::CursorState,
-) -> Result<CursorBindingRecord, CursorAuthorityError> {
-    let purpose = match record.purpose.as_str() {
-        "stream" => CursorPurpose::Stream,
-        "barrier" => CursorPurpose::Barrier,
-        _ => return Err(CursorAuthorityError::IntegrityInvalid),
-    };
-    Ok(CursorBindingRecord {
-        handle: record.handle,
-        context: CursorBindingContext::new(
-            record
-                .principal_id
-                .ok_or(CursorAuthorityError::IntegrityInvalid)?,
-            record.device_id,
-            record.service_id,
-            record
-                .filter_digest
-                .ok_or(CursorAuthorityError::IntegrityInvalid)?,
-        ),
-        purpose,
-        positions: record
-            .positions
-            .ok_or(CursorAuthorityError::IntegrityInvalid)?,
-        issued_at_ms: record.issued_at_ms,
-        expires_at_ms: record.expires_at_ms,
-    })
 }
 
 fn cursor_app_error(error: CursorAuthorityError) -> AppError {

@@ -3,9 +3,6 @@
 //! dropped/resync frame helper. Shared with sibling routing modules through
 //! `sync.rs` re-exports.
 
-#[cfg(test)]
-pub use soland_http::cursor::validate_cursor_handle;
-
 use super::*;
 
 #[derive(Debug, Default)]
