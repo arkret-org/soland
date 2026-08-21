@@ -931,15 +931,33 @@ impl ProjectionState {
         policy_floor_field(components, "metadata_encryption_floor").map(ToOwned::to_owned)
     }
 
-    /// Effective Realm `content_scheme` projected from the
-    /// `ak.component.realm.policy_bundle.v1` cell. `None` means no scheme has been negotiated
-    /// yet — callers treat that as the application-message default
-    /// (`mls_rfc9420`). Once a related Realm/Circle MLS Genesis exists,
-    /// `apply_realm_policy_bundle` treats this effective selection as immutable.
+    /// Effective Realm `content_scheme`, read from the governance binding the
+    /// winning `ak.component.mls.epoch.v1` tuple froze.
+    ///
+    /// `realm-and-space.md` §2.3 fixes the scheme at the accepted MLS group
+    /// Genesis and forbids it in mutable policy state, so the policy bundle is
+    /// never consulted. `None` means this Realm has no accepted MLS group yet
+    /// and therefore no effective scheme.
     pub fn realm_content_scheme(&self, realm_id: &str) -> Option<String> {
-        self.realm_policy_bundle_cell_value(realm_id)
-            .and_then(content_scheme_field)
+        self.realm_group_genesis_binding(realm_id)?
+            .get("content_scheme")
+            .and_then(Value::as_str)
             .map(ToOwned::to_owned)
+    }
+
+    /// The Realm-default MLS group's accepted governance binding, if the group
+    /// exists. Circle groups are independent and carry their own binding.
+    fn realm_group_genesis_binding(&self, realm_id: &str) -> Option<&Value> {
+        self.mls_commit_epochs
+            .values()
+            .find(|epoch| {
+                matches!(
+                    serde_json::from_value::<arkret_wire::ScopeRef>(epoch.effective_scope.clone()),
+                    Ok(arkret_wire::ScopeRef::Realm { realm_id: scope_realm_id })
+                        if scope_realm_id.as_str() == realm_id
+                )
+            })
+            .map(|epoch| &epoch.governance_binding)
     }
 
     /// Effective Realm `history_access` projected from its dedicated cell.
@@ -958,19 +976,17 @@ impl ProjectionState {
     }
 
     /// Effective Realm `durability_policy` (Realm Recovery Key, realm-and-space.md
-    /// §2.3.1) projected from the `ak.component.realm.policy_bundle.v1` cell.
-    /// `None` means no policy has been declared yet — callers treat that as the
-    /// spec default `mode=none` (no organizational recovery path). Deserialized
-    /// into the authoritative SDK [`arkret_models_collaboration::objects::realm::DurabilityPolicy`]
-    /// strong type (soland does not redefine the spec shape). The RRK share-acceptance
-    /// gate reads this to confirm a recipient is a declared recovery recipient.
-    pub fn realm_durability_policy(
-        &self,
-        realm_id: &str,
-    ) -> Option<arkret_models_collaboration::objects::realm::DurabilityPolicy> {
-        let components = self.realm_policy_bundle_cell_value(realm_id)?;
-        let durability = crate::reducer::durability_policy_field(components)?;
-        serde_json::from_value(durability.clone()).ok()
+    /// §2.3.1), read from the same accepted MLS group Genesis binding as the
+    /// content scheme. `None` means no accepted group has frozen one — callers
+    /// treat that as the spec default `none` (no organizational recovery path).
+    /// Parsed into the authoritative SDK closed union [`arkret_wire::DurabilityPolicy`]
+    /// (soland does not redefine the spec shape).
+    pub fn realm_durability_policy(&self, realm_id: &str) -> Option<arkret_wire::DurabilityPolicy> {
+        self.realm_group_genesis_binding(realm_id)?
+            .get("durability_policy")
+            .and_then(Value::as_str)?
+            .parse()
+            .ok()
     }
 
     /// Read the create-locked Realm `security_class` from genesis.

@@ -45,7 +45,7 @@ fn high_assurance_rejects_open_or_omitted_federation_policy() {
             .unwrap(),
         arkret_identifiers::RealmId::new(REALM).unwrap(),
         arkret_wire::EventKind::RealmPolicyBundle.as_str(),
-        json!({"policy_revision": 1, "content_scheme": "mls_rfc9420"}),
+        json!({"policy_revision": 1, "content_encryption_floor": "e2ee_required"}),
     );
     let effect = state.apply(&omitted, &ServerHlc::new("test"));
     assert!(matches!(

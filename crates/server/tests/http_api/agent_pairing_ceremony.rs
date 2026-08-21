@@ -71,7 +71,7 @@ async fn seed_agent_pcr_recovery_material(
         0,
         0,
         arkret_identifiers::Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap(),
-        arkret_models_crypto::MlsContentScheme::MlsRfc9420,
+        arkret_wire::ContentScheme::MlsRfc9420,
         None,
         arkret_wire::ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
         arkret_wire::CORE_REDUCER_PROFILE,

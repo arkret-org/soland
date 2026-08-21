@@ -34,10 +34,6 @@ pub(crate) const CIRCLE_JOIN_NOT_OPEN: &str = "circle_join_not_open";
 /// `content_scheme=mls_exporter_aead_v1` Realm, because `mls_rfc9420`
 /// (PrivateMessage) has no deliverable `history_secret` to seal to recovery
 /// recipients. Declaring `mode != none` on an incompatible Realm is rejected.
-/// realm-and-space.md §2.3.1 — `durability_policy` invariants: `recovery_recipients`
-/// MUST be non-empty when `mode != none`, and `threshold` (`1 <= k <= n ==
-/// len(recovery_recipients)`) is required when `mode=threshold`.
-pub(crate) const DURABILITY_POLICY_INVALID: &str = "durability_policy_invalid";
 
 /// R1.2 — pure validation for a `ak.member.state{join,routable}`
 /// `delivery_binding` against a projected
@@ -886,86 +882,6 @@ pub(crate) fn metadata_floor_rank(floor: Option<&str>) -> u8 {
         Some("e2ee_required") => 1,
         _ => 0,
     }
-}
-
-/// Extract the Realm `content_scheme` field from a `ak.realm.policy_bundle`
-/// value. Returns `None` when the field is absent.
-pub(crate) fn content_scheme_field(value: &Value) -> Option<&str> {
-    policy_floor_field(value, "content_scheme")
-}
-
-/// Compatibility rank used only by the durability-policy gate: exporter AEAD
-/// can carry recoverable history secrets while RFC 9420 application messages
-/// cannot. Scheme mutability is validated separately against MLS Genesis.
-pub(crate) fn content_scheme_rank(scheme: Option<&str>) -> u8 {
-    match scheme.map(str::trim) {
-        Some("mls_exporter_aead_v1") => 1,
-        _ => 0,
-    }
-}
-
-/// The canonical Realm `content_scheme` enum
-/// (realm-and-space.md history access): `mls_rfc9420` (application messages) and
-/// `mls_exporter_aead_v1` (exporter-derived AEAD content for history sharing).
-pub(crate) fn content_scheme_is_known(scheme: &str) -> bool {
-    matches!(scheme.trim(), "mls_rfc9420" | "mls_exporter_aead_v1")
-}
-
-/// Extract the `durability_policy` object from a `ak.realm.policy_bundle`
-/// value. Returns `None` when the field is absent.
-pub(crate) fn durability_policy_field(value: &Value) -> Option<&Value> {
-    value
-        .get("durability_policy")
-        .filter(|policy| policy.is_object())
-}
-
-/// realm-and-space.md §2.3.1 — validate an incoming `durability_policy` against
-/// its structural invariants and the effective `content_scheme`. `scheme` is the
-/// Realm's effective `content_scheme` *after* applying this policy update (the
-/// incoming scheme when present, else the already-projected scheme).
-///
-/// - `mode != none` requires a non-empty `recovery_recipients` array → `durability_policy_invalid`
-///   otherwise.
-/// - `mode=threshold` requires `threshold.{k,n}` with `1 <= k <= n == len(recovery_recipients)` →
-///   `durability_policy_invalid` otherwise.
-/// - `mode != none` is only valid on `content_scheme=mls_exporter_aead_v1` →
-///   `durability_scheme_incompatible` otherwise (the spec failed_precondition).
-pub(crate) fn validate_durability_policy(
-    policy: &Value,
-    effective_scheme: Option<&str>,
-) -> Result<(), &'static str> {
-    let mode = policy.get("mode").and_then(Value::as_str).unwrap_or("none");
-    if !matches!(mode, "none" | "org_recovery_key" | "threshold") {
-        return Err(DURABILITY_POLICY_INVALID);
-    }
-    if mode == "none" {
-        return Ok(());
-    }
-    // mode != none — recovery_recipients MUST be non-empty and unique.
-    let recipients = policy
-        .get("recovery_recipients")
-        .and_then(Value::as_array)
-        .filter(|recipients| !recipients.is_empty())
-        .ok_or(DURABILITY_POLICY_INVALID)?;
-    // scheme gate: organizational recovery requires a deliverable history_secret.
-    if content_scheme_rank(effective_scheme) < content_scheme_rank(Some("mls_exporter_aead_v1")) {
-        return Err(arkret_wire::ReasonCode::DURABILITY_SCHEME_INCOMPATIBLE);
-    }
-    if mode == "threshold" {
-        let threshold = policy
-            .get("threshold")
-            .and_then(Value::as_object)
-            .ok_or(DURABILITY_POLICY_INVALID)?;
-        let k = threshold.get("k").and_then(Value::as_u64);
-        let n = threshold.get("n").and_then(Value::as_u64);
-        let (Some(k), Some(n)) = (k, n) else {
-            return Err(DURABILITY_POLICY_INVALID);
-        };
-        if k < 1 || k > n || n != recipients.len() as u64 {
-            return Err(DURABILITY_POLICY_INVALID);
-        }
-    }
-    Ok(())
 }
 
 /// `encryption-and-audit.md` §2.4.1 — absolute ceiling on the declared

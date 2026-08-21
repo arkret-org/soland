@@ -354,7 +354,7 @@ impl ProjectionState {
     /// wrapper unrepresentable on the wire.
     pub(crate) fn apply_realm_policy_bundle(&mut self, operation: &Operation) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
-        let mut value = operation.payload.clone();
+        let value = operation.payload.clone();
         let Ok(bundle) = operation.typed_payload::<arkret_wire::event_spec::RealmPolicyBundle>()
         else {
             return ProjectionEffect::Rejected {
@@ -441,61 +441,11 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::METADATA_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
             };
         }
-        // encryption-and-audit.md §2.10.6: policy may select a scheme until the
-        // first ordinary Realm/Circle MLS Genesis. Once a group exists, its
-        // genesis-selected scheme is immutable; a later policy write cannot
-        // silently turn that group into a different encryption construction.
-        let incoming_scheme = content_scheme_field(&value);
-        if let Some(scheme) = incoming_scheme
-            && !content_scheme_is_known(scheme)
-        {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-            };
-        }
-        let projected_scheme = self.realm_content_scheme(&realm_id);
-        let current_effective_scheme = projected_scheme.as_deref().unwrap_or("mls_rfc9420");
-        let incoming_effective_scheme = incoming_scheme.unwrap_or(current_effective_scheme);
-        let realm_has_mls_group = self.mls_commit_epochs.values().any(|epoch| {
-            matches!(
-                serde_json::from_value::<arkret_wire::ScopeRef>(epoch.effective_scope.clone()),
-                Ok(arkret_wire::ScopeRef::Realm { realm_id: scope_realm_id })
-                    | Ok(arkret_wire::ScopeRef::Circle {
-                        realm_id: scope_realm_id,
-                        ..
-                    }) if scope_realm_id.as_str() == realm_id
-            )
-        });
-        if realm_has_mls_group && incoming_effective_scheme != current_effective_scheme {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::MLS_CONTENT_SCHEME_IMMUTABLE.to_owned(),
-            };
-        }
-        let effective_scheme = incoming_scheme.or(projected_scheme.as_deref());
-        // realm-and-space.md §2.3.1 — `durability_policy` (Realm Recovery Key)
-        // is reducer-derived from `ak.realm.policy_bundle`. Validate its
-        // structural invariants and that `mode != none` is only declared on a
-        // `content_scheme=mls_exporter_aead_v1` Realm (else
-        // `durability_scheme_incompatible`). The effective scheme is the
-        // incoming scheme when this same update sets it, else the projected one.
-        if let Some(durability_policy) = durability_policy_field(&value)
-            && let Err(reason) = validate_durability_policy(durability_policy, effective_scheme)
-        {
-            return ProjectionEffect::Rejected {
-                reason: reason.to_owned(),
-            };
-        }
-        // An omitted optional selector means "retain the established
-        // selection", not "reset to the RFC default". Preserve it in the
-        // derived snapshot so a later write cannot bypass immutability by
-        // first omitting the field.
-        if realm_has_mls_group
-            && incoming_scheme.is_none()
-            && let Some(projected_scheme) = projected_scheme
-            && let Some(object) = value.as_object_mut()
-        {
-            object.insert("content_scheme".to_owned(), Value::String(projected_scheme));
-        }
+        // `content_scheme` and `durability_policy` are frozen by the accepted
+        // MLS group Genesis and are not bundle components
+        // (realm-and-space.md sections 2.3 and 2.3.1). The closed bundle schema
+        // does not declare them, so there is nothing to select, ratchet or
+        // preserve here: both are read from the winning MLS epoch tuple.
         self.realm_policy_bundle_cells
             .insert(realm_id.clone(), CellState::Value(value));
         ProjectionEffect::RealmPolicyBundleProjected { realm_id }

@@ -25,7 +25,17 @@ fn apply_policy_bundle(
     )
 }
 
-fn seed_mls_genesis(state: &mut ProjectionState, realm: &str, scope: arkret_wire::ScopeRef) {
+/// Seed an accepted MLS group Genesis whose governance binding freezes the
+/// create-locked `content_scheme` / `durability_policy` pair
+/// (realm-and-space.md sections 2.3 and 2.3.1). These two values live nowhere
+/// else: the policy bundle cannot carry them.
+fn seed_mls_genesis_with_binding(
+    state: &mut ProjectionState,
+    realm: &str,
+    scope: arkret_wire::ScopeRef,
+    content_scheme: Option<&str>,
+    durability_policy: Option<&str>,
+) {
     let group_id = scope.canonical_mls_group_id().unwrap();
     state.mls_commit_epochs.insert(
         MlsCommitEpochKey::new(realm, &group_id),
@@ -37,11 +47,21 @@ fn seed_mls_genesis(state: &mut ProjectionState, realm: &str, scope: arkret_wire
             creator_device_id: "ak:device:01904100-0000-7000-8000-00000000c501".to_owned(),
             genesis_event_ref: "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned(),
             committed_at: 0,
-            governance_binding: serde_json::json!({
-                "realm_id": realm,
-                "mls_group_id": group_id,
-                "effective_scope": scope
-            }),
+            governance_binding: {
+                let mut binding = serde_json::json!({
+                    "realm_id": realm,
+                    "mls_group_id": group_id,
+                    "effective_scope": scope
+                });
+                let object = binding.as_object_mut().expect("binding object");
+                if let Some(scheme) = content_scheme {
+                    object.insert("content_scheme".to_owned(), serde_json::json!(scheme));
+                }
+                if let Some(policy) = durability_policy {
+                    object.insert("durability_policy".to_owned(), serde_json::json!(policy));
+                }
+                binding
+            },
             accepted_commit_digest: None,
             accepted_commit_ref: None,
             accepted_from_epoch: None,
@@ -336,380 +356,52 @@ fn metadata_floor_ratchet_rejects_downgrade() {
     ));
 }
 
-// encryption-and-audit.md §2.10.6 — policy may change the selection before
-// Genesis, but the selected scheme is immutable once an ordinary Realm or
-// Circle MLS group exists under the Realm.
+// realm-and-space.md §2.3 / §2.3.1 — `content_scheme` and `durability_policy`
+// are frozen by the accepted MLS group Genesis and are read from the winning
+// epoch tuple's governance binding, never from mutable policy state.
 #[test]
-fn content_scheme_is_selectable_before_genesis() {
+fn content_scheme_and_durability_read_the_accepted_genesis_binding() {
     let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
-    let apply_scheme = |state: &mut ProjectionState, scheme: Option<&str>| {
-        let payload = match scheme {
-            Some(s) => serde_json::json!({ "content_scheme": s }),
-            None => serde_json::json!({ "federation_policy": "open" }),
-        };
-        apply_policy_bundle(state, &hlc, realm, payload)
-    };
-    // baseline mls_rfc9420 -> projected
-    let baseline = apply_scheme(&mut state, Some("mls_rfc9420"));
-    assert!(
-        matches!(
-            baseline,
-            ProjectionEffect::RealmPolicyBundleProjected { .. }
-        ),
-        "baseline policy projection failed: {baseline:?}"
-    );
-    // upgrade rfc9420 -> exporter-aead is accepted
-    assert!(matches!(
-        apply_scheme(&mut state, Some("mls_exporter_aead_v1")),
-        ProjectionEffect::RealmPolicyBundleProjected { .. }
-    ));
-    // Before Genesis either direction remains a policy selection.
-    assert!(matches!(
-        apply_scheme(&mut state, Some("mls_rfc9420")),
-        ProjectionEffect::RealmPolicyBundleProjected { .. }
-    ));
-    assert!(matches!(
-        apply_scheme(&mut state, Some("mls_exporter_aead_v1")),
-        ProjectionEffect::RealmPolicyBundleProjected { .. }
-    ));
-}
+    let realm = "ak:realm:AcfJePA6div26qnIQkrT20tbJtdJ79JSjQFTRuB8pA7T";
+    assert_eq!(state.realm_content_scheme(realm), None);
+    assert_eq!(state.realm_durability_policy(realm), None);
 
-#[test]
-fn realm_genesis_locks_content_scheme_in_both_directions() {
-    let hlc = ServerHlc::new("realm-genesis-scheme");
-    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
-    let scope = || arkret_wire::ScopeRef::Realm {
-        realm_id: arkret_wire::RealmId::new(realm).unwrap(),
-    };
-
-    let mut rfc = ProjectionState::new();
-    assert!(matches!(
-        apply_policy_bundle(
-            &mut rfc,
-            &hlc,
-            realm,
-            serde_json::json!({"content_scheme": "mls_rfc9420"}),
-        ),
-        ProjectionEffect::RealmPolicyBundleProjected { .. }
-    ));
-    seed_mls_genesis(&mut rfc, realm, scope());
-    assert!(matches!(
-        apply_policy_bundle(
-            &mut rfc,
-            &hlc,
-            realm,
-            serde_json::json!({"content_scheme": "mls_exporter_aead_v1"}),
-        ),
-        ProjectionEffect::Rejected { reason }
-            if reason == arkret_wire::ReasonCode::MLS_CONTENT_SCHEME_IMMUTABLE
-    ));
-    assert!(matches!(
-        apply_policy_bundle(
-            &mut rfc,
-            &hlc,
-            realm,
-            serde_json::json!({"content_scheme": "mls_rfc9420"}),
-        ),
-        ProjectionEffect::RealmPolicyBundleProjected { .. }
-    ));
-    assert!(matches!(
-        apply_policy_bundle(
-            &mut rfc,
-            &hlc,
-            realm,
-            serde_json::json!({"federation_policy": "open"})
-        ),
-        ProjectionEffect::RealmPolicyBundleProjected { .. }
-    ));
-
-    let mut exporter = ProjectionState::new();
-    assert!(matches!(
-        apply_policy_bundle(
-            &mut exporter,
-            &hlc,
-            realm,
-            serde_json::json!({"content_scheme": "mls_exporter_aead_v1"}),
-        ),
-        ProjectionEffect::RealmPolicyBundleProjected { .. }
-    ));
-    seed_mls_genesis(&mut exporter, realm, scope());
-    assert!(matches!(
-        apply_policy_bundle(
-            &mut exporter,
-            &hlc,
-            realm,
-            serde_json::json!({"content_scheme": "mls_rfc9420"}),
-        ),
-        ProjectionEffect::Rejected { reason }
-            if reason == arkret_wire::ReasonCode::MLS_CONTENT_SCHEME_IMMUTABLE
-    ));
-    assert!(matches!(
-        apply_policy_bundle(
-            &mut exporter,
-            &hlc,
-            realm,
-            serde_json::json!({"content_scheme": "mls_exporter_aead_v1"}),
-        ),
-        ProjectionEffect::RealmPolicyBundleProjected { .. }
-    ));
-    assert!(matches!(
-        apply_policy_bundle(
-            &mut exporter,
-            &hlc,
-            realm,
-            serde_json::json!({"federation_policy": "open"}),
-        ),
-        ProjectionEffect::RealmPolicyBundleProjected { .. }
-    ));
-    assert_eq!(
-        exporter.realm_content_scheme(realm).as_deref(),
-        Some("mls_exporter_aead_v1"),
-        "omission must retain the Genesis-selected scheme"
-    );
-}
-
-#[test]
-fn circle_genesis_locks_parent_realm_content_scheme() {
-    let hlc = ServerHlc::new("circle-genesis-scheme");
-    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
-    let circle_scope = || arkret_wire::ScopeRef::Circle {
-        realm_id: arkret_wire::RealmId::new(realm).unwrap(),
-        circle_id: arkret_wire::CircleId::new(
-            "ak:circle:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt",
-        )
-        .unwrap(),
-    };
-
-    for (selected, attempted) in [
-        ("mls_rfc9420", "mls_exporter_aead_v1"),
-        ("mls_exporter_aead_v1", "mls_rfc9420"),
-    ] {
-        let mut state = ProjectionState::new();
-        assert!(matches!(
-            apply_policy_bundle(
-                &mut state,
-                &hlc,
-                realm,
-                serde_json::json!({"content_scheme": selected}),
-            ),
-            ProjectionEffect::RealmPolicyBundleProjected { .. }
-        ));
-        seed_mls_genesis(&mut state, realm, circle_scope());
-        assert!(matches!(
-            apply_policy_bundle(
-                &mut state,
-                &hlc,
-                realm,
-                serde_json::json!({"content_scheme": attempted}),
-            ),
-            ProjectionEffect::Rejected { reason }
-                if reason == arkret_wire::ReasonCode::MLS_CONTENT_SCHEME_IMMUTABLE
-        ));
-    }
-}
-
-#[test]
-fn sidecar_only_genesis_does_not_lock_realm_content_scheme() {
-    let hlc = ServerHlc::new("sidecar-genesis-scheme");
-    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
-    let mut state = ProjectionState::new();
-    seed_mls_genesis(
+    seed_mls_genesis_with_binding(
         &mut state,
         realm,
-        arkret_wire::ScopeRef::Sidecar {
-            realm_id: arkret_wire::RealmId::new(realm).unwrap(),
-            sidecar_id: arkret_wire::SidecarId::new(
-                "ak:sidecar:AUbhLbszCE22Bm-rjOxxh9NLjudxjc1Jm38OX5PZttdw",
-            )
-            .unwrap(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(realm.to_owned()).unwrap(),
         },
+        Some("mls_exporter_aead_v1"),
+        Some("organization_recovery_key"),
     );
-    assert!(matches!(
-        apply_policy_bundle(
-            &mut state,
-            &hlc,
-            realm,
-            serde_json::json!({"content_scheme": "mls_exporter_aead_v1"}),
-        ),
-        ProjectionEffect::RealmPolicyBundleProjected { .. }
-    ));
-}
-
-// An unknown `content_scheme` enum value is rejected outright, even on a realm
-// that has not yet committed to any scheme.
-#[test]
-fn content_scheme_rejects_unknown_value() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:AdX3Acd0WvYOiVl9-lqFGgGa8xxz2Z5P3Zcp5ply14zF";
-    let effect = apply_policy_bundle(
-        &mut state,
-        &hlc,
-        realm,
-        serde_json::json!({ "content_scheme": "aes-gcm-siv-handrolled" }),
-    );
-    assert!(matches!(
-        effect,
-        ProjectionEffect::Rejected { reason }
-            if reason == arkret_wire::ErrorCode::SCHEMA_VIOLATION
-    ));
-}
-
-#[test]
-fn content_scheme_reads_the_policy_bundle_cell() {
-    use arkret_state::lattice::CellState;
-
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("history-scheme-create");
-    let realm = "ak:realm:ATJpGWcxXQSxhpRxXI7xH5XTDhzIUCqOy5m6bXv454ge";
-    state.realm_policy_bundle_cells.insert(
-        realm.to_owned(),
-        CellState::Value(serde_json::json!({
-            "policy_revision": 1,
-            "content_scheme": "mls_exporter_aead_v1"
-        })),
-    );
-
     assert_eq!(
         state.realm_content_scheme(realm).as_deref(),
         Some("mls_exporter_aead_v1")
     );
-    let effect = apply_policy_bundle(
-        &mut state,
-        &hlc,
-        realm,
-        serde_json::json!({ "content_scheme": "mls_rfc9420" }),
+    assert_eq!(
+        state.realm_durability_policy(realm),
+        Some(arkret_wire::DurabilityPolicy::OrganizationRecoveryKey)
     );
-    assert!(matches!(
-        effect,
-        ProjectionEffect::RealmPolicyBundleProjected { .. }
-    ));
 }
 
-// realm-and-space.md §2.3.1 — `durability_policy.mode != none` is only valid on
-// a `content_scheme=mls_exporter_aead_v1` realm. Declaring an org RRK on a realm
-// that has not committed to the exporter-AEAD scheme MUST
-// `durability_scheme_incompatible`.
+// A Circle group is independent: its own Genesis binding never becomes the
+// parent Realm's effective scheme.
 #[test]
-fn durability_policy_requires_exporter_aead_scheme() {
+fn a_circle_group_genesis_does_not_supply_the_realm_scheme() {
     let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("durability-scheme");
-    let realm = "ak:realm:ARM_okyR4stVa2JmCJPyJcnwpoxsI3jimzSgJEra7UL0";
-    let recipient = serde_json::json!({
-        "recipient_id": "rrk-1",
-        "principal_id": "ak:did_core:web:hr.example",
-        "verification_method": "did:web:hr.example#rrk-1"
-    });
-    // No scheme committed yet (defaults to mls_rfc9420) → incompatible.
-    let effect = apply_policy_bundle(
-        &mut state,
-        &hlc,
-        realm,
-        serde_json::json!({
-            "durability_policy": {
-                "mode": "org_recovery_key",
-                "recovery_recipients": [recipient]
-            }
-        }),
-    );
-    assert!(matches!(
-        effect,
-        ProjectionEffect::Rejected { reason } if reason == arkret_wire::ReasonCode::DURABILITY_SCHEME_INCOMPATIBLE
-    ));
-}
-
-// A `durability_policy.mode != none` declared together with (or after) the
-// `mls_exporter_aead_v1` scheme is accepted and projected.
-#[test]
-fn durability_policy_accepted_on_exporter_aead_scheme() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("durability-ok");
-    let realm = "ak:realm:AcfJePA6div26qnIQkrT20tbJtdJ79JSjQFTRuB8pA7T";
-    let recipient = serde_json::json!({
-        "recipient_id": "rrk-1",
-        "principal_id": "ak:did_core:web:hr.example",
-        "verification_method": "did:web:hr.example#rrk-1"
-    });
-    // Same-update set of scheme + durability policy is accepted.
-    let effect = apply_policy_bundle(
-        &mut state,
-        &hlc,
-        realm,
-        serde_json::json!({
-            "content_scheme": "mls_exporter_aead_v1",
-            "durability_policy": {
-                "mode": "org_recovery_key",
-                "recovery_recipients": [recipient]
-            }
-        }),
-    );
-    assert!(matches!(
-        effect,
-        ProjectionEffect::RealmPolicyBundleProjected { .. }
-    ));
-    let projected = state
-        .realm_durability_policy(realm)
-        .expect("durability policy projected");
-    assert!(matches!(
-        projected.mode,
-        arkret_models_collaboration::objects::realm::DurabilityMode::OrgRecoveryKey
-    ));
-    assert_eq!(projected.recovery_recipients.len(), 1);
-}
-
-// `mode != none` with an empty `recovery_recipients` array is structurally
-// invalid → `durability_policy_invalid`.
-#[test]
-fn durability_policy_rejects_empty_recipients() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("durability-empty");
     let realm = "ak:realm:AQxJQaLWacjxt_NW7mRMxg7nFhvaLcCnmR-020-l4hIa";
-    let effect = apply_policy_bundle(
+    let circle = "ak:circle:ATOTi3sw4NO_6LjlHGedSYTeT3Leu2J3Tb49M1gn9cFN";
+    seed_mls_genesis_with_binding(
         &mut state,
-        &hlc,
         realm,
-        serde_json::json!({
-            "content_scheme": "mls_exporter_aead_v1",
-            "durability_policy": {
-                "mode": "org_recovery_key",
-                "recovery_recipients": []
-            }
-        }),
+        arkret_wire::ScopeRef::Circle {
+            realm_id: arkret_identifiers::RealmId::new(realm.to_owned()).unwrap(),
+            circle_id: arkret_identifiers::CircleId::new(circle.to_owned()).unwrap(),
+        },
+        Some("mls_exporter_aead_v1"),
+        Some("organization_recovery_key"),
     );
-    assert!(matches!(
-        effect,
-        ProjectionEffect::Rejected { reason } if reason == DURABILITY_POLICY_INVALID
-    ));
-}
-
-// `mode=threshold` requires `threshold.{k,n}` with `n == len(recovery_recipients)`.
-#[test]
-fn durability_policy_threshold_validates_k_of_n() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("durability-threshold");
-    let realm = "ak:realm:AQxy0zXCpXmA_8kcoWOSePqrAA7vI9NsCp7RMO8ha6ak";
-    let recipients = serde_json::json!([
-        {"recipient_id": "rrk-1", "principal_id": "ak:did_core:web:a.example", "verification_method": "did:web:a.example#rrk"},
-        {"recipient_id": "rrk-2", "principal_id": "ak:did_core:web:b.example", "verification_method": "did:web:b.example#rrk"}
-    ]);
-    // n=3 but only 2 recipients → invalid.
-    let effect = apply_policy_bundle(
-        &mut state,
-        &hlc,
-        realm,
-        serde_json::json!({
-            "content_scheme": "mls_exporter_aead_v1",
-            "durability_policy": {
-                "mode": "threshold",
-                "recovery_recipients": recipients,
-                "threshold": {"k": 2, "n": 3}
-            }
-        }),
-    );
-    assert!(matches!(
-        effect,
-        ProjectionEffect::Rejected { reason } if reason == DURABILITY_POLICY_INVALID
-    ));
+    assert_eq!(state.realm_content_scheme(realm), None);
+    assert_eq!(state.realm_durability_policy(realm), None);
 }

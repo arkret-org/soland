@@ -136,7 +136,11 @@ fn circle_view_from_with_pending(
             .transpose()?,
         agent_participation: None,
         encryption_profile: parse_sdk_field("encryption_profile", &c.encryption_profile)?,
-        content_scheme: c.content_scheme.clone(),
+        content_scheme: c
+            .content_scheme
+            .as_ref()
+            .map(|scheme| parse_sdk_field("content_scheme", scheme))
+            .transpose()?,
         mls_group_id: c.mls_group_ref.clone(),
         durability_policy: c
             .durability_policy

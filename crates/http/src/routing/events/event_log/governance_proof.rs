@@ -5,10 +5,7 @@ use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, MAX_GOVERNANCE_DEPENDENCY_SELECTORS,
     governance_artifact_selectors_for_snapshot, governance_attester_evidence_selectors,
 };
-use arkret_models_collaboration::objects::realm::DurabilityMode;
-use arkret_models_crypto::{
-    MlsContentScheme, MlsDurabilityPolicy, MlsGovernanceProofBundle, MlsGovernanceProofRequestBody,
-};
+use arkret_models_crypto::{MlsGovernanceProofBundle, MlsGovernanceProofRequestBody};
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::mls_governance_proof::{
@@ -18,7 +15,7 @@ use arkret_state::state::{BottomMode, compute_state_root, control_event_set_root
 #[cfg(test)]
 use arkret_wire::cba::LatticeOp;
 use arkret_wire::cba::LatticeOpType;
-use arkret_wire::{Event, NotarySig, ScopeRef as GovernanceScope};
+use arkret_wire::{ContentScheme, DurabilityPolicy, Event, NotarySig, ScopeRef as GovernanceScope};
 use salvo::oapi::extract::JsonBody;
 
 use super::*;
@@ -1214,8 +1211,8 @@ fn group_genesis_binding(
         .realm_content_scheme(realm_id.as_str())
         .as_deref()
     {
-        None | Some("mls_rfc9420") => MlsContentScheme::MlsRfc9420,
-        Some("mls_exporter_aead_v1") => MlsContentScheme::MlsExporterAeadV1,
+        None | Some("mls_rfc9420") => ContentScheme::MlsRfc9420,
+        Some("mls_exporter_aead_v1") => ContentScheme::MlsExporterAeadV1,
         Some(_) => {
             return Err(AppError::new(
                 ErrorCode::FrontierUnavailable,
@@ -1224,16 +1221,11 @@ fn group_genesis_binding(
         }
     };
     let durability_policy = match content_scheme {
-        MlsContentScheme::MlsRfc9420 => None,
-        MlsContentScheme::MlsExporterAeadV1 => Some(
-            match projection.realm_durability_policy(realm_id.as_str()) {
-                None
-                | Some(arkret_models_collaboration::objects::realm::DurabilityPolicy {
-                    mode: DurabilityMode::None,
-                    ..
-                }) => MlsDurabilityPolicy::None,
-                Some(_) => MlsDurabilityPolicy::OrganizationRecoveryKey,
-            },
+        ContentScheme::MlsRfc9420 => None,
+        ContentScheme::MlsExporterAeadV1 => Some(
+            projection
+                .realm_durability_policy(realm_id.as_str())
+                .unwrap_or(DurabilityPolicy::None),
         ),
     };
     let binding = MlsGroupGenesisBinding {

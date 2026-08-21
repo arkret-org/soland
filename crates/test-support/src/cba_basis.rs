@@ -629,7 +629,7 @@ async fn persist_and_project_realm_genesis_event(
         ),
         (
             arkret_wire::EventKind::RealmPolicyBundle,
-            serde_json::json!({"policy_revision": 1, "content_scheme": "mls_exporter_aead_v1"}),
+            serde_json::json!({"policy_revision": 1, "content_encryption_floor": "e2ee_required"}),
         ),
         (
             arkret_wire::EventKind::RealmJoinRule,
