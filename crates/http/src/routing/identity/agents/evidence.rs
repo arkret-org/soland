@@ -95,6 +95,26 @@ async fn current_authenticated_agent_signer_evidence(
     ),
     AgentSignerEvidenceQueryFailureReason,
 > {
+    if let AgentSignerEvidenceQuerySelector::HistoricalEvent {
+        agent_id,
+        verification_method,
+        event_id,
+        event_digest,
+        receiver_service_id,
+    } = selector
+    {
+        return historical_authenticated_agent_signer_evidence(
+            state,
+            soland_storage::HistoricalAgentSignerEvidenceKey {
+                agent_id: agent_id.clone(),
+                verification_method: verification_method.clone(),
+                event_id: event_id.clone(),
+                event_digest: event_digest.clone(),
+                receiver_service_id: receiver_service_id.clone(),
+            },
+        )
+        .await;
+    }
     let current = current_agent_signer_evidence(state, selector).await?;
     let agent_signer_evidence = AgentSignerEvidence::from(current);
     let AgentSignerEvidence::CurrentAdmission {
@@ -147,6 +167,98 @@ async fn current_authenticated_agent_signer_evidence(
             receiver_evidence,
         ],
     ))
+}
+
+async fn historical_authenticated_agent_signer_evidence(
+    state: &AppState,
+    key: soland_storage::HistoricalAgentSignerEvidenceKey,
+) -> Result<
+    (
+        AuthenticatedSignerResolutionEvidence,
+        Vec<AuthenticatedSignerResolutionEvidence>,
+    ),
+    AgentSignerEvidenceQueryFailureReason,
+> {
+    let store = state.persistence().governance_dependency_store();
+    let item = store
+        .get_historical_agent_signer_evidence(&key)
+        .await
+        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
+        .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+    let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+        authenticated_signer_resolution_evidence: root,
+        ..
+    } = item
+    else {
+        return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
+    };
+    let AuthenticatedSignerResolutionEvidence::NativeAgent {
+        signer_id,
+        verification_method,
+        agent_signer_evidence:
+            AgentSignerEvidence::HistoricalEvent {
+                event_admission_receipt,
+                ..
+            },
+        ..
+    } = &root
+    else {
+        return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
+    };
+    if signer_id != &key.agent_id
+        || verification_method != &key.verification_method
+        || event_admission_receipt.event_id != key.event_id
+        || event_admission_receipt.event_digest != key.event_digest
+        || event_admission_receipt.receiver_service_id != key.receiver_service_id
+    {
+        return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
+    }
+    root.validate_attester_binding()
+        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+
+    let mut dependencies = Vec::new();
+    let mut pending =
+        arkret_models_collaboration::governance_dependencies::governance_attester_evidence_selectors(
+            std::slice::from_ref(&root),
+        )
+        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+    let mut resolved = std::collections::BTreeSet::new();
+    while let Some(dependency_selector) = pending.pop() {
+        let selector_bytes = arkret_canonical::canonical_json_bytes(&dependency_selector)
+            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+        if !resolved.insert(selector_bytes) {
+            continue;
+        }
+        if resolved.len() > 64 {
+            return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
+        }
+        let dependency = store
+            .get_unscoped_signer_evidence(&dependency_selector)
+            .await
+            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
+            .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+        let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+            selector: stored_selector,
+            authenticated_signer_resolution_evidence,
+        } = dependency
+        else {
+            return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
+        };
+        if stored_selector != dependency_selector {
+            return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
+        }
+        authenticated_signer_resolution_evidence
+            .validate_attester_binding()
+            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+        pending.extend(
+            arkret_models_collaboration::governance_dependencies::governance_attester_evidence_selectors(
+                std::slice::from_ref(&authenticated_signer_resolution_evidence),
+            )
+            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?,
+        );
+        dependencies.push(authenticated_signer_resolution_evidence);
+    }
+    Ok((root, dependencies))
 }
 
 async fn current_service_signer_evidence(

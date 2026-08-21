@@ -9,6 +9,7 @@ use arkret_models_collaboration::history_key::{
     OrganizationRecoveryArchiveReplicaOutcome, PeerHistoryTraversalAccess,
     SelfHistoryTraversalAccess,
 };
+use arkret_models_identity::{AgentSignerEvidence, AuthenticatedSignerResolutionEvidence};
 use arkret_wire::{Event, EventProof, Hash, RealmId, Seal, SealId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -264,6 +265,11 @@ pub trait GovernanceDependencyStore: Send + Sync {
         selector: &GovernanceDependencySelector,
     ) -> PersistenceResult<Option<GovernanceDependency>>;
 
+    async fn get_historical_agent_signer_evidence(
+        &self,
+        key: &HistoricalAgentSignerEvidenceKey,
+    ) -> PersistenceResult<Option<GovernanceDependency>>;
+
     async fn put_realm_object_exact(
         &self,
         realm_id: &RealmId,
@@ -286,6 +292,45 @@ pub trait GovernanceDependencyStore: Send + Sync {
         realm_id: &RealmId,
         source: &GovernanceDependencySource,
     ) -> PersistenceResult<Vec<GovernanceDependencyEdgeRecord>>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HistoricalAgentSignerEvidenceKey {
+    pub agent_id: arkret_wire::DidCoreId,
+    pub verification_method: arkret_wire::DidUrl,
+    pub event_id: arkret_wire::EventId,
+    pub event_digest: arkret_wire::Hash,
+    pub receiver_service_id: arkret_wire::DidCoreId,
+}
+
+pub fn historical_agent_signer_evidence_key(
+    item: &GovernanceDependency,
+) -> PersistenceResult<Option<HistoricalAgentSignerEvidenceKey>> {
+    governance_signer_evidence_canonical(item)?;
+    let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+        authenticated_signer_resolution_evidence:
+            AuthenticatedSignerResolutionEvidence::NativeAgent {
+                signer_id,
+                verification_method,
+                agent_signer_evidence:
+                    AgentSignerEvidence::HistoricalEvent {
+                        event_admission_receipt,
+                        ..
+                    },
+                ..
+            },
+        ..
+    } = item
+    else {
+        return Ok(None);
+    };
+    Ok(Some(HistoricalAgentSignerEvidenceKey {
+        agent_id: signer_id.clone(),
+        verification_method: verification_method.clone(),
+        event_id: event_admission_receipt.event_id.clone(),
+        event_digest: event_admission_receipt.event_digest.clone(),
+        receiver_service_id: event_admission_receipt.receiver_service_id.clone(),
+    }))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

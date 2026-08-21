@@ -1596,6 +1596,11 @@ diesel::table! {
         object_digest -> Text,
         canonical_bytes -> Bytea,
         object_json -> Jsonb,
+        historical_agent_id -> Nullable<Text>,
+        historical_verification_method -> Nullable<Text>,
+        historical_event_id -> Nullable<Text>,
+        historical_event_digest -> Nullable<Text>,
+        historical_receiver_service_id -> Nullable<Text>,
         inserted_at -> Timestamptz,
     }
 }

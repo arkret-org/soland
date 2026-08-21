@@ -12,15 +12,16 @@ use arkret_models_identity::AuthenticatedSignerResolutionEvidence;
 use arkret_wire::{AvailabilityReceipt, Hash, RealmId, SealId};
 use soland_storage::{
     ExactWriteOutcome, GovernanceDependencyEdgeRecord, GovernanceDependencySource,
-    GovernanceDependencyStore, GovernanceDependencyWrite, HistoryTraversalAccess,
-    HistoryTraversalPin, HistoryTraversalRetainedObject, HistoryTraversalRetainedObjectRecord,
-    HistoryTraversalRetentionRecord, HistoryTraversalRetentionStore,
-    HistoryTraversalRetentionWrite, PendingRrkAcquisitionInput, PendingRrkAcquisitionRecord,
-    PendingRrkAcquisitionState, PendingRrkAcquisitionStore, StorageCasOutcome,
-    governance_dependency_canonical, governance_dependency_selector_parts,
-    governance_signer_evidence_canonical, history_traversal_canonical,
-    history_traversal_retained_object_canonical, history_traversal_retained_object_from_json,
-    rrk_archive_authorization_tuple_digest, validate_rrk_acceptance,
+    GovernanceDependencyStore, GovernanceDependencyWrite, HistoricalAgentSignerEvidenceKey,
+    HistoryTraversalAccess, HistoryTraversalPin, HistoryTraversalRetainedObject,
+    HistoryTraversalRetainedObjectRecord, HistoryTraversalRetentionRecord,
+    HistoryTraversalRetentionStore, HistoryTraversalRetentionWrite, PendingRrkAcquisitionInput,
+    PendingRrkAcquisitionRecord, PendingRrkAcquisitionState, PendingRrkAcquisitionStore,
+    StorageCasOutcome, governance_dependency_canonical, governance_dependency_selector_parts,
+    governance_signer_evidence_canonical, historical_agent_signer_evidence_key,
+    history_traversal_canonical, history_traversal_retained_object_canonical,
+    history_traversal_retained_object_from_json, rrk_archive_authorization_tuple_digest,
+    validate_rrk_acceptance,
 };
 
 use super::{
@@ -201,6 +202,7 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
         item: GovernanceDependency,
     ) -> PersistenceResult<ExactWriteOutcome> {
         let canonical = governance_signer_evidence_canonical(&item)?;
+        let historical_key = historical_agent_signer_evidence_key(&item)?;
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             let lock_key = format!(
@@ -214,13 +216,28 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
                 .await?;
             let inserted = sql_query(
                 "INSERT INTO governance_unscoped_signer_evidence \
-                    (dependency_kind,object_digest,canonical_bytes,object_json) \
-                 VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+                    (dependency_kind,object_digest,canonical_bytes,object_json, \
+                     historical_agent_id,historical_verification_method,historical_event_id, \
+                     historical_event_digest,historical_receiver_service_id) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING",
             )
             .bind::<Text, _>(canonical.dependency_kind)
             .bind::<Text, _>(canonical.object_digest.as_str())
             .bind::<Binary, _>(&canonical.canonical_bytes)
             .bind::<Jsonb, _>(&canonical.object_json)
+            .bind::<Nullable<Text>, _>(historical_key.as_ref().map(|key| key.agent_id.as_str()))
+            .bind::<Nullable<Text>, _>(
+                historical_key
+                    .as_ref()
+                    .map(|key| key.verification_method.as_str()),
+            )
+            .bind::<Nullable<Text>, _>(historical_key.as_ref().map(|key| key.event_id.as_str()))
+            .bind::<Nullable<Text>, _>(historical_key.as_ref().map(|key| key.event_digest.as_str()))
+            .bind::<Nullable<Text>, _>(
+                historical_key
+                    .as_ref()
+                    .map(|key| key.receiver_service_id.as_str()),
+            )
             .execute(&mut *conn)
             .await?;
             if inserted == 1 {
@@ -234,7 +251,14 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
             .bind::<Text, _>(canonical.dependency_kind)
             .bind::<Text, _>(canonical.object_digest.as_str())
             .get_result::<DependencyObjectRow>(&mut *conn)
-            .await?;
+            .await
+            .optional()?;
+            let Some(stored) = stored else {
+                return Err(PersistenceError::Conflict(
+                    "duplicate_conflict: historical Agent signer evidence tuple differs".to_owned(),
+                )
+                .into());
+            };
             if stored.canonical_bytes != canonical.canonical_bytes
                 || stored.object_json != canonical.object_json
             {
@@ -271,6 +295,31 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
         )
         .bind::<Text, _>(kind)
         .bind::<Text, _>(digest.as_str())
+        .get_result::<DependencyObjectRow>(&mut conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(decode_dependency)
+        .transpose()
+    }
+
+    async fn get_historical_agent_signer_evidence(
+        &self,
+        key: &HistoricalAgentSignerEvidenceKey,
+    ) -> PersistenceResult<Option<GovernanceDependency>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT dependency_kind,object_digest,canonical_bytes,object_json \
+             FROM governance_unscoped_signer_evidence \
+             WHERE historical_agent_id=$1 AND historical_verification_method=$2 \
+               AND historical_event_id=$3 AND historical_event_digest=$4 \
+               AND historical_receiver_service_id=$5",
+        )
+        .bind::<Text, _>(key.agent_id.as_str())
+        .bind::<Text, _>(key.verification_method.as_str())
+        .bind::<Text, _>(key.event_id.as_str())
+        .bind::<Text, _>(key.event_digest.as_str())
+        .bind::<Text, _>(key.receiver_service_id.as_str())
         .get_result::<DependencyObjectRow>(&mut conn)
         .await
         .optional()

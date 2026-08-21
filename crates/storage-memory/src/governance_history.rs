@@ -4,12 +4,13 @@ use arkret_models_collaboration::governance_dependencies::{
 use soland_storage::{
     ExactWriteOutcome, GovernanceDependencyCanonical, GovernanceDependencyEdgeRecord,
     GovernanceDependencySource, GovernanceDependencyStore, GovernanceDependencyWrite,
-    HistoryTraversalRetainedObject, HistoryTraversalRetainedObjectCanonical,
-    HistoryTraversalRetainedObjectRecord, HistoryTraversalRetentionRecord,
-    HistoryTraversalRetentionStore, HistoryTraversalRetentionWrite, PendingRrkAcquisitionInput,
-    PendingRrkAcquisitionRecord, PendingRrkAcquisitionState, PendingRrkAcquisitionStore,
-    PersistenceError, PersistenceResult, StorageCasOutcome, governance_dependency_canonical,
-    governance_dependency_selector_parts, governance_signer_evidence_canonical,
+    HistoricalAgentSignerEvidenceKey, HistoryTraversalRetainedObject,
+    HistoryTraversalRetainedObjectCanonical, HistoryTraversalRetainedObjectRecord,
+    HistoryTraversalRetentionRecord, HistoryTraversalRetentionStore,
+    HistoryTraversalRetentionWrite, PendingRrkAcquisitionInput, PendingRrkAcquisitionRecord,
+    PendingRrkAcquisitionState, PendingRrkAcquisitionStore, PersistenceError, PersistenceResult,
+    StorageCasOutcome, governance_dependency_canonical, governance_dependency_selector_parts,
+    governance_signer_evidence_canonical, historical_agent_signer_evidence_key,
     history_traversal_canonical, history_traversal_retained_object_from_json,
     rrk_semantically_same, validate_rrk_acceptance,
 };
@@ -24,6 +25,7 @@ struct GovernanceDependencyData {
     objects: BTreeMap<DependencyObjectKey, (GovernanceDependencyCanonical, GovernanceDependency)>,
     unscoped_signer_evidence:
         BTreeMap<(String, String), (GovernanceDependencyCanonical, GovernanceDependency)>,
+    historical_agent_signer_evidence: BTreeMap<HistoricalAgentSignerEvidenceKey, (String, String)>,
     edges: BTreeMap<DependencySourceKey, BTreeMap<u64, (String, String)>>,
 }
 
@@ -43,6 +45,7 @@ impl GovernanceDependencyStore for MemoryGovernanceDependencyStore {
             canonical.dependency_kind.to_owned(),
             canonical.object_digest.as_str().to_owned(),
         );
+        let historical_key = historical_agent_signer_evidence_key(&item)?;
         let mut data = self.data.lock();
         if let Some((stored, stored_item)) = data.unscoped_signer_evidence.get(&key) {
             return if stored == &canonical && stored_item == &item {
@@ -53,7 +56,20 @@ impl GovernanceDependencyStore for MemoryGovernanceDependencyStore {
                 ))
             };
         }
+        if let Some(historical_key) = historical_key.as_ref()
+            && let Some(existing) = data.historical_agent_signer_evidence.get(historical_key)
+            && existing != &key
+        {
+            return Err(PersistenceError::Conflict(
+                "duplicate_conflict: historical Agent signer evidence tuple differs".to_owned(),
+            ));
+        }
+        let historical_object_key = key.clone();
         data.unscoped_signer_evidence.insert(key, (canonical, item));
+        if let Some(historical_key) = historical_key {
+            data.historical_agent_signer_evidence
+                .insert(historical_key, historical_object_key);
+        }
         Ok(ExactWriteOutcome::Inserted)
     }
 
@@ -77,6 +93,25 @@ impl GovernanceDependencyStore for MemoryGovernanceDependencyStore {
             .unscoped_signer_evidence
             .get(&(kind.to_owned(), digest.as_str().to_owned()))
             .map(|(_, item)| item.clone()))
+    }
+
+    async fn get_historical_agent_signer_evidence(
+        &self,
+        key: &HistoricalAgentSignerEvidenceKey,
+    ) -> PersistenceResult<Option<GovernanceDependency>> {
+        let data = self.data.lock();
+        let Some(object_key) = data.historical_agent_signer_evidence.get(key) else {
+            return Ok(None);
+        };
+        data.unscoped_signer_evidence
+            .get(object_key)
+            .map(|(_, item)| item.clone())
+            .ok_or_else(|| {
+                PersistenceError::Internal(
+                    "historical Agent signer evidence index references a missing object".to_owned(),
+                )
+            })
+            .map(Some)
     }
 
     async fn put_realm_object_exact(
