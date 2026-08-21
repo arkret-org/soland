@@ -2826,7 +2826,7 @@ CREATE TABLE public.realm_meta (
     owner text NOT NULL,
     deleted boolean NOT NULL DEFAULT false,
     discoverability text NOT NULL,
-    history_visibility text NOT NULL,
+    history_access text NOT NULL,
     preview_policy jsonb,
     preview_policy_digest text,
     asset_privacy_policy jsonb,
@@ -2837,7 +2837,7 @@ CREATE TABLE public.realm_meta (
     minimal_metadata_realm boolean NOT NULL DEFAULT false,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT realm_meta_history_visibility_check CHECK ((history_visibility = ANY (ARRAY['world_readable'::text, 'shared'::text, 'invited'::text, 'joined'::text, 'restricted'::text])))
+    CONSTRAINT realm_meta_history_access_check CHECK ((history_access = ANY (ARRAY['since_join'::text, 'all_history_for_current_members'::text])))
 );
 
 -- Durable message projection: keyed by the canonical Event id so replayed
