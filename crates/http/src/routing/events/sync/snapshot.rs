@@ -346,13 +346,174 @@ pub(crate) async fn build_sync_snapshot(
 }
 
 async fn agent_signer_evidence_bundle_for_sync(
-    _state: &AppState,
-    _realms: &BTreeMap<
+    state: &AppState,
+    realms: &BTreeMap<
         String,
         arkret_models_collaboration::sync_frames::account_sync::RealmSyncEntry,
     >,
 ) -> Option<arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceBundle> {
-    None
+    use arkret_models_collaboration::governance_dependencies::{
+        GovernanceDependency, GovernanceDependencySelector,
+    };
+    use arkret_models_identity::AuthenticatedSignerResolutionEvidence;
+    use arkret_models_identity::agent_signer_evidence::AgentSignerEvidence;
+
+    const MAX_SYNC_EVIDENCE: usize = 256;
+
+    let receiver_service_id = arkret_wire::DidCoreId::new(state.service_id().clone()).ok()?;
+    let store = state.persistence().governance_dependency_store();
+    let mut evidence_by_receipt = BTreeMap::new();
+    let mut conflicted_receipts = BTreeSet::new();
+
+    for (realm_key, realm) in realms {
+        let Ok(realm_id) = arkret_wire::RealmId::new(realm_key.clone()) else {
+            continue;
+        };
+        let event_sets = [
+            realm
+                .timeline
+                .as_ref()
+                .map(|timeline| timeline.events.as_slice()),
+            realm.state.as_ref().map(|state| state.events.as_slice()),
+            realm
+                .state_after
+                .as_ref()
+                .map(|state| state.events.as_slice()),
+            realm
+                .account_data
+                .as_ref()
+                .map(|state| state.events.as_slice()),
+        ];
+        for event in event_sets.into_iter().flatten().flatten() {
+            if event.realm_id != realm_id {
+                continue;
+            }
+            let mut producers = event
+                .proofs
+                .iter()
+                .filter_map(arkret_wire::EventProof::as_producer);
+            let Some(producer) = producers.next() else {
+                continue;
+            };
+            if producers.next().is_some() {
+                continue;
+            }
+            let (Some(evidence_ref), Some(evidence_digest)) = (
+                producer.signer_resolution_evidence_ref.as_ref(),
+                producer.signer_resolution_evidence_digest.as_ref(),
+            ) else {
+                continue;
+            };
+            let selector = GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+                content_digest: evidence_digest.clone(),
+            };
+            let dependency = match store.get(&realm_id, &selector).await {
+                Ok(Some(dependency)) => dependency,
+                Ok(None) => match store.get_unscoped_signer_evidence(&selector).await {
+                    Ok(Some(dependency)) => dependency,
+                    Ok(None) => continue,
+                    Err(error) => {
+                        tracing::warn!(
+                            realm_id = %realm_id,
+                            event_id = %event.event_id,
+                            %error,
+                            "unscoped Agent signer evidence lookup failed during account sync"
+                        );
+                        continue;
+                    }
+                },
+                Err(error) => {
+                    tracing::warn!(
+                        realm_id = %realm_id,
+                        event_id = %event.event_id,
+                        %error,
+                        "Agent signer evidence dependency lookup failed during account sync"
+                    );
+                    continue;
+                }
+            };
+            let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+                authenticated_signer_resolution_evidence,
+                ..
+            } = dependency
+            else {
+                continue;
+            };
+            if authenticated_signer_resolution_evidence
+                .validate_attester_binding()
+                .is_err()
+                || authenticated_signer_resolution_evidence
+                    .canonical_sha256_digest()
+                    .ok()
+                    .as_ref()
+                    != Some(evidence_digest)
+                || authenticated_signer_resolution_evidence
+                    .evidence_ref()
+                    .ok()
+                    .as_ref()
+                    != Some(evidence_ref)
+            {
+                continue;
+            }
+            let AuthenticatedSignerResolutionEvidence::NativeAgent {
+                signer_id,
+                verification_method,
+                agent_signer_evidence,
+                ..
+            } = authenticated_signer_resolution_evidence
+            else {
+                continue;
+            };
+            let expected_signer = event.executed_by.as_ref().unwrap_or(&event.actor_id);
+            if &signer_id != expected_signer || verification_method != producer.verification_method
+            {
+                continue;
+            }
+            let AgentSignerEvidence::HistoricalEvent {
+                event_admission_receipt,
+                ..
+            } = &agent_signer_evidence
+            else {
+                continue;
+            };
+            if event_admission_receipt.event_id != event.event_id
+                || event_admission_receipt.event_digest != producer.event_digest
+                || event_admission_receipt.realm_id != realm_id
+                || event_admission_receipt.agent_id != signer_id
+                || event_admission_receipt.verification_method != verification_method
+                || event_admission_receipt.receiver_service_id != receiver_service_id
+            {
+                continue;
+            }
+            let receipt_key = (
+                event_admission_receipt.event_id.clone(),
+                event_admission_receipt.event_digest.clone(),
+                event_admission_receipt.receiver_service_id.clone(),
+            );
+            if conflicted_receipts.contains(&receipt_key) {
+                continue;
+            }
+            if let Some(previous) =
+                evidence_by_receipt.insert(receipt_key.clone(), agent_signer_evidence.clone())
+                && previous != agent_signer_evidence
+            {
+                evidence_by_receipt.remove(&receipt_key);
+                conflicted_receipts.insert(receipt_key);
+            }
+        }
+    }
+
+    let evidence = evidence_by_receipt
+        .into_values()
+        .take(MAX_SYNC_EVIDENCE)
+        .collect::<Vec<_>>();
+    (!evidence.is_empty()).then_some(
+        arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceBundle {
+            schema:
+                arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceBundle::SCHEMA,
+            evidence,
+        },
+    )
 }
 
 async fn account_notification_delta(
