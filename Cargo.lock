@@ -429,6 +429,7 @@ dependencies = [
  "sha2 0.11.0",
  "thiserror",
  "tls_codec",
+ "unicode-normalization",
  "uuid",
  "zeroize",
 ]

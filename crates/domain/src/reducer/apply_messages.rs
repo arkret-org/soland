@@ -828,11 +828,11 @@ fn encrypted_projection_field_matches_operation(value: &Value, operation: &Opera
     else {
         return false;
     };
-    envelope.aad.realm_id == operation.realm_id
-        && envelope.aad.event_kind == kind.as_str()
-        && envelope
-            .validate_for_scope(&operation.context.accepted_scope_ref)
-            .is_ok()
+    let reaction = matches!(
+        kind.as_str(),
+        arkret_wire::event_kind_str::REACTION_ADD | arkret_wire::event_kind_str::REACTION_REMOVE
+    );
+    envelope.encryption_context.routing_context().is_some() == reaction
 }
 
 /// Envelope `causal_refs` surfaced onto the RSVP projection payload.

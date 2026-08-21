@@ -33,7 +33,6 @@ use arkret_event_draft::ProjectedEventOperation as Operation;
 use serde_json::Value;
 use soland_services::operation_semantics as kinds;
 
-use super::is_valid_hash_digest;
 use crate::routing::interop::participant_binding;
 use crate::state::AppState;
 

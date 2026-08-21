@@ -1090,5 +1090,4 @@ mod policy_bundle_component_tests {
         }));
         assert!(realm_declared_profiles(&legacy_only).is_empty());
     }
-
 }

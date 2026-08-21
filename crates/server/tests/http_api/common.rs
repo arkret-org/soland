@@ -1141,33 +1141,6 @@ pub(crate) fn authored_event_id(event: &Value) -> &str {
         .expect("authored fixture Event has a content-bound event_id")
 }
 
-/// Author the complete closed ordinary-Realm bootstrap transaction and derive
-/// its Realm identity from the signed genesis Event.
-pub(crate) fn authored_ordinary_realm_bootstrap_unit(
-    state: &AppState,
-    actor: &str,
-    device_id: &str,
-    title: &str,
-) -> (String, Vec<arkret_wire::Event>) {
-    let created_at = chrono::Utc::now();
-    let payload = soland_test_support::cba_basis::realm_genesis_payload(
-        actor,
-        state.service_id(),
-        title,
-        "ak:trust_domain:soland.local",
-        created_at,
-    );
-    let genesis = soland_test_support::signed_event::CallerSignedEvent::realm_genesis(
-        actor, device_id, payload,
-    )
-    .build();
-    let realm_id = arkret_wire::RealmId::from_event_id(&genesis.event_id).to_string();
-    let unit = soland_test_support::signed_event::complete_realm_bootstrap_unit(
-        genesis, actor, device_id, title,
-    );
-    (realm_id, unit)
-}
-
 pub(crate) fn signed_message_event_envelope(
     actor: &str,
     realm_id: &str,

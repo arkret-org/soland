@@ -1079,11 +1079,19 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         .as_object()
         .expect("encrypted_content object");
     assert_eq!(
-        encrypted_content.keys().cloned().collect::<std::collections::BTreeSet<_>>(),
-        ["ciphertext", "content_type", "encryption_context", "version"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
+        encrypted_content
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        [
+            "ciphertext",
+            "content_type",
+            "encryption_context",
+            "version"
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
         "encrypted message MUST use the minimal closed wire: {bob_read:?}"
     );
 
