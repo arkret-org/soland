@@ -399,7 +399,7 @@ fn authenticate_frame(
     }
 }
 
-fn signal_record(realm_id_str: &str) -> soland_services::delivery::SignalRelayState {
+fn signal_record(realm_id_str: &str) -> soland_storage::SignalRelayRecord {
     let sent_at = chrono::Utc::now();
     let realm_id = arkret_identifiers::RealmId::new(realm_id_str.to_owned()).unwrap();
     let mut envelope = arkret_wire::SignalEnvelope {
@@ -445,7 +445,7 @@ fn signal_record(realm_id_str: &str) -> soland_services::delivery::SignalRelaySt
     };
     envelope.encrypted_payload.aad_digest = envelope.expected_aad_digest().unwrap();
     envelope.proof.envelope_digest = envelope.envelope_digest().unwrap();
-    soland_services::delivery::SignalRelayState {
+    soland_storage::SignalRelayRecord {
         realm_id: realm_id_str.to_owned(),
         scope_ref: envelope.scope_ref.clone(),
         sender_actor_id: envelope.sender_actor_id.as_str().to_owned(),

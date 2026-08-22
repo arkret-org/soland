@@ -166,10 +166,7 @@ impl crate::delivery::DeviceDeliveryPort for PersistenceDeviceDelivery {
 
 #[async_trait::async_trait]
 impl crate::delivery::SignalRelayPort for PersistenceSignalRelay {
-    async fn append_signal(
-        &self,
-        record: crate::delivery::SignalRelayState,
-    ) -> crate::ServiceResult<()> {
+    async fn append_signal(&self, record: SignalRelayRecord) -> crate::ServiceResult<()> {
         self.0.signal_relay().append(record).await?;
         Ok(())
     }
@@ -177,7 +174,7 @@ impl crate::delivery::SignalRelayPort for PersistenceSignalRelay {
     async fn signals_for_realm(
         &self,
         realm_id: &str,
-    ) -> crate::ServiceResult<Vec<crate::delivery::SignalRelayState>> {
+    ) -> crate::ServiceResult<Vec<SignalRelayRecord>> {
         Ok(self.0.signal_relay().list_for_realm(realm_id).await?)
     }
 

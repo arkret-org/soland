@@ -400,8 +400,8 @@ fn signal_envelope(
 fn signal_record(
     envelope: arkret_wire::SignalEnvelope,
     position: u64,
-) -> soland_services::delivery::SignalRelayState {
-    soland_services::delivery::SignalRelayState {
+) -> soland_storage::SignalRelayRecord {
+    soland_storage::SignalRelayRecord {
         realm_id: envelope.realm_id.as_str().to_owned(),
         scope_ref: envelope.scope_ref.clone(),
         sender_actor_id: envelope.sender_actor_id.as_str().to_owned(),

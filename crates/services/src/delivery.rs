@@ -6,6 +6,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures_util::stream::BoxStream;
 use serde_json::Value;
+use soland_storage::SignalRelayRecord;
 pub use soland_storage::{
     AccountNotificationDeltaWrite, RecipientNotificationRecord, StoredAccountNotificationDelta,
 };
@@ -159,8 +160,6 @@ pub enum DeviceMessageBatchCommitOutcome {
 /// Presence, typing, call signalling and read receipts are all Signals in v1:
 /// they share this one opaque relay record instead of four plaintext shapes,
 /// and the server sees only the AAD-bound envelope header.
-pub type SignalRelayState = soland_storage::SignalRelayRecord;
-
 #[derive(Clone, Debug)]
 pub struct BlobState {
     pub sha256: String,
@@ -254,8 +253,8 @@ pub trait PushBridgeCachePort: Send + Sync {
 /// watermark.
 #[async_trait]
 pub trait SignalRelayPort: Send + Sync {
-    async fn append_signal(&self, record: SignalRelayState) -> ServiceResult<()>;
-    async fn signals_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<SignalRelayState>>;
+    async fn append_signal(&self, record: SignalRelayRecord) -> ServiceResult<()>;
+    async fn signals_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<SignalRelayRecord>>;
     /// Short-lived replay suppression: whether this exact envelope digest was
     /// already admitted inside the retention window (`signal.md` §2).
     async fn signal_digest_seen(
@@ -547,11 +546,11 @@ impl DeliveryService {
             .await
     }
 
-    pub async fn append_signal(&self, record: SignalRelayState) -> ServiceResult<()> {
+    pub async fn append_signal(&self, record: SignalRelayRecord) -> ServiceResult<()> {
         self.signals.append_signal(record).await
     }
 
-    pub async fn signals_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<SignalRelayState>> {
+    pub async fn signals_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<SignalRelayRecord>> {
         self.signals.signals_for_realm(realm_id).await
     }
 
@@ -766,10 +765,13 @@ mod tests {
 
     #[async_trait]
     impl SignalRelayPort for NoSignalRelay {
-        async fn append_signal(&self, _record: SignalRelayState) -> ServiceResult<()> {
+        async fn append_signal(&self, _record: SignalRelayRecord) -> ServiceResult<()> {
             Ok(())
         }
-        async fn signals_for_realm(&self, _realm_id: &str) -> ServiceResult<Vec<SignalRelayState>> {
+        async fn signals_for_realm(
+            &self,
+            _realm_id: &str,
+        ) -> ServiceResult<Vec<SignalRelayRecord>> {
             Ok(Vec::new())
         }
         async fn signal_digest_seen(

@@ -93,7 +93,7 @@ pub(super) async fn submit_signal(
 
     let mut dispatched_recipient_count = None;
     if !duplicate {
-        let record = soland_services::delivery::SignalRelayState {
+        let record = soland_storage::SignalRelayRecord {
             realm_id: realm_id.as_str().to_owned(),
             scope_ref: envelope.scope_ref.clone(),
             sender_actor_id: envelope.sender_actor_id.as_str().to_owned(),
@@ -556,7 +556,7 @@ pub(in crate::routing::events) async fn accept_peer_signal(
     }
     state
         .deliveries()
-        .append_signal(soland_services::delivery::SignalRelayState {
+        .append_signal(soland_storage::SignalRelayRecord {
             realm_id: envelope.realm_id.as_str().to_owned(),
             scope_ref: envelope.scope_ref.clone(),
             sender_actor_id: envelope.sender_actor_id.as_str().to_owned(),
@@ -787,7 +787,7 @@ pub(crate) async fn pending_signals_for_subscriber(
 /// Signal reaches only that Circle's members.
 fn signal_visible_to_subscriber(
     state: &AppState,
-    record: &soland_services::delivery::SignalRelayState,
+    record: &soland_storage::SignalRelayRecord,
     actor: &str,
 ) -> bool {
     match record.scope_ref.circle_id() {
