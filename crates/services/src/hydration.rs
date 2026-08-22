@@ -1325,10 +1325,11 @@ pub async fn hydrate_realm_policy_event(
             else {
                 return;
             };
-            if let Some(value) = payload.value {
-                meta.asset_privacy_policy = Some(value.clone());
-                meta.asset_privacy_policy_digest = canonical_value_digest(&value);
-            }
+            let Ok(value) = serde_json::to_value(payload.value) else {
+                return;
+            };
+            meta.asset_privacy_policy = Some(value.clone());
+            meta.asset_privacy_policy_digest = canonical_value_digest(&value);
         }
         arkret_wire::EventKind::RealmPlaintextVisibleServices => {
             let Ok(payload) =
