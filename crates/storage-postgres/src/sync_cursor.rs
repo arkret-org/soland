@@ -1,7 +1,7 @@
 use super::{
     BigInt, CursorRevocation, Jsonb, Nullable, OptionalExtension, PersistenceError,
-    PersistenceResult, PgPool, QueryableByName, RunQueryDsl, SqlUuid, SyncCursorRecord,
-    SyncCursorStore, Text, Timestamptz, Utc, Value, async_trait, pg_conn, sql_query,
+    PersistenceResult, PgPool, QueryableByName, RunQueryDsl, SyncCursorRecord, SyncCursorStore,
+    Text, Timestamptz, Utc, Value, async_trait, pg_conn, sql_query, sql_types,
 };
 pub struct PgSyncCursorStore {
     pub pool: PgPool,
@@ -156,7 +156,7 @@ impl SyncCursorStore for PgSyncCursorStore {
              (id, cursor_digest, principal_id, device_id, scope, reason_code, revoked_at, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
-        .bind::<SqlUuid, _>(uuid::Uuid::now_v7())
+        .bind::<sql_types::Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&record.cursor_digest)
         .bind::<Text, _>(&record.principal_id)
         .bind::<Nullable<Text>, _>(&record.device_id)

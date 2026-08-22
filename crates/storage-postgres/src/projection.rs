@@ -4,9 +4,9 @@ use super::{
     OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
     ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore, QueryableByName,
     RealmMetaRecord, RealmMetaStore, RunQueryDsl, SpaceContainerProjectionRecord,
-    SpaceContainerProjectionStore, SqlUuid, StrandProjectionRecord, StrandProjectionStore,
+    SpaceContainerProjectionStore, StrandProjectionRecord, StrandProjectionStore,
     StrandWatchProjectionRecord, StrandWatchProjectionStore, Text, Timestamptz, Uuid, Value,
-    async_trait, ids, pg_conn, sql_query,
+    async_trait, ids, pg_conn, sql_query, sql_types,
 };
 
 /// Space, Strand, Morph and Circle are Event-derived kinds: their protocol id is
@@ -626,7 +626,7 @@ struct ProjectionEventRow {
     event_kind: String,
     #[diesel(sql_type = Text)]
     operation_kind: String,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
+    #[diesel(sql_type = Nullable<sql_types::Uuid>)]
     operation_id: Option<Uuid>,
     #[diesel(sql_type = Nullable<Text>)]
     sender: Option<String>,
@@ -707,7 +707,7 @@ impl ProjectionEventStore for PgProjectionEventStore {
         .bind::<Text, _>(&record.realm_id)
         .bind::<Text, _>(&record.event_kind)
         .bind::<Text, _>(&record.operation_kind)
-        .bind::<Nullable<SqlUuid>, _>(
+        .bind::<Nullable<sql_types::Uuid>, _>(
             record
                 .operation_id
                 .as_deref()
@@ -809,7 +809,7 @@ impl ProjectionEventStore for PgProjectionEventStore {
             "{PROJECTION_EVENT_SELECT} WHERE projected.operation_id = $1 \
              ORDER BY projected.pk DESC LIMIT 1"
         ))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(operation_id))
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(operation_id))
         .get_result::<ProjectionEventRow>(&mut *conn)
         .await
         .optional()

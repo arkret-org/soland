@@ -2,8 +2,8 @@ use super::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountLifecycleRecord,
     AccountLifecycleStore, AccountLocalpartRecord, AccountLocalpartStore, AccountRecord,
     AccountStore, BigInt, BlobRef, Bool, Jsonb, Nullable, OptionalExtension, PersistenceError,
-    PersistenceResult, PgPool, QueryableByName, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid,
-    Value, account_with_primary_localpart_select, async_trait, ids, pg_conn, sql_query,
+    PersistenceResult, PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz, Uuid, Value,
+    account_with_primary_localpart_select, async_trait, ids, pg_conn, sql_query, sql_types,
 };
 pub struct PgAccountStore {
     pub pool: PgPool,
@@ -40,7 +40,7 @@ impl AccountStore for PgAccountStore {
              display_name = EXCLUDED.display_name, payload = EXCLUDED.payload, updated_at = NOW() \
              RETURNING id",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.id))
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&record.id))
         .bind::<Text, _>(&record.did)
         .bind::<Nullable<Text>, _>(&record.display_name)
         .bind::<Jsonb, _>(&payload)
@@ -51,7 +51,7 @@ impl AccountStore for PgAccountStore {
 
         if record.localpart.trim().is_empty() {
             sql_query("DELETE FROM account_localparts WHERE account_id = $1")
-                .bind::<SqlUuid, _>(row.id)
+                .bind::<sql_types::Uuid, _>(row.id)
                 .execute(&mut *conn)
                 .await
                 .map_err(PersistenceError::database)?;
@@ -60,7 +60,7 @@ impl AccountStore for PgAccountStore {
                 "UPDATE account_localparts SET is_primary = false, updated_at = NOW() \
                  WHERE account_id = $1 AND localpart <> $2",
             )
-            .bind::<SqlUuid, _>(row.id)
+            .bind::<sql_types::Uuid, _>(row.id)
             .bind::<Text, _>(&record.localpart)
             .execute(&mut *conn)
             .await
@@ -74,8 +74,8 @@ impl AccountStore for PgAccountStore {
                  WHERE account_localparts.account_id = EXCLUDED.account_id \
                  RETURNING localpart",
             )
-            .bind::<SqlUuid, _>(Uuid::now_v7())
-            .bind::<SqlUuid, _>(row.id)
+            .bind::<sql_types::Uuid, _>(Uuid::now_v7())
+            .bind::<sql_types::Uuid, _>(row.id)
             .bind::<Text, _>(&record.localpart)
             .bind::<Timestamptz, _>(record.created_at)
             .get_result::<LocalpartOnlyRow>(&mut *conn)
@@ -221,7 +221,7 @@ impl AccountLocalpartStore for PgAccountLocalpartStore {
                 "UPDATE account_localparts SET is_primary = false, updated_at = NOW() \
                  WHERE account_id = $1",
             )
-            .bind::<SqlUuid, _>(account.id)
+            .bind::<sql_types::Uuid, _>(account.id)
             .execute(&mut *conn)
             .await
             .map_err(PersistenceError::database)?;
@@ -237,8 +237,8 @@ impl AccountLocalpartStore for PgAccountLocalpartStore {
              WHERE account_localparts.account_id = EXCLUDED.account_id \
              RETURNING id, $5::text AS account_did, localpart, is_primary, created_at, updated_at",
         )
-        .bind::<SqlUuid, _>(Uuid::now_v7())
-        .bind::<SqlUuid, _>(account.id)
+        .bind::<sql_types::Uuid, _>(Uuid::now_v7())
+        .bind::<sql_types::Uuid, _>(account.id)
         .bind::<Text, _>(localpart)
         .bind::<Bool, _>(primary)
         .bind::<Text, _>(account_did)
@@ -283,7 +283,7 @@ impl AccountLocalpartStore for PgAccountLocalpartStore {
             "UPDATE account_localparts SET is_primary = (localpart = $2), updated_at = NOW() \
              WHERE account_id = $1",
         )
-        .bind::<SqlUuid, _>(account.id)
+        .bind::<sql_types::Uuid, _>(account.id)
         .bind::<Text, _>(localpart)
         .execute(&mut *conn)
         .await
@@ -500,7 +500,7 @@ impl AccountDataStore for PgAccountDataStore {
 }
 #[derive(QueryableByName)]
 struct AccountRow {
-    #[diesel(sql_type = SqlUuid)]
+    #[diesel(sql_type = sql_types::Uuid)]
     id: Uuid,
     #[diesel(sql_type = Text)]
     did: String,
@@ -515,12 +515,12 @@ struct AccountRow {
 }
 #[derive(QueryableByName)]
 struct AccountIdRow {
-    #[diesel(sql_type = SqlUuid)]
+    #[diesel(sql_type = sql_types::Uuid)]
     id: Uuid,
 }
 #[derive(QueryableByName)]
 struct AccountLocalpartRow {
-    #[diesel(sql_type = SqlUuid)]
+    #[diesel(sql_type = sql_types::Uuid)]
     id: Uuid,
     #[diesel(sql_type = Text)]
     account_did: String,

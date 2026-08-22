@@ -1,7 +1,7 @@
 use super::{
     AuditStore, JsonPayloadRow, Jsonb, Nullable, PersistenceError, PersistenceResult, PgPool,
-    RunQueryDsl, SqlUuid, Text, Value, async_trait, audit_uuid_index, operation_uuid_index,
-    optional_audit_uuid_index, pg_conn, sql_query,
+    RunQueryDsl, Text, Value, async_trait, audit_uuid_index, operation_uuid_index,
+    optional_audit_uuid_index, pg_conn, sql_query, sql_types,
 };
 pub struct PgAuditStore {
     pub pool: PgPool,
@@ -40,13 +40,13 @@ impl AuditStore for PgAuditStore {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW()) \
              ON CONFLICT (id) DO NOTHING",
         )
-        .bind::<SqlUuid, _>(audit_id_uuid)
+        .bind::<sql_types::Uuid, _>(audit_id_uuid)
         .bind::<Nullable<Text>, _>(&actor)
-        .bind::<Nullable<SqlUuid>, _>(request_id_uuid)
+        .bind::<Nullable<sql_types::Uuid>, _>(request_id_uuid)
         .bind::<Text, _>(&action)
         .bind::<Text, _>(&outcome)
         .bind::<Nullable<Text>, _>(realm_id.as_deref())
-        .bind::<Nullable<SqlUuid>, _>(operation_id_uuid)
+        .bind::<Nullable<sql_types::Uuid>, _>(operation_id_uuid)
         .bind::<Nullable<Text>, _>(&device_id)
         .bind::<Jsonb, _>(&entry)
         .execute(&mut *conn).await

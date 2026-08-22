@@ -5,9 +5,9 @@ use super::{
     FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState,
     FederationOutboxStateDepth, FederationOutboxStore, FederationOutboxTransition, Integer,
     JsonPayloadRow, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult,
-    PgPool, PgTransactionError, ProjectedEventOperation, QueryableByName, RunQueryDsl, SqlUuid,
-    Text, Timestamptz, async_trait, frontier_exchange_failure_record,
-    frontier_exchange_success_record, ids, pg_conn, sql_query,
+    PgPool, PgTransactionError, ProjectedEventOperation, QueryableByName, RunQueryDsl, Text,
+    Timestamptz, async_trait, frontier_exchange_failure_record, frontier_exchange_success_record,
+    ids, pg_conn, sql_query, sql_types,
 };
 
 /// Every column of `federation_outbox`, aliased to the record field names.
@@ -774,7 +774,7 @@ impl FederationOperationsStore for PgFederationOperationsStore {
              VALUES ($1, $2, $3, $4, $5, $6, $7) \
              ON CONFLICT (id) DO NOTHING",
         )
-        .bind::<SqlUuid, _>(operation_id_uuid)
+        .bind::<sql_types::Uuid, _>(operation_id_uuid)
         .bind::<Text, _>(operation.realm_id.as_str())
         .bind::<Text, _>(operation.event_kind.as_str())
         .bind::<Nullable<Text>, _>(&object_id)
@@ -793,7 +793,7 @@ impl FederationOperationsStore for PgFederationOperationsStore {
             .map_err(PersistenceError::database)?;
         let operation_id_uuid = ids::typed_uuid_part_expect_internal(operation_id);
         sql_query("SELECT EXISTS(SELECT 1 FROM federation_operations WHERE id = $1) AS present")
-            .bind::<SqlUuid, _>(operation_id_uuid)
+            .bind::<sql_types::Uuid, _>(operation_id_uuid)
             .get_result::<ExistsRow>(&mut *conn)
             .await
             .map(|row| row.present)

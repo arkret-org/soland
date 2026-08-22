@@ -11,12 +11,12 @@ use soland_storage::{
 
 use super::{
     BigInt, Jsonb, NotificationStore, Nullable, PersistenceError, PersistenceResult, PgPool,
-    QueryableByName, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid, Value, async_trait, ids,
-    pg_conn, sql_query,
+    QueryableByName, RunQueryDsl, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn,
+    sql_query, sql_types,
 };
 #[derive(QueryableByName)]
 struct NotificationRow {
-    #[diesel(sql_type = SqlUuid)]
+    #[diesel(sql_type = sql_types::Uuid)]
     notification_id: Uuid,
     #[diesel(sql_type = Text)]
     recipient_id: String,
@@ -24,7 +24,7 @@ struct NotificationRow {
     realm_id: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     source_event_id: Option<String>,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
+    #[diesel(sql_type = Nullable<sql_types::Uuid>)]
     controller_account_id: Option<Uuid>,
     #[diesel(sql_type = Nullable<Text>)]
     recipient_service_id: Option<String>,
@@ -305,7 +305,7 @@ impl NotificationStore for PgNotificationStore {
               projection_position = nextval('notification_projection_position_seq'), \
               updated_at = NOW()",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
             record.notification.id.as_str(),
         ))
         .bind::<Text, _>(record.notification.actor_id.as_str())
@@ -376,11 +376,11 @@ impl NotificationStore for PgNotificationStore {
               END, \
               updated_at = NOW()",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
             record.delta.id.as_str(),
         ))
         .bind::<Text, _>(record.recipient_id.as_str())
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
             &record.controller_account_id,
         ))
         .bind::<Text, _>(record.recipient_service_id.as_str())
@@ -439,7 +439,7 @@ impl NotificationStore for PgNotificationStore {
                AND ($3 IS NULL OR projection_position > $3) \
              ORDER BY projection_position",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(controller_account_id))
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(controller_account_id))
         .bind::<Text, _>(recipient_service_id)
         .bind::<Nullable<BigInt>, _>(after_position)
         .load::<NotificationRow>(&mut *conn)

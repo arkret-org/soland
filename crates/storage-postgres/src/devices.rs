@@ -4,9 +4,9 @@ use super::{
     DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
     DeviceRevocationGateSelector, DeviceRevocationGateStatus, Integer, JsonPayloadRow, Jsonb,
     MaxSeqRow, Nullable, OneTimeKeyStore, OptionalExtension, PersistenceError, PersistenceResult,
-    PgPool, PgTransactionError, QueryableByName, RunQueryDsl, SqlUuid, Text, Timestamptz, Utc,
-    Uuid, Value, async_trait, ensure_device_message_id, fresh_device_message_ack_token, pg_conn,
-    sql_query,
+    PgPool, PgTransactionError, QueryableByName, RunQueryDsl, Text, Timestamptz, Utc, Uuid, Value,
+    async_trait, ensure_device_message_id, fresh_device_message_ack_token, pg_conn, sql_query,
+    sql_types,
 };
 pub struct PgDeviceMessageStore {
     pub pool: PgPool,
@@ -96,7 +96,7 @@ impl DeviceMessageStore for PgDeviceMessageStore {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
              ON CONFLICT (recipient, device_id, position) DO NOTHING",
             )
-            .bind::<SqlUuid, _>(Uuid::new_v4())
+            .bind::<sql_types::Uuid, _>(Uuid::new_v4())
             .bind::<Text, _>(&message.idempotency_key)
             .bind::<Text, _>(&message.sender)
             .bind::<Text, _>(&message.recipient)
@@ -337,7 +337,7 @@ impl DeviceMessageStore for PgDeviceMessageStore {
                      (id, idempotency_key, sender, recipient, device_id, position, content, created_at) \
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
                 )
-                .bind::<SqlUuid, _>(Uuid::new_v4())
+                .bind::<sql_types::Uuid, _>(Uuid::new_v4())
                 .bind::<Text, _>(&message.idempotency_key)
                 .bind::<Text, _>(&message.sender)
                 .bind::<Text, _>(&message.recipient)

@@ -10,8 +10,8 @@ use super::{
     IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, Jsonb, MaxSeqRow, MessageRecord,
     MessageStore, Nullable, OptionalExtension, PeerEventsPageQuery, PersistenceError,
     PersistenceResult, PgPool, PgTransactionError, PublicationEvidenceRecord, QueryableByName,
-    RealmEventStats, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid, Value, async_trait,
-    identity_anchor_slot_conflicts, ids, pg_conn, sql_query,
+    RealmEventStats, RunQueryDsl, Text, Timestamptz, Uuid, Value, async_trait,
+    identity_anchor_slot_conflicts, ids, pg_conn, sql_query, sql_types,
 };
 use crate::federation::{
     FederationOutboxRow, insert_federation_outbox_row, qualified_outbox_columns,
@@ -178,7 +178,7 @@ struct EventPreflightRow {
 struct EventBatchReceiptRow {
     #[diesel(sql_type = Text)]
     schema: String,
-    #[diesel(sql_type = SqlUuid)]
+    #[diesel(sql_type = sql_types::Uuid)]
     id: Uuid,
     #[diesel(sql_type = Text)]
     issuer: String,
@@ -715,7 +715,7 @@ async fn insert_event_batch_receipt(
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING pk",
     )
     .bind::<Text, _>(&receipt.schema)
-    .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
+    .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
         receipt.receipt_id.as_str(),
     ))
     .bind::<Text, _>(receipt.issuer.as_str())
@@ -1320,7 +1320,7 @@ impl EventStore for PgEventStore {
                          ON CONFLICT (actor_id, device_id) DO UPDATE SET payload = EXCLUDED.payload, \
                          verification_state = EXCLUDED.verification_state, updated_at = EXCLUDED.updated_at, revoked_at = EXCLUDED.revoked_at",
                     )
-                    .bind::<SqlUuid, _>(Uuid::now_v7())
+                    .bind::<sql_types::Uuid, _>(Uuid::now_v7())
                     .bind::<Text, _>(&device.actor)
                     .bind::<Text, _>(&device.device_id)
                     .bind::<Jsonb, _>(&device.payload)

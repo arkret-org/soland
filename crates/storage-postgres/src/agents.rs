@@ -12,14 +12,15 @@ use super::{
     ConfirmAgentProvisioningAbandonment, EnqueueAgentRuntimeMessage,
     IssueAgentProvisioningAbandonmentChallenge, Jsonb, Nullable, OptionalExtension,
     PersistenceError, PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl,
-    SqlUuid, Text, Timestamptz, Utc, Uuid, Value, apply_agent_provisioning_abandonment,
+    Text, Timestamptz, Utc, Uuid, Value, apply_agent_provisioning_abandonment,
     apply_agent_provisioning_abandonment_challenge, async_trait, ids, pg_conn, sql_query,
+    sql_types,
 };
 use crate::schema::agent_principals;
 
 #[derive(QueryableByName)]
 struct AgentRuntimeMessageRow {
-    #[diesel(sql_type = SqlUuid)]
+    #[diesel(sql_type = sql_types::Uuid)]
     message_id: Uuid,
     #[diesel(sql_type = Text)]
     request_key: String,
@@ -614,7 +615,11 @@ impl AgentStore for PgAgentStore {
                 Some(write.approval_request_id.as_str()),
             )
             .otherwise(agent_principals::approval_request_id)),
-            agent_principals::approval_notification_id.eq(case_when::<_, _, Nullable<SqlUuid>>(
+            agent_principals::approval_notification_id.eq(case_when::<
+                _,
+                _,
+                Nullable<sql_types::Uuid>,
+            >(
                 agent_principals::approval_notification_id.is_null(),
                 Some(approval_notification_id),
             )
@@ -794,7 +799,7 @@ impl AgentStore for PgAgentStore {
                  RETURNING message_id, request_key, request_digest, agent_id, \
                            verification_method, authorized_event_ref, content, enqueued_at",
             )
-            .bind::<SqlUuid, _>(message_id)
+            .bind::<sql_types::Uuid, _>(message_id)
             .bind::<Text, _>(&command.request_key)
             .bind::<Text, _>(&command.request_digest)
             .bind::<Text, _>(&command.snapshot.agent_id)

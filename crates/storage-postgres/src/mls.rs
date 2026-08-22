@@ -6,8 +6,8 @@ use super::{
     MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, Nullable, OptionalExtension,
     PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult, PgPool,
-    PgTransactionError, QueryableByName, RunQueryDsl, SqlUuid, Text, Uuid, Value, async_trait, ids,
-    json_string_array, mls_effective_scope_parts, pg_conn, sql_query,
+    PgTransactionError, QueryableByName, RunQueryDsl, Text, Uuid, Value, async_trait, ids,
+    json_string_array, mls_effective_scope_parts, pg_conn, sql_query, sql_types,
 };
 
 /// Encode a key package's trust-binding Event reference for storage.
@@ -700,7 +700,7 @@ impl MlsCommitStore for PgMlsCommitStore {
              ON CONFLICT DO NOTHING \
              RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, genesis_event_ref, governance_binding, accepted_commit_ref, committed_at, frontier_contested",
         )
-        .bind::<SqlUuid, _>(Uuid::now_v7())
+        .bind::<sql_types::Uuid, _>(Uuid::now_v7())
         .bind::<Text, _>(&scope.kind)
         .bind::<Text, _>(&scope.realm_id)
         .bind::<Nullable<Text>, _>(&scope.circle_id)
@@ -981,7 +981,7 @@ impl From<MlsWelcomeRow> for MlsWelcomeRecord {
 }
 #[derive(QueryableByName)]
 struct MlsCommitEpochRow {
-    #[diesel(sql_type = SqlUuid)]
+    #[diesel(sql_type = sql_types::Uuid)]
     id: Uuid,
     #[diesel(sql_type = Text)]
     mls_group_id: String,

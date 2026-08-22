@@ -7,8 +7,8 @@ use super::{
     AsyncConnection, AsyncPgConnection, BackupSeriesEraseProgressRecord, Binary, Jsonb, Nullable,
     OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
     QueryableByName, RunQueryDsl, SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
-    SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, SqlUuid, Text, Timestamptz,
-    Uuid, Value, async_trait, ids, pg_conn, sql_query,
+    SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, Text, Timestamptz, Uuid, Value,
+    async_trait, ids, pg_conn, sql_query, sql_types,
 };
 
 pub struct PgSecurityTransactionStore {
@@ -17,7 +17,7 @@ pub struct PgSecurityTransactionStore {
 
 #[derive(QueryableByName)]
 struct SecurityTransactionRow {
-    #[diesel(sql_type = SqlUuid)]
+    #[diesel(sql_type = sql_types::Uuid)]
     id: Uuid,
     #[diesel(sql_type = Text)]
     kind: String,
@@ -51,7 +51,7 @@ struct SecurityTransactionRow {
 
 #[derive(QueryableByName)]
 struct SecurityTransactionStepOutcomeRow {
-    #[diesel(sql_type = SqlUuid)]
+    #[diesel(sql_type = sql_types::Uuid)]
     transaction_id: Uuid,
     #[diesel(sql_type = Text)]
     step: String,
@@ -65,7 +65,7 @@ struct SecurityTransactionStepOutcomeRow {
 
 #[derive(QueryableByName)]
 struct SecurityTransactionStepAttemptRow {
-    #[diesel(sql_type = SqlUuid)]
+    #[diesel(sql_type = sql_types::Uuid)]
     transaction_id: Uuid,
     #[diesel(sql_type = Text)]
     step: String,
@@ -75,7 +75,7 @@ struct SecurityTransactionStepAttemptRow {
 
 #[derive(QueryableByName)]
 struct BackupSeriesEraseProgressRow {
-    #[diesel(sql_type = SqlUuid)]
+    #[diesel(sql_type = sql_types::Uuid)]
     transaction_id: Uuid,
     #[diesel(sql_type = Binary)]
     canonical_request: Vec<u8>,
@@ -189,7 +189,7 @@ async fn load_one(
     sql_query(format!(
         "SELECT {COLUMNS} FROM security_transactions WHERE id = $1{lock}"
     ))
-    .bind::<SqlUuid, _>(transaction_uuid)
+    .bind::<sql_types::Uuid, _>(transaction_uuid)
     .get_result::<SecurityTransactionRow>(conn)
     .await
     .optional()
@@ -215,7 +215,7 @@ async fn load_backup_erase_progress(
          FROM security_transaction_backup_erase_progress \
          WHERE transaction_id = $1{lock}"
     ))
-    .bind::<SqlUuid, _>(transaction_uuid)
+    .bind::<sql_types::Uuid, _>(transaction_uuid)
     .get_result::<BackupSeriesEraseProgressRow>(conn)
     .await
     .optional()
@@ -236,7 +236,7 @@ async fn insert_one(
           terminal_result, canonical_request) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
     )
-    .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
+    .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
         resource.transaction_id.as_str(),
     ))
     .bind::<Text, _>(match resource.kind {
@@ -300,7 +300,7 @@ async fn load_step_outcome(
         "SELECT transaction_id, step, canonical_request, response, participant_outcome \
          FROM security_transaction_step_outcomes WHERE transaction_id = $1 AND step = $2",
     )
-    .bind::<SqlUuid, _>(transaction_uuid)
+    .bind::<sql_types::Uuid, _>(transaction_uuid)
     .bind::<Text, _>(enum_text(step)?)
     .get_result::<SecurityTransactionStepOutcomeRow>(conn)
     .await
@@ -325,7 +325,7 @@ async fn load_step_attempt(
         "SELECT transaction_id, step, canonical_request \
          FROM security_transaction_step_attempts WHERE transaction_id = $1 AND step = $2",
     )
-    .bind::<SqlUuid, _>(transaction_uuid)
+    .bind::<sql_types::Uuid, _>(transaction_uuid)
     .bind::<Text, _>(enum_text(step)?)
     .get_result::<SecurityTransactionStepAttemptRow>(conn)
     .await
@@ -343,7 +343,7 @@ async fn update_mutable_fields(
         "UPDATE security_transactions SET state = $2, accepted_steps = $3, \
          next_required_step = $4, terminal_result = $5 WHERE id = $1",
     )
-    .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
+    .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
         record.resource.transaction_id.as_str(),
     ))
     .bind::<Text, _>(match record.resource.state {
@@ -396,7 +396,7 @@ struct RecoverySessionBindingRow {
     state: String,
     #[diesel(sql_type = Timestamptz)]
     expires_at: chrono::DateTime<chrono::Utc>,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
+    #[diesel(sql_type = Nullable<sql_types::Uuid>)]
     transaction_id: Option<Uuid>,
 }
 
@@ -439,7 +439,7 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
                     "SELECT principal_id, state, expires_at, transaction_id FROM recovery_sessions \
                      WHERE id = $1 FOR UPDATE",
                 )
-                .bind::<SqlUuid, _>(
+                .bind::<sql_types::Uuid, _>(
                     ids::parse_typed_uuid(recovery_session_id, "recovery_session").ok_or_else(
                         || {
                             PersistenceError::SchemaViolation(format!(
@@ -475,7 +475,7 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
                     "UPDATE recovery_sessions SET transaction_id = $2, updated_at = NOW() \
                      WHERE id = $1 AND transaction_id IS NULL",
                 )
-                .bind::<SqlUuid, _>(
+                .bind::<sql_types::Uuid, _>(
                     ids::parse_typed_uuid(&recovery_session_id, "recovery_session").ok_or_else(
                         || {
                             PersistenceError::SchemaViolation(format!(
@@ -484,7 +484,7 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
                         },
                     )?,
                 )
-                .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
+                .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
                 .execute(conn)
                 .await
                 .map_err(PersistenceError::database)?;
@@ -571,7 +571,7 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
                 "INSERT INTO security_transaction_step_attempts \
                  (transaction_id, step, canonical_request) VALUES ($1, $2, $3)",
             )
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
+            .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
             .bind::<Text, _>(enum_text(attempt.step)?)
             .bind::<Binary, _>(&attempt.canonical_request)
             .execute(conn)
@@ -647,7 +647,7 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
                  (transaction_id, step, canonical_request, response, participant_outcome) \
                  VALUES ($1, $2, $3, $4, $5)",
             )
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
+            .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
             .bind::<Text, _>(enum_text(outcome.step)?)
             .bind::<Binary, _>(&outcome.canonical_request)
             .bind::<Jsonb, _>(&outcome.response)
@@ -663,10 +663,10 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
                     "UPDATE recovery_sessions SET state = 'completed', updated_at = NOW() \
                      WHERE id = $1 AND transaction_id = $2 AND state = 'verified'",
                 )
-                .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
+                .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
                     binding.recovery_session_id().as_str(),
                 ))
-                .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
+                .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
                 .execute(conn)
                 .await
                 .map_err(PersistenceError::database)?;
@@ -721,7 +721,7 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
                 "INSERT INTO security_transaction_backup_erase_progress \
                  (transaction_id, canonical_request, outcome) VALUES ($1, $2, $3)",
             )
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
+            .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
             .bind::<Binary, _>(&progress.canonical_request)
             .bind::<Jsonb, _>(outcome)
             .execute(conn)
@@ -754,7 +754,7 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
                 "UPDATE security_transaction_backup_erase_progress \
                  SET outcome = $2, updated_at = NOW() WHERE transaction_id = $1",
             )
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
+            .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
             .bind::<Jsonb, _>(outcome)
             .execute(conn)
             .await

@@ -3,8 +3,8 @@ use soland_storage::ConflictCode;
 use super::{
     Array, Integer, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult,
     PgPool, QueryableByName, RecoveryPolicyRecord, RecoveryPolicyStore, RecoverySessionRecord,
-    RecoverySessionStore, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid, Value, async_trait, ids,
-    pg_conn, sql_query,
+    RecoverySessionStore, RunQueryDsl, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn,
+    sql_query, sql_types,
 };
 // ── Phase 2 in-memory sub-stores ────────────────────────────────────────────
 
@@ -13,7 +13,7 @@ pub struct PgRecoveryPolicyStore {
 }
 #[derive(QueryableByName)]
 struct RecoveryPolicyRow {
-    #[diesel(sql_type = SqlUuid)]
+    #[diesel(sql_type = sql_types::Uuid)]
     policy_id: Uuid,
     #[diesel(sql_type = Text)]
     principal_id: String,
@@ -25,7 +25,7 @@ struct RecoveryPolicyRow {
     trust_domain: String,
     #[diesel(sql_type = Array<Text>)]
     allowed_proof_kinds: Vec<String>,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
+    #[diesel(sql_type = Nullable<sql_types::Uuid>)]
     supersedes: Option<Uuid>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -107,7 +107,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE id = $1",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(policy_id))
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(policy_id))
         .get_result::<RecoveryPolicyRow>(&mut *conn)
         .await
         .optional().map_err(PersistenceError::database)?
@@ -221,12 +221,12 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
               acceptance_basis, expires_at, issued_at, verification_method, raw_payload, accepted_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
         .bind::<Text, _>(&record.principal_id)
         .bind::<Integer, _>(record.version as i32)
         .bind::<Text, _>(&record.trust_domain)
         .bind::<Array<Text>, _>(&record.allowed_proof_kinds)
-        .bind::<Nullable<SqlUuid>, _>(
+        .bind::<Nullable<sql_types::Uuid>, _>(
             record
                 .supersedes
                 .as_deref()
@@ -255,7 +255,7 @@ pub struct PgRecoverySessionStore {
 }
 #[derive(QueryableByName)]
 struct RecoverySessionRow {
-    #[diesel(sql_type = SqlUuid)]
+    #[diesel(sql_type = sql_types::Uuid)]
     recovery_session_id: Uuid,
     #[diesel(sql_type = Text)]
     principal_id: String,
@@ -265,7 +265,7 @@ struct RecoverySessionRow {
     requesting_device_id: String,
     #[diesel(sql_type = Text)]
     trust_domain: String,
-    #[diesel(sql_type = SqlUuid)]
+    #[diesel(sql_type = sql_types::Uuid)]
     policy_id: Uuid,
     #[diesel(sql_type = Integer)]
     policy_version: i32,
@@ -291,7 +291,7 @@ struct RecoverySessionRow {
     state: String,
     #[diesel(sql_type = Nullable<Jsonb>)]
     proof_payload: Option<Value>,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
+    #[diesel(sql_type = Nullable<sql_types::Uuid>)]
     transaction_id: Option<Uuid>,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
@@ -423,7 +423,7 @@ impl RecoverySessionStore for PgRecoverySessionStore {
             "SELECT {RECOVERY_SESSION_COLUMNS} FROM recovery_sessions \
              WHERE id = $1"
         ))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(recovery_session_id))
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(recovery_session_id))
         .get_result::<RecoverySessionRow>(&mut *conn)
         .await
         .optional()
@@ -449,14 +449,14 @@ impl RecoverySessionStore for PgRecoverySessionStore {
               state, proof_payload, transaction_id, created_at, updated_at, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
             &record.recovery_session_id,
         ))
         .bind::<Text, _>(&record.principal_id)
         .bind::<Text, _>(&record.principal_server_id)
         .bind::<Text, _>(&record.requesting_device_id)
         .bind::<Text, _>(&record.trust_domain)
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
         .bind::<Integer, _>(record.policy_version as i32)
         .bind::<Text, _>(match record.identity_model {
             arkret_models_crypto::RecoveryIdentityModel::RootAnchored => "root_anchored",
@@ -493,7 +493,7 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         .bind::<Text, _>(&record.challenge)
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Jsonb>, _>(record.proof_payload.as_ref())
-        .bind::<Nullable<SqlUuid>, _>(
+        .bind::<Nullable<sql_types::Uuid>, _>(
             record
                 .transaction_id
                 .as_deref()
@@ -517,12 +517,12 @@ impl RecoverySessionStore for PgRecoverySessionStore {
                 state = $2, proof_payload = $3, transaction_id = $4, updated_at = $5, expires_at = $6 \
              WHERE id = $1",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
             &record.recovery_session_id,
         ))
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Jsonb>, _>(record.proof_payload.as_ref())
-        .bind::<Nullable<SqlUuid>, _>(
+        .bind::<Nullable<sql_types::Uuid>, _>(
             record
                 .transaction_id
                 .as_deref()

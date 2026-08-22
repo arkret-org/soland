@@ -1,7 +1,7 @@
 use super::{
     Binary, Integer, JsonPayloadRow, Jsonb, KeyBackupDeleteChallengeRecord, KeyBackupStore,
     Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName,
-    RunQueryDsl, SqlUuid, Text, Timestamptz, Utc, Value, async_trait, ids, pg_conn, sql_query,
+    RunQueryDsl, Text, Timestamptz, Utc, Value, async_trait, ids, pg_conn, sql_query, sql_types,
 };
 
 #[derive(QueryableByName)]
@@ -107,7 +107,7 @@ impl KeyBackupStore for PgKeyBackupStore {
                 key_material_encrypted = EXCLUDED.key_material_encrypted, \
                 payload = EXCLUDED.payload",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&backup_id))
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&backup_id))
         .bind::<Nullable<Text>, _>(&account_id)
         .bind::<Nullable<Text>, _>(&device_id)
         .bind::<Nullable<Text>, _>(&scheme)
@@ -126,11 +126,11 @@ impl KeyBackupStore for PgKeyBackupStore {
         // last_accessed_at side-effect on read is informational; failure here
         // must not crash the get path.
         let _ = sql_query("UPDATE key_backups SET last_accessed_at = NOW() WHERE id = $1")
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(backup_id))
+            .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(backup_id))
             .execute(&mut *conn)
             .await;
         sql_query("SELECT payload FROM key_backups WHERE id = $1")
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(backup_id))
+            .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(backup_id))
             .get_result::<JsonPayloadRow>(&mut *conn)
             .await
             .optional()
@@ -143,7 +143,7 @@ impl KeyBackupStore for PgKeyBackupStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query("DELETE FROM key_backups WHERE id = $1")
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(backup_id))
+            .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(backup_id))
             .execute(&mut *conn)
             .await
             .map(|n| n > 0)

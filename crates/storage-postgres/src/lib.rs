@@ -6,9 +6,9 @@ pub(crate) use arkret_wire::EventBatchReceipt;
 pub(crate) use async_trait::async_trait;
 pub(crate) use chrono::Utc;
 pub(crate) use diesel::sql_types::{
-    Array, BigInt, Binary, Bool, Integer, Jsonb, Nullable, Text, Timestamptz, Uuid as SqlUuid,
+    Array, BigInt, Binary, Bool, Integer, Jsonb, Nullable, Text, Timestamptz,
 };
-pub(crate) use diesel::{OptionalExtension, QueryableByName, sql_query};
+pub(crate) use diesel::{OptionalExtension, QueryableByName, sql_query, sql_types};
 pub(crate) use diesel_async::pooled_connection::deadpool::Object;
 pub(crate) use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 pub(crate) use serde_json::Value;

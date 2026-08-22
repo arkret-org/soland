@@ -1,14 +1,14 @@
 use super::{
     Bool, Integer, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
-    PolicyDocumentRecord, PolicyDocumentStore, QueryableByName, RunQueryDsl, SqlUuid, Text,
-    Timestamptz, Uuid, Value, async_trait, ids, pg_conn, sql_query,
+    PolicyDocumentRecord, PolicyDocumentStore, QueryableByName, RunQueryDsl, Text, Timestamptz,
+    Uuid, Value, async_trait, ids, pg_conn, sql_query, sql_types,
 };
 pub struct PgPolicyDocumentStore {
     pub pool: PgPool,
 }
 #[derive(QueryableByName)]
 struct PolicyDocumentRow {
-    #[diesel(sql_type = SqlUuid)]
+    #[diesel(sql_type = sql_types::Uuid)]
     policy_id: Uuid,
     #[diesel(sql_type = Text)]
     owner: String,
@@ -49,7 +49,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
             "SELECT id AS policy_id, owner_id AS owner, scope, subject_ref, policy_kind, document, active, updated_at \
              FROM policy_documents WHERE id = $1",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(policy_id))
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(policy_id))
         .get_result::<PolicyDocumentRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(PolicyDocumentRecord::from))
@@ -86,7 +86,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
                 active = EXCLUDED.active, \
                 updated_at = EXCLUDED.updated_at",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
+        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
         .bind::<Text, _>(&record.owner)
         .bind::<Text, _>(&record.scope)
         .bind::<Text, _>(&record.subject_ref)
@@ -106,7 +106,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query("DELETE FROM policy_documents WHERE id = $1")
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(policy_id))
+            .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(policy_id))
             .execute(&mut *conn)
             .await
             .map(|n| n > 0)

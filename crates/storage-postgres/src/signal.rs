@@ -1,7 +1,7 @@
 use super::{
     BigInt, Jsonb, OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName,
-    RunQueryDsl, SIGNAL_RELAY_MAX_PER_REALM, SignalRelayRecord, SignalRelayStore, SqlUuid, Text,
-    Timestamptz, Uuid, Value, async_trait, pg_conn, sql_query,
+    RunQueryDsl, SIGNAL_RELAY_MAX_PER_REALM, SignalRelayRecord, SignalRelayStore, Text,
+    Timestamptz, Uuid, Value, async_trait, pg_conn, sql_query, sql_types,
 };
 
 /// PostgreSQL-backed live Signal relay (`sync/signal.md` §4).
@@ -133,7 +133,7 @@ impl SignalRelayStore for PgSignalRelayStore {
               signal_class, envelope_digest, envelope, sent_at, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
-        .bind::<SqlUuid, _>(Uuid::now_v7())
+        .bind::<sql_types::Uuid, _>(Uuid::now_v7())
         .bind::<Text, _>(&record.realm_id)
         .bind::<BigInt, _>(position)
         .bind::<Jsonb, _>(&scope_ref)
