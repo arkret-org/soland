@@ -24,5 +24,5 @@ pub use notification::{
     EventBroadcast, EventNotification, EventNotificationKind, EventNotificationRelay, Mutex,
 };
 pub(crate) use service_route_fetcher::VerifiedBindingRouteFetcher;
-pub(crate) use service_route_handover_signer::{AppStateCurrentResolution, AppStateNoticeSigner};
+pub(crate) use service_route_handover_signer::service_route_handover_planner;
 pub use soland_services::events::{RealmDirectoryEntry, RealmDirectoryIndex, RealmDirectoryQuery};

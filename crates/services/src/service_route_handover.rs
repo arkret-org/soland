@@ -82,6 +82,24 @@ pub struct PlannedHandover {
     pub notice: ServiceRouteHandoverNotice,
 }
 
+/// Result of one durable audience reconciliation pass.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ServiceRouteAudienceReconcilePass {
+    NoActivePlan,
+    InactiveLifecycle {
+        handover_id: String,
+        state: ServiceRouteHandoverPlanState,
+    },
+    GraceEnded {
+        handover_id: String,
+    },
+    Reconciled {
+        handover_id: String,
+        required: usize,
+        removed: usize,
+    },
+}
+
 /// Build the owner-side inverse index from accepted effective member state.
 ///
 /// No configured peer, contact, DID namespace, or historical event enters
@@ -651,6 +669,15 @@ impl ServiceRouteHandoverPlanner {
                 "there is no active service route handover plan",
             ));
         };
+        self.reconcile_plan_audience(&plan, projection, now).await
+    }
+
+    async fn reconcile_plan_audience(
+        &self,
+        plan: &ServiceRouteHandoverPlan,
+        projection: &ProjectionState,
+        now: DateTime<Utc>,
+    ) -> ServiceResult<Vec<ServiceRouteHandoverAudienceEntry>> {
         if now > plan.grace_until {
             return Err(conflict(
                 ConflictCode::FailedPrecondition,
@@ -682,6 +709,48 @@ impl ServiceRouteHandoverPlanner {
             .plans
             .audience(&self.service_id, &self.service_kind, &plan.handover_id)
             .await?)
+    }
+
+    /// Reconcile the current durable plan when its publication lifecycle is active.
+    ///
+    /// This is the worker-facing entry point. An absent plan, a draft or
+    /// quarantined plan, and a plan past `grace_until` are normal no-op pass
+    /// outcomes rather than worker errors.
+    pub async fn reconcile_active_audience(
+        &self,
+        projection: &ProjectionState,
+        now: DateTime<Utc>,
+    ) -> ServiceResult<ServiceRouteAudienceReconcilePass> {
+        let Some(plan) = self.active_plan().await? else {
+            return Ok(ServiceRouteAudienceReconcilePass::NoActivePlan);
+        };
+        if !matches!(
+            plan.state,
+            ServiceRouteHandoverPlanState::Publishing
+                | ServiceRouteHandoverPlanState::Preannounced
+                | ServiceRouteHandoverPlanState::Ready
+                | ServiceRouteHandoverPlanState::Cutover
+                | ServiceRouteHandoverPlanState::Grace
+        ) {
+            return Ok(ServiceRouteAudienceReconcilePass::InactiveLifecycle {
+                handover_id: plan.handover_id,
+                state: plan.state,
+            });
+        }
+        if now > plan.grace_until {
+            return Ok(ServiceRouteAudienceReconcilePass::GraceEnded {
+                handover_id: plan.handover_id,
+            });
+        }
+        let handover_id = plan.handover_id.clone();
+        let entries = self.reconcile_plan_audience(&plan, projection, now).await?;
+        let required = entries.iter().filter(|entry| entry.required).count();
+        let removed = entries.iter().filter(|entry| !entry.required).count();
+        Ok(ServiceRouteAudienceReconcilePass::Reconciled {
+            handover_id,
+            required,
+            removed,
+        })
     }
 }
 
@@ -777,6 +846,7 @@ mod tests {
 
     struct Harness {
         planner: ServiceRouteHandoverPlanner,
+        plans: Arc<MemoryServiceRouteHandoverPlanStore>,
         signer: Arc<FakeSigner>,
         resolution: Arc<FakeResolution>,
     }
@@ -788,8 +858,9 @@ mod tests {
         let resolution = Arc::new(FakeResolution {
             current: Mutex::new(current),
         });
+        let plans = Arc::new(MemoryServiceRouteHandoverPlanStore::new());
         let planner = ServiceRouteHandoverPlanner::new(
-            Arc::new(MemoryServiceRouteHandoverPlanStore::new()),
+            plans.clone(),
             signer.clone(),
             resolution.clone(),
             service_id(),
@@ -798,6 +869,7 @@ mod tests {
         );
         Harness {
             planner,
+            plans,
             signer,
             resolution,
         }
@@ -1000,6 +1072,170 @@ mod tests {
         assert_eq!(
             error.conflict_code(),
             Some(soland_storage::ConflictCode::DuplicateConflict)
+        );
+    }
+
+    #[tokio::test]
+    async fn worker_pass_is_a_no_op_without_an_active_plan() {
+        let harness = harness(Some(record(3)));
+        assert_eq!(
+            harness
+                .planner
+                .reconcile_active_audience(&ProjectionState::default(), now())
+                .await
+                .unwrap(),
+            ServiceRouteAudienceReconcilePass::NoActivePlan
+        );
+    }
+
+    #[tokio::test]
+    async fn projection_changes_add_and_remove_durable_required_targets() {
+        let harness = harness(Some(record(3)));
+        harness.planner.plan(request("h-1"), now()).await.unwrap();
+        let local = service_id();
+        let peer_a = DidCoreId::new("ak:did_core:web:peer-a.example").unwrap();
+        let peer_b = DidCoreId::new("ak:did_core:web:peer-b.example").unwrap();
+        let mut projection = ProjectionState::default();
+        projection.members.insert(
+            ("ak:realm:a".to_owned(), "local".to_owned()),
+            membership("local", "ak:realm:a", local.as_str(), "frontier-local"),
+        );
+        projection.members.insert(
+            ("ak:realm:a".to_owned(), "peer-a".to_owned()),
+            membership("peer-a", "ak:realm:a", peer_a.as_str(), "frontier-peer-a"),
+        );
+
+        assert_eq!(
+            harness
+                .planner
+                .reconcile_active_audience(&projection, now())
+                .await
+                .unwrap(),
+            ServiceRouteAudienceReconcilePass::Reconciled {
+                handover_id: "h-1".to_owned(),
+                required: 1,
+                removed: 0,
+            }
+        );
+
+        let rebound = projection
+            .members
+            .get_mut(&("ak:realm:a".to_owned(), "peer-a".to_owned()))
+            .unwrap();
+        rebound.recipient_service_id = Some(peer_b.as_str().to_owned());
+        rebound.delivery_binding_frontier = Some("frontier-peer-b".to_owned());
+        assert_eq!(
+            harness
+                .planner
+                .reconcile_active_audience(&projection, now() + Duration::minutes(1))
+                .await
+                .unwrap(),
+            ServiceRouteAudienceReconcilePass::Reconciled {
+                handover_id: "h-1".to_owned(),
+                required: 1,
+                removed: 1,
+            }
+        );
+        let entries = harness
+            .plans
+            .audience(&local, "principal_server", "h-1")
+            .await
+            .unwrap();
+        let removed = entries.iter().find(|entry| !entry.required).unwrap();
+        assert_eq!(removed.peer_service_id, peer_a);
+        assert_eq!(
+            removed.removed_reason.as_deref(),
+            Some("accepted_relationship_revoked")
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .find(|entry| entry.required)
+                .unwrap()
+                .peer_service_id,
+            peer_b
+        );
+
+        projection
+            .members
+            .get_mut(&("ak:realm:a".to_owned(), "peer-a".to_owned()))
+            .unwrap()
+            .state = "leave".to_owned();
+        assert_eq!(
+            harness
+                .planner
+                .reconcile_active_audience(&projection, now() + Duration::minutes(2))
+                .await
+                .unwrap(),
+            ServiceRouteAudienceReconcilePass::Reconciled {
+                handover_id: "h-1".to_owned(),
+                required: 0,
+                removed: 2,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn restarted_planner_resumes_the_durable_active_plan() {
+        let harness = harness(Some(record(3)));
+        harness.planner.plan(request("h-1"), now()).await.unwrap();
+        let restarted = ServiceRouteHandoverPlanner::new(
+            harness.plans.clone(),
+            harness.signer.clone(),
+            harness.resolution.clone(),
+            service_id(),
+            "principal_server",
+            true,
+        );
+        let local = service_id();
+        let peer = DidCoreId::new("ak:did_core:web:peer.example").unwrap();
+        let mut projection = ProjectionState::default();
+        projection.members.insert(
+            ("ak:realm:a".to_owned(), "local".to_owned()),
+            membership("local", "ak:realm:a", local.as_str(), "frontier-local"),
+        );
+        projection.members.insert(
+            ("ak:realm:a".to_owned(), "peer".to_owned()),
+            membership("peer", "ak:realm:a", peer.as_str(), "frontier-peer"),
+        );
+
+        assert_eq!(
+            restarted
+                .reconcile_active_audience(&projection, now() + Duration::minutes(1))
+                .await
+                .unwrap(),
+            ServiceRouteAudienceReconcilePass::Reconciled {
+                handover_id: "h-1".to_owned(),
+                required: 1,
+                removed: 0,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn worker_pass_stops_after_the_grace_cutoff() {
+        let harness = harness(Some(record(3)));
+        let planned = harness.planner.plan(request("h-1"), now()).await.unwrap();
+        assert_eq!(
+            harness
+                .planner
+                .reconcile_active_audience(
+                    &ProjectionState::default(),
+                    planned.plan.grace_until + Duration::milliseconds(1),
+                )
+                .await
+                .unwrap(),
+            ServiceRouteAudienceReconcilePass::GraceEnded {
+                handover_id: "h-1".to_owned(),
+            }
+        );
+        assert!(
+            harness
+                .plans
+                .audience(&service_id(), "principal_server", "h-1")
+                .await
+                .unwrap()
+                .is_empty()
         );
     }
 

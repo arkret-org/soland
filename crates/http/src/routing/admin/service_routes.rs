@@ -27,7 +27,7 @@ use soland_storage::{
 };
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
-use crate::state::{AppState, AppStateCurrentResolution, AppStateNoticeSigner};
+use crate::state::{AppState, service_route_handover_planner};
 use crate::{JsonResult, json_ok};
 
 const DETAIL_LIMIT: usize = 100;
@@ -373,23 +373,6 @@ async fn admin_get_service_route(
 const HANDOVER_LIMIT: usize = 64;
 const HANDOVER_REVISION_LIMIT: usize = 64;
 
-/// Build the owner-side planner for this deployment.
-///
-/// The planner is stateless — everything durable lives in its store — so it is
-/// assembled per request rather than held on `AppState`, which keeps the
-/// signing port out of the shared state graph.
-fn handover_planner(state: &AppState) -> Result<ServiceRouteHandoverPlanner, AppError> {
-    let (service_id, _) = crate::routing::system::service_resolution::service_ids(state)?;
-    Ok(ServiceRouteHandoverPlanner::new(
-        std::sync::Arc::new(state.persistence().clone()),
-        std::sync::Arc::new(AppStateNoticeSigner::new(state.clone())),
-        std::sync::Arc::new(AppStateCurrentResolution::new(state.clone())),
-        service_id,
-        "principal_server",
-        !state.config().development_mode,
-    ))
-}
-
 fn handover_summary(plan: &ServiceRouteHandoverPlan) -> AdminServiceRouteHandoverSummary {
     AdminServiceRouteHandoverSummary {
         service_id: plan.service_id.clone(),
@@ -476,7 +459,7 @@ async fn admin_list_service_route_handovers(
 ) -> JsonResult<AdminServiceRouteHandoverList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = require_admin_principal(state, aa.authenticated_session(state, req).await?)?;
-    let planner = handover_planner(state)?;
+    let planner = service_route_handover_planner(state)?;
     let mut plans = planner
         .list_plans(HANDOVER_LIMIT + 1)
         .await
@@ -516,7 +499,7 @@ async fn admin_get_service_route_handover(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = require_admin_principal(state, aa.authenticated_session(state, req).await?)?;
     let handover_id = handover_id.into_inner();
-    let planner = handover_planner(state)?;
+    let planner = service_route_handover_planner(state)?;
     let Some((plan, mut revisions)) = planner
         .plan_detail(&handover_id, HANDOVER_REVISION_LIMIT + 1)
         .await
@@ -566,7 +549,7 @@ async fn admin_plan_service_route_handover(
     )
     .await?;
     let body = body.into_inner();
-    let planner = handover_planner(state)?;
+    let planner = service_route_handover_planner(state)?;
     let planned = planner
         .plan(
             HandoverPlanRequest {
@@ -581,6 +564,7 @@ async fn admin_plan_service_route_handover(
         )
         .await
         .map_err(handover_error)?;
+    state.wake_service_route_handover_reconcile();
     append_audit_log(
         state,
         Some(&session.actor),
@@ -623,7 +607,7 @@ async fn admin_cancel_service_route_handover(
     let handover_id = handover_id.into_inner();
     let expected = arkret_wire::Hash::new(body.into_inner().expected_previous_notice_digest)
         .map_err(|_| AppError::param_invalid("expected_previous_notice_digest is not a digest"))?;
-    let planner = handover_planner(state)?;
+    let planner = service_route_handover_planner(state)?;
     let cancelled = planner
         .cancel(&handover_id, &expected, Utc::now())
         .await

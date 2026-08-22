@@ -11,11 +11,27 @@ use arkret_models_identity::{
 };
 use async_trait::async_trait;
 use soland_services::service_route_handover::{
-    CurrentServiceResolutionPort, ServiceRouteNoticeSigner,
+    CurrentServiceResolutionPort, ServiceRouteHandoverPlanner, ServiceRouteNoticeSigner,
 };
 use soland_services::{ServiceError, ServiceResult};
 
+use crate::AppError;
 use crate::state::AppState;
+
+/// Assemble the stateless owner-side planner against this process's durable store.
+pub(crate) fn service_route_handover_planner(
+    state: &AppState,
+) -> Result<ServiceRouteHandoverPlanner, AppError> {
+    let (service_id, _) = crate::routing::system::service_resolution::service_ids(state)?;
+    Ok(ServiceRouteHandoverPlanner::new(
+        std::sync::Arc::new(state.persistence().clone()),
+        std::sync::Arc::new(AppStateNoticeSigner::new(state.clone())),
+        std::sync::Arc::new(AppStateCurrentResolution::new(state.clone())),
+        service_id,
+        "principal_server",
+        !state.config().development_mode,
+    ))
+}
 
 pub(crate) struct AppStateNoticeSigner {
     state: AppState,

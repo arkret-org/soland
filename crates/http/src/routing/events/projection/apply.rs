@@ -685,6 +685,7 @@ async fn project_accepted_operations_inner(
                 tracing::warn!(%error, "failed to persist projection event before publish");
             }
         }
+        state.wake_service_route_handover_reconcile();
     }
 }
 
