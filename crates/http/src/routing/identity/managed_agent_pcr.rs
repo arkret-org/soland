@@ -4,7 +4,6 @@ use arkret_identifiers::{DidFullId, Hash, RealmId};
 use arkret_models_collaboration::agent_operations::{
     AgentLifecycleState, AgentPcrRecoveryState, agent_requested_scope_digest,
 };
-use arkret_models_collaboration::event_sync::RealmSealFrontierView;
 use arkret_models_collaboration::events_payloads::agent::AgentKeyScope;
 use arkret_models_crypto::{
     BackupKind, KeyBackup, KeyBackupRecipientMethod, ManagedFrontierRef, ManagedPrincipalBinding,
@@ -587,35 +586,6 @@ pub(crate) async fn managed_agent_record_for_controller_pcr(
     }))
 }
 
-pub(crate) async fn managed_agent_event_frontier(
-    state: &AppState,
-    pcr_id: &str,
-) -> Result<Option<RealmSealFrontierView>, AppError> {
-    let Some(seal) = managed_agent_event_seal_head(state, pcr_id).await? else {
-        return Ok(None);
-    };
-    let governance_policy =
-        crate::control_proposal::control_proposal_policy(state, &seal.realm_id, &[])
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("control governance policy unavailable: {error}"))
-            })?;
-    let health = state
-        .projections()
-        .control_governance_health(&seal.realm_id, chrono::Utc::now(), governance_policy)
-        .map_err(|error| {
-            AppError::internal(format!("control governance health unavailable: {error}"))
-        })?;
-    Ok(Some(RealmSealFrontierView::new(
-        seal.realm_id,
-        seal.id,
-        seal.control_event_set_root,
-        seal.state_root,
-        health,
-        Some(seal.hlc),
-    )))
-}
-
 pub(crate) async fn managed_agent_event_seal_head(
     state: &AppState,
     pcr_id: &str,
@@ -1022,7 +992,10 @@ async fn current_managed_frontier(
     if !crate::routing::events::event_log::realm_is_indexed(state, realm_id) {
         return Ok(None);
     }
-    let Some(frontier) = managed_agent_event_frontier(state, realm_id).await? else {
+    // The internal caller needs the accepted Seal's own signed roots, so it
+    // reads the Seal head directly: the frontier view deliberately carries no
+    // service-derived root hint.
+    let Some(seal) = managed_agent_event_seal_head(state, realm_id).await? else {
         return Ok(None);
     };
     let commits = state
@@ -1047,8 +1020,8 @@ async fn current_managed_frontier(
     }
     Ok(Some(CurrentManagedFrontier {
         frontier: ManagedFrontierRef {
-            frontier_digest: frontier.control_event_set_root,
-            seal_ref: frontier.seal_id.as_str().to_owned(),
+            frontier_digest: seal.control_event_set_root,
+            seal_ref: seal.id.as_str().to_owned(),
             mls_epoch: commit.epoch,
         },
         group_id: commit.group_id,

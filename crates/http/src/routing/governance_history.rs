@@ -7,19 +7,18 @@ use arkret_models_collaboration::governance_dependencies::{
 use arkret_models_collaboration::history_key::{
     AcceptedAuthorityViewVector, AccountStatusViewLocator, AgentEvidenceViewLocator, AuthorProfile,
     CircleCurrentGateProjection, CircleCurrentGateProjectionKind, CircleSealViewLocator,
-    CurrentGateProjection, HistoryEffectiveScope, HistoryGovernanceTraversalIntent,
-    HistoryGovernanceTraversalIntentKind, HistoryGovernanceTraversalRetention, HistoryKeyRequest,
-    HistoryKeyRequestAcceptedKind, HistoryKeyRequestCreateOutcome, HistoryKeyRequestListOutcome,
-    HistoryKeyRequestListQuery, HistoryKeyRequestReceipt, HistoryKeyRequestReceiptKind,
-    HistoryKeyRequestRecord, HistoryKeyRequestReplica,
-    HistoryKeyRequestReplicaDestinationAuthorization, HistoryKeyRequestReplicaKind,
-    HistoryKeyRequestReplicaOutcome, HistoryKeyResponseAckOutcome, HistoryKeyResponseAckRequest,
-    HistoryKeyResponseContent, HistoryKeyResponseListOutcome, HistoryKeyResponseListQuery,
-    HistoryKeyResponseRecord, HistoryKeyResponseSendOutcome, HistoryKeyResponseSendReceipt,
-    HistoryKeyResponseSendRequest, HistoryKeySourceRelay, HistoryManifestAdmission,
-    HistoryManifestAdmissionKind, HistoryManifestAdmissionPass, HistoryReleaseAttestation,
-    HistoryReleaseAttestationKind, HistoryReleaseVerifierProfile, HistoryRequestId,
-    HistoryResponseAckTokenClaims, HistoryResponseCapabilityPlaintext,
+    CurrentGateProjection, HistoryGovernanceTraversalIntent, HistoryGovernanceTraversalIntentKind,
+    HistoryGovernanceTraversalRetention, HistoryKeyRequest, HistoryKeyRequestAcceptedKind,
+    HistoryKeyRequestCreateOutcome, HistoryKeyRequestListOutcome, HistoryKeyRequestListQuery,
+    HistoryKeyRequestReceipt, HistoryKeyRequestReceiptKind, HistoryKeyRequestRecord,
+    HistoryKeyRequestReplica, HistoryKeyRequestReplicaDestinationAuthorization,
+    HistoryKeyRequestReplicaKind, HistoryKeyRequestReplicaOutcome, HistoryKeyResponseAckOutcome,
+    HistoryKeyResponseAckRequest, HistoryKeyResponseContent, HistoryKeyResponseListOutcome,
+    HistoryKeyResponseListQuery, HistoryKeyResponseRecord, HistoryKeyResponseSendOutcome,
+    HistoryKeyResponseSendReceipt, HistoryKeyResponseSendRequest, HistoryKeySourceRelay,
+    HistoryManifestAdmission, HistoryManifestAdmissionKind, HistoryManifestAdmissionPass,
+    HistoryReleaseAttestation, HistoryReleaseAttestationKind, HistoryReleaseVerifierProfile,
+    HistoryRequestId, HistoryResponseAckTokenClaims, HistoryResponseCapabilityPlaintext,
     HistoryResponseCapabilityPlaintextKind, HistoryResponseCapabilitySealContext,
     HistoryResponseCapabilitySealPurpose, HistoryResponsePageEntry,
     OrganizationRecoveryArchiveListItem, OrganizationRecoveryArchiveListOutcome,
@@ -39,6 +38,7 @@ use arkret_models_identity::agent_signer_evidence::{
     AgentSignerEvidence, AgentSignerEvidenceQuerySelector,
 };
 use arkret_state::mls_governance_proof::MlsGovernanceVerificationCheckpoint;
+use arkret_wire::HistoryEffectiveScope;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, KeyInit, Mac};

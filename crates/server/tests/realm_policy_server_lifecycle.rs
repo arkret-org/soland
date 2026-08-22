@@ -347,7 +347,10 @@ async fn accepted_seal_frontier(state: &AppState, token: &str, realm_id: &str) -
             else {
                 panic!("Realm-only selector returned the wrong frontier variant");
             };
-            return frontier.seal_id.to_string();
+            return frontier
+                .sole_leaf()
+                .expect("single-signer Realm frontier")
+                .to_string();
         }
         assert_eq!(
             status,

@@ -2,14 +2,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arkret_models_collaboration::history_key::{
-    CurrentGateProjection, HistoryEffectiveScope, HistoryKeyRequest, HistoryKeyRequestReceipt,
-    HistoryKeyRequestReplica, HistoryKeyResponseAckRequest, HistoryKeyResponseLostRecord,
-    HistoryKeyResponseRecord, HistoryKeyResponseSendReceipt, HistoryKeyResponseSendRequest,
-    HistoryManifestAdmission, HistoryReleaseAttestation, HistoryResponseAckEntry,
-    HistoryResponseAckTokenClaims, HistoryResponseId, HistoryResponsePageEntry,
-    SealedHistoryResponseCapability,
+    CurrentGateProjection, HistoryKeyRequest, HistoryKeyRequestReceipt, HistoryKeyRequestReplica,
+    HistoryKeyResponseAckRequest, HistoryKeyResponseLostRecord, HistoryKeyResponseRecord,
+    HistoryKeyResponseSendReceipt, HistoryKeyResponseSendRequest, HistoryManifestAdmission,
+    HistoryReleaseAttestation, HistoryResponseAckEntry, HistoryResponseAckTokenClaims,
+    HistoryResponseId, HistoryResponsePageEntry, SealedHistoryResponseCapability,
 };
-use arkret_wire::Hash;
+use arkret_wire::{Hash, HistoryEffectiveScope};
 use chrono::{DateTime, Duration, Utc};
 use soland_storage::{
     ExactWriteOutcome, HISTORY_COMPACT_RECEIPTS_PER_REQUEST_LIMIT,

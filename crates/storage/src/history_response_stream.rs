@@ -2,14 +2,13 @@ use std::sync::Arc;
 
 use arkret_models_collaboration::governance_dependencies::GovernanceDependency;
 use arkret_models_collaboration::history_key::{
-    HistoryEffectiveScope, HistoryGovernanceTraversalIntent, HistoryKeyRequest,
-    HistoryKeyRequestReceipt, HistoryKeyRequestReplica, HistoryKeyResponseAckRequest,
-    HistoryKeyResponseLostRecord, HistoryKeyResponseRecord, HistoryKeyResponseSendReceipt,
-    HistoryKeyResponseSendRequest, HistoryManifestAdmission, HistoryReleaseAttestation,
-    HistoryResponseAckTokenClaims, HistoryResponseId, HistoryResponsePageEntry,
-    SealedHistoryResponseCapability,
+    HistoryGovernanceTraversalIntent, HistoryKeyRequest, HistoryKeyRequestReceipt,
+    HistoryKeyRequestReplica, HistoryKeyResponseAckRequest, HistoryKeyResponseLostRecord,
+    HistoryKeyResponseRecord, HistoryKeyResponseSendReceipt, HistoryKeyResponseSendRequest,
+    HistoryManifestAdmission, HistoryReleaseAttestation, HistoryResponseAckTokenClaims,
+    HistoryResponseId, HistoryResponsePageEntry, SealedHistoryResponseCapability,
 };
-use arkret_wire::Hash;
+use arkret_wire::{Hash, HistoryEffectiveScope};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use subtle::ConstantTimeEq as _;

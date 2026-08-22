@@ -226,11 +226,8 @@ impl RrkAcquisitionWorker {
             return Err("intent_branch_mismatch".to_owned());
         };
         let realm_id = match effective_scope {
-            arkret_models_collaboration::history_key::HistoryEffectiveScope::Realm { realm_id }
-            | arkret_models_collaboration::history_key::HistoryEffectiveScope::Circle {
-                realm_id,
-                ..
-            } => realm_id,
+            arkret_wire::HistoryEffectiveScope::Realm { realm_id }
+            | arkret_wire::HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
         };
         let base_checkpoint =
             super::super::events::event_log::governance_proof::load_verified_governance_checkpoint(

@@ -1325,11 +1325,8 @@ struct PendingRrkRow {
 
 fn rrk_realm_id(replica: &OrganizationRecoveryArchiveReplica) -> &RealmId {
     match &replica.archive.effective_scope {
-        arkret_models_collaboration::history_key::HistoryEffectiveScope::Realm { realm_id }
-        | arkret_models_collaboration::history_key::HistoryEffectiveScope::Circle {
-            realm_id,
-            ..
-        } => realm_id,
+        arkret_wire::HistoryEffectiveScope::Realm { realm_id }
+        | arkret_wire::HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
     }
 }
 
@@ -1594,7 +1591,7 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
 
     async fn list_accepted_for_authority(
         &self,
-        effective_scope: &arkret_models_collaboration::history_key::HistoryEffectiveScope,
+        effective_scope: &arkret_wire::HistoryEffectiveScope,
         holder_principal_id: &arkret_wire::DidCoreId,
         holder_service_id: &arkret_wire::DidCoreId,
         from_epoch: u64,

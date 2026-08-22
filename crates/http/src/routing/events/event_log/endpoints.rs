@@ -15,6 +15,36 @@ mod control_proposal_decisions;
 /// the HTTP boundary replays that stored classification against its stable
 /// references and supplies exact revalidated Event digests; every other
 /// missing-Ack row remains a fail-closed store error.
+/// This service's observation coordinate for a Realm Seal frontier read.
+///
+/// `event-auth-state-resolution.md` fixes `current` as the serving service's
+/// verified durable view at this coordinate, never a global wall-clock latest
+/// claim. The sequence is the count of accepted canonical Realm Events this
+/// service has durably applied: it is monotone non-decreasing per service and
+/// advances exactly when the durable view can change.
+pub(crate) async fn realm_seal_frontier_observation_coordinate(
+    state: &AppState,
+    realm_id: &RealmId,
+) -> Result<arkret_models_collaboration::event_sync::RealmSealFrontierObservationCoordinate, AppError>
+{
+    let service_id = arkret_wire::DidCoreId::new(state.service_id().to_owned())
+        .map_err(|error| AppError::internal(format!("serving service DID invalid: {error}")))?;
+    let stats = state
+        .event_queries()
+        .realm_event_stats(realm_id.as_str())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("Realm observation coordinate unavailable: {error}"))
+        })?;
+    Ok(
+        arkret_models_collaboration::event_sync::RealmSealFrontierObservationCoordinate {
+            service_id,
+            sequence: stats.count,
+            observed_at: chrono::Utc::now(),
+        },
+    )
+}
+
 pub(crate) async fn frontier_control_governance_health(
     state: &AppState,
     realm_id: &RealmId,
@@ -1198,11 +1228,13 @@ async fn events_frontier(
                             "control governance policy unavailable: {error}"
                         ))
                     })?;
+            let observation_coordinate =
+                realm_seal_frontier_observation_coordinate(state, &realm_id).await?;
             let frontier = RealmSealFrontierView::new(
                 realm_id,
-                seal.id.clone(),
-                seal.control_event_set_root.clone(),
-                seal.state_root.clone(),
+                arkret_wire::SealBasis {
+                    leaves: vec![seal.id.clone()],
+                },
                 state
                     .projections()
                     .control_governance_health(
@@ -1215,7 +1247,7 @@ async fn events_frontier(
                             "control governance health unavailable: {error}"
                         ))
                     })?,
-                Some(seal.hlc.clone()),
+                observation_coordinate,
             );
             return soland_http::result::json_ok(EventsFrontierAccountClientState {
                 frontier: EventsFrontierView::RealmSeal(frontier),
@@ -1269,14 +1301,16 @@ async fn events_frontier(
                 })?;
         let governance_health =
             frontier_control_governance_health(state, &realm_id, governance_policy).await?;
+        let observation_coordinate =
+            realm_seal_frontier_observation_coordinate(state, &realm_id).await?;
         return soland_http::result::json_ok(EventsFrontierAccountClientState {
             frontier: EventsFrontierView::RealmSeal(RealmSealFrontierView::new(
                 realm_id.clone(),
-                seal.id,
-                seal.control_event_set_root,
-                seal.state_root,
+                arkret_wire::SealBasis {
+                    leaves: vec![seal.id],
+                },
                 governance_health,
-                Some(seal.hlc),
+                observation_coordinate,
             )),
             receipts: Vec::new(),
         });

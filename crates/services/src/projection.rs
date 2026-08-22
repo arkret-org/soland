@@ -8,8 +8,7 @@ use arkret_models_collaboration::event_sync::{
     ControlProposalFaultReason, PendingControlProposal, RetainedControlProposalFault,
 };
 use arkret_models_collaboration::history_key::{
-    AuthorizationIncarnation, CurrentGateProjection, HistoryEffectiveScope,
-    HistoryReleaseAttestation,
+    AuthorizationIncarnation, CurrentGateProjection, HistoryReleaseAttestation,
 };
 use arkret_state::lattice::CellState;
 use arkret_state::lattice::ordered_log::IssuedOp;
@@ -23,7 +22,8 @@ use arkret_state::{CellRegistry, CellStore, EffectiveSealView};
 use arkret_wire::cba::ProjectedCellWrite;
 use arkret_wire::event_envelope::Event;
 use arkret_wire::{
-    ControlProposalAck, ControlProposalDecision, ControlProposalDecisionPolicy, Seal,
+    ControlProposalAck, ControlProposalDecision, ControlProposalDecisionPolicy,
+    HistoryEffectiveScope, Seal,
 };
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;

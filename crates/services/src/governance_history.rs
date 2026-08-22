@@ -4,12 +4,12 @@ use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencyResolveOutcome, GovernanceDependencyResolveRequest,
 };
 use arkret_models_collaboration::history_key::{
-    HistoryEffectiveScope, HistoryKeyResponseAckRequest, HistoryKeyResponseLostRecord,
-    HistoryResponseId, OrganizationRecoveryArchiveListQuery, OrganizationRecoveryArchiveReplica,
+    HistoryKeyResponseAckRequest, HistoryKeyResponseLostRecord, HistoryResponseId,
+    OrganizationRecoveryArchiveListQuery, OrganizationRecoveryArchiveReplica,
     OrganizationRecoveryArchiveReplicaOutcome, PeerHistoryTraversalAccess,
     SelfHistoryTraversalAccess,
 };
-use arkret_wire::{DidCoreId, Event, Hash, RealmId, Seal};
+use arkret_wire::{DidCoreId, Event, Hash, HistoryEffectiveScope, RealmId, Seal};
 use chrono::{DateTime, Utc};
 use soland_storage::{
     ExactWriteOutcome, HistoryRequestPage, HistoryRequestRecord, HistoryRequestWrite,

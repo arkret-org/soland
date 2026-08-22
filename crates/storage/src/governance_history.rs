@@ -3,14 +3,14 @@ use arkret_models_collaboration::governance_dependencies::{
     validate_history_source_signer_dependency_closure,
 };
 use arkret_models_collaboration::history_key::{
-    ArchiveAuthorizationTuple, HistoryEffectiveScope, HistoryGovernanceTraversalIntent,
+    ArchiveAuthorizationTuple, HistoryGovernanceTraversalIntent,
     HistoryGovernanceTraversalRetention, HistoryKeyResponseSendRequest,
     OrganizationRecoveryArchiveListQuery, OrganizationRecoveryArchiveReplica,
     OrganizationRecoveryArchiveReplicaOutcome, PeerHistoryTraversalAccess,
     SelfHistoryTraversalAccess,
 };
 use arkret_models_identity::{AgentSignerEvidence, AuthenticatedSignerResolutionEvidence};
-use arkret_wire::{Event, EventProof, Hash, RealmId, Seal, SealId};
+use arkret_wire::{Event, EventProof, Hash, HistoryEffectiveScope, RealmId, Seal, SealId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 

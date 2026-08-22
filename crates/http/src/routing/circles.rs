@@ -35,9 +35,9 @@
 use arkret_identifiers::{CircleId, DidCoreId, EventId, RealmId};
 use arkret_models_collaboration::governance::circle::{
     CircleArchiveRequestBody, CircleCreateRequestBody, CircleList, CircleMemberDeleteRequestBody,
-    CircleMemberRequestBody, CircleMembership, CircleMembershipOutcome, CirclePendingMlsRemoval,
-    CircleRestoreRequestBody, CircleScopeRotateOutcome, CircleScopeRotateRequestBody,
-    CircleTombstoneRequestBody, CircleView, EncryptionFloor,
+    CircleMemberRequestBody, CircleMembership, CircleMembershipOutcome, CircleRestoreRequestBody,
+    CircleScopeRotateOutcome, CircleScopeRotateRequestBody, CircleTombstoneRequestBody, CircleView,
+    EncryptionFloor,
 };
 use arkret_wire::Event;
 use salvo::http::StatusCode;
@@ -52,7 +52,7 @@ use soland_http::result::{JsonResult, json_ok};
 use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_services::projection::{
     CircleLifecycle as CircleLifecycleState, CircleReadModel as CircleProjection,
-    MlsRemoveObligationView as MlsRemoveObligation, ProjectionSnapshot as ProjectionState,
+    ProjectionSnapshot as ProjectionState,
 };
 
 use super::AuthArgs;
@@ -91,26 +91,15 @@ fn circle_view_from_projection(
     actor: &str,
 ) -> Result<CircleView, AppError> {
     let include_member_details = c.members.contains(actor);
-    let pending_mls_removals = if include_member_details {
-        pending_mls_removals_from_projection(projection, c)
-    } else {
-        Vec::new()
-    };
     let viewer_membership = projection
         .circle_membership(&c.circle_id, actor)
         .map(|membership| parse_sdk_field("viewer_membership", &membership.state))
         .transpose()?;
-    circle_view_from_with_pending(
-        c,
-        pending_mls_removals,
-        viewer_membership,
-        include_member_details,
-    )
+    circle_view_from(c, viewer_membership, include_member_details)
 }
 
-fn circle_view_from_with_pending(
+fn circle_view_from(
     c: &CircleProjection,
-    pending_mls_removals: Vec<CirclePendingMlsRemoval>,
     viewer_membership: Option<CircleMembership>,
     include_member_details: bool,
 ) -> Result<CircleView, AppError> {
@@ -134,7 +123,6 @@ fn circle_view_from_with_pending(
             .as_ref()
             .map(|floor| parse_sdk_field::<EncryptionFloor>("metadata_encryption_floor", floor))
             .transpose()?,
-        agent_participation: None,
         encryption_profile: parse_sdk_field("encryption_profile", &c.encryption_profile)?,
         content_scheme: c
             .content_scheme
@@ -147,7 +135,6 @@ fn circle_view_from_with_pending(
             .as_ref()
             .map(|policy| parse_sdk_field("durability_policy", policy))
             .transpose()?,
-        pending_mls_removals,
         state: parse_sdk_field("state", c.state.as_str())?,
         member_count: include_member_details
             .then(|| u32::try_from(c.members.len()).unwrap_or(u32::MAX)),
@@ -194,42 +181,6 @@ fn is_reserved_sidecar_circle(circle: &CircleProjection) -> bool {
 
 fn is_ordinary_circle(circle: &CircleProjection) -> bool {
     circle.profile_ref.is_none() && !is_reserved_sidecar_circle(circle)
-}
-
-fn pending_mls_removals_from_projection(
-    projection: &ProjectionState,
-    circle: &CircleProjection,
-) -> Vec<CirclePendingMlsRemoval> {
-    projection
-        .pending_mls_removals
-        .iter()
-        .filter(|obligation| {
-            obligation.realm_id == circle.realm_id
-                && obligation.circle_id.as_deref() == Some(circle.circle_id.as_str())
-                && obligation.mls_group_ref.as_deref().is_none_or(|group_ref| {
-                    circle
-                        .mls_group_ref
-                        .as_deref()
-                        .is_none_or(|expected| expected == group_ref)
-                })
-        })
-        .filter_map(circle_pending_mls_removal_from_obligation)
-        .collect()
-}
-
-fn circle_pending_mls_removal_from_obligation(
-    obligation: &MlsRemoveObligation,
-) -> Option<CirclePendingMlsRemoval> {
-    let principal_id = arkret_identifiers::DidCoreId::new(obligation.actor_id.clone()).ok()?;
-    let membership_frontier = obligation
-        .membership_frontier
-        .iter()
-        .filter_map(|event_ref| EventId::new(event_ref.clone()).ok())
-        .collect();
-    Some(CirclePendingMlsRemoval {
-        principal_id,
-        membership_frontier,
-    })
 }
 
 fn scope_rotate_failed(reason: &'static str, detail: impl Into<String>) -> AppError {

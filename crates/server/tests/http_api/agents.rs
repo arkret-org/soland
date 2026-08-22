@@ -904,7 +904,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     }
 
     let predecessor = state
-        .test_seal(&frontier.seal_id)
+        .test_seal(frontier.sole_leaf().expect("single-signer Realm frontier"))
         .unwrap()
         .expect("controller PCR predecessor Seal");
     let mut controller_events = state

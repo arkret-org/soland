@@ -707,7 +707,7 @@ impl PendingRrkAcquisitionStore for MemoryPendingRrkAcquisitionStore {
 
     async fn list_accepted_for_authority(
         &self,
-        effective_scope: &arkret_models_collaboration::history_key::HistoryEffectiveScope,
+        effective_scope: &arkret_wire::HistoryEffectiveScope,
         holder_principal_id: &arkret_wire::DidCoreId,
         holder_service_id: &arkret_wire::DidCoreId,
         from_epoch: u64,

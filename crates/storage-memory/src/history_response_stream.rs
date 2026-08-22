@@ -473,7 +473,7 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
 
     async fn list_requests(
         &self,
-        effective_scope: &arkret_models_collaboration::history_key::HistoryEffectiveScope,
+        effective_scope: &arkret_wire::HistoryEffectiveScope,
         after_sequence: Option<u64>,
         limit: usize,
     ) -> PersistenceResult<HistoryRequestPage> {

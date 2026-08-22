@@ -13,8 +13,9 @@ use arkret_models_identity::{
 };
 use arkret_state::state::store::ControlProposalIngress;
 use arkret_wire::{
-    AccountStatusRecordId, DidCoreId, DidFullId, DidUrl, Hash, NonEmptyString, PayloadProof,
-    ProofContextId, ProtocolSignature, RealmId, ReceiptId, SchemaId, project_full_id_to_core_id,
+    AccountStatusRecordId, DidCoreId, DidFullId, DidUrl, Hash, HistoryEffectiveScope,
+    NonEmptyString, PayloadProof, ProofContextId, ProtocolSignature, RealmId, ReceiptId, SchemaId,
+    project_full_id_to_core_id,
 };
 use chrono::{Duration, Utc};
 
@@ -55,7 +56,7 @@ pub fn minimal_history_signer_evidence(
         GovernanceDependency, GovernanceDependencySelector,
     };
     use arkret_models_collaboration::history_key::{
-        AuthorizationIncarnation, HistoryEffectiveScope, MinimalMetadataMlsLeafSignerEvidence,
+        AuthorizationIncarnation, MinimalMetadataMlsLeafSignerEvidence,
     };
     use base64::Engine as _;
 
