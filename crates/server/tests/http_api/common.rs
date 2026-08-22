@@ -1719,9 +1719,6 @@ const FIXTURE_DATA_PLANE_GRANT_ACTIONS: [&str; 9] = [
     "ak.strand.update",
 ];
 
-/// One fixture Realm's accepted governance basis for one subject.
-pub(crate) type TestRealmBasis = soland_services::conformance_basis::ConformanceRealmBasis;
-
 /// The accepted Seal a fixture Event names, plus the sealed cell effects that
 /// Seal's coverage produces.
 ///
@@ -1758,7 +1755,11 @@ pub(crate) const HTTP_API_FIXTURE_BASIS: soland_test_support::cba_basis::Fixture
         &FIXTURE_DATA_PLANE_GRANT_ACTIONS,
     );
 
-fn test_realm_basis(state: &AppState, realm_id: &str, subject: &str) -> TestRealmBasis {
+fn test_realm_basis(
+    state: &AppState,
+    realm_id: &str,
+    subject: &str,
+) -> soland_services::conformance_basis::ConformanceRealmBasis {
     let subject_core = arkret_wire::project_full_id_to_core_id(
         &arkret_identifiers::DidFullId::new(subject.to_owned())
             .expect("fixture basis subject full DID"),
@@ -1777,7 +1778,7 @@ pub(crate) fn test_realm_basis_for_principal_server(
     realm_id: &str,
     subject: &str,
     principal_server_id: &str,
-) -> TestRealmBasis {
+) -> soland_services::conformance_basis::ConformanceRealmBasis {
     let subject_core = fixture_actor_core_id(subject);
     soland_test_support::cba_basis::realm_basis_for_principal_server(
         state,
