@@ -3,12 +3,11 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use arkret_models_discovery::{VerifiedProfileArtifactEntry, parse_verified_profiles_artifact};
+pub use arkret_models_discovery::VerifiedProfileArtifactEntry;
+use arkret_models_discovery::parse_verified_profiles_artifact;
 
 pub const VERIFIED_PROFILES_ARTIFACT_ENV: &str = "SOLAND_VERIFIED_PROFILES_ARTIFACT";
 pub const SOLAND_SERVICE_ROLE: &str = "principal_server";
-
-pub type VerifiedProfileDescriptor = VerifiedProfileArtifactEntry;
 
 /// Load the descriptors named by the configured artifact path.
 ///
@@ -16,7 +15,7 @@ pub type VerifiedProfileDescriptor = VerifiedProfileArtifactEntry;
 /// used to read `SOLAND_VERIFIED_PROFILES_ARTIFACT` itself, which made the
 /// artifact the one piece of deployment configuration that did not appear in
 /// `AppConfig` at all.
-pub fn load_from_configured_path(path: Option<&str>) -> Arc<Vec<VerifiedProfileDescriptor>> {
+pub fn load_from_configured_path(path: Option<&str>) -> Arc<Vec<VerifiedProfileArtifactEntry>> {
     let Some(path) = path.filter(|value| !value.is_empty()) else {
         tracing::debug!(
             target: "verified_profiles",
@@ -28,7 +27,7 @@ pub fn load_from_configured_path(path: Option<&str>) -> Arc<Vec<VerifiedProfileD
     Arc::new(load_from_path(path))
 }
 
-pub fn load_from_path(path: impl AsRef<Path>) -> Vec<VerifiedProfileDescriptor> {
+pub fn load_from_path(path: impl AsRef<Path>) -> Vec<VerifiedProfileArtifactEntry> {
     let path = path.as_ref();
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,

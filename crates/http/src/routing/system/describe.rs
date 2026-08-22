@@ -418,7 +418,7 @@ async fn build_server_description_resolved(
 ///   that would be a silent cross-binding lie.
 pub(crate) fn apply_claim_level_partition(
     description: &mut arkret_models_discovery::ServiceDescribe,
-    loaded_verified: &[crate::verified_profiles::VerifiedProfileDescriptor],
+    loaded_verified: &[crate::verified_profiles::VerifiedProfileArtifactEntry],
     candidate_join_policy_enabled: bool,
     sovereign_enclave_enabled: bool,
 ) {

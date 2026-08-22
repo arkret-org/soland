@@ -58,7 +58,7 @@ use super::notification::{EventBroadcast, EventNotification, Mutex};
 use super::{VerifiedBindingRouteFetcher, did_resolver_chain};
 use crate::authz::SolandAuthzEngine;
 use crate::config::{AppConfig, NotarySigningKeyOrigin};
-use crate::verified_profiles::VerifiedProfileDescriptor;
+use crate::verified_profiles::VerifiedProfileArtifactEntry;
 
 /// Upper bound on accepted DID bindings held in process. Eviction is
 /// deterministic (oldest `verified_at` first) in the SDK store, and evicting a
@@ -220,7 +220,7 @@ pub struct AppState {
     /// `describe.rs::apply_claim_level_partition`. Empty when the env var
     /// is unset / file missing / file malformed — that's the dev-mode
     /// invariant in service-surface.md §3.0.
-    verified_profiles: Arc<Vec<VerifiedProfileDescriptor>>,
+    verified_profiles: Arc<Vec<VerifiedProfileArtifactEntry>>,
     /// MID-1..6 (R3.1 spec-sync 2026-05-27, arkret-spec @ 7157ee8) — in-
     /// memory registry of `ak.member.identity.update` events. Reducer
     /// dispatch (`apply_member_identity_update`) and the sync roster
@@ -1165,7 +1165,7 @@ impl AppState {
         self.settings.store(Arc::new(settings));
     }
 
-    pub fn verified_profiles(&self) -> &[VerifiedProfileDescriptor] {
+    pub fn verified_profiles(&self) -> &[VerifiedProfileArtifactEntry] {
         self.verified_profiles.as_ref()
     }
 
