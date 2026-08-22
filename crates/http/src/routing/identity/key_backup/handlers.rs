@@ -266,12 +266,9 @@ pub(super) async fn put_key_backup(
     }
     validate_key_backup_body_typed(&typed_backup_id, &session.actor, &backup)?;
     enforce_recovery_policy_ref_typed(state, &session.actor, &backup).await?;
-    crate::routing::identity::managed_agent_pcr::validate_managed_agent_key_backup(
-        state,
-        &backup,
-        chrono::Utc::now(),
-    )
-    .await?;
+    if backup.encryption.recipient_method == KeyBackupRecipientMethod::RecoveryPublicKey {
+        validate_current_recovery_recipient(state, &backup, chrono::Utc::now()).await?;
+    }
     let ciphertext_digest = backup.ciphertext_digest.clone();
     let backup_value = key_backup_to_value(&backup)?;
     let existing = state

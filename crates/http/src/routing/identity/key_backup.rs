@@ -3,10 +3,12 @@
 use arkret_identifiers::{BackupId, EventId};
 use arkret_models_crypto::{
     BackupKind, KeyBackup, KeyBackupKdfName, KeyBackupRecipientMethod, KeyBackupUnlockProof,
-    KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody,
+    KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody, RecoveryHpkeSuite,
+    RecoveryKeyAgreementEntry, RecoveryKeyAgreementUse, RecoveryPolicy,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Verifier as _};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -58,17 +60,6 @@ pub(crate) fn admin_router() -> Router {
 }
 
 const KEY_BACKUP_CLASSES: &[&str] = &["secret_storage", "mls_history"];
-const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
-    "recovery_key_share",
-    "recovery_secret",
-    "mls_account_secret",
-    "mls_private_plaintext",
-    "mls_group_secrets_backup_key",
-    "mls_group_state",
-    "mls_epoch_secret",
-    "pending_welcome",
-    "private_account_state",
-];
 const KEY_BACKUP_AUTH_REQUIRED_SIGNED_FIELDS: &[&str] = &[
     "backup_id",
     "actor_id",

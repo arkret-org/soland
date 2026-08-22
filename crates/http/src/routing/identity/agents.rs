@@ -37,11 +37,11 @@ use arkret_models_collaboration::agent_operations::{
     AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleOutcome, AgentLifecycleState,
     AgentList, AgentPairingBootstrap, AgentPairingMode, AgentPairingResolveRequestBody,
     AgentPauseRequestBody, AgentPresence, AgentPresenceState, AgentProjection,
-    AgentProvisionOutcome, AgentProvisionPcrRecovery, AgentProvisionRequestBody, AgentReadiness,
-    AgentReadinessBlocker, AgentReadinessState, AgentRenewPairingOutcome,
-    AgentRenewPairingRequestBody, AgentResumeRequestBody, AgentRuntimeApprovalOutcome,
-    AgentRuntimeApprovalRequestBody, AgentRuntimeApprovalStatusOutcome,
-    AgentRuntimeApprovalStatusRequestBody, AgentRuntimeState, AgentView, KeyState,
+    AgentProvisionOutcome, AgentProvisionRequestBody, AgentReadiness, AgentReadinessBlocker,
+    AgentReadinessState, AgentRenewPairingOutcome, AgentRenewPairingRequestBody,
+    AgentResumeRequestBody, AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
+    AgentRuntimeApprovalStatusOutcome, AgentRuntimeApprovalStatusRequestBody, AgentRuntimeState,
+    AgentView, KeyState,
 };
 use arkret_models_collaboration::events_payloads::agent::AgentKeyScope;
 use arkret_models_collaboration::governance::agent_artifacts::{GrantSnapshot, PublicKey};
@@ -891,13 +891,9 @@ mod tests {
             },
         );
 
-        let key_state = agent_key_state_from_record(
-            &record,
-            arkret_models_collaboration::agent_operations::AgentPcrRecoveryState::Pending,
-            Vec::new(),
-            AgentRuntimeState::PendingRuntimeKey,
-        )
-        .expect("key state projection");
+        let key_state =
+            agent_key_state_from_record(&record, Vec::new(), AgentRuntimeState::PendingRuntimeKey)
+                .expect("key state projection");
 
         assert_eq!(
             key_state.approval_request_id.as_deref(),

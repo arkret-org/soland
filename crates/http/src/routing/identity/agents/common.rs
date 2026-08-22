@@ -608,11 +608,7 @@ pub(super) async fn agent_view_from_record(
         chrono::Utc::now(),
     );
     let agent = agent_projection_from_record(record, runtime_state);
-    let pcr_recovery =
-        crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(state, record)
-            .await?;
-    let key_state =
-        agent_key_state_from_record(record, pcr_recovery, active_authorizations, runtime_state)?;
+    let key_state = agent_key_state_from_record(record, active_authorizations, runtime_state)?;
     Ok(AgentView {
         agent,
         grants: Vec::new(),
@@ -622,7 +618,6 @@ pub(super) async fn agent_view_from_record(
 
 pub(super) fn agent_key_state_from_record(
     record: &AgentPrincipalRecord,
-    pcr_recovery: arkret_models_collaboration::agent_operations::AgentPcrRecoveryState,
     active_authorizations: Vec<
         arkret_models_collaboration::governance::agent_artifacts::AgentKeyAuthorizationState,
     >,
@@ -692,7 +687,6 @@ pub(super) fn agent_key_state_from_record(
                 AppError::internal(format!("persisted Agent PCR is invalid: {error}"))
             })?,
         controller_authorization_ref: record.controller_authorization_ref.clone(),
-        pcr_recovery,
         requested_scope,
         requested_scope_digest,
         pairing_request_id: open_handle.map(|handle| handle.pairing_request_id.clone()),

@@ -741,19 +741,6 @@ pub(super) async fn agent_key_pair(
     )
     .await?;
     ensure_current_runtime_key_request_matches(&agent_record, &body)?;
-    let pcr_recovery = crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(
-        state,
-        &agent_record,
-    )
-    .await?;
-    if !pcr_recovery.is_ready() {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "managed Agent PCR recovery backup is not ready for the current pre-commit frontier",
-        )
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_wire_code("agent_pcr_recovery_not_ready"));
-    }
     crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
         state,
         &agent_record,

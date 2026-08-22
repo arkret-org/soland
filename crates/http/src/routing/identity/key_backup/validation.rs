@@ -4,6 +4,12 @@ pub(super) fn schema_error(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::SchemaViolation, message)
 }
 
+fn failed_precondition(message: impl Into<String>, reason: &str) -> AppError {
+    AppError::new(ErrorCode::FailedPrecondition, message)
+        .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
+        .with_reason_code(reason)
+}
+
 pub(super) fn is_base64url_token(value: &str) -> bool {
     !value.is_empty()
         && value
@@ -67,15 +73,14 @@ pub(super) fn validate_key_backup_body_typed(
     if backup.contents.is_empty() {
         return Err(schema_error("key backup contents must not be empty"));
     }
-    for item in &backup.contents {
-        if !KEY_BACKUP_CONTENT_TYPES.contains(&item.item_kind.as_str()) {
-            return Err(schema_error(format!(
-                "unsupported key backup contents.item_kind `{}`",
-                item.item_kind
-            )));
-        }
-    }
-    Ok(())
+    // `KeyBackupContentItem` is the closed union of
+    // `key-backup.schema.json#/properties/contents`, so the `item_kind`
+    // vocabulary and the per-branch field sets are already decided by the type.
+    // `validate_envelope_fields` adds the branch rules (`mls_history` indexes
+    // exactly one canonical `history_secret_ranges` entry).
+    backup
+        .validate_envelope_fields()
+        .map_err(|error| schema_error(error.to_string()))
 }
 
 pub(super) fn validate_key_backup_encryption_typed(backup: &KeyBackup) -> Result<(), AppError> {
@@ -229,7 +234,7 @@ pub(super) fn validate_key_backup_domain_separation_typed(
     let expected_item_kinds: Vec<&str> = backup
         .contents
         .iter()
-        .map(|item| item.item_kind.as_str())
+        .map(arkret_models_crypto::KeyBackupContentItem::item_kind)
         .collect();
     if aad
         .item_kinds
@@ -370,7 +375,11 @@ pub(super) fn validate_mls_history_opaque_only_typed(backup: &KeyBackup) -> Resu
         scan_mls_history_opaque_field(key, value, "/encryption/aead")?;
     }
     for (idx, item) in backup.contents.iter().enumerate() {
-        for (key, value) in item.extra.iter() {
+        let extra = match item {
+            arkret_models_crypto::KeyBackupContentItem::SecretStorage(index) => &index.extra,
+            arkret_models_crypto::KeyBackupContentItem::HistorySecretRanges(index) => &index.extra,
+        };
+        for (key, value) in extra.iter() {
             scan_mls_history_opaque_field(key, value, &format!("/contents/{idx}"))?;
         }
     }
@@ -482,9 +491,130 @@ pub(super) fn validate_series_genesis_shape_typed(backup: &KeyBackup) -> Result<
     Ok(())
 }
 
+/// `key-backup.schema.json` `encryption.recipient_key_ref`: for
+/// `recipient_method=recovery_public_key` it MUST resolve to a non-revoked
+/// `recovery_key_agreements[].key_agreement_ref` of the accepted recovery
+/// policy, and the selected `hpke_suite` MUST appear in that entry's
+/// `hpke_suites`. A DID-Document-only agreement or a `recovery_keys[]`
+/// signing method is not an authorization source.
+pub(super) async fn validate_current_recovery_recipient(
+    state: &AppState,
+    backup: &KeyBackup,
+    evaluated_at: DateTime<Utc>,
+) -> Result<(), AppError> {
+    let policy = state
+        .recovery_policies()
+        .active_policy(backup.actor_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("recovery policy lookup failed: {error}")))?
+        .ok_or_else(|| {
+            failed_precondition(
+                "a recovery_public_key key backup requires an accepted recovery policy",
+                "recovery_policy_mismatch",
+            )
+        })?;
+    let policy: RecoveryPolicy = serde_json::from_value(policy.raw_payload).map_err(|error| {
+        AppError::internal(format!(
+            "accepted recovery policy failed strong decoding: {error}"
+        ))
+    })?;
+    policy.validate().map_err(|error| {
+        AppError::internal(format!(
+            "accepted recovery policy failed validation: {error}"
+        ))
+    })?;
+    let recipient = backup
+        .encryption
+        .recipient_key_ref
+        .as_deref()
+        .unwrap_or_default();
+    let suite_id = backup
+        .encryption
+        .hpke_suite
+        .as_deref()
+        .unwrap_or(arkret_wire::HPKE_SUITE_X25519_CHACHA20POLY1305_V1);
+    let suite: RecoveryHpkeSuite = serde_json::from_value(Value::String(suite_id.to_owned()))
+        .map_err(|_| {
+            AppError::new(
+                ErrorCode::UnsupportedHpkeSuite,
+                format!("key backup HPKE suite is unsupported: {suite_id}"),
+            )
+        })?;
+    let agreements = policy
+        .recovery_key_agreements
+        .as_deref()
+        .unwrap_or_default();
+    let matching_recipient = agreements
+        .iter()
+        .find(|entry| current_backup_hpke_agreement(entry, recipient, evaluated_at));
+    let Some(agreement) = matching_recipient else {
+        return Err(failed_precondition(
+            "recipient_key_ref is not a current non-revoked backup HPKE key agreement in the accepted recovery policy",
+            "recovery_policy_mismatch",
+        ));
+    };
+    if !agreement.hpke_suites.contains(&suite) {
+        return Err(AppError::new(
+            ErrorCode::UnsupportedHpkeSuite,
+            format!(
+                "key backup HPKE suite {suite_id} is not allowed by recovery key agreement {recipient}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn current_backup_hpke_agreement(
+    entry: &RecoveryKeyAgreementEntry,
+    recipient: &str,
+    evaluated_at: DateTime<Utc>,
+) -> bool {
+    entry.key_agreement_ref.as_str() == recipient
+        && entry.usage == RecoveryKeyAgreementUse::BackupHpke
+        && entry.revoked_at.is_none()
+        && entry.not_before <= evaluated_at
+        && entry.expires_at > evaluated_at
+}
+
 #[cfg(test)]
 mod tests {
+    use chrono::{DateTime, Utc};
+
     use super::*;
+
+    const RECOVERY_CONTROLLER_FULL: &str = "did:webvh:z6mkcontroller:controller.example";
+    #[test]
+    fn a_recovery_signing_key_is_not_a_backup_hpke_recipient() {
+        let now: DateTime<Utc> = "2026-07-15T00:00:00.000Z".parse().unwrap();
+        let agreement = RecoveryKeyAgreementEntry {
+            key_agreement_ref: arkret_wire::DidUrl::new(format!(
+                "{RECOVERY_CONTROLLER_FULL}#backup-hpke-1"
+            ))
+            .unwrap(),
+            key_agreement_algorithm:
+                arkret_models_crypto::key_backup::RecoveryKeyAgreementAlgorithm::X25519,
+            public_key_multibase: arkret_wire::NonEmptyString::new(
+                "z6LSriWhVBzW9Vz2PvqbieSz7Aa2hPLzTKJuDwXTMKFeomeW".to_owned(),
+            )
+            .unwrap(),
+            hpke_suites: vec![RecoveryHpkeSuite::X25519ChaCha20Poly1305],
+            usage: RecoveryKeyAgreementUse::BackupHpke,
+            not_before: now - chrono::TimeDelta::minutes(1),
+            expires_at: now + chrono::TimeDelta::days(1),
+            revoked_at: None,
+        };
+
+        assert!(current_backup_hpke_agreement(
+            &agreement,
+            agreement.key_agreement_ref.as_str(),
+            now
+        ));
+        assert!(!current_backup_hpke_agreement(
+            &agreement,
+            &format!("{RECOVERY_CONTROLLER_FULL}#recovery-proof-1"),
+            now
+        ));
+    }
 
     #[test]
     fn critical_digest_shape_is_sha256_only() {

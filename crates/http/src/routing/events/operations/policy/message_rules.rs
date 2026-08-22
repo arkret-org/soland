@@ -361,21 +361,6 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
         )
         .map_err(|_| "principal_control_realm_profile_mismatch")?;
     }
-    if kind == arkret_wire::EventKind::AgentKeyAuthorize {
-        let record = state
-            .agent_pairings()
-            .agent(&agent_id)
-            .await
-            .map_err(|_| "managed_agent_principal_binding_unavailable")?
-            .ok_or("managed_agent_principal_binding_unavailable")?;
-        let recovery =
-            crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(state, &record)
-                .await
-                .map_err(|_| "agent_pcr_recovery_not_ready")?;
-        if !recovery.is_ready() {
-            return Err("agent_pcr_recovery_not_ready");
-        }
-    }
     Ok(())
 }
 

@@ -780,7 +780,6 @@ pub(super) async fn provision_agent(
                     principal_control_realm_id: principal_control_realm_id.clone(),
                     controller_authorization_ref: controller_authorization_ref.clone(),
                     requested_scope_digest: requested_scope_digest.clone(),
-                    pcr_recovery: AgentProvisionPcrRecovery::default(),
                     pairing_request_id: pairing_request_id.clone(),
                     pairing_code: Some(pairing_code.clone()),
                     expires_at,
@@ -1251,9 +1250,6 @@ pub(super) async fn renew_agent_pairing(
     let principal_control_realm_id = RealmId::new(record.principal_control_realm_id.clone())
         .map_err(|error| AppError::internal(format!("persisted Agent PCR invalid: {error}")))?;
     let controller_authorization_ref = record.controller_authorization_ref.clone();
-    let pcr_recovery =
-        crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(state, &record)
-            .await?;
     let requested_scope_digest =
         crate::routing::identity::managed_agent_pcr::requested_scope_digest_for_record(&record)?;
     json_ok(AgentRenewPairingOutcome {
@@ -1261,7 +1257,6 @@ pub(super) async fn renew_agent_pairing(
         principal_control_realm_id,
         controller_authorization_ref,
         requested_scope_digest,
-        pcr_recovery,
         pairing_mode: if bootstrap_reopen {
             AgentPairingMode::Bootstrap
         } else {
