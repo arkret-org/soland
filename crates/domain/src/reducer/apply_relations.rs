@@ -9,7 +9,8 @@ use super::*;
 const RELATION_CONFLICT_FANOUT_LIMIT: usize = 16;
 
 fn default_relation_profile(relation_kind: &str) -> RelationProfile {
-    let cardinality = arkret_wire::standard_relation_kind_metadata(relation_kind)
+    let cardinality = arkret_wire::RelationKind::from_wire(relation_kind)
+        .descriptor()
         .and_then(|metadata| RelationCardinality::from_registry_value(metadata.default_cardinality))
         .unwrap_or(RelationCardinality::ManyToMany);
     RelationProfile {
