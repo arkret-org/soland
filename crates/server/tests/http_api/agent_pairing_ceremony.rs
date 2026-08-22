@@ -246,8 +246,26 @@ async fn seed_agent_pcr_recovery_material(
         );
 }
 
-#[tokio::test]
-async fn public_pairing_ceremony_activates_the_agent_runtime() {
+// The pairing ceremony drives the full Event admission state machine, whose
+// debug-codegen stack frame exceeds the default 2 MiB test-thread stack on
+// Windows. Run the body on a dedicated thread with headroom instead.
+#[test]
+fn public_pairing_ceremony_activates_the_agent_runtime() {
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build the pairing ceremony test runtime")
+                .block_on(public_pairing_ceremony_activates_the_agent_runtime_body())
+        })
+        .expect("spawn the pairing ceremony test thread")
+        .join()
+        .expect("pairing ceremony test thread panicked");
+}
+
+async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     let state = soland_test_support::app_state(test_config());
     let app = app_from_state(state.clone());
     let controller = "did:web:alice.example";

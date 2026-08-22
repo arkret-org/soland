@@ -1100,8 +1100,26 @@ async fn provision_agent_sdk_commit_attempt_inner(
     (status, body, commit_body, fault_outcome)
 }
 
-#[tokio::test]
-async fn production_agent_provision_admits_controller_signed_sdk_events() {
+// The provisioning commit leg drives the full Event admission state machine, whose
+// debug-codegen stack frame exceeds the default 2 MiB test-thread stack on
+// Windows. Run the body on a dedicated thread with headroom instead.
+#[test]
+fn production_agent_provision_admits_controller_signed_sdk_events() {
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build the Agent provisioning test runtime")
+                .block_on(production_agent_provision_admits_controller_signed_sdk_events_body())
+        })
+        .expect("spawn the Agent provisioning test thread")
+        .join()
+        .expect("Agent provisioning test thread panicked");
+}
+
+async fn production_agent_provision_admits_controller_signed_sdk_events_body() {
     let mut config = test_config();
     config.development_mode = false;
     let state = soland_test_support::app_state(config);
@@ -1214,8 +1232,26 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
     }
 }
 
-#[tokio::test]
-async fn agent_provision_recovers_from_each_durable_commit_boundary() {
+// The durable commit-boundary replay drives the full Event admission state machine, whose
+// debug-codegen stack frame exceeds the default 2 MiB test-thread stack on
+// Windows. Run the body on a dedicated thread with headroom instead.
+#[test]
+fn agent_provision_recovers_from_each_durable_commit_boundary() {
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build the Agent provisioning test runtime")
+                .block_on(agent_provision_recovers_from_each_durable_commit_boundary_body())
+        })
+        .expect("spawn the Agent provisioning test thread")
+        .join()
+        .expect("Agent provisioning test thread panicked");
+}
+
+async fn agent_provision_recovers_from_each_durable_commit_boundary_body() {
     use soland_storage::{
         DeliveryPolicyStoreRegistry, EventProjectionStoreRegistry, MlsAgentStoreRegistry,
     };
@@ -1364,8 +1400,26 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
     }
 }
 
-#[tokio::test]
-async fn agent_provision_commit_requires_its_server_allocation() {
+// The provisioning commit leg drives the full Event admission state machine, whose
+// debug-codegen stack frame exceeds the default 2 MiB test-thread stack on
+// Windows. Run the body on a dedicated thread with headroom instead.
+#[test]
+fn agent_provision_commit_requires_its_server_allocation() {
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build the Agent provisioning test runtime")
+                .block_on(agent_provision_commit_requires_its_server_allocation_body())
+        })
+        .expect("spawn the Agent provisioning test thread")
+        .join()
+        .expect("Agent provisioning test thread panicked");
+}
+
+async fn agent_provision_commit_requires_its_server_allocation_body() {
     let state = soland_test_support::app_state(test_config());
     let controller = "did:web:alice.example";
     let token = "agent-unallocated-commit-session";
@@ -1469,8 +1523,26 @@ async fn agent_provision_commit_requires_its_server_allocation() {
     );
 }
 
-#[tokio::test]
-async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
+// The provisioning commit leg drives the full Event admission state machine, whose
+// debug-codegen stack frame exceeds the default 2 MiB test-thread stack on
+// Windows. Run the body on a dedicated thread with headroom instead.
+#[test]
+fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build the Agent provisioning test runtime")
+                .block_on(provisioned_agent_is_listed_and_slug_conflict_is_rejected_body())
+        })
+        .expect("spawn the Agent provisioning test thread")
+        .join()
+        .expect("Agent provisioning test thread panicked");
+}
+
+async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected_body() {
     let mut config = test_config();
     config.development_mode = true;
     config.session_grant_introspection_bearer = Some("agent-lifecycle-s2s".to_owned());
@@ -1632,8 +1704,28 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
     );
 }
 
-#[tokio::test]
-async fn provisioned_agent_fanout_uses_the_active_controller_device_generation() {
+// The fanout leg drives the full Event admission state machine, whose
+// debug-codegen stack frame exceeds the default 2 MiB test-thread stack on
+// Windows. Run the body on a dedicated thread with headroom instead.
+#[test]
+fn provisioned_agent_fanout_uses_the_active_controller_device_generation() {
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build the Agent fanout test runtime")
+                .block_on(
+                    provisioned_agent_fanout_uses_the_active_controller_device_generation_body(),
+                )
+        })
+        .expect("spawn the Agent fanout test thread")
+        .join()
+        .expect("Agent fanout test thread panicked");
+}
+
+async fn provisioned_agent_fanout_uses_the_active_controller_device_generation_body() {
     let mut config = test_config();
     config.development_mode = true;
     let state = soland_test_support::app_state(config);
