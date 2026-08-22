@@ -643,7 +643,7 @@ fn profile_limitations() -> Vec<Value> {
         json!({
             "area": "snapshot.head",
             "status": "standard_self_supported",
-            "reason": "ak.self.snapshot.read.manifest_head returns a signed ak.schema.snapshot.v1 manifest; the /_soland dev bundle remains a product-face compatibility surface"
+            "reason": "ak.self.snapshot.read.manifest_head returns a signed ak.schema.snapshot.v1 manifest; the /_soland dev bundle is development-only diagnostics"
         }),
         json!({
             "area": "account_auth.device_pair",

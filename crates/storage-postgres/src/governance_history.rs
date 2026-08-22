@@ -1572,35 +1572,6 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
         load_pending_rrk(&mut conn, acquisition_digest).await
     }
 
-    async fn list_accepted(
-        &self,
-        after_archive_sequence: Option<u64>,
-        limit: usize,
-    ) -> PersistenceResult<Vec<PendingRrkAcquisitionRecord>> {
-        if !(1..=4_096).contains(&limit) {
-            return Err(PersistenceError::SchemaViolation(
-                "invalid accepted RRK list limit".to_owned(),
-            ));
-        }
-        let after = u64_to_i64(
-            after_archive_sequence.unwrap_or_default(),
-            "accepted RRK list cursor",
-        )?;
-        let limit = usize_to_i64(limit, "accepted RRK list limit")?;
-        let mut conn = pg_conn(&self.pool).await?;
-        let rows = sql_query(format!(
-            "SELECT {RRK_SELECT} FROM pending_rrk_acquisitions \
-             WHERE state = 'accepted' AND archive_sequence > $1 \
-             ORDER BY archive_sequence LIMIT $2"
-        ))
-        .bind::<BigInt, _>(after)
-        .bind::<BigInt, _>(limit)
-        .load::<PendingRrkRow>(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?;
-        rows.into_iter().map(decode_pending_rrk).collect()
-    }
-
     async fn list_accepted_for_authority(
         &self,
         effective_scope: &arkret_wire::HistoryEffectiveScope,

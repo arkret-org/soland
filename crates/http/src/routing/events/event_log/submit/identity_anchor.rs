@@ -2435,7 +2435,6 @@ mod tests {
                 payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
                 created_at: received_at,
                 jws: "e30..c2ln".to_owned(),
-                extra: Default::default(),
             },
         };
         member.signature.payload_digest = member.authority_ack_digest().unwrap();

@@ -39,12 +39,6 @@ use serde_json::Value;
 
 use crate::config::AppConfig;
 
-/// Build the no-IO fallback resolver chain used by tests and sync SDK bridges.
-/// Honors the `did_resolver_allow_methods` filter.
-pub fn build_did_resolver_chain(config: &AppConfig) -> CompositeDidResolver {
-    build_fallback_did_resolver_chain(config)
-}
-
 /// Build the async-native resolver service used by `AppState`.
 pub fn build_soland_did_resolver(config: &AppConfig) -> SolandDidResolver {
     SolandDidResolver::new(config)
@@ -749,7 +743,7 @@ mod tests {
         let mut config = base_config();
         config.external_webvh_provider_url = Some("https://webvh.example".to_owned());
         config.external_webvh_provider_active = true;
-        let chain = build_did_resolver_chain(&config);
+        let chain = build_fallback_did_resolver_chain(&config);
 
         // The webvh resolver claims `supports()` purely on DID method +
         // URL shape — no cache hit required. So the chain reports
@@ -770,7 +764,7 @@ mod tests {
         let mut config = base_config();
         config.external_webvh_provider_url = Some("https://webvh.example".to_owned());
         config.external_webvh_provider_active = false;
-        let chain = build_did_resolver_chain(&config);
+        let chain = build_fallback_did_resolver_chain(&config);
 
         assert!(
             !chain.supports(&sample_webvh_did()),
@@ -785,7 +779,7 @@ mod tests {
         let mut config = base_config();
         config.external_webvh_provider_url = None;
         config.external_webvh_provider_active = false;
-        let chain = build_did_resolver_chain(&config);
+        let chain = build_fallback_did_resolver_chain(&config);
 
         assert!(
             !chain.supports(&sample_webvh_did()),
@@ -806,7 +800,7 @@ mod tests {
         let mut config = base_config();
         config.external_webvh_provider_url = Some("https://webvh.example".to_owned());
         config.external_webvh_provider_active = true;
-        let chain = build_did_resolver_chain(&config);
+        let chain = build_fallback_did_resolver_chain(&config);
 
         // Resolver returns `Err("did:webvh document not cached")` from
         // the webvh resolver — proves dispatch went to webvh, not web
@@ -829,7 +823,7 @@ mod tests {
             vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()];
         config.external_webvh_provider_url = Some("https://webvh.example".to_owned());
         config.external_webvh_provider_active = true;
-        let chain = build_did_resolver_chain(&config);
+        let chain = build_fallback_did_resolver_chain(&config);
         assert!(
             !chain.supports(&sample_webvh_did()),
             "webvh resolver must be omitted when allow list excludes 'webvh'"
@@ -842,7 +836,7 @@ mod tests {
         config.did_resolver_allow_methods.clear();
         config.external_webvh_provider_url = Some("https://webvh.example".to_owned());
         config.external_webvh_provider_active = true;
-        let chain = build_did_resolver_chain(&config);
+        let chain = build_fallback_did_resolver_chain(&config);
         assert!(!chain.supports(&sample_webvh_did()));
         assert!(!chain.supports(&sample_web_did()));
     }

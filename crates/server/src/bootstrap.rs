@@ -894,7 +894,7 @@ async fn validate_stored_service_identity(
         .map_err(|error| anyhow::anyhow!("persisted service identity is invalid: {error}"))?;
     if stored.identity.full_id.method() != "webvh" {
         anyhow::bail!(
-            "persisted service identity {} is not did:webvh; legacy service identities are not supported",
+            "persisted service identity {} is not did:webvh",
             stored.identity.full_id
         );
     }

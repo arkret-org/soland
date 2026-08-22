@@ -2281,7 +2281,6 @@ mod proposal_decision_tests {
             payload_digest,
             created_at,
             jws: "e30..c2ln".to_owned(),
-            extra: Default::default(),
         }
     }
 

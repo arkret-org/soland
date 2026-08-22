@@ -528,15 +528,12 @@ pub(crate) fn validate_morph_update_payload(operation: &Operation) -> Result<(),
     if patch.contains_key("metadata") && patch.contains_key("encrypted_metadata") {
         return Err("morph_metadata_carrier_conflict");
     }
-    if patch.contains_key("schema_refs") {
-        return Err("morph_schema_refs_evolution_unauthorized");
-    }
     reject_forbidden_morph_update_patch(patch)?;
     Ok(())
 }
 
 /// `morph.md` §2 / §4 forbidden-wire guard for `ak.morph.update`:
-/// - `morph_kind` is immutable after `ak.morph.create` (`morph_kind_immutable`).
+/// - `morph_kind` and `schema_refs` are immutable after `ak.morph.create`.
 /// - the stage axis (`stage` / `stage_changed_at`) changes only via `ak.morph.stage.set`; writing
 ///   it through an update patch is `schema_violation`.
 /// - the reserved business-field set (`fields.stage` / `fields.lifecycle` / `fields.progress_state`
@@ -549,6 +546,9 @@ fn reject_forbidden_morph_update_patch(
     for (path, value) in patch {
         if path == "morph_kind" {
             return Err("morph_kind_immutable");
+        }
+        if path == "schema_refs" {
+            return Err("morph update cannot modify create-locked schema_refs");
         }
         if path == "stage" || path == "stage_changed_at" {
             return Err("morph_stage_patch_forbidden");
@@ -667,97 +667,6 @@ fn reject_morph_metadata_business_fields(
         }
     }
     Ok(())
-}
-
-pub(crate) fn validate_morph_schema_migrate_payload(
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    let from_schema_refs = collect_nonempty_unique_string_array(
-        operation.payload.get("from_schema_refs"),
-        "from_schema_refs",
-    )?;
-    let to_schema_refs = collect_nonempty_unique_string_array(
-        operation.payload.get("to_schema_refs"),
-        "to_schema_refs",
-    )?;
-    match operation
-        .payload
-        .get("compatibility_class")
-        .and_then(serde_json::Value::as_str)
-    {
-        Some("additive") => {
-            let empty_fields =
-                arkret_models_collaboration::events_payloads::MorphSchemaFieldSet::new();
-            arkret_models_collaboration::events_payloads::morph_schema_refs_additive_only(
-                &from_schema_refs,
-                &to_schema_refs,
-                &empty_fields,
-                &empty_fields,
-            )
-            .map_err(|_| "morph_schema_refs_transformation_unsupported")
-        }
-        // `morph.md` §4.1 S3 — breaking / transformation are NOT statically
-        // rejected here: whether they are admissible depends on the Realm
-        // declaring `ak.profile.morph.schema_migration_transformations.v1`,
-        // which is only visible to the state-aware preflight
-        // (`ProjectionState::check_morph_schema_migrate`). The static layer
-        // only checks shape: a transformation migration MUST carry a
-        // non-empty `transformation_rules[]`.
-        Some("breaking") => Ok(()),
-        Some("transformation") => {
-            let has_rules = operation
-                .payload
-                .get("transformation_rules")
-                .and_then(serde_json::Value::as_array)
-                .is_some_and(|rules| !rules.is_empty());
-            if has_rules {
-                Ok(())
-            } else {
-                Err("unsupported_transformation_rule")
-            }
-        }
-        _ => Err("morph schema_migrate compatibility_class is invalid"),
-    }
-}
-
-fn collect_nonempty_unique_string_array(
-    value: Option<&serde_json::Value>,
-    field: &'static str,
-) -> Result<Vec<String>, &'static str> {
-    let Some(items) = value.and_then(serde_json::Value::as_array) else {
-        return Err(match field {
-            "from_schema_refs" => "from_schema_refs must be a non-empty string array",
-            "to_schema_refs" => "to_schema_refs must be a non-empty string array",
-            _ => "field must be a non-empty string array",
-        });
-    };
-    if items.is_empty() {
-        return Err(match field {
-            "from_schema_refs" => "from_schema_refs must be a non-empty string array",
-            "to_schema_refs" => "to_schema_refs must be a non-empty string array",
-            _ => "field must be a non-empty string array",
-        });
-    }
-    let mut seen = std::collections::BTreeSet::new();
-    let mut values = Vec::with_capacity(items.len());
-    for item in items {
-        let Some(text) = item.as_str().filter(|text| !text.trim().is_empty()) else {
-            return Err(match field {
-                "from_schema_refs" => "from_schema_refs must contain only non-empty strings",
-                "to_schema_refs" => "to_schema_refs must contain only non-empty strings",
-                _ => "field must contain only non-empty strings",
-            });
-        };
-        if !seen.insert(text) {
-            return Err(match field {
-                "from_schema_refs" => "from_schema_refs must be unique",
-                "to_schema_refs" => "to_schema_refs must be unique",
-                _ => "field must be unique",
-            });
-        }
-        values.push(text.to_owned());
-    }
-    Ok(values)
 }
 
 pub(crate) fn validate_device_authorize_payload(operation: &Operation) -> Result<(), &'static str> {

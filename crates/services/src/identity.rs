@@ -116,7 +116,6 @@ impl arkret_wire::PayloadSigner for FrozenEd25519NotarySigner {
             payload_digest,
             created_at: Utc::now(),
             jws,
-            extra: BTreeMap::new(),
         })
     }
 }

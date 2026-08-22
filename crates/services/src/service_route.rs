@@ -267,34 +267,6 @@ impl ServiceRouteResolver {
         self.accept(service_id, service_kind, candidate, now).await
     }
 
-    pub async fn resolve_carrier_route(
-        &self,
-        carrier: &ServiceResolutionCarrier,
-        service_id: &DidCoreId,
-        service_kind: &str,
-        now: DateTime<Utc>,
-    ) -> ServiceResult<ResolvedServiceRoute> {
-        let entry = self
-            .resolve_carrier(carrier, service_id, service_kind, now)
-            .await?;
-        let route = self
-            .resolved_routes
-            .lock()
-            .get(&(service_id.to_string(), service_kind.to_owned()))
-            .cloned()
-            .ok_or_else(|| {
-                ServiceError::Internal(
-                    "verified carrier accepted without ServiceDescribe metadata".to_owned(),
-                )
-            })?;
-        if route.cache_entry.record_digest != entry.record_digest || !route.is_routable_at(now) {
-            return Err(ServiceError::Conflict(
-                "carrier ServiceDescribe metadata does not match the accepted route".to_owned(),
-            ));
-        }
-        Ok(route)
-    }
-
     async fn accept(
         &self,
         service_id: &DidCoreId,

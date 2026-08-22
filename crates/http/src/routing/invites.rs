@@ -951,10 +951,6 @@ fn merge_invite_delivery_cell(
     received_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<InviteDelivery, AppError> {
     let mut cell = existing.unwrap_or_else(|| InviteDelivery::new(received_at, Vec::new()));
-    // Cells written before the `ak.schema.invite_delivery.v1` discriminator
-    // landed carry the account-data key in `schema`; re-pin the canonical
-    // const on write so the register self-heals instead of failing CAS.
-    cell.schema = InviteDelivery::SCHEMA.to_owned();
     cell.entries.retain(|candidate| {
         invite_delivery_entry_active(candidate, received_at)
             && candidate.invite_id != new_entry.invite_id
@@ -2375,12 +2371,8 @@ mod invite_locator_security_tests {
         };
 
         // A redelivery of the same invite replaces the previous entry instead
-        // of taking a second slot, an expired prior entry is purged, and a
-        // legacy cell carrying the account-data key in `schema` is re-pinned
-        // to the canonical discriminator.
-        let mut prior =
-            InviteDelivery::new(at, vec![entry("stale-token", "2026-07-05T10:00:00.000Z")]);
-        prior.schema = AccountDataKey::ACCOUNT_INVITE_DELIVERY.to_owned();
+        // of taking a second slot, and an expired prior entry is purged.
+        let prior = InviteDelivery::new(at, vec![entry("stale-token", "2026-07-05T10:00:00.000Z")]);
         let merged = merge_invite_delivery_cell(
             Some(prior),
             entry("fresh-token", "2026-08-05T10:00:00.000Z"),

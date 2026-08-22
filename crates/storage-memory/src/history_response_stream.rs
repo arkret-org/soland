@@ -440,20 +440,6 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
         }
     }
 
-    async fn get_request_by_id(
-        &self,
-        request_id: &str,
-    ) -> PersistenceResult<Option<HistoryRequestRecord>> {
-        let record = {
-            let data = self.data.lock();
-            data.requests.get(request_id).cloned()
-        };
-        match record {
-            Some(record) => self.hydrate_local_traversal(record).await.map(Some),
-            None => Ok(None),
-        }
-    }
-
     async fn get_request_by_capability_commitment(
         &self,
         response_capability_commitment: &Hash,

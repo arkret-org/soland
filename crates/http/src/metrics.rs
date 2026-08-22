@@ -78,10 +78,8 @@ pub const DID_RESOLVE_SOURCE_NETWORK: &str = "network";
 pub const SIGNATURE_SCHEME_ED25519_JWS: &str = "ed25519_detached_jws";
 pub const SIGNATURE_SCHEME_PINNED_DOCUMENT: &str = "ed25519_pinned_document";
 pub const SIGNATURE_SCHEME_ACCEPTED_BINDING: &str = "ed25519_accepted_binding";
-pub const SIGNATURE_SCHEME_DEVICE_DIRECTORY: &str = "ed25519_device_directory";
 pub const SIGNATURE_SCHEME_MINIMAL_METADATA: &str = "ed25519_minimal_metadata";
 pub const SIGNATURE_SCHEME_AGENT_SESSION: &str = "ed25519_agent_session";
-pub const SIGNATURE_SCHEME_FEDERATED_AGENT_EVIDENCE: &str = "ed25519_federated_agent_evidence";
 pub const SIGNATURE_SCHEME_FEDERATED_SIGNER_EVIDENCE: &str = "ed25519_federated_signer_evidence";
 pub const SIGNATURE_SCHEME_DEVELOPMENT: &str = "ed25519_development";
 

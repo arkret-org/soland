@@ -398,7 +398,6 @@ fn operation_extra_validator_for_kind(kind: &arkret_wire::EventKind) -> Option<O
         }
         arkret_wire::EventKind::MorphCreate => Some(validate_morph_create_payload),
         arkret_wire::EventKind::MorphUpdate => Some(validate_morph_update_payload),
-        arkret_wire::EventKind::MorphSchemaMigrate => Some(validate_morph_schema_migrate_payload),
         arkret_wire::EventKind::DeviceAuthorize => Some(validate_device_authorize_payload),
         _ => None,
     }

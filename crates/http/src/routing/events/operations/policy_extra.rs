@@ -654,27 +654,3 @@ fn policy_declares_audience_quota(policy: &Value, audience_policy: Option<&Value
                     .is_some_and(|value| !value.trim().is_empty())
         })
 }
-
-pub(crate) fn validate_morph_schema_migrate_capability(
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    if operation
-        .payload
-        .get("authorization_ref")
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| value.starts_with("ak:grant:"))
-        .is_none()
-    {
-        return Err("ak.morph.schema_migrate requires authorization_ref");
-    }
-    let action = operation
-        .payload
-        .get("capability_action")
-        .or_else(|| operation.payload.get("action"))
-        .and_then(serde_json::Value::as_str);
-    // `capability-action-registry.json` is canonical: there is no dotted alias.
-    if action != Some(arkret_wire::CapabilityActionId::MORPH_SCHEMA_MIGRATE) {
-        return Err("ak.morph.schema_migrate requires ak.morph.schema_migrate capability");
-    }
-    Ok(())
-}

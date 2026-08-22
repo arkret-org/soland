@@ -192,20 +192,6 @@ impl PersistenceHandle {
             .await?)
     }
 
-    /// Attach the projection's generic Control Event store to the durable
-    /// device-revocation adapter. The memory adapter derives seal-settled
-    /// (`revoked`) targets and their cleanup obligations from this exact
-    /// store; durable adapters read the shared `state_control_events` table
-    /// in a JOIN and ignore the hook.
-    pub fn bind_device_revocation_control_events(
-        &self,
-        control_events: Arc<dyn arkret_state::state::ControlEventStore>,
-    ) {
-        self.persistence
-            .device_revocations()
-            .bind_control_event_store(control_events);
-    }
-
     pub async fn device_revocation_gate_status(
         &self,
         selector: &soland_storage::DeviceRevocationGateSelector,

@@ -962,12 +962,6 @@ pub trait PendingRrkAcquisitionStore: Send + Sync {
         acquisition_digest: &Hash,
     ) -> PersistenceResult<Option<PendingRrkAcquisitionRecord>>;
 
-    async fn list_accepted(
-        &self,
-        after_archive_sequence: Option<u64>,
-        limit: usize,
-    ) -> PersistenceResult<Vec<PendingRrkAcquisitionRecord>>;
-
     async fn list_accepted_for_authority(
         &self,
         effective_scope: &HistoryEffectiveScope,

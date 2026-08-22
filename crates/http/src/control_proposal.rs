@@ -79,7 +79,6 @@ pub(crate) fn mint_control_proposal_ack(
         absolute_due_at: received_at + policy.absolute_horizon,
         authority_set_ref: authority_set_ref.clone(),
         signature: PayloadSignature {
-            extra: Default::default(),
             verification_method: state.service_verification_method("notary-key")?,
             payload_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
                 .map_err(|error| error.to_string())?,
@@ -588,7 +587,6 @@ pub(crate) fn sign_control_proposal_reject(
         reason_code,
         authority_set_ref: ack.authority_set_ref.clone(),
         proofs: vec![PayloadSignature {
-            extra: Default::default(),
             verification_method: state.service_verification_method("notary-key")?,
             payload_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
                 .map_err(|error| error.to_string())?,
@@ -644,7 +642,6 @@ pub(crate) fn sign_control_proposal_defer(
         reason_code,
         authority_set_ref: ack.authority_set_ref.clone(),
         proofs: vec![PayloadSignature {
-            extra: Default::default(),
             verification_method: state.service_verification_method("notary-key")?,
             payload_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
                 .map_err(|error| error.to_string())?,

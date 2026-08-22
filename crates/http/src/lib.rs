@@ -24,7 +24,6 @@ pub mod multisig_watchdog;
 pub mod notary;
 pub mod openapi;
 pub mod openapi_routes;
-pub mod push_rule_core;
 pub mod ratelimit;
 pub mod result;
 pub mod routing;

@@ -1357,7 +1357,6 @@ mod tests {
                     .unwrap(),
                 created_at,
                 jws: "e30..c2ln".to_owned(),
-                extra: Default::default(),
             },
         };
         authority_ack.signature.payload_digest = authority_ack.authority_ack_digest().unwrap();

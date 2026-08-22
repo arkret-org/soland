@@ -185,22 +185,6 @@ impl GovernanceHistoryService {
             .collect())
     }
 
-    pub async fn resolve_self_retained_events(
-        &self,
-        realm_id: &RealmId,
-        access: SelfHistoryTraversalAccess,
-        caller: &DidCoreId,
-        now: DateTime<Utc>,
-    ) -> ServiceResult<Vec<Event>> {
-        self.retained_events(
-            realm_id,
-            HistoryTraversalAccess::SelfAccess(access),
-            Some(TraversalCaller::SelfPrincipal(caller)),
-            now,
-        )
-        .await
-    }
-
     pub async fn resolve_self_retained_events_for_access(
         &self,
         access: SelfHistoryTraversalAccess,
@@ -455,18 +439,6 @@ impl GovernanceHistoryService {
             .await?)
     }
 
-    pub async fn list_accepted_rrk(
-        &self,
-        after_archive_sequence: Option<u64>,
-        limit: usize,
-    ) -> ServiceResult<Vec<PendingRrkAcquisitionRecord>> {
-        Ok(self
-            .persistence
-            .pending_rrk_acquisitions()
-            .list_accepted(after_archive_sequence, limit)
-            .await?)
-    }
-
     pub async fn list_accepted_rrk_for_authority(
         &self,
         effective_scope: &HistoryEffectiveScope,
@@ -592,17 +564,6 @@ impl GovernanceHistoryService {
             .persistence
             .history_response_streams()
             .put_request_exact(write)
-            .await?)
-    }
-
-    pub async fn history_request_by_id(
-        &self,
-        request_id: &str,
-    ) -> ServiceResult<Option<HistoryRequestRecord>> {
-        Ok(self
-            .persistence
-            .history_response_streams()
-            .get_request_by_id(request_id)
             .await?)
     }
 

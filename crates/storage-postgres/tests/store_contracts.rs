@@ -870,7 +870,6 @@ mod control_move_ingress_negatives {
                 payload_digest: authority_set_ref.clone(),
                 created_at: now,
                 jws: "fixture-jws".to_owned(),
-                extra: Default::default(),
             },
         };
         authority_ack.signature.payload_digest = authority_ack.authority_ack_digest().unwrap();

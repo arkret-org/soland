@@ -94,9 +94,6 @@ use crate::artifacts;
 //   scope. Required to verify `Actor Profile.accountable_principal_ids[]`;
 //   reducer rejects the complete profile Event with
 //   `accountability_grant_missing`; field stripping is not a v1 behavior.
-// `ak.morph.schema_migrate` (morph / reducer_input): one-shot Morph
-//   `schema_refs[]` evolution event with explicit compatibility class.
-//   zh/models/morph.md §4.1 S3.
 // `ak.attestation.range_completeness` (audit / non-reducer): range-bound
 //   completeness attestation; backs cross-issuer fork detection.
 //   zh/sync/operations-sync.md §4.2.

@@ -442,14 +442,6 @@ fn apply_morph_restore_dispatch(
 ) -> ProjectionEffect {
     s.apply_morph_lifecycle(op, op.created_at, ObjectLifecycleTransition::Restore)
 }
-fn apply_morph_schema_migrate_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_morph_schema_migrate(op, op.created_at)
-}
-
 // AKP-0007 — Circle dispatch wrappers.
 fn apply_circle_create_dispatch(
     s: &mut ProjectionState,
@@ -1141,10 +1133,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::MorphRestore,
         apply_morph_restore_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::MorphSchemaMigrate,
-        apply_morph_schema_migrate_dispatch,
     );
     // AKP-0007 — Circle lifecycle / membership dispatch. The seventh
     // active kind, `ak.circle.seal_commit`, is reducer-derived (sub-

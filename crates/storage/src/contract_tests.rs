@@ -1216,7 +1216,6 @@ fn contract_control_proposal_ack(
                 .expect("placeholder digest"),
             created_at: now,
             jws: "e30..c2ln".to_owned(),
-            extra: std::collections::BTreeMap::new(),
         },
     };
     authority_ack.signature.payload_digest = authority_ack

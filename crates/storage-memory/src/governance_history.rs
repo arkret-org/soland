@@ -679,39 +679,6 @@ impl PendingRrkAcquisitionStore for MemoryPendingRrkAcquisitionStore {
         Ok(self.data.lock().get(acquisition_digest.as_str()).cloned())
     }
 
-    async fn list_accepted(
-        &self,
-        after_archive_sequence: Option<u64>,
-        limit: usize,
-    ) -> PersistenceResult<Vec<PendingRrkAcquisitionRecord>> {
-        if !(1..=4_096).contains(&limit) {
-            return Err(PersistenceError::SchemaViolation(
-                "invalid accepted RRK list limit".to_owned(),
-            ));
-        }
-        let mut records = self
-            .data
-            .lock()
-            .values()
-            .filter(|record| record.state == PendingRrkAcquisitionState::Accepted)
-            .filter(|record| {
-                record.accepted_outcome.as_ref().is_some_and(|outcome| {
-                    after_archive_sequence.map_or(true, |after| outcome.archive_sequence > after)
-                })
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        records.sort_by_key(|record| {
-            record
-                .accepted_outcome
-                .as_ref()
-                .map(|outcome| outcome.archive_sequence)
-                .unwrap_or_default()
-        });
-        records.truncate(limit);
-        Ok(records)
-    }
-
     async fn list_accepted_for_authority(
         &self,
         effective_scope: &arkret_wire::HistoryEffectiveScope,

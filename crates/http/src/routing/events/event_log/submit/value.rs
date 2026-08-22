@@ -2242,17 +2242,6 @@ pub(super) async fn submit_event_value_with_context(
                     reason,
                 ));
             }
-            // morph.md §4.1 S1/S3 — schema-migration profile gate, dialect
-            // check, S1 version binding, and from_schema_refs[] CAS. Capability
-            // (`capability_denied`) is enforced earlier in the operation policy
-            // layer where the authz engine is available.
-            if let Err(reason) = proj.check_morph_schema_migrate(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
-            }
             if let Err(reason) = proj.check_redaction_target_transition(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -2435,44 +2424,6 @@ pub(super) async fn submit_event_value_with_context(
         == arkret_wire::event_kind_str::DEVICE_REVOKE)
         .then(|| validate_device_revoke_submission(session, &parsed, &envelope))
         .transpose()?;
-
-    // morph.md §4.1 S3 — a breaking / transformation schema migration that
-    // reached this point passed the profile gate + capability check + CAS, and
-    // MUST emit a `schema_migration_breaking` audit record carrying issuer,
-    // from/to schema sets, compatibility class, the capability action used, and
-    // the opt-in profile ref. (additive migrations need no audit-grade record.)
-    if parsed.kind == arkret_wire::EventKind::MorphSchemaMigrate.as_str() {
-        let migrate_payload = envelope.get("payload");
-        let compatibility_class = migrate_payload
-            .and_then(|payload| payload.get("compatibility_class"))
-            .and_then(|value| value.as_str());
-        if matches!(compatibility_class, Some("breaking" | "transformation")) {
-            let payload_field =
-                |field: &str| migrate_payload.and_then(|payload| payload.get(field));
-            let capability_used = payload_field("capability_action")
-                .or_else(|| payload_field("action"))
-                .and_then(|value| value.as_str())
-                .unwrap_or(arkret_wire::event_kind_str::MORPH_SCHEMA_MIGRATE);
-            append_audit_log(
-                state,
-                Some(parsed.actor_id.as_str()),
-                "schema_migration_breaking",
-                json!({
-                    "realm_id": parsed.realm_id.clone(),
-                    "morph_id": payload_field("morph_id"),
-                    "issuer": parsed.actor_id.clone(),
-                    "from_schema_refs": payload_field("from_schema_refs"),
-                    "to_schema_refs": payload_field("to_schema_refs"),
-                    "compatibility_class": compatibility_class,
-                    "capability_used": capability_used,
-                    "profile_ref": arkret_wire::ProfileId::MORPH_SCHEMA_MIGRATION_TRANSFORMATIONS_V1,
-                    "event_id": parsed.event_id.clone(),
-                }),
-                "accepted",
-            )
-            .await;
-        }
-    }
 
     if let Some(operation) = projection_operation.as_mut() {
         stamp_projection_operation_received_at(operation, received_at);

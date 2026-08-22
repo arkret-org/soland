@@ -13,8 +13,7 @@
 //! type, the Strand / Message / Call / receipt target and the sender sequence
 //! all live inside the ciphertext and are never reconstructible here.
 //!
-//! There is no plaintext branch (§3). A legacy plaintext ephemeral envelope is
-//! rejected with `signal_plaintext_forbidden` rather than being interpreted.
+//! There is no plaintext branch (§3).
 
 use std::collections::BTreeSet;
 
@@ -22,7 +21,6 @@ use arkret_models_collaboration::http_bodies::SignalSubmitOutcome;
 use arkret_wire::{SignalClass, SignalEnvelope, SignalRelayRequest, SignalStreamFrame};
 use futures_util::stream::StreamExt;
 use salvo::prelude::*;
-use serde_json::Value;
 use soland_http::error::{AppError, ErrorCode};
 use soland_services::identity::SessionIdentityState;
 
@@ -44,11 +42,7 @@ const SIGNAL_SUBSCRIBE_POLL_MS: u64 = 250;
 
 /// `ak.self.signal.command.send`.
 ///
-/// The body is an `ak.schema.signal_envelope.v1` [`SignalEnvelope`]. It is
-/// parsed twice on purpose: once as raw JSON so a legacy plaintext ephemeral
-/// envelope can be rejected with the §3 `signal_plaintext_forbidden` reason
-/// instead of an anonymous parse failure, then into the strong SDK type that
-/// owns every structural rule.
+/// The body is an `ak.schema.signal_envelope.v1` [`SignalEnvelope`].
 #[endpoint(operation_id = "ak.self.signal.command.send")]
 #[tracing::instrument(skip_all, fields(op = "ak.self.signal.command.send"))]
 pub(super) async fn submit_signal(
@@ -63,10 +57,11 @@ pub(super) async fn submit_signal(
         arkret_wire::ServiceOperationId::SELF_SIGNAL_COMMAND_SEND,
     )?;
 
-    let raw: Value = req.parse_json().await.map_err(|error| {
-        AppError::json_invalid(format!("signal envelope is not valid JSON: {error}"))
+    let envelope: SignalEnvelope = req.parse_json().await.map_err(|error| {
+        AppError::json_invalid(format!(
+            "signal envelope does not match ak.schema.signal_envelope.v1: {error}"
+        ))
     })?;
-    let envelope = parse_signal_envelope(raw)?;
 
     admit_signal(state, &session, &envelope).await?;
 
@@ -183,28 +178,6 @@ fn remote_recipient_services(state: &AppState, envelope: &SignalEnvelope) -> BTr
         })
         .filter_map(|membership| membership.recipient_service_id.clone())
         .collect()
-}
-
-/// Reject a legacy plaintext ephemeral input before it can be mistaken for a
-/// malformed Signal (§3 has no plaintext branch).
-fn parse_signal_envelope(raw: Value) -> Result<SignalEnvelope, AppError> {
-    let Some(object) = raw.as_object() else {
-        return Err(AppError::json_invalid(
-            "signal envelope must be a JSON object",
-        ));
-    };
-    if !object.contains_key("encrypted_payload") {
-        return Err(AppError::new(
-            ErrorCode::ParamInvalid,
-            "signal envelopes are encrypted-only; there is no plaintext branch",
-        )
-        .with_reason_code(arkret_wire::ReasonCode::SIGNAL_PLAINTEXT_FORBIDDEN));
-    }
-    serde_json::from_value::<SignalEnvelope>(raw).map_err(|error| {
-        AppError::json_invalid(format!(
-            "signal envelope does not match ak.schema.signal_envelope.v1: {error}"
-        ))
-    })
 }
 
 /// The §3 admission set, in order: scope/realm coherence and every structural
@@ -804,21 +777,6 @@ mod tests {
     use salvo::http::StatusCode;
 
     use super::*;
-
-    #[test]
-    fn plaintext_ephemeral_input_is_rejected_with_the_registered_reason() {
-        let error = parse_signal_envelope(serde_json::json!({
-            "realm_id": "ak:realm:AYcmQBZ6x7FCwln_vbdWIyV2tJ4pOJ4rmbd6v_0Y7N9_",
-            "kind": "ak.typing",
-            "actor_id": "did:webvh:z6mkfixture:alice.example",
-            "content": {"typing": true}
-        }))
-        .expect_err("a plaintext ephemeral envelope must not be admitted");
-        assert_eq!(
-            error.reason_code.as_deref(),
-            Some(arkret_wire::ReasonCode::SIGNAL_PLAINTEXT_FORBIDDEN)
-        );
-    }
 
     #[test]
     fn only_active_registry_ciphersuites_are_accepted() {

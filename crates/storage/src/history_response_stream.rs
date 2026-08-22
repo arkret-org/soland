@@ -613,11 +613,6 @@ pub trait HistoryResponseStreamStore: Send + Sync {
         request_receipt_digest: &Hash,
     ) -> PersistenceResult<Option<HistoryRequestRecord>>;
 
-    async fn get_request_by_id(
-        &self,
-        request_id: &str,
-    ) -> PersistenceResult<Option<HistoryRequestRecord>>;
-
     async fn get_request_by_capability_commitment(
         &self,
         response_capability_commitment: &Hash,

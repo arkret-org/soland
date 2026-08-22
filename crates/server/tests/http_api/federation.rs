@@ -1094,7 +1094,6 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
             absolute_due_at: issued_at + policy.absolute_horizon,
             authority_set_ref: authority_set_digest.clone(),
             signature: arkret_wire::PayloadSignature {
-                extra: Default::default(),
                 verification_method: arkret_wire::DidUrl::new(format!(
                     "{PEER_SOURCE_DID}#notary-key"
                 ))

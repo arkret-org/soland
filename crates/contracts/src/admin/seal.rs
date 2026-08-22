@@ -46,29 +46,6 @@ impl AdminNotaryValue {
     pub fn kind_label(&self) -> String {
         self.kind().label().to_owned()
     }
-
-    pub fn summary(&self) -> String {
-        match &self.notary {
-            arkret_wire::NotaryValue::SingleSigner { signer, .. } => {
-                format!("single_signer({})", signer.actor_id)
-            }
-            arkret_wire::NotaryValue::Threshold {
-                threshold, members, ..
-            } => format!("threshold({threshold}/{})", members.len()),
-            arkret_wire::NotaryValue::OpenSet { members } => {
-                format!("open_set(n={})", members.len())
-            }
-            arkret_wire::NotaryValue::Mixed {
-                signer,
-                recovery_members,
-                ..
-            } => format!(
-                "mixed(primary={}, recovery_n={})",
-                signer.actor_id,
-                recovery_members.len()
-            ),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

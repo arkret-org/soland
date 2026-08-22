@@ -370,17 +370,6 @@ fn walk_inheritance(
     }
 }
 
-/// Convenience accessor: list every outbound link projection for
-/// `realm_id` regardless of direction filter (the HTTP route filters
-/// per query). Returns an empty slice for unknown realms.
-pub fn outbound_links<'a>(state: &'a ProjectionState, realm_id: &str) -> &'a [RealmLinkState] {
-    state
-        .realm_links
-        .get(realm_id)
-        .map(|v| v.as_slice())
-        .unwrap_or(&[])
-}
-
 /// Preflight admission check for a proposed `ak.realm.link` write.
 /// Mirrors the validation `ProjectionState::apply_realm_link` runs
 /// post-projection, but as a pure read against `state` so HTTP
@@ -529,7 +518,7 @@ mod tests {
             cycle,
             crate::reducer::ProjectionEffect::RealmLinkProjected { .. }
         ));
-        let rows = outbound_links(&state, REALM_C);
+        let rows = state.realm_links.get(REALM_C).expect("realm C link rows");
         assert!(
             rows.iter().any(|r| r.target_realm_id == REALM_A),
             "accepted cycle edge missing from the projection cache: {rows:?}"

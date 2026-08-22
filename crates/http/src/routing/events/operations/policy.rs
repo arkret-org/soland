@@ -251,12 +251,6 @@ async fn validate_one_operation_policy(
                 "private plaintext message operations require this service in plaintext_visible_services",
             );
         }
-        if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_wire::EventKind::MorphSchemaMigrate)
-        {
-            validate_morph_schema_migrate_capability(operation)?;
-            validate_morph_schema_migrate_authz(state, operation).await?;
-        }
         validate_principal_control_realm_binding(state, operation)?;
         message_rules::validate_managed_agent_control_realm_binding(state, operation).await?;
         validate_accountability_profile_policy(state, operations, operation).await?;

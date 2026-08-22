@@ -470,15 +470,7 @@ fn normalized_registration_policy_label(value: &str) -> String {
 }
 
 fn did_host_candidate(did: &str) -> Option<String> {
-    did_web_host_candidate(did).or_else(|| did_webvh_host_candidate(did))
-}
-
-fn did_web_host_candidate(did: &str) -> Option<String> {
-    let host = did.strip_prefix("did:web:")?;
-    let host = host.split(':').next().unwrap_or(host);
-    Some(normalized_registration_policy_label(
-        &host.replace(':', "."),
-    ))
+    did_webvh_host_candidate(did)
 }
 
 fn did_webvh_host_candidate(did: &str) -> Option<String> {
@@ -2563,14 +2555,6 @@ mod tests {
                 "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:alice"
             )
             .as_deref(),
-            Some("local.host")
-        );
-    }
-
-    #[test]
-    fn did_host_candidate_keeps_legacy_web_service_id_host() {
-        assert_eq!(
-            did_host_candidate("did:web:local.host").as_deref(),
             Some("local.host")
         );
     }

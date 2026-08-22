@@ -31,51 +31,6 @@ pub(super) fn validate_realm_lifecycle_write_gate(
     Ok(())
 }
 
-/// `morph.md` §4.1 S3 — the actor MUST hold the high-tier
-/// `ak.morph.schema_migrate` capability at the event frontier. The effective
-/// Realm-owner aggregate is also a registered source for this Event kind.
-/// The opt-in profile gate and CAS are enforced by the state-aware preflight;
-/// this check is the capability conjunct only.
-pub(super) async fn validate_morph_schema_migrate_authz(
-    state: &AppState,
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    let Some(actor) = policy_operation_sender(operation) else {
-        return Err("capability_denied");
-    };
-    let realm_id = operation.realm_id.as_str();
-    if state
-        .projections()
-        .snapshot()
-        .actor_holds_effective_realm_owner(
-            realm_id,
-            actor,
-            operation.context.principal_server_id.as_str(),
-            operation.created_at,
-        )
-    {
-        return Ok(());
-    }
-    let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    if state
-        .authorization()
-        .check(soland_services::authorization::AuthorizationCheck {
-            actor,
-            actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
-            action: arkret_wire::EventKind::MorphSchemaMigrate.as_str(),
-            resource: realm_id,
-            realm_id,
-            owner: owner.as_deref(),
-            members: &members,
-            resource_facets: &[],
-        })
-        .allowed
-    {
-        return Ok(());
-    }
-    Err("capability_denied")
-}
-
 pub(super) async fn validate_circle_create_policy(
     state: &AppState,
     operation: &Operation,
