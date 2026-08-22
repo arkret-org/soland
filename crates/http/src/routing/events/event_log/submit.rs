@@ -320,7 +320,7 @@ pub(in crate::routing) struct EventCommitIdempotency {
 /// variant and this verified variant into the durable quarantine bucket.
 pub(super) async fn quarantine_verified_event_collision(
     state: &AppState,
-    record: CanonicalEventRecord,
+    record: AcceptedEvent,
 ) -> SubmitOneError {
     let event_id = record.event_id.clone();
     match state.event_queries().store_canonical_event(record).await {

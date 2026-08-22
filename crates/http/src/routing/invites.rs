@@ -40,7 +40,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_http::util::sha256_hex;
 use soland_services::events::{
-    CanonicalEventRecord, InviteLocatorInsertResult as InviteLocatorInsertOutcome,
+    AcceptedEvent, InviteLocatorInsertResult as InviteLocatorInsertOutcome,
     InviteLocatorRotateCommand as InviteLocatorRotateMutation,
     InviteLocatorState as InviteLocatorRecord, RealmInviteState as RealmInviteRecord,
 };
@@ -315,7 +315,7 @@ enum InvitePrivateProjection<'a> {
     /// exactly what the three `invite_event` preconditions proved — so its
     /// registered reducer contract already owns the holder-visible invite row
     /// and the notify branch owes no second write of it.
-    AlreadyAcceptedLocally { record: &'a CanonicalEventRecord },
+    AlreadyAcceptedLocally { record: &'a AcceptedEvent },
 }
 
 /// Spec invite-addressing.md §7 steps 4-9 — the receive half of a private
@@ -549,7 +549,7 @@ async fn require_dispatchable_invite_event(
     session: &SessionRecord,
     delivery: &InviteDeliveryRequestBody,
     body: &Value,
-) -> Result<CanonicalEventRecord, AppError> {
+) -> Result<AcceptedEvent, AppError> {
     let Some(accepted) = state
         .event_queries()
         .canonical_event(delivery.invite_event.event_id.as_str())
@@ -605,7 +605,7 @@ async fn enqueue_remote_invite_delivery(
     state: &AppState,
     delivery: &InviteDeliveryRequestBody,
     body: &Value,
-    accepted: &CanonicalEventRecord,
+    accepted: &AcceptedEvent,
 ) -> Result<InviteDeliveryOutcome, AppError> {
     validate_invite_delivery_event_binding(body, delivery)?;
     let recipient_service_id = &delivery.invite_address.recipient_service_id;

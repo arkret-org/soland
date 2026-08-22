@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::{
-    CanonicalEventRecord, PeerEventsPageQuery, RealmMetadata as RealmMetaRecord,
+    AcceptedEvent, PeerEventsPageQuery, RealmMetadata as RealmMetaRecord,
 };
 
 use super::{is_realm_deleted, is_valid_hash_digest, now, query_param, render_error, validate_did};
@@ -1215,7 +1215,7 @@ impl PeerReadAuthz {
     async fn build(
         state: &AppState,
         source_service_id: &str,
-        records: &[CanonicalEventRecord],
+        records: &[AcceptedEvent],
     ) -> Result<Self, AppError> {
         let realm_meta = state
             .realms()
@@ -1260,13 +1260,13 @@ impl PeerReadAuthz {
         Ok(authz)
     }
 
-    fn apply_record(&mut self, record: &CanonicalEventRecord) {
+    fn apply_record(&mut self, record: &AcceptedEvent) {
         self.apply_invite_record(record);
         self.apply_member_record(record);
         self.apply_circle_member_record(record);
     }
 
-    fn apply_invite_record(&mut self, record: &CanonicalEventRecord) {
+    fn apply_invite_record(&mut self, record: &AcceptedEvent) {
         let Some(realm_id) = super::event_log::canonical_realm_id_for_record(record) else {
             return;
         };
@@ -1326,7 +1326,7 @@ impl PeerReadAuthz {
         }
     }
 
-    fn record_visible(&self, record: &CanonicalEventRecord) -> bool {
+    fn record_visible(&self, record: &AcceptedEvent) -> bool {
         let Some(realm_id) = super::event_log::canonical_realm_id_for_record(record) else {
             return false;
         };
@@ -1439,7 +1439,7 @@ impl PeerReadAuthz {
             .is_some_and(|members| !members.is_empty())
     }
 
-    fn apply_member_record(&mut self, record: &CanonicalEventRecord) {
+    fn apply_member_record(&mut self, record: &AcceptedEvent) {
         if record.kind != arkret_wire::EventKind::MemberState.as_str() {
             return;
         }
@@ -1524,7 +1524,7 @@ impl PeerReadAuthz {
         }
     }
 
-    fn apply_circle_member_record(&mut self, record: &CanonicalEventRecord) {
+    fn apply_circle_member_record(&mut self, record: &AcceptedEvent) {
         if record.kind != arkret_wire::EventKind::CircleMemberState.as_str() {
             return;
         }
@@ -1601,7 +1601,7 @@ fn history_access_allows(
 }
 
 fn record_requires_private_plaintext_visibility(
-    record: &CanonicalEventRecord,
+    record: &AcceptedEvent,
     meta: &RealmMetaRecord,
 ) -> bool {
     let _ = meta;
@@ -1611,7 +1611,7 @@ fn record_requires_private_plaintext_visibility(
     !(payload.get("encrypted_content").is_some() || payload.get("encrypted_payload").is_some())
 }
 
-fn record_scope_circle_id(record: &CanonicalEventRecord) -> Option<String> {
+fn record_scope_circle_id(record: &AcceptedEvent) -> Option<String> {
     let object = record.envelope.as_object()?;
     let scope = object.get("scope_ref")?.as_object()?;
     if scope.get("kind").and_then(Value::as_str) != Some("circle") {
@@ -1624,11 +1624,11 @@ fn record_scope_circle_id(record: &CanonicalEventRecord) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn record_payload(record: &CanonicalEventRecord) -> Option<&serde_json::Map<String, Value>> {
+fn record_payload(record: &AcceptedEvent) -> Option<&serde_json::Map<String, Value>> {
     record.envelope.get("payload").and_then(Value::as_object)
 }
 
-fn record_event_time(record: &CanonicalEventRecord) -> DateTime<Utc> {
+fn record_event_time(record: &AcceptedEvent) -> DateTime<Utc> {
     record
         .envelope
         .get("created_at")
@@ -1838,7 +1838,7 @@ fn peer_events_query_cursor_error(error: super::sync::SyncCursorError) -> AppErr
 }
 
 fn peer_record_matches(
-    record: &CanonicalEventRecord,
+    record: &AcceptedEvent,
     realms: &BTreeSet<&str>,
     actors: &BTreeSet<&str>,
     kind_filter: Option<&str>,

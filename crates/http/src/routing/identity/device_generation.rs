@@ -6,7 +6,7 @@ use arkret_identifiers::{Hash, RealmId, SealId};
 pub use arkret_models_crypto::keys::DeviceGenerationStatus;
 use serde_json::Value;
 use soland_services::ServiceError;
-use soland_services::events::CanonicalEventRecord;
+use soland_services::events::AcceptedEvent;
 
 use crate::state::AppState;
 
@@ -192,13 +192,13 @@ pub(crate) fn verified_device_authorization_binding(
 async fn generation_view_from_records(
     _state: &AppState,
     principal_id: &str,
-    records: &[CanonicalEventRecord],
+    records: &[AcceptedEvent],
 ) -> Result<Option<DeviceGenerationView>, ServiceError> {
     let Some(mut last_unconflicted) = bootstrap_generation_ref(principal_id, records) else {
         return Ok(None);
     };
     let mut status = DeviceGenerationStatus::Active;
-    let mut slots = BTreeMap::<u64, Vec<&CanonicalEventRecord>>::new();
+    let mut slots = BTreeMap::<u64, Vec<&AcceptedEvent>>::new();
     for record in records.iter().filter(|record| {
         record.actor_id == principal_id
             && record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
@@ -243,7 +243,7 @@ async fn generation_view_from_records(
     }))
 }
 
-fn bootstrap_generation_ref(principal_id: &str, records: &[CanonicalEventRecord]) -> Option<u64> {
+fn bootstrap_generation_ref(principal_id: &str, records: &[AcceptedEvent]) -> Option<u64> {
     let bootstrap = records.iter().find(|record| {
         record.actor_id == principal_id
             && record.kind == arkret_wire::EventKind::RealmCreate.as_str()
@@ -283,8 +283,8 @@ fn bootstrap_generation_ref(principal_id: &str, records: &[CanonicalEventRecord]
 }
 
 fn reanchor_unit_fingerprint(
-    reanchor: &CanonicalEventRecord,
-    records: &[CanonicalEventRecord],
+    reanchor: &AcceptedEvent,
+    records: &[AcceptedEvent],
 ) -> Option<String> {
     let authorize = soland_services::events::paired_replacement_authorize(reanchor, records)?;
     Some(format!(
@@ -300,7 +300,7 @@ fn reanchor_unit_fingerprint(
 
 pub async fn authorized_generation_for_event(
     state: &AppState,
-    record: &CanonicalEventRecord,
+    record: &AcceptedEvent,
 ) -> Result<Option<u64>, ServiceError> {
     let records = state
         .event_queries()
@@ -352,10 +352,8 @@ pub async fn quarantined_generation_event_digests(
     ))
 }
 
-fn persistence_event_record(
-    record: soland_services::events::AcceptedEvent,
-) -> CanonicalEventRecord {
-    CanonicalEventRecord {
+fn persistence_event_record(record: soland_services::events::AcceptedEvent) -> AcceptedEvent {
+    AcceptedEvent {
         event_id: record.event_id,
         actor_id: record.actor_id,
         actor_seq: record.actor_seq,
@@ -372,9 +370,9 @@ fn persistence_event_record(
 
 fn quarantined_generation_event_digests_from_records(
     principal_id: &str,
-    records: &[CanonicalEventRecord],
+    records: &[AcceptedEvent],
 ) -> BTreeSet<String> {
-    let mut slots = BTreeMap::<u64, Vec<&CanonicalEventRecord>>::new();
+    let mut slots = BTreeMap::<u64, Vec<&AcceptedEvent>>::new();
     for record in records.iter().filter(|record| {
         record.actor_id == principal_id
             && record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
@@ -646,8 +644,8 @@ mod tests {
         assert_eq!(binding.1, 3);
     }
 
-    fn record(id: &str, kind: &str, digest: &str, envelope: Value) -> CanonicalEventRecord {
-        CanonicalEventRecord {
+    fn record(id: &str, kind: &str, digest: &str, envelope: Value) -> AcceptedEvent {
+        AcceptedEvent {
             event_id: id.to_owned(),
             actor_id: "ak:did_core:webvh:z6mkfixture:alice.example".to_owned(),
             actor_seq: 1,

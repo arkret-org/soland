@@ -236,7 +236,7 @@ fn projection_operation_from_wire(
 /// Operation mapping: the accepted wire envelope is the source of truth and
 /// this delegates to the same mapper used by the live submit path.
 pub(crate) fn projection_operation_from_canonical_record(
-    record: &CanonicalEventRecord,
+    record: &AcceptedEvent,
 ) -> Option<Operation> {
     // The stored envelope is the accepted Event verbatim, so every typed
     // field it carries (`realm_id`, `actor_id`, `prev_refs`, …) is revalidated
@@ -324,7 +324,7 @@ pub(crate) fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
 
 pub(crate) async fn event_view_for_state(
     state: &AppState,
-    record: &CanonicalEventRecord,
+    record: &AcceptedEvent,
 ) -> JsonResult<EventView> {
     let receipts = state
         .event_queries()
@@ -346,7 +346,7 @@ pub(crate) async fn event_view_for_state(
 
 pub(crate) fn sdk_event_for_state(
     state: &AppState,
-    record: &CanonicalEventRecord,
+    record: &AcceptedEvent,
 ) -> Result<Event, AppError> {
     let realm_id = canonical_realm_id_for_record(record);
     let actor_erased = record.kind != arkret_wire::EventKind::AuditErasureReceipt.as_str()
@@ -361,7 +361,7 @@ pub(crate) fn sdk_event_for_state(
 }
 
 fn sdk_event_from_record(
-    record: &CanonicalEventRecord,
+    record: &AcceptedEvent,
     tombstone: Option<soland_services::governance::RetentionTombstoneRecord>,
     actor_erased: bool,
 ) -> Result<Event, AppError> {
@@ -525,7 +525,7 @@ fn sdk_event_from_record(
 
 fn event_visibility_metadata(
     state: &AppState,
-    record: &CanonicalEventRecord,
+    record: &AcceptedEvent,
 ) -> std::collections::BTreeMap<String, Value> {
     let mut metadata = json!({
         "event_id": record.event_id.clone(),
@@ -609,7 +609,7 @@ where
 }
 
 /// The Event's signed security scope.
-fn sdk_scope_ref(record: &CanonicalEventRecord, realm_id: &RealmId) -> arkret_wire::ScopeRef {
+fn sdk_scope_ref(record: &AcceptedEvent, realm_id: &RealmId) -> arkret_wire::ScopeRef {
     record
         .envelope
         .get("scope_ref")
@@ -621,7 +621,7 @@ fn sdk_scope_ref(record: &CanonicalEventRecord, realm_id: &RealmId) -> arkret_wi
 }
 
 fn sdk_event_proofs(
-    record: &CanonicalEventRecord,
+    record: &AcceptedEvent,
     object: &serde_json::Map<String, Value>,
     created_at: DateTime<Utc>,
 ) -> Result<Vec<arkret_wire::EventProof>, AppError> {
@@ -740,7 +740,7 @@ pub(in crate::routing) fn validate_device_revoke_submission(
     Ok(device_id.to_owned())
 }
 
-pub(crate) fn canonical_realm_id_for_record(record: &CanonicalEventRecord) -> Option<String> {
+pub(crate) fn canonical_realm_id_for_record(record: &AcceptedEvent) -> Option<String> {
     record
         .envelope
         .get("realm_id")
@@ -759,7 +759,7 @@ fn session_actor_core_id(session: &SessionRecord) -> Option<arkret_wire::DidCore
 
 pub(crate) async fn event_visible_to_session(
     state: &AppState,
-    record: &CanonicalEventRecord,
+    record: &AcceptedEvent,
     session: &SessionRecord,
 ) -> bool {
     if session_actor_core_id(session)
@@ -785,7 +785,7 @@ pub(crate) async fn event_visible_to_session(
 
 fn circle_event_visible_to_session(
     state: &AppState,
-    record: &CanonicalEventRecord,
+    record: &AcceptedEvent,
     session: &SessionRecord,
 ) -> bool {
     let Some(scope_circle_id) = effective_scope_for_envelope(&record.envelope)
@@ -844,9 +844,9 @@ pub async fn effective_read_receipt_policy_for_realm(
     // boot before the projection has been rehydrated, or when a server is
     // running with persistence disabled.
     let records = state.event_queries().canonical_events().await.ok()?;
-    let mut latest: Option<&CanonicalEventRecord> = None;
+    let mut latest: Option<&AcceptedEvent> = None;
     for record in &records {
-        // CanonicalEventRecord uses `kind` (not event_kind) for the
+        // AcceptedEvent uses `kind` (not event_kind) for the
         // canonical Arkret event kind string.
         if record.kind != arkret_wire::event_kind_str::REALM_READ_RECEIPT_POLICY {
             continue;
@@ -860,7 +860,7 @@ pub async fn effective_read_receipt_policy_for_realm(
         }
     }
     let record = latest?;
-    // The policy state lives on the envelope payload; CanonicalEventRecord
+    // The policy state lives on the envelope payload; AcceptedEvent
     // stores the full envelope, so we drill down to `envelope.payload`.
     let payload = record.envelope.get("payload")?;
     read_receipt_policy_from_value(payload)

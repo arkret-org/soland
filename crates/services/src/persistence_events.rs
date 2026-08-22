@@ -34,7 +34,7 @@ fn application_accepted_event(
 }
 
 fn persistence_canonical_event(
-    record: crate::events::CanonicalEventRecord,
+    record: crate::events::AcceptedEvent,
 ) -> soland_storage::CanonicalEventRecord {
     soland_storage::CanonicalEventRecord {
         event_id: record.event_id,
@@ -213,7 +213,7 @@ fn persistence_event_commit_request(
 impl crate::events::EventReadPort for PersistenceEventReader {
     async fn store_canonical_event(
         &self,
-        record: crate::events::CanonicalEventRecord,
+        record: crate::events::AcceptedEvent,
     ) -> crate::ServiceResult<()> {
         self.0
             .events()
@@ -223,7 +223,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     }
     async fn store_realm_bootstrap_batch(
         &self,
-        records: Vec<crate::events::CanonicalEventRecord>,
+        records: Vec<crate::events::AcceptedEvent>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         deliveries: Vec<crate::federation::FederationDeliveryRecord>,
@@ -244,7 +244,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     }
     async fn store_direct_conversation_founding_batch(
         &self,
-        records: Vec<crate::events::CanonicalEventRecord>,
+        records: Vec<crate::events::AcceptedEvent>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         slot: soland_storage::DirectConversationFoundingSlotRecord,
@@ -279,7 +279,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     }
     async fn store_identity_anchor_batch(
         &self,
-        records: Vec<crate::events::CanonicalEventRecord>,
+        records: Vec<crate::events::AcceptedEvent>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         receipt: Option<arkret_wire::EventBatchReceipt>,
@@ -334,7 +334,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn canonical_event(
         &self,
         event_id: &str,
-    ) -> crate::ServiceResult<Option<crate::events::CanonicalEventRecord>> {
+    ) -> crate::ServiceResult<Option<crate::events::AcceptedEvent>> {
         Ok(self
             .0
             .events()
@@ -345,9 +345,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn has_canonical_event(&self, event_id: &str) -> crate::ServiceResult<bool> {
         Ok(self.0.events().contains(event_id).await?)
     }
-    async fn canonical_events(
-        &self,
-    ) -> crate::ServiceResult<Vec<crate::events::CanonicalEventRecord>> {
+    async fn canonical_events(&self) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
         Ok(self
             .0
             .events()
@@ -360,7 +358,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn canonical_events_for_actor(
         &self,
         actor_id: &str,
-    ) -> crate::ServiceResult<Vec<crate::events::CanonicalEventRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
         Ok(self
             .0
             .events()
@@ -374,7 +372,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         &self,
         realm_id: &str,
         actor_id: &str,
-    ) -> crate::ServiceResult<Vec<crate::events::CanonicalEventRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
         Ok(self
             .0
             .events()
@@ -418,7 +416,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     }
     async fn peer_authz_state_records(
         &self,
-    ) -> crate::ServiceResult<Vec<crate::events::CanonicalEventRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
         Ok(self
             .0
             .events()
@@ -431,7 +429,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn peer_events_query_page(
         &self,
         query: &crate::events::PeerEventsPageQuery,
-    ) -> crate::ServiceResult<Vec<crate::events::CanonicalEventRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
         let query = soland_storage::PeerEventsPageQuery {
             realms: query.realms.clone(),
             actors: query.actors.clone(),
@@ -452,7 +450,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn realm_events_newest_first(
         &self,
         realm_id: &str,
-    ) -> crate::ServiceResult<Vec<crate::events::CanonicalEventRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
         Ok(self
             .0
             .events()

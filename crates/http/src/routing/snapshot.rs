@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 use soland_services::delivery::BlobState as BlobRecord;
-use soland_services::events::CanonicalEventRecord;
+use soland_services::events::AcceptedEvent;
 
 use super::*;
 use crate::state::AppState;
@@ -190,7 +190,7 @@ async fn persist_snapshot_chunk_blobs(
 }
 
 fn snapshot_item_from_event(
-    record: &CanonicalEventRecord,
+    record: &AcceptedEvent,
 ) -> Result<arkret_state::SnapshotMaterializedItem, soland_http::error::AppError> {
     let event_id = arkret_identifiers::EventId::new(record.event_id.clone())
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
@@ -214,7 +214,7 @@ fn snapshot_item_from_event(
 
 fn snapshot_event_set_leaf(
     state: &AppState,
-    record: &CanonicalEventRecord,
+    record: &AcceptedEvent,
 ) -> Result<arkret_state::EventSetLeaf, soland_http::error::AppError> {
     Ok(arkret_state::EventSetLeaf {
         event_id: arkret_identifiers::EventId::new(record.event_id.clone())
@@ -229,9 +229,9 @@ fn snapshot_event_set_leaf(
 }
 
 fn snapshot_frontier_event_ids(
-    events: &[CanonicalEventRecord],
+    events: &[AcceptedEvent],
 ) -> Result<Vec<arkret_identifiers::EventId>, soland_http::error::AppError> {
-    let mut by_actor: std::collections::BTreeMap<&str, &CanonicalEventRecord> =
+    let mut by_actor: std::collections::BTreeMap<&str, &AcceptedEvent> =
         std::collections::BTreeMap::new();
     for record in events {
         by_actor
@@ -256,7 +256,7 @@ fn snapshot_frontier_event_ids(
 
 fn snapshot_timeline_hlc(
     state: &AppState,
-    events: &[CanonicalEventRecord],
+    events: &[AcceptedEvent],
     fallback: chrono::DateTime<chrono::Utc>,
 ) -> Result<arkret_identifiers::Hlc, soland_http::error::AppError> {
     let max_received_at = events
@@ -269,7 +269,7 @@ fn snapshot_timeline_hlc(
 
 fn event_hlc_or_received_at(
     state: &AppState,
-    record: &CanonicalEventRecord,
+    record: &AcceptedEvent,
 ) -> Result<arkret_identifiers::Hlc, soland_http::error::AppError> {
     if let Some(hlc) = record.envelope.get("hlc").and_then(Value::as_str)
         && let Ok(parsed) = arkret_identifiers::Hlc::new(hlc.to_owned())

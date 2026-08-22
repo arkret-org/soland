@@ -35,7 +35,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
-use soland_services::events::CanonicalEventRecord;
+use soland_services::events::AcceptedEvent;
 use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use super::{now, realm_has_member, sha256_hex, validate_device_id};
@@ -973,7 +973,7 @@ async fn call_state_from_event_log(
         .project_call_state_cell(&operations, cell_id))
 }
 
-fn record_call_id(record: &CanonicalEventRecord) -> Option<&str> {
+fn record_call_id(record: &AcceptedEvent) -> Option<&str> {
     record
         .envelope
         .get("payload")
@@ -981,9 +981,7 @@ fn record_call_id(record: &CanonicalEventRecord) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-fn call_state_operation_from_record(
-    record: &CanonicalEventRecord,
-) -> Result<Option<Operation>, AppError> {
+fn call_state_operation_from_record(record: &AcceptedEvent) -> Result<Option<Operation>, AppError> {
     let Some(operation) =
         crate::routing::events::event_log::projection_operation_from_canonical_record(record)
     else {

@@ -962,7 +962,7 @@ fn validate_self_principal_pcr_bootstrap_context(
 
 pub(super) async fn identical_historical_retry(
     state: &AppState,
-    candidates: &[CanonicalEventRecord],
+    candidates: &[AcceptedEvent],
 ) -> Result<Option<EventsSubmitOutcome>, SubmitOneError> {
     let ids = candidates
         .iter()
@@ -1095,7 +1095,7 @@ fn conflicting_reanchor_slot(
     reanchor: &ValidatedEventEnvelope,
     authorize: &ValidatedEventEnvelope,
     reanchor_envelope: &Value,
-    existing: &[CanonicalEventRecord],
+    existing: &[AcceptedEvent],
 ) -> Vec<String> {
     let Some(new_generation) = reanchor_envelope
         .pointer("/payload/new_device_generation")
@@ -1405,7 +1405,7 @@ async fn validate_reanchor_actor_frontier(
 }
 
 fn preserved_actor_frontier(
-    records: &[CanonicalEventRecord],
+    records: &[AcceptedEvent],
     actor_id: &str,
     realm_id: &str,
     covered_digests: &std::collections::BTreeSet<String>,
@@ -1647,8 +1647,8 @@ pub(super) fn canonical_record(
     parsed: &ValidatedEventEnvelope,
     envelope: Value,
     received_at: DateTime<Utc>,
-) -> CanonicalEventRecord {
-    CanonicalEventRecord {
+) -> AcceptedEvent {
+    AcceptedEvent {
         event_id: parsed.event_id.to_string(),
         actor_id: parsed.actor_id.to_string(),
         actor_seq: parsed.actor_seq,
@@ -2272,7 +2272,7 @@ mod tests {
         serde_json::to_value(event).unwrap()
     }
 
-    fn stored_record(envelope: &Value, actor_seq: u64) -> CanonicalEventRecord {
+    fn stored_record(envelope: &Value, actor_seq: u64) -> AcceptedEvent {
         let mut envelope = envelope.clone();
         let is_wire_event = envelope.get("scope_ref").is_some();
         let canonical_bytes = if is_wire_event {
@@ -2312,7 +2312,7 @@ mod tests {
                 "test Event canonical bytes must remain stable after stamping its id"
             );
         }
-        CanonicalEventRecord {
+        AcceptedEvent {
             event_id: envelope["event_id"].as_str().unwrap().to_owned(),
             actor_id: "did:webvh:z6mkfixture:alice.example".to_owned(),
             actor_seq,
@@ -2410,7 +2410,7 @@ mod tests {
         assert_eq!(heads, expected_heads);
     }
 
-    fn anchor_ack(record: &CanonicalEventRecord) -> arkret_wire::ControlProposalAck {
+    fn anchor_ack(record: &AcceptedEvent) -> arkret_wire::ControlProposalAck {
         let realm_id = arkret_identifiers::RealmId::new(
             record
                 .realm_id

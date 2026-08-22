@@ -232,7 +232,7 @@ pub(super) fn accountability_grant_operation_signed_by(
 }
 
 pub(super) fn accountability_grant_envelope_signed_by(
-    record: &soland_services::events::CanonicalEventRecord,
+    record: &soland_services::events::AcceptedEvent,
     issuer: &str,
 ) -> bool {
     record

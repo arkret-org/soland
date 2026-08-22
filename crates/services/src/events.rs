@@ -392,8 +392,6 @@ pub struct AcceptedEvent {
     pub received_at: DateTime<Utc>,
 }
 
-pub type CanonicalEventRecord = AcceptedEvent;
-
 /// Locate the replacement `ak.device.authorize` that belongs to one accepted
 /// B-model re-anchor.
 ///
@@ -404,9 +402,9 @@ pub type CanonicalEventRecord = AcceptedEvent;
 /// signed content — an id or envelope-digest binding would make the two Events
 /// preimages of each other.
 pub fn paired_replacement_authorize<'a>(
-    reanchor: &CanonicalEventRecord,
-    records: impl IntoIterator<Item = &'a CanonicalEventRecord>,
-) -> Option<&'a CanonicalEventRecord> {
+    reanchor: &AcceptedEvent,
+    records: impl IntoIterator<Item = &'a AcceptedEvent>,
+) -> Option<&'a AcceptedEvent> {
     records.into_iter().find(|candidate| {
         arkret_wire::EventKind::DeviceAuthorize == candidate.kind
             && candidate.actor_id == reanchor.actor_id
@@ -458,7 +456,7 @@ enum CausalReachability {
 /// complete. Any missing Event, digest edge, explicit `after` reference, or
 /// materialized message reference keeps the relation `Undecidable`.
 pub fn read_cursor_causal_relation(
-    records: &[CanonicalEventRecord],
+    records: &[AcceptedEvent],
     current_event_id: &str,
     candidate_event_id: &str,
 ) -> ReadCursorCausalRelation {
@@ -482,13 +480,13 @@ pub fn read_cursor_causal_relation(
 }
 
 struct CanonicalCausalGraph<'a> {
-    by_event_id: BTreeMap<&'a str, &'a CanonicalEventRecord>,
+    by_event_id: BTreeMap<&'a str, &'a AcceptedEvent>,
     event_id_by_digest: BTreeMap<&'a str, &'a str>,
     event_id_by_message_id: BTreeMap<String, &'a str>,
 }
 
 impl<'a> CanonicalCausalGraph<'a> {
-    fn new(records: &'a [CanonicalEventRecord]) -> Self {
+    fn new(records: &'a [AcceptedEvent]) -> Self {
         let by_event_id = records
             .iter()
             .map(|record| (record.event_id.as_str(), record))
@@ -548,7 +546,7 @@ impl<'a> CanonicalCausalGraph<'a> {
         }
     }
 
-    fn predecessors(&self, record: &CanonicalEventRecord) -> (BTreeSet<String>, bool) {
+    fn predecessors(&self, record: &AcceptedEvent) -> (BTreeSet<String>, bool) {
         let mut predecessors = BTreeSet::new();
         let mut complete = true;
         collect_string_array(
@@ -897,20 +895,20 @@ pub struct IdentityAnchorCommitResult {
 
 #[async_trait::async_trait]
 pub trait EventReadPort: Send + Sync {
-    async fn store_canonical_event(&self, record: CanonicalEventRecord) -> ServiceResult<()>;
+    async fn store_canonical_event(&self, record: AcceptedEvent) -> ServiceResult<()>;
     /// Commit one Realm genesis unit. `deliveries` are the federation outbox
     /// rows for that unit; they land in the same transaction as the Events, so
     /// a crash can never leave an accepted Event without its delivery intent.
     async fn store_realm_bootstrap_batch(
         &self,
-        records: Vec<CanonicalEventRecord>,
+        records: Vec<AcceptedEvent>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         deliveries: Vec<FederationDeliveryRecord>,
     ) -> ServiceResult<()>;
     async fn store_direct_conversation_founding_batch(
         &self,
-        records: Vec<CanonicalEventRecord>,
+        records: Vec<AcceptedEvent>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         slot: soland_storage::DirectConversationFoundingSlotRecord,
@@ -927,7 +925,7 @@ pub trait EventReadPort: Send + Sync {
     #[allow(clippy::too_many_arguments)]
     async fn store_identity_anchor_batch(
         &self,
-        records: Vec<CanonicalEventRecord>,
+        records: Vec<AcceptedEvent>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         receipt: Option<EventBatchReceipt>,
@@ -938,18 +936,16 @@ pub trait EventReadPort: Send + Sync {
         publication_evidence: Vec<PublicationEvidenceRecord>,
         deliveries: Vec<FederationDeliveryRecord>,
     ) -> ServiceResult<IdentityAnchorCommitResult>;
-    async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<CanonicalEventRecord>>;
+    async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>>;
     async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool>;
-    async fn canonical_events(&self) -> ServiceResult<Vec<CanonicalEventRecord>>;
-    async fn canonical_events_for_actor(
-        &self,
-        actor_id: &str,
-    ) -> ServiceResult<Vec<CanonicalEventRecord>>;
+    async fn canonical_events(&self) -> ServiceResult<Vec<AcceptedEvent>>;
+    async fn canonical_events_for_actor(&self, actor_id: &str)
+    -> ServiceResult<Vec<AcceptedEvent>>;
     async fn canonical_events_for_realm_actor(
         &self,
         realm_id: &str,
         actor_id: &str,
-    ) -> ServiceResult<Vec<CanonicalEventRecord>>;
+    ) -> ServiceResult<Vec<AcceptedEvent>>;
     async fn canonical_batch_receipts_for_event(
         &self,
         event_id: &str,
@@ -963,15 +959,12 @@ pub trait EventReadPort: Send + Sync {
         event_id: &str,
     ) -> ServiceResult<Option<arkret_wire::ControlProposalAck>>;
     async fn realm_event_stats(&self, realm_id: &str) -> ServiceResult<RealmEventStats>;
-    async fn peer_authz_state_records(&self) -> ServiceResult<Vec<CanonicalEventRecord>>;
+    async fn peer_authz_state_records(&self) -> ServiceResult<Vec<AcceptedEvent>>;
     async fn peer_events_query_page(
         &self,
         query: &PeerEventsPageQuery,
-    ) -> ServiceResult<Vec<CanonicalEventRecord>>;
-    async fn realm_events_newest_first(
-        &self,
-        realm_id: &str,
-    ) -> ServiceResult<Vec<CanonicalEventRecord>>;
+    ) -> ServiceResult<Vec<AcceptedEvent>>;
+    async fn realm_events_newest_first(&self, realm_id: &str) -> ServiceResult<Vec<AcceptedEvent>>;
     async fn accepted_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>>;
     async fn accepted_events(&self) -> ServiceResult<Vec<AcceptedEvent>>;
     async fn projected_events_capped(&self, limit: usize) -> ServiceResult<Vec<ProjectedEvent>>;
@@ -1059,8 +1052,8 @@ pub struct EventQueryService {
 }
 
 fn active_agent_accountability(
-    original_event: &CanonicalEventRecord,
-    events: &[CanonicalEventRecord],
+    original_event: &AcceptedEvent,
+    events: &[AcceptedEvent],
     query: &ActiveAgentAccountabilityQuery,
 ) -> bool {
     if arkret_wire::EventKind::AgentProvision == original_event.kind {
@@ -1143,7 +1136,7 @@ fn active_agent_accountability(
 }
 
 fn active_accountability_scopes(
-    events: &[CanonicalEventRecord],
+    events: &[AcceptedEvent],
     realm_id: Option<&str>,
     issuer: &str,
     subject: &str,
@@ -1211,12 +1204,12 @@ impl EventQueryService {
         Ok(active_agent_accountability(&original_event, &events, query))
     }
 
-    pub async fn store_canonical_event(&self, record: CanonicalEventRecord) -> ServiceResult<()> {
+    pub async fn store_canonical_event(&self, record: AcceptedEvent) -> ServiceResult<()> {
         self.events.store_canonical_event(record).await
     }
     pub async fn store_realm_bootstrap_batch(
         &self,
-        records: Vec<CanonicalEventRecord>,
+        records: Vec<AcceptedEvent>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         deliveries: Vec<FederationDeliveryRecord>,
@@ -1232,7 +1225,7 @@ impl EventQueryService {
     }
     pub async fn store_direct_conversation_founding_batch(
         &self,
-        records: Vec<CanonicalEventRecord>,
+        records: Vec<AcceptedEvent>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         slot: soland_storage::DirectConversationFoundingSlotRecord,
@@ -1261,7 +1254,7 @@ impl EventQueryService {
     #[allow(clippy::too_many_arguments)]
     pub async fn store_identity_anchor_batch(
         &self,
-        records: Vec<CanonicalEventRecord>,
+        records: Vec<AcceptedEvent>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         receipt: Option<EventBatchReceipt>,
@@ -1287,10 +1280,7 @@ impl EventQueryService {
             )
             .await
     }
-    pub async fn canonical_event(
-        &self,
-        event_id: &str,
-    ) -> ServiceResult<Option<CanonicalEventRecord>> {
+    pub async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>> {
         self.events.canonical_event(event_id).await
     }
     pub async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool> {
@@ -1302,20 +1292,20 @@ impl EventQueryService {
     ) -> ServiceResult<Option<arkret_wire::ControlProposalAck>> {
         self.events.control_proposal_ack_for_event(event_id).await
     }
-    pub async fn canonical_events(&self) -> ServiceResult<Vec<CanonicalEventRecord>> {
+    pub async fn canonical_events(&self) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events.canonical_events().await
     }
     pub async fn canonical_events_for_actor(
         &self,
         actor_id: &str,
-    ) -> ServiceResult<Vec<CanonicalEventRecord>> {
+    ) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events.canonical_events_for_actor(actor_id).await
     }
     pub async fn canonical_events_for_realm_actor(
         &self,
         realm_id: &str,
         actor_id: &str,
-    ) -> ServiceResult<Vec<CanonicalEventRecord>> {
+    ) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events
             .canonical_events_for_realm_actor(realm_id, actor_id)
             .await
@@ -1339,19 +1329,19 @@ impl EventQueryService {
     pub async fn realm_event_stats(&self, realm_id: &str) -> ServiceResult<RealmEventStats> {
         self.events.realm_event_stats(realm_id).await
     }
-    pub async fn peer_authz_state_records(&self) -> ServiceResult<Vec<CanonicalEventRecord>> {
+    pub async fn peer_authz_state_records(&self) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events.peer_authz_state_records().await
     }
     pub async fn peer_events_query_page(
         &self,
         query: &PeerEventsPageQuery,
-    ) -> ServiceResult<Vec<CanonicalEventRecord>> {
+    ) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events.peer_events_query_page(query).await
     }
     pub async fn realm_events_newest_first(
         &self,
         realm_id: &str,
-    ) -> ServiceResult<Vec<CanonicalEventRecord>> {
+    ) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events.realm_events_newest_first(realm_id).await
     }
 
@@ -2430,7 +2420,7 @@ mod tests {
         actor_seq: u64,
         grant_status: &str,
         received_at: DateTime<Utc>,
-    ) -> CanonicalEventRecord {
+    ) -> AcceptedEvent {
         accountability_event_with_scope(
             event_id,
             actor_seq,
@@ -2446,8 +2436,8 @@ mod tests {
         grant_status: &str,
         accountability_scope: Value,
         received_at: DateTime<Utc>,
-    ) -> CanonicalEventRecord {
-        CanonicalEventRecord {
+    ) -> AcceptedEvent {
+        AcceptedEvent {
             event_id: event_id.to_owned(),
             actor_id: "ak:did_core:web:controller.example".to_owned(),
             actor_seq,

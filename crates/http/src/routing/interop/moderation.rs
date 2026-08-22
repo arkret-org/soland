@@ -672,9 +672,7 @@ async fn validate_franking_event_time_anchor(
         .map_err(|error| franking_proof_invalid(error.to_string()))
 }
 
-fn encrypted_event_payload_digest(
-    record: &soland_services::events::CanonicalEventRecord,
-) -> Option<&str> {
+fn encrypted_event_payload_digest(record: &soland_services::events::AcceptedEvent) -> Option<&str> {
     record
         .envelope
         .pointer("/payload/encrypted_content/payload_digest")
@@ -1059,7 +1057,7 @@ mod report_safety_tests {
         let (event_id, canonical_digest, canonical_bytes) = franking_event_fixture();
         state
             .event_queries()
-            .store_canonical_event(soland_services::events::CanonicalEventRecord {
+            .store_canonical_event(soland_services::events::AcceptedEvent {
                 event_id,
                 actor_id: REPORTER.to_owned(),
                 actor_seq: 1,

@@ -207,7 +207,7 @@ fn require_session_initiator(
 async fn exact_existing_event(
     state: &AppState,
     event: &arkret_wire::Event,
-) -> Result<Option<soland_services::events::CanonicalEventRecord>, SubmitOneError> {
+) -> Result<Option<soland_services::events::AcceptedEvent>, SubmitOneError> {
     let existing = state
         .event_queries()
         .canonical_event(event.event_id.as_str())
@@ -244,7 +244,7 @@ async fn exact_existing_event(
 
 async fn outcome_evidence_for_records(
     state: &AppState,
-    records: &[soland_services::events::CanonicalEventRecord],
+    records: &[soland_services::events::AcceptedEvent],
 ) -> Result<
     (
         Vec<arkret_wire::ControlProposalAck>,

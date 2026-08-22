@@ -42,7 +42,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::util::query_param;
-use soland_services::events::{CanonicalEventRecord, ProjectedEvent as ProjectionEventRecord};
+use soland_services::events::{AcceptedEvent, ProjectedEvent as ProjectionEventRecord};
 use soland_services::identity::{DeviceIdentity, SaveDeviceCommand};
 
 use super::util::{canonical_json, order_hlc_clocks, sha256_digest};
@@ -1562,12 +1562,12 @@ fn payload_too_large_error(message: impl Into<String>) -> AppError {
         .with_status(StatusCode::PAYLOAD_TOO_LARGE)
 }
 
-fn canonical_event_operation_id(record: &CanonicalEventRecord) -> Option<String> {
+fn canonical_event_operation_id(record: &AcceptedEvent) -> Option<String> {
     crate::routing::events::event_log::event_operation_id(&record.envelope, &record.event_id)
         .map(|operation_id| operation_id.to_string())
 }
 
-fn canonical_event_diagnostic(record: &CanonicalEventRecord) -> CanonicalEventDiagnostic {
+fn canonical_event_diagnostic(record: &AcceptedEvent) -> CanonicalEventDiagnostic {
     CanonicalEventDiagnostic {
         event_id: record.event_id.clone(),
         actor_id: record.actor_id.clone(),

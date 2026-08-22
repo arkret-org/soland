@@ -3457,7 +3457,7 @@ mod trust_binding_tests {
             .unwrap();
         state
             .event_queries()
-            .store_canonical_event(soland_services::events::CanonicalEventRecord {
+            .store_canonical_event(soland_services::events::AcceptedEvent {
                 event_id: authorize_event_id.clone(),
                 actor_id: principal.to_string(),
                 actor_seq: 1,

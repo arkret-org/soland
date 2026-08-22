@@ -3,7 +3,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer as _, SigningKey};
 use serde_json::json;
-use soland_services::events::CanonicalEventRecord;
+use soland_services::events::AcceptedEvent;
 use soland_services::identity::{
     DirectConversationCoordinatesRecord, DirectConversationEndorsement,
 };
@@ -2261,7 +2261,7 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
         canonical_event_storage_identity(&grant_envelope);
     state
         .event_queries()
-        .store_canonical_event(CanonicalEventRecord {
+        .store_canonical_event(AcceptedEvent {
             event_id: grant_event_id,
             actor_id: "did:web:mallory.example".to_owned(),
             actor_seq: 1,

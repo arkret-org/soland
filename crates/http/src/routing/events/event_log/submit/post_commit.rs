@@ -821,7 +821,7 @@ async fn realm_event_dependency_records(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
     peer: &DynamicPeerEventTarget,
-) -> Result<Vec<CanonicalEventRecord>, String> {
+) -> Result<Vec<AcceptedEvent>, String> {
     let records = state
         .event_queries()
         .realm_events_newest_first(parsed.realm_id.as_str())
@@ -890,9 +890,9 @@ async fn realm_event_dependency_records(
 
 fn append_stored_event_dependencies(
     event_id: &str,
-    by_id: &BTreeMap<String, CanonicalEventRecord>,
+    by_id: &BTreeMap<String, AcceptedEvent>,
     visited: &mut std::collections::BTreeSet<String>,
-    ordered: &mut Vec<CanonicalEventRecord>,
+    ordered: &mut Vec<AcceptedEvent>,
 ) {
     if !visited.insert(event_id.to_owned()) {
         return;

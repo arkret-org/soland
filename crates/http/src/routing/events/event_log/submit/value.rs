@@ -127,7 +127,7 @@ fn local_device_authorization_error(error: soland_services::ServiceError) -> Sub
 }
 
 pub(super) fn stored_prev_frontier_digest(
-    record: &CanonicalEventRecord,
+    record: &AcceptedEvent,
 ) -> Result<String, SubmitOneError> {
     let prev_refs = record
         .envelope
@@ -874,7 +874,7 @@ pub(super) async fn durable_pending_delivery_count(
 
 async fn stored_control_proposal_ack(
     state: &AppState,
-    existing: &soland_services::events::CanonicalEventRecord,
+    existing: &soland_services::events::AcceptedEvent,
     digest: &Hash,
 ) -> Result<arkret_wire::ControlProposalAck, SubmitOneError> {
     if let Some(ack) = state

@@ -25,14 +25,12 @@ fn realm_digest_suite(state: &ProjectionState, realm_id: &str) -> arkret_canonic
 pub trait HydrationProjectionAdapter: Send + Sync {
     fn operation_from_canonical_record(
         &self,
-        record: &crate::events::CanonicalEventRecord,
+        record: &crate::events::AcceptedEvent,
     ) -> Option<arkret_event_draft::ProjectedEventOperation>;
 }
 
-fn application_canonical_event(
-    record: &CanonicalEventRecord,
-) -> crate::events::CanonicalEventRecord {
-    crate::events::CanonicalEventRecord {
+fn application_canonical_event(record: &CanonicalEventRecord) -> crate::events::AcceptedEvent {
+    crate::events::AcceptedEvent {
         event_id: record.event_id.clone(),
         actor_id: record.actor_id.clone(),
         actor_seq: record.actor_seq,

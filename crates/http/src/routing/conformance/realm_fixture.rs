@@ -10,7 +10,7 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use soland_http::error::AppError;
-use soland_services::events::{CanonicalEventRecord, ProjectedEvent};
+use soland_services::events::{AcceptedEvent, ProjectedEvent};
 use soland_services::projection::ProjectionEffectView;
 
 use crate::state::AppState;
@@ -93,7 +93,7 @@ pub async fn install(
             .map_err(|error| AppError::param_invalid(error.to_string()))?;
         state
             .event_queries()
-            .store_canonical_event(CanonicalEventRecord {
+            .store_canonical_event(AcceptedEvent {
                 event_id: event.event_id.to_string(),
                 actor_id: event.actor_id.to_string(),
                 actor_seq: event.actor_seq,

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
-use soland_services::events::CanonicalEventRecord;
+use soland_services::events::AcceptedEvent;
 use soland_services::federation::FEDERATION_FRONTIER_STATUS_STALE_PEER;
 
 use crate::state::AppState;
@@ -254,14 +254,14 @@ fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn federation_visible_realms(records: &[CanonicalEventRecord]) -> BTreeSet<String> {
+fn federation_visible_realms(records: &[AcceptedEvent]) -> BTreeSet<String> {
     records
         .iter()
         .filter_map(crate::routing::events::event_log::canonical_realm_id_for_record)
         .collect()
 }
 
-fn local_frontier_root(records: &[CanonicalEventRecord], realm_id: &str) -> Result<String, String> {
+fn local_frontier_root(records: &[AcceptedEvent], realm_id: &str) -> Result<String, String> {
     let visible_realm_records = records
         .iter()
         .filter(|record| {

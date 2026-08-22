@@ -722,7 +722,7 @@ async fn materialize_realm_control_with_transported_seals(
 fn materialize_managed_agent_realm_control(
     state: &AppState,
     realm_id: &RealmId,
-    records: &[soland_services::events::CanonicalEventRecord],
+    records: &[soland_services::events::AcceptedEvent],
 ) -> Result<MaterializedRealmControl, AppError> {
     let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
     let mut events = Vec::with_capacity(records.len());
@@ -1330,7 +1330,7 @@ fn map_governance_frontier_error(error: arkret_wire::WireError) -> AppError {
     AppError::new(code, error.to_string())
 }
 
-fn event_signer_device_id(record: &CanonicalEventRecord) -> Option<String> {
+fn event_signer_device_id(record: &AcceptedEvent) -> Option<String> {
     let verification_method = record
         .envelope
         .get("proofs")
@@ -1364,7 +1364,7 @@ fn verification_method_device_id(actor_id: &str, verification_method: &str) -> O
 
 pub(crate) async fn first_generation_event_seal_requirement(
     state: &AppState,
-    records: &[CanonicalEventRecord],
+    records: &[AcceptedEvent],
 ) -> Result<Option<crate::notary::FirstGenerationEventSealRequirement>, AppError> {
     let actors = records
         .iter()

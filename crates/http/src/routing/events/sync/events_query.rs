@@ -1308,7 +1308,7 @@ fn projection_row_is_redacted_message_tombstone(row: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use soland_services::events::CanonicalEventRecord;
+    use soland_services::events::AcceptedEvent;
 
     use super::*;
 
@@ -1508,7 +1508,7 @@ mod tests {
             .to_owned();
         state
             .event_queries()
-            .store_canonical_event(CanonicalEventRecord {
+            .store_canonical_event(AcceptedEvent {
                 event_id: event_id.to_owned(),
                 actor_id,
                 actor_seq,

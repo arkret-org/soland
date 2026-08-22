@@ -44,7 +44,7 @@ pub(super) async fn enforce_sibling_fork_limit(
     state: &AppState,
     session: &SessionRecord,
     parsed: &ValidatedEventEnvelope,
-    existing_records: &[CanonicalEventRecord],
+    existing_records: &[AcceptedEvent],
 ) -> Result<(), SubmitOneError> {
     let prev_frontier_digest = prev_frontier_digest(&parsed.prev_refs)?;
     let sibling_count = existing_records

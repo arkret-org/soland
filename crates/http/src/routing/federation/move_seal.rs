@@ -24,7 +24,7 @@ use crate::{JsonResult, json_ok};
 struct DeviceGenerationEventSealContext {
     principal_id: String,
     current_generation_ref: Option<u64>,
-    records: Vec<soland_services::events::CanonicalEventRecord>,
+    records: Vec<soland_services::events::AcceptedEvent>,
     accepted_frontier_refs: Vec<SealId>,
     cas_frontier_refs: Vec<SealId>,
     generation_fence: Option<crate::notary::FirstGenerationEventSealRequirement>,
@@ -451,9 +451,7 @@ fn verify_device_seal_signature(
         })
 }
 
-fn ordinary_event_device_id(
-    record: &soland_services::events::CanonicalEventRecord,
-) -> Option<String> {
+fn ordinary_event_device_id(record: &soland_services::events::AcceptedEvent) -> Option<String> {
     let verification_method = record
         .envelope
         .get("proofs")

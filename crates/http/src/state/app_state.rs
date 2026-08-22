@@ -2097,7 +2097,7 @@ struct RuntimeHydrationProjectionAdapter;
 impl HydrationProjectionAdapter for RuntimeHydrationProjectionAdapter {
     fn operation_from_canonical_record(
         &self,
-        record: &soland_services::events::CanonicalEventRecord,
+        record: &soland_services::events::AcceptedEvent,
     ) -> Option<arkret_event_draft::ProjectedEventOperation> {
         crate::routing::events::event_log::projection_operation_from_canonical_record(record)
     }

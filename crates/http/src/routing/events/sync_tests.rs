@@ -882,7 +882,7 @@ fn canonical_event_record_received_at(
     actor_id: &str,
     created_at: DateTime<Utc>,
     received_at: DateTime<Utc>,
-) -> soland_services::events::CanonicalEventRecord {
+) -> soland_services::events::AcceptedEvent {
     let kind = kind.as_ref();
     let event = crate::test_event::raw_event_at(
         kind,
@@ -899,7 +899,7 @@ fn canonical_event_record_received_at(
     let envelope = serde_json::to_value(&event).unwrap();
     let canonical_bytes = crate::routing::events::event_log::event_canonical_bytes(&envelope)
         .expect("canonical sync fixture digest payload");
-    soland_services::events::CanonicalEventRecord {
+    soland_services::events::AcceptedEvent {
         event_id: event.event_id.to_string(),
         actor_id: actor_id.to_owned(),
         actor_seq,
@@ -916,10 +916,7 @@ fn canonical_event_record_received_at(
     }
 }
 
-async fn store_canonical_event(
-    state: &AppState,
-    record: soland_services::events::CanonicalEventRecord,
-) {
+async fn store_canonical_event(state: &AppState, record: soland_services::events::AcceptedEvent) {
     state
         .event_queries()
         .store_canonical_event(record)

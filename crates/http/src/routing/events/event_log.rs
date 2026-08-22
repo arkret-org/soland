@@ -50,7 +50,7 @@ use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode, error_http_status};
 use soland_http::result::{JsonResult, json_ok};
-use soland_services::events::CanonicalEventRecord;
+use soland_services::events::AcceptedEvent;
 use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_services::{operation_semantics as kinds, protocol_artifacts as artifacts};
 
