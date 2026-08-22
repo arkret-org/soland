@@ -31,7 +31,7 @@ use arkret_models_collaboration::account_lifecycle::{
 use arkret_models_collaboration::sync_frames::account_sync::{
     ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
 };
-use arkret_wire::{AccountDataKey, Event, SealId};
+use arkret_wire::{AccountDataKey, ConsentScope, Event, SealId};
 use chrono::{DateTime, Utc};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -255,7 +255,7 @@ async fn plan_consent_grant(
             ConsentRejection::schema(format!("ak.consent.grant payload is invalid: {error}"))
         })?;
     let peer = payload.peer.to_string();
-    let consent_scope = wire_consent_scope(&payload.consent_scope)?;
+    let consent_scope = payload.consent_scope.as_str().to_owned();
     validate_consent_intent(&holder, &peer)?;
     let consent_id = payload.consent_id.to_string();
     let cell_id = consent_cell_id_for_consent_id(&consent_id)?;
@@ -738,7 +738,7 @@ async fn request_consent_cell(
     // Syntactic validation is safe, but holder existence, policy, rate-limit,
     // silent drop and quarantine admission are intentionally indistinguishable.
     // This operation never creates a consent cell or a pending consent state.
-    let _ = normalize_scope(body.consent_scope.as_deref())?;
+    let _ = normalize_scope(body.consent_scope.as_ref().map(|scope| scope.as_str()))?;
     let _ = body.holder_principal_id;
     json_ok(ConsentRequestOutcome {
         ok: true,
@@ -829,17 +829,6 @@ async fn submit_caller_signed_consent_event(
 // Shared consent vocabulary.
 // ────────────────────────────────────────────────────────────────────────
 
-/// The closed `consent_scope` enum
-/// (`schemas/consent-operations.schema.json#/$defs/consent_scope`).
-pub const CONSENT_SCOPES: &[&str] = &[
-    "invite",
-    "direct_message",
-    "voice_call",
-    "video_call",
-    "presence",
-    "any",
-];
-
 /// Concrete action scopes a `consent_scope=any` grant can satisfy.
 pub const CONSENT_ACTION_SCOPE_CASCADE: &[&str] = &[
     "invite",
@@ -897,22 +886,13 @@ pub(super) fn normalize_scope(input: Option<&str>) -> Result<String, AppError> {
     if raw.is_empty() {
         return Ok("direct_message".to_owned());
     }
-    if CONSENT_SCOPES.contains(&raw) {
-        return Ok(raw.to_owned());
-    }
-    Err(AppError::param_invalid(
-        "consent_scope must be invite, direct_message, voice_call, video_call, presence, or any",
-    ))
-}
-
-/// Wire `consent_scope` carried by a signed consent payload.
-fn wire_consent_scope(scope: &str) -> Result<String, ConsentRejection> {
-    if CONSENT_SCOPES.contains(&scope) {
-        return Ok(scope.to_owned());
-    }
-    Err(ConsentRejection::schema(
-        "consent_scope is outside the closed consent_scope enum",
-    ))
+    raw.parse::<ConsentScope>()
+        .map(|scope| scope.as_str().to_owned())
+        .map_err(|_| {
+            AppError::param_invalid(
+                "consent_scope must be invite, direct_message, voice_call, video_call, presence, or any",
+            )
+        })
 }
 
 fn consent_cell_id_for_consent_id(consent_id: &str) -> Result<String, ConsentRejection> {
@@ -1086,7 +1066,10 @@ fn consent_response(
             .map_err(|e| AppError::internal(format!("stored consent holder_principal_id: {e}")))?,
         peer_principal_id: DidCoreId::new(cell.peer.clone())
             .map_err(|e| AppError::internal(format!("stored consent peer_principal_id: {e}")))?,
-        consent_scope: cell.consent_scope.clone(),
+        consent_scope: cell
+            .consent_scope
+            .parse()
+            .map_err(|e| AppError::internal(format!("stored consent_scope: {e}")))?,
         state: if active_grant_dots.is_empty() {
             ConsentState::NoConsent
         } else {
@@ -1414,16 +1397,19 @@ mod tests {
         assert_eq!(ConsentRevokeInvalidationChannel::ALL.len(), 5);
         assert_eq!(CONSENT_SCOPE_CASCADE.len(), 5);
         assert_eq!(CONSENT_ACTION_SCOPE_CASCADE.len(), 5);
-        assert_eq!(CONSENT_SCOPES.len(), 6);
+        assert_eq!(ConsentScope::ALL.len(), 6);
     }
 
     #[test]
     fn only_the_closed_consent_scope_enum_is_accepted() {
         assert_eq!(normalize_scope(None).unwrap(), "direct_message");
         assert_eq!(normalize_scope(Some("any")).unwrap(), "any");
-        // The alias forms an earlier implementation coerced are not wire values.
+        // Unregistered values fail at both query and signed-payload boundaries.
         normalize_scope(Some("dm")).expect_err("dm is not a consent_scope");
-        wire_consent_scope("messaging").expect_err("messaging is not a consent_scope");
+        serde_json::from_value::<
+            arkret_models_collaboration::events_payloads::ConsentGrantPayload,
+        >(grant_payload(PEER, "messaging"))
+        .expect_err("messaging is not a consent_scope");
     }
 
     #[tokio::test]
