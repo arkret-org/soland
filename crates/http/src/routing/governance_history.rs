@@ -14,11 +14,11 @@ use arkret_models_collaboration::history_key::{
     HistoryKeyRequestReplica, HistoryKeyRequestReplicaDestinationAuthorization,
     HistoryKeyRequestReplicaKind, HistoryKeyRequestReplicaOutcome, HistoryKeyResponseAckOutcome,
     HistoryKeyResponseAckRequest, HistoryKeyResponseContent, HistoryKeyResponseListOutcome,
-    HistoryKeyResponseListQuery, HistoryKeyResponseRecord, HistoryKeyResponseSendOutcome,
-    HistoryKeyResponseSendReceipt, HistoryKeyResponseSendRequest, HistoryKeySourceRelay,
-    HistoryManifestAdmission, HistoryManifestAdmissionKind, HistoryManifestAdmissionPass,
-    HistoryReleaseAttestation, HistoryReleaseAttestationKind, HistoryReleaseVerifierProfile,
-    HistoryRequestId, HistoryResponseAckTokenClaims, HistoryResponseCapabilityPlaintext,
+    HistoryKeyResponseListQuery, HistoryKeyResponseRecord, HistoryKeyResponseSendReceipt,
+    HistoryKeyResponseSendRequest, HistoryKeySourceRelay, HistoryManifestAdmission,
+    HistoryManifestAdmissionKind, HistoryManifestAdmissionPass, HistoryReleaseAttestation,
+    HistoryReleaseAttestationKind, HistoryReleaseVerifierProfile, HistoryRequestId,
+    HistoryResponseAckTokenClaims, HistoryResponseCapabilityPlaintext,
     HistoryResponseCapabilityPlaintextKind, HistoryResponseCapabilitySealContext,
     HistoryResponseCapabilitySealPurpose, HistoryResponsePageEntry,
     OrganizationRecoveryArchiveListItem, OrganizationRecoveryArchiveListOutcome,
@@ -762,7 +762,7 @@ async fn send_history_key_response(
     body: JsonBody<HistoryKeyResponseSendRequest>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<HistoryKeyResponseSendOutcome> {
+) -> JsonResult<HistoryKeyResponseSendReceipt> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let response = body.into_inner();
@@ -846,7 +846,7 @@ async fn send_history_key_response(
 async fn relay_history_key_response(
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<HistoryKeyResponseSendOutcome> {
+) -> JsonResult<HistoryKeyResponseSendReceipt> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
     let transport_source = arkret_wire::DidCoreId::new(source_service_id_from_request(req)?)
@@ -2586,7 +2586,7 @@ async fn accept_history_response_manifest(
     response: HistoryKeyResponseSendRequest,
     source_relay: Option<&SourceRelayAttestation>,
     source_signer_dependencies: Vec<GovernanceDependency>,
-) -> JsonResult<HistoryKeyResponseSendOutcome> {
+) -> JsonResult<HistoryKeyResponseSendReceipt> {
     let history = state.persistence().governance_history_service();
     let mut existing_reservation = None;
     if let Some(retry) = history
@@ -3247,7 +3247,7 @@ async fn accept_history_response_chunk(
     response: HistoryKeyResponseSendRequest,
     source_relay: Option<&SourceRelayAttestation>,
     source_signer_dependencies: Vec<GovernanceDependency>,
-) -> JsonResult<HistoryKeyResponseSendOutcome> {
+) -> JsonResult<HistoryKeyResponseSendReceipt> {
     let history = state.persistence().governance_history_service();
     let mut existing_reservation = None;
     if let Some(retry) = history
