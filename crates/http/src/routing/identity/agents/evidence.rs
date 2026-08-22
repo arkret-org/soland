@@ -159,6 +159,7 @@ async fn current_authenticated_agent_signer_evidence(
         state,
         &gate.authority_service_id,
         state.config().account_authority_url.as_deref(),
+        chrono::Utc::now(),
     )
     .await?;
     let receiver_evidence =
@@ -331,10 +332,20 @@ async fn current_controller_signer_evidence(
     Ok(evidence)
 }
 
+/// Retain a peer service resolution as a signer-evidence leaf.
+///
+/// `at` is the instant the retained resolution is judged against and MUST be
+/// the same instant the eventual verifier uses: `Utc::now()` for the current
+/// branch, and the receipt `accepted_at` for a historical Native Agent root
+/// (`zh/identity/key-management.md` §historical branch). Judging a historical
+/// leaf at `now` would publish a root that its own verifier evaluates at
+/// `accepted_at` and may reject, which is unrecoverable once the selector
+/// tuple is taken.
 pub(crate) async fn fetch_service_signer_evidence(
     state: &AppState,
     service_id: &DidCoreId,
     base_url: Option<&str>,
+    at: chrono::DateTime<chrono::Utc>,
 ) -> Result<AuthenticatedSignerResolutionEvidence, AgentSignerEvidenceQueryFailureReason> {
     let base_url = base_url
         .filter(|value| !value.trim().is_empty())
@@ -366,9 +377,7 @@ pub(crate) async fn fetch_service_signer_evidence(
     let resolution = serde_json::from_slice(&body)
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     arkret_identity::service_signer_evidence_from_authenticated_resolution(
-        resolution,
-        service_id,
-        chrono::Utc::now(),
+        resolution, service_id, at,
     )
     .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)
 }
@@ -472,10 +481,14 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
         dependency_by_digest(store, &controller_signer_evidence_digest).await?;
     let account_authority_evidence =
         dependency_by_digest(store, &account_authority_signer_evidence_digest).await?;
-    let receiver_evidence =
-        fetch_service_signer_evidence(state, &receipt.receiver_service_id, Some(receiver_base_url))
-            .await
-            .map_err(|reason| AppError::internal(format!("{reason:?}")))?;
+    let receiver_evidence = fetch_service_signer_evidence(
+        state,
+        &receipt.receiver_service_id,
+        Some(receiver_base_url),
+        receipt.accepted_at,
+    )
+    .await
+    .map_err(|reason| AppError::internal(format!("{reason:?}")))?;
     let AuthenticatedSignerResolutionEvidence::Service {
         authenticated_resolution,
         ..
