@@ -1471,25 +1471,23 @@ async fn realm_presign_policy_block(
     realm_id: Option<&str>,
 ) -> Option<&'static str> {
     let realm_id = realm_id?;
-    let meta = state.realms().realm_metadata(realm_id).await.ok()??;
+    let Some(meta) = state.realms().realm_metadata(realm_id).await.ok().flatten() else {
+        return Some("direct_download_disallowed_presign_forbidden");
+    };
     if meta.minimal_metadata_realm {
         return Some("minimal_metadata_presign_forbidden");
     }
-    if asset_privacy_policy_disallows_direct_download(meta.asset_privacy_policy.as_ref()) {
+    if !asset_privacy_policy_allows_direct_download(meta.asset_privacy_policy.as_ref()) {
         return Some("direct_download_disallowed_presign_forbidden");
     }
     None
 }
 
-fn asset_privacy_policy_disallows_direct_download(policy: Option<&Value>) -> bool {
-    let Some(policy) = policy else {
-        return false;
-    };
-    let body = policy
-        .get("asset_privacy_policy")
-        .or_else(|| policy.get("value"))
-        .unwrap_or(policy);
-    body.get("direct_download_allowed").and_then(Value::as_bool) == Some(false)
+fn asset_privacy_policy_allows_direct_download(policy: Option<&Value>) -> bool {
+    policy
+        .and_then(|value| value.get("direct_download_allowed"))
+        .and_then(Value::as_bool)
+        == Some(true)
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -1640,17 +1638,20 @@ mod presign_block_tests {
     }
 
     #[test]
-    fn asset_privacy_policy_disallows_direct_download() {
-        assert!(super::asset_privacy_policy_disallows_direct_download(Some(
+    fn asset_privacy_policy_direct_download_is_explicit_opt_in() {
+        assert!(super::asset_privacy_policy_allows_direct_download(Some(
+            &json!({"direct_download_allowed": true})
+        )));
+        assert!(!super::asset_privacy_policy_allows_direct_download(Some(
             &json!({"direct_download_allowed": false})
         )));
-        assert!(super::asset_privacy_policy_disallows_direct_download(Some(
-            &json!({"value": {"direct_download_allowed": false}})
+        assert!(!super::asset_privacy_policy_allows_direct_download(Some(
+            &json!({"value": {"direct_download_allowed": true}})
         )));
-        assert!(!super::asset_privacy_policy_disallows_direct_download(
-            Some(&json!({"direct_download_allowed": true}))
-        ));
-        assert!(!super::asset_privacy_policy_disallows_direct_download(None));
+        assert!(!super::asset_privacy_policy_allows_direct_download(Some(
+            &json!({"future_policy_field": true})
+        )));
+        assert!(!super::asset_privacy_policy_allows_direct_download(None));
     }
 }
 

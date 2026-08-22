@@ -1709,6 +1709,25 @@ fn load_receive_policy_constraints(
     )?;
     let unknown_invites_max_behavior =
         env_unknown_action(values, "SOLAND_RECEIVE_POLICY_UNKNOWN_INVITES_MAX_BEHAVIOR")?;
+    let disclosure_max = {
+        let high_trust_max =
+            env_disclosure_level(values, "SOLAND_RECEIVE_POLICY_DISCLOSURE_HIGH_TRUST_MAX")?;
+        let discovery_trust_max = env_disclosure_level(
+            values,
+            "SOLAND_RECEIVE_POLICY_DISCLOSURE_DISCOVERY_TRUST_MAX",
+        )?;
+        let low_trust_max =
+            env_disclosure_level(values, "SOLAND_RECEIVE_POLICY_DISCLOSURE_LOW_TRUST_MAX")?;
+        if high_trust_max.is_some() || discovery_trust_max.is_some() || low_trust_max.is_some() {
+            Some(arkret_wire::receive_policy::ReceiveDisclosureMax {
+                high_trust_max,
+                discovery_trust_max,
+                low_trust_max,
+            })
+        } else {
+            None
+        }
+    };
     let allowed_handle_domains =
         env_csv_cap(values, "SOLAND_RECEIVE_POLICY_ALLOWED_HANDLE_DOMAINS").map(|domains| {
             domains
@@ -1733,6 +1752,7 @@ fn load_receive_policy_constraints(
         || handle_claim_max_behavior.is_some()
         || explicit_address_max_behavior.is_some()
         || unknown_invites_max_behavior.is_some()
+        || disclosure_max.is_some()
         || allowed_handle_domains.is_some()
         || trusted_handle_issuers.is_some()
         || trusted_directory_services.is_some()
@@ -1752,6 +1772,7 @@ fn load_receive_policy_constraints(
             handle_claim_max_behavior,
             explicit_address_max_behavior,
             unknown_invites_max_behavior,
+            disclosure_max,
             allowed_handle_domains,
             trusted_handle_issuers,
             trusted_directory_services,
@@ -1760,6 +1781,24 @@ fn load_receive_policy_constraints(
             accepted_subject_did_methods,
         },
     ))
+}
+
+fn env_disclosure_level(
+    values: &BTreeMap<String, String>,
+    name: &str,
+) -> anyhow::Result<Option<arkret_wire::receive_policy::ReceiveDisclosureLevel>> {
+    let Some(value) = env_non_empty(values, name) else {
+        return Ok(None);
+    };
+    match value.as_str() {
+        "opaque" => Ok(Some(
+            arkret_wire::receive_policy::ReceiveDisclosureLevel::Opaque,
+        )),
+        "outcome" => Ok(Some(
+            arkret_wire::receive_policy::ReceiveDisclosureLevel::Outcome,
+        )),
+        other => anyhow::bail!("{name} must be opaque or outcome; got {other}"),
+    }
 }
 
 fn env_receive_action(
