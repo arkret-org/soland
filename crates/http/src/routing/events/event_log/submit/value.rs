@@ -1379,6 +1379,58 @@ pub(super) async fn accepted_event_envelope(
             format!("Principal Server id is invalid: {error}"),
         )
     })?;
+    let producer_signer_evidence = if session.agent_session.is_some() {
+        let signer_id = event
+            .executed_by
+            .as_ref()
+            .unwrap_or(&event.actor_id)
+            .clone();
+        let selector = arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector::CurrentAdmission {
+            agent_id: signer_id,
+            verification_method: producer.verification_method.clone(),
+            operation_id: arkret_wire::ProtocolOperationId::new(
+                "ak:operation:ak.self.events.command.submit",
+            )
+            .map_err(|error| SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                error,
+            ))?,
+            request_digest: event_digest.clone(),
+            verifier_id: service_id.clone(),
+            audience: service_id.clone(),
+            challenge: arkret_wire::NonEmptyString::new(event.event_id.as_str().to_owned())
+                .map_err(|error| SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    error.to_string(),
+                ))?,
+        };
+        Some(
+            crate::routing::identity::agents::evidence::freeze_current_agent_signer_evidence(
+                state, &selector,
+            )
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "temporarily_unavailable",
+                    format!("Agent signer evidence freeze failed: {error}"),
+                )
+            })?,
+        )
+    } else {
+        None
+    };
+    if event.actor_kind == Some(arkret_wire::EnvelopeActorKind::Agent)
+        && producer_signer_evidence.is_none()
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "temporarily_unavailable",
+            "Native Agent admission could not freeze producer signer evidence",
+        ));
+    }
     let authenticated_resolution =
         crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
             .await
@@ -1455,6 +1507,11 @@ pub(super) async fn accepted_event_envelope(
         })?,
         producer_verification_method: producer.verification_method.clone(),
         producer_signing_key,
+        producer_signer_resolution_evidence_ref: producer_signer_evidence
+            .as_ref()
+            .map(|(reference, _)| reference.clone()),
+        producer_signer_resolution_evidence_digest: producer_signer_evidence
+            .map(|(_, digest)| digest),
         signer_resolution_evidence_ref,
         signer_resolution_evidence_digest,
         accepted_at,
@@ -3475,6 +3532,8 @@ mod local_device_authorization_tests {
                 "did:key:z6MkvLM6yK9N3Z1GYikAQLnhdjZoFQv4u4sRZNzgmwLkYsXx",
             )
             .unwrap(),
+            producer_signer_resolution_evidence_ref: None,
+            producer_signer_resolution_evidence_digest: None,
             signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
                 "ak:signer_evidence:sha256:{}",
                 "11".repeat(32)

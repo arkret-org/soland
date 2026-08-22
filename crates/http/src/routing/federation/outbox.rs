@@ -1262,6 +1262,25 @@ impl FederationDispatcher {
                         None,
                         now,
                     )
+                } else if (200..300).contains(&status)
+                    && let Err(error) = self
+                        .capture_agent_event_admission_receipts(
+                            &row,
+                            &body_text,
+                            &peer_target.base_url,
+                        )
+                        .await
+                {
+                    self.transport_retry(
+                        &row,
+                        &lease_token,
+                        attempts,
+                        Some(status),
+                        error_code::TRANSPORT_ERROR,
+                        excerpt(&format!("agent_receipt_handoff: {error}")),
+                        None,
+                        now,
+                    )
                 } else if let Err(error) = &account_status_resubmission {
                     self.transport_retry(
                         &row,
@@ -1302,6 +1321,94 @@ impl FederationDispatcher {
             }
         };
         self.commit(command).await;
+    }
+
+    async fn capture_agent_event_admission_receipts(
+        &self,
+        row: &PendingFederationDelivery,
+        response_body: &str,
+        peer_base_url: &str,
+    ) -> Result<(), String> {
+        if row.delivery.endpoint != "/_arkret/peer/events" {
+            return Ok(());
+        }
+        let request: arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody =
+            serde_json::from_str(&row.delivery.payload_json)
+                .map_err(|error| format!("federation request decode failed: {error}"))?;
+        let arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody::Batch(
+            request,
+        ) = request
+        else {
+            return Ok(());
+        };
+        let outcome: arkret_models_collaboration::http_bodies::EventsSubmitOutcome =
+            serde_json::from_str(response_body)
+                .map_err(|error| format!("federation outcome decode failed: {error}"))?;
+        outcome
+            .validate_delivery_state()
+            .map_err(|error| format!("federation outcome validation failed: {error}"))?;
+        let delivered = outcome
+            .accepted
+            .iter()
+            .chain(&outcome.duplicate)
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut expected = std::collections::BTreeMap::new();
+        for submission in &request.events {
+            let Some(admission) = submission
+                .event
+                .proofs
+                .iter()
+                .find_map(|proof| match proof {
+                    arkret_wire::EventProof::PrincipalServerAdmission(value) => Some(value),
+                    arkret_wire::EventProof::Producer(_) => None,
+                })
+            else {
+                continue;
+            };
+            if admission.producer_signer_resolution_evidence_ref.is_some()
+                && delivered.contains(&submission.event.event_id)
+            {
+                expected.insert(
+                    submission.event.event_id.clone(),
+                    (&submission.event, admission),
+                );
+            }
+        }
+        if expected.len() != outcome.agent_event_admission_receipts.len() {
+            return Err("accepted Native Agent Event receipt set is incomplete".to_owned());
+        }
+        for receipt in outcome.agent_event_admission_receipts {
+            let Some((event, admission)) = expected.remove(&receipt.event_id) else {
+                return Err("outcome contains an unexpected Agent Event receipt".to_owned());
+            };
+            let signer_id = event.executed_by.as_ref().unwrap_or(&event.actor_id);
+            if receipt.event_digest != admission.event_digest
+                || receipt.realm_id != event.realm_id
+                || receipt.producer_accepted_at != admission.accepted_at
+                || receipt.agent_id != *signer_id
+                || receipt.verification_method != admission.producer_verification_method
+                || Some(&receipt.producer_signer_resolution_evidence_ref)
+                    != admission.producer_signer_resolution_evidence_ref.as_ref()
+                || Some(&receipt.producer_signer_resolution_evidence_digest)
+                    != admission
+                        .producer_signer_resolution_evidence_digest
+                        .as_ref()
+                || receipt.receiver_service_id.as_str() != row.delivery.peer_did
+            {
+                return Err("Agent Event receipt does not match the delivered Event".to_owned());
+            }
+            crate::routing::identity::agents::evidence::materialize_historical_agent_signer_evidence(
+                &self.state,
+                receipt,
+                peer_base_url,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        }
+        if !expected.is_empty() {
+            return Err("accepted Native Agent Event receipt set is incomplete".to_owned());
+        }
+        Ok(())
     }
 
     async fn capture_history_response_relay_outcome(
@@ -2462,6 +2569,8 @@ mod tests {
                         "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuVkhY7g94pVQyG98x",
                     )
                     .unwrap(),
+                    producer_signer_resolution_evidence_ref: None,
+                    producer_signer_resolution_evidence_digest: None,
                     signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
                         "ak:signer_evidence:sha256:{}",
                         "11".repeat(32)
