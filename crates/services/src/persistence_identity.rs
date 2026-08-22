@@ -939,8 +939,8 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
 
     async fn enqueue_runtime_message_if_current(
         &self,
-        command: &crate::identity::EnqueueAgentRuntimeMessageCommand,
-    ) -> crate::ServiceResult<crate::identity::AgentRuntimeEnqueueResult> {
+        command: &EnqueueAgentRuntimeMessage,
+    ) -> crate::ServiceResult<AgentRuntimeEnqueueOutcome> {
         Ok(self
             .0
             .agents()

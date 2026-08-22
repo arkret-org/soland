@@ -24,6 +24,7 @@ use chrono::{DateTime, Utc};
 use ed25519_dalek::Signer as _;
 use parking_lot::Mutex;
 use serde_json::Value;
+use soland_storage::{AgentRuntimeEnqueueOutcome, EnqueueAgentRuntimeMessage};
 
 /// Freeze one locally held Ed25519 notary key into the canonical Realm
 /// notary descriptor. Callers must pass the verification key belonging to the
@@ -1379,9 +1380,6 @@ pub struct StoreAgentRuntimeApprovalCommand {
         arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection,
 }
 
-pub type EnqueueAgentRuntimeMessageCommand = soland_storage::EnqueueAgentRuntimeMessage;
-pub type AgentRuntimeEnqueueResult = soland_storage::AgentRuntimeEnqueueOutcome;
-
 #[async_trait]
 pub trait AgentPairingPort: Send + Sync {
     async fn pairing_record(
@@ -1421,8 +1419,8 @@ pub trait AgentPairingPort: Send + Sync {
     ) -> ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome>;
     async fn enqueue_runtime_message_if_current(
         &self,
-        command: &EnqueueAgentRuntimeMessageCommand,
-    ) -> ServiceResult<AgentRuntimeEnqueueResult>;
+        command: &EnqueueAgentRuntimeMessage,
+    ) -> ServiceResult<AgentRuntimeEnqueueOutcome>;
 }
 
 #[derive(Clone, Debug)]
@@ -2136,8 +2134,8 @@ impl AgentPairingService {
 
     pub async fn enqueue_runtime_message_if_current(
         &self,
-        command: &EnqueueAgentRuntimeMessageCommand,
-    ) -> ServiceResult<AgentRuntimeEnqueueResult> {
+        command: &EnqueueAgentRuntimeMessage,
+    ) -> ServiceResult<AgentRuntimeEnqueueOutcome> {
         self.pairing
             .enqueue_runtime_message_if_current(command)
             .await
@@ -3432,8 +3430,8 @@ mod tests {
 
         async fn enqueue_runtime_message_if_current(
             &self,
-            _command: &EnqueueAgentRuntimeMessageCommand,
-        ) -> ServiceResult<AgentRuntimeEnqueueResult> {
+            _command: &EnqueueAgentRuntimeMessage,
+        ) -> ServiceResult<AgentRuntimeEnqueueOutcome> {
             Ok(soland_storage::AgentRuntimeEnqueueOutcome::SnapshotConflict)
         }
     }
