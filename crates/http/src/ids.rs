@@ -12,8 +12,8 @@
 /// id-kind instead of maintaining parallel local copies.
 ///
 /// - [`RealmId`] is the SDK security-boundary id and validates `ak:realm:`.
-/// - [`SpaceContainerId`] is the SDK Space container id and validates `ak:space:`.
-pub use arkret_identifiers::{RealmId, SpaceId as SpaceContainerId};
+/// - [`SpaceId`] is the SDK Space container id and validates `ak:space:`.
+pub use arkret_identifiers::{RealmId, SpaceId};
 use uuid::Uuid;
 
 /// Generate a new typed wire ID with the given kind prefix.
@@ -227,8 +227,8 @@ mod tests {
 
     #[test]
     fn space_container_id_rejects_bad_kind() {
-        assert!(SpaceContainerId::new(fixture_realm_id()).is_err());
-        assert!(SpaceContainerId::new("ak:space:01914b2e-7a6d-7cc2-98eb-07c7c9ff4b55").is_err());
-        assert!(SpaceContainerId::new("").is_err());
+        assert!(SpaceId::new(fixture_realm_id()).is_err());
+        assert!(SpaceId::new("ak:space:01914b2e-7a6d-7cc2-98eb-07c7c9ff4b55").is_err());
+        assert!(SpaceId::new("").is_err());
     }
 }

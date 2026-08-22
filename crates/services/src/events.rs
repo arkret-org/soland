@@ -777,7 +777,7 @@ pub struct IdempotentResponse {
 /// One outbound delivery intent committed together with its Event. Same type
 /// the federation service enqueues and the dispatcher claims — there is exactly
 /// one shape for "a request this service owes a peer".
-pub use crate::federation::FederationDeliveryRecord as FederationDelivery;
+use crate::federation::FederationDeliveryRecord;
 
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventCommand {
@@ -797,7 +797,7 @@ pub struct CommitAcceptedEventCommand {
     pub device_revocation_gate: Option<soland_storage::DeviceRevocationGateSelector>,
     pub projections: Vec<ProjectedEvent>,
     pub idempotency: Option<IdempotentResponse>,
-    pub deliveries: Vec<FederationDelivery>,
+    pub deliveries: Vec<FederationDeliveryRecord>,
 }
 
 /// The holder-private consent effects of one accepted consent Control Move.
@@ -906,7 +906,7 @@ pub trait EventReadPort: Send + Sync {
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
-        deliveries: Vec<FederationDelivery>,
+        deliveries: Vec<FederationDeliveryRecord>,
     ) -> ServiceResult<()>;
     async fn store_direct_conversation_founding_batch(
         &self,
@@ -914,7 +914,7 @@ pub trait EventReadPort: Send + Sync {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         slot: soland_storage::DirectConversationFoundingSlotRecord,
-        deliveries: Vec<FederationDelivery>,
+        deliveries: Vec<FederationDeliveryRecord>,
     ) -> ServiceResult<soland_storage::DirectConversationFoundingCommitOutcome>;
     async fn direct_conversation_founding_slot(
         &self,
@@ -936,7 +936,7 @@ pub trait EventReadPort: Send + Sync {
         frontier_cas: Option<IdentityAnchorFrontierState>,
         reanchor_slot: Option<IdentityAnchorReanchorState>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
-        deliveries: Vec<FederationDelivery>,
+        deliveries: Vec<FederationDeliveryRecord>,
     ) -> ServiceResult<IdentityAnchorCommitResult>;
     async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<CanonicalEventRecord>>;
     async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool>;
@@ -1219,7 +1219,7 @@ impl EventQueryService {
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
-        deliveries: Vec<FederationDelivery>,
+        deliveries: Vec<FederationDeliveryRecord>,
     ) -> ServiceResult<()> {
         self.events
             .store_realm_bootstrap_batch(
@@ -1236,7 +1236,7 @@ impl EventQueryService {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         slot: soland_storage::DirectConversationFoundingSlotRecord,
-        deliveries: Vec<FederationDelivery>,
+        deliveries: Vec<FederationDeliveryRecord>,
     ) -> ServiceResult<soland_storage::DirectConversationFoundingCommitOutcome> {
         self.events
             .store_direct_conversation_founding_batch(
@@ -1270,7 +1270,7 @@ impl EventQueryService {
         frontier_cas: Option<IdentityAnchorFrontierState>,
         reanchor_slot: Option<IdentityAnchorReanchorState>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
-        deliveries: Vec<FederationDelivery>,
+        deliveries: Vec<FederationDeliveryRecord>,
     ) -> ServiceResult<IdentityAnchorCommitResult> {
         self.events
             .store_identity_anchor_batch(
@@ -2406,7 +2406,7 @@ mod tests {
                     received_at: now,
                 }],
                 idempotency: None,
-                deliveries: vec![FederationDelivery {
+                deliveries: vec![FederationDeliveryRecord {
                     id: "delivery:test".to_owned(),
                     peer_did: "did:web:peer.example".to_owned(),
                     peer_url: Some("https://peer.example".to_owned()),

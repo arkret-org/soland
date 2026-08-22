@@ -14,7 +14,7 @@
 
 use soland_http::config::{AppConfig, StartupOverrides};
 use soland_http::routing::federation::outbox_operator::{self, DEFAULT_LIST_LIMIT};
-use soland_services::federation::FederationDeliveryState;
+use soland_storage::FederationOutboxState;
 use soland_storage_postgres::Db;
 
 const USAGE: &str = "usage:\n  \
@@ -77,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
         "list" => {
             let lifecycle = match arg_value(&args, "--state") {
                 Some(value) => parse_state(&value)?,
-                None => FederationDeliveryState::Pending,
+                None => FederationOutboxState::Pending,
             };
             let rows = outbox_operator::list_by_state(&state, lifecycle, limit)
                 .await
@@ -111,8 +111,8 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn parse_state(value: &str) -> anyhow::Result<FederationDeliveryState> {
-    FederationDeliveryState::parse(value.trim()).ok_or_else(|| {
+fn parse_state(value: &str) -> anyhow::Result<FederationOutboxState> {
+    FederationOutboxState::parse(value.trim()).ok_or_else(|| {
         anyhow::anyhow!(
             "unknown --state {value}; expected pending, pending_route, leased, delivered, \
              cancelled_authority_lost, policy_suppressed, dead_lettered or superseded"

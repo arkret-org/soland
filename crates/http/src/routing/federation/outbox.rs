@@ -47,9 +47,9 @@ use arkret_signatures::http_signature::{
 use rand::RngExt;
 use soland_services::federation::{
     ClaimFederationDeliveriesCommand, FederationDeadLetter, FederationDeliveryOutcome,
-    FederationDeliveryRecord, FederationPolicyResolution, PendingFederationDelivery,
-    RecordFederationAttemptCommand,
+    FederationDeliveryRecord, PendingFederationDelivery, RecordFederationAttemptCommand,
 };
+use soland_storage::FederationOutboxPolicyResolution;
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -807,7 +807,7 @@ impl FederationDispatcher {
                     .federation()
                     .resolve_policy_suppressed(
                         &row.delivery.id,
-                        FederationPolicyResolution::Repin {
+                        FederationOutboxPolicyResolution::Repin {
                             policy_version: policy_version.clone(),
                         },
                     )
@@ -831,15 +831,15 @@ impl FederationDispatcher {
                 )
                 .is_ok();
             let resolution = if egress_ok {
-                FederationPolicyResolution::Release {
+                FederationOutboxPolicyResolution::Release {
                     next_attempt_at: now_unix_secs(),
                 }
             } else {
-                FederationPolicyResolution::Repin {
+                FederationOutboxPolicyResolution::Repin {
                     policy_version: policy_version.clone(),
                 }
             };
-            let released = matches!(resolution, FederationPolicyResolution::Release { .. });
+            let released = matches!(resolution, FederationOutboxPolicyResolution::Release { .. });
             match self
                 .state
                 .federation()

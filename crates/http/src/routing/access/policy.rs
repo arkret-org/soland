@@ -45,7 +45,7 @@ use crate::routing::append_audit_log;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
-    AdminPolicyPayload, OkOutcome, PolicyDocumentOutcome, PolicyDocumentsOutcome, PolicyEffect,
+    AdminPolicyDocument, AdminPolicyDocumentPage, AdminPolicyPayload, OkOutcome, PolicyEffect,
     UpsertPolicyDocumentRequestBody,
 };
 
@@ -92,7 +92,7 @@ async fn list_policy_documents(
     include_inactive: QueryParam<bool, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<PolicyDocumentsOutcome> {
+) -> JsonResult<AdminPolicyDocumentPage> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let scope = scope.into_inner();
@@ -113,7 +113,7 @@ async fn list_policy_documents(
         })
         .map(|policy| policy_document_to_response(&policy))
         .collect::<Result<Vec<_>, _>>()?;
-    json_ok(PolicyDocumentsOutcome {
+    json_ok(AdminPolicyDocumentPage {
         policies,
         next_cursor: None,
     })
@@ -132,7 +132,7 @@ async fn get_policy_document(
     policy_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<PolicyDocumentOutcome> {
+) -> JsonResult<AdminPolicyDocument> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let policy_id = policy_id.into_inner();
@@ -160,7 +160,7 @@ async fn upsert_policy_document(
     body: JsonBody<UpsertPolicyDocumentRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<PolicyDocumentOutcome> {
+) -> JsonResult<AdminPolicyDocument> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -557,7 +557,7 @@ fn policy_action_risk_tier(action: &str) -> Option<CapabilityRiskTier> {
 /// effect.
 pub fn policy_document_to_response(
     policy: &PolicyDocumentRecord,
-) -> Result<PolicyDocumentOutcome, AppError> {
+) -> Result<AdminPolicyDocument, AppError> {
     let payload: AdminPolicyPayload =
         serde_json::from_value(policy.payload.clone()).map_err(|error| {
             AppError::internal(format!(
@@ -565,7 +565,7 @@ pub fn policy_document_to_response(
                 policy.policy_id
             ))
         })?;
-    Ok(PolicyDocumentOutcome {
+    Ok(AdminPolicyDocument {
         policy_id: policy.policy_id.clone(),
         owner: policy.owner.clone(),
         scope: policy.scope.clone(),

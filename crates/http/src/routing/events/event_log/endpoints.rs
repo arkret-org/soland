@@ -758,30 +758,28 @@ async fn event_delivery_status(
             continue;
         }
         let status = match delivery.state {
-            soland_services::federation::FederationDeliveryState::PendingRoute => {
+            soland_storage::FederationOutboxState::PendingRoute => {
                 EventDeliveryTargetState::PendingRoute
             }
-            soland_services::federation::FederationDeliveryState::Pending => {
+            soland_storage::FederationOutboxState::Pending => {
                 EventDeliveryTargetState::PendingDelivery
             }
-            soland_services::federation::FederationDeliveryState::Leased => {
+            soland_storage::FederationOutboxState::Leased => {
                 if delivery.leased_from_state
-                    == Some(soland_services::federation::FederationDeliveryState::PendingRoute)
+                    == Some(soland_storage::FederationOutboxState::PendingRoute)
                 {
                     EventDeliveryTargetState::PendingRoute
                 } else {
                     EventDeliveryTargetState::PendingDelivery
                 }
             }
-            soland_services::federation::FederationDeliveryState::Delivered => {
-                EventDeliveryTargetState::Delivered
-            }
-            soland_services::federation::FederationDeliveryState::CancelledAuthorityLost => {
+            soland_storage::FederationOutboxState::Delivered => EventDeliveryTargetState::Delivered,
+            soland_storage::FederationOutboxState::CancelledAuthorityLost => {
                 EventDeliveryTargetState::CancelledAuthorityLost
             }
-            soland_services::federation::FederationDeliveryState::PolicySuppressed
-            | soland_services::federation::FederationDeliveryState::DeadLettered
-            | soland_services::federation::FederationDeliveryState::Superseded => {
+            soland_storage::FederationOutboxState::PolicySuppressed
+            | soland_storage::FederationOutboxState::DeadLettered
+            | soland_storage::FederationOutboxState::Superseded => {
                 return Err(AppError::internal(
                     "Realm fanout row entered a state forbidden by the delivery-status contract",
                 ));

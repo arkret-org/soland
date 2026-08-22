@@ -517,7 +517,7 @@ pub(crate) fn grant_has_broadcast_safety_constraints(grant: &crate::authz::Grant
         || grant.constraints.iter().any(|constraint| {
             matches!(
                 constraint,
-                crate::authz::Constraint::Temporal {
+                crate::authz::GrantConstraint::Temporal {
                     expires_at: Some(_),
                     ..
                 }
@@ -526,7 +526,7 @@ pub(crate) fn grant_has_broadcast_safety_constraints(grant: &crate::authz::Grant
     let has_rate_limit = grant.constraints.iter().any(|constraint| {
         matches!(
             constraint,
-            crate::authz::Constraint::RateLimiting { max_operations, period }
+            crate::authz::GrantConstraint::RateLimiting { max_operations, period }
                 if *max_operations > 0 && !period.trim().is_empty()
         )
     });

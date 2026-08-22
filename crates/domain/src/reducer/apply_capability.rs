@@ -140,7 +140,7 @@ fn engine_resources_from_body(body: &Value, realm_id: &str) -> Vec<String> {
     resources
 }
 
-fn engine_constraints_from_body(body: &Value) -> Option<Vec<crate::capability::Constraint>> {
+fn engine_constraints_from_body(body: &Value) -> Option<Vec<crate::capability::GrantConstraint>> {
     value_array_field(body, "constraints")
         .into_iter()
         .map(|constraint| serde_json::from_value(constraint.clone()).ok())
@@ -383,12 +383,12 @@ mod cba_capability_cell_tests {
 
         assert!(matches!(
             &grant.constraints[0],
-            crate::capability::Constraint::FieldAccess { allowed_write_fields, .. }
+            crate::capability::GrantConstraint::FieldAccess { allowed_write_fields, .. }
                 if allowed_write_fields == &["tracks.synthesis.content"]
         ));
         assert!(matches!(
             &grant.constraints[1],
-            crate::capability::Constraint::ScopeLimitation { allowed_tracks, .. }
+            crate::capability::GrantConstraint::ScopeLimitation { allowed_tracks, .. }
                 if allowed_tracks == &["synthesis"]
         ));
     }

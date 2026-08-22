@@ -1278,7 +1278,7 @@ async fn accepted_remote_history_response_retry(
         ));
     }
     match delivery.state {
-        soland_services::federation::FederationDeliveryState::Delivered => {
+        soland_storage::FederationOutboxState::Delivered => {
             let receipt: HistoryKeyResponseSendReceipt =
                 serde_json::from_str(delivery.last_response_excerpt.as_deref().ok_or_else(
                     || AppError::internal("delivered history relay omits its durable receipt"),
@@ -1297,20 +1297,18 @@ async fn accepted_remote_history_response_retry(
             .await?;
             Ok(Some(receipt))
         }
-        soland_services::federation::FederationDeliveryState::Pending
-        | soland_services::federation::FederationDeliveryState::PendingRoute
-        | soland_services::federation::FederationDeliveryState::Leased
-        | soland_services::federation::FederationDeliveryState::PolicySuppressed => {
-            Err(AppError::new(
-                ErrorCode::DependencyMissing,
-                "history response relay is pending destination acceptance",
-            ))
-        }
-        soland_services::federation::FederationDeliveryState::CancelledAuthorityLost
-        | soland_services::federation::FederationDeliveryState::DeadLettered
-        | soland_services::federation::FederationDeliveryState::Superseded => Err(
-            AppError::conflict("history response relay reached a terminal delivery failure"),
-        ),
+        soland_storage::FederationOutboxState::Pending
+        | soland_storage::FederationOutboxState::PendingRoute
+        | soland_storage::FederationOutboxState::Leased
+        | soland_storage::FederationOutboxState::PolicySuppressed => Err(AppError::new(
+            ErrorCode::DependencyMissing,
+            "history response relay is pending destination acceptance",
+        )),
+        soland_storage::FederationOutboxState::CancelledAuthorityLost
+        | soland_storage::FederationOutboxState::DeadLettered
+        | soland_storage::FederationOutboxState::Superseded => Err(AppError::conflict(
+            "history response relay reached a terminal delivery failure",
+        )),
     }
 }
 
@@ -1492,7 +1490,7 @@ async fn delivered_remote_source_manifest(
     let mut found = None;
     for delivery in deliveries {
         if delivery.delivery.endpoint != HISTORY_RESPONSE_RELAY_ENDPOINT
-            || delivery.state != soland_services::federation::FederationDeliveryState::Delivered
+            || delivery.state != soland_storage::FederationOutboxState::Delivered
         {
             continue;
         }

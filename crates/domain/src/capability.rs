@@ -3,8 +3,8 @@ use arkret_identifiers::{
     ReadCursorId, RealmId, RelationId, SpaceId, StrandId, ViewId,
 };
 pub use arkret_policy::authz::authority::{
-    Grant, GrantConstraint as Constraint, IssuerAuthorityRef, grant_effective_expiry,
-    is_grant_expired, max_authority_depth,
+    Grant, GrantConstraint, IssuerAuthorityRef, grant_effective_expiry, is_grant_expired,
+    max_authority_depth,
 };
 use serde_json::{Map, Value};
 

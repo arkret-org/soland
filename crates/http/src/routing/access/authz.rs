@@ -30,7 +30,7 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{now, query_param};
-use crate::authz::{Constraint, GrantDecisionVerdict};
+use crate::authz::{GrantConstraint, GrantDecisionVerdict};
 use crate::routing::spaces::space::realm_has_member_by_id;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -481,10 +481,10 @@ fn capability_grant_from_authz_grant(
 }
 
 fn wire_constraint_from_authz_constraint(
-    constraint: Constraint,
+    constraint: GrantConstraint,
 ) -> Result<WireGrantConstraint, AppError> {
     match constraint {
-        Constraint::Decision { decision } => {
+        GrantConstraint::Decision { decision } => {
             let mut wire = WireGrantConstraint::new(
                 WireGrantConstraintKind::ScopeLimitation,
                 wire_effect_from_decision(decision),
@@ -497,7 +497,7 @@ fn wire_constraint_from_authz_constraint(
             )?;
             Ok(wire)
         }
-        Constraint::Temporal {
+        GrantConstraint::Temporal {
             expires_at,
             constraint_subkind,
             message_edit_window,
@@ -532,7 +532,7 @@ fn wire_constraint_from_authz_constraint(
             wire.redact_after_window_allowed = Some(redact_after_window_allowed);
             Ok(wire)
         }
-        Constraint::AllowedCircleIds { allowed_circle_ids } => {
+        GrantConstraint::AllowedCircleIds { allowed_circle_ids } => {
             let mut wire = WireGrantConstraint::new(
                 WireGrantConstraintKind::ScopeLimitation,
                 WireGrantConstraintEffect::Allow,
@@ -540,7 +540,7 @@ fn wire_constraint_from_authz_constraint(
             wire.allowed_circle_ids = allowed_circle_ids.into_iter().collect();
             Ok(wire)
         }
-        Constraint::AllowedSessionIds {
+        GrantConstraint::AllowedSessionIds {
             allowed_session_ids,
         } => {
             let mut wire = WireGrantConstraint::new(
@@ -551,7 +551,7 @@ fn wire_constraint_from_authz_constraint(
             wire.allowed_session_ids = allowed_session_ids.into_iter().collect();
             Ok(wire)
         }
-        Constraint::AllowedObjectFacets { facets } => {
+        GrantConstraint::AllowedObjectFacets { facets } => {
             let mut wire = WireGrantConstraint::new(
                 WireGrantConstraintKind::KindRestriction,
                 WireGrantConstraintEffect::Allow,
@@ -572,7 +572,7 @@ fn wire_constraint_from_authz_constraint(
             }
             Ok(wire)
         }
-        Constraint::RateLimiting {
+        GrantConstraint::RateLimiting {
             max_operations,
             period,
         } => {
@@ -585,7 +585,7 @@ fn wire_constraint_from_authz_constraint(
             wire.period = Some(period);
             Ok(wire)
         }
-        Constraint::FieldAccess {
+        GrantConstraint::FieldAccess {
             effect,
             allowed_write_fields,
             denied_write_fields,
@@ -607,7 +607,7 @@ fn wire_constraint_from_authz_constraint(
                 .map_err(|error| AppError::internal(error.to_string()))?;
             Ok(wire)
         }
-        Constraint::ScopeLimitation {
+        GrantConstraint::ScopeLimitation {
             effect,
             allowed_strand_ids,
             denied_strand_ids,
@@ -628,7 +628,7 @@ fn wire_constraint_from_authz_constraint(
             wire.allowed_session_ids = allowed_session_ids.into_iter().collect();
             Ok(wire)
         }
-        Constraint::AuthorityControl {
+        GrantConstraint::AuthorityControl {
             max_authority_depth,
             authority_regrant_allowed,
             constraint_subkind,

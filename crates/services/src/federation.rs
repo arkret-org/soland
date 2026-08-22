@@ -121,14 +121,14 @@ pub struct FederationDeliveryRecord {
 
 /// One outbox row with its full explicit lifecycle. Re-exported storage state
 /// so the dispatcher and the operator surfaces speak one vocabulary.
-pub use soland_storage::FederationOutboxState as FederationDeliveryState;
+use soland_storage::FederationOutboxState;
 pub use soland_storage::{RealmFanoutAuthorityWitness, RealmFanoutBinding};
 
 #[derive(Clone, Debug)]
 pub struct PendingFederationDelivery {
     pub delivery: FederationDeliveryRecord,
-    pub state: FederationDeliveryState,
-    pub leased_from_state: Option<FederationDeliveryState>,
+    pub state: FederationOutboxState,
+    pub leased_from_state: Option<FederationOutboxState>,
     pub attempts: i32,
     pub semantic_attempts: i32,
     pub next_attempt_at: i64,
@@ -204,7 +204,7 @@ pub enum FederationDeliveryOutcome {
 }
 
 /// Verdict of one `policy_suppressed` revalidation.
-pub use soland_storage::FederationOutboxPolicyResolution as FederationPolicyResolution;
+use soland_storage::FederationOutboxPolicyResolution;
 
 /// One attempt's complete, atomically applied result.
 #[derive(Clone, Debug)]
@@ -232,7 +232,7 @@ pub struct RequeueFederationDeadLetterCommand {
     pub requeued_at: i64,
 }
 
-pub use soland_storage::FederationOutboxStateDepth as FederationDeliveryStateDepth;
+use soland_storage::FederationOutboxStateDepth;
 
 #[async_trait]
 pub trait FederationOutboxPort: Send + Sync {
@@ -256,7 +256,7 @@ pub trait FederationOutboxPort: Send + Sync {
     async fn resolve_policy_suppressed(
         &self,
         id: &str,
-        resolution: &FederationPolicyResolution,
+        resolution: &FederationOutboxPolicyResolution,
     ) -> ServiceResult<bool>;
     async fn delivery(&self, id: &str) -> ServiceResult<Option<PendingFederationDelivery>>;
     async fn deliveries_for_event(
@@ -265,10 +265,10 @@ pub trait FederationOutboxPort: Send + Sync {
     ) -> ServiceResult<Vec<PendingFederationDelivery>>;
     async fn deliveries_by_state(
         &self,
-        state: FederationDeliveryState,
+        state: FederationOutboxState,
         limit: usize,
     ) -> ServiceResult<Vec<PendingFederationDelivery>>;
-    async fn state_depth(&self) -> ServiceResult<Vec<FederationDeliveryStateDepth>>;
+    async fn state_depth(&self) -> ServiceResult<Vec<FederationOutboxStateDepth>>;
     async fn dead_letter(&self, id: &str) -> ServiceResult<Option<FederationDeadLetter>>;
     async fn dead_letters(&self) -> ServiceResult<Vec<FederationDeadLetter>>;
     async fn requeue_dead_letter(
@@ -352,10 +352,10 @@ impl FederationService {
                     && row.delivery.coalescing_key.as_deref() == Some(coalescing_key)
                     && matches!(
                         row.state,
-                        FederationDeliveryState::Pending
-                            | FederationDeliveryState::PendingRoute
-                            | FederationDeliveryState::Leased
-                            | FederationDeliveryState::PolicySuppressed
+                        FederationOutboxState::Pending
+                            | FederationOutboxState::PendingRoute
+                            | FederationOutboxState::Leased
+                            | FederationOutboxState::PolicySuppressed
                     )
             })
         {
@@ -393,7 +393,7 @@ impl FederationService {
     pub async fn resolve_policy_suppressed(
         &self,
         id: &str,
-        resolution: FederationPolicyResolution,
+        resolution: FederationOutboxPolicyResolution,
     ) -> ServiceResult<bool> {
         self.outbox.resolve_policy_suppressed(id, &resolution).await
     }
@@ -411,13 +411,13 @@ impl FederationService {
 
     pub async fn deliveries_by_state(
         &self,
-        state: FederationDeliveryState,
+        state: FederationOutboxState,
         limit: usize,
     ) -> ServiceResult<Vec<PendingFederationDelivery>> {
         self.outbox.deliveries_by_state(state, limit).await
     }
 
-    pub async fn delivery_state_depth(&self) -> ServiceResult<Vec<FederationDeliveryStateDepth>> {
+    pub async fn delivery_state_depth(&self) -> ServiceResult<Vec<FederationOutboxStateDepth>> {
         self.outbox.state_depth().await
     }
 
@@ -542,7 +542,7 @@ mod tests {
     fn pending_entry(delivery: &FederationDeliveryRecord) -> PendingFederationDelivery {
         PendingFederationDelivery {
             delivery: delivery.clone(),
-            state: FederationDeliveryState::Pending,
+            state: FederationOutboxState::Pending,
             leased_from_state: None,
             attempts: 0,
             semantic_attempts: 0,
@@ -597,10 +597,8 @@ mod tests {
                     break;
                 }
                 let claimable = match entry.state {
-                    FederationDeliveryState::Pending | FederationDeliveryState::PendingRoute => {
-                        true
-                    }
-                    FederationDeliveryState::Leased => {
+                    FederationOutboxState::Pending | FederationOutboxState::PendingRoute => true,
+                    FederationOutboxState::Leased => {
                         entry.lease_expires_at.unwrap_or(0) <= command.now
                     }
                     _ => false,
@@ -609,7 +607,7 @@ mod tests {
                     continue;
                 }
                 entry.leased_from_state = Some(entry.state);
-                entry.state = FederationDeliveryState::Leased;
+                entry.state = FederationOutboxState::Leased;
                 entry.lease_owner = Some(command.lease_owner.clone());
                 entry.lease_token = Some(command.lease_token.clone());
                 entry.lease_expires_at = Some(command.now + command.lease_duration_secs);
@@ -638,27 +636,27 @@ mod tests {
             entry.state = match &command.outcome {
                 FederationDeliveryOutcome::Retry { next_attempt_at } => {
                     entry.next_attempt_at = *next_attempt_at;
-                    FederationDeliveryState::Pending
+                    FederationOutboxState::Pending
                 }
                 FederationDeliveryOutcome::RouteUnavailable { next_attempt_at } => {
                     entry.next_attempt_at = *next_attempt_at;
-                    FederationDeliveryState::PendingRoute
+                    FederationOutboxState::PendingRoute
                 }
-                FederationDeliveryOutcome::Delivered => FederationDeliveryState::Delivered,
+                FederationDeliveryOutcome::Delivered => FederationOutboxState::Delivered,
                 FederationDeliveryOutcome::CancelledAuthorityLost => {
-                    FederationDeliveryState::CancelledAuthorityLost
+                    FederationOutboxState::CancelledAuthorityLost
                 }
                 FederationDeliveryOutcome::PolicySuppressed { .. } => {
-                    FederationDeliveryState::PolicySuppressed
+                    FederationOutboxState::PolicySuppressed
                 }
                 FederationDeliveryOutcome::DeadLettered(record) => {
                     self.dead_letters
                         .lock()
                         .expect("dead-letter lock")
                         .push((**record).clone());
-                    FederationDeliveryState::DeadLettered
+                    FederationOutboxState::DeadLettered
                 }
-                FederationDeliveryOutcome::Superseded { .. } => FederationDeliveryState::Superseded,
+                FederationDeliveryOutcome::Superseded { .. } => FederationOutboxState::Superseded,
             };
             Ok(true)
         }
@@ -674,7 +672,7 @@ mod tests {
         async fn resolve_policy_suppressed(
             &self,
             _id: &str,
-            _resolution: &FederationPolicyResolution,
+            _resolution: &FederationOutboxPolicyResolution,
         ) -> ServiceResult<bool> {
             Ok(false)
         }
@@ -712,7 +710,7 @@ mod tests {
 
         async fn deliveries_by_state(
             &self,
-            state: FederationDeliveryState,
+            state: FederationOutboxState,
             limit: usize,
         ) -> ServiceResult<Vec<PendingFederationDelivery>> {
             Ok(self
@@ -726,7 +724,7 @@ mod tests {
                 .collect())
         }
 
-        async fn state_depth(&self) -> ServiceResult<Vec<FederationDeliveryStateDepth>> {
+        async fn state_depth(&self) -> ServiceResult<Vec<FederationOutboxStateDepth>> {
             Ok(Vec::new())
         }
 

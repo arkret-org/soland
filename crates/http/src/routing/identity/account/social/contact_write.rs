@@ -1768,7 +1768,7 @@ async fn prepare_contact_federation_delivery(
     event: &Event,
     outcome: &ContactOperationOutcome,
     _planned_record: Option<&ContactRecord>,
-) -> Result<Option<soland_services::events::FederationDelivery>, AppError> {
+) -> Result<Option<soland_services::federation::FederationDeliveryRecord>, AppError> {
     let ContactOperationOutcome::Accepted { outcome } = outcome else {
         return Ok(None);
     };

@@ -25,9 +25,10 @@
 
 use serde::Serialize;
 use soland_services::federation::{
-    FederationDeadLetter, FederationDeliveryRecord, FederationDeliveryState,
-    PendingFederationDelivery, RequeueFederationDeadLetterCommand,
+    FederationDeadLetter, FederationDeliveryRecord, PendingFederationDelivery,
+    RequeueFederationDeadLetterCommand,
 };
+use soland_storage::FederationOutboxState;
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -149,7 +150,7 @@ pub struct RequeueOutcome {
 /// Rows in one lifecycle state, newest first.
 pub async fn list_by_state(
     state: &AppState,
-    lifecycle: FederationDeliveryState,
+    lifecycle: FederationOutboxState,
     limit: usize,
 ) -> Result<Vec<OutboxSummary>, String> {
     Ok(state

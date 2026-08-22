@@ -462,7 +462,7 @@ pub(super) async fn validate_message_edit_redact_window_policy(
             continue;
         }
         for constraint in &grant.constraints {
-            if let crate::authz::Constraint::Temporal {
+            if let crate::authz::GrantConstraint::Temporal {
                 message_edit_window,
                 message_redact_window,
                 redact_after_window_allowed,

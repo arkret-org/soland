@@ -888,7 +888,7 @@ async fn identity_anchor_fanout_records(
     unit: &[(&ValidatedEventEnvelope, &Value)],
     control_proposal_acks: &[arkret_wire::ControlProposalAck],
     publication_evidence: &[soland_services::events::PublicationEvidenceRecord],
-) -> Result<Vec<soland_services::events::FederationDelivery>, SubmitOneError> {
+) -> Result<Vec<soland_services::federation::FederationDeliveryRecord>, SubmitOneError> {
     if session.token_hash.starts_with("federation:") {
         return Ok(Vec::new());
     }

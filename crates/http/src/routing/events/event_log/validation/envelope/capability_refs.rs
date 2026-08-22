@@ -768,17 +768,17 @@ fn grant_constraints_cover_data_event(
     action: &str,
     access: &DataEventConstraintContext,
 ) -> bool {
-    use crate::authz::{Constraint, GrantDecisionVerdict};
+    use crate::authz::{GrantConstraint, GrantDecisionVerdict};
 
     let mut has_allowed_write_fields = false;
     for constraint in &grant.constraints {
         match constraint {
-            Constraint::Decision { decision } => {
+            GrantConstraint::Decision { decision } => {
                 if !matches!(decision, GrantDecisionVerdict::Allow) {
                     return false;
                 }
             }
-            Constraint::FieldAccess {
+            GrantConstraint::FieldAccess {
                 effect,
                 allowed_write_fields,
                 denied_write_fields,
@@ -817,7 +817,7 @@ fn grant_constraints_cover_data_event(
                     }
                 }
             }
-            Constraint::ScopeLimitation {
+            GrantConstraint::ScopeLimitation {
                 effect,
                 allowed_strand_ids,
                 denied_strand_ids,
@@ -862,11 +862,11 @@ fn grant_has_matching_restrictive_constraint(
     grant: &crate::authz::Grant,
     access: &DataEventConstraintContext,
 ) -> bool {
-    use crate::authz::{Constraint, GrantDecisionVerdict};
+    use crate::authz::{GrantConstraint, GrantDecisionVerdict};
 
     grant.constraints.iter().any(|constraint| match constraint {
-        Constraint::Decision { decision } => !matches!(decision, GrantDecisionVerdict::Allow),
-        Constraint::FieldAccess {
+        GrantConstraint::Decision { decision } => !matches!(decision, GrantDecisionVerdict::Allow),
+        GrantConstraint::FieldAccess {
             effect,
             allowed_write_fields,
             denied_write_fields,
@@ -887,7 +887,7 @@ fn grant_has_matching_restrictive_constraint(
                 access,
             )
         }
-        Constraint::ScopeLimitation {
+        GrantConstraint::ScopeLimitation {
             effect,
             allowed_strand_ids,
             denied_strand_ids,
@@ -1035,12 +1035,12 @@ pub(super) fn append_authz_resource_candidates(
 #[cfg(test)]
 mod constraint_tests {
     use super::*;
-    use crate::authz::{Constraint, GrantDecisionVerdict, projected_grant_fixture};
+    use crate::authz::{GrantConstraint, GrantDecisionVerdict, projected_grant_fixture};
 
     const REALM: &str = "ak:realm:AX-N4k3nJ3KKtkbL-adKMKRyKUlTWlwhxQVvjmvEBEVB";
     const STRAND: &str = "ak:strand:AT3ARBdH1FM6GjXK9ulTx-YMvQOXys39dlUzZV6KyID9";
 
-    fn grant(constraints: Vec<Constraint>) -> crate::authz::Grant {
+    fn grant(constraints: Vec<GrantConstraint>) -> crate::authz::Grant {
         projected_grant_fixture(
             REALM.to_owned(),
             "ak:did_core:web:issuer.example".to_owned(),
@@ -1051,8 +1051,8 @@ mod constraint_tests {
         )
     }
 
-    fn field_access(fields: &[&str]) -> Constraint {
-        Constraint::FieldAccess {
+    fn field_access(fields: &[&str]) -> GrantConstraint {
+        GrantConstraint::FieldAccess {
             effect: GrantDecisionVerdict::Allow,
             allowed_write_fields: fields.iter().map(|field| (*field).to_owned()).collect(),
             denied_write_fields: Vec::new(),
@@ -1144,7 +1144,7 @@ mod constraint_tests {
     fn allowed_tracks_applies_only_to_track_targeted_paths() {
         let grant = grant(vec![
             field_access(&["content", "tracks.synthesis.content"]),
-            Constraint::ScopeLimitation {
+            GrantConstraint::ScopeLimitation {
                 effect: GrantDecisionVerdict::Allow,
                 allowed_strand_ids: Vec::new(),
                 denied_strand_ids: Vec::new(),
@@ -1175,7 +1175,7 @@ mod constraint_tests {
     fn matching_deny_grant_cannot_be_bleached_by_a_separate_allow_grant() {
         let description_access = access("content");
         let allow = grant(vec![field_access(&["content"])]);
-        let deny = grant(vec![Constraint::FieldAccess {
+        let deny = grant(vec![GrantConstraint::FieldAccess {
             effect: GrantDecisionVerdict::Deny,
             allowed_write_fields: Vec::new(),
             denied_write_fields: vec!["content".to_owned()],
@@ -1204,7 +1204,7 @@ mod constraint_tests {
     #[test]
     fn indeterminate_allow_is_per_grant_not_a_global_restriction() {
         let description_access = access("content");
-        let conditional_allow = grant(vec![Constraint::FieldAccess {
+        let conditional_allow = grant(vec![GrantConstraint::FieldAccess {
             effect: GrantDecisionVerdict::Allow,
             allowed_write_fields: vec!["content".to_owned()],
             denied_write_fields: Vec::new(),

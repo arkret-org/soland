@@ -20,7 +20,7 @@ pub mod policy_client;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-// Delegation primitives — `Grant`, `Constraint` (alias of `GrantConstraint`),
+// Delegation primitives — `Grant`, `GrantConstraint`,
 // and the chain-integrity / expiry helpers — live in the SDK so inkson and
 // sodmin admin can call them client-side. See
 // `arkret_policy::authz::authority`.
@@ -30,7 +30,7 @@ use std::sync::Arc;
 // `soland_domain::reducer::apply_capability` is the only place a grant comes
 // into existence, and this engine is strictly the read-side index over it.
 pub use arkret_policy::authz::authority::{
-    AppletAuthorityBindingError, Grant, GrantConstraint as Constraint, GrantDecisionVerdict,
+    AppletAuthorityBindingError, Grant, GrantConstraint, GrantDecisionVerdict,
     authority_chain_intact, is_grant_expired, validate_applet_authority_binding,
 };
 use parking_lot::Mutex;
@@ -376,7 +376,7 @@ pub fn projected_grant_fixture(
     subject: String,
     resource: String,
     actions: Vec<String>,
-    constraints: Vec<Constraint>,
+    constraints: Vec<GrantConstraint>,
 ) -> Grant {
     Grant {
         // `grant` is Event-derived, so the id can only be the create Event's
@@ -423,7 +423,7 @@ pub fn install_projected_grant(
     subject: String,
     resource: String,
     actions: Vec<String>,
-    constraints: Vec<Constraint>,
+    constraints: Vec<GrantConstraint>,
 ) -> Grant {
     let grant = projected_grant_fixture(realm_id, issuer, subject, resource, actions, constraints);
     authz.upsert_projected_grant(grant.clone());
@@ -618,13 +618,13 @@ fn grant_decision(grant: &Grant) -> GrantDecision {
         .unwrap_or(GrantDecision::Allow)
 }
 
-fn is_decision_constraint(constraint: &Constraint) -> bool {
+fn is_decision_constraint(constraint: &GrantConstraint) -> bool {
     decision_from_constraint(constraint).is_some()
 }
 
-fn decision_from_constraint(constraint: &Constraint) -> Option<GrantDecision> {
+fn decision_from_constraint(constraint: &GrantConstraint) -> Option<GrantDecision> {
     match constraint {
-        Constraint::Decision { decision } => Some(match decision {
+        GrantConstraint::Decision { decision } => Some(match decision {
             GrantDecisionVerdict::Deny => GrantDecision::Deny,
             GrantDecisionVerdict::Quarantine => GrantDecision::Quarantine,
             GrantDecisionVerdict::Allow => GrantDecision::Allow,
@@ -637,13 +637,13 @@ fn decision_from_constraint(constraint: &Constraint) -> Option<GrantDecision> {
 /// Evaluate a constraint. Returns `None` when the constraint is satisfied,
 /// or `Some(reason_text)` when it fails.
 fn evaluate_constraint(
-    constraint: &Constraint,
+    constraint: &GrantConstraint,
     _actor: &str,
     resource: &str,
     resource_facets: &[String],
 ) -> Option<String> {
     match constraint {
-        Constraint::Temporal { expires_at, .. } => {
+        GrantConstraint::Temporal { expires_at, .. } => {
             // Check if the grant hasn't expired
             if let Some(expires) = expires_at {
                 return if chrono::Utc::now() < *expires {
@@ -654,7 +654,7 @@ fn evaluate_constraint(
             }
             None
         }
-        Constraint::AllowedCircleIds { allowed_circle_ids } => {
+        GrantConstraint::AllowedCircleIds { allowed_circle_ids } => {
             // AKP-0007 (spec b7d35be) — narrow a Circle-management
             // capability (`ak.circle.manage`, `ak.circle.member.manage`,
             // `ak.circle.member.add.others`, `ak.circle.audit`) to a
@@ -678,7 +678,7 @@ fn evaluate_constraint(
                 );
             }
             if !resource.starts_with("ak:circle:") {
-                // Constraint is Circle-scoped — non-Circle resources are
+                // GrantConstraint is Circle-scoped — non-Circle resources are
                 // out of scope; pass through.
                 return None;
             }
@@ -691,7 +691,7 @@ fn evaluate_constraint(
                 ))
             }
         }
-        Constraint::AllowedSessionIds {
+        GrantConstraint::AllowedSessionIds {
             allowed_session_ids,
         } => {
             if allowed_session_ids.is_empty() {
@@ -711,7 +711,7 @@ fn evaluate_constraint(
                 ))
             }
         }
-        Constraint::AllowedObjectFacets { facets: allowed } => {
+        GrantConstraint::AllowedObjectFacets { facets: allowed } => {
             // Resource must carry at least one of the listed facets. When the
             // resource itself reports no facets, fail-closed — the grant is
             // facet-bound and an unfaceted target falls outside its scope.
@@ -734,13 +734,13 @@ fn evaluate_constraint(
                 ))
             }
         }
-        Constraint::AuthorityControl { .. } => {
+        GrantConstraint::AuthorityControl { .. } => {
             // Depth is enforced at chain-walk time. The registered
             // applet_authority subkind is checked by the Applet Event
             // reducer, where registration epoch evidence is available.
             None
         }
-        Constraint::RateLimiting {
+        GrantConstraint::RateLimiting {
             max_operations,
             period,
         } => {
@@ -757,14 +757,14 @@ fn evaluate_constraint(
                 None
             }
         }
-        Constraint::FieldAccess { .. } => {
+        GrantConstraint::FieldAccess { .. } => {
             // These constraints require operation-derived dotted paths and
             // track targets. DataEvent admission evaluates them against the
             // signed payload in `capability_refs`; this resource-only helper
             // has no safe context from which to do so.
             None
         }
-        Constraint::ScopeLimitation {
+        GrantConstraint::ScopeLimitation {
             allowed_strand_ids,
             denied_strand_ids,
             allowed_circle_ids,
@@ -792,7 +792,7 @@ fn evaluate_constraint(
             }
             None
         }
-        Constraint::Decision { .. } => {
+        GrantConstraint::Decision { .. } => {
             // Decision constraints are evaluated separately via
             // `decision_from_constraint`; treat as satisfied here so they
             // never fail the satisfaction check.
@@ -967,7 +967,7 @@ mod tests {
         subject: &str,
         resource: &str,
         actions: &[&str],
-        constraints: Vec<Constraint>,
+        constraints: Vec<GrantConstraint>,
     ) -> Grant {
         let grant = projected_grant_fixture(
             realm_id.to_owned(),
@@ -1158,7 +1158,7 @@ mod tests {
             "did:web:bob",
             "ak:space:1",
             &["ak.message.create"],
-            vec![Constraint::Decision {
+            vec![GrantConstraint::Decision {
                 decision: GrantDecisionVerdict::Allow,
             }],
         );
@@ -1169,7 +1169,7 @@ mod tests {
             "did:web:bob",
             "ak:space:1",
             &["ak.message.create"],
-            vec![Constraint::Decision {
+            vec![GrantConstraint::Decision {
                 decision: GrantDecisionVerdict::Deny,
             }],
         );
@@ -1198,7 +1198,7 @@ mod tests {
             "did:web:bob",
             "ak:space:1",
             &["ak.message.create"],
-            vec![Constraint::Decision {
+            vec![GrantConstraint::Decision {
                 decision: GrantDecisionVerdict::RequireReview,
             }],
         );
@@ -1209,7 +1209,7 @@ mod tests {
             "did:web:bob",
             "ak:space:1",
             &["ak.message.create"],
-            vec![Constraint::Decision {
+            vec![GrantConstraint::Decision {
                 decision: GrantDecisionVerdict::Allow,
             }],
         );
@@ -1232,7 +1232,7 @@ mod tests {
             "did:web:bob",
             "ak:space:1",
             &["ak.message.create"],
-            vec![Constraint::Decision {
+            vec![GrantConstraint::Decision {
                 decision: GrantDecisionVerdict::Quarantine,
             }],
         );

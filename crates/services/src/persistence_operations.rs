@@ -271,7 +271,7 @@ impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
     async fn resolve_policy_suppressed(
         &self,
         id: &str,
-        resolution: &crate::federation::FederationPolicyResolution,
+        resolution: &soland_storage::FederationOutboxPolicyResolution,
     ) -> crate::ServiceResult<bool> {
         Ok(self
             .0
@@ -308,7 +308,7 @@ impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
 
     async fn deliveries_by_state(
         &self,
-        state: crate::federation::FederationDeliveryState,
+        state: soland_storage::FederationOutboxState,
         limit: usize,
     ) -> crate::ServiceResult<Vec<crate::federation::PendingFederationDelivery>> {
         Ok(self
@@ -323,7 +323,7 @@ impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
 
     async fn state_depth(
         &self,
-    ) -> crate::ServiceResult<Vec<crate::federation::FederationDeliveryStateDepth>> {
+    ) -> crate::ServiceResult<Vec<soland_storage::FederationOutboxStateDepth>> {
         Ok(self.0.federation_outbox().state_depth().await?)
     }
 

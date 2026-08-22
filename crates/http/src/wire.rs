@@ -404,8 +404,7 @@ pub use arkret_models_integration::{
 // The policy document surface is one definition shared with the operator
 // console (`soland-contracts::admin::policy`); see that module for why.
 pub use soland_contracts::admin::policy::{
-    AdminPolicyDocument as PolicyDocumentOutcome,
-    AdminPolicyDocumentPage as PolicyDocumentsOutcome, AdminPolicyPayload, PolicyEffect,
+    AdminPolicyDocument, AdminPolicyDocumentPage, AdminPolicyPayload, PolicyEffect,
     UpsertPolicyDocumentRequestBody,
 };
 
@@ -458,8 +457,7 @@ pub use arkret_models_collaboration::objects::media::{
     CallMediaParticipantBinding, CallMediaTokenExchangeOutcome, CallMediaTokenExchangeRequestBody,
 };
 pub use arkret_models_collaboration::sidecar_operations::{
-    SidecarEnsureOutcome as AgentSidecarEnsureOutcome,
-    SidecarEnsureRequestBody as AgentSidecarEnsureRequestBody,
+    SidecarEnsureOutcome, SidecarEnsureRequestBody,
 };
 pub use arkret_models_crypto::KeysBackupsPutRequestBody;
 // Key-backup replace/delete outcomes are the SDK server-side DTOs

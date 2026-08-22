@@ -79,7 +79,7 @@ pub(super) struct SubmitCommitOptions<'a> {
     pub(super) idempotency: Option<SubmitCommitIdempotency>,
     pub(super) device_pairing: Option<&'a DevicePairingAdmission>,
     pub(super) contact_projection: Option<&'a soland_services::events::CommitContactProjection>,
-    pub(super) additional_deliveries: &'a [soland_services::events::FederationDelivery],
+    pub(super) additional_deliveries: &'a [soland_services::federation::FederationDeliveryRecord],
 }
 
 impl SubmitCommitOptions<'_> {
@@ -432,7 +432,7 @@ pub(in crate::routing) async fn submit_initial_event_submission_with_contact_pro
     session: &SessionRecord,
     submission: arkret_wire::EventInitialSubmission,
     contact_projection: soland_services::events::CommitContactProjection,
-    deliveries: Vec<soland_services::events::FederationDelivery>,
+    deliveries: Vec<soland_services::federation::FederationDeliveryRecord>,
     idempotency: soland_services::events::IdempotentResponse,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     // Same Box::pin boundary as `submit_initial_event_submission`: the
@@ -843,16 +843,14 @@ pub(super) async fn durable_pending_delivery_count(
                 continue;
             }
             let pending = match delivery.state {
-                soland_services::federation::FederationDeliveryState::Pending
-                | soland_services::federation::FederationDeliveryState::PendingRoute
-                | soland_services::federation::FederationDeliveryState::Leased => true,
-                soland_services::federation::FederationDeliveryState::Delivered
-                | soland_services::federation::FederationDeliveryState::CancelledAuthorityLost => {
-                    false
-                }
-                soland_services::federation::FederationDeliveryState::PolicySuppressed
-                | soland_services::federation::FederationDeliveryState::DeadLettered
-                | soland_services::federation::FederationDeliveryState::Superseded => {
+                soland_storage::FederationOutboxState::Pending
+                | soland_storage::FederationOutboxState::PendingRoute
+                | soland_storage::FederationOutboxState::Leased => true,
+                soland_storage::FederationOutboxState::Delivered
+                | soland_storage::FederationOutboxState::CancelledAuthorityLost => false,
+                soland_storage::FederationOutboxState::PolicySuppressed
+                | soland_storage::FederationOutboxState::DeadLettered
+                | soland_storage::FederationOutboxState::Superseded => {
                     return Err(SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "internal_error",

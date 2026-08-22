@@ -109,7 +109,7 @@ pub(crate) async fn prepare_peer_contact_carrier(
     state: &AppState,
     recipient_service_id: &str,
     delivery: &PeerContactSubmitRequestBody,
-) -> Result<Option<soland_services::events::FederationDelivery>, AppError> {
+) -> Result<Option<soland_services::federation::FederationDeliveryRecord>, AppError> {
     if recipient_service_id == state.service_id() {
         return Ok(None);
     }
@@ -145,18 +145,20 @@ pub(crate) async fn prepare_peer_contact_carrier(
         .map_err(|error| AppError::internal(format!("contact delivery canonicalize: {error}")))?;
     let payload_json = String::from_utf8(payload_bytes)
         .map_err(|error| AppError::internal(format!("contact delivery utf8: {error}")))?;
-    Ok(Some(soland_services::events::FederationDelivery {
-        id: Uuid::new_v4().to_string(),
-        peer_did: recipient_service_id.to_owned(),
-        peer_url: Some(peer_url.trim_end_matches('/').to_owned()),
-        endpoint: "/_arkret/peer/contacts".to_owned(),
-        idempotency_key: idempotency_key.to_owned(),
-        payload_json,
-        coalescing_key: None,
-        coalescing_position: None,
-        realm_fanout: None,
-        created_at: now().timestamp(),
-    }))
+    Ok(Some(
+        soland_services::federation::FederationDeliveryRecord {
+            id: Uuid::new_v4().to_string(),
+            peer_did: recipient_service_id.to_owned(),
+            peer_url: Some(peer_url.trim_end_matches('/').to_owned()),
+            endpoint: "/_arkret/peer/contacts".to_owned(),
+            idempotency_key: idempotency_key.to_owned(),
+            payload_json,
+            coalescing_key: None,
+            coalescing_position: None,
+            realm_fanout: None,
+            created_at: now().timestamp(),
+        },
+    ))
 }
 
 fn peer_contact_delivery_address(

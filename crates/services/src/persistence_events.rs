@@ -84,7 +84,7 @@ fn persistence_projected_event(
 }
 
 fn persistence_outbox_row(
-    delivery: crate::events::FederationDelivery,
+    delivery: crate::federation::FederationDeliveryRecord,
 ) -> soland_storage::FederationOutboxRecord {
     let coalescing_key = delivery.coalescing_key.clone();
     let coalescing_position = delivery.coalescing_position;
@@ -226,7 +226,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         records: Vec<crate::events::CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
-        deliveries: Vec<crate::events::FederationDelivery>,
+        deliveries: Vec<crate::federation::FederationDeliveryRecord>,
     ) -> crate::ServiceResult<()> {
         self.0
             .events()
@@ -248,7 +248,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         slot: soland_storage::DirectConversationFoundingSlotRecord,
-        deliveries: Vec<crate::events::FederationDelivery>,
+        deliveries: Vec<crate::federation::FederationDeliveryRecord>,
     ) -> crate::ServiceResult<soland_storage::DirectConversationFoundingCommitOutcome> {
         Ok(self
             .0
@@ -288,7 +288,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         frontier_cas: Option<crate::events::IdentityAnchorFrontierState>,
         reanchor_slot: Option<crate::events::IdentityAnchorReanchorState>,
         publication_evidence: Vec<soland_storage::PublicationEvidenceRecord>,
-        deliveries: Vec<crate::events::FederationDelivery>,
+        deliveries: Vec<crate::federation::FederationDeliveryRecord>,
     ) -> crate::ServiceResult<crate::events::IdentityAnchorCommitResult> {
         let outcome = self
             .0

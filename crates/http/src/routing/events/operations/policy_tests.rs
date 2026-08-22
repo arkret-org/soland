@@ -434,7 +434,7 @@ fn install_projected_grant(
     subject: String,
     resource: String,
     actions: Vec<String>,
-    constraints: Vec<crate::authz::Constraint>,
+    constraints: Vec<crate::authz::GrantConstraint>,
 ) -> crate::authz::Grant {
     let mut grant = crate::authz::projected_grant_fixture(
         realm_id,
@@ -537,7 +537,7 @@ fn grant_circle_action(
         actor.to_owned(),
         circle_id.to_owned(),
         vec![action.to_owned()],
-        vec![crate::authz::Constraint::AllowedCircleIds {
+        vec![crate::authz::GrantConstraint::AllowedCircleIds {
             allowed_circle_ids: std::collections::BTreeSet::from([
                 arkret_identifiers::CircleId::new(circle_id.to_owned()).expect("valid circle id"),
             ]),

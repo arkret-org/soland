@@ -40,12 +40,11 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_http::util::sha256_hex;
 use soland_services::events::{
-    CanonicalEventRecord, FederationDelivery,
-    InviteLocatorInsertResult as InviteLocatorInsertOutcome,
+    CanonicalEventRecord, InviteLocatorInsertResult as InviteLocatorInsertOutcome,
     InviteLocatorRotateCommand as InviteLocatorRotateMutation,
     InviteLocatorState as InviteLocatorRecord, RealmInviteState as RealmInviteRecord,
 };
-use soland_services::federation::EnqueueFederationDeliveryCommand;
+use soland_services::federation::{EnqueueFederationDeliveryCommand, FederationDeliveryRecord};
 use soland_services::identity::{
     AccountDataCasOutcome, AccountDataState, SessionIdentityState as SessionRecord,
 };
@@ -640,7 +639,7 @@ async fn enqueue_remote_invite_delivery(
     let enqueued = state
         .federation()
         .enqueue_delivery(EnqueueFederationDeliveryCommand {
-            delivery: FederationDelivery {
+            delivery: FederationDeliveryRecord {
                 id: enqueued_id.clone(),
                 peer_did: recipient_service_id.as_str().to_owned(),
                 peer_url: Some(entry.base_url.trim_end_matches('/').to_owned()),
