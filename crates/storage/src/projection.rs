@@ -1,6 +1,6 @@
 use super::{
-    BTreeMap, Operation, PersistenceResult, ProjectionEventRecord, RealmMetaRecord, Value,
-    async_trait,
+    BTreeMap, PersistenceResult, ProjectedEventOperation, ProjectionEventRecord, RealmMetaRecord,
+    Value, async_trait,
 };
 /// Trait for Realm metadata storage operations.
 #[async_trait]
@@ -245,14 +245,20 @@ pub fn first_string_field<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str
         .find_map(|key| value.get(*key).and_then(Value::as_str))
 }
 #[doc(hidden)]
-pub fn object_string_field<'a>(operation: &'a Operation, keys: &[&str]) -> Option<&'a str> {
+pub fn object_string_field<'a>(
+    operation: &'a ProjectedEventOperation,
+    keys: &[&str],
+) -> Option<&'a str> {
     operation
         .payload
         .get("object")
         .and_then(|object| first_string_field(object, keys))
 }
 #[doc(hidden)]
-pub fn patch_string_field<'a>(operation: &'a Operation, field: &str) -> Option<&'a str> {
+pub fn patch_string_field<'a>(
+    operation: &'a ProjectedEventOperation,
+    field: &str,
+) -> Option<&'a str> {
     let patch_value = operation
         .payload
         .get("patch")

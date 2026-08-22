@@ -4,10 +4,10 @@ use super::{
     FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
     FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState,
     FederationOutboxStateDepth, FederationOutboxStore, FederationOutboxTransition, Integer,
-    JsonPayloadRow, Jsonb, Nullable, Operation, OptionalExtension, PersistenceError,
-    PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl, SqlUuid, Text,
-    Timestamptz, async_trait, frontier_exchange_failure_record, frontier_exchange_success_record,
-    ids, pg_conn, sql_query,
+    JsonPayloadRow, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult,
+    PgPool, PgTransactionError, ProjectedEventOperation, QueryableByName, RunQueryDsl, SqlUuid,
+    Text, Timestamptz, async_trait, frontier_exchange_failure_record,
+    frontier_exchange_success_record, ids, pg_conn, sql_query,
 };
 
 /// Every column of `federation_outbox`, aliased to the record field names.
@@ -753,7 +753,7 @@ pub struct PgFederationOperationsStore {
 }
 #[async_trait]
 impl FederationOperationsStore for PgFederationOperationsStore {
-    async fn append(&self, operation: Operation) -> PersistenceResult<()> {
+    async fn append(&self, operation: ProjectedEventOperation) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -800,7 +800,10 @@ impl FederationOperationsStore for PgFederationOperationsStore {
             .map_err(PersistenceError::database)
     }
 
-    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<Operation>> {
+    async fn list_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Vec<ProjectedEventOperation>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -814,14 +817,14 @@ impl FederationOperationsStore for PgFederationOperationsStore {
         .map_err(PersistenceError::database)?;
         rows.into_iter()
             .map(|row| {
-                serde_json::from_value::<Operation>(row.payload).map_err(|error| {
+                serde_json::from_value::<ProjectedEventOperation>(row.payload).map_err(|error| {
                     PersistenceError::Internal(format!("federation operation deserialize: {error}"))
                 })
             })
             .collect()
     }
 
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<Operation>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectedEventOperation>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -834,7 +837,7 @@ impl FederationOperationsStore for PgFederationOperationsStore {
         .map_err(PersistenceError::database)?;
         rows.into_iter()
             .map(|row| {
-                serde_json::from_value::<Operation>(row.payload).map_err(|error| {
+                serde_json::from_value::<ProjectedEventOperation>(row.payload).map_err(|error| {
                     PersistenceError::Internal(format!("federation operation deserialize: {error}"))
                 })
             })

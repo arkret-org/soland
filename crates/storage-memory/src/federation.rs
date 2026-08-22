@@ -3,8 +3,8 @@ use super::{
     FederationOperationsStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
     FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
     FederationOutboxRequeue, FederationOutboxState, FederationOutboxStateDepth,
-    FederationOutboxStore, FederationOutboxTransition, Mutex, Operation, PersistenceError,
-    PersistenceResult, async_trait, frontier_exchange_failure_record,
+    FederationOutboxStore, FederationOutboxTransition, Mutex, PersistenceError, PersistenceResult,
+    ProjectedEventOperation, async_trait, frontier_exchange_failure_record,
     frontier_exchange_success_record,
 };
 // G3.S0 — in-memory outbound federation HTTP delivery queue.
@@ -455,7 +455,7 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
 }
 #[derive(Default)]
 pub(crate) struct MemoryFederationOperationsStore {
-    data: Mutex<Vec<Operation>>,
+    data: Mutex<Vec<ProjectedEventOperation>>,
 }
 impl MemoryFederationOperationsStore {
     pub(crate) fn new() -> Self {
@@ -464,7 +464,7 @@ impl MemoryFederationOperationsStore {
 }
 #[async_trait]
 impl FederationOperationsStore for MemoryFederationOperationsStore {
-    async fn append(&self, operation: Operation) -> PersistenceResult<()> {
+    async fn append(&self, operation: ProjectedEventOperation) -> PersistenceResult<()> {
         self.data.lock().push(operation);
         Ok(())
     }
@@ -477,7 +477,10 @@ impl FederationOperationsStore for MemoryFederationOperationsStore {
             .any(|known| known.operation_id.as_str() == operation_id))
     }
 
-    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<Operation>> {
+    async fn list_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Vec<ProjectedEventOperation>> {
         Ok(self
             .data
             .lock()
@@ -487,7 +490,7 @@ impl FederationOperationsStore for MemoryFederationOperationsStore {
             .collect())
     }
 
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<Operation>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectedEventOperation>> {
         Ok(self.data.lock().clone())
     }
 }

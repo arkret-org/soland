@@ -1,6 +1,6 @@
 use super::{
     FederationFrontierExchangeRecord, FederationOutboxDeadLetterRecord, FederationOutboxRecord,
-    FederationOutboxState, Operation, PersistenceResult, async_trait,
+    FederationOutboxState, PersistenceResult, ProjectedEventOperation, async_trait,
 };
 
 /// One atomic "read due rows and take ownership of them" operation.
@@ -261,8 +261,11 @@ pub fn frontier_exchange_failure_record(
 /// what the durable Pg implementation will follow.
 #[async_trait]
 pub trait FederationOperationsStore: Send + Sync {
-    async fn append(&self, operation: Operation) -> PersistenceResult<()>;
+    async fn append(&self, operation: ProjectedEventOperation) -> PersistenceResult<()>;
     async fn contains(&self, operation_id: &str) -> PersistenceResult<bool>;
-    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<Operation>>;
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<Operation>>;
+    async fn list_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Vec<ProjectedEventOperation>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectedEventOperation>>;
 }
