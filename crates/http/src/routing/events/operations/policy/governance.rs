@@ -715,15 +715,17 @@ pub(super) async fn validate_call_recording_start_policy(
 
 fn call_recording_start_payload(
     operation: &Operation,
-) -> Result<arkret_models_collaboration::events_payloads::call::RecordingStartPayload, &'static str>
-{
+) -> Result<
+    arkret_models_collaboration::events_payloads::call::CallRecordingStartPayload,
+    &'static str,
+> {
     operation
         .typed_payload::<arkret_wire::event_spec::CallRecordingStart>()
         .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
 }
 
 pub(super) fn call_recording_start_required_action(
-    payload: &arkret_models_collaboration::events_payloads::call::RecordingStartPayload,
+    payload: &arkret_models_collaboration::events_payloads::call::CallRecordingStartPayload,
 ) -> &'static str {
     match payload.capture_kind {
         arkret_models_collaboration::events_payloads::call::RecordingCaptureKind::Transcript => {
