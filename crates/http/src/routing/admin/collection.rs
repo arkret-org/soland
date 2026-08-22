@@ -26,13 +26,13 @@ use serde_json::{Value, json};
 use soland_contracts::admin::{
     AdminFederationOperation, AdminMediaRow, AdminRealmItem, AdminSpaceRow, RealmClass, SpaceHealth,
 };
+use soland_domain::reducer::SpaceContainerLifecycleState;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::{
     RealmInviteState as RealmInviteRecord, RealmMetadata as RealmMetaRecord,
 };
 use soland_services::operation_semantics as kinds;
-use soland_services::projection::SpaceContainerLifecycle as SpaceContainerLifecycleState;
 
 use super::{
     append_audit_log, discussion_track_for_projection_event, policy_document_to_response,

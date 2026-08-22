@@ -10,6 +10,7 @@ use arkret_models_collaboration::event_sync::{
 use arkret_models_collaboration::history_key::{
     AuthorizationIncarnation, CurrentGateProjection, HistoryReleaseAttestation,
 };
+use arkret_models_collaboration::objects::read_receipts::ReadMarkerOutcome;
 use arkret_state::lattice::CellState;
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::store::{ControlProposalIngress, ControlProposalIngressClass};
@@ -43,24 +44,9 @@ use crate::hydration::{HydrationProjectionAdapter, hydrate_projections_from_pers
 
 pub mod tombstone;
 
-pub type CircleReadModel = soland_domain::reducer::CircleProjection;
-pub type CircleLifecycle = soland_domain::reducer::CircleLifecycleState;
-pub type MlsRemoveObligationView = soland_domain::reducer::MlsRemoveObligation;
-pub type MlsCommitEpochView = soland_domain::reducer::MlsCommitEpoch;
-pub type MessageReadModel = soland_domain::reducer::MessageState;
-pub type MorphReadModel = soland_domain::reducer::MorphProjection;
-pub type ObjectLifecycle = soland_domain::reducer::ObjectLifecycleState;
-pub type RelationReadModel = soland_domain::reducer::SolandRelationState;
-pub type SpaceContainerLifecycle = soland_domain::reducer::SpaceContainerLifecycleState;
-pub type MembershipReadModel = soland_domain::reducer::SolandMembershipState;
-pub type RealmLinkReadModel = soland_domain::reducer::RealmLinkState;
-
 fn projection_event_ref(operation: &Operation) -> String {
     operation.context.event_id.to_string()
 }
-
-pub type EffectiveRealmPolicyView =
-    arkret_models_collaboration::governance::realm_governance::RealmEffectivePolicyOutcome;
 
 pub fn morph_document_body(fields: &BTreeMap<String, Value>) -> Option<Value> {
     soland_domain::reducer::morph_document_body(fields)
@@ -92,7 +78,7 @@ pub fn check_realm_link_admissible(
 pub fn effective_policy_for_realm(
     projection: &ProjectionState,
     realm_id: &str,
-) -> EffectiveRealmPolicyView {
+) -> arkret_models_collaboration::governance::realm_governance::RealmEffectivePolicyOutcome {
     soland_domain::reducer::realm_links::effective_policy_for_realm(projection, realm_id)
 }
 
@@ -172,8 +158,6 @@ pub struct AgentActionApprovalValidation {
     pub expires_at: DateTime<Utc>,
 }
 
-pub type ReadMarkerView = arkret_models_collaboration::objects::read_receipts::ReadMarkerOutcome;
-
 #[derive(Clone, Debug)]
 pub enum MlsProjectionEffect {
     KeyPackagePublished {
@@ -220,7 +204,7 @@ pub enum ProjectionEffectView {
         reason: String,
     },
     Ignored,
-    ReadMarkerUpdated(ReadMarkerView),
+    ReadMarkerUpdated(ReadMarkerOutcome),
     Mls(MlsProjectionEffect),
     ModerationAppealProjected {
         appeal_id: String,

@@ -520,7 +520,7 @@ fn controller_device_completed_group_join(
 }
 
 fn epoch_matches_sidecar_binding(
-    row: &soland_services::projection::MlsCommitEpochView,
+    row: &soland_domain::reducer::MlsCommitEpoch,
     expected: &SidecarMlsBinding,
 ) -> bool {
     serde_json::from_value::<MlsGovernanceBindingPayload>(row.governance_binding.clone())

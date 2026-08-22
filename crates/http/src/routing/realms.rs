@@ -37,12 +37,11 @@ use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::Value;
+use soland_domain::reducer::RealmLinkState;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::identity::SessionIdentityState as SessionRecord;
-use soland_services::projection::{
-    RealmLinkReadModel as RealmLinkState, check_realm_link_admissible, effective_policy_for_realm,
-};
+use soland_services::projection::{check_realm_link_admissible, effective_policy_for_realm};
 
 use super::AuthArgs;
 use crate::routing::organizations;

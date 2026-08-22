@@ -85,7 +85,7 @@ pub(super) async fn federation_service_binding_current_for_destination(
 }
 
 pub(super) fn delivery_binding_member_view(
-    member: &soland_services::projection::MembershipReadModel,
+    member: &soland_domain::reducer::SolandMembershipState,
 ) -> Option<DeliveryBindingMemberView> {
     if member.delivery_status.as_deref() != Some("routable") {
         return None;
