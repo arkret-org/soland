@@ -39,7 +39,7 @@ fn spawn_mock_gateway(
                 .unwrap_or("unknown")
                 .to_owned();
             let body = format!(
-                "{{\"fanout_id\":\"{fanout_id}\",\"outcome\":\"{outcome}\",\"actor_bindings_unbound\":1,\"device_bindings_unbound\":0,\"sealed_channels\":0,\"messages_drained\":0}}"
+                "{{\"fanout_id\":\"{fanout_id}\",\"outcome\":\"{outcome}\",\"actor_bindings_unbound\":1,\"device_bindings_unbound\":0,\"messages_drained\":0}}"
             );
             let head = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",

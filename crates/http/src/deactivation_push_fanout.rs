@@ -206,7 +206,6 @@ async fn attempt_fanout(state: &AppState, did: &str, fanout_id: String) -> bool 
                     outcome = ack.outcome.as_str(),
                     actor_bindings_unbound = ack.actor_bindings_unbound,
                     device_bindings_unbound = ack.device_bindings_unbound,
-                    sealed_channels = ack.sealed_channels,
                     messages_drained = ack.messages_drained,
                     "deactivation push fanout completed on gateway"
                 );
