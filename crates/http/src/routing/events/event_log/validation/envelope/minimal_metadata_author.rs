@@ -307,7 +307,7 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
 
     // The LeafNode signature_key (byte-equal to the proof key after the
     // claim admission) verifies the detached JWS over the proof binding.
-    let proof = arkret_wire::Proof {
+    let proof = arkret_wire::ProducerEventProof {
         kind: "detached_jws".to_owned(),
         proof_purpose: None,
         verification_method: proof_verification_method,

@@ -1,4 +1,4 @@
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use salvo::prelude::Request;
 use sha2::{Digest, Sha256};
 
@@ -63,7 +63,7 @@ pub fn verify_signed_http_request(
     target_uri: &str,
     authority: &str,
     body: &[u8],
-    public_key: &arkret_signatures::http_signature::Ed25519PublicKey,
+    public_key: &VerifyingKey,
     policy: &arkret_signatures::http_signature::SignatureVerificationPolicy,
 ) -> Result<
     arkret_signatures::http_signature::VerifiedHttpMessageSignature,
@@ -91,7 +91,7 @@ pub fn verify_signed_canonical_json_request(
     target_uri: &str,
     authority: &str,
     body: &[u8],
-    public_key: &arkret_signatures::http_signature::Ed25519PublicKey,
+    public_key: &VerifyingKey,
     policy: &arkret_signatures::http_signature::SignatureVerificationPolicy,
 ) -> Result<
     arkret_signatures::http_signature::VerifiedHttpMessageSignature,

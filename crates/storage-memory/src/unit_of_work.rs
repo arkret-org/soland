@@ -1225,7 +1225,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        let producer = arkret_wire::Proof {
+        let producer = arkret_wire::ProducerEventProof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             proof_purpose: None,
             verification_method: arkret_wire::DidUrl::new(format!(

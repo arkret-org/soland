@@ -278,7 +278,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         created_at,
     )
     .unwrap();
-    authorize.prev_refs = vec![genesis_event_id];
+    authorize.prev_refs = vec![genesis_event_id.clone()];
     authorize.executed_by = Some(controller_core.clone());
     authorize.authorization_ref = Some(record.controller_authorization_ref.clone().into());
     authorize.seal_basis = Some(genesis_seal.seal_basis());
@@ -298,10 +298,45 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     )
     .unwrap();
     let authorize = authorize.into_event();
+    let accepted_genesis = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(agent_pcr_realm.as_str())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|record| record.event_id == genesis_event_id.as_str())
+        .map(|record| serde_json::from_value::<arkret_wire::Event>(record.envelope).unwrap())
+        .expect("accepted managed Agent PCR genesis");
+    let agent_pcr_authority =
+        arkret_bootstrap::ManagedAgentPcrGenesisAuthority::from_accepted_create(
+            &accepted_genesis,
+            &super::agents::genesis_projector,
+        )
+        .unwrap();
+    let proposal_member = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
+        agent_pcr_realm.clone(),
+        arkret_wire::Hash::new(
+            authorize
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap(),
+        agent_pcr_authority.authority_set_ref().clone(),
+        created_at,
+        arkret_wire::ControlProposalDecisionPolicy::default(),
+        &controller_signer,
+    )
+    .unwrap();
+    let mut authorize_submission = arkret_wire::EventInitialSubmission::online(authorize);
+    authorize_submission.control_proposal_ack = Some(
+        arkret_wire::ControlProposalAck::from_authority_acks_protocol_bounds(vec![proposal_member])
+            .unwrap(),
+    );
 
     let binding_to_sign = arkret_signatures::agent_evidence::materialize_agent_signing_key_binding(
         binding_core,
-        authorize.event_id.clone(),
+        authorize_submission.event.event_id.clone(),
         controller_verification_method.clone(),
     )
     .expect("signing key binding materializes");
@@ -351,7 +386,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
             .unwrap(),
             issued_at: created_at,
             expires_at: created_at + chrono::Duration::minutes(5),
-            proofs: vec![arkret_wire::Proof {
+            proofs: vec![arkret_wire::ProducerEventProof {
                 kind: "detached_jws".to_owned(),
                 verification_method: controller_verification_method.clone(),
                 event_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
@@ -374,11 +409,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
             .unwrap();
 
     let key_pair_request = builder
-        .build_key_pair_request(
-            disclosure,
-            signing_key_binding,
-            arkret_wire::EventInitialSubmission::online(authorize),
-        )
+        .build_key_pair_request(disclosure, signing_key_binding, authorize_submission)
         .expect("key pair request builds");
     let key_pair_body = key_pair_request.body;
     let event_id = key_pair_body.authorize_event.event.event_id.clone();

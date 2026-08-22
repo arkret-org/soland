@@ -26,11 +26,12 @@ use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use arkret_signatures::http_signature::{
-    Component, ContentDigest, Ed25519PublicKey, SignatureVerificationPolicy, public_key_from_bytes,
+    Component, ContentDigest, SignatureVerificationPolicy, public_key_from_bytes,
     verify_content_digest, verify_signed_http_message,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use ed25519_dalek::VerifyingKey;
 use salvo::prelude::*;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::util::{bearer_token, dpop_token};
@@ -350,7 +351,7 @@ fn path_template_matches(template: &str, actual: &str) -> bool {
 /// Parse the stored session signing key JWK into its Ed25519 public key, the
 /// explicit JWK `kid` (if any), and its RFC 7638 thumbprint. A presented keyid
 /// is accepted if it matches either.
-fn parse_session_jwk(jwk: &str) -> Result<(Ed25519PublicKey, Option<String>, String), AppError> {
+fn parse_session_jwk(jwk: &str) -> Result<(VerifyingKey, Option<String>, String), AppError> {
     let value: serde_json::Value = serde_json::from_str(jwk)
         .map_err(|_| AppError::unauthenticated("session signing key is not valid JWK JSON"))?;
     let kty = value

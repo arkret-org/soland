@@ -70,6 +70,7 @@ mod snapshot;
 /// Boot-time worker re-export (`events` is crate-private; `main` only needs
 /// this one entry point from it).
 pub use events::sync::spawn_sync_cursor_ttl_sweeper;
+pub use governance_history::spawn_history_request_replica_reconciler;
 pub use interop::spawn_resumable_upload_ttl_sweeper;
 pub(crate) use interop::{
     MAX_BLOB_UPLOAD_BYTES, TUS_EXTENSIONS, TUS_VERSIONS, push_target_privacy_derivation_claim,

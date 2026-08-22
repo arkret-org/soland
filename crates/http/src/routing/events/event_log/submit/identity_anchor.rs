@@ -2015,7 +2015,7 @@ mod tests {
         )
         .unwrap();
         event.proofs = vec![
-            arkret_wire::Proof {
+            arkret_wire::ProducerEventProof {
                 kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
                 proof_purpose: None,
                 verification_method: arkret_wire::DidUrl::new(verification_method.to_owned())
@@ -2246,7 +2246,7 @@ mod tests {
             .and_then(Value::as_str)
         {
             event.proofs.push(
-                arkret_wire::Proof {
+                arkret_wire::ProducerEventProof {
                     kind: "detached_jws".to_owned(),
                     proof_purpose: None,
                     verification_method: arkret_wire::DidUrl::new(format!("{actor}#key-1"))

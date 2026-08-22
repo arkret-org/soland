@@ -2255,7 +2255,7 @@ pub(crate) fn accepted_event_digest_suites(
 /// re-derive `event_digest` from the proof-less envelope bytes.
 fn verify_federated_producer_event_proof(
     event: &arkret_wire::Event,
-    producer: &arkret_wire::Proof,
+    producer: &arkret_wire::ProducerEventProof,
     producer_key: &[u8; 32],
 ) -> Result<(), String> {
     let envelope_bytes = arkret_signatures::EventProofBuilder::new()
@@ -2331,7 +2331,7 @@ mod federated_producer_event_proof_tests {
     }
 
     fn sign_with_protected_header(
-        proof: &arkret_wire::Proof,
+        proof: &arkret_wire::ProducerEventProof,
         actor_id: &arkret_wire::DidCoreId,
         key: &SigningKey,
         header: serde_json::Value,

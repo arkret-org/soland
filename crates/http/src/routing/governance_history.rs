@@ -57,6 +57,72 @@ use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 
 const HISTORY_RESPONSE_RELAY_ENDPOINT: &str = "/_arkret/peer/history-key-responses/relay";
+const HISTORY_REQUEST_REPLICA_RECONCILE_PAGE_LIMIT: usize = 100;
+const HISTORY_REQUEST_REPLICA_RECONCILE_INTERVAL_SECONDS: u64 = 30;
+
+/// Reconcile durable request-replica obligations after startup and membership
+/// delivery-binding changes. The request store is the cursor source of truth;
+/// deterministic outbox identities make every pass safe to repeat.
+pub fn spawn_history_request_replica_reconciler(
+    state: AppState,
+) -> std::sync::Arc<tokio::task::JoinHandle<()>> {
+    let task = tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(
+            HISTORY_REQUEST_REPLICA_RECONCILE_INTERVAL_SECONDS,
+        ));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            match reconcile_history_request_replicas(&state).await {
+                Ok((scanned, failed)) if scanned > 0 || failed > 0 => tracing::debug!(
+                    scanned,
+                    failed,
+                    "history request replica reconciliation pass completed"
+                ),
+                Ok(_) => {}
+                Err(error) => tracing::warn!(
+                    %error,
+                    "history request replica reconciliation pass failed"
+                ),
+            }
+        }
+    });
+    std::sync::Arc::new(task)
+}
+
+async fn reconcile_history_request_replicas(state: &AppState) -> Result<(usize, usize), AppError> {
+    let history = state.persistence().governance_history_service();
+    let pass_now = now();
+    let mut after_sequence = None;
+    let mut scanned = 0usize;
+    let mut failed = 0usize;
+    loop {
+        let page = history
+            .list_local_history_requests(
+                after_sequence,
+                pass_now,
+                HISTORY_REQUEST_REPLICA_RECONCILE_PAGE_LIMIT,
+            )
+            .await
+            .map_err(map_service_error)?;
+        for record in &page.records {
+            scanned += 1;
+            if let Err(error) = enqueue_member_history_request_replicas(state, record).await {
+                failed += 1;
+                tracing::warn!(
+                    request_digest = %record.write.request_digest,
+                    %error,
+                    "history request replica reconciliation record failed"
+                );
+            }
+        }
+        let Some(next_sequence) = page.next_sequence else {
+            break;
+        };
+        after_sequence = Some(next_sequence);
+    }
+    Ok((scanned, failed))
+}
 
 pub(super) fn self_router() -> Router {
     Router::new()

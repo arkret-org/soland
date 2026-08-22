@@ -1748,7 +1748,7 @@ mod tests {
         .unwrap();
         let device_id = "ak:device:01904100-0000-7000-8000-000000000001";
         event.proofs = vec![
-            arkret_wire::Proof {
+            arkret_wire::ProducerEventProof {
                 kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
                 proof_purpose: None,
                 verification_method: arkret_wire::DidUrl::new(format!(

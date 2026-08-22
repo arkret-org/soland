@@ -24,21 +24,23 @@ fn ordered_log_message(actor_seq: u64, hlc: &str, body: &str) -> arkret_wire::Ev
             .unwrap(),
     )
     .unwrap();
-    event.proofs = vec![arkret_wire::EventProof::Producer(arkret_wire::Proof {
-        kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-        verification_method: arkret_wire::DidUrl::new(
-            "did:webvh:z6mkfixture:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",
-        )
-        .unwrap(),
-        event_digest,
-        signer_resolution_evidence_ref: None,
-        signer_resolution_evidence_digest: None,
-        created_at: event.created_at,
-        domain: None,
-        audience: None,
-        proof_purpose: None,
-        jws: "eyJhbGciOiJFZDI1NTE5In0..c2ln".to_owned(),
-    })];
+    event.proofs = vec![arkret_wire::EventProof::Producer(
+        arkret_wire::ProducerEventProof {
+            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+            verification_method: arkret_wire::DidUrl::new(
+                "did:webvh:z6mkfixture:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",
+            )
+            .unwrap(),
+            event_digest,
+            signer_resolution_evidence_ref: None,
+            signer_resolution_evidence_digest: None,
+            created_at: event.created_at,
+            domain: None,
+            audience: None,
+            proof_purpose: None,
+            jws: "eyJhbGciOiJFZDI1NTE5In0..c2ln".to_owned(),
+        },
+    )];
     event
 }
 

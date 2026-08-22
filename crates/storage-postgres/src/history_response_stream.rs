@@ -929,6 +929,59 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
         })
     }
 
+    async fn list_local_requests(
+        &self,
+        after: Option<u64>,
+        now: DateTime<Utc>,
+        limit: usize,
+    ) -> PersistenceResult<HistoryRequestPage> {
+        if !(1..=100).contains(&limit) {
+            return Err(PersistenceError::SchemaViolation(
+                "local history request list limit is invalid".to_owned(),
+            ));
+        }
+        let after = after
+            .map(|value| as_i64(value, "local request cursor"))
+            .transpose()?
+            .unwrap_or(-1);
+        let mut conn = pg_conn(&self.pool).await?;
+        let rows = sql_query(
+            "SELECT request_sequence,request_digest,request_receipt_digest,request_json, \
+             request_receipt_json,sealed_history_response_capability_json,request_replica_digest,request_replica_json,stored_at FROM history_key_requests \
+             WHERE request_replica_digest IS NULL AND expires_at>$1 AND request_sequence>$2 \
+             ORDER BY request_sequence LIMIT $3",
+        )
+        .bind::<Timestamptz, _>(now)
+        .bind::<BigInt, _>(after)
+        .bind::<BigInt, _>(i64::try_from(limit + 1).unwrap_or(101))
+        .load::<RequestRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        let mut records = rows
+            .into_iter()
+            .map(decode_request)
+            .collect::<PersistenceResult<Vec<_>>>()?;
+        for record in &mut records {
+            let retention_digest = record.write.traversal_retention_digest().clone();
+            record.write.local_traversal = Some(
+                load_retention(&mut conn, &retention_digest)
+                    .await?
+                    .ok_or_else(|| {
+                        PersistenceError::Internal(
+                            "local history request lost its traversal retention".to_owned(),
+                        )
+                    })?
+                    .write,
+            );
+        }
+        let limited = records.len() > limit;
+        records.truncate(limit);
+        Ok(HistoryRequestPage {
+            next_sequence: limited.then(|| records.last().expect("limited page").sequence),
+            records,
+        })
+    }
+
     async fn reserve_response_exact(
         &self,
         input: HistoryResponseReservationInput,

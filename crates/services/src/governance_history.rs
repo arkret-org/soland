@@ -632,6 +632,19 @@ impl GovernanceHistoryService {
             .await?)
     }
 
+    pub async fn list_local_history_requests(
+        &self,
+        after_sequence: Option<u64>,
+        now: DateTime<Utc>,
+        limit: usize,
+    ) -> ServiceResult<HistoryRequestPage> {
+        Ok(self
+            .persistence
+            .history_response_streams()
+            .list_local_requests(after_sequence, now, limit)
+            .await?)
+    }
+
     pub async fn read_history_response_stream(
         &self,
         response_capability_commitment: &Hash,

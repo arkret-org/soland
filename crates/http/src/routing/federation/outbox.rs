@@ -2534,7 +2534,7 @@ mod tests {
             )
             .unwrap();
             event.proofs = vec![
-                arkret_wire::primitives::Proof {
+                arkret_wire::ProducerEventProof {
                     kind: "detached_jws".to_owned(),
                     verification_method: arkret_wire::DidUrl::new(
                         "did:webvh:z6mkalice:alice.example#device-1",

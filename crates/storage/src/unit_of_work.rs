@@ -174,7 +174,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        let producer = arkret_wire::Proof {
+        let producer = arkret_wire::ProducerEventProof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             verification_method: arkret_wire::DidUrl::new(
                 "did:web:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",

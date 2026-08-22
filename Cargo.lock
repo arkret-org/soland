@@ -325,6 +325,7 @@ dependencies = [
  "arkret-state",
  "arkret-wire",
  "chrono",
+ "ed25519-dalek",
  "futures-util",
  "getrandom 0.4.3",
  "reqwest",

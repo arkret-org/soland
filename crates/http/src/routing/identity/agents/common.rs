@@ -26,23 +26,6 @@ pub(super) fn controller_service_session(
     }
 }
 
-/// Submit a controller-signed delegated Event through the normal Event
-/// admission pipeline with the Agent as the envelope actor. The pairing
-/// handler validates the controller/delegation/PCR bindings before creating
-/// this context; signature validation still runs in the shared pipeline.
-pub(super) fn delegated_agent_session(
-    controller_session: &SessionRecord,
-    agent_id: &str,
-) -> SessionRecord {
-    let mut session = controller_session.clone();
-    session.token_hash = format!(
-        "agent-delegated-event:{}:{agent_id}",
-        controller_session.token_hash
-    );
-    session.actor = agent_id.to_owned();
-    session
-}
-
 pub(super) fn validate_agent_id(value: &str) -> Result<(), AppError> {
     arkret_wire::DidCoreId::new(value.to_owned())
         .map(|_| ())

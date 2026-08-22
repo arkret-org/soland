@@ -1942,7 +1942,7 @@ mod seal_delta_tests {
                 .unwrap(),
         )
         .unwrap();
-        let proof = |verification_method: &str| arkret_wire::primitives::Proof {
+        let proof = |verification_method: &str| arkret_wire::ProducerEventProof {
             kind: "detached_jws".to_owned(),
             verification_method: arkret_wire::DidUrl::new(verification_method.to_owned())
                 .expect("fixture verification method is a DID URL"),

@@ -659,22 +659,24 @@ fn sdk_event_proofs(
         .and_then(sdk_audience);
     let event_digest = Hash::new(record.canonical_digest.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
-    Ok(vec![arkret_wire::EventProof::Producer(Proof {
-        kind: proof_kind::DETACHED_JWS.to_owned(),
-        proof_purpose: None,
-        verification_method,
-        event_digest,
-        signer_resolution_evidence_ref: None,
-        signer_resolution_evidence_digest: None,
-        created_at,
-        domain,
-        audience,
-        jws: proof
-            .and_then(|proof| proof.get("jws").or_else(|| proof.get("detached_jws")))
-            .and_then(Value::as_str)
-            .unwrap_or("ZGV2..c2ln")
-            .to_owned(),
-    })])
+    Ok(vec![arkret_wire::EventProof::Producer(
+        ProducerEventProof {
+            kind: proof_kind::DETACHED_JWS.to_owned(),
+            proof_purpose: None,
+            verification_method,
+            event_digest,
+            signer_resolution_evidence_ref: None,
+            signer_resolution_evidence_digest: None,
+            created_at,
+            domain,
+            audience,
+            jws: proof
+                .and_then(|proof| proof.get("jws").or_else(|| proof.get("detached_jws")))
+                .and_then(Value::as_str)
+                .unwrap_or("ZGV2..c2ln")
+                .to_owned(),
+        },
+    )])
 }
 
 fn sdk_audience(value: &Value) -> Option<Audience> {

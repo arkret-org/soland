@@ -872,6 +872,10 @@ CREATE INDEX history_key_requests_scope_sequence_idx
         request_sequence
     );
 
+CREATE INDEX history_key_requests_local_sequence_idx
+    ON public.history_key_requests (request_sequence)
+    WHERE request_replica_digest IS NULL;
+
 CREATE TABLE public.history_key_response_streams (
     request_id text PRIMARY KEY REFERENCES public.history_key_requests(request_id) ON DELETE CASCADE,
     response_capability_commitment text NOT NULL UNIQUE,

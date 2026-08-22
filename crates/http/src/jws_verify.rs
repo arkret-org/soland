@@ -868,7 +868,7 @@ pub fn verify_principal_authorized_control_ack_jws_async<'a>(
 /// record subject folded into the signed transcript — which for delegated
 /// execution differs from `principal_id`, the DID that owns the signing key.
 pub fn verify_principal_authorized_event_proof_async<'a>(
-    proof: &'a arkret_wire::Proof,
+    proof: &'a arkret_wire::ProducerEventProof,
     envelope_bytes: &'a [u8],
     actor_id: &'a arkret_wire::DidCoreId,
     verification_method: &'a str,
@@ -1103,7 +1103,7 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
 }
 
 pub async fn verify_registered_identity_resolution_event_proof_async(
-    proof: &arkret_wire::Proof,
+    proof: &arkret_wire::ProducerEventProof,
     envelope_bytes: &[u8],
     actor_id: &arkret_wire::DidCoreId,
     verification_method: &str,
@@ -1690,7 +1690,9 @@ mod did_binding_tests {
     /// A minimal but genuine Event proof: real envelope bytes, an
     /// `event_digest` actually derived from them, and the canonical
     /// proof-binding transcript the JWS has to sign.
-    fn event_proof_fixture(verification_method: &str) -> (Vec<u8>, arkret_wire::Proof) {
+    fn event_proof_fixture(
+        verification_method: &str,
+    ) -> (Vec<u8>, arkret_wire::ProducerEventProof) {
         let envelope_bytes =
             br#"{"actor_id":"did:web:principal.example","kind":"ak.test.event"}"#.to_vec();
         let event_digest =

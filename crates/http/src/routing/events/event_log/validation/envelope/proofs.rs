@@ -623,7 +623,7 @@ pub(crate) async fn validate_event_proofs(
 async fn verify_with_installed_applet_registration_epoch(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
-    proof: &arkret_wire::Proof,
+    proof: &arkret_wire::ProducerEventProof,
     envelope_bytes: &[u8],
     actor_id: &arkret_wire::DidCoreId,
     signer_controller: &str,
@@ -983,7 +983,7 @@ pub(super) fn verify_with_federated_signer_evidence(
     Ok(Some(signing_key.clone()))
 }
 
-/// Parse the wire proof into the SDK [`arkret_wire::Proof`] and reproduce the
+/// Parse the wire proof into the SDK [`arkret_wire::ProducerEventProof`] and reproduce the
 /// canonical proof-binding transcript it must have signed (`encoding.md` §6).
 ///
 /// The typed proof is returned alongside the bytes because the DID-rooted
@@ -996,13 +996,20 @@ pub(super) fn event_proof_binding_bytes(
     verification_method: &str,
     created_at: &str,
     proof_object: &serde_json::Map<String, Value>,
-) -> Result<(arkret_wire::Proof, arkret_wire::DidCoreId, Vec<u8>), EventValidationError> {
-    let proof: arkret_wire::Proof = serde_json::from_value(Value::Object(proof_object.clone()))
-        .map_err(|error| {
+) -> Result<
+    (
+        arkret_wire::ProducerEventProof,
+        arkret_wire::DidCoreId,
+        Vec<u8>,
+    ),
+    EventValidationError,
+> {
+    let proof: arkret_wire::ProducerEventProof =
+        serde_json::from_value(Value::Object(proof_object.clone())).map_err(|error| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_proof",
-                format!("event proof is not an SDK Proof: {error}"),
+                format!("event proof is not an SDK ProducerEventProof: {error}"),
             )
         })?;
     if proof.event_digest.as_str() != event_digest

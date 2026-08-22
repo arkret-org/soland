@@ -1386,11 +1386,8 @@ pub(super) async fn submit_production_key_authorize_event(
         authorized_public_key_digest,
         state.service_id(),
     )?;
-    let delegated_session = delegated_agent_session(session, agent_id);
     let outcome = crate::routing::events::event_log::submit_initial_event_submission(
-        state,
-        &delegated_session,
-        submission,
+        state, session, submission,
     )
     .await
     .map_err(|error| {

@@ -506,6 +506,42 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
         })
     }
 
+    async fn list_local_requests(
+        &self,
+        after_sequence: Option<u64>,
+        now: DateTime<Utc>,
+        limit: usize,
+    ) -> PersistenceResult<HistoryRequestPage> {
+        if !(1..=100).contains(&limit) {
+            return Err(PersistenceError::SchemaViolation(
+                "local history request list limit must be within 1..=100".to_owned(),
+            ));
+        }
+        let mut records = {
+            let data = self.data.lock();
+            data.requests
+                .values()
+                .filter(|record| {
+                    record.write.request_replica.is_none()
+                        && record.write.request.expires_at > now
+                        && after_sequence.is_none_or(|after| record.sequence > after)
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        records.sort_by_key(|record| record.sequence);
+        let limited = records.len() > limit;
+        records.truncate(limit);
+        let mut hydrated = Vec::with_capacity(records.len());
+        for record in records {
+            hydrated.push(self.hydrate_local_traversal(record).await?);
+        }
+        Ok(HistoryRequestPage {
+            next_sequence: limited.then(|| hydrated.last().expect("non-empty page").sequence),
+            records: hydrated,
+        })
+    }
+
     async fn reserve_response_exact(
         &self,
         input: HistoryResponseReservationInput,

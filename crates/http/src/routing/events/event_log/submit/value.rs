@@ -878,8 +878,6 @@ async fn stored_control_proposal_ack(
     state: &AppState,
     existing: &soland_services::events::CanonicalEventRecord,
     digest: &Hash,
-    digest_suite: arkret_canonical::DigestSuite,
-    submitted: Option<&arkret_wire::ControlProposalAck>,
 ) -> Result<arkret_wire::ControlProposalAck, SubmitOneError> {
     if let Some(ack) = state
         .projections()
@@ -909,106 +907,11 @@ async fn stored_control_proposal_ack(
     if let Some(ack) = durable_ack {
         return Ok(ack);
     }
-
-    // Migration repair for an exact, still-unsealed Event accepted by an
-    // older build before closed managed-PCR anchors participated in the
-    // proposal protocol. A byte-identical retry may attach the first valid
-    // Control Proposal Ack and rebuild the pending index; it may never replace one.
-    let submitted = submitted.ok_or_else(|| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "accepted Control Move is missing its Control Proposal Ack",
-        )
-    })?;
-    let event: Event = serde_json::from_value(existing.envelope.clone()).map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("stored Control Move is not canonical wire: {error}"),
-        )
-    })?;
-    if event.kind == arkret_wire::EventKind::DeviceRevoke {
-        return Err(SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "accepted device revoke is missing its mandatory Control Proposal Ack",
-        ));
-    }
-    let recovered_digest = Hash::new(event.event_digest_with_digest_suite(digest_suite).map_err(
-        |error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("stored Control Move digest is invalid: {error}"),
-            )
-        },
-    )?)
-    .map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("stored Control Move digest is invalid: {error}"),
-        )
-    })?;
-    if &recovered_digest != digest
-        || submitted.proposal_digest != *digest
-        || submitted.realm_id != event.realm_id
-    {
-        return Err(SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "durable Control Proposal Ack does not bind the accepted Control Move",
-        ));
-    }
-    let policy = crate::control_proposal::control_proposal_policy(
-        state,
-        &event.realm_id,
-        std::slice::from_ref(&event),
-    )
-    .await
-    .map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "quorum_unreachable",
-            format!("Control Proposal policy is unavailable: {error}"),
-        )
-    })?;
-    if is_managed_agent_pcr_create(&event) {
-        crate::control_proposal::verify_managed_agent_pcr_genesis_ack(
-            state, &event, submitted, policy,
-        )
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                "failed_precondition",
-                format!("submitted Control Proposal Ack is invalid: {error}"),
-            )
-        })?;
-    } else {
-        crate::control_proposal::verify_control_proposal_ack(state, &event, submitted, policy)
-            .await
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    "failed_precondition",
-                    format!("submitted Control Proposal Ack is invalid: {error}"),
-                )
-            })?;
-    }
-    state
-        .projections()
-        .put_pending_control_event_with_ack(&event, submitted, digest_suite)
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("accepted Control Move pending index recovery failed: {error}"),
-            )
-        })?;
-    state.wake_control_seal_coordinator();
-    Ok(submitted.clone())
+    Err(SubmitOneError::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal_error",
+        "accepted Control Move is missing its durable Control Proposal Ack",
+    ))
 }
 
 /// Whether this Control Move is authored directly by the current device of a
@@ -1930,14 +1833,7 @@ pub(super) async fn submit_event_value_with_context(
                         format!("stored Control Move digest is invalid: {error}"),
                     )
                 })?;
-                let ack = stored_control_proposal_ack(
-                    state,
-                    &existing,
-                    &digest,
-                    parsed.digest_suite,
-                    context.control_proposal_ack,
-                )
-                .await?;
+                let ack = stored_control_proposal_ack(state, &existing, &digest).await?;
                 response.outcome.control_proposal_acks.push(ack);
             }
             apply_durable_delivery_summary(state, &mut response).await?;
@@ -2596,6 +2492,14 @@ pub(super) async fn submit_event_value_with_context(
         if self_principal_pcr_device_authorized {
             None
         } else {
+            let managed_agent_pcr_control =
+                crate::control_proposal::managed_agent_pcr_event_matches_accepted_delegation(
+                    state, event,
+                )
+                .await
+                .map_err(|error| {
+                    SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+                })?;
             let policy = crate::control_proposal::control_proposal_policy(
                 state,
                 &realm_id,
@@ -2615,18 +2519,16 @@ pub(super) async fn submit_event_value_with_context(
                 // controller device named by the accepted Agent DID
                 // delegation, never by a frozen notary descriptor and never
                 // by this service (`authz/cba-profiles.md`, ingress source 1).
-                let authority_set_ref = if managed_agent_pcr_genesis {
-                    crate::control_proposal::verify_managed_agent_pcr_genesis_ack(
-                        state, event, ack, policy,
-                    )
-                    .await
-                    .map_err(|error| {
-                        SubmitOneError::new(
-                            StatusCode::PRECONDITION_FAILED,
-                            "failed_precondition",
-                            format!("submitted Control Proposal Ack is invalid: {error}"),
-                        )
-                    })?
+                let authority_set_ref = if managed_agent_pcr_control {
+                    crate::control_proposal::verify_managed_agent_pcr_ack(state, event, ack, policy)
+                        .await
+                        .map_err(|error| {
+                            SubmitOneError::new(
+                                StatusCode::PRECONDITION_FAILED,
+                                "failed_precondition",
+                                format!("submitted Control Proposal Ack is invalid: {error}"),
+                            )
+                        })?
                 } else {
                     let worker =
                         crate::notary::NotaryWorker::for_service(state.service_id().clone());
@@ -2672,6 +2574,12 @@ pub(super) async fn submit_event_value_with_context(
                     ));
                 }
                 Some(ack.clone())
+            } else if managed_agent_pcr_control {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    "failed_precondition",
+                    "managed Agent PCR Control Move requires a delegated-controller Control Proposal Ack",
+                ));
             } else if event.seal_basis.is_none() {
                 let bootstrap_authority = context
                     .authorization_lease
@@ -3208,14 +3116,7 @@ pub(super) async fn submit_event_value_with_context(
                                     format!("stored Control Move digest is invalid: {error}"),
                                 )
                             })?;
-                        let ack = stored_control_proposal_ack(
-                            state,
-                            &existing,
-                            &digest,
-                            parsed.digest_suite,
-                            context.control_proposal_ack,
-                        )
-                        .await?;
+                        let ack = stored_control_proposal_ack(state, &existing, &digest).await?;
                         response.outcome.control_proposal_acks.push(ack);
                     }
                     apply_durable_delivery_summary(state, &mut response).await?;

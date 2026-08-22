@@ -630,6 +630,16 @@ pub trait HistoryResponseStreamStore: Send + Sync {
         limit: usize,
     ) -> PersistenceResult<HistoryRequestPage>;
 
+    /// Enumerate locally-created, unexpired requests for background replica
+    /// reconciliation. Replica rows are excluded because this service is not
+    /// their release authority.
+    async fn list_local_requests(
+        &self,
+        after_sequence: Option<u64>,
+        now: DateTime<Utc>,
+        limit: usize,
+    ) -> PersistenceResult<HistoryRequestPage>;
+
     async fn reserve_response_exact(
         &self,
         input: HistoryResponseReservationInput,

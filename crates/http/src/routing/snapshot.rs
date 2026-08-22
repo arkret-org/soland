@@ -45,7 +45,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let built_chunks = arkret_state::build_snapshot_chunks(
         &snapshot_id,
-        arkret_state::SNAPSHOT_REDUCER_PROFILE_V1,
+        arkret_wire::CORE_REDUCER_PROFILE,
         items.clone(),
         arkret_state::DEFAULT_SNAPSHOT_CHUNK_BYTES,
     )
@@ -87,7 +87,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
     let mut manifest = arkret_state::SnapshotManifest {
         id: snapshot_id,
         realm_id: realm_id_value,
-        reducer_profile: arkret_state::SNAPSHOT_REDUCER_PROFILE_V1.to_owned(),
+        reducer_profile: arkret_wire::CORE_REDUCER_PROFILE.to_owned(),
         schema_profile_refs: vec![
             arkret_wire::ProfileId::CORE_EVENT_STORE_V1.to_owned(),
             arkret_wire::ProfileId::PRINCIPAL_SERVER_EVENTS_API_V1.to_owned(),
