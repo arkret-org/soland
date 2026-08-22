@@ -1,5 +1,5 @@
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{OperationId, RealmId};
+use arkret_identifiers::{DeviceId, OperationId, RealmId};
 use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -24,6 +24,10 @@ fn op_at(secs: i64, object_kind: impl AsRef<str>, mut payload: serde_json::Value
         payload,
     );
     op.created_at = Utc.timestamp_opt(secs, 0).single().expect("ts in range");
+    op.context.producer_device_id = Some(
+        DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001")
+            .expect("fixture device id parses"),
+    );
     op
 }
 
@@ -61,6 +65,7 @@ fn governance_binding_for_scope(
         "previous_epoch": previous_epoch,
         "next_epoch": previous_epoch + 1,
         "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "content_scheme": "mls_rfc9420",
         "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
         "reducer_profile": CORE_REDUCER_PROFILE
     });
@@ -131,6 +136,7 @@ fn genesis_binding(group_id: &str, effective_scope: Value) -> Value {
         "previous_epoch": 0,
         "next_epoch": 0,
         "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "content_scheme": "mls_rfc9420",
         "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
         "reducer_profile": CORE_REDUCER_PROFILE
     });
@@ -149,8 +155,6 @@ fn genesis_payload(group_id: &str, effective_scope: Value) -> Value {
         "mls_group_id": group_id,
         "effective_scope": effective_scope.clone(),
         "epoch": 0,
-        "creator_principal_id": "ak:did_core:web:alice.example",
-        "creator_device_id": "ak:device:alice-desktop",
         "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
         "group_info_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
         "ratchet_tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
@@ -783,7 +787,7 @@ fn commit_epoch_in_order_succeeds() {
             effective_scope: realm_scope(),
             epoch: 2,
             leader_actor_id: "ak:did_core:web:alice.example".to_owned(),
-            creator_device_id: "ak:device:alice-desktop".to_owned(),
+            creator_device_id: "ak:device:0196419b-0000-7000-8000-000000000001".to_owned(),
             genesis_event_ref,
             committed_at: 501,
             governance_binding: governance_binding(1),

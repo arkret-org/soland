@@ -553,15 +553,9 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
     if epoch != 0 {
         return reject("mls_genesis_epoch_invalid");
     }
-    let Some(creator_actor_id) = payload.get("creator_principal_id").and_then(Value::as_str) else {
-        return reject("mls_genesis_creator_missing");
-    };
-    let Some(creator_device_id) = payload
-        .get("creator_device_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-    else {
-        return reject("mls_genesis_creator_device_missing");
+    let creator_actor_id = op.context.sender.as_str();
+    let Some(creator_device_id) = op.context.producer_device_id.as_ref() else {
+        return reject("schema_violation");
     };
     let genesis_event_ref = op.context.event_id.to_string();
     let Some(governance_binding) = payload.get("governance_binding").cloned() else {
@@ -588,7 +582,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
             effective_scope: effective_scope.clone(),
             epoch: 0,
             leader_actor_id: creator_actor_id.to_owned(),
-            creator_device_id: creator_device_id.to_owned(),
+            creator_device_id: creator_device_id.as_str().to_owned(),
             genesis_event_ref,
             committed_at: op.created_at.timestamp(),
             governance_binding,
@@ -604,7 +598,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
         effective_scope,
         epoch: 0,
         creator_actor_id: creator_actor_id.to_owned(),
-        creator_device_id: creator_device_id.to_owned(),
+        creator_device_id: creator_device_id.as_str().to_owned(),
     })
 }
 

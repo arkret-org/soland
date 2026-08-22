@@ -2156,7 +2156,6 @@ pub(super) async fn submit_event_value_with_context(
         if let Err(reason) =
             crate::routing::identity::agents::sidecar::validate_sidecar_mls_event_binding(
                 state,
-                parsed.actor_id.as_str(),
                 parsed.device_id_str(),
                 operation,
             )

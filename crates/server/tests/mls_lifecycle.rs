@@ -884,8 +884,6 @@ async fn mls_lifecycle_end_to_end() {
             "mls_group_id": group_id,
             "effective_scope": effective_scope.clone(),
             "epoch": 0,
-            "creator_principal_id": alice_core,
-            "creator_device_id": alice_device,
             "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
             "group_info_ref": "ak:blob:sha256:3333333333333333333333333333333333333333333333333333333333333333",
             "group_info_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",

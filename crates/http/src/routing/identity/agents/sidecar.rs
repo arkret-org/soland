@@ -363,8 +363,7 @@ pub(crate) fn validate_sidecar_exchange_control_event(
 
 pub(crate) async fn validate_sidecar_mls_event_binding(
     state: &AppState,
-    actor_id: &str,
-    device_id: &str,
+    controller_device_id: &str,
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if !matches!(
@@ -437,17 +436,15 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
     match operation.event_kind.clone() {
         arkret_wire::EventKind::MlsGenesis => {
             if current_group.is_some()
-                || operation
-                    .payload
-                    .get("creator_principal_id")
-                    .and_then(Value::as_str)
-                    != Some(sidecar_projection.controller_id.as_str())
-                || operation
-                    .payload
-                    .get("creator_device_id")
-                    .and_then(Value::as_str)
-                    != Some(device_id)
-                || actor_id != sidecar_projection.controller_id
+                || operation.context.sender.as_str() != sidecar_projection.controller_id
+                || !device_coordinates_match(
+                    operation
+                        .context
+                        .producer_device_id
+                        .as_ref()
+                        .map(|device_id| device_id.as_str()),
+                    controller_device_id,
+                )
             {
                 return Err("mls_sidecar_genesis_authority_mismatch");
             }
@@ -484,6 +481,11 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
         _ => {}
     }
     Ok(())
+}
+
+fn device_coordinates_match(projected: Option<&str>, authenticated: &str) -> bool {
+    !authenticated.is_empty()
+        && projected.is_some_and(|projected| !projected.is_empty() && projected == authenticated)
 }
 
 /// The second `current_controller_device_ready` disjunct of
@@ -551,8 +553,9 @@ async fn sidecar_view(
     let epoch_binding_current =
         epoch_row.is_some_and(|row| epoch_matches_sidecar_binding(row, &expected_binding));
     let controller_device_ready = epoch_binding_current
+        && !controller_device_id.is_empty()
         && epoch_row.is_some_and(|row| {
-            row.creator_device_id == controller_device_id
+            device_coordinates_match(Some(&row.creator_device_id), controller_device_id)
                 || controller_device_completed_group_join(
                     &projection,
                     &record.controller_id,
@@ -1416,6 +1419,20 @@ mod tests {
             sidecar_access_readiness(&[], false, false, false),
             AgentSidecarAccessReadiness::KeyMaterialPending
         );
+    }
+
+    #[test]
+    fn absent_device_coordinates_never_match() {
+        assert!(!device_coordinates_match(None, ""));
+        assert!(!device_coordinates_match(Some(""), ""));
+        assert!(!device_coordinates_match(
+            None,
+            "ak:device:01904100-0000-7000-8000-a11ce0000001"
+        ));
+        assert!(device_coordinates_match(
+            Some("ak:device:01904100-0000-7000-8000-a11ce0000001"),
+            "ak:device:01904100-0000-7000-8000-a11ce0000001"
+        ));
     }
 
     #[test]

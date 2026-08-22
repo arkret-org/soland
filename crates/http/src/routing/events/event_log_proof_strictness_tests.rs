@@ -882,6 +882,62 @@ fn event_payload_validator_rejects_registered_payload_shape_errors() {
 }
 
 #[test]
+fn schema_define_admission_executes_the_registered_definition_validator_profile() {
+    let state = make_state(true);
+    let valid = json!({
+        "payload": {
+            "schema_id": "ak.schema.example.v1",
+            "value": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "ak.schema.example.v1",
+                "type": "string"
+            }
+        }
+    });
+    validate_event_schema_and_payload(
+        &state,
+        arkret_wire::EventKind::SchemaDefine.as_str(),
+        "ak.schema.event.v1",
+        &valid,
+        valid.as_object().unwrap(),
+    )
+    .expect("valid Draft 2020-12 schema definition must pass admission");
+
+    for invalid in [
+        json!({
+            "payload": {
+                "schema_id": "ak.schema.example.v1",
+                "value": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "$id": "ak.schema.other.v1",
+                    "type": "string"
+                }
+            }
+        }),
+        json!({
+            "payload": {
+                "schema_id": "ak.schema.example.v1",
+                "value": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "$id": "ak.schema.example.v1",
+                    "type": "not_a_json_schema_type"
+                }
+            }
+        }),
+    ] {
+        let error = validate_event_schema_and_payload(
+            &state,
+            arkret_wire::EventKind::SchemaDefine.as_str(),
+            "ak.schema.event.v1",
+            &invalid,
+            invalid.as_object().unwrap(),
+        )
+        .expect_err("invalid schema definition must fail admission");
+        assert_eq!(error.code, "schema_violation");
+    }
+}
+
+#[test]
 fn member_state_join_schema_allows_contextual_invite_ref() {
     let state = make_state(true);
     let valid = json!({

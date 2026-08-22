@@ -362,6 +362,7 @@ mod tests {
                 "previous_epoch": 7,
                 "next_epoch": 8,
                 "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                "content_scheme": "mls_rfc9420",
                 "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
                 "reducer_profile": CORE_REDUCER_PROFILE
             }

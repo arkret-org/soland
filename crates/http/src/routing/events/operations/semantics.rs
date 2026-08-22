@@ -210,6 +210,26 @@ fn validate_typed_payload_shapes(
                 .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
             Ok(())
         }
+        arkret_wire::EventKind::OrganizationModerationPolicy => operation
+            .typed_payload::<arkret_wire::event_spec::OrganizationModerationPolicy>()
+            .map(|_| ())
+            .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION),
+        arkret_wire::EventKind::IdentityDisclosurePolicy => operation
+            .typed_payload::<arkret_wire::event_spec::IdentityDisclosurePolicy>()
+            .map(|_| ())
+            .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION),
+        arkret_wire::EventKind::IdentityDisclosureReceipt => operation
+            .typed_payload::<arkret_wire::event_spec::IdentityDisclosureReceipt>()
+            .map(|_| ())
+            .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION),
+        arkret_wire::EventKind::PolicySet => operation
+            .typed_payload::<arkret_wire::event_spec::PolicySet>()
+            .map(|_| ())
+            .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION),
+        arkret_wire::EventKind::PolicyAction => operation
+            .typed_payload::<arkret_wire::event_spec::PolicyAction>()
+            .map(|_| ())
+            .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION),
         // ak.space.archive / ak.space.restore use the typed
         // SpaceStateTransitionPayload (space_id, new_state, reason?).
         // The removed top-level `target_ref` form is rejected
@@ -320,7 +340,9 @@ pub(crate) fn validate_operation_schema_from_sdk_artifact(
     event_payload_validator_catalog()
         .map_err(|_| "operation payload validator catalog unavailable")?
         .validate_payload(kind.as_str(), &operation.payload)
-        .map_err(|_| "operation payload violates SDK artifact schema")
+        .map_err(|_| "operation payload violates SDK artifact schema")?;
+    arkret_schema::validate_payload_validator_profile(kind, &operation.payload)
+        .map_err(|_| "operation payload violates SDK validator profile")
 }
 
 pub(crate) fn validate_operation_payload_schema(
@@ -466,6 +488,34 @@ mod tests {
                 &arkret_wire::EventKind::RealmDigestSuiteTransition,
                 &noop,
             ),
+            Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
+        );
+    }
+
+    #[test]
+    fn policy_set_typed_payload_enforces_wrapper_subject_identity() {
+        let mismatched = operation(
+            arkret_wire::EventKind::PolicySet,
+            serde_json::json!({
+                "policy_id": "ak:policy:0198f1a2-4c3d-7e56-8a90-1b2c3d4e5f60",
+                "value": {
+                    "id": "ak:policy:0198f1a2-4c3d-7e56-8a90-1b2c3d4e5f61",
+                    "schema": "ak.schema.policy.v1",
+                    "policy_kind": "access",
+                    "rules": [{
+                        "rule_id": "allow_read",
+                        "kind": "action",
+                        "effect": "allow",
+                        "actions": ["ak.object.read"]
+                    }],
+                    "default_effect": "deny",
+                    "created_by": "ak:did_core:webvh:z6mkfixtureauthor",
+                    "created_at": "2026-04-26T00:00:00Z"
+                }
+            }),
+        );
+        assert_eq!(
+            validate_typed_payload_shapes(&arkret_wire::EventKind::PolicySet, &mismatched),
             Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         );
     }
