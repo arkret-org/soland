@@ -486,6 +486,37 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
     Ok(())
 }
 
+/// The second `current_controller_device_ready` disjunct of
+/// `agent-operations.schema.json#/$defs/agent_sidecar_mls_context`.
+///
+/// A controller device that did not create the accepted Sidecar genesis is
+/// ready once it has completed matching Welcome and KeyPackage consume
+/// evidence for this exact group: a Welcome addressed to that device admitting
+/// it into `group_id`, whose claimed KeyPackage belongs to the same device and
+/// carries a consume record for the same group. Evidence from another Sidecar's
+/// group never satisfies this (`models/sidecar.md` section 5).
+fn controller_device_completed_group_join(
+    projection: &soland_domain::reducer::ProjectionState,
+    controller_id: &str,
+    controller_device_id: &str,
+    group_id: &str,
+) -> bool {
+    projection.mls_welcomes.values().flatten().any(|welcome| {
+        welcome.group_id == group_id
+            && welcome.recipient_actor_id == controller_id
+            && welcome.recipient_device_id == controller_device_id
+            && projection
+                .mls_key_packages
+                .get(&welcome.key_package_id)
+                .is_some_and(|key_package| {
+                    key_package.actor_id == controller_id
+                        && key_package.device_id == controller_device_id
+                        && key_package.claimed_by.as_deref() == Some(group_id)
+                        && key_package.consumed_at.is_some()
+                })
+    })
+}
+
 fn epoch_matches_sidecar_binding(
     row: &soland_services::projection::MlsCommitEpochView,
     expected: &SidecarMlsBinding,
@@ -520,7 +551,15 @@ async fn sidecar_view(
     let epoch_binding_current =
         epoch_row.is_some_and(|row| epoch_matches_sidecar_binding(row, &expected_binding));
     let controller_device_ready = epoch_binding_current
-        && epoch_row.is_some_and(|row| row.creator_device_id == controller_device_id);
+        && epoch_row.is_some_and(|row| {
+            row.creator_device_id == controller_device_id
+                || controller_device_completed_group_join(
+                    &projection,
+                    &record.controller_id,
+                    controller_device_id,
+                    &row.group_id,
+                )
+        });
     let effective = if epoch_binding_current {
         desired_typed.clone()
     } else {
@@ -1453,6 +1492,105 @@ mod tests {
         assert!(matches!(
             binding.effective_scope(),
             arkret_wire::ScopeRef::Sidecar { .. }
+        ));
+    }
+
+    fn projection_with_controller_join(
+        welcome_group_id: &str,
+        claimed_group_id: Option<&str>,
+        consumed: bool,
+    ) -> soland_domain::reducer::ProjectionState {
+        let controller = "ak:did_core:web:alice.example";
+        let device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
+        let mut projection = soland_domain::reducer::ProjectionState::default();
+        projection.mls_key_packages.insert(
+            "keypackage-controller-02".to_owned(),
+            soland_domain::reducer::MlsKeyPackage {
+                id: "keypackage-controller-02".to_owned(),
+                keypackage_ref: "ak:keypackage:controller-02".to_owned(),
+                keypackage_digest: format!("sha256:{}", "2".repeat(64)),
+                actor_id: controller.to_owned(),
+                device_id: device.to_owned(),
+                lifetime: soland_domain::reducer::KeyPackageLifetime {
+                    not_before: 0,
+                    not_after: i64::MAX,
+                },
+                key_package_bytes: vec![1, 2, 3],
+                capabilities: Vec::new(),
+                capabilities_digest: format!("sha256:{}", "3".repeat(64)),
+                device_signature: json!({}),
+                last_resort: false,
+                last_resort_realm_id: None,
+                claimed_by: claimed_group_id.map(ToOwned::to_owned),
+                device_authorize_event_id: None,
+                agent_key_authorize_event_id: None,
+                claimed_at: claimed_group_id.map(|_| 1),
+                claim_expires_at_unix_ms: None,
+                consumed_at: consumed.then_some(2),
+                created_at: 0,
+            },
+        );
+        projection.mls_welcomes.insert(
+            soland_domain::reducer::MlsWelcomeQueueKey::new(controller, device),
+            vec![soland_domain::reducer::MlsWelcome {
+                id: "ak:mls_welcome:controller-02".to_owned(),
+                group_id: welcome_group_id.to_owned(),
+                recipient_actor_id: controller.to_owned(),
+                recipient_device_id: device.to_owned(),
+                welcome_bytes: vec![4, 5, 6],
+                key_package_id: "keypackage-controller-02".to_owned(),
+                epoch: 1,
+                commit_ref: None,
+                governance_binding: json!({}),
+                enqueued_at: 1,
+                delivered_at: None,
+            }],
+        );
+        projection
+    }
+
+    #[test]
+    fn a_second_controller_device_is_ready_on_matching_welcome_and_consume_evidence() {
+        let controller = "ak:did_core:web:alice.example";
+        let device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
+        let group = "sidecarGroup01";
+        let projection = projection_with_controller_join(group, Some(group), true);
+        assert!(controller_device_completed_group_join(
+            &projection,
+            controller,
+            device,
+            group
+        ));
+    }
+
+    #[test]
+    fn controller_join_evidence_never_crosses_groups_or_skips_consume() {
+        let controller = "ak:did_core:web:alice.example";
+        let device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
+        let group = "sidecarGroup01";
+        assert!(!controller_device_completed_group_join(
+            &projection_with_controller_join("sidecarGroup02", Some("sidecarGroup02"), true),
+            controller,
+            device,
+            group
+        ));
+        assert!(!controller_device_completed_group_join(
+            &projection_with_controller_join(group, Some(group), false),
+            controller,
+            device,
+            group
+        ));
+        assert!(!controller_device_completed_group_join(
+            &projection_with_controller_join(group, None, true),
+            controller,
+            device,
+            group
+        ));
+        assert!(!controller_device_completed_group_join(
+            &projection_with_controller_join(group, Some(group), true),
+            controller,
+            "ak:device:01904100-0000-7000-8000-a11ce0000003",
+            group
         ));
     }
 }

@@ -237,6 +237,16 @@ fn stamp_projection_operation_received_at(
     );
 }
 
+fn is_managed_agent_pcr_create(event: &arkret_wire::Event) -> bool {
+    event.kind == arkret_wire::EventKind::RealmCreate
+        && event.executed_by.as_ref() != Some(&event.actor_id)
+        && arkret_bootstrap::materialize_managed_agent_pcr_control(
+            std::slice::from_ref(event),
+            &genesis_cell_write_projector,
+        )
+        .is_ok()
+}
+
 fn batch_is_managed_agent_pcr_create(envelopes: &[Value]) -> bool {
     if envelopes.len() != 1 {
         return false;
@@ -244,13 +254,7 @@ fn batch_is_managed_agent_pcr_create(envelopes: &[Value]) -> bool {
     let Ok(event) = serde_json::from_value::<arkret_wire::Event>(envelopes[0].clone()) else {
         return false;
     };
-    event.kind == arkret_wire::EventKind::RealmCreate
-        && event.executed_by.as_ref() != Some(&event.actor_id)
-        && arkret_bootstrap::materialize_managed_agent_pcr_control(
-            std::slice::from_ref(&event),
-            &genesis_cell_write_projector,
-        )
-        .is_ok()
+    is_managed_agent_pcr_create(&event)
 }
 
 #[derive(Debug)]

@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use arkret_identifiers::{Hash, RealmId};
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::events_payloads::realm::RealmPolicyBundlePayload;
 use arkret_wire::{
     AuthoritySetRef, ControlProposalAck, ControlProposalAckKind, ControlProposalAuthorityAck,
@@ -157,6 +158,154 @@ pub(crate) async fn mint_control_proposal_acks(
             )
         })
         .collect()
+}
+
+/// Verify the delegated-controller Control Proposal Ack of a managed Agent PCR
+/// closed genesis.
+///
+/// `authz/cba-profiles.md` ingress source 1 is the only receipt path this class
+/// has: the founding authority is recomputed from the candidate signed create,
+/// the current controller device is established by the accepted Agent DID
+/// delegation, and the receipt signer is that controller device. A managed
+/// Agent PCR freezes the Agent DID as its notary
+/// (`identity/key-management.md` section 3.6), and the same section makes the
+/// current controller device a delegated notary signer of that PCR, so the
+/// receipt signer is deliberately absent from the frozen descriptor set and
+/// this judgement MUST NOT run through the frozen-descriptor rail. It also
+/// MUST NOT fall back to a service-signed receipt.
+pub(crate) async fn verify_managed_agent_pcr_genesis_ack(
+    state: &AppState,
+    event: &Event,
+    ack: &ControlProposalAck,
+    policy: ControlProposalDecisionPolicy,
+) -> Result<Hash, String> {
+    ack.validate_structural(policy)
+        .map_err(|error| error.to_string())?;
+    let authority = arkret_bootstrap::ManagedAgentPcrGenesisAuthority::from_delegated_create(
+        event,
+        &|event: &Event| {
+            arkret_schema::project_registered_cell_writes(
+                event,
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .map_err(|error| error.to_string())
+        },
+    )
+    .map_err(|error| format!("managed Agent PCR genesis authority is invalid: {error}"))?;
+    if *authority.realm_id() != event.realm_id || ack.realm_id != event.realm_id {
+        return Err("managed Agent PCR genesis Ack does not bind the Event Realm".to_owned());
+    }
+    if ack.authority_set_ref != *authority.authority_set_ref() {
+        return Err(
+            "managed Agent PCR genesis Ack does not bind the recomputed founding authority"
+                .to_owned(),
+        );
+    }
+    let record = state
+        .agent_pairings()
+        .agent(authority.agent_id().as_str())
+        .await
+        .map_err(|error| format!("accepted managed Agent delegation is unavailable: {error}"))?
+        .ok_or_else(|| "managed Agent PCR has no accepted Agent delegation".to_owned())?;
+    let record_controller_id = arkret_wire::DidCoreId::new(record.controller_id.clone())
+        .or_else(|_| {
+            arkret_wire::DidFullId::new(record.controller_id.clone())
+                .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+                .map(arkret_wire::DidCoreId::from)
+        })
+        .map_err(|error| format!("accepted managed Agent controller is invalid: {error}"))?;
+    if record.principal_control_realm_id != event.realm_id.as_str()
+        || record_controller_id != *authority.controller_id()
+        || record.controller_authorization_ref.as_str() != authority.authorization_ref()
+        || record.state == AgentLifecycleState::Deactivated
+    {
+        return Err(
+            "managed Agent PCR genesis authority differs from the accepted Agent delegation"
+                .to_owned(),
+        );
+    }
+    let [member] = ack.authority_acks.as_slice() else {
+        return Err(
+            "managed Agent PCR genesis Ack requires exactly one delegated controller signature"
+                .to_owned(),
+        );
+    };
+    let device_id = member
+        .signature
+        .verification_method
+        .as_str()
+        .rsplit_once('#')
+        .map(|(_, fragment)| fragment)
+        .filter(|fragment| fragment.starts_with("ak:device:"))
+        .filter(|fragment| fragment.len() > "ak:device:".len())
+        .ok_or_else(|| {
+            "managed Agent PCR genesis Ack signer is not a controller device method".to_owned()
+        })?;
+    if !crate::routing::federation::move_seal::session_device_verification_method_matches(
+        authority.controller_id().as_str(),
+        device_id,
+        &member.signature.verification_method,
+    ) {
+        return Err(
+            "managed Agent PCR genesis Ack signer is not the delegated controller".to_owned(),
+        );
+    }
+    let device = state
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
+            actor_id: record.controller_id.clone(),
+            device_id: device_id.to_owned(),
+        })
+        .await
+        .map_err(|error| format!("controller device lookup failed: {error}"))?
+        .ok_or_else(|| {
+            "managed Agent PCR genesis Ack signer is not a registered controller device".to_owned()
+        })?;
+    let generation = crate::routing::identity::device_generation::current_device_generation(
+        state,
+        &record.controller_id,
+    )
+    .await
+    .map_err(|error| format!("controller device generation is unavailable: {error}"))?;
+    if device.revoked_at.is_some()
+        || device.verification_state != "verified"
+        || generation.as_ref().is_some_and(|generation| {
+            generation.status
+                != crate::routing::identity::device_generation::DeviceGenerationStatus::Active
+                || device
+                    .payload
+                    .get("authorized_generation_ref")
+                    .and_then(serde_json::Value::as_u64)
+                    != Some(generation.current_ref)
+        })
+    {
+        return Err(
+            "managed Agent PCR genesis Ack signer is not an active controller device".to_owned(),
+        );
+    }
+    let public_key = device
+        .payload
+        .get("device_public_key")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "controller device signing key is missing".to_owned())?;
+    let multibase = public_key
+        .strip_prefix("did:key:")
+        .ok_or_else(|| "controller device key must be a canonical did:key".to_owned())?;
+    let key = arkret_canonical::decode_ed25519_multibase(multibase)
+        .map_err(|error| format!("controller device key is invalid: {error}"))?;
+    let bytes = member
+        .canonical_bytes_for_signature()
+        .map_err(|error| error.to_string())?;
+    arkret_signatures::Ed25519DetachedJwsVerifier::new()
+        .verify_detached_jws(
+            &member.signature.jws,
+            &bytes,
+            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                bytes: key.to_vec(),
+            },
+        )
+        .map_err(|error| format!("managed Agent PCR genesis Ack signature is invalid: {error}"))?;
+    Ok(authority.authority_set_ref().clone())
 }
 
 pub(crate) async fn verify_control_proposal_ack(

@@ -974,7 +974,10 @@ async fn stored_control_proposal_ack(
             format!("Control Proposal policy is unavailable: {error}"),
         )
     })?;
-    crate::control_proposal::verify_control_proposal_ack(state, &event, submitted, policy)
+    if is_managed_agent_pcr_create(&event) {
+        crate::control_proposal::verify_managed_agent_pcr_genesis_ack(
+            state, &event, submitted, policy,
+        )
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -983,6 +986,17 @@ async fn stored_control_proposal_ack(
                 format!("submitted Control Proposal Ack is invalid: {error}"),
             )
         })?;
+    } else {
+        crate::control_proposal::verify_control_proposal_ack(state, &event, submitted, policy)
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    "failed_precondition",
+                    format!("submitted Control Proposal Ack is invalid: {error}"),
+                )
+            })?;
+    }
     state
         .projections()
         .put_pending_control_event_with_ack(&event, submitted, digest_suite)
@@ -2585,23 +2599,57 @@ pub(super) async fn submit_event_value_with_context(
                 )
             })?;
             if let Some(ack) = context.control_proposal_ack {
-                let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
-                let (_, authority_set_ref) = worker
-                    .current_notary_value_for_events(state, &realm_id, std::slice::from_ref(event))
+                // A managed Agent PCR closed genesis is the one delegated
+                // ingress-authority class: its receipt is signed by the
+                // controller device named by the accepted Agent DID
+                // delegation, never by a frozen notary descriptor and never
+                // by this service (`authz/cba-profiles.md`, ingress source 1).
+                let authority_set_ref = if managed_agent_pcr_genesis {
+                    crate::control_proposal::verify_managed_agent_pcr_genesis_ack(
+                        state, event, ack, policy,
+                    )
+                    .await
                     .map_err(|error| {
                         SubmitOneError::new(
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            "quorum_unreachable",
-                            format!("Control Proposal authority is unavailable: {error}"),
+                            StatusCode::PRECONDITION_FAILED,
+                            "failed_precondition",
+                            format!("submitted Control Proposal Ack is invalid: {error}"),
                         )
                     })?
-                    .ok_or_else(|| {
-                        SubmitOneError::new(
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            "quorum_unreachable",
-                            "current proposal authority profile is unavailable",
+                } else {
+                    let worker =
+                        crate::notary::NotaryWorker::for_service(state.service_id().clone());
+                    let (_, authority_set_ref) = worker
+                        .current_notary_value_for_events(
+                            state,
+                            &realm_id,
+                            std::slice::from_ref(event),
                         )
-                    })?;
+                        .map_err(|error| {
+                            SubmitOneError::new(
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "quorum_unreachable",
+                                format!("Control Proposal authority is unavailable: {error}"),
+                            )
+                        })?
+                        .ok_or_else(|| {
+                            SubmitOneError::new(
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "quorum_unreachable",
+                                "current proposal authority profile is unavailable",
+                            )
+                        })?;
+                    crate::control_proposal::verify_control_proposal_ack(state, event, ack, policy)
+                        .await
+                        .map_err(|error| {
+                            SubmitOneError::new(
+                                StatusCode::PRECONDITION_FAILED,
+                                "failed_precondition",
+                                format!("submitted Control Proposal Ack is invalid: {error}"),
+                            )
+                        })?;
+                    authority_set_ref
+                };
                 if ack.realm_id != realm_id
                     || ack.proposal_digest != proposal_digest
                     || ack.authority_set_ref != authority_set_ref
@@ -2612,15 +2660,6 @@ pub(super) async fn submit_event_value_with_context(
                         "submitted Control Proposal Ack does not bind the Event basis authority",
                     ));
                 }
-                crate::control_proposal::verify_control_proposal_ack(state, event, ack, policy)
-                    .await
-                    .map_err(|error| {
-                        SubmitOneError::new(
-                            StatusCode::PRECONDITION_FAILED,
-                            "failed_precondition",
-                            format!("submitted Control Proposal Ack is invalid: {error}"),
-                        )
-                    })?;
                 Some(ack.clone())
             } else if event.seal_basis.is_none() {
                 let bootstrap_authority = context
