@@ -18,6 +18,7 @@
 //!   moves underneath a plan, the plan is invalid; it is never silently re-targeted at the new
 //!   record.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arkret_models_identity::service_identity::CanonicalServiceUrl;
@@ -29,10 +30,11 @@ use arkret_models_identity::{
 use arkret_wire::{DidCoreId, Hash};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use soland_domain::reducer::ProjectionState;
 use soland_storage::{
-    ConflictCode, ServiceRouteHandoverNoticeCommit, ServiceRouteHandoverNoticeRecord,
-    ServiceRouteHandoverPlan, ServiceRouteHandoverPlanState, ServiceRouteHandoverPlanStore,
-    ServiceRouteHandoverPlanWrite,
+    ConflictCode, ServiceRouteHandoverAudienceEntry, ServiceRouteHandoverAudienceTarget,
+    ServiceRouteHandoverNoticeCommit, ServiceRouteHandoverNoticeRecord, ServiceRouteHandoverPlan,
+    ServiceRouteHandoverPlanState, ServiceRouteHandoverPlanStore, ServiceRouteHandoverPlanWrite,
 };
 
 use crate::{ServiceError, ServiceResult};
@@ -78,6 +80,110 @@ pub struct HandoverPlanRequest {
 pub struct PlannedHandover {
     pub plan: ServiceRouteHandoverPlan,
     pub notice: ServiceRouteHandoverNotice,
+}
+
+/// Build the owner-side inverse index from accepted effective member state.
+///
+/// No configured peer, contact, DID namespace, or historical event enters
+/// this function. A Realm participates only when a current routable member is
+/// bound to this deployment; targets are current routable remote bindings in
+/// that same Realm. Both sides must retain an accepted frontier, so an
+/// incomplete projection fails closed instead of producing an unauditable
+/// notification target.
+#[must_use]
+pub fn derive_realm_handover_audience(
+    projection: &ProjectionState,
+    local_service_id: &DidCoreId,
+    now: DateTime<Utc>,
+) -> Vec<ServiceRouteHandoverAudienceTarget> {
+    let effective = |member: &soland_domain::reducer::SolandMembershipState| {
+        member.state == "join"
+            && member.delivery_status.as_deref() == Some("routable")
+            && member
+                .delivery_binding_expires_at
+                .is_none_or(|expires_at| expires_at > now)
+    };
+
+    let mut local_frontiers = BTreeMap::<String, Vec<String>>::new();
+    for member in projection
+        .members
+        .values()
+        .filter(|member| effective(member))
+    {
+        if member.recipient_service_id.as_deref() != Some(local_service_id.as_str()) {
+            continue;
+        }
+        let Some(frontier) = member
+            .delivery_binding_frontier
+            .as_ref()
+            .or(member.membership_event_ref.as_ref())
+        else {
+            continue;
+        };
+        local_frontiers
+            .entry(member.realm_id.clone())
+            .or_default()
+            .push(frontier.clone());
+    }
+    for frontiers in local_frontiers.values_mut() {
+        frontiers.sort();
+        frontiers.dedup();
+    }
+
+    let mut targets = BTreeMap::<(String, String), ServiceRouteHandoverAudienceTarget>::new();
+    for member in projection
+        .members
+        .values()
+        .filter(|member| effective(member))
+    {
+        let Some(local_basis) = local_frontiers.get(&member.realm_id) else {
+            continue;
+        };
+        let Some(peer) = member
+            .recipient_service_id
+            .as_deref()
+            .and_then(|value| DidCoreId::new(value.to_owned()).ok())
+        else {
+            continue;
+        };
+        if peer == *local_service_id {
+            continue;
+        }
+        if projection
+            .federation_delivery_revoked_peers(&member.realm_id)
+            .contains(peer.as_str())
+        {
+            continue;
+        }
+        let Some(peer_frontier) = member
+            .delivery_binding_frontier
+            .as_ref()
+            .or(member.membership_event_ref.as_ref())
+        else {
+            continue;
+        };
+        let key = (member.realm_id.clone(), peer.as_str().to_owned());
+        targets
+            .entry(key)
+            .and_modify(|target| target.accepted_frontier.push(peer_frontier.clone()))
+            .or_insert_with(|| {
+                let mut accepted_frontier = local_basis.clone();
+                accepted_frontier.push(peer_frontier.clone());
+                ServiceRouteHandoverAudienceTarget {
+                    realm_id: member.realm_id.clone(),
+                    peer_service_id: peer,
+                    accepted_frontier,
+                }
+            });
+    }
+    targets
+        .into_values()
+        .map(|mut target| {
+            target.accepted_frontier.sort();
+            target.accepted_frontier.dedup();
+            target
+        })
+        .collect()
 }
 
 /// Owner-side handover control plane.
@@ -530,6 +636,53 @@ impl ServiceRouteHandoverPlanner {
             .active_plan(&self.service_id, &self.service_kind)
             .await?)
     }
+
+    /// Refresh the durable notification set from the current accepted
+    /// projection. Callers run this after projection changes and while the old
+    /// endpoint remains in grace; restarting cannot forget earlier rows.
+    pub async fn reconcile_audience(
+        &self,
+        projection: &ProjectionState,
+        now: DateTime<Utc>,
+    ) -> ServiceResult<Vec<ServiceRouteHandoverAudienceEntry>> {
+        let Some(plan) = self.active_plan().await? else {
+            return Err(conflict(
+                ConflictCode::FailedPrecondition,
+                "there is no active service route handover plan",
+            ));
+        };
+        if now > plan.grace_until {
+            return Err(conflict(
+                ConflictCode::FailedPrecondition,
+                "the service route handover grace window has ended",
+            ));
+        }
+        let Some(notice_digest) = plan.active_notice_digest.as_ref() else {
+            return Err(ServiceError::Internal(
+                "the active handover plan has no notice digest".to_owned(),
+            ));
+        };
+        let targets = derive_realm_handover_audience(projection, &self.service_id, now);
+        match self
+            .plans
+            .reconcile_audience(
+                &self.service_id,
+                &self.service_kind,
+                &plan.handover_id,
+                notice_digest,
+                targets,
+                now,
+            )
+            .await?
+        {
+            ServiceRouteHandoverPlanWrite::Applied | ServiceRouteHandoverPlanWrite::Replay => {}
+            other => return Err(plan_write_error(other)),
+        }
+        Ok(self
+            .plans
+            .audience(&self.service_id, &self.service_kind, &plan.handover_id)
+            .await?)
+    }
 }
 
 #[cfg(test)]
@@ -659,6 +812,98 @@ mod tests {
             grace_until: now() + Duration::hours(6),
             expires_at: now() + Duration::hours(12),
         }
+    }
+
+    fn membership(
+        actor: &str,
+        realm_id: &str,
+        recipient_service_id: &str,
+        frontier: &str,
+    ) -> soland_domain::reducer::SolandMembershipState {
+        soland_domain::reducer::SolandMembershipState {
+            member: actor.to_owned(),
+            realm_id: realm_id.to_owned(),
+            state: "join".to_owned(),
+            role: "member".to_owned(),
+            delivery_status: Some("routable".to_owned()),
+            recipient_service_id: Some(recipient_service_id.to_owned()),
+            recipient_service_resolution: None,
+            membership_event_ref: Some(frontier.to_owned()),
+            delivery_binding_frontier: Some(frontier.to_owned()),
+            delivery_binding_expires_at: None,
+            invited_at: None,
+            joined_at: now(),
+            updated_at: now(),
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn audience_comes_only_from_current_accepted_realm_bindings() {
+        let local = service_id();
+        let peer = DidCoreId::new("ak:did_core:web:peer.example").unwrap();
+        let mut projection = ProjectionState::default();
+        projection.members.insert(
+            ("ak:realm:a".to_owned(), "local-a".to_owned()),
+            membership("local-a", "ak:realm:a", local.as_str(), "frontier-local-a"),
+        );
+        projection.members.insert(
+            ("ak:realm:a".to_owned(), "remote-a1".to_owned()),
+            membership("remote-a1", "ak:realm:a", peer.as_str(), "frontier-peer-a1"),
+        );
+        projection.members.insert(
+            ("ak:realm:a".to_owned(), "remote-a2".to_owned()),
+            membership("remote-a2", "ak:realm:a", peer.as_str(), "frontier-peer-a2"),
+        );
+        projection.members.insert(
+            ("ak:realm:b".to_owned(), "local-b".to_owned()),
+            membership("local-b", "ak:realm:b", local.as_str(), "frontier-local-b"),
+        );
+        projection.members.insert(
+            ("ak:realm:b".to_owned(), "remote-b".to_owned()),
+            membership("remote-b", "ak:realm:b", peer.as_str(), "frontier-peer-b"),
+        );
+
+        // Accepted remote membership without local participation is not an
+        // audience source. Neither are expired or left bindings.
+        projection.members.insert(
+            ("ak:realm:c".to_owned(), "remote-c".to_owned()),
+            membership("remote-c", "ak:realm:c", peer.as_str(), "frontier-peer-c"),
+        );
+        let mut expired = membership(
+            "expired",
+            "ak:realm:a",
+            "ak:did_core:web:expired.example",
+            "frontier-expired",
+        );
+        expired.delivery_binding_expires_at = Some(now());
+        projection
+            .members
+            .insert(("ak:realm:a".to_owned(), "expired".to_owned()), expired);
+        let mut left = membership(
+            "left",
+            "ak:realm:a",
+            "ak:did_core:web:left.example",
+            "frontier-left",
+        );
+        left.state = "leave".to_owned();
+        projection
+            .members
+            .insert(("ak:realm:a".to_owned(), "left".to_owned()), left);
+
+        let audience = derive_realm_handover_audience(&projection, &local, now());
+        assert_eq!(audience.len(), 2, "the peer remains scoped to two Realms");
+        assert_eq!(audience[0].realm_id, "ak:realm:a");
+        assert_eq!(audience[0].peer_service_id, peer);
+        assert_eq!(
+            audience[0].accepted_frontier,
+            vec![
+                "frontier-local-a".to_owned(),
+                "frontier-peer-a1".to_owned(),
+                "frontier-peer-a2".to_owned(),
+            ]
+        );
+        assert_eq!(audience[1].realm_id, "ak:realm:b");
     }
 
     #[tokio::test]

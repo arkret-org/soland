@@ -3,20 +3,23 @@ use std::collections::BTreeMap;
 use arkret_wire::{DidCoreId, Hash};
 use chrono::{DateTime, Utc};
 use soland_storage::{
-    PersistenceError, PersistenceResult, ServiceRouteHandoverNoticeCommit,
-    ServiceRouteHandoverNoticeRecord, ServiceRouteHandoverPlan, ServiceRouteHandoverPlanState,
-    ServiceRouteHandoverPlanStore, ServiceRouteHandoverPlanWrite,
+    PersistenceError, PersistenceResult, ServiceRouteHandoverAudienceEntry,
+    ServiceRouteHandoverAudienceStatus, ServiceRouteHandoverAudienceTarget,
+    ServiceRouteHandoverNoticeCommit, ServiceRouteHandoverNoticeRecord, ServiceRouteHandoverPlan,
+    ServiceRouteHandoverPlanState, ServiceRouteHandoverPlanStore, ServiceRouteHandoverPlanWrite,
 };
 
 use super::{Arc, Mutex, async_trait};
 
 type PlanKey = (String, String, String);
 type NoticeKey = (String, String, String, u32);
+type AudienceKey = (String, String, String, String, String);
 
 #[derive(Default)]
 struct PlanState {
     plans: BTreeMap<PlanKey, ServiceRouteHandoverPlan>,
     notices: BTreeMap<NoticeKey, ServiceRouteHandoverNoticeRecord>,
+    audience: BTreeMap<AudienceKey, ServiceRouteHandoverAudienceEntry>,
 }
 
 #[derive(Clone, Default)]
@@ -44,6 +47,22 @@ fn canonical_notice_digest(record: &ServiceRouteHandoverNoticeRecord) -> Persist
             .map_err(|error| PersistenceError::Internal(error.to_string()))?,
     )
     .map_err(|error| PersistenceError::Internal(error.to_string()))
+}
+
+fn audience_key(
+    service_id: &DidCoreId,
+    service_kind: &str,
+    handover_id: &str,
+    realm_id: &str,
+    peer_service_id: &DidCoreId,
+) -> AudienceKey {
+    (
+        service_id.as_str().to_owned(),
+        service_kind.to_owned(),
+        handover_id.to_owned(),
+        realm_id.to_owned(),
+        peer_service_id.as_str().to_owned(),
+    )
 }
 
 #[async_trait]
@@ -128,6 +147,134 @@ impl ServiceRouteHandoverPlanStore for MemoryServiceRouteHandoverPlanStore {
         notices.sort_by_key(|record| record.notice_revision);
         notices.truncate(limit);
         Ok(notices)
+    }
+
+    async fn audience(
+        &self,
+        service_id: &DidCoreId,
+        service_kind: &str,
+        handover_id: &str,
+    ) -> PersistenceResult<Vec<ServiceRouteHandoverAudienceEntry>> {
+        Ok(self
+            .state
+            .lock()
+            .audience
+            .values()
+            .filter(|entry| {
+                entry.service_id == *service_id
+                    && entry.service_kind == service_kind
+                    && entry.handover_id == handover_id
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn reconcile_audience(
+        &self,
+        service_id: &DidCoreId,
+        service_kind: &str,
+        handover_id: &str,
+        notice_digest: &Hash,
+        targets: Vec<ServiceRouteHandoverAudienceTarget>,
+        updated_at: DateTime<Utc>,
+    ) -> PersistenceResult<ServiceRouteHandoverPlanWrite> {
+        let mut desired = BTreeMap::<(String, String), ServiceRouteHandoverAudienceTarget>::new();
+        for mut target in targets {
+            if target.realm_id.trim().is_empty() || target.peer_service_id == *service_id {
+                return Err(PersistenceError::SchemaViolation(
+                    "handover audience target must name a Realm and a remote service".to_owned(),
+                ));
+            }
+            target.accepted_frontier.sort();
+            target.accepted_frontier.dedup();
+            desired
+                .entry((
+                    target.realm_id.clone(),
+                    target.peer_service_id.as_str().to_owned(),
+                ))
+                .and_modify(|existing| {
+                    existing
+                        .accepted_frontier
+                        .append(&mut target.accepted_frontier);
+                    existing.accepted_frontier.sort();
+                    existing.accepted_frontier.dedup();
+                })
+                .or_insert(target);
+        }
+
+        let mut state = self.state.lock();
+        let Some(plan) = state
+            .plans
+            .get(&plan_key(service_id, service_kind, handover_id))
+        else {
+            return Ok(ServiceRouteHandoverPlanWrite::Rejected);
+        };
+        if plan.state.is_terminal() || plan.active_notice_digest.as_ref() != Some(notice_digest) {
+            return Ok(ServiceRouteHandoverPlanWrite::Rejected);
+        }
+
+        let prefix = (
+            service_id.as_str().to_owned(),
+            service_kind.to_owned(),
+            handover_id.to_owned(),
+        );
+        for entry in state.audience.values_mut().filter(|entry| {
+            entry.service_id == *service_id
+                && entry.service_kind == service_kind
+                && entry.handover_id == handover_id
+        }) {
+            let desired_key = (
+                entry.realm_id.clone(),
+                entry.peer_service_id.as_str().to_owned(),
+            );
+            if !desired.contains_key(&desired_key) && entry.required {
+                entry.required = false;
+                entry.status = ServiceRouteHandoverAudienceStatus::Removed;
+                entry.removed_reason = Some("accepted_relationship_revoked".to_owned());
+                entry.updated_at = updated_at;
+            }
+        }
+        for (_, target) in desired {
+            let key = audience_key(
+                service_id,
+                service_kind,
+                handover_id,
+                &target.realm_id,
+                &target.peer_service_id,
+            );
+            match state.audience.get_mut(&key) {
+                Some(entry) => {
+                    if entry.notice_digest != *notice_digest || !entry.required {
+                        entry.notice_digest = notice_digest.clone();
+                        entry.status = ServiceRouteHandoverAudienceStatus::Pending;
+                    }
+                    entry.accepted_frontier = target.accepted_frontier;
+                    entry.required = true;
+                    entry.removed_reason = None;
+                    entry.updated_at = updated_at;
+                }
+                None => {
+                    state.audience.insert(
+                        key,
+                        ServiceRouteHandoverAudienceEntry {
+                            service_id: service_id.clone(),
+                            service_kind: prefix.1.clone(),
+                            handover_id: prefix.2.clone(),
+                            realm_id: target.realm_id,
+                            peer_service_id: target.peer_service_id,
+                            notice_digest: notice_digest.clone(),
+                            accepted_frontier: target.accepted_frontier,
+                            required: true,
+                            status: ServiceRouteHandoverAudienceStatus::Pending,
+                            removed_reason: None,
+                            created_at: updated_at,
+                            updated_at,
+                        },
+                    );
+                }
+            }
+        }
+        Ok(ServiceRouteHandoverPlanWrite::Applied)
     }
 
     async fn open_plan(

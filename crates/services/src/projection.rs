@@ -2652,6 +2652,11 @@ impl ProjectionService {
                 .and_then(|member| member.delivery_binding_frontier.clone())
                 .or_else(|| membership_event_ref.clone())
         });
+        let delivery_binding_expires_at = recipient_service_id.as_ref().and_then(|_| {
+            previous
+                .as_ref()
+                .and_then(|membership| membership.delivery_binding_expires_at)
+        });
         let joined_at = previous
             .as_ref()
             .filter(|membership| membership.state == "join")
@@ -2669,6 +2674,7 @@ impl ProjectionService {
                 recipient_service_resolution: None,
                 membership_event_ref,
                 delivery_binding_frontier,
+                delivery_binding_expires_at,
                 invited_at: previous
                     .as_ref()
                     .and_then(|membership| membership.invited_at)
@@ -2730,6 +2736,7 @@ impl ProjectionService {
                 recipient_service_resolution: None,
                 membership_event_ref: Some(event_ref.clone()),
                 delivery_binding_frontier: None,
+                delivery_binding_expires_at: None,
                 invited_at: previous
                     .as_ref()
                     .and_then(|member| member.invited_at)

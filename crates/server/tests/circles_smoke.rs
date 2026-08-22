@@ -157,6 +157,7 @@ fn add_realm_member(state: &mut ProjectionState, _hlc: &ServerHlc, realm_id: &st
             recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,
+            delivery_binding_expires_at: None,
             invited_at: None,
             joined_at: now,
             updated_at: now,

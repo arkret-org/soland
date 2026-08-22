@@ -1094,6 +1094,7 @@ async fn register_native_agent_membership_context(
             recipient_service_resolution: None,
             membership_event_ref: Some(AGENT_CONTROLLER_MEMBERSHIP_EVENT_ID.to_owned()),
             delivery_binding_frontier: None,
+            delivery_binding_expires_at: None,
             invited_at: None,
             joined_at: now,
             updated_at: now,

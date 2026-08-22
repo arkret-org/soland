@@ -704,6 +704,7 @@ fn insert_projected_membership_at(
             recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,
+            delivery_binding_expires_at: None,
             invited_at: (membership == "invite").then_some(updated_at),
             joined_at: updated_at,
             updated_at,

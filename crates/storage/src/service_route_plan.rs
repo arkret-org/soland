@@ -201,6 +201,61 @@ pub struct ServiceRouteHandoverNoticeCommit {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Required-notice state for one accepted Realm relationship.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServiceRouteHandoverAudienceStatus {
+    Pending,
+    Removed,
+}
+
+impl ServiceRouteHandoverAudienceStatus {
+    pub const ALL: [Self; 2] = [Self::Pending, Self::Removed];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Removed => "removed",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|status| status.as_str() == value)
+    }
+}
+
+/// Durable inverse-index row derived only from accepted Realm/member state.
+///
+/// The key deliberately includes `realm_id`: the same remote service may be
+/// able to see a notice through two Realms, but one Realm's ACK cannot satisfy
+/// the other Realm's authorization path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceRouteHandoverAudienceEntry {
+    pub service_id: DidCoreId,
+    pub service_kind: String,
+    pub handover_id: String,
+    pub realm_id: String,
+    pub peer_service_id: DidCoreId,
+    pub notice_digest: Hash,
+    pub accepted_frontier: Vec<String>,
+    pub required: bool,
+    pub status: ServiceRouteHandoverAudienceStatus,
+    pub removed_reason: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One currently accepted Realm/peer relationship before durable reconcile.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceRouteHandoverAudienceTarget {
+    pub realm_id: String,
+    pub peer_service_id: DidCoreId,
+    pub accepted_frontier: Vec<String>,
+}
+
 /// Outcome of a conditional owner-plan write.
 ///
 /// The conflict variants are kept apart because they demand different
@@ -267,6 +322,26 @@ pub trait ServiceRouteHandoverPlanStore: Send + Sync {
         handover_id: &str,
         limit: usize,
     ) -> PersistenceResult<Vec<ServiceRouteHandoverNoticeRecord>>;
+
+    /// Current and removed audience rows for one plan, sorted by Realm/peer.
+    async fn audience(
+        &self,
+        service_id: &DidCoreId,
+        service_kind: &str,
+        handover_id: &str,
+    ) -> PersistenceResult<Vec<ServiceRouteHandoverAudienceEntry>>;
+
+    /// Atomically reconcile accepted projection relationships into the
+    /// durable audience snapshot for the exact active notice revision.
+    async fn reconcile_audience(
+        &self,
+        service_id: &DidCoreId,
+        service_kind: &str,
+        handover_id: &str,
+        notice_digest: &Hash,
+        targets: Vec<ServiceRouteHandoverAudienceTarget>,
+        updated_at: DateTime<Utc>,
+    ) -> PersistenceResult<ServiceRouteHandoverPlanWrite>;
 
     /// Open a `Draft` plan. Fails closed when the service already has an
     /// unfinished plan, so a second migration cannot be started underneath a

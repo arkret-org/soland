@@ -249,6 +249,7 @@ impl ProjectionState {
                 recipient_service_resolution: None,
                 membership_event_ref: None,
                 delivery_binding_frontier: None,
+                delivery_binding_expires_at: None,
                 invited_at: Some(admission_time),
                 joined_at: admission_time,
                 updated_at: admission_time,

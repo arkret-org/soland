@@ -1032,6 +1032,9 @@ pub struct SolandMembershipState {
     /// the membership event when the binding does not carry a narrower
     /// frontier.
     pub delivery_binding_frontier: Option<String>,
+    /// Hard validity bound carried by the accepted delivery binding. An
+    /// expired binding is not an effective Realm delivery relationship.
+    pub delivery_binding_expires_at: Option<chrono::DateTime<chrono::Utc>>,
     /// First effective invite frontier retained after a later join so
     /// `history_access=since_join` can start at the invite boundary while
     /// `history_access=since_join` starts at the join boundary.

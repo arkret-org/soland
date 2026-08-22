@@ -2755,6 +2755,35 @@ CREATE TABLE public.service_route_handover_notices (
         ON DELETE CASCADE
 );
 
+-- Accepted Realm relationships that must receive the plan's active notice.
+-- A peer occurring in two Realms remains two authorization/ACK barriers.
+CREATE TABLE public.service_route_handover_audience (
+    service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
+    service_kind text NOT NULL,
+    handover_id text NOT NULL,
+    realm_id text NOT NULL CHECK (realm_id LIKE 'ak:realm:%'),
+    peer_service_id text NOT NULL CHECK (peer_service_id LIKE 'ak:did_core:%'),
+    notice_digest text NOT NULL,
+    accepted_frontier jsonb NOT NULL,
+    required boolean NOT NULL,
+    audience_status text NOT NULL CHECK (audience_status IN ('pending', 'removed')),
+    removed_reason text,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY (service_id, service_kind, handover_id, realm_id, peer_service_id),
+    FOREIGN KEY (service_id, service_kind, handover_id)
+        REFERENCES public.service_route_handover_plans (service_id, service_kind, handover_id)
+        ON DELETE CASCADE,
+    CONSTRAINT service_route_handover_audience_required_shape_check CHECK (
+        (required AND audience_status = 'pending' AND removed_reason IS NULL)
+        OR (NOT required AND audience_status = 'removed' AND removed_reason IS NOT NULL)
+    )
+);
+CREATE INDEX service_route_handover_audience_pending_idx
+    ON public.service_route_handover_audience
+        (service_id, service_kind, handover_id, audience_status)
+    WHERE required;
+
 CREATE TABLE public.service_identity_registrations (
     service_kind text NOT NULL,
     public_base text NOT NULL,

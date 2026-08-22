@@ -45,9 +45,9 @@ use super::{
     OrganizationRegistrationTerminalReason, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, ProjectionEventRecord,
     ProjectionEventStore, RealmFanoutAuthorityWitness, RealmFanoutBinding, RealmMetaRecord,
-    RealmMetaStore, ServiceRouteHandoverNoticeCommit, ServiceRouteHandoverNoticeRecord,
-    ServiceRouteHandoverPlan, ServiceRouteHandoverPlanState, ServiceRouteHandoverPlanStore,
-    ServiceRouteHandoverPlanWrite,
+    RealmMetaStore, ServiceRouteHandoverAudienceStatus, ServiceRouteHandoverAudienceTarget,
+    ServiceRouteHandoverNoticeCommit, ServiceRouteHandoverNoticeRecord, ServiceRouteHandoverPlan,
+    ServiceRouteHandoverPlanState, ServiceRouteHandoverPlanStore, ServiceRouteHandoverPlanWrite,
 };
 
 pub fn minimal_history_signer_evidence(
@@ -3305,6 +3305,88 @@ pub async fn assert_service_route_handover_plan_store_contract(
     assert_eq!(
         stored.active_notice_digest.as_ref(),
         Some(&revision_zero_digest)
+    );
+
+    // Audience is scoped by Realm, not globally by peer. Duplicate current
+    // members on the same remote service collapse within a Realm, while the
+    // same service in a second Realm remains an independent barrier row.
+    let peer = DidCoreId::new("ak:did_core:web:peer.example").unwrap();
+    assert_eq!(
+        store
+            .reconcile_audience(
+                service_id,
+                service_kind,
+                "h-1",
+                &revision_zero_digest,
+                vec![
+                    ServiceRouteHandoverAudienceTarget {
+                        realm_id: "ak:realm:audience-a".to_owned(),
+                        peer_service_id: peer.clone(),
+                        accepted_frontier: vec!["ak:event:frontier-a1".to_owned()],
+                    },
+                    ServiceRouteHandoverAudienceTarget {
+                        realm_id: "ak:realm:audience-a".to_owned(),
+                        peer_service_id: peer.clone(),
+                        accepted_frontier: vec!["ak:event:frontier-a2".to_owned()],
+                    },
+                    ServiceRouteHandoverAudienceTarget {
+                        realm_id: "ak:realm:audience-b".to_owned(),
+                        peer_service_id: peer.clone(),
+                        accepted_frontier: vec!["ak:event:frontier-b".to_owned()],
+                    },
+                ],
+                now,
+            )
+            .await
+            .unwrap(),
+        ServiceRouteHandoverPlanWrite::Applied
+    );
+    let audience = store
+        .audience(service_id, service_kind, "h-1")
+        .await
+        .unwrap();
+    assert_eq!(audience.len(), 2);
+    assert!(audience.iter().all(|entry| entry.required));
+    assert_eq!(audience[0].accepted_frontier.len(), 2);
+
+    // A later accepted projection revokes Realm A and introduces Realm C.
+    // The removed row remains durable and explains why it left the barrier.
+    store
+        .reconcile_audience(
+            service_id,
+            service_kind,
+            "h-1",
+            &revision_zero_digest,
+            vec![
+                ServiceRouteHandoverAudienceTarget {
+                    realm_id: "ak:realm:audience-b".to_owned(),
+                    peer_service_id: peer.clone(),
+                    accepted_frontier: vec!["ak:event:frontier-b2".to_owned()],
+                },
+                ServiceRouteHandoverAudienceTarget {
+                    realm_id: "ak:realm:audience-c".to_owned(),
+                    peer_service_id: peer,
+                    accepted_frontier: vec!["ak:event:frontier-c".to_owned()],
+                },
+            ],
+            now + Duration::minutes(1),
+        )
+        .await
+        .unwrap();
+    let audience = store
+        .audience(service_id, service_kind, "h-1")
+        .await
+        .unwrap();
+    assert_eq!(audience.len(), 3);
+    let removed = audience
+        .iter()
+        .find(|entry| entry.realm_id == "ak:realm:audience-a")
+        .unwrap();
+    assert!(!removed.required);
+    assert_eq!(removed.status, ServiceRouteHandoverAudienceStatus::Removed);
+    assert_eq!(
+        removed.removed_reason.as_deref(),
+        Some("accepted_relationship_revoked")
     );
 
     // The identical revision replays; a different one at the same revision is

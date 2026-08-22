@@ -735,6 +735,18 @@ impl ProjectionState {
             } else {
                 None
             };
+        let delivery_binding_expires_at =
+            if new_state == "join" && delivery_status.as_deref() == Some("routable") {
+                payload
+                    .get("delivery_binding")
+                    .and_then(Value::as_object)
+                    .and_then(|binding| binding.get("expires_at"))
+                    .and_then(Value::as_str)
+                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                    .map(|value| value.with_timezone(&chrono::Utc))
+            } else {
+                None
+            };
         let remove_membership_frontier = matches!(new_state.as_str(), "leave" | "ban").then(|| {
             vec![
                 event_ref
@@ -797,6 +809,7 @@ impl ProjectionState {
                 recipient_service_resolution,
                 membership_event_ref: event_ref,
                 delivery_binding_frontier,
+                delivery_binding_expires_at,
                 invited_at,
                 joined_at,
                 updated_at: now,

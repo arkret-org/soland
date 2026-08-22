@@ -280,6 +280,7 @@ async fn seed_pending_invite(
             recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,
+            delivery_binding_expires_at: None,
             invited_at: Some(now),
             joined_at: now,
             updated_at: now,

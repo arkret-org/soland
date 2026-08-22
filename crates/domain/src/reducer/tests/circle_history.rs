@@ -23,6 +23,7 @@ fn seed_state(history_access: &str) -> (ProjectionState, ServerHlc, chrono::Date
                 recipient_service_resolution: None,
                 membership_event_ref: None,
                 delivery_binding_frontier: None,
+                delivery_binding_expires_at: None,
                 invited_at: None,
                 joined_at: base,
                 updated_at: base,

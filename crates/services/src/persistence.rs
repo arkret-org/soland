@@ -905,6 +905,40 @@ impl soland_storage::ServiceRouteHandoverPlanStore for PersistenceHandle {
             .await
     }
 
+    async fn audience(
+        &self,
+        service_id: &arkret_wire::DidCoreId,
+        service_kind: &str,
+        handover_id: &str,
+    ) -> PersistenceResult<Vec<soland_storage::ServiceRouteHandoverAudienceEntry>> {
+        self.persistence
+            .service_route_plans()
+            .audience(service_id, service_kind, handover_id)
+            .await
+    }
+
+    async fn reconcile_audience(
+        &self,
+        service_id: &arkret_wire::DidCoreId,
+        service_kind: &str,
+        handover_id: &str,
+        notice_digest: &arkret_wire::Hash,
+        targets: Vec<soland_storage::ServiceRouteHandoverAudienceTarget>,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<soland_storage::ServiceRouteHandoverPlanWrite> {
+        self.persistence
+            .service_route_plans()
+            .reconcile_audience(
+                service_id,
+                service_kind,
+                handover_id,
+                notice_digest,
+                targets,
+                updated_at,
+            )
+            .await
+    }
+
     async fn open_plan(
         &self,
         plan: soland_storage::ServiceRouteHandoverPlan,

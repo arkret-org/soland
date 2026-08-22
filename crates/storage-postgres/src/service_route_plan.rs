@@ -1,13 +1,14 @@
 use arkret_models_identity::{ServiceRouteHandoverNotice, ServiceRouteHandoverState};
 use arkret_wire::{DidCoreId, Hash};
 use chrono::{DateTime, Utc};
-use diesel::sql_types::{BigInt, Integer, Jsonb, Nullable, Text, Timestamptz};
+use diesel::sql_types::{BigInt, Bool, Integer, Jsonb, Nullable, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use soland_storage::{
-    PersistenceError, PersistenceResult, ServiceRouteHandoverNoticeCommit,
-    ServiceRouteHandoverNoticeRecord, ServiceRouteHandoverPlan, ServiceRouteHandoverPlanState,
-    ServiceRouteHandoverPlanStore, ServiceRouteHandoverPlanWrite,
+    PersistenceError, PersistenceResult, ServiceRouteHandoverAudienceEntry,
+    ServiceRouteHandoverAudienceStatus, ServiceRouteHandoverAudienceTarget,
+    ServiceRouteHandoverNoticeCommit, ServiceRouteHandoverNoticeRecord, ServiceRouteHandoverPlan,
+    ServiceRouteHandoverPlanState, ServiceRouteHandoverPlanStore, ServiceRouteHandoverPlanWrite,
 };
 
 use crate::{PgPool, PgTransactionError, async_trait, pg_conn};
@@ -78,6 +79,34 @@ struct NoticeRow {
     expires_at: DateTime<Utc>,
 }
 
+#[derive(QueryableByName)]
+struct AudienceRow {
+    #[diesel(sql_type = Text)]
+    service_id: String,
+    #[diesel(sql_type = Text)]
+    service_kind: String,
+    #[diesel(sql_type = Text)]
+    handover_id: String,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    peer_service_id: String,
+    #[diesel(sql_type = Text)]
+    notice_digest: String,
+    #[diesel(sql_type = Jsonb)]
+    accepted_frontier: serde_json::Value,
+    #[diesel(sql_type = Bool)]
+    required: bool,
+    #[diesel(sql_type = Text)]
+    audience_status: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    removed_reason: Option<String>,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: DateTime<Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: DateTime<Utc>,
+}
+
 const PLAN_COLUMNS: &str = "service_id, service_kind, handover_id, basis_record_sequence, \
      basis_record_digest, candidate_base_url, candidate_record_url, not_before, cutover_at, \
      grace_until, expires_at, lifecycle_state, active_notice_revision, active_notice_digest, \
@@ -85,6 +114,10 @@ const PLAN_COLUMNS: &str = "service_id, service_kind, handover_id, basis_record_
 
 const NOTICE_COLUMNS: &str = "service_id, service_kind, handover_id, notice_revision, \
      notice_digest, previous_notice_digest, notice_state, notice, issued_at, expires_at";
+
+const AUDIENCE_COLUMNS: &str = "service_id, service_kind, handover_id, realm_id, \
+     peer_service_id, notice_digest, accepted_frontier, required, audience_status, \
+     removed_reason, created_at, updated_at";
 
 fn internal(error: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::Internal(error.to_string())
@@ -179,6 +212,33 @@ impl NoticeRow {
             notice,
             issued_at: self.issued_at,
             expires_at: self.expires_at,
+        })
+    }
+}
+
+impl AudienceRow {
+    fn decode(self) -> PersistenceResult<ServiceRouteHandoverAudienceEntry> {
+        let status =
+            ServiceRouteHandoverAudienceStatus::parse(&self.audience_status).ok_or_else(|| {
+                PersistenceError::Internal(format!(
+                    "unknown stored service route handover audience status: {}",
+                    self.audience_status
+                ))
+            })?;
+        let accepted_frontier = serde_json::from_value(self.accepted_frontier).map_err(internal)?;
+        Ok(ServiceRouteHandoverAudienceEntry {
+            service_id: DidCoreId::new(self.service_id).map_err(internal)?,
+            service_kind: self.service_kind,
+            handover_id: self.handover_id,
+            realm_id: self.realm_id,
+            peer_service_id: DidCoreId::new(self.peer_service_id).map_err(internal)?,
+            notice_digest: hash(self.notice_digest)?,
+            accepted_frontier,
+            required: self.required,
+            status,
+            removed_reason: self.removed_reason,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
         })
     }
 }
@@ -302,6 +362,123 @@ impl ServiceRouteHandoverPlanStore for PgServiceRouteHandoverPlanStore {
         .await
         .map_err(internal)?;
         rows.into_iter().map(NoticeRow::decode).collect()
+    }
+
+    async fn audience(
+        &self,
+        service_id: &DidCoreId,
+        service_kind: &str,
+        handover_id: &str,
+    ) -> PersistenceResult<Vec<ServiceRouteHandoverAudienceEntry>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let rows = sql_query(format!(
+            "SELECT {AUDIENCE_COLUMNS} FROM service_route_handover_audience \
+             WHERE service_id = $1 AND service_kind = $2 AND handover_id = $3 \
+             ORDER BY realm_id ASC, peer_service_id ASC"
+        ))
+        .bind::<Text, _>(service_id.as_str())
+        .bind::<Text, _>(service_kind)
+        .bind::<Text, _>(handover_id)
+        .get_results::<AudienceRow>(&mut conn)
+        .await
+        .map_err(internal)?;
+        rows.into_iter().map(AudienceRow::decode).collect()
+    }
+
+    async fn reconcile_audience(
+        &self,
+        service_id: &DidCoreId,
+        service_kind: &str,
+        handover_id: &str,
+        notice_digest: &Hash,
+        targets: Vec<ServiceRouteHandoverAudienceTarget>,
+        updated_at: DateTime<Utc>,
+    ) -> PersistenceResult<ServiceRouteHandoverPlanWrite> {
+        let mut desired = std::collections::BTreeMap::<
+            (String, String),
+            ServiceRouteHandoverAudienceTarget,
+        >::new();
+        for mut target in targets {
+            if target.realm_id.trim().is_empty() || target.peer_service_id == *service_id {
+                return Err(PersistenceError::SchemaViolation(
+                    "handover audience target must name a Realm and a remote service".to_owned(),
+                ));
+            }
+            target.accepted_frontier.sort();
+            target.accepted_frontier.dedup();
+            desired
+                .entry((
+                    target.realm_id.clone(),
+                    target.peer_service_id.as_str().to_owned(),
+                ))
+                .and_modify(|existing| {
+                    existing
+                        .accepted_frontier
+                        .append(&mut target.accepted_frontier);
+                    existing.accepted_frontier.sort();
+                    existing.accepted_frontier.dedup();
+                })
+                .or_insert(target);
+        }
+
+        let mut conn = pg_conn(&self.pool).await?;
+        let service_id = service_id.clone();
+        let service_kind = service_kind.to_owned();
+        let handover_id = handover_id.to_owned();
+        let notice_digest = notice_digest.clone();
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            lock_plan_slot(conn, &service_id, &service_kind).await?;
+            let Some(plan) = load_plan(conn, &service_id, &service_kind, &handover_id).await? else {
+                return Ok(ServiceRouteHandoverPlanWrite::Rejected);
+            };
+            if plan.state.is_terminal()
+                || plan.active_notice_digest.as_ref() != Some(&notice_digest)
+            {
+                return Ok(ServiceRouteHandoverPlanWrite::Rejected);
+            }
+
+            sql_query(
+                "UPDATE service_route_handover_audience \
+                 SET required = false, audience_status = 'removed', \
+                     removed_reason = 'accepted_relationship_revoked', updated_at = $4 \
+                 WHERE service_id = $1 AND service_kind = $2 AND handover_id = $3 \
+                   AND required = true",
+            )
+            .bind::<Text, _>(service_id.as_str())
+            .bind::<Text, _>(service_kind.as_str())
+            .bind::<Text, _>(handover_id.as_str())
+            .bind::<Timestamptz, _>(updated_at)
+            .execute(conn)
+            .await?;
+
+            for (_, target) in desired {
+                let frontier = serde_json::to_value(target.accepted_frontier).map_err(internal)?;
+                sql_query(
+                    "INSERT INTO service_route_handover_audience \
+                         (service_id, service_kind, handover_id, realm_id, peer_service_id, \
+                          notice_digest, accepted_frontier, required, audience_status, \
+                          removed_reason, created_at, updated_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, true, 'pending', NULL, $8, $8) \
+                     ON CONFLICT (service_id, service_kind, handover_id, realm_id, peer_service_id) \
+                     DO UPDATE SET notice_digest = EXCLUDED.notice_digest, \
+                         accepted_frontier = EXCLUDED.accepted_frontier, required = true, \
+                         audience_status = 'pending', removed_reason = NULL, updated_at = EXCLUDED.updated_at",
+                )
+                .bind::<Text, _>(service_id.as_str())
+                .bind::<Text, _>(service_kind.as_str())
+                .bind::<Text, _>(handover_id.as_str())
+                .bind::<Text, _>(target.realm_id)
+                .bind::<Text, _>(target.peer_service_id.as_str())
+                .bind::<Text, _>(notice_digest.as_str())
+                .bind::<Jsonb, _>(frontier)
+                .bind::<Timestamptz, _>(updated_at)
+                .execute(conn)
+                .await?;
+            }
+            Ok(ServiceRouteHandoverPlanWrite::Applied)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn open_plan(
