@@ -1884,9 +1884,7 @@ impl AppState {
 
 impl AppState {
     #[cfg(test)]
-    pub(crate) fn test_persistence(
-        &self,
-    ) -> Arc<soland_services::persistence::TestPersistenceStore> {
+    pub(crate) fn test_persistence(&self) -> Arc<dyn soland_storage::PersistenceStore> {
         self.persistence.shared_for_tests()
     }
 

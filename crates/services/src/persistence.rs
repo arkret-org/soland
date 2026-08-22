@@ -23,9 +23,6 @@ use crate::persistence_operations::{
 };
 use crate::projection::ProjectionService;
 
-#[doc(hidden)]
-pub type TestPersistenceStore = dyn PersistenceStore;
-
 /// Opaque application-owned handle used by the composition root to install a
 /// concrete persistence adapter without exposing the storage registry to HTTP
 /// or runtime state.
@@ -727,7 +724,7 @@ impl PersistenceHandle {
     }
 
     #[doc(hidden)]
-    pub fn shared_for_tests(&self) -> Arc<TestPersistenceStore> {
+    pub fn shared_for_tests(&self) -> Arc<dyn PersistenceStore> {
         self.persistence.clone()
     }
 }
