@@ -47,12 +47,12 @@ use salvo::prelude::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use soland_domain::reducer::ProjectionState;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_services::projection::{
     CircleLifecycle as CircleLifecycleState, CircleReadModel as CircleProjection,
-    ProjectionSnapshot as ProjectionState,
 };
 
 use super::AuthArgs;

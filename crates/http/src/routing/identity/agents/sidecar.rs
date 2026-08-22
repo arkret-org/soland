@@ -267,7 +267,7 @@ fn typed_agent_ids(agent_ids: &[String]) -> Result<Vec<arkret_wire::DidCoreId>, 
 }
 
 fn sidecar_control_frontier(
-    projection: &soland_services::projection::ProjectionSnapshot,
+    projection: &soland_domain::reducer::ProjectionState,
     record: &AgentSidecarRecord,
 ) -> Result<Vec<NonEmptyString>, AppError> {
     let create_ref = projection
@@ -283,7 +283,7 @@ fn sidecar_control_frontier(
 fn sidecar_mls_binding_for_desired(
     record: &AgentSidecarRecord,
     desired_agent_ids: &[arkret_wire::DidCoreId],
-    projection: &soland_services::projection::ProjectionSnapshot,
+    projection: &soland_domain::reducer::ProjectionState,
 ) -> Result<SidecarMlsBinding, AppError> {
     let sidecar_id = SidecarId::new(record.sidecar_id.clone())
         .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?;

@@ -4,7 +4,7 @@ use super::*;
 /// `ak.self.account.stream.subscribe` delta frame.
 pub(crate) async fn build_sync_snapshot(
     state: &AppState,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     body: &SyncRequestBody,
     after_cursor: &SyncCursor,
 ) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
@@ -518,7 +518,7 @@ async fn agent_signer_evidence_bundle_for_sync(
 
 async fn account_notification_delta(
     state: &AppState,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     after_cursor: &SyncCursor,
     is_incremental: bool,
 ) -> (
@@ -619,7 +619,7 @@ async fn account_notification_delta(
 pub(super) fn roster_members_for_realm(
     state: &AppState,
     realm_entry: &crate::state::RealmDirectoryEntry,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     body: &SyncRequestBody,
 ) -> Vec<Value> {
     let membership_states = roster_membership_states_for_realm(state, realm_entry);
@@ -766,7 +766,7 @@ impl<'a> RosterDisclosureContext<'a> {
     fn new(
         state: &'a AppState,
         realm_entry: &'a RealmDirectoryEntry,
-        session: Option<&'a SessionRecord>,
+        session: Option<&'a SessionIdentityState>,
         body: &SyncRequestBody,
         membership_states: &BTreeMap<String, String>,
     ) -> Self {
@@ -792,7 +792,7 @@ impl<'a> RosterDisclosureContext<'a> {
 
 fn roster_handle_claim_audience(
     state: &AppState,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     body: &SyncRequestBody,
 ) -> String {
     let filter_value = sync_filter_value(body.filter.as_ref());
@@ -882,7 +882,7 @@ async fn timeline_events_for_realm(
     projection: &ProjectionState,
     realm_id: &str,
     after_position: i64,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
 ) -> (
     Vec<arkret_wire::Event>,
     Vec<arkret_models_collaboration::sync_frames::account_sync::OrderedLogSiblingDiagnostic>,
@@ -1164,7 +1164,7 @@ async fn state_events_for_realm(
     state: &AppState,
     realm_id: &str,
     after_position: i64,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     include_current_security_baseline: bool,
 ) -> (Vec<arkret_wire::Event>, i64) {
     let events = state
@@ -1249,14 +1249,14 @@ fn projection_event_position(event: &soland_services::events::ProjectedEvent) ->
     timestamp_position_with_tie_breaker(event.received_at, &event.event_id)
 }
 
-fn account_realm_projection_position(meta: Option<&RealmMetaRecord>, realm_id: &str) -> i64 {
+fn account_realm_projection_position(meta: Option<&RealmMetadata>, realm_id: &str) -> i64 {
     meta.map(|record| timestamp_position_with_tie_breaker(record.updated_at, realm_id))
         .unwrap_or_default()
 }
 
 async fn device_lists_for_actors(
     state: &AppState,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     visible_actors: &BTreeSet<String>,
     after_cursor: &SyncCursor,
     is_incremental: bool,
@@ -1363,7 +1363,7 @@ async fn accepted_event(state: &AppState, event_id: &str) -> Option<arkret_wire:
 
 async fn account_data_events(
     state: &AppState,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
 ) -> Vec<arkret_wire::Event> {
     let Some(session) = session else {
         return Vec::new();
@@ -1438,7 +1438,7 @@ async fn account_data_events(
 /// available to every device of the recipient principal.
 async fn notification_account_data_events(
     state: &AppState,
-    session: &SessionRecord,
+    session: &SessionIdentityState,
 ) -> Vec<arkret_wire::Event> {
     let rows = state
         .deliveries()
@@ -1511,15 +1511,15 @@ async fn realm_event_visible_to_session_with_projection(
     realm_id: &str,
     event_created_at: DateTime<Utc>,
     sender: Option<&str>,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
 ) -> bool {
     realm_event_visible_to_session(state, realm_id, event_created_at, sender, session).await
 }
 
 pub(crate) async fn projection_record_visible_to_session(
     state: &AppState,
-    event: &ProjectionEventRecord,
-    session: Option<&SessionRecord>,
+    event: &ProjectedEvent,
+    session: Option<&SessionIdentityState>,
 ) -> bool {
     if !realm_event_visible_to_session(
         state,
@@ -1573,7 +1573,7 @@ pub(crate) async fn projection_record_visible_to_session(
 pub(crate) async fn projection_event_value_visible_to_session(
     state: &AppState,
     event: &Value,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
 ) -> bool {
     let Some(realm_id) = event.get("realm_id").and_then(Value::as_str) else {
         return false;
@@ -1602,7 +1602,7 @@ fn message_scope_circle_id(content: &Value) -> Option<&str> {
 
 fn projection_event_scope_circle_id(
     projection: &ProjectionState,
-    event: &ProjectionEventRecord,
+    event: &ProjectedEvent,
 ) -> Option<String> {
     if event.event_kind == arkret_wire::EventKind::MessageCreate {
         return event
@@ -1668,7 +1668,7 @@ fn circle_scope_visible_to_session(
     projection: &ProjectionState,
     scope_circle_id: Option<&str>,
     event_created_at: chrono::DateTime<chrono::Utc>,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     sender: Option<&str>,
 ) -> bool {
     let Some(scope_circle_id) = scope_circle_id else {

@@ -1014,7 +1014,7 @@ pub(super) fn effect_resource_candidates(
 
 pub(super) fn append_authz_resource_candidates(
     resources: &mut Vec<String>,
-    projection: Option<&soland_services::projection::ProjectionSnapshot>,
+    projection: Option<&soland_domain::reducer::ProjectionState>,
     realm_id: &str,
     resource: &str,
 ) {

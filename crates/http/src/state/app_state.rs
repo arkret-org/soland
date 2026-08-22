@@ -19,6 +19,8 @@ use arkret_wire::ServiceKind;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use soland_domain::reducer::ProjectionState;
 use soland_services::authorization::{
     AuthorizationCheck, AuthorizationDecision, AuthorizationPort, AuthorizationService,
 };
@@ -44,8 +46,6 @@ use soland_services::persistence::PersistenceHandle;
 use soland_services::persistence_events::PersistenceEventServices;
 use soland_services::persistence_identity::PersistenceIdentityServices;
 use soland_services::persistence_operations::PersistenceOperationalServices;
-#[cfg(test)]
-use soland_services::projection::ProjectionSnapshot as ProjectionState;
 use soland_services::projection::{ProjectionService, ServiceClock};
 use soland_services::runtime_guards::{
     KeyBackupDownloadOutcome, ModerationReportRateOutcome, RuntimeGuardService,

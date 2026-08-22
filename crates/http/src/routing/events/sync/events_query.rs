@@ -457,7 +457,7 @@ pub(crate) fn ndjson_line(value: &impl serde::Serialize) -> Bytes {
     Bytes::from(s)
 }
 
-pub(crate) fn subscribe_subject(req: &Request, session: Option<&SessionRecord>) -> String {
+pub(crate) fn subscribe_subject(req: &Request, session: Option<&SessionIdentityState>) -> String {
     match session {
         Some(session) => format!("session:{}:{}", session.actor, session.device_id),
         None => format!("remote:{}", req.remote_addr()),
@@ -487,7 +487,7 @@ pub(crate) fn events_subscribe_filter_digest(accessible_realms: &[String]) -> St
 
 fn events_subscribe_scope_key(
     req: &Request,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     accessible_realms: &[String],
 ) -> String {
     let realms = accessible_realms
@@ -644,7 +644,7 @@ fn events_query_cursor_error(error: SyncCursorError) -> soland_http::error::AppE
 
 async fn events_query_cursor_target(
     state: &AppState,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     filter_digest: &str,
     cursor: Option<&str>,
 ) -> Result<Option<String>, soland_http::error::AppError> {
@@ -999,7 +999,7 @@ async fn events_query_impl(
 
 async fn range_completeness_for_query(
     state: &AppState,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     parts: &EventsQueryParts,
     realms: &[String],
 ) -> Result<
@@ -1727,7 +1727,7 @@ mod tests {
 
 async fn durable_events_query_from_parts(
     state: &AppState,
-    session: &SessionRecord,
+    session: &SessionIdentityState,
     parts: &EventsQueryParts,
     cursor: Option<&str>,
     stop_cursor: Option<&str>,

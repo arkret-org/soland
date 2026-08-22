@@ -35,17 +35,15 @@ pub(crate) use arkret_models_collaboration::http_bodies::{
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 pub(crate) use bytes::Bytes;
-pub(crate) use chrono::{DateTime, Duration as ChronoDuration, Utc};
+pub(crate) use chrono::{DateTime, Utc};
 pub(crate) use futures_util::stream::StreamExt;
 pub(crate) use salvo::http::{StatusCode, header};
 pub(crate) use salvo::prelude::*;
 pub(crate) use serde_json::{Value, json};
-pub(crate) use soland_services::events::{
-    ProjectedEvent as ProjectionEventRecord, RealmMetadata as RealmMetaRecord,
-};
-pub(crate) use soland_services::identity::SessionIdentityState as SessionRecord;
-pub(crate) use soland_services::projection::ProjectionSnapshot as ProjectionState;
-pub(crate) use soland_services::sync::CursorState as SyncCursorRecord;
+pub(crate) use soland_domain::reducer::ProjectionState;
+pub(crate) use soland_services::events::{ProjectedEvent, RealmMetadata};
+pub(crate) use soland_services::identity::SessionIdentityState;
+pub(crate) use soland_services::sync::CursorState;
 pub(crate) use tokio::sync::broadcast::error::RecvError;
 
 use super::super::identity::device_messages::prune_device_messages_for_limits;

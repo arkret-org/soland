@@ -47,7 +47,7 @@ pub enum SyncCursorError {
 pub(crate) const STREAM_CURSOR_PURPOSE: &str = "stream";
 pub(crate) const BARRIER_CURSOR_PURPOSE: &str = "barrier";
 
-fn cursor_principal_device(session: Option<&SessionRecord>) -> (String, String) {
+fn cursor_principal_device(session: Option<&SessionIdentityState>) -> (String, String) {
     let principal_id = session
         .map(|session| session.actor.clone())
         .unwrap_or_else(|| "anonymous".to_owned());
@@ -59,7 +59,7 @@ fn cursor_principal_device(session: Option<&SessionRecord>) -> (String, String) 
 
 pub async fn sync_token_for_client_sync(
     state: &AppState,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     filter: Option<&serde_json::Value>,
     realms_positions: BTreeMap<String, i64>,
     account_realms_positions: BTreeMap<String, i64>,
@@ -81,7 +81,7 @@ pub async fn sync_token_for_client_sync(
 
 pub async fn sync_token_for_client_sync_frontiers(
     state: &AppState,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     filter: Option<&serde_json::Value>,
     realms_positions: BTreeMap<String, i64>,
     account_realms_positions: BTreeMap<String, i64>,
@@ -124,7 +124,7 @@ pub async fn sync_token_for_client_sync_frontiers(
     let expires_at_ms = cursor.expires_at.timestamp_millis();
     upsert_sync_cursor_record(
         state,
-        SyncCursorRecord {
+        CursorState {
             handle: handle.clone(),
             principal_id: Some(principal_id),
             device_id: Some(device_id),
@@ -143,7 +143,7 @@ pub async fn sync_token_for_client_sync_frontiers(
 
 pub(crate) async fn sync_token_for_events_query(
     state: &AppState,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     filter_digest: &str,
     event_id: &str,
 ) -> String {
@@ -165,7 +165,7 @@ pub(crate) async fn sync_token_for_events_query(
     let expires_at_ms = cursor.expires_at.timestamp_millis();
     upsert_sync_cursor_record(
         state,
-        SyncCursorRecord {
+        CursorState {
             handle: handle.clone(),
             principal_id: Some(principal_id),
             device_id: Some(device_id),
@@ -184,7 +184,7 @@ pub(crate) async fn sync_token_for_events_query(
 
 pub(crate) async fn sync_barrier_token_for_event(
     state: &AppState,
-    session: &SessionRecord,
+    session: &SessionIdentityState,
     event_id: &str,
 ) -> String {
     let issued_at = chrono::Utc::now();
@@ -204,7 +204,7 @@ pub(crate) async fn sync_barrier_token_for_event(
     let expires_at_ms = cursor.expires_at.timestamp_millis();
     upsert_sync_cursor_record(
         state,
-        SyncCursorRecord {
+        CursorState {
             handle,
             principal_id: Some(session.actor.clone()),
             device_id: Some(session.device_id.clone()),
@@ -239,7 +239,7 @@ async fn sync_token_for_state_positions(
     let expires_at_ms = cursor.expires_at.timestamp_millis();
     upsert_sync_cursor_record(
         state,
-        SyncCursorRecord {
+        CursorState {
             handle: handle.clone(),
             principal_id: None,
             device_id: None,
@@ -437,7 +437,7 @@ pub fn spawn_sync_cursor_ttl_sweeper(
 /// response: the client still gets its data, and if the row never lands the
 /// next `after=` presentation fails handle lookup and the client recovers
 /// through the spec's full-resync path (client-sync.md §12.3).
-async fn upsert_sync_cursor_record(state: &AppState, record: SyncCursorRecord) {
+async fn upsert_sync_cursor_record(state: &AppState, record: CursorState) {
     if let Err(error) = state.sync().upsert_cursor(&record).await {
         tracing::warn!(%error, handle = %record.handle, "sync cursor handle upsert failed");
     }
@@ -454,7 +454,7 @@ async fn stored_sync_cursor_by_handle(
 async fn stored_sync_cursor_record_by_handle(
     state: &AppState,
     handle: &str,
-) -> Result<SyncCursorRecord, SyncCursorError> {
+) -> Result<CursorState, SyncCursorError> {
     state
         .sync()
         .cursor(handle)
@@ -470,7 +470,7 @@ async fn stored_sync_cursor_record_by_handle(
 /// shape from a persisted row. Generic rows reconstruct a ctx WITHOUT
 /// `principal_id`/`device_id`, which `parse_and_validate_sync_cursor` rejects
 /// by construction.
-fn stored_value_from_sync_cursor_record(record: SyncCursorRecord) -> Value {
+fn stored_value_from_sync_cursor_record(record: CursorState) -> Value {
     let mut ctx = serde_json::Map::new();
     if let Some(principal_id) = record.principal_id {
         ctx.insert("principal_id".to_owned(), Value::String(principal_id));
@@ -521,7 +521,7 @@ fn cursor_position_map(
 pub async fn parse_and_validate_sync_cursor(
     token: &str,
     state: &AppState,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     filter: Option<&serde_json::Value>,
     now_ms: i64,
 ) -> Result<SyncCursor, SyncCursorError> {
@@ -642,7 +642,7 @@ pub async fn parse_and_validate_sync_cursor(
 pub(crate) async fn parse_and_validate_events_query_cursor(
     token: &str,
     state: &AppState,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     filter_digest: &str,
     now_ms: i64,
 ) -> Result<EventsQueryCursor, SyncCursorError> {
@@ -713,7 +713,7 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
 pub(crate) async fn parse_and_validate_barrier_cursor(
     token: &str,
     state: &AppState,
-    session: &SessionRecord,
+    session: &SessionIdentityState,
     now_ms: i64,
 ) -> Result<String, SyncCursorError> {
     let cursor = decode_sync_cursor(token, now_ms)?;
@@ -908,7 +908,7 @@ pub(super) async fn account_cursor_revoke(
     };
 
     let revoked_at = now();
-    let expires_at = revoked_at + ChronoDuration::seconds(CURSOR_MAX_TTL_SECONDS);
+    let expires_at = revoked_at + chrono::Duration::seconds(CURSOR_MAX_TTL_SECONDS);
     let device_id = if matches!(
         scope,
         arkret_models_identity::account::CursorRevokeScope::ThisCursor
@@ -955,7 +955,7 @@ pub(super) async fn account_cursor_revoke(
 fn cursor_authority_revoked(
     state: &AppState,
     token: &str,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     now_ms: i64,
 ) -> bool {
     let digest = sha256_hex(token.as_bytes());

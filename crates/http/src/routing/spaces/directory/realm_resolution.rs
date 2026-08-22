@@ -346,7 +346,7 @@ pub(super) fn target_kind_for_address(
 }
 
 pub(super) fn realm_preview_from_directory_entry(
-    projection: &ProjectionSnapshot,
+    projection: &ProjectionState,
     entry: &RealmDirectoryEntry,
 ) -> RealmPreview {
     realm_preview_from_directory_entry_with_alias(
@@ -390,7 +390,7 @@ fn realm_preview_from_directory_entry_with_alias(
     }
 }
 
-fn effective_realm_alias(projection: &ProjectionSnapshot, realm_id: &str) -> Option<String> {
+fn effective_realm_alias(projection: &ProjectionState, realm_id: &str) -> Option<String> {
     projection
         .realm_null_subject_cell_value(realm_id, CellFamilyId::REALM_ALIAS_V1)
         .and_then(realm_alias_from_cell_value)

@@ -71,10 +71,10 @@ use ed25519_dalek::{Signature, Verifier};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_domain::reducer::ProjectionState;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::identity::SessionIdentityState as SessionRecord;
-use soland_services::projection::ProjectionSnapshot;
 
 use super::{
     authenticated_session, device_inventory_to_json, handle_for_did, invite_token_matches_realm,

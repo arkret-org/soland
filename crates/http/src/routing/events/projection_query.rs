@@ -46,13 +46,13 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_domain::reducer::ProjectionState;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_services::projection::{
     MessageReadModel as MessageState, MorphReadModel as MorphProjection,
-    ObjectLifecycle as ObjectLifecycleState, ProjectionSnapshot as ProjectionState,
-    RelationReadModel as SolandRelationState,
+    ObjectLifecycle as ObjectLifecycleState, RelationReadModel as SolandRelationState,
     SpaceContainerLifecycle as SpaceContainerLifecycleState, morph_document_body,
 };
 

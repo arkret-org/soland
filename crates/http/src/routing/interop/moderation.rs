@@ -422,7 +422,7 @@ fn moderation_target_effective_scope_value(
 }
 
 fn moderation_target_message<'a>(
-    projection: &'a soland_services::projection::ProjectionSnapshot,
+    projection: &'a soland_domain::reducer::ProjectionState,
     target_ref: &str,
 ) -> Option<&'a soland_services::projection::MessageReadModel> {
     projection.messages.get(target_ref).or_else(|| {

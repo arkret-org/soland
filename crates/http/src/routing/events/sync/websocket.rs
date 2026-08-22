@@ -87,7 +87,7 @@ struct ConnectionLease {
 }
 
 impl ConnectionLease {
-    fn acquire(session: &SessionRecord) -> Option<Self> {
+    fn acquire(session: &SessionIdentityState) -> Option<Self> {
         let key = (session.actor.clone(), session.device_id.clone());
         let mut counts = CONNECTION_COUNTS
             .lock()
@@ -116,7 +116,7 @@ impl Drop for ConnectionLease {
 }
 
 struct AuthenticatedSession {
-    record: SessionRecord,
+    record: SessionIdentityState,
     grant: String,
 }
 
@@ -705,7 +705,7 @@ async fn verify_authenticate(
     nonce: &str,
     origin: &str,
     base_url: &str,
-) -> std::result::Result<SessionRecord, &'static str> {
+) -> std::result::Result<SessionIdentityState, &'static str> {
     let WebSocketClientFrame::Authenticate {
         connection_id: presented_connection_id,
         session_grant,
@@ -874,7 +874,7 @@ async fn run_multiplex(
     socket: WebSocket,
     codec: WebSocketFrameCodec,
     mut connection: WebSocketConnectionState,
-    mut session: SessionRecord,
+    mut session: SessionIdentityState,
     mut session_grant: String,
     connection_id: String,
     origin: String,
@@ -1237,7 +1237,7 @@ async fn run_multiplex(
 
 async fn handle_client_frame(
     state: &AppState,
-    session: &SessionRecord,
+    session: &SessionIdentityState,
     connection: &mut WebSocketConnectionState,
     sender: &ChannelSender,
     producers: &mut std::collections::BTreeMap<String, tokio::task::JoinHandle<()>>,
@@ -1325,7 +1325,7 @@ struct ProducerExit {
 
 fn spawn_producer(
     state: AppState,
-    session: SessionRecord,
+    session: SessionIdentityState,
     sender: ChannelSender,
     channel_id: String,
     parameters: WebSocketOpenParameters,
@@ -1366,7 +1366,7 @@ fn spawn_producer(
 /// composes, emitted continuously instead of once per request.
 async fn run_account_channel(
     state: AppState,
-    session: SessionRecord,
+    session: SessionIdentityState,
     sender: ChannelSender,
     channel_id: String,
     parameters:
@@ -1541,7 +1541,7 @@ fn websocket_account_filter(
 /// bindings: durable history bootstrap is `events.read.scan`.
 async fn run_events_channel(
     state: AppState,
-    session: SessionRecord,
+    session: SessionIdentityState,
     sender: ChannelSender,
     channel_id: String,
     parameters:
@@ -2082,7 +2082,7 @@ mod tests {
 
     #[test]
     fn actor_device_connection_count_is_bounded_and_released() {
-        let session = SessionRecord {
+        let session = SessionIdentityState {
             token_hash: "lease-test".to_owned(),
             actor: "did:example:websocket-lease-test".to_owned(),
             device_id: "device-websocket-lease-test".to_owned(),
@@ -2110,7 +2110,7 @@ mod live_tests;
 /// Signal channel: §6.2 — live fanout only. No cursor, no catch-up, no ack.
 async fn run_signal_channel(
     state: AppState,
-    session: SessionRecord,
+    session: SessionIdentityState,
     sender: ChannelSender,
     channel_id: String,
 ) -> WebSocketClosedReason {

@@ -43,7 +43,6 @@ use crate::hydration::{HydrationProjectionAdapter, hydrate_projections_from_pers
 
 pub mod tombstone;
 
-pub type ProjectionSnapshot = ProjectionState;
 pub type CircleReadModel = soland_domain::reducer::CircleProjection;
 pub type CircleLifecycle = soland_domain::reducer::CircleLifecycleState;
 pub type MlsRemoveObligationView = soland_domain::reducer::MlsRemoveObligation;
@@ -75,7 +74,7 @@ pub fn engine_grant_from_capability_cell_state(
 }
 
 pub fn check_realm_link_admissible(
-    projection: &ProjectionSnapshot,
+    projection: &ProjectionState,
     realm_id: &str,
     target_realm_id: &str,
     link_kind: &str,
@@ -91,7 +90,7 @@ pub fn check_realm_link_admissible(
 }
 
 pub fn effective_policy_for_realm(
-    projection: &ProjectionSnapshot,
+    projection: &ProjectionState,
     realm_id: &str,
 ) -> EffectiveRealmPolicyView {
     soland_domain::reducer::realm_links::effective_policy_for_realm(projection, realm_id)

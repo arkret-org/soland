@@ -31,6 +31,7 @@ use parking_lot::Mutex;
 use rand_core::SeedableRng;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use soland_domain::reducer::ProjectionState;
 use soland_http::config::AppConfig;
 use soland_http::state::{AppState, AppStateRuntime, EventBroadcast};
 use soland_services::delivery::ObjectStoragePort;
@@ -38,7 +39,7 @@ use soland_services::events::RealmDirectoryIndex;
 use soland_services::governance::RuntimeSettingsPort;
 use soland_services::jobs::RuntimeHealthPort;
 use soland_services::persistence::PersistenceHandle;
-use soland_services::projection::{EventSealCommitPort, ProjectionService, ProjectionSnapshot};
+use soland_services::projection::{EventSealCommitPort, ProjectionService};
 use soland_storage::PersistenceStore;
 use soland_storage_memory::SolandMemoryPersistenceStore;
 
@@ -318,7 +319,7 @@ pub fn app_state_with_identity(
 
 pub trait AppStateTestExt {
     fn test_persistence(&self) -> Arc<dyn PersistenceStore>;
-    fn test_projection(&self) -> &'static Arc<Mutex<ProjectionSnapshot>>;
+    fn test_projection(&self) -> &'static Arc<Mutex<ProjectionState>>;
     fn test_realms(&self) -> &'static Arc<Mutex<RealmDirectoryIndex>>;
     fn test_put_seal(
         &self,
@@ -366,7 +367,7 @@ impl AppStateTestExt for AppState {
             .expect("AppState was not constructed by soland-test-support")
     }
 
-    fn test_projection(&self) -> &'static Arc<Mutex<ProjectionSnapshot>> {
+    fn test_projection(&self) -> &'static Arc<Mutex<ProjectionState>> {
         state_test_registry()
             .lock()
             .get(&app_state_key(self))
@@ -434,7 +435,7 @@ fn app_state_key(state: &AppState) -> usize {
 
 struct StateTestResources {
     persistence: Arc<dyn PersistenceStore>,
-    projection: Option<&'static Arc<Mutex<ProjectionSnapshot>>>,
+    projection: Option<&'static Arc<Mutex<ProjectionState>>>,
     realms: Option<&'static Arc<Mutex<RealmDirectoryIndex>>>,
     seal_store: Option<Arc<dyn SealStore>>,
     cell_store: Option<Arc<dyn CellStore>>,

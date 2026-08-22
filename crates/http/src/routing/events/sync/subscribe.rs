@@ -60,7 +60,7 @@ pub(crate) async fn subscribe_session_or_render(
     state: &AppState,
     req: &Request,
     res: &mut Response,
-) -> Option<Option<SessionRecord>> {
+) -> Option<Option<SessionIdentityState>> {
     match authenticated_session(state, req).await {
         Ok(session) => Some(Some(session)),
         Err((status, code, message)) => {
@@ -83,7 +83,7 @@ pub(crate) async fn account_subscribe_session_or_render(
     state: &AppState,
     req: &Request,
     res: &mut Response,
-) -> Option<SessionRecord> {
+) -> Option<SessionIdentityState> {
     match authenticated_session(state, req).await {
         Ok(session) => Some(session),
         Err((status, code, message)) => {
@@ -417,7 +417,7 @@ pub(crate) fn delta_is_empty(
 pub(crate) async fn account_subscribe_notification_should_wake(
     state: &AppState,
     notification: &crate::state::EventNotification,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
 ) -> bool {
     if let crate::state::EventNotificationKind::Account {
         account_id,
@@ -550,7 +550,7 @@ fn account_reconnect_control_frame(
 
 fn account_subscribe_scope_key(
     req: &Request,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
     body: &SyncRequestBody,
 ) -> String {
     let filter_value = sync_filter_value(body.filter.as_ref());

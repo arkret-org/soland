@@ -24,7 +24,7 @@ use futures_util::stream::StreamExt;
 use salvo::prelude::*;
 use serde_json::Value;
 use soland_http::error::{AppError, ErrorCode};
-use soland_services::identity::SessionIdentityState as SessionRecord;
+use soland_services::identity::SessionIdentityState;
 
 use super::events_query::ndjson_line;
 use super::subscribe::account_subscribe_session_or_render;
@@ -213,7 +213,7 @@ fn parse_signal_envelope(raw: Value) -> Result<SignalEnvelope, AppError> {
 /// the device proof.
 async fn admit_signal(
     state: &AppState,
-    session: &SessionRecord,
+    session: &SessionIdentityState,
     envelope: &SignalEnvelope,
 ) -> Result<(), AppError> {
     // (1) + (4, partly) — `scope_ref.realm_id == realm_id`, the E2EE profile
@@ -311,7 +311,7 @@ async fn admit_signal(
 /// `signal.md` §3(2) — live send eligibility for the envelope's scope.
 fn signal_scope_send_eligible(
     state: &AppState,
-    session: &SessionRecord,
+    session: &SessionIdentityState,
     envelope: &SignalEnvelope,
 ) -> Result<(), AppError> {
     let Some(circle_id) = envelope.scope_ref.circle_id() else {
@@ -727,7 +727,7 @@ pub(super) async fn signal_subscribe(depot: &mut Depot, req: &mut Request, res: 
 /// reconnect inside the TTL window.
 pub(crate) async fn pending_signals_for_subscriber(
     state: &AppState,
-    session: &SessionRecord,
+    session: &SessionIdentityState,
 ) -> Vec<SignalEnvelope> {
     let now = chrono::Utc::now();
     let mut delivered = Vec::new();

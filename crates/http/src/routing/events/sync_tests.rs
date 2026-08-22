@@ -363,7 +363,7 @@ fn signal_envelope(
             .unwrap(),
         signal_class: arkret_wire::SignalClass::Session,
         sent_at,
-        expires_at: sent_at + ChronoDuration::seconds(ttl_seconds),
+        expires_at: sent_at + chrono::Duration::seconds(ttl_seconds),
         encrypted_payload: arkret_wire::SignalEncryptedPayload {
             scheme: arkret_wire::SIGNAL_AEAD_SCHEME.to_owned(),
             key_ref: arkret_wire::SignalKeyRef {
@@ -592,8 +592,8 @@ fn roster_body(audience: &str) -> SyncRequestBody {
     }
 }
 
-fn roster_session(state: &AppState, actor: &str) -> SessionRecord {
-    SessionRecord {
+fn roster_session(state: &AppState, actor: &str) -> SessionIdentityState {
+    SessionIdentityState {
         token_hash: "token".to_owned(),
         actor: actor.to_owned(),
         device_id: "device-1".to_owned(),
@@ -601,7 +601,7 @@ fn roster_session(state: &AppState, actor: &str) -> SessionRecord {
         session_public_key: None,
         agent_session: None,
         session_grant: None,
-        expires_at: now() + ChronoDuration::hours(1),
+        expires_at: now() + chrono::Duration::hours(1),
         created_at: now(),
         revoked_at: None,
     }
@@ -722,9 +722,9 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
     let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
-    let pre_join_received_at = created_at + ChronoDuration::milliseconds(100);
-    let joined_at = created_at + ChronoDuration::milliseconds(200);
-    let post_join_received_at = created_at + ChronoDuration::milliseconds(300);
+    let pre_join_received_at = created_at + chrono::Duration::milliseconds(100);
+    let joined_at = created_at + chrono::Duration::milliseconds(200);
+    let post_join_received_at = created_at + chrono::Duration::milliseconds(300);
 
     state
         .realms()
@@ -751,7 +751,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
         .expect("realm meta stored");
     insert_projected_membership_at(&state, ROSTER_CALLER, "join", joined_at);
 
-    let event_at = |event_id: &str, received_at| ProjectionEventRecord {
+    let event_at = |event_id: &str, received_at| ProjectedEvent {
         event_id: event_id.to_owned(),
         realm_id: ROSTER_REALM.to_owned(),
         event_kind: arkret_wire::EventKind::MlsCommit,
@@ -835,7 +835,7 @@ async fn native_sidecar_events_are_visible_only_to_the_controller() {
     );
 
     let structural_event =
-        |event_id: &str, kind: arkret_wire::EventKind, payload: Value| ProjectionEventRecord {
+        |event_id: &str, kind: arkret_wire::EventKind, payload: Value| ProjectedEvent {
             event_id: event_id.to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
             event_kind: kind,
@@ -937,9 +937,9 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
-    let pre_join_received_at = created_at + ChronoDuration::milliseconds(100);
-    let joined_at = created_at + ChronoDuration::milliseconds(200);
-    let post_join_received_at = created_at + ChronoDuration::milliseconds(300);
+    let pre_join_received_at = created_at + chrono::Duration::milliseconds(100);
+    let joined_at = created_at + chrono::Duration::milliseconds(200);
+    let post_join_received_at = created_at + chrono::Duration::milliseconds(300);
 
     state
         .realms()
@@ -1112,7 +1112,7 @@ fn handle_claim(
         "visibility": "public",
         "audience": audience,
         "created_at": arkret_canonical::format_timestamp_canonical(
-            now() - ChronoDuration::minutes(1)
+            now() - chrono::Duration::minutes(1)
         ),
         "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
         "proofs": [{
@@ -1142,7 +1142,7 @@ fn cache_claim(state: &AppState, claim: Value) -> String {
 fn roster_row(
     state: &AppState,
     realm: &RealmDirectoryEntry,
-    session: Option<&SessionRecord>,
+    session: Option<&SessionIdentityState>,
 ) -> Value {
     let body = roster_body(state.service_id());
     roster_members_for_realm(state, realm, session, &body)
@@ -1230,7 +1230,7 @@ async fn member_identity_projection_stores_typed_event_id_and_matches_event_repl
             "identity_payload": second_identity,
             "replaces": [ { "event_id": first_event_id, "payload_digest": first_digest } ],
         }),
-        created_at + ChronoDuration::milliseconds(1),
+        created_at + chrono::Duration::milliseconds(1),
     );
     project_member_identity_update(&state, &second_op).await;
 
@@ -1303,7 +1303,7 @@ fn roster_discloses_handle_claim_for_visible_trusted_issuer() {
         &state,
         state.service_id(),
         state.service_id(),
-        now() + ChronoDuration::hours(1),
+        now() + chrono::Duration::hours(1),
         "verified",
         None,
     );
@@ -1332,7 +1332,7 @@ fn roster_hides_handle_claim_from_untrusted_issuer() {
             &state,
             "did:web:evil.example",
             state.service_id(),
-            now() + ChronoDuration::hours(1),
+            now() + chrono::Duration::hours(1),
             "verified",
             None,
         ),
@@ -1357,7 +1357,7 @@ fn roster_hides_expired_handle_claim() {
             &state,
             state.service_id(),
             state.service_id(),
-            now() - ChronoDuration::seconds(1),
+            now() - chrono::Duration::seconds(1),
             "verified",
             None,
         ),
@@ -1381,7 +1381,7 @@ fn roster_hides_revoked_handle_claim() {
             &state,
             state.service_id(),
             state.service_id(),
-            now() + ChronoDuration::hours(1),
+            now() + chrono::Duration::hours(1),
             "revoked",
             None,
         ),
@@ -1405,7 +1405,7 @@ fn roster_disclosure_depends_on_realm_policy() {
             &state,
             state.service_id(),
             state.service_id(),
-            now() + ChronoDuration::hours(1),
+            now() + chrono::Duration::hours(1),
             "verified",
             None,
         ),
@@ -1431,7 +1431,7 @@ fn roster_limits_large_inline_handle_claim_payloads() {
         &state,
         state.service_id(),
         state.service_id(),
-        now() + ChronoDuration::hours(1),
+        now() + chrono::Duration::hours(1),
         "verified",
         Some(json!([{"blob": "x".repeat(HANDLE_CLAIMS_INLINE_MAX_BYTES + 1)}])),
     );
@@ -1458,7 +1458,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     let created_at = DateTime::parse_from_rfc3339("2026-06-18T00:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
-    let updated_at = created_at + ChronoDuration::seconds(1);
+    let updated_at = created_at + chrono::Duration::seconds(1);
     for (actor, device_id) in [
         (
             ROSTER_ACTOR,
@@ -1515,8 +1515,8 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
         .into_iter()
         .next()
         .expect("actor device exists");
-    revoked.revoked_at = Some(updated_at + ChronoDuration::seconds(1));
-    revoked.updated_at = updated_at + ChronoDuration::seconds(1);
+    revoked.revoked_at = Some(updated_at + chrono::Duration::seconds(1));
+    revoked.updated_at = updated_at + chrono::Duration::seconds(1);
     state
         .identities()
         .save_device(soland_services::identity::SaveDeviceCommand {
@@ -1574,8 +1574,8 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     let first_created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
-    let second_created_at = first_created_at + ChronoDuration::seconds(1);
-    let meta_created_at = first_created_at - ChronoDuration::seconds(1);
+    let second_created_at = first_created_at + chrono::Duration::seconds(1);
+    let meta_created_at = first_created_at - chrono::Duration::seconds(1);
     state
         .realms()
         .store_realm_metadata(
@@ -1760,7 +1760,7 @@ async fn membership_only_projection_advances_incremental_roster() {
             "delivery_status": "unroutable",
             "sender": ROSTER_ACTOR
         }),
-        created_at + ChronoDuration::seconds(1),
+        created_at + chrono::Duration::seconds(1),
     );
     crate::routing::events::projection::project_accepted_operations(
         &state,
@@ -1826,7 +1826,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
             "delivery_status": "unroutable",
             "sender": ROSTER_ACTOR
         }),
-        base + ChronoDuration::seconds(1),
+        base + chrono::Duration::seconds(1),
     );
     let strand_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000c3",
@@ -1839,7 +1839,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
                 "metadata": {"title": "Discussion"}
             }
         }),
-        base + ChronoDuration::seconds(2),
+        base + chrono::Duration::seconds(2),
     );
     let message_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000c4",
@@ -1853,7 +1853,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
             "sender": ROSTER_ACTOR,
             "content": {"kind": "ak.content.text", "body": "Pinned welcome"}
         }),
-        base + ChronoDuration::seconds(3),
+        base + chrono::Duration::seconds(3),
     );
     crate::routing::events::projection::project_accepted_operations(
         &state,
@@ -1885,8 +1885,8 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         arkret_wire::EventKind::PinAdd,
         pin_payload.clone(),
         ROSTER_ACTOR,
-        base + ChronoDuration::seconds(4),
-        base + ChronoDuration::seconds(4),
+        base + chrono::Duration::seconds(4),
+        base + chrono::Duration::seconds(4),
     );
     let pin_add = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000c5",
@@ -1898,7 +1898,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
             "rank": "r1",
             "sender": ROSTER_ACTOR
         }),
-        base + ChronoDuration::seconds(4),
+        base + chrono::Duration::seconds(4),
     );
     store_canonical_event(&state, pin_record).await;
     crate::routing::events::projection::project_accepted_operations(
@@ -1946,8 +1946,8 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
             "content": {"kind": "ak.content.text", "body": "edited"}
         }),
         ROSTER_ACTOR,
-        base + ChronoDuration::seconds(4),
-        base + ChronoDuration::seconds(4),
+        base + chrono::Duration::seconds(4),
+        base + chrono::Duration::seconds(4),
     );
     let revision_event_id = revision_record.event_id.clone();
     let realm_create = sync_test_operation_at(
@@ -1976,7 +1976,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
             "delivery_status": "unroutable",
             "sender": ROSTER_ACTOR
         }),
-        base + ChronoDuration::seconds(1),
+        base + chrono::Duration::seconds(1),
     );
     let strand_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c3",
@@ -1989,7 +1989,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
                 "metadata": {"title": "Discussion"}
             }
         }),
-        base + ChronoDuration::seconds(2),
+        base + chrono::Duration::seconds(2),
     );
     let message_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c4",
@@ -2003,7 +2003,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
             "sender": ROSTER_ACTOR,
             "content": {"kind": "ak.content.text", "body": "original"}
         }),
-        base + ChronoDuration::seconds(3),
+        base + chrono::Duration::seconds(3),
     );
     let message_revise = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c5",
@@ -2017,7 +2017,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
             "sender": ROSTER_ACTOR,
             "content": {"kind": "ak.content.text", "body": "edited"}
         }),
-        base + ChronoDuration::seconds(4),
+        base + chrono::Duration::seconds(4),
     );
     let message_redact = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c6",
@@ -2029,7 +2029,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
             "sender": ROSTER_ACTOR,
             "reason": "user requested tombstone"
         }),
-        base + ChronoDuration::seconds(5),
+        base + chrono::Duration::seconds(5),
     );
     crate::routing::events::projection::project_accepted_operations(
         &state,
@@ -2497,7 +2497,7 @@ async fn revoked_cursor_returns_revoked_error() {
             scope: "this_cursor".to_owned(),
             reason_code: "compromised".to_owned(),
             revoked_at: now(),
-            expires_at: now() + ChronoDuration::seconds(CURSOR_MAX_TTL_SECONDS),
+            expires_at: now() + chrono::Duration::seconds(CURSOR_MAX_TTL_SECONDS),
         });
 
     let error = parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
@@ -2531,8 +2531,8 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
             device_id: None,
             scope: "this_cursor".to_owned(),
             reason_code: "stale".to_owned(),
-            revoked_at: now() - ChronoDuration::seconds(2 * CURSOR_MAX_TTL_SECONDS),
-            expires_at: now() - ChronoDuration::seconds(CURSOR_MAX_TTL_SECONDS),
+            revoked_at: now() - chrono::Duration::seconds(2 * CURSOR_MAX_TTL_SECONDS),
+            expires_at: now() - chrono::Duration::seconds(CURSOR_MAX_TTL_SECONDS),
         });
 
     parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
