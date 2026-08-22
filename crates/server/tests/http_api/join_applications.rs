@@ -98,8 +98,15 @@ async fn list_page(state: AppState, token: &str, query: &str) -> (Option<StatusC
     (status, body)
 }
 
-#[tokio::test]
-async fn join_application_list_paginates_with_opaque_canonical_cursor() {
+#[test]
+fn join_application_list_paginates_with_opaque_canonical_cursor() {
+    run_on_deep_stack(
+        "join_application_list_paginates_with_opaque_canonical_cursor",
+        join_application_list_paginates_with_opaque_canonical_cursor_body,
+    );
+}
+
+async fn join_application_list_paginates_with_opaque_canonical_cursor_body() {
     let state = soland_test_support::app_state(join_config());
     let token = dev_token(state.clone()).await;
     let applicant = fixture_actor_core_id("did:web:alice.example");
@@ -166,8 +173,15 @@ async fn join_application_list_paginates_with_opaque_canonical_cursor() {
     );
 }
 
-#[tokio::test]
-async fn join_application_list_rejects_bare_application_ref_cursor() {
+#[test]
+fn join_application_list_rejects_bare_application_ref_cursor() {
+    run_on_deep_stack(
+        "join_application_list_rejects_bare_application_ref_cursor",
+        join_application_list_rejects_bare_application_ref_cursor_body,
+    );
+}
+
+async fn join_application_list_rejects_bare_application_ref_cursor_body() {
     let state = soland_test_support::app_state(join_config());
     let token = dev_token(state.clone()).await;
     let applicant = fixture_actor_core_id("did:web:alice.example");

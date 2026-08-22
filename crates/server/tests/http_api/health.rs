@@ -4,8 +4,12 @@
 
 use super::common::*;
 
-#[tokio::test]
-async fn health_and_describe_work() {
+#[test]
+fn health_and_describe_work() {
+    run_on_deep_stack("health_and_describe_work", health_and_describe_work_body);
+}
+
+async fn health_and_describe_work_body() {
     let mut home = TestClient::get("http://server/").send(&app()).await;
     assert_eq!(home.status_code.unwrap(), StatusCode::OK);
     let home_body = home.take_string().await.unwrap();
@@ -305,8 +309,15 @@ async fn health_and_describe_work() {
     assert_eq!(full_gap["status"], "not_claimed");
 }
 
-#[tokio::test]
-async fn server_describe_accepts_only_its_selected_role() {
+#[test]
+fn server_describe_accepts_only_its_selected_role() {
+    run_on_deep_stack(
+        "server_describe_accepts_only_its_selected_role",
+        server_describe_accepts_only_its_selected_role_body,
+    );
+}
+
+async fn server_describe_accepts_only_its_selected_role_body() {
     let service = app_from_state(soland_test_support::app_state(test_config()));
 
     let selected: Value =
@@ -326,8 +337,15 @@ async fn server_describe_accepts_only_its_selected_role() {
     assert_eq!(rejected["error"]["code"], "param_invalid");
 }
 
-#[tokio::test]
-async fn open_service_resolution_serves_byte_canonical_record() {
+#[test]
+fn open_service_resolution_serves_byte_canonical_record() {
+    run_on_deep_stack(
+        "open_service_resolution_serves_byte_canonical_record",
+        open_service_resolution_serves_byte_canonical_record_body,
+    );
+}
+
+async fn open_service_resolution_serves_byte_canonical_record_body() {
     let state = soland_test_support::app_state(test_config());
     let service = app_from_state(state.clone());
     let service_id = arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap();
@@ -350,8 +368,15 @@ async fn open_service_resolution_serves_byte_canonical_record() {
     );
 }
 
-#[tokio::test]
-async fn readyz_returns_503_until_session_grant_introspection_bearer_is_configured() {
+#[test]
+fn readyz_returns_503_until_session_grant_introspection_bearer_is_configured() {
+    run_on_deep_stack(
+        "readyz_returns_503_until_session_grant_introspection_bearer_is_configured",
+        readyz_returns_503_until_session_grant_introspection_bearer_is_configured_body,
+    );
+}
+
+async fn readyz_returns_503_until_session_grant_introspection_bearer_is_configured_body() {
     let mut config = test_config();
     config.development_mode = false;
     config.session_grant_introspection_url =
@@ -369,8 +394,15 @@ async fn readyz_returns_503_until_session_grant_introspection_bearer_is_configur
     assert_eq!(body["checks"]["session_grant_introspection"]["ok"], false);
 }
 
-#[tokio::test]
-async fn describe_separates_claim_levels() {
+#[test]
+fn describe_separates_claim_levels() {
+    run_on_deep_stack(
+        "describe_separates_claim_levels",
+        describe_separates_claim_levels_body,
+    );
+}
+
+async fn describe_separates_claim_levels_body() {
     let describe: Value = TestClient::get("http://server/_arkret/describe")
         .send(&app())
         .await
@@ -434,8 +466,15 @@ async fn describe_separates_claim_levels() {
         .expect("server describe must deserialize with the SDK client model");
 }
 
-#[tokio::test]
-async fn describe_returns_development_mode_field() {
+#[test]
+fn describe_returns_development_mode_field() {
+    run_on_deep_stack(
+        "describe_returns_development_mode_field",
+        describe_returns_development_mode_field_body,
+    );
+}
+
+async fn describe_returns_development_mode_field_body() {
     // Default test config — `development_mode = true`, no admin allowlist.
     let dev_app = app();
 
@@ -514,8 +553,15 @@ async fn describe_returns_development_mode_field() {
     assert_eq!(prod_operator_describe["admin_auth_mode"], "did_allowlist");
 }
 
-#[tokio::test]
-async fn healthz_exposes_hardening_status() {
+#[test]
+fn healthz_exposes_hardening_status() {
+    run_on_deep_stack(
+        "healthz_exposes_hardening_status",
+        healthz_exposes_hardening_status_body,
+    );
+}
+
+async fn healthz_exposes_hardening_status_body() {
     let dev_app = app();
 
     let health: Value = TestClient::get("http://server/health")

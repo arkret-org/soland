@@ -525,8 +525,15 @@ async fn account_subscribe_first_frame_with_status(
     (status, frame)
 }
 
-#[tokio::test]
-async fn agent_session_without_stream_scope_cannot_subscribe_events() {
+#[test]
+fn agent_session_without_stream_scope_cannot_subscribe_events() {
+    run_on_deep_stack(
+        "agent_session_without_stream_scope_cannot_subscribe_events",
+        agent_session_without_stream_scope_cannot_subscribe_events_body,
+    );
+}
+
+async fn agent_session_without_stream_scope_cannot_subscribe_events_body() {
     let (state, presentation) =
         seed_agent_grant_session("scope-denied-stream", &["ak.self.events.read.scan"]).await;
     let subscribe_url = format!(
@@ -559,8 +566,15 @@ async fn agent_session_without_stream_scope_cannot_subscribe_events() {
     assert_agent_scope_denied(&body, "ak.self.events.stream.subscribe");
 }
 
-#[tokio::test]
-async fn agent_session_without_query_scope_cannot_scan_events() {
+#[test]
+fn agent_session_without_query_scope_cannot_scan_events() {
+    run_on_deep_stack(
+        "agent_session_without_query_scope_cannot_scan_events",
+        agent_session_without_query_scope_cannot_scan_events_body,
+    );
+}
+
+async fn agent_session_without_query_scope_cannot_scan_events_body() {
     let (state, presentation) =
         seed_agent_grant_session("scope-denied-query", &["ak.self.events.stream.subscribe"]).await;
 
@@ -589,8 +603,15 @@ async fn agent_session_without_query_scope_cannot_scan_events() {
     assert_agent_scope_denied(&body, "ak.self.events.read.scan");
 }
 
-#[tokio::test]
-async fn agent_session_without_submit_scope_cannot_submit_events() {
+#[test]
+fn agent_session_without_submit_scope_cannot_submit_events() {
+    run_on_deep_stack(
+        "agent_session_without_submit_scope_cannot_submit_events",
+        agent_session_without_submit_scope_cannot_submit_events_body,
+    );
+}
+
+async fn agent_session_without_submit_scope_cannot_submit_events_body() {
     let (state, presentation) =
         seed_agent_grant_session("scope-denied-submit", &["ak.self.events.read.scan"]).await;
     let event = signed_event_envelope(
@@ -624,8 +645,15 @@ async fn agent_session_without_submit_scope_cannot_submit_events() {
     assert_agent_scope_denied(&body, "ak.self.events.command.submit");
 }
 
-#[tokio::test]
-async fn pg_account_subscribe_cursor_handle_survives_app_state_rebuild() {
+#[test]
+fn pg_account_subscribe_cursor_handle_survives_app_state_rebuild() {
+    run_on_deep_stack(
+        "pg_account_subscribe_cursor_handle_survives_app_state_rebuild",
+        pg_account_subscribe_cursor_handle_survives_app_state_rebuild_body,
+    );
+}
+
+async fn pg_account_subscribe_cursor_handle_survives_app_state_rebuild_body() {
     let Some(first_state) = optional_pg_app_state().await else {
         return;
     };
@@ -660,8 +688,15 @@ async fn pg_account_subscribe_cursor_handle_survives_app_state_rebuild() {
     );
 }
 
-#[tokio::test]
-async fn memory_account_subscribe_cursor_handle_does_not_survive_app_state_rebuild() {
+#[test]
+fn memory_account_subscribe_cursor_handle_does_not_survive_app_state_rebuild() {
+    run_on_deep_stack(
+        "memory_account_subscribe_cursor_handle_does_not_survive_app_state_rebuild",
+        memory_account_subscribe_cursor_handle_does_not_survive_app_state_rebuild_body,
+    );
+}
+
+async fn memory_account_subscribe_cursor_handle_does_not_survive_app_state_rebuild_body() {
     let first_state = soland_test_support::app_state(test_config());
     let actor = "did:web:memory-cursor-restart.example";
     let device = "ak:device:01904100-0000-7000-8000-0badc0ffee01";
@@ -693,8 +728,15 @@ async fn memory_account_subscribe_cursor_handle_does_not_survive_app_state_rebui
     assert_eq!(rejected["error"]["code"], "cursor_integrity_invalid");
 }
 
-#[tokio::test]
-async fn events_describe_and_single_event_submit_work() {
+#[test]
+fn events_describe_and_single_event_submit_work() {
+    run_on_deep_stack(
+        "events_describe_and_single_event_submit_work",
+        events_describe_and_single_event_submit_work_body,
+    );
+}
+
+async fn events_describe_and_single_event_submit_work_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     authorize_test_plaintext_message_service(&state, "did:web:alice.example", demo_realm_id())
@@ -1044,8 +1086,15 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(hidden_body["error"]["code"], "not_found");
 }
 
-#[tokio::test]
-async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
+#[test]
+fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
+    run_on_deep_stack(
+        "realm_create_genesis_unit_projects_five_cells_without_seal_basis",
+        realm_create_genesis_unit_projects_five_cells_without_seal_basis_body,
+    );
+}
+
+async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body() {
     let state = soland_test_support::app_state(test_config());
     let control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let actor = test_event_signer_did().to_owned();
@@ -1426,8 +1475,15 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
     }
 }
 
-#[tokio::test]
-async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
+#[test]
+fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
+    run_on_deep_stack(
+        "invite_create_accepts_locator_evidence_digest_without_local_consent",
+        invite_create_accepts_locator_evidence_digest_without_local_consent_body,
+    );
+}
+
+async fn invite_create_accepts_locator_evidence_digest_without_local_consent_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let seeded = seed_test_realm(
@@ -1519,8 +1575,15 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
     );
 }
 
-#[tokio::test]
-async fn sync_cursor_rejects_facets_and_renderer_changes() {
+#[test]
+fn sync_cursor_rejects_facets_and_renderer_changes() {
+    run_on_deep_stack(
+        "sync_cursor_rejects_facets_and_renderer_changes",
+        sync_cursor_rejects_facets_and_renderer_changes_body,
+    );
+}
+
+async fn sync_cursor_rejects_facets_and_renderer_changes_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
@@ -1548,8 +1611,15 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
     assert_eq!(filter_changed.status_code.unwrap().as_u16(), 400);
 }
 
-#[tokio::test]
-async fn cursor_syntax_failures_pin_param_invalid_with_invalid_cursor_reason() {
+#[test]
+fn cursor_syntax_failures_pin_param_invalid_with_invalid_cursor_reason() {
+    run_on_deep_stack(
+        "cursor_syntax_failures_pin_param_invalid_with_invalid_cursor_reason",
+        cursor_syntax_failures_pin_param_invalid_with_invalid_cursor_reason_body,
+    );
+}
+
+async fn cursor_syntax_failures_pin_param_invalid_with_invalid_cursor_reason_body() {
     // encoding.md §8.3 closed set: a token that carries the `ak:cursor:`
     // prefix but fails base64url/JSON/schema decoding MUST be rejected with
     // top-level `param_invalid` and reason `invalid_cursor` — never
@@ -1590,8 +1660,15 @@ async fn cursor_syntax_failures_pin_param_invalid_with_invalid_cursor_reason() {
     );
 }
 
-#[tokio::test]
-async fn account_subscribe_realms_filter_excludes_out_of_scope_realms() {
+#[test]
+fn account_subscribe_realms_filter_excludes_out_of_scope_realms() {
+    run_on_deep_stack(
+        "account_subscribe_realms_filter_excludes_out_of_scope_realms",
+        account_subscribe_realms_filter_excludes_out_of_scope_realms_body,
+    );
+}
+
+async fn account_subscribe_realms_filter_excludes_out_of_scope_realms_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let included = seed_test_realm(
@@ -1634,8 +1711,15 @@ async fn account_subscribe_realms_filter_excludes_out_of_scope_realms() {
     );
 }
 
-#[tokio::test]
-async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
+#[test]
+fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
+    run_on_deep_stack(
+        "events_query_exposes_prev_cursor_and_limited_timeline_pages",
+        events_query_exposes_prev_cursor_and_limited_timeline_pages_body,
+    );
+}
+
+async fn events_query_exposes_prev_cursor_and_limited_timeline_pages_body() {
     let state = soland_test_support::app_state(test_config());
     let actor = test_event_signer_did();
     let actor_core = fixture_actor_core_id(actor);
@@ -1719,8 +1803,15 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
     assert_eq!(invalid_cursor_body["error"]["code"], "schema_violation");
 }
 
-#[tokio::test(start_paused = true)]
-async fn incremental_sync_waits_30_seconds_then_returns_frontier() {
+#[test]
+fn incremental_sync_waits_30_seconds_then_returns_frontier() {
+    run_on_deep_stack_paused(
+        "incremental_sync_waits_30_seconds_then_returns_frontier",
+        incremental_sync_waits_30_seconds_then_returns_frontier_body,
+    );
+}
+
+async fn incremental_sync_waits_30_seconds_then_returns_frontier_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
 
@@ -1751,8 +1842,15 @@ async fn incremental_sync_waits_30_seconds_then_returns_frontier() {
     );
 }
 
-#[tokio::test(start_paused = true)]
-async fn incremental_sync_meta_only_delta_advances_cursor_once() {
+#[test]
+fn incremental_sync_meta_only_delta_advances_cursor_once() {
+    run_on_deep_stack_paused(
+        "incremental_sync_meta_only_delta_advances_cursor_once",
+        incremental_sync_meta_only_delta_advances_cursor_once_body,
+    );
+}
+
+async fn incremental_sync_meta_only_delta_advances_cursor_once_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let created = seed_test_realm(
@@ -1820,8 +1918,15 @@ async fn incremental_sync_meta_only_delta_advances_cursor_once() {
     );
 }
 
-#[tokio::test]
-async fn incremental_sync_emits_realm_with_new_timeline_event() {
+#[test]
+fn incremental_sync_emits_realm_with_new_timeline_event() {
+    run_on_deep_stack(
+        "incremental_sync_emits_realm_with_new_timeline_event",
+        incremental_sync_emits_realm_with_new_timeline_event_body,
+    );
+}
+
+async fn incremental_sync_emits_realm_with_new_timeline_event_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
 
@@ -1853,8 +1958,15 @@ async fn incremental_sync_emits_realm_with_new_timeline_event() {
     );
 }
 
-#[tokio::test]
-async fn account_subscribe_waits_for_broadcast_before_returning_incremental_batch() {
+#[test]
+fn account_subscribe_waits_for_broadcast_before_returning_incremental_batch() {
+    run_on_deep_stack(
+        "account_subscribe_waits_for_broadcast_before_returning_incremental_batch",
+        account_subscribe_waits_for_broadcast_before_returning_incremental_batch_body,
+    );
+}
+
+async fn account_subscribe_waits_for_broadcast_before_returning_incremental_batch_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
 
@@ -1919,8 +2031,15 @@ async fn account_subscribe_waits_for_broadcast_before_returning_incremental_batc
     );
 }
 
-#[tokio::test]
-async fn account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnostic() {
+#[test]
+fn account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnostic() {
+    run_on_deep_stack(
+        "account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnostic",
+        account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnostic_body,
+    );
+}
+
+async fn account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnostic_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let actor_seq = 900_000;

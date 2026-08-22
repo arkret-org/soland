@@ -239,8 +239,15 @@ async fn bind_default_receive_policy(fixture: &DispatchFixture) {
     );
 }
 
-#[tokio::test]
-async fn self_invite_dispatch_to_a_local_target_runs_the_receive_chain_and_notifies() {
+#[test]
+fn self_invite_dispatch_to_a_local_target_runs_the_receive_chain_and_notifies() {
+    run_on_deep_stack(
+        "self_invite_dispatch_to_a_local_target_runs_the_receive_chain_and_notifies",
+        self_invite_dispatch_to_a_local_target_runs_the_receive_chain_and_notifies_body,
+    );
+}
+
+async fn self_invite_dispatch_to_a_local_target_runs_the_receive_chain_and_notifies_body() {
     // `shared_realm` is high trust (§2) and is on the §5 fail-closed default
     // allowlist, so the effective receive action is notify and §5.1 lets the
     // high-trust disclosure echo the real outcome.
@@ -261,8 +268,15 @@ async fn self_invite_dispatch_to_a_local_target_runs_the_receive_chain_and_notif
     );
 }
 
-#[tokio::test]
-async fn self_invite_dispatch_quarantine_is_deferred_and_idempotent_per_idempotency_key() {
+#[test]
+fn self_invite_dispatch_quarantine_is_deferred_and_idempotent_per_idempotency_key() {
+    run_on_deep_stack(
+        "self_invite_dispatch_quarantine_is_deferred_and_idempotent_per_idempotency_key",
+        self_invite_dispatch_quarantine_is_deferred_and_idempotent_per_idempotency_key_body,
+    );
+}
+
+async fn self_invite_dispatch_quarantine_is_deferred_and_idempotent_per_idempotency_key_body() {
     // `explicit_address` is low trust and is not on the §5 default allowlist,
     // so the effective behavior is quarantine. §5.1 pins that to
     // `status=deferred` with no `disclosed_outcome` in every disclosure tier.
@@ -290,8 +304,15 @@ async fn self_invite_dispatch_quarantine_is_deferred_and_idempotent_per_idempote
     );
 }
 
-#[tokio::test]
-async fn self_invite_dispatch_rejects_an_invite_event_this_service_never_accepted() {
+#[test]
+fn self_invite_dispatch_rejects_an_invite_event_this_service_never_accepted() {
+    run_on_deep_stack(
+        "self_invite_dispatch_rejects_an_invite_event_this_service_never_accepted",
+        self_invite_dispatch_rejects_an_invite_event_this_service_never_accepted_body,
+    );
+}
+
+async fn self_invite_dispatch_rejects_an_invite_event_this_service_never_accepted_body() {
     let fixture = seed_dispatch_fixture(explicit_address_evidence).await;
     bind_default_receive_policy(&fixture).await;
 
@@ -311,8 +332,15 @@ async fn self_invite_dispatch_rejects_an_invite_event_this_service_never_accepte
     );
 }
 
-#[tokio::test]
-async fn self_invite_dispatch_rejects_an_invite_event_signed_by_another_actor() {
+#[test]
+fn self_invite_dispatch_rejects_an_invite_event_signed_by_another_actor() {
+    run_on_deep_stack(
+        "self_invite_dispatch_rejects_an_invite_event_signed_by_another_actor",
+        self_invite_dispatch_rejects_an_invite_event_signed_by_another_actor_body,
+    );
+}
+
+async fn self_invite_dispatch_rejects_an_invite_event_signed_by_another_actor_body() {
     let fixture = seed_dispatch_fixture(explicit_address_evidence).await;
     bind_default_receive_policy(&fixture).await;
 
@@ -332,8 +360,16 @@ async fn self_invite_dispatch_rejects_an_invite_event_signed_by_another_actor() 
     );
 }
 
-#[tokio::test]
-async fn self_invite_dispatch_rejects_an_invite_event_that_is_not_the_stored_canonical_bytes() {
+#[test]
+fn self_invite_dispatch_rejects_an_invite_event_that_is_not_the_stored_canonical_bytes() {
+    run_on_deep_stack(
+        "self_invite_dispatch_rejects_an_invite_event_that_is_not_the_stored_canonical_bytes",
+        self_invite_dispatch_rejects_an_invite_event_that_is_not_the_stored_canonical_bytes_body,
+    );
+}
+
+async fn self_invite_dispatch_rejects_an_invite_event_that_is_not_the_stored_canonical_bytes_body()
+{
     let fixture = seed_dispatch_fixture(explicit_address_evidence).await;
     bind_default_receive_policy(&fixture).await;
 

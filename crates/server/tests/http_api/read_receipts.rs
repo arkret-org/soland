@@ -236,8 +236,15 @@ async fn submit_alice_target_message(state: AppState, token: &str, body: &str) -
     message["event_id"].as_str().unwrap().to_owned()
 }
 
-#[tokio::test]
-async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_target() {
+#[test]
+fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_target() {
+    run_on_deep_stack(
+        "private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_target",
+        private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_target_body,
+    );
+}
+
+async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_target_body() {
     let state = soland_test_support::app_state(test_config());
     let alice_token = dev_token(state.clone()).await;
     add_test_realm_member(&state, demo_realm_id(), BOB);
@@ -342,8 +349,15 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
     );
 }
 
-#[tokio::test]
-async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable() {
+#[test]
+fn read_receipt_signal_is_session_ttl_bounded_and_never_durable() {
+    run_on_deep_stack(
+        "read_receipt_signal_is_session_ttl_bounded_and_never_durable",
+        read_receipt_signal_is_session_ttl_bounded_and_never_durable_body,
+    );
+}
+
+async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable_body() {
     let state = soland_test_support::app_state(test_config());
     let alice_token = dev_token(state.clone()).await;
     add_test_realm_member(&state, demo_realm_id(), BOB);

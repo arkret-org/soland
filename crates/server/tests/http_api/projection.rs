@@ -4,8 +4,15 @@
 
 use super::common::*;
 
-#[tokio::test]
-async fn projection_space_containers_endpoint_reports_lifecycle_state() {
+#[test]
+fn projection_space_containers_endpoint_reports_lifecycle_state() {
+    run_on_deep_stack(
+        "projection_space_containers_endpoint_reports_lifecycle_state",
+        projection_space_containers_endpoint_reports_lifecycle_state_body,
+    );
+}
+
+async fn projection_space_containers_endpoint_reports_lifecycle_state_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     // Every fixture DataEvent below names the demo Realm's basis Seal in
@@ -130,8 +137,15 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     assert_eq!(row["state"], "active");
 }
 
-#[tokio::test]
-async fn projection_strands_endpoint_reports_lifecycle_state() {
+#[test]
+fn projection_strands_endpoint_reports_lifecycle_state() {
+    run_on_deep_stack(
+        "projection_strands_endpoint_reports_lifecycle_state",
+        projection_strands_endpoint_reports_lifecycle_state_body,
+    );
+}
+
+async fn projection_strands_endpoint_reports_lifecycle_state_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     // Every fixture DataEvent below names the demo Realm's basis Seal in
@@ -212,8 +226,15 @@ async fn projection_strands_endpoint_reports_lifecycle_state() {
     assert_eq!(row["rank"], "r007");
 }
 
-#[tokio::test]
-async fn projection_morphs_endpoint_reports_lifecycle_state() {
+#[test]
+fn projection_morphs_endpoint_reports_lifecycle_state() {
+    run_on_deep_stack(
+        "projection_morphs_endpoint_reports_lifecycle_state",
+        projection_morphs_endpoint_reports_lifecycle_state_body,
+    );
+}
+
+async fn projection_morphs_endpoint_reports_lifecycle_state_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     // Every fixture DataEvent below names the demo Realm's basis Seal in
@@ -310,8 +331,15 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
     assert_eq!(unauth.status_code, Some(StatusCode::UNAUTHORIZED));
 }
 
-#[tokio::test]
-async fn projection_morphs_endpoint_filters_circle_scope() {
+#[test]
+fn projection_morphs_endpoint_filters_circle_scope() {
+    run_on_deep_stack(
+        "projection_morphs_endpoint_filters_circle_scope",
+        projection_morphs_endpoint_filters_circle_scope_body,
+    );
+}
+
+async fn projection_morphs_endpoint_filters_circle_scope_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let bob = register_account(
@@ -463,8 +491,15 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
     );
 }
 
-#[tokio::test]
-async fn projection_document_endpoint_reports_body_versions_relations_and_range_comments() {
+#[test]
+fn projection_document_endpoint_reports_body_versions_relations_and_range_comments() {
+    run_on_deep_stack(
+        "projection_document_endpoint_reports_body_versions_relations_and_range_comments",
+        projection_document_endpoint_reports_body_versions_relations_and_range_comments_body,
+    );
+}
+
+async fn projection_document_endpoint_reports_body_versions_relations_and_range_comments_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     // Every fixture DataEvent below names the demo Realm's basis Seal in
@@ -687,8 +722,15 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     assert_eq!(body["cursor_presence"].as_array().unwrap().len(), 0);
 }
 
-#[tokio::test]
-async fn projection_document_relations_return_lazy_and_locked_stubs() {
+#[test]
+fn projection_document_relations_return_lazy_and_locked_stubs() {
+    run_on_deep_stack(
+        "projection_document_relations_return_lazy_and_locked_stubs",
+        projection_document_relations_return_lazy_and_locked_stubs_body,
+    );
+}
+
+async fn projection_document_relations_return_lazy_and_locked_stubs_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     // Every fixture DataEvent below names the demo Realm's basis Seal in
@@ -888,8 +930,15 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
     assert!(!locked_wire.contains("Locked Secret Title"));
 }
 
-#[tokio::test]
-async fn projection_endpoints_hide_terminal_state_by_default() {
+#[test]
+fn projection_endpoints_hide_terminal_state_by_default() {
+    run_on_deep_stack(
+        "projection_endpoints_hide_terminal_state_by_default",
+        projection_endpoints_hide_terminal_state_by_default_body,
+    );
+}
+
+async fn projection_endpoints_hide_terminal_state_by_default_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     // Every fixture DataEvent below names the demo Realm's basis Seal in
@@ -1061,8 +1110,15 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     assert_eq!(row["state"], "redacted");
 }
 
-#[tokio::test]
-async fn projection_persistence_write_through_mirrors_lifecycle_events() {
+#[test]
+fn projection_persistence_write_through_mirrors_lifecycle_events() {
+    run_on_deep_stack(
+        "projection_persistence_write_through_mirrors_lifecycle_events",
+        projection_persistence_write_through_mirrors_lifecycle_events_body,
+    );
+}
+
+async fn projection_persistence_write_through_mirrors_lifecycle_events_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     // Every fixture DataEvent below names the demo Realm's basis Seal in

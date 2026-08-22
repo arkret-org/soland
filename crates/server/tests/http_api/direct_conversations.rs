@@ -308,8 +308,15 @@ async fn seed_remote_claim_prerequisites(
     (signing_key, authorize_event_id)
 }
 
-#[tokio::test]
-async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() {
+#[test]
+fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() {
+    run_on_deep_stack(
+        "peer_keypackage_claim_is_participant_authorized_atomic_and_queryable",
+        peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_body,
+    );
+}
+
+async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_body() {
     let state = soland_test_support::app_state(test_config());
     let _alice = dev_token(state.clone()).await;
     let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
@@ -520,8 +527,15 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
     );
 }
 
-#[tokio::test]
-async fn direct_resolve_fails_closed_without_accepted_contact() {
+#[test]
+fn direct_resolve_fails_closed_without_accepted_contact() {
+    run_on_deep_stack(
+        "direct_resolve_fails_closed_without_accepted_contact",
+        direct_resolve_fails_closed_without_accepted_contact_body,
+    );
+}
+
+async fn direct_resolve_fails_closed_without_accepted_contact_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let _bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
@@ -544,8 +558,15 @@ async fn direct_resolve_fails_closed_without_accepted_contact() {
     );
 }
 
-#[tokio::test]
-async fn direct_resolve_private_detail_stays_redacted_in_production() {
+#[test]
+fn direct_resolve_private_detail_stays_redacted_in_production() {
+    run_on_deep_stack(
+        "direct_resolve_private_detail_stays_redacted_in_production",
+        direct_resolve_private_detail_stays_redacted_in_production_body,
+    );
+}
+
+async fn direct_resolve_private_detail_stays_redacted_in_production_body() {
     let mut config = test_config();
     config.development_mode = false;
     let state = soland_test_support::app_state(config);
@@ -567,8 +588,15 @@ async fn direct_resolve_private_detail_stays_redacted_in_production() {
     assert!(body["error"]["details"]["reason_detail"].is_null());
 }
 
-#[tokio::test]
-async fn direct_resolve_uses_accepted_contact_scope_without_legacy_consent_overlay() {
+#[test]
+fn direct_resolve_uses_accepted_contact_scope_without_legacy_consent_overlay() {
+    run_on_deep_stack(
+        "direct_resolve_uses_accepted_contact_scope_without_legacy_consent_overlay",
+        direct_resolve_uses_accepted_contact_scope_without_legacy_consent_overlay_body,
+    );
+}
+
+async fn direct_resolve_uses_accepted_contact_scope_without_legacy_consent_overlay_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let _bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
@@ -588,8 +616,15 @@ async fn direct_resolve_uses_accepted_contact_scope_without_legacy_consent_overl
     assert_eq!(state.test_direct_conversation_binding_count(), 0);
 }
 
-#[tokio::test]
-async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
+#[test]
+fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
+    run_on_deep_stack(
+        "direct_resolve_rejects_pairwise_did_without_stable_identity_link",
+        direct_resolve_rejects_pairwise_did_without_stable_identity_link_body,
+    );
+}
+
+async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let mut response = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
@@ -606,8 +641,15 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
     assert_eq!(state.test_direct_conversation_binding_count(), 0);
 }
 
-#[tokio::test]
-async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs() {
+#[test]
+fn direct_resolve_ignores_accepted_row_without_contact_fact_refs() {
+    run_on_deep_stack(
+        "direct_resolve_ignores_accepted_row_without_contact_fact_refs",
+        direct_resolve_ignores_accepted_row_without_contact_fact_refs_body,
+    );
+}
+
+async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let _bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
@@ -653,8 +695,15 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs() {
     assert_eq!(body["state"], "temporarily_unavailable");
 }
 
-#[tokio::test]
-async fn direct_resolve_reports_founder_status_without_materializing() {
+#[test]
+fn direct_resolve_reports_founder_status_without_materializing() {
+    run_on_deep_stack(
+        "direct_resolve_reports_founder_status_without_materializing",
+        direct_resolve_reports_founder_status_without_materializing_body,
+    );
+}
+
+async fn direct_resolve_reports_founder_status_without_materializing_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let _bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
@@ -676,8 +725,15 @@ async fn direct_resolve_reports_founder_status_without_materializing() {
     assert_eq!(state.test_direct_conversation_binding_count(), 0);
 }
 
-#[tokio::test]
-async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempotent() {
+#[test]
+fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempotent() {
+    run_on_deep_stack(
+        "contacts_spec_path_projects_directional_scopes_and_resolve_is_idempotent",
+        contacts_spec_path_projects_directional_scopes_and_resolve_is_idempotent_body,
+    );
+}
+
+async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempotent_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
@@ -738,8 +794,15 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
     assert!(available.claimed_by_mls_group_id.is_none());
 }
 
-#[tokio::test]
-async fn concurrent_direct_resolve_queries_are_side_effect_free() {
+#[test]
+fn concurrent_direct_resolve_queries_are_side_effect_free() {
+    run_on_deep_stack(
+        "concurrent_direct_resolve_queries_are_side_effect_free",
+        concurrent_direct_resolve_queries_are_side_effect_free_body,
+    );
+}
+
+async fn concurrent_direct_resolve_queries_are_side_effect_free_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;

@@ -57,8 +57,15 @@ async fn signal_test_context(state: &AppState) -> (String, SigningKey, arkret_wi
 /// old rail could only assert weakly become structural here: a session may not
 /// relay a *sibling* device's envelope at all, and a revoked device's envelope
 /// is rejected on the directory lookup rather than on its signature.
-#[tokio::test]
-async fn signal_requires_active_authorized_device_signature() {
+#[test]
+fn signal_requires_active_authorized_device_signature() {
+    run_on_deep_stack(
+        "signal_requires_active_authorized_device_signature",
+        signal_requires_active_authorized_device_signature_body,
+    );
+}
+
+async fn signal_requires_active_authorized_device_signature_body() {
     let state = soland_test_support::app_state(test_config());
     let (token, signing_key, seal_ref) = signal_test_context(&state).await;
 
@@ -161,8 +168,15 @@ async fn signal_requires_active_authorized_device_signature() {
     assert_eq!(revoked.status_code, Some(StatusCode::UNAUTHORIZED));
 }
 
-#[tokio::test]
-async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() {
+#[test]
+fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() {
+    run_on_deep_stack(
+        "file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign",
+        file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign_body,
+    );
+}
+
+async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
@@ -248,8 +262,15 @@ async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() 
     assert_eq!(file_transfer_presign.status_code.unwrap().as_u16(), 403);
 }
 
-#[tokio::test]
-async fn profile_avatar_get_recovers_existing_local_object_without_metadata() {
+#[test]
+fn profile_avatar_get_recovers_existing_local_object_without_metadata() {
+    run_on_deep_stack(
+        "profile_avatar_get_recovers_existing_local_object_without_metadata",
+        profile_avatar_get_recovers_existing_local_object_without_metadata_body,
+    );
+}
+
+async fn profile_avatar_get_recovers_existing_local_object_without_metadata_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let avatar_bytes = b"\x89PNG\r\n\x1a\navatar-bytes".to_vec();
@@ -314,8 +335,15 @@ async fn profile_avatar_get_recovers_existing_local_object_without_metadata() {
 /// counter-example. What survives at this layer is the accepted-envelope
 /// contract — the send needs a session, an admitted Signal reports the class-free
 /// `SignalSubmitOutcome`, and a legacy plaintext ephemeral body fails closed.
-#[tokio::test]
-async fn signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body() {
+#[test]
+fn signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body() {
+    run_on_deep_stack(
+        "signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body",
+        signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body_body,
+    );
+}
+
+async fn signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body_body() {
     let state = soland_test_support::app_state(test_config());
     let (token, signing_key, seal_ref) = signal_test_context(&state).await;
 
@@ -391,8 +419,15 @@ async fn signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body() 
     );
 }
 
-#[tokio::test]
-async fn push_profile_and_moderation_contracts_work() {
+#[test]
+fn push_profile_and_moderation_contracts_work() {
+    run_on_deep_stack(
+        "push_profile_and_moderation_contracts_work",
+        push_profile_and_moderation_contracts_work_body,
+    );
+}
+
+async fn push_profile_and_moderation_contracts_work_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let event_signing_key = SigningKey::from_bytes(&[21_u8; 32]);
@@ -584,8 +619,16 @@ async fn push_profile_and_moderation_contracts_work() {
 /// to encrypt for the scope at all. So the surviving server-side premise is the
 /// inverse: whatever this key holds, it neither gates nor rewrites the Signal
 /// rail, because §3's admission set does not contain it.
-#[tokio::test]
-async fn presence_visibility_account_data_requires_encrypted_content_and_never_gates_the_rail() {
+#[test]
+fn presence_visibility_account_data_requires_encrypted_content_and_never_gates_the_rail() {
+    run_on_deep_stack(
+        "presence_visibility_account_data_requires_encrypted_content_and_never_gates_the_rail",
+        presence_visibility_account_data_requires_encrypted_content_and_never_gates_the_rail_body,
+    );
+}
+
+async fn presence_visibility_account_data_requires_encrypted_content_and_never_gates_the_rail_body()
+{
     let state = soland_test_support::app_state(test_config());
     let (token, signing_key, seal_ref) = signal_test_context(&state).await;
 
@@ -660,8 +703,15 @@ async fn presence_visibility_account_data_requires_encrypted_content_and_never_g
 /// check that survives is the one the envelope still signs: §3(2) live send
 /// eligibility for `scope_ref`, which for a Circle requires a joined Circle
 /// membership rather than mere Realm membership.
-#[tokio::test]
-async fn signal_send_rejects_a_circle_scope_the_sender_has_not_joined() {
+#[test]
+fn signal_send_rejects_a_circle_scope_the_sender_has_not_joined() {
+    run_on_deep_stack(
+        "signal_send_rejects_a_circle_scope_the_sender_has_not_joined",
+        signal_send_rejects_a_circle_scope_the_sender_has_not_joined_body,
+    );
+}
+
+async fn signal_send_rejects_a_circle_scope_the_sender_has_not_joined_body() {
     let state = soland_test_support::app_state(test_config());
     let (token, signing_key, seal_ref) = signal_test_context(&state).await;
     let circle_id = "ak:circle:AbKyOtwLpbgxFjQKemj8jLsHIcHewEJYmageMo-mkx7R";
@@ -704,8 +754,15 @@ async fn signal_send_rejects_a_circle_scope_the_sender_has_not_joined() {
 /// Restates `typing_submit_accepts_default_realm_strand_scope`: the Realm-default
 /// scope is admitted for a joined Realm member, and the relay records only the
 /// server-visible header — `signal_class`, scope, sender and the envelope digest.
-#[tokio::test]
-async fn signal_send_accepts_the_realm_scope_for_a_joined_member() {
+#[test]
+fn signal_send_accepts_the_realm_scope_for_a_joined_member() {
+    run_on_deep_stack(
+        "signal_send_accepts_the_realm_scope_for_a_joined_member",
+        signal_send_accepts_the_realm_scope_for_a_joined_member_body,
+    );
+}
+
+async fn signal_send_accepts_the_realm_scope_for_a_joined_member_body() {
     let state = soland_test_support::app_state(test_config());
     let (token, signing_key, seal_ref) = signal_test_context(&state).await;
 
@@ -748,8 +805,15 @@ async fn signal_send_accepts_the_realm_scope_for_a_joined_member() {
 /// `EventNotificationKind::Signal { signal_class }` and carries nothing else. A
 /// wakeup that named `ak.typing` would be exactly the metadata leak this rail
 /// removed.
-#[tokio::test]
-async fn signal_send_wakes_the_live_stream_carrying_only_the_signal_class() {
+#[test]
+fn signal_send_wakes_the_live_stream_carrying_only_the_signal_class() {
+    run_on_deep_stack(
+        "signal_send_wakes_the_live_stream_carrying_only_the_signal_class",
+        signal_send_wakes_the_live_stream_carrying_only_the_signal_class_body,
+    );
+}
+
+async fn signal_send_wakes_the_live_stream_carrying_only_the_signal_class_body() {
     let state = soland_test_support::app_state(test_config());
     let (token, signing_key, seal_ref) = signal_test_context(&state).await;
     let mut wakeups = state.test_subscribe_event_notifications();
@@ -782,8 +846,15 @@ async fn signal_send_wakes_the_live_stream_carrying_only_the_signal_class() {
 /// it: it is a per-`(actor, device, realm)` watermark over the relay position
 /// rather than a sync cursor revision, and a sending device never receives its
 /// own Signal back.
-#[tokio::test]
-async fn signal_is_delivered_once_per_subscriber_device_and_never_self_echoed() {
+#[test]
+fn signal_is_delivered_once_per_subscriber_device_and_never_self_echoed() {
+    run_on_deep_stack(
+        "signal_is_delivered_once_per_subscriber_device_and_never_self_echoed",
+        signal_is_delivered_once_per_subscriber_device_and_never_self_echoed_body,
+    );
+}
+
+async fn signal_is_delivered_once_per_subscriber_device_and_never_self_echoed_body() {
     let state = soland_test_support::app_state(test_config());
     add_test_realm_member(&state, demo_realm_id(), "did:web:bob.example");
     let (alice_token, alice_key, seal_ref) = signal_test_context(&state).await;
@@ -843,8 +914,15 @@ async fn signal_is_delivered_once_per_subscriber_device_and_never_self_echoed() 
 /// re-implement it and cannot: the track name is inside the ciphertext. The one
 /// class gate `signal.md` §3(3) does keep at the ingress is `moderation`, which
 /// had no HTTP-level coverage before; it takes this test's slot.
-#[tokio::test]
-async fn signal_moderation_class_requires_the_moderation_action() {
+#[test]
+fn signal_moderation_class_requires_the_moderation_action() {
+    run_on_deep_stack(
+        "signal_moderation_class_requires_the_moderation_action",
+        signal_moderation_class_requires_the_moderation_action_body,
+    );
+}
+
+async fn signal_moderation_class_requires_the_moderation_action_body() {
     let state = soland_test_support::app_state(test_config());
     let bob = "did:web:bob.example";
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000005";
@@ -922,8 +1000,15 @@ async fn signal_moderation_class_requires_the_moderation_action() {
     assert_eq!(granted.status_code, Some(StatusCode::OK));
 }
 
-#[tokio::test]
-async fn signal_fanout_is_filtered_by_signed_scope_only() {
+#[test]
+fn signal_fanout_is_filtered_by_signed_scope_only() {
+    run_on_deep_stack(
+        "signal_fanout_is_filtered_by_signed_scope_only",
+        signal_fanout_is_filtered_by_signed_scope_only_body,
+    );
+}
+
+async fn signal_fanout_is_filtered_by_signed_scope_only_body() {
     let state = soland_test_support::app_state(test_config());
     let bob = "did:web:bob.example";
     let carol = "did:web:carol.example";
@@ -1033,8 +1118,15 @@ async fn signal_fanout_is_filtered_by_signed_scope_only() {
 /// The structural contract that replaced it is `SignalEnvelope::validate_structural`
 /// plus the §3(4) E2EE-profile rule, so this asserts each of its arms at the
 /// HTTP boundary.
-#[tokio::test]
-async fn signal_envelope_structural_contract_is_enforced() {
+#[test]
+fn signal_envelope_structural_contract_is_enforced() {
+    run_on_deep_stack(
+        "signal_envelope_structural_contract_is_enforced",
+        signal_envelope_structural_contract_is_enforced_body,
+    );
+}
+
+async fn signal_envelope_structural_contract_is_enforced_body() {
     let state = soland_test_support::app_state(test_config());
     let (token, signing_key, seal_ref) = signal_test_context(&state).await;
     let realm_scope = || arkret_wire::ScopeRef::Realm {
@@ -1156,8 +1248,15 @@ async fn signal_envelope_structural_contract_is_enforced() {
     assert_eq!(relayed[0].signal_class, arkret_wire::SignalClass::Setup);
 }
 
-#[tokio::test]
-async fn push_reregistration_is_object_idempotent_and_replaces_the_provider_token() {
+#[test]
+fn push_reregistration_is_object_idempotent_and_replaces_the_provider_token() {
+    run_on_deep_stack(
+        "push_reregistration_is_object_idempotent_and_replaces_the_provider_token",
+        push_reregistration_is_object_idempotent_and_replaces_the_provider_token_body,
+    );
+}
+
+async fn push_reregistration_is_object_idempotent_and_replaces_the_provider_token_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
@@ -1222,8 +1321,15 @@ async fn push_reregistration_is_object_idempotent_and_replaces_the_provider_toke
     );
 }
 
-#[tokio::test]
-async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify() {
+#[test]
+fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify() {
+    run_on_deep_stack(
+        "push_unregister_mutates_registration_and_gateway_snapshot_gates_notify",
+        push_unregister_mutates_registration_and_gateway_snapshot_gates_notify_body,
+    );
+}
+
+async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());

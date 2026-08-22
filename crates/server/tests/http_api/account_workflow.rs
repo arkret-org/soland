@@ -209,8 +209,15 @@ async fn accept_contact_request(
     accepted
 }
 
-#[tokio::test]
-async fn account_viewer_returns_device_summaries() {
+#[test]
+fn account_viewer_returns_device_summaries() {
+    run_on_deep_stack(
+        "account_viewer_returns_device_summaries",
+        account_viewer_returns_device_summaries_body,
+    );
+}
+
+async fn account_viewer_returns_device_summaries_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
@@ -245,8 +252,15 @@ async fn account_viewer_returns_device_summaries() {
 /// on the operator lifecycle route. What this test owns is the *gate*: once the
 /// replica holds `erasure_pending`, every `/_arkret/self/*` read MUST answer
 /// `401 account_erased` rather than a generic `unauthenticated`.
-#[tokio::test]
-async fn erasure_pending_account_refuses_self_reads_with_account_erased() {
+#[test]
+fn erasure_pending_account_refuses_self_reads_with_account_erased() {
+    run_on_deep_stack(
+        "erasure_pending_account_refuses_self_reads_with_account_erased",
+        erasure_pending_account_refuses_self_reads_with_account_erased_body,
+    );
+}
+
+async fn erasure_pending_account_refuses_self_reads_with_account_erased_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let actor = fixture_actor_core_id("did:web:alice.example");
@@ -291,8 +305,15 @@ async fn erasure_pending_account_refuses_self_reads_with_account_erased() {
 /// suspension refuses only new grant issuance — so this test also pins that
 /// difference to stop a future "complete the list" edit from rejecting
 /// suspended sessions too.
-#[tokio::test]
-async fn soft_logged_out_account_refuses_self_reads_while_suspended_stays_valid() {
+#[test]
+fn soft_logged_out_account_refuses_self_reads_while_suspended_stays_valid() {
+    run_on_deep_stack(
+        "soft_logged_out_account_refuses_self_reads_while_suspended_stays_valid",
+        soft_logged_out_account_refuses_self_reads_while_suspended_stays_valid_body,
+    );
+}
+
+async fn soft_logged_out_account_refuses_self_reads_while_suspended_stays_valid_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let actor = fixture_actor_core_id("did:web:alice.example");
@@ -350,8 +371,15 @@ async fn soft_logged_out_account_refuses_self_reads_while_suspended_stays_valid(
     assert_eq!(viewer_body["state"], "suspended");
 }
 
-#[tokio::test]
-async fn repeated_account_projection_is_idempotent_and_me_reads_state() {
+#[test]
+fn repeated_account_projection_is_idempotent_and_me_reads_state() {
+    run_on_deep_stack(
+        "repeated_account_projection_is_idempotent_and_me_reads_state",
+        repeated_account_projection_is_idempotent_and_me_reads_state_body,
+    );
+}
+
+async fn repeated_account_projection_is_idempotent_and_me_reads_state_body() {
     let state = soland_test_support::app_state(test_config());
     let token = register_account(
         state.clone(),
@@ -391,8 +419,15 @@ async fn repeated_account_projection_is_idempotent_and_me_reads_state() {
     assert_eq!(me["state"], "active");
 }
 
-#[tokio::test]
-async fn account_lifecycle_errors_surface_specific_codes() {
+#[test]
+fn account_lifecycle_errors_surface_specific_codes() {
+    run_on_deep_stack(
+        "account_lifecycle_errors_surface_specific_codes",
+        account_lifecycle_errors_surface_specific_codes_body,
+    );
+}
+
+async fn account_lifecycle_errors_surface_specific_codes_body() {
     let state = soland_test_support::app_state(test_config());
     let admin = dev_token(state.clone()).await;
     let bob = register_account(
@@ -526,8 +561,15 @@ async fn account_lifecycle_errors_surface_specific_codes() {
     );
 }
 
-#[tokio::test]
-async fn account_viewer_does_not_authorize_unverified_session_device() {
+#[test]
+fn account_viewer_does_not_authorize_unverified_session_device() {
+    run_on_deep_stack(
+        "account_viewer_does_not_authorize_unverified_session_device",
+        account_viewer_does_not_authorize_unverified_session_device_body,
+    );
+}
+
+async fn account_viewer_does_not_authorize_unverified_session_device_body() {
     let state = soland_test_support::app_state(test_config());
     let first_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let second_device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
@@ -570,8 +612,15 @@ async fn account_viewer_does_not_authorize_unverified_session_device() {
     assert!(second.get("authorized_at").is_none());
 }
 
-#[tokio::test]
-async fn account_viewer_authorizes_founding_device_registered_with_account() {
+#[test]
+fn account_viewer_authorizes_founding_device_registered_with_account() {
+    run_on_deep_stack(
+        "account_viewer_authorizes_founding_device_registered_with_account",
+        account_viewer_authorizes_founding_device_registered_with_account_body,
+    );
+}
+
+async fn account_viewer_authorizes_founding_device_registered_with_account_body() {
     // A device becomes `verified` only through an accepted and projected
     // `ak.device.authorize`; account registration alone creates an unverified
     // placeholder until that possession-bound authorization is accepted.
@@ -621,8 +670,15 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
     assert!(founding["authorized_at"].is_null());
 }
 
-#[tokio::test]
-async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device() {
+#[test]
+fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device() {
+    run_on_deep_stack(
+        "first_gate_registration_does_not_downgrade_a_pcr_authorized_device",
+        first_gate_registration_does_not_downgrade_a_pcr_authorized_device_body,
+    );
+}
+
+async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device_body() {
     let state = soland_test_support::app_state(test_config());
     let device_id = "ak:device:01904100-0000-7000-8000-b0b0b0000002";
     let full_id = "did:web:bob-pcr-first.example";
@@ -689,8 +745,15 @@ async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device() {
     );
 }
 
-#[tokio::test]
-async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
+#[test]
+fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
+    run_on_deep_stack(
+        "repeated_gate_registration_does_not_downgrade_an_authorized_device",
+        repeated_gate_registration_does_not_downgrade_an_authorized_device_body,
+    );
+}
+
+async fn repeated_gate_registration_does_not_downgrade_an_authorized_device_body() {
     let state = soland_test_support::app_state(test_config());
     let device_id = "ak:device:01904100-0000-7000-8000-b0b0b0000003";
     let full_id = "did:web:bob-repeat.example";
@@ -775,18 +838,10 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
 // Windows. Run the body on a dedicated thread with headroom instead.
 #[test]
 fn account_contacts_and_realm_lifecycle_workflow() {
-    std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("build the workflow test runtime")
-                .block_on(account_contacts_and_realm_lifecycle_workflow_body())
-        })
-        .expect("spawn the workflow test thread")
-        .join()
-        .expect("workflow test thread panicked");
+    run_on_deep_stack(
+        "account_contacts_and_realm_lifecycle_workflow",
+        account_contacts_and_realm_lifecycle_workflow_body,
+    );
 }
 
 async fn account_contacts_and_realm_lifecycle_workflow_body() {

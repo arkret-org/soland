@@ -259,8 +259,15 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
         .unwrap();
 }
 
-#[tokio::test]
-async fn open_principal_resolution_is_public_bounded_and_blinds_unknown_principals() {
+#[test]
+fn open_principal_resolution_is_public_bounded_and_blinds_unknown_principals() {
+    run_on_deep_stack(
+        "open_principal_resolution_is_public_bounded_and_blinds_unknown_principals",
+        open_principal_resolution_is_public_bounded_and_blinds_unknown_principals_body,
+    );
+}
+
+async fn open_principal_resolution_is_public_bounded_and_blinds_unknown_principals_body() {
     let state = soland_test_support::app_state(test_config());
     let principal_server_id = state.service_id().clone();
     let service = app_from_state(state);
@@ -281,8 +288,15 @@ async fn open_principal_resolution_is_public_bounded_and_blinds_unknown_principa
     assert_eq!(with_stale_selector.status_code, Some(StatusCode::NOT_FOUND));
 }
 
-#[tokio::test]
-async fn actor_profile_resolve_uses_one_failure_for_unknown_or_unavailable_actor() {
+#[test]
+fn actor_profile_resolve_uses_one_failure_for_unknown_or_unavailable_actor() {
+    run_on_deep_stack(
+        "actor_profile_resolve_uses_one_failure_for_unknown_or_unavailable_actor",
+        actor_profile_resolve_uses_one_failure_for_unknown_or_unavailable_actor_body,
+    );
+}
+
+async fn actor_profile_resolve_uses_one_failure_for_unknown_or_unavailable_actor_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let body: Value = TestClient::post("http://server/_arkret/self/actor-profiles/query")
@@ -304,8 +318,15 @@ async fn actor_profile_resolve_uses_one_failure_for_unknown_or_unavailable_actor
     );
 }
 
-#[tokio::test]
-async fn resolution_audit_blinds_a_wrong_principal_authority_pair() {
+#[test]
+fn resolution_audit_blinds_a_wrong_principal_authority_pair() {
+    run_on_deep_stack(
+        "resolution_audit_blinds_a_wrong_principal_authority_pair",
+        resolution_audit_blinds_a_wrong_principal_authority_pair_body,
+    );
+}
+
+async fn resolution_audit_blinds_a_wrong_principal_authority_pair_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let response = TestClient::post("http://server/_arkret/self/identity/resolution-audit/query")
@@ -322,8 +343,15 @@ async fn resolution_audit_blinds_a_wrong_principal_authority_pair() {
     assert_eq!(response.status_code, Some(StatusCode::NOT_FOUND));
 }
 
-#[tokio::test]
-async fn resolution_audit_returns_unified_event_receipt_and_seal_evidence() {
+#[test]
+fn resolution_audit_returns_unified_event_receipt_and_seal_evidence() {
+    run_on_deep_stack(
+        "resolution_audit_returns_unified_event_receipt_and_seal_evidence",
+        resolution_audit_returns_unified_event_receipt_and_seal_evidence_body,
+    );
+}
+
+async fn resolution_audit_returns_unified_event_receipt_and_seal_evidence_body() {
     let state = soland_test_support::app_state(test_config());
     let service_id = state.service_id().clone();
     let token = dev_token_for_device(
@@ -362,8 +390,12 @@ async fn resolution_audit_returns_unified_event_receipt_and_seal_evidence() {
     assert!(body.get("resolution_cell_proof").is_none());
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn identity_surface_works() {
+#[test]
+fn identity_surface_works() {
+    run_on_deep_stack_multi_thread("identity_surface_works", identity_surface_works_body);
+}
+
+async fn identity_surface_works_body() {
     let state = soland_test_support::app_state(test_config());
     let expected_service_id =
         arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
@@ -454,8 +486,15 @@ async fn identity_surface_works() {
     assert_eq!(log["has_more"], false);
 }
 
-#[tokio::test]
-async fn identity_describe_exposes_external_webvh_provider() {
+#[test]
+fn identity_describe_exposes_external_webvh_provider() {
+    run_on_deep_stack(
+        "identity_describe_exposes_external_webvh_provider",
+        identity_describe_exposes_external_webvh_provider_body,
+    );
+}
+
+async fn identity_describe_exposes_external_webvh_provider_body() {
     let mut config = test_config();
     config.external_webvh_provider_url = Some("http://webvh.local".to_owned());
     config.external_webvh_provider_active = true;
@@ -511,8 +550,15 @@ async fn identity_describe_exposes_external_webvh_provider() {
     );
 }
 
-#[tokio::test]
-async fn identity_describe_keeps_external_webvh_provider_when_probe_fails() {
+#[test]
+fn identity_describe_keeps_external_webvh_provider_when_probe_fails() {
+    run_on_deep_stack(
+        "identity_describe_keeps_external_webvh_provider_when_probe_fails",
+        identity_describe_keeps_external_webvh_provider_when_probe_fails_body,
+    );
+}
+
+async fn identity_describe_keeps_external_webvh_provider_when_probe_fails_body() {
     let mut config = test_config();
     config.external_webvh_provider_url = Some("http://webvh.unreachable.local".to_owned());
     config.external_webvh_provider_active = false;
@@ -552,8 +598,15 @@ async fn identity_describe_keeps_external_webvh_provider_when_probe_fails() {
     );
 }
 
-#[tokio::test]
-async fn standard_service_registration_is_idempotent_and_rejects_forks() {
+#[test]
+fn standard_service_registration_is_idempotent_and_rejects_forks() {
+    run_on_deep_stack(
+        "standard_service_registration_is_idempotent_and_rejects_forks",
+        standard_service_registration_is_idempotent_and_rejects_forks_body,
+    );
+}
+
+async fn standard_service_registration_is_idempotent_and_rejects_forks_body() {
     use rand_chacha::rand_core::SeedableRng;
 
     let mut config = test_config();
@@ -683,8 +736,15 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
     assert_eq!(error["error"]["code"], "service_identity_conflict");
 }
 
-#[tokio::test]
-async fn embedded_webvh_provider_registers_and_serves_identity() {
+#[test]
+fn embedded_webvh_provider_registers_and_serves_identity() {
+    run_on_deep_stack(
+        "embedded_webvh_provider_registers_and_serves_identity",
+        embedded_webvh_provider_registers_and_serves_identity_body,
+    );
+}
+
+async fn embedded_webvh_provider_registers_and_serves_identity_body() {
     let mut config = test_config();
     config.public_base_url = "https://soland.example".to_owned();
     config.embedded_webvh_provider_enabled = true;
@@ -897,8 +957,15 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
 /// serves the resulting canonical resources, treats
 /// an exact retry as a duplicate, and rejects collisions and generic fallback
 /// operations.
-#[tokio::test]
-async fn submit_did_operation_webvh_serves_canonical_did_json() {
+#[test]
+fn submit_did_operation_webvh_serves_canonical_did_json() {
+    run_on_deep_stack(
+        "submit_did_operation_webvh_serves_canonical_did_json",
+        submit_did_operation_webvh_serves_canonical_did_json_body,
+    );
+}
+
+async fn submit_did_operation_webvh_serves_canonical_did_json_body() {
     let mut config = test_config();
     config.public_base_url = "https://soland.example".to_owned();
     config.embedded_webvh_provider_enabled = true;
@@ -1080,8 +1147,15 @@ async fn submit_did_operation_webvh_serves_canonical_did_json() {
     assert_eq!(unknown.status_code.unwrap(), StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
-async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling() {
+#[test]
+fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling() {
+    run_on_deep_stack(
+        "submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling",
+        submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling_body,
+    );
+}
+
+async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling_body() {
     let mut config = test_config();
     config.public_base_url = "https://soland.example".to_owned();
     config.did_resolver_allow_methods =

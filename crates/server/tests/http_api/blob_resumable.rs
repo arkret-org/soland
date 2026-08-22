@@ -14,8 +14,15 @@ fn b64(value: &str) -> String {
     BASE64_STANDARD.encode(value.as_bytes())
 }
 
-#[tokio::test]
-async fn tus_options_probe_advertises_capabilities_without_auth() {
+#[test]
+fn tus_options_probe_advertises_capabilities_without_auth() {
+    run_on_deep_stack(
+        "tus_options_probe_advertises_capabilities_without_auth",
+        tus_options_probe_advertises_capabilities_without_auth_body,
+    );
+}
+
+async fn tus_options_probe_advertises_capabilities_without_auth_body() {
     let state = soland_test_support::app_state(test_config());
     let response = TestClient::options("http://server/_arkret/self/blob/resumable")
         .send(&app_from_state(state))
@@ -35,8 +42,15 @@ async fn tus_options_probe_advertises_capabilities_without_auth() {
     );
 }
 
-#[tokio::test]
-async fn tus_create_requires_supported_version_and_auth() {
+#[test]
+fn tus_create_requires_supported_version_and_auth() {
+    run_on_deep_stack(
+        "tus_create_requires_supported_version_and_auth",
+        tus_create_requires_supported_version_and_auth_body,
+    );
+}
+
+async fn tus_create_requires_supported_version_and_auth_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
@@ -59,8 +73,15 @@ async fn tus_create_requires_supported_version_and_auth() {
     assert_eq!(wrong_version.headers.get("tus-version").unwrap(), "1.0.0");
 }
 
-#[tokio::test]
-async fn resumable_chunked_upload_matches_canonical_blob_ref() {
+#[test]
+fn resumable_chunked_upload_matches_canonical_blob_ref() {
+    run_on_deep_stack(
+        "resumable_chunked_upload_matches_canonical_blob_ref",
+        resumable_chunked_upload_matches_canonical_blob_ref_body,
+    );
+}
+
+async fn resumable_chunked_upload_matches_canonical_blob_ref_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
@@ -234,8 +255,15 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref() {
     assert_eq!(after.status_code.unwrap().as_u16(), 404);
 }
 
-#[tokio::test]
-async fn resumable_upload_is_actor_scoped_and_terminable() {
+#[test]
+fn resumable_upload_is_actor_scoped_and_terminable() {
+    run_on_deep_stack(
+        "resumable_upload_is_actor_scoped_and_terminable",
+        resumable_upload_is_actor_scoped_and_terminable_body,
+    );
+}
+
+async fn resumable_upload_is_actor_scoped_and_terminable_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let bob = dev_token_for_device(
@@ -285,8 +313,15 @@ async fn resumable_upload_is_actor_scoped_and_terminable() {
     assert_eq!(after.status_code.unwrap().as_u16(), 404);
 }
 
-#[tokio::test]
-async fn describe_advertises_tus_binding_and_limits() {
+#[test]
+fn describe_advertises_tus_binding_and_limits() {
+    run_on_deep_stack(
+        "describe_advertises_tus_binding_and_limits",
+        describe_advertises_tus_binding_and_limits_body,
+    );
+}
+
+async fn describe_advertises_tus_binding_and_limits_body() {
     let state = soland_test_support::app_state(test_config());
     let describe: Value = TestClient::get("http://server/_arkret/describe")
         .send(&app_from_state(state))

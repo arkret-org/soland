@@ -1105,18 +1105,10 @@ async fn provision_agent_sdk_commit_attempt_inner(
 // Windows. Run the body on a dedicated thread with headroom instead.
 #[test]
 fn production_agent_provision_admits_controller_signed_sdk_events() {
-    std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("build the Agent provisioning test runtime")
-                .block_on(production_agent_provision_admits_controller_signed_sdk_events_body())
-        })
-        .expect("spawn the Agent provisioning test thread")
-        .join()
-        .expect("Agent provisioning test thread panicked");
+    run_on_deep_stack(
+        "production_agent_provision_admits_controller_signed_sdk_events",
+        production_agent_provision_admits_controller_signed_sdk_events_body,
+    );
 }
 
 async fn production_agent_provision_admits_controller_signed_sdk_events_body() {
@@ -1237,18 +1229,10 @@ async fn production_agent_provision_admits_controller_signed_sdk_events_body() {
 // Windows. Run the body on a dedicated thread with headroom instead.
 #[test]
 fn agent_provision_recovers_from_each_durable_commit_boundary() {
-    std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("build the Agent provisioning test runtime")
-                .block_on(agent_provision_recovers_from_each_durable_commit_boundary_body())
-        })
-        .expect("spawn the Agent provisioning test thread")
-        .join()
-        .expect("Agent provisioning test thread panicked");
+    run_on_deep_stack(
+        "agent_provision_recovers_from_each_durable_commit_boundary",
+        agent_provision_recovers_from_each_durable_commit_boundary_body,
+    );
 }
 
 async fn agent_provision_recovers_from_each_durable_commit_boundary_body() {
@@ -1405,18 +1389,10 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary_body() {
 // Windows. Run the body on a dedicated thread with headroom instead.
 #[test]
 fn agent_provision_commit_requires_its_server_allocation() {
-    std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("build the Agent provisioning test runtime")
-                .block_on(agent_provision_commit_requires_its_server_allocation_body())
-        })
-        .expect("spawn the Agent provisioning test thread")
-        .join()
-        .expect("Agent provisioning test thread panicked");
+    run_on_deep_stack(
+        "agent_provision_commit_requires_its_server_allocation",
+        agent_provision_commit_requires_its_server_allocation_body,
+    );
 }
 
 async fn agent_provision_commit_requires_its_server_allocation_body() {
@@ -1528,18 +1504,10 @@ async fn agent_provision_commit_requires_its_server_allocation_body() {
 // Windows. Run the body on a dedicated thread with headroom instead.
 #[test]
 fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
-    std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("build the Agent provisioning test runtime")
-                .block_on(provisioned_agent_is_listed_and_slug_conflict_is_rejected_body())
-        })
-        .expect("spawn the Agent provisioning test thread")
-        .join()
-        .expect("Agent provisioning test thread panicked");
+    run_on_deep_stack(
+        "provisioned_agent_is_listed_and_slug_conflict_is_rejected",
+        provisioned_agent_is_listed_and_slug_conflict_is_rejected_body,
+    );
 }
 
 async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected_body() {
@@ -1709,20 +1677,10 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected_body() {
 // Windows. Run the body on a dedicated thread with headroom instead.
 #[test]
 fn provisioned_agent_fanout_uses_the_active_controller_device_generation() {
-    std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("build the Agent fanout test runtime")
-                .block_on(
-                    provisioned_agent_fanout_uses_the_active_controller_device_generation_body(),
-                )
-        })
-        .expect("spawn the Agent fanout test thread")
-        .join()
-        .expect("Agent fanout test thread panicked");
+    run_on_deep_stack(
+        "provisioned_agent_fanout_uses_the_active_controller_device_generation",
+        provisioned_agent_fanout_uses_the_active_controller_device_generation_body,
+    );
 }
 
 async fn provisioned_agent_fanout_uses_the_active_controller_device_generation_body() {

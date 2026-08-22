@@ -4,8 +4,15 @@
 
 use super::common::*;
 
-#[tokio::test]
-async fn policy_check_and_validation_work() {
+#[test]
+fn policy_check_and_validation_work() {
+    run_on_deep_stack(
+        "policy_check_and_validation_work",
+        policy_check_and_validation_work_body,
+    );
+}
+
+async fn policy_check_and_validation_work_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let actor_id = fixture_actor_core_id("did:web:alice.example");

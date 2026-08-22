@@ -248,8 +248,15 @@ fn resign_federation_event_as(event: Value, actor_full_id: &str) -> Value {
     serde_json::to_value(event).expect("federation fixture serializes")
 }
 
-#[tokio::test]
-async fn peer_events_describe_advertises_formal_surface() {
+#[test]
+fn peer_events_describe_advertises_formal_surface() {
+    run_on_deep_stack(
+        "peer_events_describe_advertises_formal_surface",
+        peer_events_describe_advertises_formal_surface_body,
+    );
+}
+
+async fn peer_events_describe_advertises_formal_surface_body() {
     let state = soland_test_support::app_state(test_config());
     let describe: Value = TestClient::query("http://server/_arkret/peer/events/describe")
         .json(&serde_json::json!({}))
@@ -282,8 +289,15 @@ async fn peer_events_describe_advertises_formal_surface() {
     );
 }
 
-#[tokio::test]
-async fn peer_events_query_and_frontier_use_peer_surface() {
+#[test]
+fn peer_events_query_and_frontier_use_peer_surface() {
+    run_on_deep_stack(
+        "peer_events_query_and_frontier_use_peer_surface",
+        peer_events_query_and_frontier_use_peer_surface_body,
+    );
+}
+
+async fn peer_events_query_and_frontier_use_peer_surface_body() {
     let state = soland_test_support::app_state(test_config());
     seed_peer_read_authorization(&state, PEER_SOURCE_ID, "did:web:alice.example").await;
     let mut event = signed_event_envelope(
@@ -379,8 +393,15 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
     );
 }
 
-#[tokio::test]
-async fn peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason() {
+#[test]
+fn peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason() {
+    run_on_deep_stack(
+        "peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason",
+        peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason_body,
+    );
+}
+
+async fn peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason_body() {
     // encoding.md §8.3 closed set on the federation read path
     // (`ak.peer.events.read.scan`): an `ak:cursor:`-prefixed token that fails
     // base64url/JSON/schema decoding MUST return top-level `param_invalid`
@@ -413,8 +434,15 @@ async fn peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason()
     );
 }
 
-#[tokio::test]
-async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
+#[test]
+fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
+    run_on_deep_stack(
+        "peer_events_submit_quarantines_actor_seq_sibling_overflow",
+        peer_events_submit_quarantines_actor_seq_sibling_overflow_body,
+    );
+}
+
+async fn peer_events_submit_quarantines_actor_seq_sibling_overflow_body() {
     let state = soland_test_support::app_state(test_config());
     seed_peer_delivery_binding(&state).await;
     let now = Utc::now();
@@ -474,8 +502,15 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
     );
 }
 
-#[tokio::test]
-async fn peer_events_submit_verifies_digest_against_the_received_wire_body() {
+#[test]
+fn peer_events_submit_verifies_digest_against_the_received_wire_body() {
+    run_on_deep_stack(
+        "peer_events_submit_verifies_digest_against_the_received_wire_body",
+        peer_events_submit_verifies_digest_against_the_received_wire_body_body,
+    );
+}
+
+async fn peer_events_submit_verifies_digest_against_the_received_wire_body_body() {
     let state = soland_test_support::app_state(test_config());
     seed_peer_delivery_binding(&state).await;
     let event = signed_event_after_current_alice_frontier(
@@ -515,8 +550,15 @@ async fn peer_events_submit_verifies_digest_against_the_received_wire_body() {
     );
 }
 
-#[tokio::test]
-async fn peer_events_submit_accepts_online_event_without_offline_evidence() {
+#[test]
+fn peer_events_submit_accepts_online_event_without_offline_evidence() {
+    run_on_deep_stack(
+        "peer_events_submit_accepts_online_event_without_offline_evidence",
+        peer_events_submit_accepts_online_event_without_offline_evidence_body,
+    );
+}
+
+async fn peer_events_submit_accepts_online_event_without_offline_evidence_body() {
     let state = soland_test_support::app_state(test_config());
     seed_peer_delivery_binding(&state).await;
     let event = signed_event_after_current_alice_frontier(
@@ -553,8 +595,15 @@ async fn peer_events_submit_accepts_online_event_without_offline_evidence() {
     assert_eq!(outcome["accepted"][0], event["event_id"]);
 }
 
-#[tokio::test]
-async fn peer_events_frontier_exposes_current_sibling_heads() {
+#[test]
+fn peer_events_frontier_exposes_current_sibling_heads() {
+    run_on_deep_stack(
+        "peer_events_frontier_exposes_current_sibling_heads",
+        peer_events_frontier_exposes_current_sibling_heads_body,
+    );
+}
+
+async fn peer_events_frontier_exposes_current_sibling_heads_body() {
     let state = soland_test_support::app_state(test_config());
     seed_peer_read_authorization(&state, PEER_SOURCE_ID, "did:web:alice.example").await;
     let now = Utc::now();
@@ -606,8 +655,15 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
 /// the authenticated source service authority. An actor hosted elsewhere and
 /// not known as a member of the binding Realm is rejected before any session
 /// is constructed.
-#[tokio::test]
-async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
+#[test]
+fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
+    run_on_deep_stack(
+        "peer_events_submit_rejects_actor_outside_source_trust_domain",
+        peer_events_submit_rejects_actor_outside_source_trust_domain_body,
+    );
+}
+
+async fn peer_events_submit_rejects_actor_outside_source_trust_domain_body() {
     let state = soland_test_support::app_state(test_config());
     seed_peer_delivery_binding(&state).await;
     let mut event = signed_event_envelope(
@@ -653,8 +709,15 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
 /// SOL-02-007 — counterpart positive path: a known member of the binding
 /// Realm may be relayed by a foreign source domain (identity is still
 /// re-verified by the downstream proof chain).
-#[tokio::test]
-async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
+#[test]
+fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
+    run_on_deep_stack(
+        "peer_events_submit_accepts_known_member_relayed_by_foreign_domain",
+        peer_events_submit_accepts_known_member_relayed_by_foreign_domain_body,
+    );
+}
+
+async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain_body() {
     let state = soland_test_support::app_state(test_config());
     seed_peer_delivery_binding(&state).await;
     // encryption-and-audit.md §2: this fixture submits plaintext, so the
@@ -691,8 +754,15 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
     assert_eq!(outcome["status"], "accepted", "{outcome:?}");
 }
 
-#[tokio::test]
-async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration() {
+#[test]
+fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration() {
+    run_on_deep_stack(
+        "peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration",
+        peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration_body,
+    );
+}
+
+async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration_body() {
     let state = soland_test_support::app_state(test_config());
     seed_peer_delivery_binding(&state).await;
     let welcome_event_id = "ak:event:AeKCyaUbw70FHlzkWyBOZi9ZQYsRpG1NIAp9Yjv7Tofa";
@@ -729,8 +799,15 @@ async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration
     );
 }
 
-#[tokio::test]
-async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() {
+#[test]
+fn peer_events_query_clips_circle_event_outside_source_did_member_scope() {
+    run_on_deep_stack(
+        "peer_events_query_clips_circle_event_outside_source_did_member_scope",
+        peer_events_query_clips_circle_event_outside_source_did_member_scope_body,
+    );
+}
+
+async fn peer_events_query_clips_circle_event_outside_source_did_member_scope_body() {
     let state = soland_test_support::app_state(test_config());
     seed_peer_read_authorization(&state, PEER_SOURCE_ID, "did:web:bob.example").await;
     install_test_circle(&state, TEST_CIRCLE_ID, &["did:web:alice.example"]);
@@ -833,8 +910,15 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     );
 }
 
-#[tokio::test]
-async fn self_events_reject_federation_wire() {
+#[test]
+fn self_events_reject_federation_wire() {
+    run_on_deep_stack(
+        "self_events_reject_federation_wire",
+        self_events_reject_federation_wire_body,
+    );
+}
+
+async fn self_events_reject_federation_wire_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let event = signed_event_envelope(

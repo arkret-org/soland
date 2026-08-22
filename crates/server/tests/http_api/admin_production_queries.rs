@@ -16,8 +16,15 @@ fn assert_no_production_gap(body: &Value) {
     );
 }
 
-#[tokio::test]
-async fn admin_actors_query_returns_typed_rows_and_walks_cursor() {
+#[test]
+fn admin_actors_query_returns_typed_rows_and_walks_cursor() {
+    run_on_deep_stack(
+        "admin_actors_query_returns_typed_rows_and_walks_cursor",
+        admin_actors_query_returns_typed_rows_and_walks_cursor_body,
+    );
+}
+
+async fn admin_actors_query_returns_typed_rows_and_walks_cursor_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let _bob = register_account(
@@ -86,8 +93,15 @@ async fn admin_actors_query_returns_typed_rows_and_walks_cursor() {
     );
 }
 
-#[tokio::test]
-async fn admin_actors_query_applies_and_echoes_filters() {
+#[test]
+fn admin_actors_query_applies_and_echoes_filters() {
+    run_on_deep_stack(
+        "admin_actors_query_applies_and_echoes_filters",
+        admin_actors_query_applies_and_echoes_filters_body,
+    );
+}
+
+async fn admin_actors_query_applies_and_echoes_filters_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let _bob = register_account(
@@ -125,8 +139,15 @@ async fn admin_actors_query_applies_and_echoes_filters() {
     assert_eq!(response.status_code, Some(StatusCode::BAD_REQUEST));
 }
 
-#[tokio::test]
-async fn admin_actors_query_rejects_expired_cursor_with_gone() {
+#[test]
+fn admin_actors_query_rejects_expired_cursor_with_gone() {
+    run_on_deep_stack(
+        "admin_actors_query_rejects_expired_cursor_with_gone",
+        admin_actors_query_rejects_expired_cursor_with_gone_body,
+    );
+}
+
+async fn admin_actors_query_rejects_expired_cursor_with_gone_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
@@ -142,8 +163,15 @@ async fn admin_actors_query_rejects_expired_cursor_with_gone() {
     );
 }
 
-#[tokio::test]
-async fn admin_queries_require_authentication() {
+#[test]
+fn admin_queries_require_authentication() {
+    run_on_deep_stack(
+        "admin_queries_require_authentication",
+        admin_queries_require_authentication_body,
+    );
+}
+
+async fn admin_queries_require_authentication_body() {
     let state = soland_test_support::app_state(test_config());
     for resource in ["actors", "audit", "capabilities", "devices"] {
         let response = TestClient::get(format!("http://server/_soland/admin/{resource}"))
@@ -157,8 +185,15 @@ async fn admin_queries_require_authentication() {
     }
 }
 
-#[tokio::test]
-async fn admin_audit_query_is_typed_newest_first_and_filterable() {
+#[test]
+fn admin_audit_query_is_typed_newest_first_and_filterable() {
+    run_on_deep_stack(
+        "admin_audit_query_is_typed_newest_first_and_filterable",
+        admin_audit_query_is_typed_newest_first_and_filterable_body,
+    );
+}
+
+async fn admin_audit_query_is_typed_newest_first_and_filterable_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
@@ -211,8 +246,15 @@ async fn admin_audit_query_is_typed_newest_first_and_filterable() {
     assert_eq!(response.status_code, Some(StatusCode::BAD_REQUEST));
 }
 
-#[tokio::test]
-async fn admin_capabilities_query_reports_tombstones_and_validates_state_filter() {
+#[test]
+fn admin_capabilities_query_reports_tombstones_and_validates_state_filter() {
+    run_on_deep_stack(
+        "admin_capabilities_query_reports_tombstones_and_validates_state_filter",
+        admin_capabilities_query_reports_tombstones_and_validates_state_filter_body,
+    );
+}
+
+async fn admin_capabilities_query_reports_tombstones_and_validates_state_filter_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
@@ -239,8 +281,15 @@ async fn admin_capabilities_query_reports_tombstones_and_validates_state_filter(
     );
 }
 
-#[tokio::test]
-async fn admin_devices_query_filters_by_name_or_id() {
+#[test]
+fn admin_devices_query_filters_by_name_or_id() {
+    run_on_deep_stack(
+        "admin_devices_query_filters_by_name_or_id",
+        admin_devices_query_filters_by_name_or_id_body,
+    );
+}
+
+async fn admin_devices_query_filters_by_name_or_id_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let _bob = register_account(
@@ -279,8 +328,15 @@ async fn admin_devices_query_filters_by_name_or_id() {
     assert!(devices[0]["created_at"].as_str().is_some());
 }
 
-#[tokio::test]
-async fn admin_collection_no_longer_serves_migrated_resources() {
+#[test]
+fn admin_collection_no_longer_serves_migrated_resources() {
+    run_on_deep_stack(
+        "admin_collection_no_longer_serves_migrated_resources",
+        admin_collection_no_longer_serves_migrated_resources_body,
+    );
+}
+
+async fn admin_collection_no_longer_serves_migrated_resources_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 

@@ -5,8 +5,15 @@ use super::common::*;
 /// artifact. Typed JSON routes are annotated `#[endpoint]`; the remaining
 /// transport-specialized handlers are intentionally outside the ordinary
 /// generated operation surface.
-#[tokio::test]
-async fn served_openapi_is_generated_from_the_router() {
+#[test]
+fn served_openapi_is_generated_from_the_router() {
+    run_on_deep_stack(
+        "served_openapi_is_generated_from_the_router",
+        served_openapi_is_generated_from_the_router_body,
+    );
+}
+
+async fn served_openapi_is_generated_from_the_router_body() {
     let spec: Value = TestClient::get("http://server/.well-known/arkret/openapi.json")
         .send(&app())
         .await
@@ -34,8 +41,15 @@ async fn served_openapi_is_generated_from_the_router() {
     assert_component_refs_resolve(&spec, &spec);
 }
 
-#[tokio::test]
-async fn served_openapi_yaml_renders() {
+#[test]
+fn served_openapi_yaml_renders() {
+    run_on_deep_stack(
+        "served_openapi_yaml_renders",
+        served_openapi_yaml_renders_body,
+    );
+}
+
+async fn served_openapi_yaml_renders_body() {
     let response = TestClient::get("http://server/.well-known/arkret/openapi.yaml")
         .send(&app())
         .await;
@@ -172,8 +186,15 @@ fn operation_ids(root: &Value) -> Vec<&str> {
 /// A path that exists only in the canonical spec artifact (never registered as
 /// a live route) must be treated as unknown by the 404/405 disambiguator,
 /// which is now driven by the router walk rather than the OpenAPI document.
-#[tokio::test]
-async fn artifact_only_path_is_not_treated_as_a_registered_route() {
+#[test]
+fn artifact_only_path_is_not_treated_as_a_registered_route() {
+    run_on_deep_stack(
+        "artifact_only_path_is_not_treated_as_a_registered_route",
+        artifact_only_path_is_not_treated_as_a_registered_route_body,
+    );
+}
+
+async fn artifact_only_path_is_not_treated_as_a_registered_route_body() {
     let response: Value = TestClient::post("http://server/_arkret/gate/account/session-grants")
         .send(&app())
         .await

@@ -10,8 +10,15 @@ fn registration_secret_digest(value: &str) -> arkret_identifiers::Hash {
     arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(value.as_bytes())).unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn external_bearer_without_dpop_is_rejected() {
+#[test]
+fn external_bearer_without_dpop_is_rejected() {
+    run_on_deep_stack_multi_thread(
+        "external_bearer_without_dpop_is_rejected",
+        external_bearer_without_dpop_is_rejected_body,
+    );
+}
+
+async fn external_bearer_without_dpop_is_rejected_body() {
     let state = soland_test_support::app_state(test_config());
 
     let mut response = TestClient::get("http://server/_arkret/self/account/viewer")
@@ -25,8 +32,15 @@ async fn external_bearer_without_dpop_is_rejected() {
     assert_eq!(body["error"]["code"], "unauthenticated");
 }
 
-#[tokio::test]
-async fn account_register_requires_account_authority_bearer() {
+#[test]
+fn account_register_requires_account_authority_bearer() {
+    run_on_deep_stack(
+        "account_register_requires_account_authority_bearer",
+        account_register_requires_account_authority_bearer_body,
+    );
+}
+
+async fn account_register_requires_account_authority_bearer_body() {
     let state = soland_test_support::app_state(test_config());
 
     let mut response = TestClient::post("http://server/_arkret/gate/account/register")
@@ -42,8 +56,15 @@ async fn account_register_requires_account_authority_bearer() {
     assert_eq!(body["error"]["code"], "unauthenticated");
 }
 
-#[tokio::test]
-async fn account_registration_policy_rejects_closed_and_audits() {
+#[test]
+fn account_registration_policy_rejects_closed_and_audits() {
+    run_on_deep_stack(
+        "account_registration_policy_rejects_closed_and_audits",
+        account_registration_policy_rejects_closed_and_audits_body,
+    );
+}
+
+async fn account_registration_policy_rejects_closed_and_audits_body() {
     let state = soland_test_support::app_state(test_config());
     {
         let mut policy = state.test_account_registration_policy().lock();
@@ -85,8 +106,15 @@ async fn account_registration_policy_rejects_closed_and_audits() {
     );
 }
 
-#[tokio::test]
-async fn account_registration_policy_and_closed_projection_wire_are_enforced() {
+#[test]
+fn account_registration_policy_and_closed_projection_wire_are_enforced() {
+    run_on_deep_stack(
+        "account_registration_policy_and_closed_projection_wire_are_enforced",
+        account_registration_policy_and_closed_projection_wire_are_enforced_body,
+    );
+}
+
+async fn account_registration_policy_and_closed_projection_wire_are_enforced_body() {
     let state = soland_test_support::app_state(test_config());
     {
         let mut policy = state.test_account_registration_policy().lock();
@@ -191,8 +219,15 @@ async fn account_registration_policy_and_closed_projection_wire_are_enforced() {
     assert_eq!(limited["error"]["details"]["reason_detail"], "rate_limited");
 }
 
-#[tokio::test]
-async fn dev_login_is_unavailable_in_production_mode() {
+#[test]
+fn dev_login_is_unavailable_in_production_mode() {
+    run_on_deep_stack(
+        "dev_login_is_unavailable_in_production_mode",
+        dev_login_is_unavailable_in_production_mode_body,
+    );
+}
+
+async fn dev_login_is_unavailable_in_production_mode_body() {
     let mut config = test_config();
     config.development_mode = false;
     let state = soland_test_support::app_state(config);
@@ -208,8 +243,15 @@ async fn dev_login_is_unavailable_in_production_mode() {
     assert_eq!(response.status_code.unwrap(), StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
-async fn oversized_json_body_is_rejected_before_handler() {
+#[test]
+fn oversized_json_body_is_rejected_before_handler() {
+    run_on_deep_stack(
+        "oversized_json_body_is_rejected_before_handler",
+        oversized_json_body_is_rejected_before_handler_body,
+    );
+}
+
+async fn oversized_json_body_is_rejected_before_handler_body() {
     let state = soland_test_support::app_state(test_config());
     let body = serde_json::json!({
         "query": "x".repeat(128),
@@ -224,8 +266,15 @@ async fn oversized_json_body_is_rejected_before_handler() {
     assert_eq!(response.status_code.unwrap(), StatusCode::PAYLOAD_TOO_LARGE);
 }
 
-#[tokio::test]
-async fn rate_limit_errors_use_standard_envelope_with_retry_after() {
+#[test]
+fn rate_limit_errors_use_standard_envelope_with_retry_after() {
+    run_on_deep_stack(
+        "rate_limit_errors_use_standard_envelope_with_retry_after",
+        rate_limit_errors_use_standard_envelope_with_retry_after_body,
+    );
+}
+
+async fn rate_limit_errors_use_standard_envelope_with_retry_after_body() {
     let state = soland_test_support::app_state(test_config());
     let limited_service = service_with_rate_limiter_config(
         state,
@@ -268,8 +317,15 @@ async fn rate_limit_errors_use_standard_envelope_with_retry_after() {
     );
 }
 
-#[tokio::test]
-async fn framework_errors_use_arkret_error_envelope() {
+#[test]
+fn framework_errors_use_arkret_error_envelope() {
+    run_on_deep_stack(
+        "framework_errors_use_arkret_error_envelope",
+        framework_errors_use_arkret_error_envelope_body,
+    );
+}
+
+async fn framework_errors_use_arkret_error_envelope_body() {
     let not_found: Value = TestClient::get("http://server/_arkret/self/missing")
         .send(&app())
         .await
@@ -289,8 +345,15 @@ async fn framework_errors_use_arkret_error_envelope() {
     assert_eq!(method_not_allowed["error"]["code"], "method_not_allowed");
 }
 
-#[tokio::test]
-async fn protected_endpoints_reject_query_auth_material() {
+#[test]
+fn protected_endpoints_reject_query_auth_material() {
+    run_on_deep_stack(
+        "protected_endpoints_reject_query_auth_material",
+        protected_endpoints_reject_query_auth_material_body,
+    );
+}
+
+async fn protected_endpoints_reject_query_auth_material_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let mut response = TestClient::get(format!(
@@ -309,8 +372,15 @@ async fn protected_endpoints_reject_query_auth_material() {
     );
 }
 
-#[tokio::test]
-async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() {
+#[test]
+fn hard_logout_removes_push_registration_and_to_device_queue_for_device() {
+    run_on_deep_stack(
+        "hard_logout_removes_push_registration_and_to_device_queue_for_device",
+        hard_logout_removes_push_registration_and_to_device_queue_for_device_body,
+    );
+}
+
+async fn hard_logout_removes_push_registration_and_to_device_queue_for_device_body() {
     let state = soland_test_support::app_state(test_config());
     let actor_full_id = "did:web:alice.example";
     let actor = "ak:did_core:web:alice.example";
@@ -486,8 +556,15 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
     }
 }
 
-#[tokio::test]
-async fn postgres_startup_migrations_are_gated_by_database_url() {
+#[test]
+fn postgres_startup_migrations_are_gated_by_database_url() {
+    run_on_deep_stack(
+        "postgres_startup_migrations_are_gated_by_database_url",
+        postgres_startup_migrations_are_gated_by_database_url_body,
+    );
+}
+
+async fn postgres_startup_migrations_are_gated_by_database_url_body() {
     if std::env::var("DATABASE_URL")
         .ok()
         .filter(|url| !url.trim().is_empty())

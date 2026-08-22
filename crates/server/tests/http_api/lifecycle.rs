@@ -4,8 +4,15 @@
 
 use super::common::*;
 
-#[tokio::test]
-async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transitions() {
+#[test]
+fn space_container_lifecycle_state_machine_returns_412_for_illegal_transitions() {
+    run_on_deep_stack(
+        "space_container_lifecycle_state_machine_returns_412_for_illegal_transitions",
+        space_container_lifecycle_state_machine_returns_412_for_illegal_transitions_body,
+    );
+}
+
+async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transitions_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     // Every fixture DataEvent below names the demo Realm's basis Seal in
@@ -164,8 +171,15 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
     assert_eq!(body["error"]["code"], "space_not_archived");
 }
 
-#[tokio::test]
-async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transitions() {
+#[test]
+fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transitions() {
+    run_on_deep_stack(
+        "strand_morph_lifecycle_state_machine_returns_412_for_illegal_transitions",
+        strand_morph_lifecycle_state_machine_returns_412_for_illegal_transitions_body,
+    );
+}
+
+async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transitions_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     // Every fixture DataEvent below names the demo Realm's basis Seal in
@@ -377,8 +391,15 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
     assert_eq!(body["error"]["code"], "morph_not_active");
 }
 
-#[tokio::test]
-async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persist() {
+#[test]
+fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persist() {
+    run_on_deep_stack(
+        "encrypted_realm_rejects_plaintext_strand_content_before_event_log_persist",
+        encrypted_realm_rejects_plaintext_strand_content_before_event_log_persist_body,
+    );
+}
+
+async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persist_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     // Every fixture DataEvent below names the demo Realm's basis Seal in
@@ -497,8 +518,15 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
     );
 }
 
-#[tokio::test]
-async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
+#[test]
+fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
+    run_on_deep_stack(
+        "strand_update_status_fsm_rejects_skipped_terminal_transitions",
+        strand_update_status_fsm_rejects_skipped_terminal_transitions_body,
+    );
+}
+
+async fn strand_update_status_fsm_rejects_skipped_terminal_transitions_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     // Every fixture DataEvent below names the demo Realm's basis Seal in
@@ -685,8 +713,15 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
     );
 }
 
-#[tokio::test]
-async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal_repeat() {
+#[test]
+fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal_repeat() {
+    run_on_deep_stack(
+        "redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal_repeat",
+        redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal_repeat_body,
+    );
+}
+
+async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal_repeat_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     // Every fixture DataEvent below names the demo Realm's basis Seal in
@@ -841,8 +876,15 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
     assert_eq!(body["error"]["code"], "morph_already_terminal");
 }
 
-#[tokio::test]
-async fn strand_tracks_update_rejected_when_parent_strand_archived() {
+#[test]
+fn strand_tracks_update_rejected_when_parent_strand_archived() {
+    run_on_deep_stack(
+        "strand_tracks_update_rejected_when_parent_strand_archived",
+        strand_tracks_update_rejected_when_parent_strand_archived_body,
+    );
+}
+
+async fn strand_tracks_update_rejected_when_parent_strand_archived_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     // Every fixture DataEvent below names the demo Realm's basis Seal in

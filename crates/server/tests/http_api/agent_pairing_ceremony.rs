@@ -42,18 +42,10 @@ fn ceremony_requested_scope() -> Value {
 // Windows. Run the body on a dedicated thread with headroom instead.
 #[test]
 fn public_pairing_ceremony_activates_the_agent_runtime() {
-    std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("build the pairing ceremony test runtime")
-                .block_on(public_pairing_ceremony_activates_the_agent_runtime_body())
-        })
-        .expect("spawn the pairing ceremony test thread")
-        .join()
-        .expect("pairing ceremony test thread panicked");
+    run_on_deep_stack(
+        "public_pairing_ceremony_activates_the_agent_runtime",
+        public_pairing_ceremony_activates_the_agent_runtime_body,
+    );
 }
 
 async fn public_pairing_ceremony_activates_the_agent_runtime_body() {

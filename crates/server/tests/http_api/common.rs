@@ -2855,3 +2855,86 @@ fn projected_operation_id(event_id: &str) -> String {
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     format!("ak:operation:{}", uuid::Uuid::from_bytes(bytes))
 }
+
+/// The Event admission state machine's debug-codegen stack frame exceeds the
+/// default 2 MiB libtest thread stack on Windows, so any test that drives it
+/// overflows and aborts the whole binary before libtest can print a
+/// `test result:` line.
+///
+/// `RUST_MIN_STACK` is not a fix: `work/done/2026-08-17-1805` forbids pinning
+/// it in `.cargo/config.toml` or CI, and an environment variable that every
+/// caller must remember is not a property of the test. The affected tests run
+/// their body on a dedicated thread with headroom instead.
+pub(crate) const DEEP_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+/// Run one async test body on a [`DEEP_STACK_BYTES`] thread with a
+/// current-thread Tokio runtime.
+pub(crate) fn run_on_deep_stack<F>(name: &'static str, body: impl FnOnce() -> F + Send + 'static)
+where
+    F: Future<Output = ()>,
+{
+    run_on_deep_stack_with(name, RuntimeFlavor::CurrentThread, body);
+}
+
+/// [`run_on_deep_stack`] for a test that needs
+/// `#[tokio::test(flavor = "multi_thread")]` semantics.
+pub(crate) fn run_on_deep_stack_multi_thread<F>(
+    name: &'static str,
+    body: impl FnOnce() -> F + Send + 'static,
+) where
+    F: Future<Output = ()>,
+{
+    run_on_deep_stack_with(name, RuntimeFlavor::MultiThread, body);
+}
+
+#[derive(Clone, Copy)]
+enum RuntimeFlavor {
+    CurrentThread,
+    CurrentThreadPaused,
+    MultiThread,
+}
+
+/// [`run_on_deep_stack`] for a test that needs `#[tokio::test(start_paused = true)]`
+/// semantics.
+pub(crate) fn run_on_deep_stack_paused<F>(
+    name: &'static str,
+    body: impl FnOnce() -> F + Send + 'static,
+) where
+    F: Future<Output = ()>,
+{
+    run_on_deep_stack_with(name, RuntimeFlavor::CurrentThreadPaused, body);
+}
+
+fn run_on_deep_stack_with<F>(
+    name: &'static str,
+    flavor: RuntimeFlavor,
+    body: impl FnOnce() -> F + Send + 'static,
+) where
+    F: Future<Output = ()>,
+{
+    let joined = std::thread::Builder::new()
+        .stack_size(DEEP_STACK_BYTES)
+        .spawn(move || {
+            let mut builder = match flavor {
+                RuntimeFlavor::MultiThread => tokio::runtime::Builder::new_multi_thread(),
+                RuntimeFlavor::CurrentThread | RuntimeFlavor::CurrentThreadPaused => {
+                    tokio::runtime::Builder::new_current_thread()
+                }
+            };
+            builder.enable_all();
+            if matches!(flavor, RuntimeFlavor::CurrentThreadPaused) {
+                builder.start_paused(true);
+            }
+            builder
+                .build()
+                .unwrap_or_else(|error| panic!("build the {name} test runtime: {error}"))
+                .block_on(body());
+        })
+        .unwrap_or_else(|error| panic!("spawn the {name} test thread: {error}"))
+        .join();
+    // Re-raise the original payload so the assertion message libtest reports is
+    // the one the test body produced, not a generic "thread panicked".
+    if let Err(payload) = joined {
+        std::panic::resume_unwind(payload);
+    }
+}

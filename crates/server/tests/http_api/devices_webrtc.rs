@@ -209,8 +209,15 @@ async fn post_account_device_pair(
     (status, body)
 }
 
-#[tokio::test]
-async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
+#[test]
+fn account_device_pair_registers_sibling_via_canonical_gate_route() {
+    run_on_deep_stack(
+        "account_device_pair_registers_sibling_via_canonical_gate_route",
+        account_device_pair_registers_sibling_via_canonical_gate_route_body,
+    );
+}
+
+async fn account_device_pair_registers_sibling_via_canonical_gate_route_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let predecessor = project_test_authorized_device(
@@ -259,8 +266,15 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
     assert_eq!(paired_device.verification_state, "verified");
 }
 
-#[tokio::test]
-async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
+#[test]
+fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
+    run_on_deep_stack(
+        "account_device_pair_rejects_untrusted_authorizers_and_bad_proofs",
+        account_device_pair_rejects_untrusted_authorizers_and_bad_proofs_body,
+    );
+}
+
+async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs_body() {
     let state = soland_test_support::app_state(test_config());
     let actor = "did:web:alice.example";
     let trusted_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -336,8 +350,16 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
     assert_eq!(paired.verification_state, "verified");
 }
 
-#[tokio::test]
-async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authorizes_new_device() {
+#[test]
+fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authorizes_new_device() {
+    run_on_deep_stack(
+        "to_device_pairing_request_reaches_existing_device_and_gate_pair_authorizes_new_device",
+        to_device_pairing_request_reaches_existing_device_and_gate_pair_authorizes_new_device_body,
+    );
+}
+
+async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authorizes_new_device_body()
+ {
     let state = soland_test_support::app_state(test_config());
     let actor = "did:web:alice.example";
     let existing_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -467,8 +489,15 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
     assert!(after.updated_at >= before.updated_at);
 }
 
-#[tokio::test]
-async fn to_device_capacity_eviction_sets_lost_watermark() {
+#[test]
+fn to_device_capacity_eviction_sets_lost_watermark() {
+    run_on_deep_stack(
+        "to_device_capacity_eviction_sets_lost_watermark",
+        to_device_capacity_eviction_sets_lost_watermark_body,
+    );
+}
+
+async fn to_device_capacity_eviction_sets_lost_watermark_body() {
     let mut config = test_config();
     config.to_device_queue_capacity = 2;
     let state = soland_test_support::app_state(config);
@@ -535,8 +564,15 @@ async fn to_device_capacity_eviction_sets_lost_watermark() {
     assert_eq!(subscribe_messages[1]["content"]["seq"], 3);
 }
 
-#[tokio::test]
-async fn protocol_device_surface_excludes_pairing_request_scaffold() {
+#[test]
+fn protocol_device_surface_excludes_pairing_request_scaffold() {
+    run_on_deep_stack(
+        "protocol_device_surface_excludes_pairing_request_scaffold",
+        protocol_device_surface_excludes_pairing_request_scaffold_body,
+    );
+}
+
+async fn protocol_device_surface_excludes_pairing_request_scaffold_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
@@ -589,8 +625,15 @@ async fn protocol_device_surface_excludes_pairing_request_scaffold() {
     assert_eq!(soland_authorize.status_code, Some(StatusCode::NOT_FOUND));
 }
 
-#[tokio::test]
-async fn rtc_media_token_uses_projected_media_service_epoch() {
+#[test]
+fn rtc_media_token_uses_projected_media_service_epoch() {
+    run_on_deep_stack(
+        "rtc_media_token_uses_projected_media_service_epoch",
+        rtc_media_token_uses_projected_media_service_epoch_body,
+    );
+}
+
+async fn rtc_media_token_uses_projected_media_service_epoch_body() {
     let state = soland_test_support::app_state(test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
@@ -771,8 +814,15 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
 /// `ak.call.state` event); authorization is purely realm membership +
 /// `ak.call.join`. This is the case the old `participants.contains` /
 /// session-not-found gate broke (it 404'd every real inkson call).
-#[tokio::test]
-async fn rtc_media_token_inkson_flow_no_session_issues_token() {
+#[test]
+fn rtc_media_token_inkson_flow_no_session_issues_token() {
+    run_on_deep_stack(
+        "rtc_media_token_inkson_flow_no_session_issues_token",
+        rtc_media_token_inkson_flow_no_session_issues_token_body,
+    );
+}
+
+async fn rtc_media_token_inkson_flow_no_session_issues_token_body() {
     let state = soland_test_support::app_state(livekit_test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     // Use a non-owner member so the pre-grant assertion actually isolates
@@ -845,8 +895,15 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
     );
 }
 
-#[tokio::test]
-async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
+#[test]
+fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
+    run_on_deep_stack(
+        "rtc_media_token_rejects_epoch_and_focus_mismatches",
+        rtc_media_token_rejects_epoch_and_focus_mismatches_body,
+    );
+}
+
+async fn rtc_media_token_rejects_epoch_and_focus_mismatches_body() {
     let state = soland_test_support::app_state(test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
@@ -913,8 +970,15 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     );
 }
 
-#[tokio::test]
-async fn rtc_media_token_rejects_non_member_actor() {
+#[test]
+fn rtc_media_token_rejects_non_member_actor() {
+    run_on_deep_stack(
+        "rtc_media_token_rejects_non_member_actor",
+        rtc_media_token_rejects_non_member_actor_body,
+    );
+}
+
+async fn rtc_media_token_rejects_non_member_actor_body() {
     let state = soland_test_support::app_state(test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     let _token = dev_token(state.clone()).await;
@@ -944,8 +1008,15 @@ async fn rtc_media_token_rejects_non_member_actor() {
     assert_eq!(body["error"]["code"], "capability_denied");
 }
 
-#[tokio::test]
-async fn rtc_media_token_requires_call_join_capability() {
+#[test]
+fn rtc_media_token_requires_call_join_capability() {
+    run_on_deep_stack(
+        "rtc_media_token_requires_call_join_capability",
+        rtc_media_token_requires_call_join_capability_body,
+    );
+}
+
+async fn rtc_media_token_requires_call_join_capability_body() {
     // `media-service-binding.md` §6 — a realm member + call participant that
     // does NOT hold ak.call.join is denied; granting the capability lets the
     // exchange proceed.
@@ -1054,8 +1125,15 @@ fn verify_livekit_jwt(token: &str, api_secret: &[u8]) -> Value {
     .expect("jwt payload json")
 }
 
-#[tokio::test]
-async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
+#[test]
+fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
+    run_on_deep_stack(
+        "rtc_media_token_livekit_backend_token_carries_livekit_claims",
+        rtc_media_token_livekit_backend_token_carries_livekit_claims_body,
+    );
+}
+
+async fn rtc_media_token_livekit_backend_token_carries_livekit_claims_body() {
     let state = soland_test_support::app_state(livekit_test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
@@ -1141,8 +1219,15 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     );
 }
 
-#[tokio::test]
-async fn admin_realm_media_service_renders_projected_cell() {
+#[test]
+fn admin_realm_media_service_renders_projected_cell() {
+    run_on_deep_stack(
+        "admin_realm_media_service_renders_projected_cell",
+        admin_realm_media_service_renders_projected_cell_body,
+    );
+}
+
+async fn admin_realm_media_service_renders_projected_cell_body() {
     let state = soland_test_support::app_state(test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
@@ -1189,8 +1274,15 @@ async fn admin_realm_media_service_renders_projected_cell() {
     assert!(empty.get("foci").is_none() || empty["foci"].as_array().unwrap().is_empty());
 }
 
-#[tokio::test]
-async fn webrtc_ban_blocks_removed_participant_token_reissue() {
+#[test]
+fn webrtc_ban_blocks_removed_participant_token_reissue() {
+    run_on_deep_stack(
+        "webrtc_ban_blocks_removed_participant_token_reissue",
+        webrtc_ban_blocks_removed_participant_token_reissue_body,
+    );
+}
+
+async fn webrtc_ban_blocks_removed_participant_token_reissue_body() {
     let state = soland_test_support::app_state(livekit_test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     let _alice_token = dev_token(state.clone()).await;
@@ -1461,8 +1553,15 @@ const WEBRTC_BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b000000001"
 /// member's device verbatim — so that receiver can verify `proof` over the exact
 /// canonical bytes the sender signed — and the originating device never gets its
 /// own frame echoed back.
-#[tokio::test]
-async fn call_signal_relays_to_other_realm_member_and_filters_self_device() {
+#[test]
+fn call_signal_relays_to_other_realm_member_and_filters_self_device() {
+    run_on_deep_stack(
+        "call_signal_relays_to_other_realm_member_and_filters_self_device",
+        call_signal_relays_to_other_realm_member_and_filters_self_device_body,
+    );
+}
+
+async fn call_signal_relays_to_other_realm_member_and_filters_self_device_body() {
     let state = soland_test_support::app_state(test_config());
     add_test_realm_member(&state, demo_realm_id(), WEBRTC_BOB);
     let (alice_token, alice_key) =
@@ -1513,8 +1612,15 @@ async fn call_signal_relays_to_other_realm_member_and_filters_self_device() {
 /// Restates `ephemeral_call_signal_reaches_same_actor_other_device`:
 /// `webrtc-signaling.md` §7 multi-device fan-out. Only the originating device is
 /// suppressed, so a sibling device of the same actor still rings.
-#[tokio::test]
-async fn call_signal_reaches_same_actor_other_device() {
+#[test]
+fn call_signal_reaches_same_actor_other_device() {
+    run_on_deep_stack(
+        "call_signal_reaches_same_actor_other_device",
+        call_signal_reaches_same_actor_other_device_body,
+    );
+}
+
+async fn call_signal_reaches_same_actor_other_device_body() {
     let state = soland_test_support::app_state(test_config());
     let device_b = "ak:device:01904100-0000-7000-8000-a11ce0000002";
     let (token_a, key_a) =
@@ -1559,8 +1665,15 @@ async fn call_signal_reaches_same_actor_other_device() {
 /// record is appended directly because an already-expired envelope can no longer
 /// be admitted through the endpoint at all — which is itself the stronger half
 /// of the rule.
-#[tokio::test]
-async fn call_signal_not_delivered_after_ttl_expiry() {
+#[test]
+fn call_signal_not_delivered_after_ttl_expiry() {
+    run_on_deep_stack(
+        "call_signal_not_delivered_after_ttl_expiry",
+        call_signal_not_delivered_after_ttl_expiry_body,
+    );
+}
+
+async fn call_signal_not_delivered_after_ttl_expiry_body() {
     let state = soland_test_support::app_state(test_config());
     add_test_realm_member(&state, demo_realm_id(), WEBRTC_BOB);
     let (alice_token, alice_key) =
@@ -1673,8 +1786,15 @@ async fn call_signal_not_delivered_after_ttl_expiry() {
 /// receiving client, not this endpoint. The send-side denial that does survive
 /// at the ingress is §3(2) eligibility: a non-member of the Realm may not send
 /// into it, and nothing enters the relay.
-#[tokio::test]
-async fn call_signal_from_a_non_member_is_denied_and_never_relayed() {
+#[test]
+fn call_signal_from_a_non_member_is_denied_and_never_relayed() {
+    run_on_deep_stack(
+        "call_signal_from_a_non_member_is_denied_and_never_relayed",
+        call_signal_from_a_non_member_is_denied_and_never_relayed_body,
+    );
+}
+
+async fn call_signal_from_a_non_member_is_denied_and_never_relayed_body() {
     let state = soland_test_support::app_state(test_config());
     // Bob is deliberately not added to the demo Realm.
     let outsider_device = "ak:device:01904100-0000-7000-8000-b0b000000004";
@@ -1716,8 +1836,15 @@ async fn call_signal_from_a_non_member_is_denied_and_never_relayed() {
 /// device is never in its own fanout. The old "a full catchup re-delivers
 /// everything pending" half is gone with the cursor — §4 gives this stream no
 /// `after` token and no catchup mode, so the watermark is the only resume state.
-#[tokio::test]
-async fn call_signal_resubscribe_does_not_redeliver() {
+#[test]
+fn call_signal_resubscribe_does_not_redeliver() {
+    run_on_deep_stack(
+        "call_signal_resubscribe_does_not_redeliver",
+        call_signal_resubscribe_does_not_redeliver_body,
+    );
+}
+
+async fn call_signal_resubscribe_does_not_redeliver_body() {
     let state = soland_test_support::app_state(test_config());
     add_test_realm_member(&state, demo_realm_id(), WEBRTC_BOB);
     let (alice_token, alice_key) =

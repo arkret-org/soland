@@ -48,8 +48,15 @@ async fn submit(state: &AppState, token: &str, event: &Value) -> Value {
         .unwrap()
 }
 
-#[tokio::test]
-async fn rsvp_carrying_a_producer_effect_array_is_rejected() {
+#[test]
+fn rsvp_carrying_a_producer_effect_array_is_rejected() {
+    run_on_deep_stack(
+        "rsvp_carrying_a_producer_effect_array_is_rejected",
+        rsvp_carrying_a_producer_effect_array_is_rejected_body,
+    );
+}
+
+async fn rsvp_carrying_a_producer_effect_array_is_rejected_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     seed_demo_realm_basis(&state).await;
@@ -69,8 +76,15 @@ async fn rsvp_carrying_a_producer_effect_array_is_rejected() {
     );
 }
 
-#[tokio::test]
-async fn rsvp_without_payload_entry_is_rejected() {
+#[test]
+fn rsvp_without_payload_entry_is_rejected() {
+    run_on_deep_stack(
+        "rsvp_without_payload_entry_is_rejected",
+        rsvp_without_payload_entry_is_rejected_body,
+    );
+}
+
+async fn rsvp_without_payload_entry_is_rejected_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     seed_demo_realm_basis(&state).await;
@@ -96,8 +110,15 @@ async fn rsvp_without_payload_entry_is_rejected() {
     );
 }
 
-#[tokio::test]
-async fn rsvp_projects_exactly_the_registered_cell_write() {
+#[test]
+fn rsvp_projects_exactly_the_registered_cell_write() {
+    run_on_deep_stack(
+        "rsvp_projects_exactly_the_registered_cell_write",
+        rsvp_projects_exactly_the_registered_cell_write_body,
+    );
+}
+
+async fn rsvp_projects_exactly_the_registered_cell_write_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     seed_demo_realm_basis(&state).await;

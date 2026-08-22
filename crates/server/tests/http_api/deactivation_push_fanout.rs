@@ -93,8 +93,15 @@ async fn admin_actor_row(state: AppState, admin: &str, did: &str) -> Value {
         .unwrap_or_else(|| panic!("actor {did} missing from admin actors: {actors}"))
 }
 
-#[tokio::test]
-async fn deactivation_notifies_configured_push_gateway_and_clears_partial() {
+#[test]
+fn deactivation_notifies_configured_push_gateway_and_clears_partial() {
+    run_on_deep_stack(
+        "deactivation_notifies_configured_push_gateway_and_clears_partial",
+        deactivation_notifies_configured_push_gateway_and_clears_partial_body,
+    );
+}
+
+async fn deactivation_notifies_configured_push_gateway_and_clears_partial_body() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let requests = spawn_mock_gateway(listener, 1, "completed");
@@ -152,8 +159,15 @@ async fn deactivation_notifies_configured_push_gateway_and_clears_partial() {
     assert_eq!(Worker::new(state.clone()).run_once().await, 0);
 }
 
-#[tokio::test]
-async fn gateway_failure_marks_partial_and_worker_retries_until_ack() {
+#[test]
+fn gateway_failure_marks_partial_and_worker_retries_until_ack() {
+    run_on_deep_stack(
+        "gateway_failure_marks_partial_and_worker_retries_until_ack",
+        gateway_failure_marks_partial_and_worker_retries_until_ack_body,
+    );
+}
+
+async fn gateway_failure_marks_partial_and_worker_retries_until_ack_body() {
     // Reserve a port, then drop the listener so the inline attempt gets a
     // connection error.
     let parked = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -205,8 +219,15 @@ async fn gateway_failure_marks_partial_and_worker_retries_until_ack() {
     assert_eq!(Worker::new(state.clone()).run_once().await, 0);
 }
 
-#[tokio::test]
-async fn partially_completed_ack_keeps_partial_until_retry_completes() {
+#[test]
+fn partially_completed_ack_keeps_partial_until_retry_completes() {
+    run_on_deep_stack(
+        "partially_completed_ack_keeps_partial_until_retry_completes",
+        partially_completed_ack_keeps_partial_until_retry_completes_body,
+    );
+}
+
+async fn partially_completed_ack_keeps_partial_until_retry_completes_body() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     // First answer: partially_completed (gateway bookkeeping incomplete).
@@ -255,8 +276,15 @@ async fn partially_completed_ack_keeps_partial_until_retry_completes() {
     assert!(state.deactivation_push_partial(did.as_str()));
 }
 
-#[tokio::test]
-async fn no_gateway_configured_completes_locally_without_partial() {
+#[test]
+fn no_gateway_configured_completes_locally_without_partial() {
+    run_on_deep_stack(
+        "no_gateway_configured_completes_locally_without_partial",
+        no_gateway_configured_completes_locally_without_partial_body,
+    );
+}
+
+async fn no_gateway_configured_completes_locally_without_partial_body() {
     // Default test config: no `deactivation_push_gateway_url`. The §7.1
     // criterion is conditional on a registered internal channel to a gateway
     // that independently holds delivery state; without one, the local

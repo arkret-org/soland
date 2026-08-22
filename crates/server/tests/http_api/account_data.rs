@@ -8,8 +8,15 @@ fn canonical_request_body<T: serde::Serialize>(value: &T) -> Vec<u8> {
     arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
 }
 
-#[tokio::test]
-async fn account_data_accepts_fresh_principal_control_realm() {
+#[test]
+fn account_data_accepts_fresh_principal_control_realm() {
+    run_on_deep_stack(
+        "account_data_accepts_fresh_principal_control_realm",
+        account_data_accepts_fresh_principal_control_realm_body,
+    );
+}
+
+async fn account_data_accepts_fresh_principal_control_realm_body() {
     const FRESH_DID: &str = "did:web:fresh-avatar.example";
     const FRESH_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000010";
     const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b000000010";
@@ -95,8 +102,15 @@ async fn account_data_accepts_fresh_principal_control_realm() {
     assert_eq!(denied["error"]["code"], "capability_denied", "{denied}");
 }
 
-#[tokio::test]
-async fn encrypted_account_data_realm_remark_round_trip() {
+#[test]
+fn encrypted_account_data_realm_remark_round_trip() {
+    run_on_deep_stack(
+        "encrypted_account_data_realm_remark_round_trip",
+        encrypted_account_data_realm_remark_round_trip_body,
+    );
+}
+
+async fn encrypted_account_data_realm_remark_round_trip_body() {
     const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b000000001";
 
@@ -242,8 +256,15 @@ async fn encrypted_account_data_realm_remark_round_trip() {
     );
 }
 
-#[tokio::test]
-async fn encrypted_account_data_requires_standard_envelope_metadata() {
+#[test]
+fn encrypted_account_data_requires_standard_envelope_metadata() {
+    run_on_deep_stack(
+        "encrypted_account_data_requires_standard_envelope_metadata",
+        encrypted_account_data_requires_standard_envelope_metadata_body,
+    );
+}
+
+async fn encrypted_account_data_requires_standard_envelope_metadata_body() {
     const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
     let state = soland_test_support::app_state(test_config());
@@ -365,8 +386,15 @@ async fn encrypted_account_data_requires_standard_envelope_metadata() {
     assert_eq!(status.as_u16(), 400, "body: {body}");
 }
 
-#[tokio::test]
-async fn encrypted_realm_remark_rejects_plaintext_carrier() {
+#[test]
+fn encrypted_realm_remark_rejects_plaintext_carrier() {
+    run_on_deep_stack(
+        "encrypted_realm_remark_rejects_plaintext_carrier",
+        encrypted_realm_remark_rejects_plaintext_carrier_body,
+    );
+}
+
+async fn encrypted_realm_remark_rejects_plaintext_carrier_body() {
     const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
     let state = soland_test_support::app_state(test_config());
@@ -405,8 +433,15 @@ async fn encrypted_realm_remark_rejects_plaintext_carrier() {
     );
 }
 
-#[tokio::test]
-async fn account_data_requires_auth() {
+#[test]
+fn account_data_requires_auth() {
+    run_on_deep_stack(
+        "account_data_requires_auth",
+        account_data_requires_auth_body,
+    );
+}
+
+async fn account_data_requires_auth_body() {
     let event = signed_actor_private_event_envelope(
         "did:web:alice.example",
         "ak:device:01904100-0000-7000-8000-a11ce0000001",

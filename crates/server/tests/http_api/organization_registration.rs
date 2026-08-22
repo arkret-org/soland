@@ -130,8 +130,15 @@ fn signed_control_proof(
     }
 }
 
-#[tokio::test]
-async fn organization_registration_http_round_trip_and_get_are_non_enumerable() {
+#[test]
+fn organization_registration_http_round_trip_and_get_are_non_enumerable() {
+    run_on_deep_stack(
+        "organization_registration_http_round_trip_and_get_are_non_enumerable",
+        organization_registration_http_round_trip_and_get_are_non_enumerable_body,
+    );
+}
+
+async fn organization_registration_http_round_trip_and_get_are_non_enumerable_body() {
     let mut config = test_config();
     config.admin_principal_dids = vec![fixture_actor_core_id("did:web:alice.example").to_string()];
     let mut state = soland_test_support::app_state(config);

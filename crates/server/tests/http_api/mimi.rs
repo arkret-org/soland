@@ -247,9 +247,16 @@ fn identifier_commitment(identifier: &str) -> String {
     arkret_canonical::sha256_digest(identifier.as_bytes())
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "spec-open: 2026-08-14-1029-mimi-room-binding-cell-subject-encoding"]
-async fn mimi_provider_facade_contracts_work() {
+fn mimi_provider_facade_contracts_work() {
+    run_on_deep_stack(
+        "mimi_provider_facade_contracts_work",
+        mimi_provider_facade_contracts_work_body,
+    );
+}
+
+async fn mimi_provider_facade_contracts_work_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     seed_test_realm_basis_seal(&state, demo_realm_id(), state.service_full_id().as_str()).await;
@@ -494,9 +501,16 @@ async fn mimi_provider_facade_contracts_work() {
     assert!(report["report_id"].as_str().is_some());
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "spec-open: 2026-08-14-1029-mimi-room-binding-cell-subject-encoding"]
-async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
+fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
+    run_on_deep_stack(
+        "mimi_facade_writes_strand_into_canonical_reducer_chain",
+        mimi_facade_writes_strand_into_canonical_reducer_chain_body,
+    );
+}
+
+async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
@@ -796,9 +810,16 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "spec-open: 2026-08-14-1029-mimi-room-binding-cell-subject-encoding"]
-async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
+fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
+    run_on_deep_stack(
+        "mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content",
+        mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body,
+    );
+}
+
+async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());

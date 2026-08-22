@@ -4,8 +4,15 @@
 use super::helpers::*;
 use crate::common::*;
 
-#[tokio::test]
-async fn server_preserves_e2ee_payloads_as_opaque_data() {
+#[test]
+fn server_preserves_e2ee_payloads_as_opaque_data() {
+    run_on_deep_stack(
+        "server_preserves_e2ee_payloads_as_opaque_data",
+        server_preserves_e2ee_payloads_as_opaque_data_body,
+    );
+}
+
+async fn server_preserves_e2ee_payloads_as_opaque_data_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let ciphertext = "base64url-opaque-ciphertext";
@@ -51,8 +58,15 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
     assert!(delivered["next_cursor"].as_str().is_some());
 }
 
-#[tokio::test]
-async fn device_message_id_idempotency_survives_ack_and_rejects_canonical_target_conflicts() {
+#[test]
+fn device_message_id_idempotency_survives_ack_and_rejects_canonical_target_conflicts() {
+    run_on_deep_stack(
+        "device_message_id_idempotency_survives_ack_and_rejects_canonical_target_conflicts",
+        device_message_id_idempotency_survives_ack_and_rejects_canonical_target_conflicts_body,
+    );
+}
+
+async fn device_message_id_idempotency_survives_ack_and_rejects_canonical_target_conflicts_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let sender_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -226,8 +240,15 @@ async fn device_message_id_idempotency_survives_ack_and_rejects_canonical_target
     );
 }
 
-#[tokio::test]
-async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
+#[test]
+fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
+    run_on_deep_stack(
+        "to_device_messages_survive_duplicate_sync_until_ack_token_consumed",
+        to_device_messages_survive_duplicate_sync_until_ack_token_consumed_body,
+    );
+}
+
+async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
@@ -311,8 +332,15 @@ async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
     );
 }
 
-#[tokio::test]
-async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
+#[test]
+fn expired_to_device_messages_signal_lost_and_advance_cursor() {
+    run_on_deep_stack(
+        "expired_to_device_messages_signal_lost_and_advance_cursor",
+        expired_to_device_messages_signal_lost_and_advance_cursor_body,
+    );
+}
+
+async fn expired_to_device_messages_signal_lost_and_advance_cursor_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let mut expired_target = device_message_target(
@@ -397,8 +425,15 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
     assert_ne!(after_lost["to_device"]["lost"], true);
 }
 
-#[tokio::test]
-async fn device_messages_evicted_after_session_logout() {
+#[test]
+fn device_messages_evicted_after_session_logout() {
+    run_on_deep_stack(
+        "device_messages_evicted_after_session_logout",
+        device_messages_evicted_after_session_logout_body,
+    );
+}
+
+async fn device_messages_evicted_after_session_logout_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 

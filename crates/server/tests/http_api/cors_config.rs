@@ -4,8 +4,15 @@
 
 use super::common::*;
 
-#[tokio::test]
-async fn configured_cors_allows_only_explicit_origin() {
+#[test]
+fn configured_cors_allows_only_explicit_origin() {
+    run_on_deep_stack(
+        "configured_cors_allows_only_explicit_origin",
+        configured_cors_allows_only_explicit_origin_body,
+    );
+}
+
+async fn configured_cors_allows_only_explicit_origin_body() {
     let mut config = test_config();
     config.cors_allow_origin = Some("https://app.example".to_owned());
     let service = app_from_state(soland_test_support::app_state(config));
@@ -69,8 +76,15 @@ async fn configured_cors_allows_only_explicit_origin() {
     );
 }
 
-#[tokio::test]
-async fn configured_cors_allows_query_reads_and_message_signature_headers() {
+#[test]
+fn configured_cors_allows_query_reads_and_message_signature_headers() {
+    run_on_deep_stack(
+        "configured_cors_allows_query_reads_and_message_signature_headers",
+        configured_cors_allows_query_reads_and_message_signature_headers_body,
+    );
+}
+
+async fn configured_cors_allows_query_reads_and_message_signature_headers_body() {
     // api-conventions.md §5 binds canonical `read` operations to RFC 10008
     // `QUERY`, and §3 requires RFC 9421 message signatures on protected self operations.
     // A browser preflight that omits either the method or the signature
@@ -118,8 +132,15 @@ async fn configured_cors_allows_query_reads_and_message_signature_headers() {
     }
 }
 
-#[tokio::test]
-async fn configured_cors_allows_blob_upload_headers() {
+#[test]
+fn configured_cors_allows_blob_upload_headers() {
+    run_on_deep_stack(
+        "configured_cors_allows_blob_upload_headers",
+        configured_cors_allows_blob_upload_headers_body,
+    );
+}
+
+async fn configured_cors_allows_blob_upload_headers_body() {
     let mut config = test_config();
     config.cors_allow_origin = Some("https://app.example".to_owned());
     let service = app_from_state(soland_test_support::app_state(config));
@@ -163,8 +184,15 @@ async fn configured_cors_allows_blob_upload_headers() {
     }
 }
 
-#[tokio::test]
-async fn invite_create_event_surfaces_via_authz_invites() {
+#[test]
+fn invite_create_event_surfaces_via_authz_invites() {
+    run_on_deep_stack(
+        "invite_create_event_surfaces_via_authz_invites",
+        invite_create_event_surfaces_via_authz_invites_body,
+    );
+}
+
+async fn invite_create_event_surfaces_via_authz_invites_body() {
     // A directed `ak.invite.create` atomically creates the invite lifecycle
     // and the invitee's membership proposal. The invitee must then see the
     // pending invitation through `GET /authz/invites`.
@@ -270,8 +298,15 @@ async fn invite_create_event_surfaces_via_authz_invites() {
     );
 }
 
-#[tokio::test]
-async fn wildcard_cors_mirrors_origin_without_credentials() {
+#[test]
+fn wildcard_cors_mirrors_origin_without_credentials() {
+    run_on_deep_stack(
+        "wildcard_cors_mirrors_origin_without_credentials",
+        wildcard_cors_mirrors_origin_without_credentials_body,
+    );
+}
+
+async fn wildcard_cors_mirrors_origin_without_credentials_body() {
     // api-conventions.md §10 recommends `Access-Control-Allow-Origin: *` for
     // browser-facing services. The combination `*` + Access-Control-Allow-
     // Credentials is rejected by browsers, so the wildcard posture must
@@ -326,8 +361,15 @@ async fn wildcard_cors_mirrors_origin_without_credentials() {
     );
 }
 
-#[tokio::test]
-async fn server_describe_advertises_account_authority_and_oidc_method_when_configured() {
+#[test]
+fn server_describe_advertises_account_authority_and_oidc_method_when_configured() {
+    run_on_deep_stack(
+        "server_describe_advertises_account_authority_and_oidc_method_when_configured",
+        server_describe_advertises_account_authority_and_oidc_method_when_configured_body,
+    );
+}
+
+async fn server_describe_advertises_account_authority_and_oidc_method_when_configured_body() {
     let mut config = test_config();
     config.account_authority_url = Some("https://auth.local.host".to_owned());
     config.account_authority_service_id =
@@ -361,8 +403,15 @@ async fn server_describe_advertises_account_authority_and_oidc_method_when_confi
     );
 }
 
-#[tokio::test]
-async fn runtime_service_id_is_used_across_public_metadata() {
+#[test]
+fn runtime_service_id_is_used_across_public_metadata() {
+    run_on_deep_stack(
+        "runtime_service_id_is_used_across_public_metadata",
+        runtime_service_id_is_used_across_public_metadata_body,
+    );
+}
+
+async fn runtime_service_id_is_used_across_public_metadata_body() {
     let service_full_id =
         "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:configured.example";
     let service_id = fixture_actor_core_id(service_full_id);

@@ -4,8 +4,15 @@ use soland_storage::BlobRecord;
 
 use super::common::*;
 
-#[tokio::test]
-async fn admin_actor_detail_includes_account_lifecycle_linkage() {
+#[test]
+fn admin_actor_detail_includes_account_lifecycle_linkage() {
+    run_on_deep_stack(
+        "admin_actor_detail_includes_account_lifecycle_linkage",
+        admin_actor_detail_includes_account_lifecycle_linkage_body,
+    );
+}
+
+async fn admin_actor_detail_includes_account_lifecycle_linkage_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
@@ -40,8 +47,15 @@ async fn admin_actor_detail_includes_account_lifecycle_linkage() {
     );
 }
 
-#[tokio::test]
-async fn admin_account_status_aliases_keep_protocol_state_closed() {
+#[test]
+fn admin_account_status_aliases_keep_protocol_state_closed() {
+    run_on_deep_stack(
+        "admin_account_status_aliases_keep_protocol_state_closed",
+        admin_account_status_aliases_keep_protocol_state_closed_body,
+    );
+}
+
+async fn admin_account_status_aliases_keep_protocol_state_closed_body() {
     let state = soland_test_support::app_state(test_config());
     let admin = dev_token(state.clone()).await;
     let _bob = register_account(
@@ -110,8 +124,15 @@ async fn admin_account_status_aliases_keep_protocol_state_closed() {
     assert_eq!(pending.status_code.unwrap().as_u16(), 400);
 }
 
-#[tokio::test]
-async fn admin_media_statistics_and_by_actor_are_derived_from_blobs() {
+#[test]
+fn admin_media_statistics_and_by_actor_are_derived_from_blobs() {
+    run_on_deep_stack(
+        "admin_media_statistics_and_by_actor_are_derived_from_blobs",
+        admin_media_statistics_and_by_actor_are_derived_from_blobs_body,
+    );
+}
+
+async fn admin_media_statistics_and_by_actor_are_derived_from_blobs_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let now = chrono::Utc::now();

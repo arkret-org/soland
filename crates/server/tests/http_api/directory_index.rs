@@ -4,8 +4,15 @@
 
 use super::common::*;
 
-#[tokio::test]
-async fn sync_and_directory_share_demo_realm() {
+#[test]
+fn sync_and_directory_share_demo_realm() {
+    run_on_deep_stack(
+        "sync_and_directory_share_demo_realm",
+        sync_and_directory_share_demo_realm_body,
+    );
+}
+
+async fn sync_and_directory_share_demo_realm_body() {
     let sync_describe: Value = TestClient::get("http://server/_arkret/self/account/describe")
         .send(&app())
         .await
@@ -47,8 +54,15 @@ async fn sync_and_directory_share_demo_realm() {
     assert_eq!(directory["realms"].as_array().unwrap().len(), 1);
 }
 
-#[tokio::test]
-async fn directory_product_endpoints_return_demo_projection_shapes() {
+#[test]
+fn directory_product_endpoints_return_demo_projection_shapes() {
+    run_on_deep_stack(
+        "directory_product_endpoints_return_demo_projection_shapes",
+        directory_product_endpoints_return_demo_projection_shapes_body,
+    );
+}
+
+async fn directory_product_endpoints_return_demo_projection_shapes_body() {
     let organizations: Value =
         TestClient::post("http://server/_arkret/find/directory/search-organizations")
             .json(&serde_json::json!({"query": "arkret", "limit": 10}))
@@ -189,8 +203,15 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(invalid.status_code.unwrap().as_u16(), 422);
 }
 
-#[tokio::test]
-async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
+#[test]
+fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
+    run_on_deep_stack(
+        "account_primary_handle_claim_is_listed_for_webvh_service_id",
+        account_primary_handle_claim_is_listed_for_webvh_service_id_body,
+    );
+}
+
+async fn account_primary_handle_claim_is_listed_for_webvh_service_id_body() {
     let mut config = test_config();
     config.public_base_url = "https://local.host".to_owned();
     config.account_authority_url = Some("https://auth.local.host".to_owned());
@@ -264,8 +285,15 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
     assert_eq!(claims[0]["handle"], "registered-handle:local.host");
 }
 
-#[tokio::test]
-async fn device_only_subject_does_not_publish_an_unbound_synthetic_handle() {
+#[test]
+fn device_only_subject_does_not_publish_an_unbound_synthetic_handle() {
+    run_on_deep_stack(
+        "device_only_subject_does_not_publish_an_unbound_synthetic_handle",
+        device_only_subject_does_not_publish_an_unbound_synthetic_handle_body,
+    );
+}
+
+async fn device_only_subject_does_not_publish_an_unbound_synthetic_handle_body() {
     let mut config = test_config();
     config.public_base_url = "https://local.host".to_owned();
     let state = soland_test_support::app_state(config);
@@ -311,8 +339,15 @@ async fn device_only_subject_does_not_publish_an_unbound_synthetic_handle() {
     assert_eq!(body["has_more"], false);
 }
 
-#[tokio::test]
-async fn directory_resolve_handle_invite_accepts_canonical_handles_without_contact() {
+#[test]
+fn directory_resolve_handle_invite_accepts_canonical_handles_without_contact() {
+    run_on_deep_stack(
+        "directory_resolve_handle_invite_accepts_canonical_handles_without_contact",
+        directory_resolve_handle_invite_accepts_canonical_handles_without_contact_body,
+    );
+}
+
+async fn directory_resolve_handle_invite_accepts_canonical_handles_without_contact_body() {
     let mut config = test_config();
     config.public_base_url = "https://local.host".to_owned();
     let state = soland_test_support::app_state(config);
@@ -463,8 +498,15 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     assert_eq!(remote.status_code.unwrap(), StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
-async fn directory_demo_projection_rejects_outside_development_mode() {
+#[test]
+fn directory_demo_projection_rejects_outside_development_mode() {
+    run_on_deep_stack(
+        "directory_demo_projection_rejects_outside_development_mode",
+        directory_demo_projection_rejects_outside_development_mode_body,
+    );
+}
+
+async fn directory_demo_projection_rejects_outside_development_mode_body() {
     let mut config = test_config();
     config.development_mode = false;
     config.seed_demo_data = true;
@@ -523,8 +565,15 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
     }
 }
 
-#[tokio::test]
-async fn private_contact_discovery_rejects_plaintext_identifier_matching() {
+#[test]
+fn private_contact_discovery_rejects_plaintext_identifier_matching() {
+    run_on_deep_stack(
+        "private_contact_discovery_rejects_plaintext_identifier_matching",
+        private_contact_discovery_rejects_plaintext_identifier_matching_body,
+    );
+}
+
+async fn private_contact_discovery_rejects_plaintext_identifier_matching_body() {
     let service = app();
     let mut response = TestClient::post(
         "http://server/_arkret/find/directory/private-contact-discovery",
@@ -558,8 +607,15 @@ async fn private_contact_discovery_rejects_plaintext_identifier_matching() {
     );
 }
 
-#[tokio::test]
-async fn directory_resolve_target_preview_requires_effective_preview_policy() {
+#[test]
+fn directory_resolve_target_preview_requires_effective_preview_policy() {
+    run_on_deep_stack(
+        "directory_resolve_target_preview_requires_effective_preview_policy",
+        directory_resolve_target_preview_requires_effective_preview_policy_body,
+    );
+}
+
+async fn directory_resolve_target_preview_requires_effective_preview_policy_body() {
     let state = soland_test_support::app_state(test_config());
     let realm = seed_test_realm(
         &state,
@@ -594,8 +650,15 @@ async fn directory_resolve_target_preview_requires_effective_preview_policy() {
     assert_eq!(unauthorized.status_code.unwrap(), StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
-async fn directory_resolve_target_preview_returns_policy_limited_projection() {
+#[test]
+fn directory_resolve_target_preview_returns_policy_limited_projection() {
+    run_on_deep_stack(
+        "directory_resolve_target_preview_returns_policy_limited_projection",
+        directory_resolve_target_preview_returns_policy_limited_projection_body,
+    );
+}
+
+async fn directory_resolve_target_preview_returns_policy_limited_projection_body() {
     let state = soland_test_support::app_state(test_config());
     let realm = seed_test_realm(
         &state,
@@ -663,8 +726,15 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
     assert_eq!(resolved["join_candidates"].as_array().map(Vec::len), None);
 }
 
-#[tokio::test]
-async fn directory_resolve_realm_returns_spec_title_field() {
+#[test]
+fn directory_resolve_realm_returns_spec_title_field() {
+    run_on_deep_stack(
+        "directory_resolve_realm_returns_spec_title_field",
+        directory_resolve_realm_returns_spec_title_field_body,
+    );
+}
+
+async fn directory_resolve_realm_returns_spec_title_field_body() {
     let state = soland_test_support::app_state(test_config());
     let realm = seed_test_realm(
         &state,
@@ -733,8 +803,15 @@ fn preview_token_for_address(
     )
 }
 
-#[tokio::test]
-async fn broader_protocol_surface_returns_contract_shapes() {
+#[test]
+fn broader_protocol_surface_returns_contract_shapes() {
+    run_on_deep_stack(
+        "broader_protocol_surface_returns_contract_shapes",
+        broader_protocol_surface_returns_contract_shapes_body,
+    );
+}
+
+async fn broader_protocol_surface_returns_contract_shapes_body() {
     let directory_describe: Value =
         TestClient::get("http://server/_arkret/find/directory/describe")
             .send(&app())
@@ -821,8 +898,15 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     assert!(ice["signature"].is_object());
 }
 
-#[tokio::test]
-async fn admin_collection_surfaces_return_sodmin_shapes() {
+#[test]
+fn admin_collection_surfaces_return_sodmin_shapes() {
+    run_on_deep_stack(
+        "admin_collection_surfaces_return_sodmin_shapes",
+        admin_collection_surfaces_return_sodmin_shapes_body,
+    );
+}
+
+async fn admin_collection_surfaces_return_sodmin_shapes_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 

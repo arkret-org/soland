@@ -43,8 +43,15 @@ fn accepted_device_authorize_operation(
     .unwrap()
 }
 
-#[tokio::test]
-async fn auth_keys_device_messages_and_blobs_work() {
+#[test]
+fn auth_keys_device_messages_and_blobs_work() {
+    run_on_deep_stack(
+        "auth_keys_device_messages_and_blobs_work",
+        auth_keys_device_messages_and_blobs_work_body,
+    );
+}
+
+async fn auth_keys_device_messages_and_blobs_work_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let alice = "did:web:alice.example";
@@ -746,8 +753,15 @@ fn push_notify_request(push_target_id: &str, devices: &[&str]) -> PushNotifyRequ
 /// Device-identity Phase 1 — a peer (member B) resolves member A's authoritative
 /// device verify key via `keys/query`, and the key disappears once A's device is
 /// revoked (device-lifecycle.md §8.2).
-#[tokio::test]
-async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
+#[test]
+fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
+    run_on_deep_stack(
+        "keys_query_projects_device_signing_key_and_drops_on_revoke",
+        keys_query_projects_device_signing_key_and_drops_on_revoke_body,
+    );
+}
+
+async fn keys_query_projects_device_signing_key_and_drops_on_revoke_body() {
     let state = soland_test_support::app_state(test_config());
 
     let alice = "did:web:alice.example";
@@ -826,8 +840,15 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
 /// An active member must retain access to an ex-member's authoritative device
 /// key so accepted membership-frontier events remain verifiable after a leave
 /// or ban. Actors that never reached a joined state remain hidden.
-#[tokio::test]
-async fn keys_query_keeps_historical_member_signing_key_visible_after_ban() {
+#[test]
+fn keys_query_keeps_historical_member_signing_key_visible_after_ban() {
+    run_on_deep_stack(
+        "keys_query_keeps_historical_member_signing_key_visible_after_ban",
+        keys_query_keeps_historical_member_signing_key_visible_after_ban_body,
+    );
+}
+
+async fn keys_query_keeps_historical_member_signing_key_visible_after_ban_body() {
     let state = soland_test_support::app_state(test_config());
 
     let bob = "did:web:bob.example";
@@ -891,8 +912,15 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban() {
 /// Device-identity Phase 1 (Task C) — an accepted `ak.device.authorize` carrying
 /// `device_public_key` projects that key into the devices table, so a device that
 /// was authorized but never opened a session is still directory-resolvable.
-#[tokio::test]
-async fn device_authorize_projects_public_key_into_devices_table() {
+#[test]
+fn device_authorize_projects_public_key_into_devices_table() {
+    run_on_deep_stack(
+        "device_authorize_projects_public_key_into_devices_table",
+        device_authorize_projects_public_key_into_devices_table_body,
+    );
+}
+
+async fn device_authorize_projects_public_key_into_devices_table_body() {
     let state = soland_test_support::app_state(test_config());
 
     let alice = "did:web:alice.example";
@@ -949,8 +977,15 @@ async fn device_authorize_projects_public_key_into_devices_table() {
     assert!(device.revoked_at.is_none());
 }
 
-#[tokio::test]
-async fn device_authorize_projection_preserves_atomic_generation_binding() {
+#[test]
+fn device_authorize_projection_preserves_atomic_generation_binding() {
+    run_on_deep_stack(
+        "device_authorize_projection_preserves_atomic_generation_binding",
+        device_authorize_projection_preserves_atomic_generation_binding_body,
+    );
+}
+
+async fn device_authorize_projection_preserves_atomic_generation_binding_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = "did:web:managed-alice.example";
     let alice_core = core_principal(alice);
@@ -1010,8 +1045,15 @@ async fn device_authorize_projection_preserves_atomic_generation_binding() {
     );
 }
 
-#[tokio::test]
-async fn keys_query_exposes_accepted_device_anchor() {
+#[test]
+fn keys_query_exposes_accepted_device_anchor() {
+    run_on_deep_stack(
+        "keys_query_exposes_accepted_device_anchor",
+        keys_query_exposes_accepted_device_anchor_body,
+    );
+}
+
+async fn keys_query_exposes_accepted_device_anchor_body() {
     let state = soland_test_support::app_state(test_config());
 
     let alice = "did:web:managed-alice.example";
@@ -1069,8 +1111,15 @@ async fn keys_query_exposes_accepted_device_anchor() {
         .expect("keys/query row decodes as a complete attested record");
 }
 
-#[tokio::test]
-async fn keys_query_hides_revoked_device() {
+#[test]
+fn keys_query_hides_revoked_device() {
+    run_on_deep_stack(
+        "keys_query_hides_revoked_device",
+        keys_query_hides_revoked_device_body,
+    );
+}
+
+async fn keys_query_hides_revoked_device_body() {
     let state = soland_test_support::app_state(test_config());
     let alice_core = core_principal("did:web:alice.example");
     let desktop = dev_token_for_device(
@@ -1217,8 +1266,15 @@ async fn keys_query_hides_revoked_device() {
     );
 }
 
-#[tokio::test]
-async fn revoked_device_blocks_encrypted_writes() {
+#[test]
+fn revoked_device_blocks_encrypted_writes() {
+    run_on_deep_stack(
+        "revoked_device_blocks_encrypted_writes",
+        revoked_device_blocks_encrypted_writes_body,
+    );
+}
+
+async fn revoked_device_blocks_encrypted_writes_body() {
     let state = soland_test_support::app_state(test_config());
     let alice_core = core_principal("did:web:alice.example");
     let stale_session = dev_token_for_device(
