@@ -782,6 +782,7 @@ pub use crate::federation::FederationDeliveryRecord as FederationDelivery;
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventCommand {
     pub event: AcceptedEvent,
+    pub governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
     pub device_pairing_authorization: Option<CommitDevicePairingAuthorization>,
     pub contact_projection: Option<CommitContactProjection>,
     /// Holder-private consent cell mutation plus its eager cache
@@ -904,12 +905,14 @@ pub trait EventReadPort: Send + Sync {
         &self,
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         deliveries: Vec<FederationDelivery>,
     ) -> ServiceResult<()>;
     async fn store_direct_conversation_founding_batch(
         &self,
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         slot: soland_storage::DirectConversationFoundingSlotRecord,
         deliveries: Vec<FederationDelivery>,
     ) -> ServiceResult<soland_storage::DirectConversationFoundingCommitOutcome>;
@@ -926,6 +929,7 @@ pub trait EventReadPort: Send + Sync {
         &self,
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         receipt: Option<EventBatchReceipt>,
         device: Option<IdentityAnchorDeviceState>,
         account_slot: Option<soland_storage::IdentityAnchorAccountSlot>,
@@ -1214,16 +1218,23 @@ impl EventQueryService {
         &self,
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         deliveries: Vec<FederationDelivery>,
     ) -> ServiceResult<()> {
         self.events
-            .store_realm_bootstrap_batch(records, control_proposal_acks, deliveries)
+            .store_realm_bootstrap_batch(
+                records,
+                control_proposal_acks,
+                governance_dependencies,
+                deliveries,
+            )
             .await
     }
     pub async fn store_direct_conversation_founding_batch(
         &self,
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         slot: soland_storage::DirectConversationFoundingSlotRecord,
         deliveries: Vec<FederationDelivery>,
     ) -> ServiceResult<soland_storage::DirectConversationFoundingCommitOutcome> {
@@ -1231,6 +1242,7 @@ impl EventQueryService {
             .store_direct_conversation_founding_batch(
                 records,
                 control_proposal_acks,
+                governance_dependencies,
                 slot,
                 deliveries,
             )
@@ -1251,6 +1263,7 @@ impl EventQueryService {
         &self,
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         receipt: Option<EventBatchReceipt>,
         device: Option<IdentityAnchorDeviceState>,
         account_slot: Option<soland_storage::IdentityAnchorAccountSlot>,
@@ -1263,6 +1276,7 @@ impl EventQueryService {
             .store_identity_anchor_batch(
                 records,
                 control_proposal_acks,
+                governance_dependencies,
                 receipt,
                 device,
                 account_slot,
@@ -2360,6 +2374,7 @@ mod tests {
         let service = EventService::new(Arc::new(RecordingCommitter));
         let result = service
             .commit_accepted_event(CommitAcceptedEventCommand {
+                governance_dependencies: Vec::new(),
                 device_pairing_authorization: None,
                 contact_projection: None,
                 consent_projection: None,

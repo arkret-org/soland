@@ -287,19 +287,22 @@ pub(super) async fn submit_realm_bootstrap_batch(
     })?;
     let mut accepted_envelopes = Vec::with_capacity(envelopes.len());
     let mut accepted_typed_events = Vec::with_capacity(envelopes.len());
+    let mut governance_dependencies = Vec::with_capacity(envelopes.len());
     for ((envelope, typed), parsed) in envelopes.iter().cloned().zip(&typed_events).zip(&validated)
     {
-        let (accepted_typed, accepted_envelope, _) = super::value::accepted_event_envelope(
-            state,
-            session,
-            envelope,
-            typed.clone(),
-            parsed,
-            received_at,
-        )
-        .await?;
+        let (accepted_typed, accepted_envelope, _, governance_dependency) =
+            super::value::accepted_event_envelope(
+                state,
+                session,
+                envelope,
+                typed.clone(),
+                parsed,
+                received_at,
+            )
+            .await?;
         accepted_envelopes.push(accepted_envelope);
         accepted_typed_events.push(accepted_typed);
+        governance_dependencies.extend(governance_dependency);
     }
     let records = validated
         .iter()
@@ -352,6 +355,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
             .store_direct_conversation_founding_batch(
                 records,
                 control_proposal_acks.clone(),
+                governance_dependencies,
                 context.slot,
                 deliveries,
             )
@@ -359,7 +363,12 @@ pub(super) async fn submit_realm_bootstrap_batch(
     } else {
         state
             .event_queries()
-            .store_realm_bootstrap_batch(records, control_proposal_acks.clone(), deliveries)
+            .store_realm_bootstrap_batch(
+                records,
+                control_proposal_acks.clone(),
+                governance_dependencies,
+                deliveries,
+            )
             .await
             .map(|_| soland_storage::DirectConversationFoundingCommitOutcome::Committed)
     };

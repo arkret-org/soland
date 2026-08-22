@@ -54,6 +54,114 @@ fn i64_to_u64(value: i64, field: &str) -> PersistenceResult<u64> {
     })
 }
 
+pub(crate) async fn put_governance_dependency_exact_in_transaction(
+    conn: &mut AsyncPgConnection,
+    write: &GovernanceDependencyWrite,
+) -> PersistenceResult<ExactWriteOutcome> {
+    let canonical = governance_dependency_canonical(&write.item)?;
+    let edge_index = u64_to_i64(write.edge_index, "governance dependency edge index")?;
+    let (source_kind, source_ref) = write.source.storage_parts();
+    let lock_key = format!(
+        "governance-dependency:{}:{source_kind}:{source_ref}",
+        write.realm_id.as_str()
+    );
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind::<Text, _>(&lock_key)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+
+    let object_rows = sql_query(
+        "INSERT INTO governance_dependency_objects \
+            (realm_id, dependency_kind, object_digest, canonical_bytes, object_json) \
+         VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+    )
+    .bind::<Text, _>(write.realm_id.as_str())
+    .bind::<Text, _>(canonical.dependency_kind)
+    .bind::<Text, _>(canonical.object_digest.as_str())
+    .bind::<Binary, _>(&canonical.canonical_bytes)
+    .bind::<Jsonb, _>(&canonical.object_json)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if object_rows == 0 {
+        let stored = sql_query(
+            "SELECT dependency_kind, object_digest, canonical_bytes, object_json \
+             FROM governance_dependency_objects \
+             WHERE realm_id = $1 AND dependency_kind = $2 AND object_digest = $3",
+        )
+        .bind::<Text, _>(write.realm_id.as_str())
+        .bind::<Text, _>(canonical.dependency_kind)
+        .bind::<Text, _>(canonical.object_digest.as_str())
+        .get_result::<DependencyObjectRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        if stored.canonical_bytes != canonical.canonical_bytes
+            || stored.object_json != canonical.object_json
+        {
+            return Err(PersistenceError::Conflict(
+                "duplicate_conflict: governance dependency object differs".to_owned(),
+            ));
+        }
+    }
+
+    let (seal_id, event_digest) = match &write.source {
+        GovernanceDependencySource::Seal(seal_id) => (Some(seal_id.as_str()), None),
+        GovernanceDependencySource::ControlEvent(event_digest) => {
+            (None, Some(event_digest.as_str()))
+        }
+    };
+    let edge_rows = sql_query(
+        "INSERT INTO governance_dependency_edges \
+            (realm_id, seal_id, event_digest, dependency_kind, object_digest, edge_index) \
+         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
+    )
+    .bind::<Text, _>(write.realm_id.as_str())
+    .bind::<Nullable<Text>, _>(seal_id)
+    .bind::<Nullable<Text>, _>(event_digest)
+    .bind::<Text, _>(canonical.dependency_kind)
+    .bind::<Text, _>(canonical.object_digest.as_str())
+    .bind::<BigInt, _>(edge_index)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if edge_rows == 0 {
+        #[derive(QueryableByName)]
+        struct EdgeRow {
+            #[diesel(sql_type = Text)]
+            dependency_kind: String,
+            #[diesel(sql_type = Text)]
+            object_digest: String,
+            #[diesel(sql_type = BigInt)]
+            edge_index: i64,
+        }
+        let rows = sql_query(
+            "SELECT dependency_kind, object_digest, edge_index \
+             FROM governance_dependency_edges \
+             WHERE realm_id = $1 \
+               AND (($2::text IS NOT NULL AND seal_id = $2) \
+                 OR ($3::text IS NOT NULL AND event_digest = $3))",
+        )
+        .bind::<Text, _>(write.realm_id.as_str())
+        .bind::<Nullable<Text>, _>(seal_id)
+        .bind::<Nullable<Text>, _>(event_digest)
+        .load::<EdgeRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        if rows.iter().any(|row| {
+            row.edge_index == edge_index
+                && row.dependency_kind == canonical.dependency_kind
+                && row.object_digest == canonical.object_digest.as_str()
+        }) {
+            return Ok(ExactWriteOutcome::ExactReplay);
+        }
+        return Err(PersistenceError::Conflict(
+            "duplicate_conflict: governance dependency edge differs".to_owned(),
+        ));
+    }
+    Ok(ExactWriteOutcome::Inserted)
+}
+
 #[derive(QueryableByName)]
 struct DependencyObjectRow {
     #[diesel(sql_type = Text)]
@@ -389,107 +497,11 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
         &self,
         write: GovernanceDependencyWrite,
     ) -> PersistenceResult<ExactWriteOutcome> {
-        let canonical = governance_dependency_canonical(&write.item)?;
-        let edge_index = u64_to_i64(write.edge_index, "governance dependency edge index")?;
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            let (source_kind, source_ref) = write.source.storage_parts();
-            let lock_key = format!(
-                "governance-dependency:{}:{source_kind}:{source_ref}",
-                write.realm_id.as_str()
-            );
-            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-                .bind::<Text, _>(&lock_key)
-                .execute(&mut *conn)
-                .await?;
-
-            let object_rows = sql_query(
-                "INSERT INTO governance_dependency_objects \
-                    (realm_id, dependency_kind, object_digest, canonical_bytes, object_json) \
-                 VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
-            )
-            .bind::<Text, _>(write.realm_id.as_str())
-            .bind::<Text, _>(canonical.dependency_kind)
-            .bind::<Text, _>(canonical.object_digest.as_str())
-            .bind::<Binary, _>(&canonical.canonical_bytes)
-            .bind::<Jsonb, _>(&canonical.object_json)
-            .execute(&mut *conn)
-            .await?;
-            if object_rows == 0 {
-                let stored = sql_query(
-                    "SELECT dependency_kind, object_digest, canonical_bytes, object_json \
-                     FROM governance_dependency_objects \
-                     WHERE realm_id = $1 AND dependency_kind = $2 AND object_digest = $3",
-                )
-                .bind::<Text, _>(write.realm_id.as_str())
-                .bind::<Text, _>(canonical.dependency_kind)
-                .bind::<Text, _>(canonical.object_digest.as_str())
-                .get_result::<DependencyObjectRow>(&mut *conn)
-                .await?;
-                if stored.canonical_bytes != canonical.canonical_bytes
-                    || stored.object_json != canonical.object_json
-                {
-                    return Err(PersistenceError::Conflict(
-                        "duplicate_conflict: governance dependency object differs".to_owned(),
-                    )
-                    .into());
-                }
-            }
-
-            let (seal_id, event_digest) = match &write.source {
-                GovernanceDependencySource::Seal(seal_id) => (Some(seal_id.as_str()), None),
-                GovernanceDependencySource::ControlEvent(event_digest) => {
-                    (None, Some(event_digest.as_str()))
-                }
-            };
-            let edge_rows = sql_query(
-                "INSERT INTO governance_dependency_edges \
-                    (realm_id, seal_id, event_digest, dependency_kind, object_digest, edge_index) \
-                 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
-            )
-            .bind::<Text, _>(write.realm_id.as_str())
-            .bind::<Nullable<Text>, _>(seal_id)
-            .bind::<Nullable<Text>, _>(event_digest)
-            .bind::<Text, _>(canonical.dependency_kind)
-            .bind::<Text, _>(canonical.object_digest.as_str())
-            .bind::<BigInt, _>(edge_index)
-            .execute(&mut *conn)
-            .await?;
-            if edge_rows == 0 {
-                #[derive(QueryableByName)]
-                struct EdgeRow {
-                    #[diesel(sql_type = Text)]
-                    dependency_kind: String,
-                    #[diesel(sql_type = Text)]
-                    object_digest: String,
-                    #[diesel(sql_type = BigInt)]
-                    edge_index: i64,
-                }
-                let rows = sql_query(
-                    "SELECT dependency_kind, object_digest, edge_index \
-                     FROM governance_dependency_edges \
-                     WHERE realm_id = $1 \
-                       AND (($2::text IS NOT NULL AND seal_id = $2) \
-                         OR ($3::text IS NOT NULL AND event_digest = $3))",
-                )
-                .bind::<Text, _>(write.realm_id.as_str())
-                .bind::<Nullable<Text>, _>(seal_id)
-                .bind::<Nullable<Text>, _>(event_digest)
-                .load::<EdgeRow>(&mut *conn)
-                .await?;
-                if rows.iter().any(|row| {
-                    row.edge_index == edge_index
-                        && row.dependency_kind == canonical.dependency_kind
-                        && row.object_digest == canonical.object_digest.as_str()
-                }) {
-                    return Ok(ExactWriteOutcome::ExactReplay);
-                }
-                return Err(PersistenceError::Conflict(
-                    "duplicate_conflict: governance dependency edge differs".to_owned(),
-                )
-                .into());
-            }
-            Ok(ExactWriteOutcome::Inserted)
+            put_governance_dependency_exact_in_transaction(conn, &write)
+                .await
+                .map_err(Into::into)
         })
         .await
         .map_err(PgTransactionError::into_persistence)

@@ -282,6 +282,7 @@ async fn prepare_ghost_event(
     })?;
     let device_id = parsed.device_id_str().to_owned();
     let command = soland_services::events::CommitAcceptedEventCommand {
+        governance_dependencies: Vec::new(),
         device_pairing_authorization: None,
         contact_projection: None,
         consent_projection: None,

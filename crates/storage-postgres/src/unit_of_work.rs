@@ -12,6 +12,7 @@ use soland_storage::{
 use crate::events::{
     CanonicalEventRow, CanonicalInsertOutcome, insert_canonical_event, realm_actor_lock_key,
 };
+use crate::governance_history::put_governance_dependency_exact_in_transaction;
 use crate::{ExistsRow, PgPool, PgTransactionError, pg_conn};
 
 #[derive(diesel::QueryableByName)]
@@ -892,6 +893,22 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                         Ok(())
                     }
                 })?;
+                for dependency in &request.governance_dependencies {
+                    let source_matches = matches!(
+                        &dependency.source,
+                        soland_storage::GovernanceDependencySource::ControlEvent(digest)
+                            if digest.as_str() == event_digest
+                    );
+                    if dependency.realm_id != typed_event.realm_id || !source_matches
+                    {
+                        return Err(PersistenceError::Conflict(
+                            "schema_violation: governance dependency does not bind committed Control Move"
+                                .to_owned(),
+                        )
+                        .into());
+                    }
+                    put_governance_dependency_exact_in_transaction(conn, dependency).await?;
+                }
                 if typed_event.kind == arkret_wire::EventKind::DeviceRevoke {
                     let transition = request.device_revocation_transition.as_ref().ok_or_else(|| {
                         PersistenceError::Conflict(
@@ -924,6 +941,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 }
             } else if request.control_proposal_ingress.is_some()
                 || request.device_revocation_transition.is_some()
+                || !request.governance_dependencies.is_empty()
             {
                 return Err(PersistenceError::Conflict(
                     "schema_violation: non-Control Event cannot carry Control Proposal authority"

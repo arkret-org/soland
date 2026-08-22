@@ -247,6 +247,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
         .put_identity_anchor_batch_atomic(
             Vec::new(),
             Vec::new(),
+            Vec::new(),
             Some(receipt),
             None,
             None,

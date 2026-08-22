@@ -3,11 +3,11 @@ use super::{
     DirectConversationFoundingCommitOutcome, DirectConversationFoundingSlotRecord,
     EventBatchReceipt, EventStore, FederationOutboxRecord, FederationOutboxState,
     IdentityAnchorAccountSlot, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
-    IdentityAnchorReanchorSlot, MessageRecord, MessageStore, Mutex, PeerEventsPageQuery,
-    PersistenceError, PersistenceResult, ProjectionEventRecord, PublicationEvidenceRecord,
-    RealmEventStats, async_trait, event_position_cmp, identity_anchor_slot_conflicts, ids,
-    peer_page_record_after_cursor, peer_page_record_matches, receipt_covers_event,
-    record_is_peer_authz_state_record, stage_identity_anchor_events,
+    IdentityAnchorReanchorSlot, MemoryGovernanceDependencyStore, MessageRecord, MessageStore,
+    Mutex, PeerEventsPageQuery, PersistenceError, PersistenceResult, ProjectionEventRecord,
+    PublicationEvidenceRecord, RealmEventStats, async_trait, event_position_cmp,
+    identity_anchor_slot_conflicts, ids, peer_page_record_after_cursor, peer_page_record_matches,
+    receipt_covers_event, record_is_peer_authz_state_record, stage_identity_anchor_events,
 };
 // In-memory message store
 pub(crate) struct MemoryMessageStore {
@@ -112,6 +112,7 @@ pub(crate) struct MemoryEventStore {
     direct_conversation_founding_slots:
         Mutex<BTreeMap<(String, String, String), DirectConversationFoundingSlotRecord>>,
     identity_anchor_account_slots: Mutex<BTreeMap<(String, String), IdentityAnchorAccountSlot>>,
+    governance_dependencies: MemoryGovernanceDependencyStore,
 }
 impl MemoryEventStore {
     pub(crate) fn with_devices(
@@ -120,6 +121,7 @@ impl MemoryEventStore {
         publication_evidence: Arc<Mutex<BTreeMap<String, PublicationEvidenceRecord>>>,
         federation_outbox: Arc<Mutex<BTreeMap<String, FederationOutboxRecord>>>,
         projections: Arc<Mutex<Vec<ProjectionEventRecord>>>,
+        governance_dependencies: MemoryGovernanceDependencyStore,
     ) -> Self {
         Self {
             data,
@@ -134,8 +136,37 @@ impl MemoryEventStore {
             event_outbox_ids: Mutex::new(BTreeMap::new()),
             direct_conversation_founding_slots: Mutex::new(BTreeMap::new()),
             identity_anchor_account_slots: Mutex::new(BTreeMap::new()),
+            governance_dependencies,
         }
     }
+}
+
+fn stage_event_batch_governance_dependencies(
+    data: &mut crate::governance_history::GovernanceDependencyData,
+    records: &[CanonicalEventRecord],
+    dependencies: &[soland_storage::GovernanceDependencyWrite],
+) -> PersistenceResult<()> {
+    for dependency in dependencies {
+        let soland_storage::GovernanceDependencySource::ControlEvent(event_digest) =
+            &dependency.source
+        else {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: Event batch cannot carry a Seal governance dependency"
+                    .to_owned(),
+            ));
+        };
+        let matches = records.iter().any(|record| {
+            event_digest.as_str() == record.canonical_digest
+                && record.realm_id.as_deref() == Some(dependency.realm_id.as_str())
+        });
+        if !matches {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: governance dependency source is not in Event batch".to_owned(),
+            ));
+        }
+        crate::governance_history::stage_governance_dependency_exact(data, dependency)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn quarantine_memory_event(
@@ -456,6 +487,7 @@ impl EventStore for MemoryEventStore {
         &self,
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<()> {
         let mut data = self.data.lock();
@@ -465,6 +497,7 @@ impl EventStore for MemoryEventStore {
         let mut projections = self.projections.lock();
         let mut event_outbox_ids = self.event_outbox_ids.lock();
         let mut federation_outbox = self.federation_outbox.lock();
+        let mut stored_governance_dependencies = self.governance_dependencies.data.lock();
         preflight_memory_events(
             &records,
             &mut data,
@@ -481,17 +514,24 @@ impl EventStore for MemoryEventStore {
         let mut staged = data.clone();
         let mut staged_control_proposal_acks = stored_control_proposal_acks.clone();
         let mut staged_outbox = federation_outbox.clone();
+        let mut staged_governance_dependencies = stored_governance_dependencies.clone();
         stage_control_proposal_acks(
             &mut staged_control_proposal_acks,
             &records,
             control_proposal_acks,
             true,
         )?;
+        stage_event_batch_governance_dependencies(
+            &mut staged_governance_dependencies,
+            &records,
+            &governance_dependencies,
+        )?;
         stage_identity_anchor_events(&mut staged, records)?;
         let outbox_ids = stage_federation_outbox(&mut staged_outbox, outbox)?;
         *data = staged;
         *stored_control_proposal_acks = staged_control_proposal_acks;
         *federation_outbox = staged_outbox;
+        *stored_governance_dependencies = staged_governance_dependencies;
         for event_id in event_ids {
             event_outbox_ids
                 .entry(event_id)
@@ -505,6 +545,7 @@ impl EventStore for MemoryEventStore {
         &self,
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         slot: DirectConversationFoundingSlotRecord,
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<DirectConversationFoundingCommitOutcome> {
@@ -543,6 +584,7 @@ impl EventStore for MemoryEventStore {
         let mut projections = self.projections.lock();
         let mut event_outbox_ids = self.event_outbox_ids.lock();
         let mut federation_outbox = self.federation_outbox.lock();
+        let mut stored_governance_dependencies = self.governance_dependencies.data.lock();
         preflight_memory_events(
             &records,
             &mut data,
@@ -556,13 +598,20 @@ impl EventStore for MemoryEventStore {
         let mut staged = data.clone();
         let mut staged_acks = stored_control_proposal_acks.clone();
         let mut staged_outbox = federation_outbox.clone();
+        let mut staged_governance_dependencies = stored_governance_dependencies.clone();
         stage_control_proposal_acks(&mut staged_acks, &records, control_proposal_acks, true)?;
+        stage_event_batch_governance_dependencies(
+            &mut staged_governance_dependencies,
+            &records,
+            &governance_dependencies,
+        )?;
         stage_identity_anchor_events(&mut staged, records)?;
         let outbox_ids = stage_federation_outbox(&mut staged_outbox, outbox)?;
         slots.insert(key, slot);
         *data = staged;
         *stored_control_proposal_acks = staged_acks;
         *federation_outbox = staged_outbox;
+        *stored_governance_dependencies = staged_governance_dependencies;
         for event_id in event_ids {
             event_outbox_ids
                 .entry(event_id)
@@ -593,6 +642,7 @@ impl EventStore for MemoryEventStore {
         &self,
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         receipt: Option<EventBatchReceipt>,
         device: Option<DeviceInventoryRecord>,
         account_slot: Option<IdentityAnchorAccountSlot>,
@@ -612,6 +662,7 @@ impl EventStore for MemoryEventStore {
         let mut projections = self.projections.lock();
         let mut event_outbox_ids = self.event_outbox_ids.lock();
         let mut federation_outbox = self.federation_outbox.lock();
+        let mut stored_governance_dependencies = self.governance_dependencies.data.lock();
         preflight_memory_events(
             &records,
             &mut data,
@@ -632,6 +683,7 @@ impl EventStore for MemoryEventStore {
         let mut staged_account_slots = account_slots.clone();
         let mut staged_evidence = evidence.clone();
         let mut staged_outbox = federation_outbox.clone();
+        let mut staged_governance_dependencies = stored_governance_dependencies.clone();
         let reanchor_conflict = reanchor_slot.as_ref().is_some_and(|slot| {
             identity_anchor_slot_conflicts(&staged_events.values().collect::<Vec<_>>(), slot)
         });
@@ -648,6 +700,11 @@ impl EventStore for MemoryEventStore {
                 &records,
                 control_proposal_acks,
                 true,
+            )?;
+            stage_event_batch_governance_dependencies(
+                &mut staged_governance_dependencies,
+                &records,
+                &governance_dependencies,
             )?;
         }
         stage_identity_anchor_events(&mut staged_events, records)?;
@@ -691,6 +748,7 @@ impl EventStore for MemoryEventStore {
         *account_slots = staged_account_slots;
         *evidence = staged_evidence;
         *federation_outbox = staged_outbox;
+        *stored_governance_dependencies = staged_governance_dependencies;
         if !reanchor_conflict {
             for event_id in event_ids {
                 event_outbox_ids
@@ -926,6 +984,7 @@ mod tests {
             Arc::new(Mutex::new(BTreeMap::new())),
             outbox.clone(),
             Arc::new(Mutex::new(Vec::new())),
+            MemoryGovernanceDependencyStore::default(),
         );
         let existing = record(b"existing");
         let conflict_id = existing.event_id.clone();
@@ -938,6 +997,7 @@ mod tests {
         let error = store
             .put_realm_bootstrap_batch_atomic(
                 vec![first, forged],
+                Vec::new(),
                 Vec::new(),
                 vec![FederationOutboxRecord::pending(
                     "outbox:rollback".to_owned(),
@@ -979,6 +1039,7 @@ mod tests {
             Arc::new(Mutex::new(BTreeMap::new())),
             Arc::new(Mutex::new(BTreeMap::new())),
             Arc::new(Mutex::new(Vec::new())),
+            MemoryGovernanceDependencyStore::default(),
         );
         let first = record(b"first");
         let mut colliding = first.clone();
@@ -1072,6 +1133,7 @@ mod tests {
             Arc::new(Mutex::new(BTreeMap::new())),
             Arc::new(Mutex::new(BTreeMap::new())),
             Arc::new(Mutex::new(Vec::new())),
+            MemoryGovernanceDependencyStore::default(),
         );
         let first = record(b"digest-covered-preimage");
         let mut replay = first.clone();

@@ -121,6 +121,7 @@ fn persistence_event_commit_request(
 ) -> soland_storage::EventCommitRequest {
     soland_storage::EventCommitRequest {
         event: persistence_canonical_event(command.event),
+        governance_dependencies: command.governance_dependencies,
         device_pairing_authorization: command.device_pairing_authorization.map(|commit| {
             soland_storage::DevicePairingAuthorizationCommit {
                 device_pairing_request_id: commit.device_pairing_request_id,
@@ -224,6 +225,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         &self,
         records: Vec<crate::events::CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         deliveries: Vec<crate::events::FederationDelivery>,
     ) -> crate::ServiceResult<()> {
         self.0
@@ -234,6 +236,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                     .map(persistence_canonical_event)
                     .collect(),
                 control_proposal_acks,
+                governance_dependencies,
                 deliveries.into_iter().map(persistence_outbox_row).collect(),
             )
             .await?;
@@ -243,6 +246,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         &self,
         records: Vec<crate::events::CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         slot: soland_storage::DirectConversationFoundingSlotRecord,
         deliveries: Vec<crate::events::FederationDelivery>,
     ) -> crate::ServiceResult<soland_storage::DirectConversationFoundingCommitOutcome> {
@@ -255,6 +259,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                     .map(persistence_canonical_event)
                     .collect(),
                 control_proposal_acks,
+                governance_dependencies,
                 slot,
                 deliveries.into_iter().map(persistence_outbox_row).collect(),
             )
@@ -276,6 +281,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         &self,
         records: Vec<crate::events::CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         receipt: Option<arkret_wire::EventBatchReceipt>,
         device: Option<crate::events::IdentityAnchorDeviceState>,
         account_slot: Option<soland_storage::IdentityAnchorAccountSlot>,
@@ -293,6 +299,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                     .map(persistence_canonical_event)
                     .collect(),
                 control_proposal_acks,
+                governance_dependencies,
                 receipt,
                 device.map(|state| soland_storage::DeviceInventoryRecord {
                     actor: state.actor,

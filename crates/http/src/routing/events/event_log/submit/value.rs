@@ -1340,9 +1340,17 @@ pub(super) async fn accepted_event_envelope(
     event: Event,
     parsed: &ValidatedEventEnvelope,
     accepted_at: chrono::DateTime<chrono::Utc>,
-) -> Result<(Event, Value, Vec<u8>), SubmitOneError> {
+) -> Result<
+    (
+        Event,
+        Value,
+        Vec<u8>,
+        Option<soland_storage::GovernanceDependencyWrite>,
+    ),
+    SubmitOneError,
+> {
     if session.token_hash.starts_with("federation:") {
-        return Ok((event, envelope, parsed.canonical_bytes.clone()));
+        return Ok((event, envelope, parsed.canonical_bytes.clone(), None));
     }
     let mut event = event;
     if event.principal_server_id.as_str() != state.service_id() {
@@ -1491,12 +1499,7 @@ pub(super) async fn accepted_event_envelope(
     state
         .persistence()
         .governance_dependency_store()
-        .put_exact(soland_storage::GovernanceDependencyWrite {
-            realm_id: event.realm_id.clone(),
-            source: soland_storage::GovernanceDependencySource::ControlEvent(event_digest.clone()),
-            edge_index: 0,
-            item: dependency,
-        })
+        .put_unscoped_signer_evidence_exact(dependency.clone())
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -1505,6 +1508,15 @@ pub(super) async fn accepted_event_envelope(
                 format!("Principal Server signer evidence retention failed: {error}"),
             )
         })?;
+    let governance_dependency = (event.kind.is_reducer_input()
+        && event.seal_ref.is_none()
+        && event.auth_context.is_none())
+    .then(|| soland_storage::GovernanceDependencyWrite {
+        realm_id: event.realm_id.clone(),
+        source: soland_storage::GovernanceDependencySource::ControlEvent(event_digest.clone()),
+        edge_index: 0,
+        item: dependency,
+    });
     let mut admission = arkret_wire::PrincipalServerAdmissionProof {
         kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
         verification_method,
@@ -1575,7 +1587,7 @@ pub(super) async fn accepted_event_envelope(
             )
         })?;
     let envelope = typed_event_to_canonical_value(event.clone())?;
-    Ok((event, envelope, canonical_bytes))
+    Ok((event, envelope, canonical_bytes, governance_dependency))
 }
 
 pub(super) fn validate_origin_submission_shape(
@@ -2800,15 +2812,16 @@ pub(super) async fn submit_event_value_with_context(
         } else {
             None
         };
-    let (accepted_event, envelope, accepted_canonical_bytes) = accepted_event_envelope(
-        state,
-        session,
-        envelope,
-        submitted_event,
-        &parsed,
-        received_at,
-    )
-    .await?;
+    let (accepted_event, envelope, accepted_canonical_bytes, governance_dependency) =
+        accepted_event_envelope(
+            state,
+            session,
+            envelope,
+            submitted_event,
+            &parsed,
+            received_at,
+        )
+        .await?;
     let envelope_for_bootstrap = envelope.clone();
     let accepted_control_event_for_proposal = control_event_for_proposal
         .is_some()
@@ -2956,6 +2969,7 @@ pub(super) async fn submit_event_value_with_context(
             None
         };
     let command = soland_services::events::CommitAcceptedEventCommand {
+        governance_dependencies: governance_dependency.into_iter().collect(),
         device_pairing_authorization: commit_options
             .as_ref()
             .and_then(|options| options.device_pairing)

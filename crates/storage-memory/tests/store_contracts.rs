@@ -1,7 +1,9 @@
 use soland_storage::contract_tests::{
     ConsentCommitContractStores, DeviceRevocationSealSettlementStores, EventCommitContractStores,
     assert_account_status_replica_decision_table_contract,
-    assert_atomic_batch_outbox_rollback_contract, assert_consent_projection_commit_contract,
+    assert_atomic_batch_outbox_rollback_contract,
+    assert_atomic_control_event_governance_dependency_contract,
+    assert_consent_projection_commit_contract,
     assert_control_proposal_authority_ack_store_contract, assert_device_key_store_contract,
     assert_device_message_snapshot_guard_contract,
     assert_device_revocation_seal_settlement_contract, assert_event_commit_unit_of_work_contract,
@@ -52,6 +54,17 @@ async fn memory_adapter_satisfies_unscoped_signer_evidence_contract() {
     assert_governance_unscoped_signer_evidence_contract(
         store.governance_dependencies(),
         "memory-unscoped-signer-evidence",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn memory_adapter_commits_control_event_governance_dependencies_atomically() {
+    let store = SolandMemoryPersistenceStore::new();
+    assert_atomic_control_event_governance_dependency_contract(
+        store.events(),
+        store.governance_dependencies(),
+        "memory-control-event-governance",
     )
     .await;
 }

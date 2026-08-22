@@ -34,10 +34,11 @@ use super::{
     ExactWriteOutcome, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
     FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
     FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
-    FederationOutboxTransition, GovernanceDependencyStore, HandleClaimEvidenceRecord,
-    IdempotencyRecord, IdempotencyStore, InviteReceivePolicyStore, MemberIdentityEventRecord,
-    MemberIdentityReplacementEdge, MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord,
-    MessageStore, MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsKeyPackageClaim,
+    FederationOutboxTransition, GovernanceDependencySource, GovernanceDependencyStore,
+    GovernanceDependencyWrite, HandleClaimEvidenceRecord, IdempotencyRecord, IdempotencyStore,
+    InviteReceivePolicyStore, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
+    MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord, MessageStore,
+    MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsKeyPackageClaim,
     MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, OneTimeKeyStore,
     OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
     OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
@@ -1239,6 +1240,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let event_id = event.event_id.clone();
     let control_proposal_ack = contract_control_proposal_ack(&event, &realm_id, now);
     let request = EventCommitRequest {
+        governance_dependencies: Vec::new(),
         device_pairing_authorization: None,
         contact_projection: None,
         consent_projection: None,
@@ -1370,6 +1372,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let pairing_event_id = pairing_event.event_id.clone();
     let pairing_ack = contract_control_proposal_ack(&pairing_event, &realm_id, now);
     let pairing_commit = EventCommitRequest {
+        governance_dependencies: Vec::new(),
         device_pairing_authorization: Some(DevicePairingAuthorizationCommit {
             device_pairing_request_id: pairing_request_id.clone(),
             pairing_code: "7H2K9M4Q".to_owned(),
@@ -1473,6 +1476,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         updated_at: now,
     };
     let contact_commit = EventCommitRequest {
+        governance_dependencies: Vec::new(),
         device_pairing_authorization: None,
         contact_projection: Some(ContactProjectionCommit {
             record: contact_record.clone(),
@@ -1556,6 +1560,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let failed_contact_commit = stores
         .unit_of_work
         .commit_event(EventCommitRequest {
+            governance_dependencies: Vec::new(),
             device_pairing_authorization: None,
             contact_projection: Some(ContactProjectionCommit {
                 record: conflicting_contact,
@@ -1608,6 +1613,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let rollback_event_id = rollback_event.event_id.clone();
     let rollback_ack = contract_control_proposal_ack(&rollback_event, &realm_id, now);
     let failed = EventCommitRequest {
+        governance_dependencies: Vec::new(),
         device_pairing_authorization: None,
         contact_projection: None,
         consent_projection: None,
@@ -2370,6 +2376,7 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
             .put_realm_bootstrap_batch_atomic(
                 vec![bootstrap_record.clone()],
                 vec![control_proposal_ack(&bootstrap_record)],
+                Vec::new(),
                 colliding_outbox("bootstrap"),
             )
             .await
@@ -2399,6 +2406,7 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
             .put_identity_anchor_batch_atomic(
                 vec![anchor_record.clone()],
                 vec![control_proposal_ack(&anchor_record)],
+                Vec::new(),
                 None,
                 None,
                 None,
@@ -2434,6 +2442,7 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
         .put_realm_bootstrap_batch_atomic(
             vec![committed_record.clone()],
             vec![control_proposal_ack(&committed_record)],
+            Vec::new(),
             vec![FederationOutboxRecord::pending(
                 committed_outbox_id.clone(),
                 format!("did:web:peer-{namespace}.example"),
@@ -2454,6 +2463,83 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
             .expect("outbox")
             .is_some(),
         "an accepted genesis unit always has its delivery intent"
+    );
+}
+
+/// A Control Event and its governance-history edge share one transaction.
+/// This specifically guards the source-row foreign key: adapters must create
+/// the pending Control Event before the edge becomes visible, and any invalid
+/// edge must roll the whole Event unit back.
+pub async fn assert_atomic_control_event_governance_dependency_contract(
+    events: &dyn EventStore,
+    dependencies: &dyn GovernanceDependencyStore,
+    namespace: &str,
+) {
+    let now = database_timestamp_now();
+    let principal_id = format!("did:web:{namespace}.example");
+    let realm_id = contract_realm_id(&format!("governance-edge:{namespace}"));
+    let record = canonical_wire_event_record("", &principal_id, &realm_id, 0, now);
+    let source = GovernanceDependencySource::ControlEvent(
+        Hash::new(record.canonical_digest.clone()).expect("typed Control Event digest"),
+    );
+    let item = minimal_history_signer_evidence(namespace);
+    events
+        .put_realm_bootstrap_batch_atomic(
+            vec![record.clone()],
+            vec![contract_control_proposal_ack(&record, &realm_id, now)],
+            vec![GovernanceDependencyWrite {
+                realm_id: RealmId::new(realm_id.clone()).expect("typed Realm"),
+                source: source.clone(),
+                edge_index: 0,
+                item: item.clone(),
+            }],
+            Vec::new(),
+        )
+        .await
+        .expect("Control Event and governance dependency commit atomically");
+    let stored = dependencies
+        .list_for_source(
+            &RealmId::new(realm_id.clone()).expect("typed Realm"),
+            &source,
+        )
+        .await
+        .expect("read committed Control Event dependency");
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].edge_index, 0);
+    assert_eq!(stored[0].item, item);
+
+    let rollback_realm_id = contract_realm_id(&format!("governance-rollback:{namespace}"));
+    let rollback_record =
+        canonical_wire_event_record("", &principal_id, &rollback_realm_id, 0, now);
+    let wrong_realm_id = contract_realm_id(&format!("governance-wrong:{namespace}"));
+    let error = events
+        .put_realm_bootstrap_batch_atomic(
+            vec![rollback_record.clone()],
+            vec![contract_control_proposal_ack(
+                &rollback_record,
+                &rollback_realm_id,
+                now,
+            )],
+            vec![GovernanceDependencyWrite {
+                realm_id: RealmId::new(wrong_realm_id).expect("typed wrong Realm"),
+                source: GovernanceDependencySource::ControlEvent(
+                    Hash::new(rollback_record.canonical_digest.clone())
+                        .expect("typed rollback Event digest"),
+                ),
+                edge_index: 0,
+                item: minimal_history_signer_evidence(&format!("rollback:{namespace}")),
+            }],
+            Vec::new(),
+        )
+        .await
+        .expect_err("mismatched governance dependency Realm must abort Event unit");
+    assert!(matches!(error, PersistenceError::Conflict(_)));
+    assert!(
+        !events
+            .contains(&rollback_record.event_id)
+            .await
+            .expect("read rolled-back Event"),
+        "invalid governance dependency must not leave a canonical Event prefix"
     );
 }
 
@@ -3849,6 +3935,7 @@ fn contract_device_revoke_fixture(
     let ingress = ControlProposalIngress::AckRequired(control_proposal_ack);
     (
         EventCommitRequest {
+            governance_dependencies: Vec::new(),
             device_pairing_authorization: None,
             contact_projection: None,
             consent_projection: None,
@@ -4249,6 +4336,7 @@ fn consent_commit_request(
     consent_projection: ConsentProjectionCommit,
 ) -> EventCommitRequest {
     EventCommitRequest {
+        governance_dependencies: Vec::new(),
         device_pairing_authorization: None,
         contact_projection: None,
         consent_projection: Some(consent_projection),

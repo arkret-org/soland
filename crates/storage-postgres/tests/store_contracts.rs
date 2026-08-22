@@ -1,6 +1,8 @@
 use soland_storage::contract_tests::{
     ConsentCommitContractStores, DeviceRevocationSealSettlementStores, EventCommitContractStores,
-    assert_atomic_batch_outbox_rollback_contract, assert_consent_projection_commit_contract,
+    assert_atomic_batch_outbox_rollback_contract,
+    assert_atomic_control_event_governance_dependency_contract,
+    assert_consent_projection_commit_contract,
     assert_control_proposal_authority_ack_store_contract,
     assert_device_message_snapshot_guard_contract,
     assert_device_revocation_seal_settlement_contract, assert_event_commit_unit_of_work_contract,
@@ -104,6 +106,20 @@ async fn postgres_adapter_satisfies_unscoped_signer_evidence_contract_when_confi
     let store = PgGovernanceDependencyStore { pool };
     let namespace = format!("postgres-unscoped-signer-{}", uuid::Uuid::now_v7());
     assert_governance_unscoped_signer_evidence_contract(&store, &namespace).await;
+}
+
+#[tokio::test]
+async fn postgres_adapter_commits_control_event_governance_dependencies_atomically_when_configured()
+{
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let events = PgEventStore { pool: pool.clone() };
+    let dependencies = PgGovernanceDependencyStore { pool };
+    let namespace = format!("postgres-control-event-governance-{}", uuid::Uuid::now_v7());
+    assert_atomic_control_event_governance_dependency_contract(&events, &dependencies, &namespace)
+        .await;
 }
 
 #[tokio::test]
@@ -279,6 +295,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
         arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
     PgEventCommitUnitOfWork::new(pool.clone())
         .commit_event(EventCommitRequest {
+            governance_dependencies: Vec::new(),
             device_pairing_authorization: None,
             contact_projection: None,
             consent_projection: None,
@@ -531,6 +548,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
         .commit_event_batch(EventBatchCommitRequest {
             events: vec![
                 EventCommitRequest {
+                    governance_dependencies: Vec::new(),
                     device_pairing_authorization: None,
                     contact_projection: None,
                     consent_projection: None,
@@ -543,6 +561,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
                     outbox: Vec::new(),
                 },
                 EventCommitRequest {
+                    governance_dependencies: Vec::new(),
                     device_pairing_authorization: None,
                     contact_projection: None,
                     consent_projection: None,
@@ -883,6 +902,7 @@ mod control_move_ingress_negatives {
             ingress: Option<arkret_state::state::store::ControlProposalIngress>,
         ) -> EventCommitRequest {
             EventCommitRequest {
+                governance_dependencies: Vec::new(),
                 device_pairing_authorization: None,
                 contact_projection: None,
                 consent_projection: None,

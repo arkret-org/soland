@@ -53,6 +53,9 @@ pub struct AccountDataCasCommit {
 #[derive(Clone, Debug)]
 pub struct EventCommitRequest {
     pub event: CanonicalEventRecord,
+    /// Governance history edges whose source Control Event is this Event.
+    /// These become visible in the same durable boundary as that source row.
+    pub governance_dependencies: Vec<crate::GovernanceDependencyWrite>,
     /// Optional staged device-pairing CAS consumed in the same durable
     /// boundary as the canonical Event and its reducer projection.
     pub device_pairing_authorization: Option<DevicePairingAuthorizationCommit>,

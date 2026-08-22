@@ -269,6 +269,52 @@ fn stage_control_proposal_ack(
     Ok(())
 }
 
+fn stage_event_governance_dependencies(
+    data: &mut crate::governance_history::GovernanceDependencyData,
+    request: &EventCommitRequest,
+) -> PersistenceResult<()> {
+    let event = serde_json::from_value::<arkret_wire::Event>(request.event.envelope.clone())
+        .map_err(|error| {
+            PersistenceError::Conflict(format!(
+                "schema_violation: accepted Event envelope is not canonical wire: {error}"
+            ))
+        })?;
+    let is_control_move =
+        event.kind.is_reducer_input() && event.seal_ref.is_none() && event.auth_context.is_none();
+    if !is_control_move {
+        return if request.governance_dependencies.is_empty() {
+            Ok(())
+        } else {
+            Err(PersistenceError::Conflict(
+                "schema_violation: non-Control Event cannot carry governance dependencies"
+                    .to_owned(),
+            ))
+        };
+    }
+    let event_digest = event
+        .event_digest_with_digest_suite(request.event.digest_suite)
+        .map_err(|error| {
+            PersistenceError::Conflict(format!(
+                "schema_violation: accepted Control Move digest failed: {error}"
+            ))
+        })?;
+    for dependency in &request.governance_dependencies {
+        let source_matches = matches!(
+            &dependency.source,
+            soland_storage::GovernanceDependencySource::ControlEvent(digest)
+                if digest.as_str() == event_digest
+        );
+        if dependency.realm_id != event.realm_id || !source_matches {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: governance dependency does not bind committed Control Move"
+                    .to_owned(),
+            ));
+        }
+        crate::governance_history::stage_governance_dependency_exact(data, dependency)?;
+    }
+    Ok(())
+}
+
 fn stage_device_revocation(
     state: &mut MemoryDeviceRevocationState,
     request: &EventCommitRequest,
@@ -495,6 +541,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut device_revocations = self.device_revocations.state.lock();
         let mut consent_cells = self.consent_cells.data.lock();
         let mut account_data = self.account_data.data.lock();
+        let mut governance_dependencies = self.governance_dependencies.data.lock();
 
         let mut staged_events = events.clone();
         let mut staged_control_proposal_acks = control_proposal_acks.clone();
@@ -508,6 +555,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_device_revocations = device_revocations.clone();
         let mut staged_consent_cells = consent_cells.clone();
         let mut staged_account_data = account_data.clone();
+        let mut staged_governance_dependencies = governance_dependencies.clone();
 
         stage_device_pairing_authorization(
             &mut staged_pairings,
@@ -589,6 +637,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         }
         soland_storage::validate_actor_scope_commit(staged_events.values(), &request.event)?;
         stage_control_proposal_ack(&mut staged_control_proposal_acks, &request)?;
+        stage_event_governance_dependencies(&mut staged_governance_dependencies, &request)?;
         stage_contact_projection(&mut staged_contacts, request.contact_projection.as_ref())?;
         stage_consent_projection(
             &mut staged_consent_cells,
@@ -675,6 +724,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *device_revocations = staged_device_revocations;
         *consent_cells = staged_consent_cells;
         *account_data = staged_account_data;
+        *governance_dependencies = staged_governance_dependencies;
 
         let outcome = EventCommitOutcome {
             event_inserted: true,
@@ -715,6 +765,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut invite_policies = self.invite_receive_policies.data.lock();
         let mut device_revocations = self.device_revocations.state.lock();
         let mut agent_membership_cascades = self.agent_membership_cascades.data.lock();
+        let mut governance_dependencies = self.governance_dependencies.data.lock();
 
         let mut staged_events = events.clone();
         let mut staged_control_proposal_acks = control_proposal_acks.clone();
@@ -728,6 +779,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_invite_policies = invite_policies.clone();
         let mut staged_device_revocations = device_revocations.clone();
         let mut staged_agent_membership_cascades = agent_membership_cascades.clone();
+        let mut staged_governance_dependencies = governance_dependencies.clone();
         let mut event_inserted = false;
         let mut projections_inserted = 0;
         let mut outbox_inserted = 0;
@@ -820,6 +872,10 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 &event_request.event,
             )?;
             stage_control_proposal_ack(&mut staged_control_proposal_acks, &event_request)?;
+            stage_event_governance_dependencies(
+                &mut staged_governance_dependencies,
+                &event_request,
+            )?;
             let event_id = event_request.event.event_id.clone();
             stage_contact_projection(
                 &mut staged_contacts,
@@ -933,6 +989,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *invite_policies = staged_invite_policies;
         *device_revocations = staged_device_revocations;
         *agent_membership_cascades = staged_agent_membership_cascades;
+        *governance_dependencies = staged_governance_dependencies;
 
         #[cfg(feature = "fault-injection")]
         self.fault_injector
@@ -1008,6 +1065,7 @@ mod tests {
         let canonical_bytes =
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         EventCommitRequest {
+            governance_dependencies: Vec::new(),
             device_pairing_authorization: None,
             contact_projection: None,
             consent_projection: None,
@@ -1217,6 +1275,7 @@ mod tests {
         let canonical_bytes =
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         EventCommitRequest {
+            governance_dependencies: Vec::new(),
             device_pairing_authorization: None,
             contact_projection: None,
             consent_projection: None,
@@ -1325,6 +1384,7 @@ mod tests {
         };
         (
             EventCommitRequest {
+                governance_dependencies: Vec::new(),
                 device_pairing_authorization: None,
                 contact_projection: None,
                 consent_projection: None,

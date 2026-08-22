@@ -449,7 +449,7 @@ pub(super) async fn submit_identity_anchor_batch(
         .iter()
         .map(|record| record.ingress_receipt.clone())
         .collect::<Vec<_>>();
-    let (accepted_create_event, accepted_create_envelope, _) =
+    let (accepted_create_event, accepted_create_envelope, _, create_dependency) =
         super::value::accepted_event_envelope(
             state,
             session,
@@ -459,7 +459,7 @@ pub(super) async fn submit_identity_anchor_batch(
             received_at,
         )
         .await?;
-    let (accepted_authorize_event, accepted_authorize_envelope, _) =
+    let (accepted_authorize_event, accepted_authorize_envelope, _, authorize_dependency) =
         super::value::accepted_event_envelope(
             state,
             session,
@@ -470,6 +470,10 @@ pub(super) async fn submit_identity_anchor_batch(
         )
         .await?;
     let accepted_envelopes = vec![accepted_create_envelope, accepted_authorize_envelope];
+    let governance_dependencies = [create_dependency, authorize_dependency]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
     let records = vec![
         canonical_record(&first, accepted_envelopes[0].clone(), received_at),
         canonical_record(&second, accepted_envelopes[1].clone(), received_at),
@@ -595,6 +599,7 @@ pub(super) async fn submit_identity_anchor_batch(
         .store_identity_anchor_batch(
             records.clone(),
             control_proposal_acks.clone(),
+            governance_dependencies,
             receipt,
             device_projection,
             account_slot,
@@ -2486,6 +2491,7 @@ mod tests {
             .store_identity_anchor_batch(
                 vec![reanchor.clone(), authorize.clone()],
                 vec![anchor_ack(&reanchor), anchor_ack(&authorize)],
+                Vec::new(),
                 None,
                 None,
                 None,

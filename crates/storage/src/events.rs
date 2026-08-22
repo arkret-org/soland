@@ -51,6 +51,7 @@ pub trait EventStore: Send + Sync {
         &self,
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<crate::GovernanceDependencyWrite>,
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<()>;
     /// Commit the accepted Direct Conversation founding unit, its immutable slot, receipt bytes,
@@ -59,6 +60,7 @@ pub trait EventStore: Send + Sync {
         &self,
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<crate::GovernanceDependencyWrite>,
         slot: DirectConversationFoundingSlotRecord,
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<DirectConversationFoundingCommitOutcome>;
@@ -77,6 +79,7 @@ pub trait EventStore: Send + Sync {
         &self,
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<crate::GovernanceDependencyWrite>,
         receipt: Option<EventBatchReceipt>,
         device: Option<DeviceInventoryRecord>,
         account_slot: Option<IdentityAnchorAccountSlot>,

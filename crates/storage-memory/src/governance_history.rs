@@ -20,8 +20,8 @@ use super::{Arc, BTreeMap, Mutex};
 type DependencyObjectKey = (String, String, String);
 type DependencySourceKey = (String, String, String);
 
-#[derive(Default)]
-struct GovernanceDependencyData {
+#[derive(Clone, Default)]
+pub(crate) struct GovernanceDependencyData {
     objects: BTreeMap<DependencyObjectKey, (GovernanceDependencyCanonical, GovernanceDependency)>,
     unscoped_signer_evidence:
         BTreeMap<(String, String), (GovernanceDependencyCanonical, GovernanceDependency)>,
@@ -31,7 +31,61 @@ struct GovernanceDependencyData {
 
 #[derive(Clone, Default)]
 pub struct MemoryGovernanceDependencyStore {
-    data: Arc<Mutex<GovernanceDependencyData>>,
+    pub(crate) data: Arc<Mutex<GovernanceDependencyData>>,
+}
+
+pub(crate) fn stage_governance_dependency_exact(
+    data: &mut GovernanceDependencyData,
+    write: &GovernanceDependencyWrite,
+) -> PersistenceResult<ExactWriteOutcome> {
+    let canonical = governance_dependency_canonical(&write.item)?;
+    let (source_kind, source_ref) = write.source.storage_parts();
+    let object_key = (
+        write.realm_id.as_str().to_owned(),
+        canonical.dependency_kind.to_owned(),
+        canonical.object_digest.as_str().to_owned(),
+    );
+    let source_key = (
+        write.realm_id.as_str().to_owned(),
+        source_kind.to_owned(),
+        source_ref.to_owned(),
+    );
+    let edge_value = (
+        canonical.dependency_kind.to_owned(),
+        canonical.object_digest.as_str().to_owned(),
+    );
+    if let Some((stored, stored_item)) = data.objects.get(&object_key)
+        && (stored.canonical_bytes != canonical.canonical_bytes
+            || stored.object_json != canonical.object_json
+            || stored_item != &write.item)
+    {
+        return Err(PersistenceError::Conflict(
+            "duplicate_conflict: governance dependency object differs".to_owned(),
+        ));
+    }
+    let edges = data.edges.get(&source_key);
+    if let Some(stored) = edges.and_then(|edges| edges.get(&write.edge_index)) {
+        return if stored == &edge_value {
+            Ok(ExactWriteOutcome::ExactReplay)
+        } else {
+            Err(PersistenceError::Conflict(
+                "duplicate_conflict: governance dependency edge index differs".to_owned(),
+            ))
+        };
+    }
+    if edges.is_some_and(|edges| edges.values().any(|stored| stored == &edge_value)) {
+        return Err(PersistenceError::Conflict(
+            "duplicate_conflict: governance dependency edge moved index".to_owned(),
+        ));
+    }
+    data.objects
+        .entry(object_key)
+        .or_insert((canonical, write.item.clone()));
+    data.edges
+        .entry(source_key)
+        .or_default()
+        .insert(write.edge_index, edge_value);
+    Ok(ExactWriteOutcome::Inserted)
 }
 
 #[async_trait::async_trait]
@@ -143,55 +197,8 @@ impl GovernanceDependencyStore for MemoryGovernanceDependencyStore {
         &self,
         write: GovernanceDependencyWrite,
     ) -> PersistenceResult<ExactWriteOutcome> {
-        let canonical = governance_dependency_canonical(&write.item)?;
-        let (source_kind, source_ref) = write.source.storage_parts();
-        let object_key = (
-            write.realm_id.as_str().to_owned(),
-            canonical.dependency_kind.to_owned(),
-            canonical.object_digest.as_str().to_owned(),
-        );
-        let source_key = (
-            write.realm_id.as_str().to_owned(),
-            source_kind.to_owned(),
-            source_ref.to_owned(),
-        );
-        let edge_value = (
-            canonical.dependency_kind.to_owned(),
-            canonical.object_digest.as_str().to_owned(),
-        );
         let mut data = self.data.lock();
-        if let Some((stored, stored_item)) = data.objects.get(&object_key)
-            && (stored.canonical_bytes != canonical.canonical_bytes
-                || stored.object_json != canonical.object_json
-                || stored_item != &write.item)
-        {
-            return Err(PersistenceError::Conflict(
-                "duplicate_conflict: governance dependency object differs".to_owned(),
-            ));
-        }
-        let edges = data.edges.get(&source_key);
-        if let Some(stored) = edges.and_then(|edges| edges.get(&write.edge_index)) {
-            return if stored == &edge_value {
-                Ok(ExactWriteOutcome::ExactReplay)
-            } else {
-                Err(PersistenceError::Conflict(
-                    "duplicate_conflict: governance dependency edge index differs".to_owned(),
-                ))
-            };
-        }
-        if edges.is_some_and(|edges| edges.values().any(|stored| stored == &edge_value)) {
-            return Err(PersistenceError::Conflict(
-                "duplicate_conflict: governance dependency edge moved index".to_owned(),
-            ));
-        }
-        data.objects
-            .entry(object_key)
-            .or_insert((canonical, write.item));
-        data.edges
-            .entry(source_key)
-            .or_default()
-            .insert(write.edge_index, edge_value);
-        Ok(ExactWriteOutcome::Inserted)
+        stage_governance_dependency_exact(&mut data, &write)
     }
 
     async fn get(

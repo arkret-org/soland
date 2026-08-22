@@ -83,7 +83,7 @@ pub struct SolandMemoryPersistenceStore {
     organization_policies: MemoryOrganizationPolicyStore,
     realm_organizations: MemoryRealmOrganizationStore,
     realm_organization_statements: MemoryRealmOrganizationStatementStore,
-    governance_dependencies: MemoryGovernanceDependencyStore,
+    pub(crate) governance_dependencies: MemoryGovernanceDependencyStore,
     history_traversal_retentions: MemoryHistoryTraversalRetentionStore,
     history_response_streams: MemoryHistoryResponseStreamStore,
     pending_rrk_acquisitions: MemoryPendingRrkAcquisitionStore,
@@ -147,12 +147,14 @@ impl SolandMemoryPersistenceStore {
         let federation_outbox = MemoryFederationOutboxStore::new();
         let canonical_events = Arc::new(Mutex::new(BTreeMap::new()));
         let projection_events = MemoryProjectionEventStore::new(canonical_events.clone());
+        let governance_dependencies = MemoryGovernanceDependencyStore::default();
         let events = MemoryEventStore::with_devices(
             canonical_events.clone(),
             devices.shared_data(),
             publication_evidence_data.clone(),
             federation_outbox.data.clone(),
             projection_events.data.clone(),
+            governance_dependencies.clone(),
         );
         let recovery_sessions = MemoryRecoverySessionStore::new();
         let security_transactions =
@@ -191,7 +193,7 @@ impl SolandMemoryPersistenceStore {
             organization_policies: MemoryOrganizationPolicyStore::new(),
             realm_organizations: MemoryRealmOrganizationStore::new(),
             realm_organization_statements: MemoryRealmOrganizationStatementStore::new(),
-            governance_dependencies: MemoryGovernanceDependencyStore::default(),
+            governance_dependencies,
             history_traversal_retentions,
             history_response_streams,
             pending_rrk_acquisitions: MemoryPendingRrkAcquisitionStore::default(),

@@ -16,6 +16,7 @@ use super::{
 use crate::federation::{
     FederationOutboxRow, insert_federation_outbox_row, qualified_outbox_columns,
 };
+use crate::governance_history::put_governance_dependency_exact_in_transaction;
 pub struct PgEventStore {
     pub pool: PgPool,
 }
@@ -600,6 +601,41 @@ async fn insert_pending_control_event(
         }
     })
 }
+
+async fn insert_control_event_governance_dependencies(
+    conn: &mut AsyncPgConnection,
+    record: &CanonicalEventRecord,
+    dependencies: &[soland_storage::GovernanceDependencyWrite],
+) -> PersistenceResult<usize> {
+    let realm_id = record.realm_id.as_deref().ok_or_else(|| {
+        PersistenceError::Conflict(
+            "schema_violation: Control Event governance dependency is missing Realm".to_owned(),
+        )
+    })?;
+    let mut inserted = 0;
+    for dependency in dependencies {
+        let soland_storage::GovernanceDependencySource::ControlEvent(event_digest) =
+            &dependency.source
+        else {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: Event batch cannot carry a Seal governance dependency"
+                    .to_owned(),
+            ));
+        };
+        if event_digest.as_str() != record.canonical_digest {
+            continue;
+        }
+        if dependency.realm_id.as_str() != realm_id {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: governance dependency Realm does not bind Control Event"
+                    .to_owned(),
+            ));
+        }
+        put_governance_dependency_exact_in_transaction(conn, dependency).await?;
+        inserted += 1;
+    }
+    Ok(inserted)
+}
 async fn assert_identity_anchor_frontier(
     conn: &mut AsyncPgConnection,
     expected: &IdentityAnchorFrontierCas,
@@ -857,6 +893,7 @@ impl EventStore for PgEventStore {
         &self,
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<()> {
         let mut acks = BTreeMap::new();
@@ -885,6 +922,7 @@ impl EventStore for PgEventStore {
                     return Ok(StoreTransactionOutcome::Collision);
                 }
                 let mut event_pks = Vec::with_capacity(records.len());
+                let mut dependency_count = 0;
                 for record in records {
                     let event_pk = match insert_canonical_event(conn, &record).await? {
                         CanonicalInsertOutcome::Inserted(pk)
@@ -902,6 +940,19 @@ impl EventStore for PgEventStore {
                     )
                         })?;
                     insert_pending_control_event(conn, &record, control_proposal_ack).await?;
+                    dependency_count += insert_control_event_governance_dependencies(
+                        conn,
+                        &record,
+                        &governance_dependencies,
+                    )
+                    .await?;
+                }
+                if dependency_count != governance_dependencies.len() {
+                    return Err(PersistenceError::Conflict(
+                        "schema_violation: Realm bootstrap governance dependency source is not in batch"
+                            .to_owned(),
+                    )
+                    .into());
                 }
                 // Same transaction as the Events: the delivery intent for a Realm
                 // genesis unit is not a post-commit best-effort follow-up.
@@ -925,6 +976,7 @@ impl EventStore for PgEventStore {
         &self,
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         slot: DirectConversationFoundingSlotRecord,
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<DirectConversationFoundingCommitOutcome> {
@@ -1018,6 +1070,7 @@ impl EventStore for PgEventStore {
                 return Err(PersistenceError::Conflict("event_hash_collision".to_owned()).into());
             }
             let mut event_pks = Vec::with_capacity(records.len());
+            let mut dependency_count = 0;
             for record in records {
                 let event_pk = match insert_canonical_event(conn, &record).await? {
                     CanonicalInsertOutcome::Inserted(pk) | CanonicalInsertOutcome::Replay(pk) => pk,
@@ -1033,6 +1086,19 @@ impl EventStore for PgEventStore {
                     )
                 })?;
                 insert_pending_control_event(conn, &record, ack).await?;
+                dependency_count += insert_control_event_governance_dependencies(
+                    conn,
+                    &record,
+                    &governance_dependencies,
+                )
+                .await?;
+            }
+            if dependency_count != governance_dependencies.len() {
+                return Err(PersistenceError::Conflict(
+                    "schema_violation: Direct Conversation governance dependency source is not in batch"
+                        .to_owned(),
+                )
+                .into());
             }
             let event_ids = serde_json::to_value(&slot.event_ids).map_err(PersistenceError::database)?;
             sql_query(
@@ -1091,6 +1157,7 @@ impl EventStore for PgEventStore {
         &self,
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         receipt: Option<EventBatchReceipt>,
         device: Option<DeviceInventoryRecord>,
         account_slot: Option<IdentityAnchorAccountSlot>,
@@ -1206,6 +1273,7 @@ impl EventStore for PgEventStore {
                         .into());
                     }
                 }
+                let mut dependency_count = 0;
                 for record in records {
                     let event_pk = match insert_canonical_event(conn, &record).await? {
                         CanonicalInsertOutcome::Inserted(pk) | CanonicalInsertOutcome::Replay(pk) => pk,
@@ -1228,7 +1296,20 @@ impl EventStore for PgEventStore {
                                 })?,
                         )
                         .await?;
+                        dependency_count += insert_control_event_governance_dependencies(
+                            conn,
+                            &record,
+                            &governance_dependencies,
+                        )
+                        .await?;
                     }
+                }
+                if !reanchor_conflict && dependency_count != governance_dependencies.len() {
+                    return Err(PersistenceError::Conflict(
+                        "schema_violation: identity anchor governance dependency source is not in batch"
+                            .to_owned(),
+                    )
+                    .into());
                 }
                 if !reanchor_conflict
                     && let Some(device) = device
