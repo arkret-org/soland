@@ -110,7 +110,7 @@ pub(super) async fn security_transaction_get(
 pub(super) async fn security_transaction_continue(
     aa: AuthArgs,
     transaction_id: PathParam<String>,
-    body: JsonBody<TypedSecurityTransactionContinueRequest>,
+    body: JsonBody<SecurityTransactionContinueRequest>,
     depot: &mut Depot,
     res: &mut Response,
     req: &mut Request,
@@ -144,9 +144,8 @@ pub(super) async fn security_transaction_continue(
         return json_ok(resource);
     }
 
-    transaction
-        .resource
-        .validate_continue(&request)
+    request
+        .validate_for_transaction(&transaction.resource)
         .map_err(|error| {
             AppError::conflict(error.to_string())
                 .with_wire_code("security_transaction_failed_precondition")
@@ -1059,7 +1058,7 @@ async fn continue_rotation_local_commit(
     state: &AppState,
     session: &SessionRecord,
     transaction: SecurityTransactionRecord,
-    request: TypedSecurityTransactionContinueRequest,
+    request: SecurityTransactionContinueRequest,
     canonical_request: Vec<u8>,
     res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
@@ -1138,7 +1137,7 @@ async fn continue_issue_terminal_receipt(
     state: &AppState,
     session: &SessionRecord,
     mut transaction: SecurityTransactionRecord,
-    request: TypedSecurityTransactionContinueRequest,
+    request: SecurityTransactionContinueRequest,
     canonical_request: Vec<u8>,
     res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
@@ -1612,7 +1611,7 @@ fn verify_recovery_device_signature(
 async fn continue_publish_did_entry(
     _state: &AppState,
     _transaction: SecurityTransactionRecord,
-    _request: TypedSecurityTransactionContinueRequest,
+    _request: SecurityTransactionContinueRequest,
     _canonical_request: Vec<u8>,
     _res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
@@ -1626,7 +1625,7 @@ async fn continue_submit_reanchor_unit(
     state: &AppState,
     session: &SessionRecord,
     mut transaction: SecurityTransactionRecord,
-    _request: TypedSecurityTransactionContinueRequest,
+    _request: SecurityTransactionContinueRequest,
     canonical_request: Vec<u8>,
     res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {

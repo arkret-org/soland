@@ -22,7 +22,7 @@ use arkret_models_crypto::{
     RecoveryPolicyRef, RecoveryPolicySummary, RecoveryProofKind, RecoveryPublicationAction,
     RecoveryPublicationAuthorityContext, RecoverySessionCreateRequestBody,
     RecoverySessionProofSubmitOutcome, RecoverySessionProofSubmitRequestBody, RecoverySessionState,
-    SessionState, TypedSecurityTransactionContinueRequest,
+    SecurityTransactionContinueRequest, SessionState,
 };
 use arkret_wire::{
     AuthoritySetAuthorizationRule, AuthoritySetPolicy, AuthoritySetPolicyKind,
