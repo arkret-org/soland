@@ -508,8 +508,8 @@ async fn peer_claim_keypackage(
 
 async fn claim_keypackage_at_destination(
     state: &AppState,
-    body: &KeyPackagesClaimRequestBody,
-) -> JsonResult<KeyPackagesClaimOutcome> {
+    body: &PeerKeyPackagesClaimRequestBody,
+) -> JsonResult<PeerKeyPackagesClaimOutcome> {
     let body_value = serde_json::to_value(body)
         .map_err(|error| AppError::internal(format!("KeyPackage claim serialize: {error}")))?;
     let source_service_id = body.service_binding.source_service_id.as_str().to_owned();
@@ -1474,7 +1474,8 @@ async fn claim_keypackage(
     }
     body.validate_shape()
         .map_err(|error| peer_claim_schema_violation(error.to_string()))?;
-    validate_peer_claim_time_window(&body)?;
+    let peer_body = PeerKeyPackagesClaimRequestBody::from(&body);
+    validate_peer_claim_time_window(&peer_body)?;
     let local_service_id = state.service_id();
     if body.service_binding.source_service_id.as_str() != local_service_id {
         return Err(peer_claim_schema_violation(
@@ -1520,7 +1521,8 @@ async fn claim_keypackage(
             .await
             .map_err(|error| AppError::internal(format!("remote claim relay ledger: {error}")))?
         {
-            return replay_peer_claim(existing, &request_digest);
+            return replay_peer_claim(existing, &request_digest)
+                .map(|Json(outcome)| Json(outcome.into()));
         }
         let target = crate::routing::federation::federation::resolved_peer_target(
             state,
@@ -1557,7 +1559,9 @@ async fn claim_keypackage(
         .with_status(StatusCode::SERVICE_UNAVAILABLE)
         .with_wire_code("dependency_unavailable"));
     }
-    claim_keypackage_at_destination(state, &body).await
+    claim_keypackage_at_destination(state, &peer_body)
+        .await
+        .map(|Json(outcome)| Json(outcome.into()))
 }
 
 pub(crate) async fn capture_relayed_keypackage_claim_outcome(
