@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use arkret_models_collaboration::governance_dependencies::{
-    GovernanceDependency, GovernanceDependencyResolveOutcome, GovernanceDependencyResolveRequest,
+    GovernanceDependency, GovernanceDependencyResolveOutcome, GovernanceDependencySelector,
+    PeerGovernanceDependencyResolveRequest, SelfGovernanceDependencyResolveRequest,
 };
 use arkret_models_collaboration::history_key::{
     HistoryKeyResponseAckRequest, HistoryKeyResponseLostRecord, HistoryResponseId,
@@ -42,17 +43,22 @@ impl GovernanceHistoryService {
 
     pub async fn resolve_self_dependencies(
         &self,
-        request: GovernanceDependencyResolveRequest<SelfHistoryTraversalAccess>,
+        request: SelfGovernanceDependencyResolveRequest,
         ordinary_realm_visible: bool,
         caller: &DidCoreId,
         now: DateTime<Utc>,
     ) -> ServiceResult<GovernanceDependencyResolveOutcome> {
+        request
+            .validate()
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let access = request
             .history_traversal_access
             .clone()
             .map(HistoryTraversalAccess::SelfAccess);
         self.resolve_dependencies(
-            request,
+            request.realm_id,
+            request.selectors,
+            request.byte_limit,
             access,
             ordinary_realm_visible,
             Some(TraversalCaller::SelfPrincipal(caller)),
@@ -63,17 +69,22 @@ impl GovernanceHistoryService {
 
     pub async fn resolve_peer_dependencies(
         &self,
-        request: GovernanceDependencyResolveRequest<PeerHistoryTraversalAccess>,
+        request: PeerGovernanceDependencyResolveRequest,
         ordinary_realm_visible: bool,
         caller: &DidCoreId,
         now: DateTime<Utc>,
     ) -> ServiceResult<GovernanceDependencyResolveOutcome> {
+        request
+            .validate()
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let access = request
             .history_traversal_access
             .clone()
             .map(HistoryTraversalAccess::PeerAccess);
         self.resolve_dependencies(
-            request,
+            request.realm_id,
+            request.selectors,
+            request.byte_limit,
             access,
             ordinary_realm_visible,
             Some(TraversalCaller::PeerService(caller)),
@@ -82,21 +93,19 @@ impl GovernanceHistoryService {
         .await
     }
 
-    async fn resolve_dependencies<A>(
+    async fn resolve_dependencies(
         &self,
-        request: GovernanceDependencyResolveRequest<A>,
+        realm_id: RealmId,
+        selectors: Vec<GovernanceDependencySelector>,
+        byte_limit: u64,
         access: Option<HistoryTraversalAccess>,
         ordinary_realm_visible: bool,
         caller: Option<TraversalCaller<'_>>,
         now: DateTime<Utc>,
     ) -> ServiceResult<GovernanceDependencyResolveOutcome> {
-        request
-            .validate()
-            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-
         let retained_dependencies = match access.as_ref() {
             Some(access) => Some(
-                self.retained_dependencies(&request.realm_id, access, caller, now)
+                self.retained_dependencies(&realm_id, access, caller, now)
                     .await?,
             ),
             None if ordinary_realm_visible => None,
@@ -104,7 +113,7 @@ impl GovernanceHistoryService {
         };
         let mut items = Vec::new();
         let mut missing_selectors = Vec::new();
-        for selector in &request.selectors {
+        for selector in &selectors {
             let item = if let Some(retained) = &retained_dependencies {
                 retained
                     .iter()
@@ -114,7 +123,7 @@ impl GovernanceHistoryService {
                 let realm_item = self
                     .persistence
                     .governance_dependencies()
-                    .get(&request.realm_id, selector)
+                    .get(&realm_id, selector)
                     .await?;
                 match realm_item {
                     Some(item) => Some(item),
@@ -140,7 +149,7 @@ impl GovernanceHistoryService {
             .map_err(|error| ServiceError::Internal(error.to_string()))?;
         let encoded = arkret_canonical::canonical_json_bytes(&outcome)
             .map_err(|error| ServiceError::Internal(error.to_string()))?;
-        let byte_limit = usize::try_from(request.byte_limit).unwrap_or(usize::MAX);
+        let byte_limit = usize::try_from(byte_limit).unwrap_or(usize::MAX);
         if encoded.len() > byte_limit || encoded.len() > MAX_RESPONSE_BYTES {
             return Err(ServiceError::SchemaViolation(
                 "limit_exceeded: complete governance dependency outcome exceeds byte_limit"

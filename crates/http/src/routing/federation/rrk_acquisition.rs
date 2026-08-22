@@ -408,7 +408,7 @@ impl RrkAcquisitionWorker {
                 )
                 .await?;
             outcome
-                .validate_for_request(&request)
+                .validate_for_peer_request(&request)
                 .map_err(|error| format!("dependency_outcome:{error}"))?;
             if !outcome.missing_selectors.is_empty() {
                 return Err("governance_dependency_missing".to_owned());
@@ -591,7 +591,7 @@ pub(crate) async fn fetch_peer_governance_dependencies(
     let outcome: GovernanceDependencyResolveOutcome =
         serde_json::from_slice(&bytes).map_err(|error| format!("response_json:{error}"))?;
     outcome
-        .validate_for_request(request)
+        .validate_for_peer_request(request)
         .map_err(|error| format!("dependency_outcome:{error}"))?;
     Ok(outcome)
 }
