@@ -379,6 +379,19 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
     receiver_base_url: &str,
 ) -> Result<(), AppError> {
     let store = state.persistence().governance_dependency_store();
+    if let Some(materialized) = store
+        .get_historical_agent_signer_evidence(&soland_storage::HistoricalAgentSignerEvidenceKey {
+            agent_id: receipt.agent_id.clone(),
+            verification_method: receipt.verification_method.clone(),
+            event_id: receipt.event_id.clone(),
+            event_digest: receipt.event_digest.clone(),
+            receiver_service_id: receipt.receiver_service_id.clone(),
+        })
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        return replayed_historical_agent_signer_evidence(materialized, &receipt);
+    }
     let original_selector = GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
         content_digest: receipt.producer_signer_resolution_evidence_digest.clone(),
     };
@@ -528,6 +541,47 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
         ],
     )
     .await
+}
+
+/// Decide the outcome of a second consumption of one already materialized
+/// selector tuple.
+///
+/// The Agent Authority signs a fresh outer attestation on every attempt, so
+/// re-running materialization derives a different canonical root digest for
+/// byte-identical inputs: the new digest cannot take the stored tuple, and the
+/// tuple would answer `duplicate_conflict` forever. `zh/sync/federation.md`
+/// §4.1.1 makes the same tuple carrying the same receipt an exact replay, so it
+/// resolves here as a no-op against the stored root. A stored tuple carrying a
+/// different receipt stays a real conflict with zero overwrite; the receipt
+/// binds the producer evidence pair, so receipt equality also settles the
+/// frozen `admission_evidence` the root was built from.
+fn replayed_historical_agent_signer_evidence(
+    materialized: GovernanceDependency,
+    receipt: &arkret_models_identity::agent_signer_evidence::AgentEventAdmissionReceipt,
+) -> Result<(), AppError> {
+    let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+        authenticated_signer_resolution_evidence:
+            AuthenticatedSignerResolutionEvidence::NativeAgent {
+                agent_signer_evidence:
+                    AgentSignerEvidence::HistoricalEvent {
+                        event_admission_receipt,
+                        ..
+                    },
+                ..
+            },
+        ..
+    } = materialized
+    else {
+        return Err(AppError::internal(
+            "materialized historical Agent signer evidence has the wrong kind",
+        ));
+    };
+    if event_admission_receipt != *receipt {
+        return Err(AppError::conflict(
+            "duplicate_conflict: historical Agent signer evidence tuple differs",
+        ));
+    }
+    Ok(())
 }
 
 async fn persist_agent_signer_evidence_closure(
