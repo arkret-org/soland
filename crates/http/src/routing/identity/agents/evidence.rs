@@ -159,6 +159,7 @@ async fn current_authenticated_agent_signer_evidence(
         state,
         &gate.authority_service_id,
         state.config().account_authority_url.as_deref(),
+        None,
         chrono::Utc::now(),
     )
     .await?;
@@ -345,6 +346,7 @@ pub(crate) async fn fetch_service_signer_evidence(
     state: &AppState,
     service_id: &DidCoreId,
     base_url: Option<&str>,
+    verification_method: Option<&arkret_wire::DidUrl>,
     at: chrono::DateTime<chrono::Utc>,
 ) -> Result<AuthenticatedSignerResolutionEvidence, AgentSignerEvidenceQueryFailureReason> {
     let base_url = base_url
@@ -376,9 +378,19 @@ pub(crate) async fn fetch_service_signer_evidence(
     }
     let resolution = serde_json::from_slice(&body)
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    arkret_identity::service_signer_evidence_from_authenticated_resolution(
-        resolution, service_id, at,
-    )
+    match verification_method {
+        Some(method) => {
+            arkret_identity::service_signer_evidence_for_method_from_authenticated_resolution(
+                resolution,
+                service_id,
+                method.clone(),
+                at,
+            )
+        }
+        None => arkret_identity::service_signer_evidence_from_authenticated_resolution(
+            resolution, service_id, at,
+        ),
+    }
     .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)
 }
 
@@ -481,10 +493,14 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
         dependency_by_digest(store, &controller_signer_evidence_digest).await?;
     let account_authority_evidence =
         dependency_by_digest(store, &account_authority_signer_evidence_digest).await?;
+    let receipt_method =
+        arkret_signatures::agent_evidence::historical_receipt_verification_method(&receipt)
+            .map_err(|reason| AppError::internal(reason.as_str()))?;
     let receiver_evidence = fetch_service_signer_evidence(
         state,
         &receipt.receiver_service_id,
         Some(receiver_base_url),
+        Some(&receipt_method),
         receipt.accepted_at,
     )
     .await
@@ -498,11 +514,14 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
             "receiver signer evidence is not authenticated service evidence",
         ));
     };
-    let receipt_method =
-        arkret_signatures::agent_evidence::historical_receipt_verification_method(&receipt)
-            .map_err(|reason| AppError::internal(reason.as_str()))?;
+    let historical_document = arkret_identity::authenticated_service_document_at(
+        authenticated_resolution,
+        &receipt.receiver_service_id,
+        receipt.accepted_at,
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
     let receiver_key = arkret_identity::jws::resolve_ed25519_pubkey_from_document(
-        &authenticated_resolution.normalized_did_document,
+        &historical_document,
         receipt_method.as_str(),
     )
     .map_err(|error| AppError::internal(error.to_string()))?;
