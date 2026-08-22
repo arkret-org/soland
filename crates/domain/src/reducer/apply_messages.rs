@@ -724,7 +724,7 @@ impl ProjectionState {
             .payload
             .get("read_scope")
             .cloned()
-            .and_then(|value| serde_json::from_value::<ReadScopeWire>(value).ok())
+            .and_then(|value| serde_json::from_value::<ReadCursorScope>(value).ok())
         else {
             return ProjectionEffect::Ignored;
         };
@@ -738,7 +738,7 @@ impl ProjectionState {
             .payload
             .get("position")
             .cloned()
-            .and_then(|value| serde_json::from_value::<ReadCursorPositionWire>(value).ok())
+            .and_then(|value| serde_json::from_value::<ReadCursorPosition>(value).ok())
         else {
             return ProjectionEffect::Ignored;
         };
@@ -747,7 +747,7 @@ impl ProjectionState {
             return ProjectionEffect::Ignored;
         };
 
-        let marker = ReadMarkerState {
+        let marker = ReadMarkerOutcome {
             realm_id: realm_id.clone(),
             actor_id: actor_id.clone(),
             device_id,
@@ -787,8 +787,8 @@ fn read_cursor_causal_relation(operation: &Operation) -> ReadCursorCausalRelatio
 /// Decision 0017 / read-receipts.md §6.5. Missing relation context is
 /// deliberately undecidable and preserves the current durable projection.
 fn read_cursor_candidate_wins(
-    current: &ReadMarkerState,
-    candidate: &ReadMarkerState,
+    current: &ReadMarkerOutcome,
+    candidate: &ReadMarkerOutcome,
     relation: ReadCursorCausalRelation,
 ) -> bool {
     match relation {

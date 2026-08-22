@@ -23,6 +23,7 @@ use arkret_models_collaboration::account_lifecycle::{
 use arkret_models_collaboration::http_bodies::{
     AccountDevicePairOutcome, AccountDevicePairRequestBody,
 };
+use arkret_models_identity::AccountLogoutOutcome;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Duration;
@@ -40,8 +41,8 @@ use super::{
 };
 use crate::state::AppState;
 use crate::wire::{
-    DevLoginRequestBody, LogoutOutcome, SessionGrantIntrospectOutcome,
-    SessionGrantIntrospectRequestBody, SessionLoginOutcome,
+    DevLoginRequestBody, SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
+    SessionLoginOutcome,
 };
 use crate::{JsonResult, ids, json_ok};
 

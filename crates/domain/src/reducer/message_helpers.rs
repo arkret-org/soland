@@ -4,7 +4,7 @@
 //! and sibling `apply_*` modules keep resolving these by name.
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_wire::ReadCursorScope as ReadScopeWire;
+use arkret_wire::ReadCursorScope;
 use serde_json::Value;
 
 use super::PollOptionState;
@@ -223,7 +223,7 @@ pub(crate) fn poll_choices_from_content(content: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub(crate) fn read_scope_key(scope: &ReadScopeWire) -> String {
+pub(crate) fn read_scope_key(scope: &ReadCursorScope) -> String {
     let track_selector = scope.track.as_deref().unwrap_or("");
     format!(
         "{}\u{1f}{}\u{1f}{}",

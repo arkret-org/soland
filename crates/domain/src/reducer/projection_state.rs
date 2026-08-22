@@ -42,7 +42,7 @@ pub struct ProjectionState {
     pub pins: BTreeMap<(String, String), PinProjection>,
     /// Read markers keyed by (realm_id, actor, scope_id). Causal-first merge;
     /// HLC/device ordering applies only to causally concurrent positions.
-    pub read_cursors: BTreeMap<(String, String, String), ReadMarkerState>,
+    pub read_cursors: BTreeMap<(String, String, String), ReadMarkerOutcome>,
     /// Relations keyed by relation_id. LWW by HLC.
     pub relations: BTreeMap<String, SolandRelationState>,
     /// Per-(Strand, Actor) notification watch preferences.

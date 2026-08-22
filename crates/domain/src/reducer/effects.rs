@@ -8,7 +8,7 @@ use arkret_wire::EventKind;
 use serde_json::Value;
 
 use super::{
-    CircleLifecycleState, MessageState, ObjectLifecycleState, PushRouteSubject, ReadMarkerState,
+    CircleLifecycleState, MessageState, ObjectLifecycleState, PushRouteSubject, ReadMarkerOutcome,
     SolandRelationState, SpaceContainerLifecycleState,
 };
 
@@ -42,7 +42,7 @@ pub enum ProjectionEffect {
         target_ref: String,
         active: bool,
     },
-    ReadMarkerUpdated(ReadMarkerState),
+    ReadMarkerUpdated(ReadMarkerOutcome),
     RelationCreated(SolandRelationState),
     RelationUpdated(SolandRelationState),
     RelationDeleted {

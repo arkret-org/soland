@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use arkret_models_identity::EffectiveIdentityEntry;
 use serde_json::Value;
 pub use soland_storage::{
     HandleClaimEvidenceRecord, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
@@ -52,8 +53,6 @@ pub struct HandleClaimDigestInput {
     pub binding_state: String,
     pub expires_at: Option<String>,
 }
-
-pub type EffectiveIdentityEntry = arkret_models_identity::EffectiveIdentityEntry;
 
 /// Per-`(realm_id, actor_id)` snapshot derived on demand by
 /// [`MemberIdentityRegistry::snapshot_for_actor`]. Drives the sync

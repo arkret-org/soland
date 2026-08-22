@@ -415,8 +415,6 @@ pub struct DevLoginRequestBody {
     pub display_name: Option<String>,
 }
 
-pub type LogoutOutcome = arkret_models_identity::AccountLogoutOutcome;
-
 #[derive(salvo::oapi::ToSchema, Debug, Serialize)]
 pub struct SolandAccountRegisterOutcome {
     pub did: String,
@@ -1282,11 +1280,6 @@ pub fn now() -> DateTime<Utc> {
 }
 
 // ── Conversation Model DTOs ──
-
-pub type ReadScopeWire = arkret_wire::primitives::ReadCursorScope;
-pub type ReadCursorPositionWire =
-    arkret_models_collaboration::objects::read_receipts::ReadCursorPosition;
-pub type ReadMarkerOutcome = arkret_models_collaboration::objects::read_receipts::ReadMarkerOutcome;
 
 #[cfg(test)]
 mod tests {

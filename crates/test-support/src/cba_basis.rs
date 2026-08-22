@@ -33,6 +33,7 @@ use std::sync::{LazyLock, Mutex};
 use arkret_identifiers::{DidFullId, Hlc, RealmId, SealId};
 use arkret_wire::{Seal, SealBasis};
 use soland_http::state::AppState;
+use soland_services::conformance_basis::ConformanceRealmBasis;
 
 use crate::AppStateTestExt as _;
 
@@ -41,9 +42,6 @@ const FIXTURE_BASIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
 const FIXTURE_BASIS_ID_DOMAIN: &str = "soland:test-support:realm-basis:";
 /// Stable MLS group id used by E2EE fixture payloads.
 pub const FIXTURE_MLS_GROUP_ID: &str = "fixtureMlsGroup01";
-/// One fixture Realm's accepted authorization basis for one subject.
-pub type RealmBasis = soland_services::conformance_basis::ConformanceRealmBasis;
-
 /// Build a frozen single-signer fixture from a real deterministic Ed25519 key.
 #[must_use]
 pub fn test_single_signer_notary(full_did: &str) -> arkret_wire::NotaryValue {
@@ -92,7 +90,7 @@ impl<'a> FixtureBasis<'a> {
 
 type BasisKey = (String, String, String, String, String, Vec<String>);
 
-static REALM_BASES: LazyLock<Mutex<BTreeMap<BasisKey, RealmBasis>>> =
+static REALM_BASES: LazyLock<Mutex<BTreeMap<BasisKey, ConformanceRealmBasis>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
 /// The sealed genesis unit `subject` holds in `realm_id`.
@@ -101,7 +99,7 @@ pub fn realm_basis(
     realm_id: &str,
     subject: &arkret_identifiers::DidCoreId,
     basis: FixtureBasis<'_>,
-) -> RealmBasis {
+) -> ConformanceRealmBasis {
     realm_basis_for_principal_server(state, realm_id, subject, state.service_id(), basis)
 }
 
@@ -114,7 +112,7 @@ pub fn realm_basis_for_principal_server(
     subject: &arkret_identifiers::DidCoreId,
     principal_server_id: &str,
     basis: FixtureBasis<'_>,
-) -> RealmBasis {
+) -> ConformanceRealmBasis {
     let subject = subject.as_str();
     let notary = state.service_id().clone();
     let actions = basis

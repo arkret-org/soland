@@ -30,7 +30,7 @@ pub(super) async fn logout(
     aa: super::super::AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<LogoutOutcome> {
+) -> JsonResult<AccountLogoutOutcome> {
     let _ = &aa; // header presence registered with the OpenAPI doc
     let state = depot.get_typed::<AppState>().expect("state injected");
 
@@ -107,7 +107,7 @@ pub(super) async fn logout(
     )
     .await;
 
-    json_ok(LogoutOutcome {
+    json_ok(AccountLogoutOutcome {
         ok: true,
         revoked: revoked || auth_side_revoked,
     })
@@ -137,7 +137,10 @@ fn auth_error_to_app_error(error: (StatusCode, &'static str, &'static str)) -> A
 /// push registrations + drop to-device), mirroring the production
 /// principal-side effects without an Auth Server round-trip. The durable
 /// device authorization remains active across logout and re-login.
-async fn dev_mode_local_logout(state: &AppState, token: &str) -> Result<LogoutOutcome, AppError> {
+async fn dev_mode_local_logout(
+    state: &AppState,
+    token: &str,
+) -> Result<AccountLogoutOutcome, AppError> {
     let token_hash = session_credential_hash(token, state.service_id());
     let revoked_session = state
         .sessions()
@@ -162,7 +165,7 @@ async fn dev_mode_local_logout(state: &AppState, token: &str) -> Result<LogoutOu
         )
         .await;
     }
-    Ok(LogoutOutcome { ok: true, revoked })
+    Ok(AccountLogoutOutcome { ok: true, revoked })
 }
 
 /// Server-to-server introspection of a presented `ak.session.grant` for the

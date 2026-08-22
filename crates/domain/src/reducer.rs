@@ -68,10 +68,10 @@ use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::CellRef;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::objects::read_receipts::{
-    ReadCursorCausalRelation, ReadCursorPosition as ReadCursorPositionWire,
+    ReadCursorCausalRelation, ReadCursorPosition, ReadMarkerOutcome,
 };
 use arkret_state::lattice::CellState;
-use arkret_wire::ReadCursorScope as ReadScopeWire;
+use arkret_wire::ReadCursorScope;
 use arkret_wire::cba::ProjectedCellWrite;
 use serde_json::Value;
 
@@ -120,7 +120,7 @@ pub use projections::{
     KeyPackageLifetime, MessageState, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage,
     MlsRemoveObligation, MlsRemoveProposal, MlsWelcome, MlsWelcomeQueueKey, MorphProjection,
     ObjectLifecycleState, PendingReplayEntry, PinProjection, PollOptionState, PollState,
-    ProjectedMessageView, PushRouteCellValue, PushRouteSubject, ReactionState, ReadMarkerState,
+    ProjectedMessageView, PushRouteCellValue, PushRouteSubject, ReactionState,
     RealmInheritancePolicyState, RealmLinkState, RealmOrganizationStatementState,
     RealmPolicyServerConfig, RealmPolicyServerHead, RedactionCellValue, RsvpHead, RsvpProjection,
     SidecarContextProjection, SidecarProjection, SolandKeyBackupActiveSeries,

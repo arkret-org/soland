@@ -978,8 +978,6 @@ pub struct PollState {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-pub type ReadMarkerState = arkret_models_collaboration::objects::read_receipts::ReadMarkerOutcome;
-
 #[derive(Clone, Debug)]
 pub struct SolandRelationState {
     pub relation_id: String,
