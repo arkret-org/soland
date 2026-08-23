@@ -628,10 +628,6 @@ fn sync_test_operation_at(
     operation
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the fixture preserves the accepted Event envelope coordinates"
-)]
 fn accepted_sync_test_operation_at(
     operation_id: &str,
     event_id: &str,

@@ -800,7 +800,7 @@ async fn handle_contact_control_request(
                 contact_address,
             )
             .await?;
-            return Ok(Some(outcome));
+            Ok(Some(outcome))
         }
         PeerContactSubmitRequestBody::GlareFinalize {
             contact_round_id,
@@ -828,7 +828,7 @@ async fn handle_contact_control_request(
                 contact_address,
             )
             .await?;
-            return Ok(Some(outcome));
+            Ok(Some(outcome))
         }
         PeerContactSubmitRequestBody::ContinuityCheckpoint {
             proposal,
@@ -848,9 +848,9 @@ async fn handle_contact_control_request(
                 contact_address,
             )
             .await?;
-            return Ok(Some(outcome));
+            Ok(Some(outcome))
         }
-        _ => return Ok(None),
+        _ => Ok(None),
     }
 }
 
@@ -2569,16 +2569,12 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                 ..
             },
             PeerContactSubmitOutcome::Control(PeerContactControlSubmitOutcome::GlareFinalize {
-                status,
+                status: PeerContactOutcome::Accepted | PeerContactOutcome::Duplicate,
                 control_receipt,
                 glare_concurrency_attestation: remote_attestation,
                 current_proof: Some(remote_proof),
             }),
-        ) if matches!(
-            status,
-            PeerContactOutcome::Accepted | PeerContactOutcome::Duplicate
-        ) =>
-        {
+        ) => {
             validate_outbound_control_receipt(
                 state,
                 request,
@@ -2801,15 +2797,11 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
         (
             PeerContactSubmitRequestBody::ProofRefresh { current_proof, .. },
             PeerContactSubmitOutcome::Control(PeerContactControlSubmitOutcome::ProofRefresh {
-                status,
+                status: PeerContactOutcome::Accepted | PeerContactOutcome::Duplicate,
                 control_receipt,
                 current_proof: returned_proof,
             }),
-        ) if matches!(
-            status,
-            PeerContactOutcome::Accepted | PeerContactOutcome::Duplicate
-        ) =>
-        {
+        ) => {
             if super::account::canonical_contact_digest(current_proof)?
                 != super::account::canonical_contact_digest(returned_proof)?
             {

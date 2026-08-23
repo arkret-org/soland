@@ -320,9 +320,8 @@ async fn verify_target_artifact(
         };
     if Utc::now() >= expires_at
         || proof.created_at != issued_at
-        || DidCoreId::from(
-            arkret_wire::project_full_id_to_core_id(&full_id).map_err(protocol_violation)?,
-        ) != *expected
+        || arkret_wire::project_full_id_to_core_id(&full_id).map_err(protocol_violation)?
+            != *expected
     {
         return Err(protocol_violation(
             "artifact proof target or freshness mismatch",

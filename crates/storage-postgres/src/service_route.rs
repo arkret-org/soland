@@ -600,12 +600,10 @@ impl ServiceRouteStore for PgServiceRouteStore {
             if let Some(notice) = request.service_route_handover_notice.filter(|notice| {
                 &notice.notice.service_id == target_service_id
                     && notice.notice.service_kind == service_kind
+            }) && latest.as_ref().is_none_or(|current| {
+                current.notice.notice_revision < notice.notice.notice_revision
             }) {
-                if latest.as_ref().is_none_or(|current| {
-                    current.notice.notice_revision < notice.notice.notice_revision
-                }) {
-                    latest = Some(notice);
-                }
+                latest = Some(notice);
             }
         }
         Ok(latest)

@@ -3154,15 +3154,14 @@ pub(super) async fn submit_event_value_with_context(
         .await;
         resolve_moderation_dismiss_queue_item(state, &operation, parsed.event_id.as_str()).await;
     }
-    if parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
-        || parsed.kind == arkret_wire::EventKind::IdentityResolutionUpdate.as_str()
+    if (parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
+        || parsed.kind == arkret_wire::EventKind::IdentityResolutionUpdate.as_str())
+        && let Err(error) = persist_principal_resolution_projection(state, &accepted_event).await
     {
-        if let Err(error) = persist_principal_resolution_projection(state, &accepted_event).await {
-            // This index is rebuildable from canonical Events. The Event is
-            // already committed, so never misreport it as rejected; surface
-            // the drift for repair and let public reads fail closed meanwhile.
-            tracing::error!(%error, event_id = %parsed.event_id, "principal resolution read-index update failed");
-        }
+        // This index is rebuildable from canonical Events. The Event is
+        // already committed, so never misreport it as rejected; surface
+        // the drift for repair and let public reads fail closed meanwhile.
+        tracing::error!(%error, event_id = %parsed.event_id, "principal resolution read-index update failed");
     }
     if let Some(event) = projected_event {
         let _ = state.publish_event_notification(crate::state::EventNotification::event(

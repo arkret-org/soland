@@ -463,9 +463,8 @@ fn fixture_service_identity_for_full_id_and_version(
     .expect("principal-server registration key");
     let signing_key_ref =
         DidCoreIdentityKeyRef::new("fixture:soland:service-signing-key").expect("fixture key ref");
-    let service_id = DidCoreId::from(
-        project_full_id_to_core_id(&full_id).expect("fixture service DID projects to a core id"),
-    );
+    let service_id =
+        project_full_id_to_core_id(&full_id).expect("fixture service DID projects to a core id");
     DidCoreIdentityState::Ready {
         identity: LocalDidCoreIdentity {
             service_id,

@@ -534,13 +534,13 @@ async fn claim_keypackage_at_destination(
             reason = "keypackage_claim_rate_limited",
             "peer KeyPackage claim rejected by protocol quota"
         );
-        record_peer_claim_failed(state, &body, &source_service_id, &request_digest).await?;
+        record_peer_claim_failed(state, body, &source_service_id, &request_digest).await?;
         return Err(peer_claim_failed());
     }
 
-    let policy_authorized = peer_claim_policy_authorized(state, &body, &source_service_id).await?;
+    let policy_authorized = peer_claim_policy_authorized(state, body, &source_service_id).await?;
     let participant_authorized = if policy_authorized {
-        verify_peer_claim_participant_authorization(state, &body).await?
+        verify_peer_claim_participant_authorization(state, body).await?
     } else {
         false
     };
@@ -553,7 +553,7 @@ async fn claim_keypackage_at_destination(
             participant_authorized,
             "peer KeyPackage claim authorization rejected"
         );
-        record_peer_claim_failed(state, &body, &source_service_id, &request_digest).await?;
+        record_peer_claim_failed(state, body, &source_service_id, &request_digest).await?;
         return Err(peer_claim_failed());
     }
 
@@ -626,14 +626,9 @@ async fn claim_keypackage_at_destination(
         predicted.claimed_at = Some(now_secs);
         predicted.claim_expires_at_unix_ms = Some(body.expires_at.timestamp_millis());
         predicted.consumed_at = None;
-        let outcome = build_peer_claim_outcome(
-            state,
-            &body,
-            &source_service_id,
-            &request_digest,
-            &predicted,
-        )
-        .await?;
+        let outcome =
+            build_peer_claim_outcome(state, body, &source_service_id, &request_digest, &predicted)
+                .await?;
         let outcome_value = serde_json::to_value(&outcome).map_err(|error| {
             AppError::internal(format!("peer claim outcome serialize: {error}"))
         })?;
@@ -693,7 +688,7 @@ async fn claim_keypackage_at_destination(
         }
     }
 
-    record_peer_claim_failed(state, &body, &source_service_id, &request_digest).await?;
+    record_peer_claim_failed(state, body, &source_service_id, &request_digest).await?;
     Err(peer_claim_failed())
 }
 
@@ -1126,10 +1121,10 @@ async fn peer_claim_policy_authorized(
             let expected_pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
                 trust_domain,
                 arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
-                    arkret_wire::DidCoreId::from(body.requester.clone()),
+                    body.requester.clone(),
                 ),
                 arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
-                    arkret_wire::DidCoreId::from(body.target_principal_id.clone()),
+                    body.target_principal_id.clone(),
                 ),
             )
             .map_err(|_| peer_claim_failed())?;
@@ -3432,7 +3427,7 @@ mod trust_binding_tests {
         let authorize_event = crate::test_event::raw_event(
             arkret_wire::EventKind::AgentKeyAuthorize.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
-            arkret_wire::DidCoreId::from(principal_core.clone()),
+            principal_core.clone(),
             1,
             arkret_identifiers::Hlc::new("019041000000-0001-0000000f").unwrap(),
             json!({

@@ -618,11 +618,8 @@ fn sign_lease(
             let proof = proof.as_producer()?;
             let (controller, _) = proof.verification_method.rsplit_once('#')?;
             let full_id = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
-            (arkret_wire::project_full_id_to_core_id(&full_id)
-                .map(arkret_wire::DidCoreId::from)
-                .ok()
-                == Some(event.actor_id.clone()))
-            .then_some(event.actor_id.clone())
+            (arkret_wire::project_full_id_to_core_id(&full_id).ok() == Some(event.actor_id.clone()))
+                .then_some(event.actor_id.clone())
         })
         .ok_or_else(|| {
             AppError::new(

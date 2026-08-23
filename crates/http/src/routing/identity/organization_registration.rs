@@ -266,19 +266,6 @@ fn indistinguishable_not_found() -> AppError {
     .with_status(StatusCode::NOT_FOUND)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::authenticated_actor_core_id;
-
-    #[test]
-    fn authenticated_actor_is_projected_to_stable_core_id() {
-        let core = authenticated_actor_core_id("did:webvh:z6mkactor:alice.example")
-            .expect("active full DID projects to a core id");
-        assert_eq!(core.as_str(), "ak:did_core:webvh:z6mkactor");
-        assert!(authenticated_actor_core_id("ak:did_core:webvh:z6mkactor").is_none());
-    }
-}
-
 fn map_error(error: OrganizationRegistrationError) -> AppError {
     let detail = error.detail;
     match error.code {
@@ -306,5 +293,18 @@ fn map_error(error: OrganizationRegistrationError) -> AppError {
             AppError::new(ErrorCode::OrganizationRegistrationStale, detail)
         }
         OrganizationRegistrationErrorCode::Internal => AppError::internal(detail),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::authenticated_actor_core_id;
+
+    #[test]
+    fn authenticated_actor_is_projected_to_stable_core_id() {
+        let core = authenticated_actor_core_id("did:webvh:z6mkactor:alice.example")
+            .expect("active full DID projects to a core id");
+        assert_eq!(core.as_str(), "ak:did_core:webvh:z6mkactor");
+        assert!(authenticated_actor_core_id("ak:did_core:webvh:z6mkactor").is_none());
     }
 }

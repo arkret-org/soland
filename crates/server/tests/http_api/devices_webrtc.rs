@@ -238,7 +238,6 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route_body() {
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
 
-    let mut sibling_pair_body = sibling_pair_body;
     sibling_pair_body["display_name"] = Value::String("Paired Phone".to_owned());
     sibling_pair_body["device_metadata"] = serde_json::json!({"platform": "ios"});
     let mut paired = post_authenticated_canonical(
@@ -1170,13 +1169,13 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims_body() {
 
     // `bindings/livekit.md` §2 — the backend_token is a real LiveKit JWT:
     // `base64url(header).base64url(payload).base64url(HMAC-SHA256)`. It MUST
-    // NOT carry the legacy `livekit.` provider prefix, header MUST be
+    // The header MUST be
     // `{alg:HS256,typ:JWT}`, and the signature MUST verify under the
     // configured API Secret.
     let backend_token = token_response["backend_token"].as_str().unwrap();
     assert!(
         !backend_token.starts_with("livekit."),
-        "LiveKit backend_token must be a standard JWT, not the legacy envelope"
+        "LiveKit backend_token must be a standard JWT"
     );
     let claims = verify_livekit_jwt(backend_token, TEST_LIVEKIT_API_SECRET.as_bytes());
     // §2: `iss` = LiveKit API Key.

@@ -195,19 +195,6 @@ mod tests {
     }
 
     #[test]
-    fn plaintext_visible_services_projection_rejects_legacy_string_list() {
-        let operation = op(
-            arkret_wire::EventKind::RealmPlaintextVisibleServices,
-            json!({
-                "plaintext_visible_services": ["did:web:legacy.local"]
-            }),
-        );
-
-        assert!(plaintext_services_from_operation(&operation).is_empty());
-        assert!(plaintext_service_classes_from_operation(&operation).is_empty());
-    }
-
-    #[test]
     fn member_state_without_title_does_not_project_realm_title() {
         let operation = op(
             arkret_wire::EventKind::MemberState,

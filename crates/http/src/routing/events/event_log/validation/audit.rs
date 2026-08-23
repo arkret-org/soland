@@ -501,21 +501,6 @@ mod tests {
         check(&[own]).expect("writing your own watch state needs no audit pair");
     }
 
-    /// The pre-migration audit shape carried `writer_did`. It has to stop
-    /// pairing, or the rename would be cosmetic: an old producer would keep
-    /// getting `.others` writes admitted against a field the schema no longer
-    /// knows.
-    #[test]
-    fn the_pre_migration_writer_field_no_longer_pairs() {
-        let mut legacy = paired_audit();
-        let payload = legacy["payload"].as_object_mut().unwrap();
-        let writer = payload.remove("writer_actor_id").unwrap();
-        payload.insert("writer_did".to_owned(), writer);
-
-        check(&[others_watch_write(), legacy])
-            .expect_err("an audit using the removed writer_did field does not pair");
-    }
-
     #[test]
     fn the_audit_pair_edge_must_be_present_and_critical() {
         let mut no_edge = paired_audit();

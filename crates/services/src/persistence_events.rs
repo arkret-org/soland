@@ -90,14 +90,16 @@ fn persistence_outbox_row(
     let coalescing_position = delivery.coalescing_position;
     let mut persisted = match delivery.realm_fanout {
         Some(binding) => soland_storage::FederationOutboxRecord::realm_fanout(
-            delivery.id,
-            delivery.peer_did,
-            delivery.peer_url,
-            delivery.endpoint,
-            delivery.idempotency_key,
-            delivery.payload_json,
-            binding,
-            delivery.created_at,
+            soland_storage::RealmFanoutOutboxInput {
+                id: delivery.id,
+                peer_did: delivery.peer_did,
+                peer_url: delivery.peer_url,
+                endpoint: delivery.endpoint,
+                idempotency_key: delivery.idempotency_key,
+                payload_json: delivery.payload_json,
+                binding,
+                created_at: delivery.created_at,
+            },
         ),
         None => soland_storage::FederationOutboxRecord::pending(
             delivery.id,

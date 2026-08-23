@@ -688,7 +688,7 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
                     }
                     return Ok(HistoryRequestPutOutcome::Stored {
                         outcome: ExactWriteOutcome::ExactReplay,
-                        record: existing,
+                        record: Box::new(existing),
                     });
                 }
                 return Err(PersistenceError::Conflict(
@@ -764,8 +764,8 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
                 )
                 .into());
             }
-            if let Some(traversal) = &write.local_traversal {
-                if persist_retention_in_transaction(conn, traversal).await?
+            if let Some(traversal) = &write.local_traversal
+                && persist_retention_in_transaction(conn, traversal).await?
                     != ExactWriteOutcome::Inserted
                 {
                     return Err(PersistenceError::Conflict(
@@ -773,7 +773,6 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
                     )
                     .into());
                 }
-            }
             let sequence = sql_query(
                 "INSERT INTO history_key_requests \
                  (request_id,request_digest,request_receipt_digest,effective_scope_kind, \
@@ -817,10 +816,10 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
             }
             Ok(HistoryRequestPutOutcome::Stored {
                 outcome: ExactWriteOutcome::Inserted,
-                record: HistoryRequestRecord {
+                record: Box::new(HistoryRequestRecord {
                     sequence: as_u64(sequence.sequence, "request sequence")?,
                     write,
-                },
+                }),
             })
         })
         .await
@@ -1158,9 +1157,9 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
         let mut conn = pg_conn(&self.pool).await?;
         if let Some(row) = response_by(&mut conn, response_id.as_str(), false).await? {
             return Ok(Some(if let Some(value) = row.send_receipt_json.clone() {
-                HistoryResponseRetryRecord::Accepted(decode(value, "send receipt")?)
+                HistoryResponseRetryRecord::Accepted(Box::new(decode(value, "send receipt")?))
             } else {
-                HistoryResponseRetryRecord::Reserved(reservation(&row)?)
+                HistoryResponseRetryRecord::Reserved(Box::new(reservation(&row)?))
             }));
         }
         let row=sql_query("SELECT response_id,source_record_digest,terminal_status,expired_at,retain_until FROM history_key_response_tombstones WHERE response_id=$1 AND retain_until>now()")
@@ -1371,8 +1370,39 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
                     Err(PersistenceError::Conflict("duplicate_conflict: ack token differs".to_owned()).into())
                 };
             }
-            for claim in &write.claims.ordered_ack_entries { let sequence=as_i64(claim.sequence,"ack sequence")?; let row=sql_query("SELECT response_id,request_id,source_record_digest,source_record_json,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at,state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes FROM history_key_responses WHERE request_id=$1 AND sequence=$2 AND state IN ('accepted','lost')")
-                .bind::<Text,_>(write.claims.request_id.as_str()).bind::<BigInt,_>(sequence).get_result::<ResponseRow>(&mut *conn).await.optional()?.ok_or_else(||PersistenceError::Conflict("duplicate_conflict: ack token entry unavailable".to_owned()))?; let entry=page_entry(&row)?; if entry.ack_token_entry().map_err(|error|PersistenceError::SchemaViolation(error.to_string()))? != *claim {return Err(PersistenceError::Conflict("duplicate_conflict: ack token entry differs".to_owned()).into());} if claim.sequence==high_water_sequence && row.cursor.as_deref()!=Some(write.claims.high_water_cursor.as_str()){return Err(PersistenceError::SchemaViolation("ack high-water cursor mismatch".to_owned()).into());}}
+            for claim in &write.claims.ordered_ack_entries {
+                let sequence = as_i64(claim.sequence, "ack sequence")?;
+                let row = sql_query("SELECT response_id,request_id,source_record_digest,source_record_json,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at,state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes FROM history_key_responses WHERE request_id=$1 AND sequence=$2 AND state IN ('accepted','lost')")
+                    .bind::<Text, _>(write.claims.request_id.as_str())
+                    .bind::<BigInt, _>(sequence)
+                    .get_result::<ResponseRow>(&mut *conn)
+                    .await
+                    .optional()?
+                    .ok_or_else(|| {
+                        PersistenceError::Conflict(
+                            "duplicate_conflict: ack token entry unavailable".to_owned(),
+                        )
+                    })?;
+                let entry = page_entry(&row)?;
+                if entry
+                    .ack_token_entry()
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+                    != *claim
+                {
+                    return Err(PersistenceError::Conflict(
+                        "duplicate_conflict: ack token entry differs".to_owned(),
+                    )
+                    .into());
+                }
+                if claim.sequence == high_water_sequence
+                    && row.cursor.as_deref() != Some(write.claims.high_water_cursor.as_str())
+                {
+                    return Err(PersistenceError::SchemaViolation(
+                        "ack high-water cursor mismatch".to_owned(),
+                    )
+                    .into());
+                }
+            }
             let inserted=sql_query("INSERT INTO history_key_response_ack_tokens (ack_token,request_id,claims_json,issued_at) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING")
                 .bind::<Text,_>(&write.ack_token).bind::<Text,_>(write.claims.request_id.as_str()).bind::<Jsonb,_>(&encode(&write.claims)?)
                 .bind::<Timestamptz,_>(now).execute(&mut *conn).await?;

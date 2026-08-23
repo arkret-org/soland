@@ -515,7 +515,7 @@ async fn create_history_key_request(
         match history.store_history_request(write).await {
             Ok(soland_storage::HistoryRequestPutOutcome::Stored { record, .. }) => {
                 enqueue_member_history_request_replicas(state, &record).await?;
-                return history_request_create_outcome(record);
+                return history_request_create_outcome(*record);
             }
             Ok(soland_storage::HistoryRequestPutOutcome::CapabilityCommitmentCollision) => {
                 // The storage transaction has made no durable writes.  Generate a
@@ -1241,7 +1241,7 @@ async fn accepted_history_response_retry(
         .await
         .map_err(map_service_error)?
     {
-        Some(soland_storage::HistoryResponseRetryRecord::Accepted(receipt)) => Ok(Some(receipt)),
+        Some(soland_storage::HistoryResponseRetryRecord::Accepted(receipt)) => Ok(Some(*receipt)),
         Some(soland_storage::HistoryResponseRetryRecord::Expired(_)) => Err(AppError::conflict(
             "history response ID belongs to an expired record",
         )),
@@ -1880,7 +1880,7 @@ async fn history_response_coverage_ranges(
     Ok(manifest
         .chunks
         .iter()
-        .map(|descriptor| descriptor.covered_epoch_range.clone())
+        .map(|descriptor| descriptor.covered_epoch_range)
         .collect())
 }
 
@@ -2117,7 +2117,7 @@ fn validate_history_request_bases(
 ) -> Result<(), AppError> {
     let mut current = state
         .projections()
-        .realm_seal_leaves(&realm_id)
+        .realm_seal_leaves(realm_id)
         .map_err(|error| AppError::internal(error.to_string()))?;
     current.sort();
     if current != request.trusted_current_basis.leaves {
@@ -2257,7 +2257,7 @@ async fn build_member_history_retention(
         for event_digest in &seal.delta {
             let event = state
                 .projections()
-                .control_event_by_digest(&event_digest)
+                .control_event_by_digest(event_digest)
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| {
                     AppError::new(
@@ -2459,7 +2459,7 @@ async fn collect_history_dependencies(
             GovernanceDependency::GovernanceRegistrySnapshot {
                 governance_registry_snapshot,
                 ..
-            } => governance_artifact_selectors_for_snapshot(&governance_registry_snapshot)
+            } => governance_artifact_selectors_for_snapshot(governance_registry_snapshot)
                 .map_err(|error| AppError::new(ErrorCode::DependencyMissing, error.to_string()))?,
             GovernanceDependency::GovernanceRegistryArtifact {
                 governance_registry_artifact,
@@ -2604,7 +2604,7 @@ async fn accept_history_response_manifest(
     {
         match retry {
             soland_storage::HistoryResponseRetryRecord::Accepted(receipt) => {
-                return json_ok(receipt);
+                return json_ok(*receipt);
             }
             soland_storage::HistoryResponseRetryRecord::Expired(_) => {
                 return Err(AppError::conflict(
@@ -2619,7 +2619,7 @@ async fn accept_history_response_manifest(
                 ));
             }
             soland_storage::HistoryResponseRetryRecord::Reserved(reservation) => {
-                existing_reservation = Some(reservation);
+                existing_reservation = Some(*reservation);
             }
         }
     }
@@ -3206,7 +3206,7 @@ async fn validate_retained_history_cut(
             .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
     }
     let checkpoint = arkret::verify_mls_governance_closure(
-        &realm_id,
+        realm_id,
         target_basis,
         &replay_seals,
         &replay_events,
@@ -3317,7 +3317,7 @@ async fn accept_history_response_chunk(
     {
         match retry {
             soland_storage::HistoryResponseRetryRecord::Accepted(receipt) => {
-                return json_ok(receipt);
+                return json_ok(*receipt);
             }
             soland_storage::HistoryResponseRetryRecord::Expired(_) => {
                 return Err(AppError::conflict(
@@ -3332,7 +3332,7 @@ async fn accept_history_response_chunk(
                 ));
             }
             soland_storage::HistoryResponseRetryRecord::Reserved(reservation) => {
-                existing_reservation = Some(reservation);
+                existing_reservation = Some(*reservation);
             }
         }
     }
@@ -3412,7 +3412,7 @@ async fn accept_history_response_chunk(
             &response,
             source_relay,
             &accepted_manifest.manifest_admission,
-            descriptor.covered_epoch_range.clone(),
+            descriptor.covered_epoch_range,
         )
         .await?
     };
@@ -3518,7 +3518,7 @@ async fn build_history_release_attestation(
     };
     let mut current_leaves = state
         .projections()
-        .realm_seal_leaves(&realm_id)
+        .realm_seal_leaves(realm_id)
         .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
     current_leaves.sort();
     let seal_basis = arkret_wire::SealBasis {
@@ -3661,9 +3661,8 @@ async fn build_history_release_attestation(
                 .map(OrganizationRecoveryArchiveSetMember::from_replica)
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|error| AppError::capability_denied(error.to_string()))?;
-            let archive_coverage =
-                organization_recovery_archive_coverage(released_range.clone(), &members)
-                    .map_err(|error| AppError::capability_denied(error.to_string()))?;
+            let archive_coverage = organization_recovery_archive_coverage(released_range, &members)
+                .map_err(|error| AppError::capability_denied(error.to_string()))?;
             let tuple_digest = archive_tuple
                 .archive_authorization_tuple_digest()
                 .map_err(|error| AppError::internal(error.to_string()))?;
@@ -4500,7 +4499,7 @@ fn canonical_manifest_ranges(
     let mut ranges = manifest
         .chunks
         .iter()
-        .map(|chunk| chunk.covered_epoch_range.clone())
+        .map(|chunk| chunk.covered_epoch_range)
         .collect::<Vec<_>>();
     ranges.sort_by_key(|range| (range.from_epoch, range.to_epoch));
     let mut canonical = Vec::<arkret_models_collaboration::history_key::EpochRange>::new();
@@ -5094,7 +5093,7 @@ async fn replicate_history_key_request(
         .await
         .map_err(map_service_error)?;
     let record = match outcome {
-        soland_storage::HistoryRequestPutOutcome::Stored { record, .. } => record,
+        soland_storage::HistoryRequestPutOutcome::Stored { record, .. } => *record,
         soland_storage::HistoryRequestPutOutcome::CapabilityCommitmentCollision => {
             return Err(AppError::internal(
                 "replicated history request unexpectedly collided with a local response capability",

@@ -262,9 +262,7 @@ fn bootstrap_generation_ref(principal_id: &str, records: &[AcceptedEvent]) -> Op
                     })
                 })
     });
-    let Some(bootstrap) = bootstrap else {
-        return None;
-    };
+    let bootstrap = bootstrap?;
     let paired = records.iter().any(|record| {
         record.actor_id == principal_id
             && record.kind == arkret_wire::EventKind::DeviceAuthorize.as_str()

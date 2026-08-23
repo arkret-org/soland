@@ -85,10 +85,11 @@ impl DeviceInventoryStore for MemoryDeviceInventoryStore {
 }
 type DeviceMessageTransaction = (String, BTreeMap<String, bool>, chrono::DateTime<Utc>);
 type DeviceMessageIntent = (String, bool, chrono::DateTime<Utc>);
+type DeviceInventory = Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>;
 
 #[derive(Default)]
 pub(crate) struct MemoryDeviceMessageStore {
-    inventory: Option<Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>>,
+    inventory: Option<DeviceInventory>,
     revocations: Option<crate::MemoryDeviceRevocationStore>,
     queue: Mutex<VecDeque<DeviceMessageRecord>>,
     txns: Mutex<BTreeMap<String, DeviceMessageTransaction>>,
@@ -98,7 +99,7 @@ pub(crate) struct MemoryDeviceMessageStore {
 }
 impl MemoryDeviceMessageStore {
     pub(crate) fn with_inventory_and_revocations(
-        inventory: Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>,
+        inventory: DeviceInventory,
         revocations: crate::MemoryDeviceRevocationStore,
     ) -> Self {
         Self {

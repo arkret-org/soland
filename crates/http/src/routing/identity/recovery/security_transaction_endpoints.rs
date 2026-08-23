@@ -1231,13 +1231,13 @@ async fn continue_issue_terminal_receipt(
         )
         .with_wire_code("security_transaction_failed_precondition"));
     }
-    let receipt_previous_generation = serde_json::to_value(&receipt.previous_model_generation_ref)
+    let receipt_previous_generation = serde_json::to_value(receipt.previous_model_generation_ref)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let expected_previous_generation = serde_json::to_value(&previous_generation)
+    let expected_previous_generation = serde_json::to_value(previous_generation)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let receipt_result_generation = serde_json::to_value(&receipt.result_model_generation_ref)
+    let receipt_result_generation = serde_json::to_value(receipt.result_model_generation_ref)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let expected_result_generation = serde_json::to_value(&result_generation)
+    let expected_result_generation = serde_json::to_value(result_generation)
         .map_err(|error| AppError::internal(error.to_string()))?;
     if receipt.receipt_id != binding.terminal_receipt_id
         || receipt.transaction_id != transaction.resource.transaction_id

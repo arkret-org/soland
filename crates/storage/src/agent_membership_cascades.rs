@@ -13,7 +13,7 @@ pub enum AgentMembershipCascadeCommit {
         expected_agent_ids: Vec<arkret_wire::DidCoreId>,
     },
     EmergencyTerminal {
-        record: AgentCleanupPendingRecord,
+        record: Box<AgentCleanupPendingRecord>,
     },
     EmergencyCleanup {
         cleanup_intent_digest: Hash,

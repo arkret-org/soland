@@ -864,8 +864,8 @@ impl ProjectionService {
             .collect()
     }
 
-    /// Compatibility point lookup for callers that require exactly one direct
-    /// covering Seal. Multi-Seal coverage is never collapsed implicitly.
+    /// Point lookup for callers that require exactly one direct covering Seal.
+    /// Multi-Seal coverage is never collapsed implicitly.
     pub fn seal_covering_event(&self, event_digest: &Hash) -> StoreResult<Option<Seal>> {
         let mut seals = self.seals_covering_event(event_digest)?;
         match seals.len() {
@@ -1175,13 +1175,15 @@ impl ProjectionService {
     {
         arkret_state::verify_control_move_in_context(
             event,
-            realm_id,
-            pre_state,
-            self.cell_registry(),
-            digest_suite,
+            arkret_state::ControlMoveVerificationContext {
+                realm_id,
+                pre_state,
+                registry: self.cell_registry(),
+                digest_suite,
+                submit_context: context,
+            },
             verify_proofs,
             |event| self.project_cell_writes_with_digest_suite(event, digest_suite),
-            context,
         )
     }
 
@@ -1224,13 +1226,15 @@ impl ProjectionService {
     {
         arkret_state::verify_accepted_control_move_in_context(
             event,
-            realm_id,
-            pre_state,
-            self.cell_registry(),
-            digest_suite,
+            arkret_state::ControlMoveVerificationContext {
+                realm_id,
+                pre_state,
+                registry: self.cell_registry(),
+                digest_suite,
+                submit_context: context,
+            },
             verify_proofs,
             |event| self.project_accepted_cell_writes_with_digest_suite(event, digest_suite),
-            context,
         )
     }
 
@@ -3133,7 +3137,7 @@ mod control_governance_health_tests {
     use arkret_state::state::{
         MemoryCellRegistry, MemoryCellStore, MemoryControlEventStore, MemorySealStore,
     };
-    use arkret_wire::{DidCoreId, DidFullId, Hlc, ScopeRef, project_full_id_to_core_id};
+    use arkret_wire::{DidFullId, Hlc, ScopeRef, project_full_id_to_core_id};
 
     use super::*;
 
@@ -3172,18 +3176,14 @@ mod control_governance_health_tests {
             ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
-            DidCoreId::from(
-                project_full_id_to_core_id(
-                    &DidFullId::new("did:web:alice.example".to_owned()).unwrap(),
-                )
-                .unwrap(),
-            ),
-            DidCoreId::from(
-                project_full_id_to_core_id(
-                    &DidFullId::new("did:web:service.example".to_owned()).unwrap(),
-                )
-                .unwrap(),
-            ),
+            project_full_id_to_core_id(
+                &DidFullId::new("did:web:alice.example".to_owned()).unwrap(),
+            )
+            .unwrap(),
+            project_full_id_to_core_id(
+                &DidFullId::new("did:web:service.example".to_owned()).unwrap(),
+            )
+            .unwrap(),
             0,
             Hlc::new("019f00000000-0000-00000001").unwrap(),
             serde_json::json!({"seed": seed}),

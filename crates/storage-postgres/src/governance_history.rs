@@ -1686,7 +1686,7 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
         }
         let limit = usize_to_i64(limit, "pending RRK claim limit")?;
         let mut conn = pg_conn(&self.pool).await?;
-        let rows = sql_query(format!(
+        let rows = sql_query(
             "WITH candidates AS ( \
                 SELECT acquisition_digest FROM pending_rrk_acquisitions \
                 WHERE state IN ('pending', 'ready') AND next_attempt_at <= $1 \
@@ -1701,7 +1701,8 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
              FROM candidates \
              WHERE pending.acquisition_digest = candidates.acquisition_digest \
              RETURNING pending.*"
-        ))
+                .to_string(),
+        )
         .bind::<Timestamptz, _>(now)
         .bind::<BigInt, _>(limit)
         .bind::<Text, _>(claim_token)

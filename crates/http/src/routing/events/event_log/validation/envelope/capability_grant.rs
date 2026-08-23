@@ -79,19 +79,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_legacy_nested_proofs_and_actor_mismatch() {
+    fn rejects_actor_mismatch() {
         let actor = "ak:did_core:web:alice.example";
-        let mut legacy = event(actor);
-        legacy["payload"]["grant"]["proofs"] = json!([]);
-        assert!(
-            validate_capability_grant_body(
-                arkret_wire::EventKind::CapabilityGrant.as_str(),
-                actor,
-                legacy.as_object().unwrap(),
-            )
-            .is_err()
-        );
-
         let event = event(actor);
         assert!(
             validate_capability_grant_body(

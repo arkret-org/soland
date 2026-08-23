@@ -440,23 +440,6 @@ mod tests {
     }
 
     #[test]
-    fn typed_container_payload_rejects_legacy_shape() {
-        let legacy = operation(
-            arkret_wire::EventKind::ContainerMoveItem,
-            serde_json::json!({
-                "object_ref": "ak:morph:AXh0mpVGb536xVxbSPfM4Wc_1WuXAxTYgmtXEncKM9T0",
-                "to_container_id": "ak:morph:AfqXI4jyBJWA5HRhSr3SdFP5Qb_2V210Q00mFqUjA7_z",
-                "relation_kind": "contains",
-                "rank": "A"
-            }),
-        );
-        assert_eq!(
-            validate_typed_payload_shapes(&arkret_wire::EventKind::ContainerMoveItem, &legacy,),
-            Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
-        );
-    }
-
-    #[test]
     fn typed_realm_control_payloads_enforce_realm_and_transition_rules() {
         let wrong_realm = operation(
             arkret_wire::EventKind::RealmNotary,

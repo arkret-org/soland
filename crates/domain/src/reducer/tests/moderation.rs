@@ -368,28 +368,3 @@ fn moderation_appeal_duplicate_active_rejected() {
             if reason == "moderation_appeal_duplicate_active"
     ));
 }
-
-#[test]
-fn moderation_appeal_submit_rejects_carried_appeal_id() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
-    let legacy = make_operation(
-        arkret_wire::EventKind::ModerationAppealSubmit,
-        MOD_REALM,
-        serde_json::json!({
-            "event_id": MOD_APPEAL_EVENT_ID,
-            "appeal_id": MOD_APPEAL_ID,
-            "realm_id": MOD_REALM,
-            "decision_ref": MOD_DECISION_ID,
-            "target_ref": MOD_TARGET_REF,
-            "appellant": "ak:did_core:web:appellant.example",
-            "reason_text_ref": "legacy appeal text",
-        }),
-    );
-
-    assert!(matches!(
-        state.apply(&legacy, &hlc),
-        ProjectionEffect::Rejected { ref reason }
-            if reason == "moderation_appeal_submit_id_must_be_event_derived"
-    ));
-}

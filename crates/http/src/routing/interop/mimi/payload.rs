@@ -47,11 +47,8 @@ pub(super) async fn persist_mimi_canonical_message_event(
         .transpose()?
         .unwrap_or(0);
     let service_did = state.service_resolution_commitment().full_id.clone();
-    let service_actor_id = arkret_wire::DidCoreId::from(
-        arkret_wire::project_full_id_to_core_id(&service_did).map_err(|error| {
-            AppError::internal(format!("service DID cannot be projected: {error}"))
-        })?,
-    );
+    let service_actor_id = arkret_wire::project_full_id_to_core_id(&service_did)
+        .map_err(|error| AppError::internal(format!("service DID cannot be projected: {error}")))?;
     let hlc = arkret_identifiers::Hlc::new(state.hlc().now())
         .map_err(|error| AppError::internal(format!("MIMI HLC invalid: {error}")))?;
     let typed_payload: arkret_models_collaboration::events_payloads::MessageCreatePayload =

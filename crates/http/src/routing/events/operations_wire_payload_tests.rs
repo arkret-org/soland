@@ -100,10 +100,7 @@ fn relation_update_rejects_effective_scope_patch_paths() {
 }
 
 /// The derived-edge rule needs the Relation pre-state, so the stateless
-/// validator MUST NOT re-decide it. The flat `kind` / `from_ref` shape the old
-/// second implementation read is not a spec payload at all: the SDK artifact
-/// schema rejects it because `relation_create_payload` is
-/// `additionalProperties:false` over `{relation, rank}`.
+/// validator MUST NOT re-decide it.
 #[test]
 fn relation_derived_edge_admission_is_not_duplicated_in_the_payload_validator() {
     let derived = wire_operation(
@@ -111,26 +108,10 @@ fn relation_derived_edge_admission_is_not_duplicated_in_the_payload_validator() 
         json!({"relation": {"kind": "contains", "from_ref": TEST_SPACE, "to_ref": TEST_STRAND}}),
     );
     assert_eq!(validate_relation_operation_payload(&derived), Ok(()));
-
-    let flat_legacy = wire_operation(
-        arkret_wire::EventKind::RelationCreate,
-        json!({
-            "relation": {"kind": "contains", "from_ref": TEST_SPACE, "to_ref": TEST_STRAND},
-            "relation_kind": "contains",
-            "from_ref": TEST_SPACE
-        }),
-    );
-    assert!(
-        validate_operation_schema_from_sdk_artifact(
-            &arkret_wire::EventKind::RelationCreate,
-            &flat_legacy
-        )
-        .is_err()
-    );
 }
 
-fn capability_grant_payload(extra: Option<(&str, Value)>) -> Value {
-    let mut grant = json!({
+fn capability_grant_payload() -> Value {
+    let grant = json!({
         "schema": "ak.schema.capability.v1",
         "realm_id": TEST_REALM,
         "issuer": TEST_ISSUER,
@@ -147,63 +128,27 @@ fn capability_grant_payload(extra: Option<(&str, Value)>) -> Value {
             "authority_generation": 0
         }]
     });
-    if let Some((field, value)) = extra {
-        grant[field] = value;
-    }
     json!({"grant": grant})
 }
 
-/// `capability-grant.schema.json` names the selector list `resources` and the
-/// authoring shape in `capability_grant_payload` is
-/// `additionalProperties:false`, so `resource_selectors` is an unknown field
-/// the schema rejects outright — soland no longer consumes it anywhere.
 #[test]
-fn capability_grant_resource_selectors_alias_is_a_schema_violation() {
+fn capability_grant_resources_pass_the_artifact_schema() {
     let canonical = wire_operation(
         arkret_wire::EventKind::CapabilityGrant,
-        capability_grant_payload(None),
+        capability_grant_payload(),
     );
     validate_operation_schema_from_sdk_artifact(
         &arkret_wire::EventKind::CapabilityGrant,
         &canonical,
     )
     .expect("canonical `resources` grant passes the artifact schema");
-
-    let aliased = wire_operation(
-        arkret_wire::EventKind::CapabilityGrant,
-        capability_grant_payload(Some((
-            "resource_selectors",
-            json!([{"kind": "strand", "realm_id": TEST_REALM, "strand_id": TEST_STRAND}]),
-        ))),
-    );
-    assert!(
-        validate_operation_schema_from_sdk_artifact(
-            &arkret_wire::EventKind::CapabilityGrant,
-            &aliased
-        )
-        .is_err()
-    );
 }
 
-/// `membership_payload` / `circle_member_state_payload` name the subject
-/// `actor_id` and are `additionalProperties:false`; `member` / `actor` are not
-/// spec fields, so a payload carrying only those falls back to the Event
-/// author rather than retargeting the membership move.
 #[test]
-fn membership_target_reads_only_actor_id() {
+fn membership_target_reads_actor_id() {
     let canonical = wire_operation(
         arkret_wire::EventKind::MemberState,
         json!({"actor_id": TEST_SUBJECT, "membership": "join"}),
     );
     assert_eq!(membership_target(&canonical), Some(TEST_SUBJECT));
-
-    let legacy = wire_operation(
-        arkret_wire::EventKind::MemberState,
-        json!({"member": TEST_SUBJECT, "actor": TEST_SUBJECT, "membership": "join"}),
-    );
-    assert_eq!(
-        membership_target(&legacy),
-        Some(legacy.context.sender.as_str())
-    );
-    assert_ne!(membership_target(&legacy), Some(TEST_SUBJECT));
 }

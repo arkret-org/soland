@@ -107,7 +107,7 @@ fn stage_agent_membership_cascade(
                 ));
             }
             match records.get(record.cleanup_intent_digest.as_str()) {
-                Some(existing) if existing == record => {}
+                Some(existing) if existing == record.as_ref() => {}
                 Some(_) => {
                     return Err(PersistenceError::Conflict(
                         "duplicate_conflict: cleanup intent digest names different content"
@@ -123,7 +123,10 @@ fn stage_agent_membership_cascade(
                                 .to_owned(),
                         ));
                     }
-                    records.insert(record.cleanup_intent_digest.to_string(), record.clone());
+                    records.insert(
+                        record.cleanup_intent_digest.to_string(),
+                        record.as_ref().clone(),
+                    );
                 }
             }
         }
@@ -1437,12 +1440,12 @@ mod tests {
         let mut delegated = request;
         let mut event: arkret_wire::Event =
             serde_json::from_value(delegated.event.envelope.clone()).unwrap();
-        event.executed_by = Some(arkret_wire::DidCoreId::from(
+        event.executed_by = Some(
             arkret_wire::project_full_id_to_core_id(
                 &arkret_wire::DidFullId::new("did:web:controller.example").unwrap(),
             )
             .unwrap(),
-        ));
+        );
         delegated.event.canonical_digest = event
             .event_digest_with_digest_suite(delegated.event.digest_suite)
             .unwrap();
@@ -1554,7 +1557,7 @@ mod tests {
                 events: vec![terminal.clone()],
                 applet_ghosts: None,
                 agent_membership_cascade: Some(AgentMembershipCascadeCommit::EmergencyTerminal {
-                    record: record.clone(),
+                    record: Box::new(record.clone()),
                 }),
             })
             .await

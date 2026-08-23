@@ -192,7 +192,7 @@ impl MemberIdentityStore for PgMemberIdentityStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(&format!(
+        sql_query(format!(
             "SELECT {HANDLE_CLAIM_COLUMNS} FROM member_identity_handle_claims \
              ORDER BY subject_id, digest"
         ))

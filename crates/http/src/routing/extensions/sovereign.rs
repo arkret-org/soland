@@ -475,6 +475,14 @@ async fn configure_deployment(
         guard.upstream_main = Some(upstream);
     }
     if let Some(roots) = body.trust_roots {
+        if let Some(invalid) = roots
+            .iter()
+            .find(|root| parse_sovereign_trust_root(root).is_none())
+        {
+            return Err(AppError::param_invalid(format!(
+                "trust root must be a canonical sovereign did_core_id: {invalid}"
+            )));
+        }
         guard.trust_roots = roots;
     }
     if let Some(allow) = body.allow_external_via_enclave {
@@ -1238,36 +1246,13 @@ fn did_matches_trust_roots(did: &str, roots: &[String]) -> bool {
 }
 
 fn did_matches_trust_root(did: &str, root: &str) -> bool {
-    let did = did.trim();
-    let root = root.trim();
-    if root == "*" {
-        return true;
-    }
     // A sovereign DID-policy trust root is a stable identity core, not a
     // resolver locator. Compare it to the registered adapter projection of a
     // supplied bare DID; never try to resolve or reconstruct a DID from the
     // core string itself.
-    if let Some(root_core) = parse_sovereign_trust_root(root) {
-        return project_sovereign_candidate(did).is_some_and(|candidate| candidate == root_core);
-    }
-    // Retain the deployment extension's historical pattern forms for
-    // backwards-compatible operator configuration. They are not the
-    // `ak.sovereign.did_policy.value.trust_roots` wire shape.
-    if root == did {
-        return true;
-    }
-    if let Some(suffix) = root.strip_prefix("did:web:*.") {
-        return did
-            .strip_prefix("did:web:")
-            .is_some_and(|host| host == suffix || host.ends_with(&format!(".{suffix}")));
-    }
-    if let Some(prefix) = root.strip_suffix('*') {
-        return did.starts_with(prefix);
-    }
-    if root.starts_with("did:") {
-        return did == root || did.starts_with(&format!("{root}:"));
-    }
-    false
+    parse_sovereign_trust_root(root).is_some_and(|root_core| {
+        project_sovereign_candidate(did).is_some_and(|candidate| candidate == root_core)
+    })
 }
 
 fn parse_sovereign_trust_root(value: &str) -> Option<arkret_wire::DidCoreId> {
@@ -1286,9 +1271,6 @@ fn parse_sovereign_trust_root(value: &str) -> Option<arkret_wire::DidCoreId> {
 }
 
 fn project_sovereign_candidate(value: &str) -> Option<arkret_wire::DidCoreId> {
-    if let Some(core) = parse_sovereign_trust_root(value) {
-        return Some(core);
-    }
     let full_id = arkret_wire::DidFullId::new(value.to_owned()).ok()?;
     arkret_wire::project_full_id_to_core_id(&full_id).ok()
 }
@@ -1387,11 +1369,19 @@ mod tests {
             "did:webvh:zE2ucm2oH9PCib4kBzLEAkFqa:registry.defense.example",
             root,
         ));
-        assert!(did_matches_trust_root(root, root));
+        assert!(!did_matches_trust_root(root, root));
         assert!(!did_matches_trust_root(
             "did:webvh:zDifferentScid:registry.defense.example",
             root,
         ));
+    }
+
+    #[test]
+    fn non_core_trust_root_patterns_are_rejected() {
+        let did = "did:web:service.internal.example";
+        for root in ["*", did, "did:web:*.internal.example", "did:web:service.*"] {
+            assert!(!did_matches_trust_root(did, root));
+        }
     }
 
     #[test]

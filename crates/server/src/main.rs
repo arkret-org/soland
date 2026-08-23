@@ -442,7 +442,6 @@ fn init_tracing(config: &AppConfig) -> anyhow::Result<TracingGuards> {
     let log_file = config.log_file.clone();
 
     let file_guard = if let Some(path) = log_file {
-        let path = std::path::PathBuf::from(path);
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {

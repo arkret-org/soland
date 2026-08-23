@@ -497,17 +497,32 @@ async fn lock_seal_identity(
         .map(|_| ())
 }
 
+#[derive(Clone, Copy)]
+struct StateSealInsert<'a> {
+    id: &'a str,
+    digest_suite: arkret_canonical::DigestSuite,
+    realm_id: &'a str,
+    seal_id_preimage_bytes: &'a [u8],
+    accepted_seal_bytes: &'a [u8],
+    seal_json: &'a Value,
+    predecessor_refs: &'a Value,
+    is_genesis: bool,
+}
+
 async fn preflight_state_seal(
     conn: &mut AsyncPgConnection,
-    id: &str,
-    digest_suite: arkret_canonical::DigestSuite,
-    realm_id: &str,
-    seal_id_preimage_bytes: &[u8],
-    accepted_seal_bytes: &[u8],
-    seal_json: &Value,
-    predecessor_refs: &Value,
-    is_genesis: bool,
+    insert: &StateSealInsert<'_>,
 ) -> Result<SealInsertOutcome, EventSealCommitError> {
+    let StateSealInsert {
+        id,
+        digest_suite,
+        realm_id,
+        seal_id_preimage_bytes,
+        accepted_seal_bytes,
+        seal_json,
+        predecessor_refs,
+        is_genesis,
+    } = *insert;
     let stored = sql_query(
         "SELECT s.digest_suite, s.realm_id, s.seal_id_preimage_bytes, s.accepted_seal_bytes, s.seal_json, \
                 s.predecessor_refs, s.is_genesis, \
@@ -642,28 +657,21 @@ async fn realm_has_seal_collision(
 
 async fn insert_new_state_seal(
     conn: &mut AsyncPgConnection,
-    id: &str,
-    digest_suite: arkret_canonical::DigestSuite,
-    realm_id: &str,
-    seal_id_preimage_bytes: &[u8],
-    accepted_seal_bytes: &[u8],
-    seal_json: &Value,
-    predecessor_refs: &Value,
-    is_genesis: bool,
+    insert: &StateSealInsert<'_>,
 ) -> Result<(), diesel::result::Error> {
     sql_query(
         "INSERT INTO state_seals \
          (id, digest_suite, realm_id, seal_id_preimage_bytes, accepted_seal_bytes, seal_json, predecessor_refs, is_genesis) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
-    .bind::<Text, _>(id)
-    .bind::<Text, _>(digest_suite.as_str())
-    .bind::<Text, _>(realm_id)
-    .bind::<Binary, _>(seal_id_preimage_bytes)
-    .bind::<Binary, _>(accepted_seal_bytes)
-    .bind::<Jsonb, _>(seal_json)
-    .bind::<Jsonb, _>(predecessor_refs)
-    .bind::<Bool, _>(is_genesis)
+    .bind::<Text, _>(insert.id)
+    .bind::<Text, _>(insert.digest_suite.as_str())
+    .bind::<Text, _>(insert.realm_id)
+    .bind::<Binary, _>(insert.seal_id_preimage_bytes)
+    .bind::<Binary, _>(insert.accepted_seal_bytes)
+    .bind::<Jsonb, _>(insert.seal_json)
+    .bind::<Jsonb, _>(insert.predecessor_refs)
+    .bind::<Bool, _>(insert.is_genesis)
     .execute(conn)
     .await
     .map(|_| ())
@@ -1451,18 +1459,17 @@ impl SealStore for PgSealStore {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
                 lock_seal_identity(conn, &id).await?;
-                let outcome = preflight_state_seal(
-                    conn,
-                    &id,
+                let insert = StateSealInsert {
+                    id: &id,
                     digest_suite,
-                    &realm_id,
-                    &seal_id_preimage_bytes,
-                    &accepted_seal_bytes,
-                    &seal_json,
-                    &predecessor_refs,
+                    realm_id: &realm_id,
+                    seal_id_preimage_bytes: &seal_id_preimage_bytes,
+                    accepted_seal_bytes: &accepted_seal_bytes,
+                    seal_json: &seal_json,
+                    predecessor_refs: &predecessor_refs,
                     is_genesis,
-                )
-                .await?;
+                };
+                let outcome = preflight_state_seal(conn, &insert).await?;
                 if outcome == SealInsertOutcome::Inserted {
                     lock_seal_realm(conn, &realm_id).await?;
                     if realm_has_seal_collision(conn, &realm_id).await? {
@@ -1471,18 +1478,7 @@ impl SealStore for PgSealStore {
                         ))
                         .into());
                     }
-                    insert_new_state_seal(
-                        conn,
-                        &id,
-                        digest_suite,
-                        &realm_id,
-                        &seal_id_preimage_bytes,
-                        &accepted_seal_bytes,
-                        &seal_json,
-                        &predecessor_refs,
-                        is_genesis,
-                    )
-                    .await?;
+                    insert_new_state_seal(conn, &insert).await?;
                 }
                 Ok(outcome)
             })
@@ -1527,18 +1523,17 @@ impl SealStore for PgSealStore {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
                 lock_seal_identity(conn, &id).await?;
-                let outcome = preflight_state_seal(
-                    conn,
-                    &id,
+                let insert = StateSealInsert {
+                    id: &id,
                     digest_suite,
-                    &realm_id,
-                    &seal_id_preimage_bytes,
-                    &accepted_seal_bytes,
-                    &seal_json,
-                    &predecessor_refs,
+                    realm_id: &realm_id,
+                    seal_id_preimage_bytes: &seal_id_preimage_bytes,
+                    accepted_seal_bytes: &accepted_seal_bytes,
+                    seal_json: &seal_json,
+                    predecessor_refs: &predecessor_refs,
                     is_genesis,
-                )
-                .await?;
+                };
+                let outcome = preflight_state_seal(conn, &insert).await?;
                 if outcome != SealInsertOutcome::Inserted {
                     return Ok(outcome);
                 }
@@ -1574,18 +1569,7 @@ impl SealStore for PgSealStore {
                 if actual != expected {
                     return Ok(SealInsertOutcome::FrontierMismatch);
                 }
-                insert_new_state_seal(
-                    conn,
-                    &id,
-                    digest_suite,
-                    &realm_id,
-                    &seal_id_preimage_bytes,
-                    &accepted_seal_bytes,
-                    &seal_json,
-                    &predecessor_refs,
-                    is_genesis,
-                )
-                .await?;
+                insert_new_state_seal(conn, &insert).await?;
                 Ok(SealInsertOutcome::Inserted)
             })
             .await
@@ -1823,18 +1807,17 @@ impl EventSealCommitStore for PgEventSealCommitStore {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
                 lock_seal_identity(conn, &seal_id).await?;
-                let outcome = preflight_state_seal(
-                    conn,
-                    &seal_id,
+                let insert = StateSealInsert {
+                    id: &seal_id,
                     digest_suite,
-                    &realm_id,
-                    &seal_id_preimage_bytes,
-                    &accepted_seal_bytes,
-                    &seal_json,
-                    &predecessor_refs,
+                    realm_id: &realm_id,
+                    seal_id_preimage_bytes: &seal_id_preimage_bytes,
+                    accepted_seal_bytes: &accepted_seal_bytes,
+                    seal_json: &seal_json,
+                    predecessor_refs: &predecessor_refs,
                     is_genesis,
-                )
-                .await?;
+                };
+                let outcome = preflight_state_seal(conn, &insert).await?;
                 if outcome != SealInsertOutcome::Inserted {
                     return Ok(outcome);
                 }
@@ -1962,18 +1945,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 // marker must commit in this same transaction; otherwise a
                 // covered Event remains visible in the pending queue and can
                 // be proposed repeatedly after a restart.
-                insert_new_state_seal(
-                    conn,
-                    &seal_id,
-                    digest_suite,
-                    &realm_id,
-                    &seal_id_preimage_bytes,
-                    &accepted_seal_bytes,
-                    &seal_json,
-                    &predecessor_refs,
-                    is_genesis,
-                )
-                .await?;
+                insert_new_state_seal(conn, &insert).await?;
                 for (delta_index, digest) in delta.iter().enumerate() {
                     mark_control_event_sealed_in_transaction(
                         conn,
@@ -2360,13 +2332,11 @@ mod event_seal_commit_tests {
     /// fsm cells, where the issuer travels but is not part of the slot key.
     fn test_issued(op: super::SealedOp) -> super::IssuedOp {
         super::IssuedOp {
-            issuer: arkret_wire::DidCoreId::from(
-                arkret_wire::project_full_id_to_core_id(
-                    &arkret_wire::DidFullId::new("did:webvh:z6mkfixture:alice.example".to_owned())
-                        .unwrap(),
-                )
-                .unwrap(),
-            ),
+            issuer: arkret_wire::project_full_id_to_core_id(
+                &arkret_wire::DidFullId::new("did:webvh:z6mkfixture:alice.example".to_owned())
+                    .unwrap(),
+            )
+            .unwrap(),
             op,
         }
     }
@@ -2437,18 +2407,14 @@ mod event_seal_commit_tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm.clone(),
             },
-            arkret_wire::DidCoreId::from(
-                arkret_wire::project_full_id_to_core_id(
-                    &arkret_wire::DidFullId::new("did:web:alice.example".to_owned()).unwrap(),
-                )
-                .unwrap(),
-            ),
-            arkret_wire::DidCoreId::from(
-                arkret_wire::project_full_id_to_core_id(
-                    &arkret_wire::DidFullId::new("did:web:alice.example".to_owned()).unwrap(),
-                )
-                .unwrap(),
-            ),
+            arkret_wire::project_full_id_to_core_id(
+                &arkret_wire::DidFullId::new("did:web:alice.example".to_owned()).unwrap(),
+            )
+            .unwrap(),
+            arkret_wire::project_full_id_to_core_id(
+                &arkret_wire::DidFullId::new("did:web:alice.example".to_owned()).unwrap(),
+            )
+            .unwrap(),
             increment as u64,
             arkret_wire::Hlc::new(format!("0189c4d2af00-0000-aabbccd{increment}")).unwrap(),
             json!({"marker": marker.to_string()}),

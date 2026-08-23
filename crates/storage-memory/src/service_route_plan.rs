@@ -6,7 +6,7 @@ use soland_storage::{
     PersistenceError, PersistenceResult, ServiceRouteHandoverAudienceEntry,
     ServiceRouteHandoverAudienceStatus, ServiceRouteHandoverAudienceTarget,
     ServiceRouteHandoverNoticeCommit, ServiceRouteHandoverNoticeRecord, ServiceRouteHandoverPlan,
-    ServiceRouteHandoverPlanState, ServiceRouteHandoverPlanStore, ServiceRouteHandoverPlanWrite,
+    ServiceRouteHandoverPlanAdvance, ServiceRouteHandoverPlanStore, ServiceRouteHandoverPlanWrite,
 };
 
 use super::{Arc, Mutex, async_trait};
@@ -387,14 +387,17 @@ impl ServiceRouteHandoverPlanStore for MemoryServiceRouteHandoverPlanStore {
 
     async fn advance_plan_state(
         &self,
-        service_id: &DidCoreId,
-        service_kind: &str,
-        handover_id: &str,
-        expected_state: ServiceRouteHandoverPlanState,
-        next_state: ServiceRouteHandoverPlanState,
-        last_error: Option<String>,
-        updated_at: DateTime<Utc>,
+        advance: ServiceRouteHandoverPlanAdvance<'_>,
     ) -> PersistenceResult<ServiceRouteHandoverPlanWrite> {
+        let ServiceRouteHandoverPlanAdvance {
+            service_id,
+            service_kind,
+            handover_id,
+            expected_state,
+            next_state,
+            last_error,
+            updated_at,
+        } = advance;
         let key = plan_key(service_id, service_kind, handover_id);
         let mut state = self.state.lock();
         let Some(plan) = state.plans.get_mut(&key) else {

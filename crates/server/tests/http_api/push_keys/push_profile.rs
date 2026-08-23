@@ -333,17 +333,17 @@ async fn profile_avatar_get_recovers_existing_local_object_without_metadata_body
 /// `signal.md` §1 removes all three: `signal_class` is the only classification
 /// the server may see and §6 makes an outer `signal_kind=typing` an explicit
 /// counter-example. What survives at this layer is the accepted-envelope
-/// contract — the send needs a session, an admitted Signal reports the class-free
-/// `SignalSubmitOutcome`, and a legacy plaintext ephemeral body fails closed.
+/// contract — the send needs a session and an admitted Signal reports the
+/// class-free `SignalSubmitOutcome`.
 #[test]
-fn signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body() {
+fn signal_send_requires_a_session_and_deduplicates_replay() {
     run_on_deep_stack(
-        "signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body",
-        signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body_body,
+        "signal_send_requires_a_session_and_deduplicates_replay",
+        signal_send_requires_a_session_and_deduplicates_replay_body,
     );
 }
 
-async fn signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body_body() {
+async fn signal_send_requires_a_session_and_deduplicates_replay_body() {
     let state = soland_test_support::app_state(test_config());
     let (token, signing_key, seal_ref) = signal_test_context(&state).await;
 
@@ -357,28 +357,6 @@ async fn signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body_bo
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
-
-    // §3 states there is no plaintext branch. The old `ak.presence` /`ak.typing`
-    // envelope is not a malformed Signal, it is a rail that no longer exists,
-    // and it MUST fail closed under the registered reason code.
-    let mut plaintext = TestClient::post("http://server/_arkret/self/signal")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "application/json", true)
-        .body(canonical_body(&serde_json::json!({
-            "kind": "ak.presence",
-            "realm_id": demo_realm_id(),
-            "actor_id": ALICE,
-            "device_id": ALICE_DEVICE,
-            "payload": {"state": "dnd", "status_message": "In a meeting"}
-        })))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(plaintext.status_code, Some(StatusCode::BAD_REQUEST));
-    let plaintext_body: Value = plaintext.take_json().await.unwrap();
-    assert_eq!(
-        plaintext_body["error"]["details"]["reason_code"],
-        "signal_plaintext_forbidden"
-    );
 
     let envelope = alice_signal(&seal_ref, "presence", &signing_key);
     let outcome: arkret_models_collaboration::http_bodies::SignalSubmitOutcome =

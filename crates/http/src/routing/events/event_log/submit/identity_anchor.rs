@@ -467,7 +467,7 @@ pub(super) async fn submit_identity_anchor_batch(
             received_at,
         )
         .await?;
-    let accepted_envelopes = vec![accepted_create_envelope, accepted_authorize_envelope];
+    let accepted_envelopes = [accepted_create_envelope, accepted_authorize_envelope];
     let governance_dependencies = [create_dependency, authorize_dependency]
         .into_iter()
         .flatten()
@@ -480,8 +480,6 @@ pub(super) async fn submit_identity_anchor_batch(
         None
     } else if is_reanchor {
         Some(typed_device_reanchor_payload(&envelopes[0])?.new_device_generation)
-    } else if is_bootstrap {
-        bootstrap_generation_ref(&envelopes[0])?
     } else {
         bootstrap_generation_ref(&envelopes[0])?
     };
@@ -704,12 +702,11 @@ pub(super) async fn submit_identity_anchor_batch(
                 .await;
             }
         }
-        if is_bootstrap {
-            if let Err(error) =
+        if is_bootstrap
+            && let Err(error) =
                 persist_principal_resolution_projection(state, &accepted_create_event).await
-            {
-                tracing::error!(%error, event_id = %first.event_id, "principal genesis resolution read-index update failed");
-            }
+        {
+            tracing::error!(%error, event_id = %first.event_id, "principal genesis resolution read-index update failed");
         }
     }
     if is_bootstrap {

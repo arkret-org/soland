@@ -1738,7 +1738,7 @@ impl MessageStore for PgMessageStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(&format!(
+        sql_query(format!(
             "SELECT {MESSAGE_COLUMNS} FROM messages WHERE event_id = $1"
         ))
         .bind::<Text, _>(event_id)
@@ -1784,7 +1784,7 @@ impl MessageStore for PgMessageStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(&format!(
+        sql_query(format!(
             "SELECT {MESSAGE_COLUMNS} FROM messages WHERE realm_id = $1 \
              ORDER BY created_at DESC, pk DESC LIMIT $2"
         ))
@@ -1806,7 +1806,7 @@ impl MessageStore for PgMessageStore {
             .map_err(PersistenceError::database)?;
         // Chronological order (oldest first) so thread readers get a natural
         // conversation timeline; the caller decides whether to reverse.
-        sql_query(&format!(
+        sql_query(format!(
             "SELECT {MESSAGE_COLUMNS} FROM messages WHERE thread_id = $1 \
              ORDER BY created_at ASC, pk ASC LIMIT $2"
         ))

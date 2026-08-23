@@ -62,10 +62,8 @@ pub(crate) fn canonical_value_digest(value: &serde_json::Value) -> Option<String
 pub(crate) fn test_actor_id(
     full_id: &arkret_identifiers::DidFullId,
 ) -> arkret_identifiers::DidCoreId {
-    arkret_identifiers::DidCoreId::from(
-        arkret_identifiers::project_full_id_to_core_id(full_id)
-            .expect("test full_id must project to an Actor core_id"),
-    )
+    arkret_identifiers::project_full_id_to_core_id(full_id)
+        .expect("test full_id must project to an Actor core_id")
 }
 
 #[cfg(test)]
@@ -86,6 +84,50 @@ pub(crate) fn test_single_signer_notary(full_id: &str, seed: u8) -> arkret_wire:
     )
     .expect("test notary descriptor");
     arkret_wire::NotaryValue::single_signer(descriptor)
+}
+
+use salvo::catcher::Catcher;
+use salvo::prelude::{CatchPanic, Service};
+
+use crate::ratelimit::RateLimiterConfig;
+use crate::routing::{cors_handler_for_origin_spec, error_catcher};
+use crate::state::AppState;
+
+fn finish_service(router: salvo::Router, cors_allow_origin: Option<String>) -> Service {
+    let mut service = Service::new(router);
+    if let Some(origin) = cors_allow_origin {
+        service = service.hoop(cors_handler_for_origin_spec(&origin));
+    }
+    service = service.hoop(CatchPanic::new());
+    service.catcher(Catcher::default().hoop(error_catcher))
+}
+
+pub fn service(state: AppState) -> Service {
+    let cors_allow_origin = state.config().cors_allow_origin.clone();
+    finish_service(router(state), cors_allow_origin)
+}
+
+pub fn service_with_rate_limiter_config(
+    state: AppState,
+    rate_limiter_config: RateLimiterConfig,
+) -> Service {
+    let cors_allow_origin = state.config().cors_allow_origin.clone();
+    finish_service(
+        router_with_rate_limiter_config(state, rate_limiter_config),
+        cors_allow_origin,
+    )
+}
+
+pub fn service_with_request_size_limit(state: AppState, max_request_size_bytes: usize) -> Service {
+    let cors_allow_origin = state.config().cors_allow_origin.clone();
+    finish_service(
+        router_with_rate_limiter_and_request_size_config(
+            state,
+            RateLimiterConfig::default(),
+            max_request_size_bytes,
+        ),
+        cors_allow_origin,
+    )
 }
 
 #[cfg(test)]
@@ -141,48 +183,4 @@ pub(crate) mod test_event {
             created_at,
         )
     }
-}
-
-use salvo::catcher::Catcher;
-use salvo::prelude::{CatchPanic, Service};
-
-use crate::ratelimit::RateLimiterConfig;
-use crate::routing::{cors_handler_for_origin_spec, error_catcher};
-use crate::state::AppState;
-
-fn finish_service(router: salvo::Router, cors_allow_origin: Option<String>) -> Service {
-    let mut service = Service::new(router);
-    if let Some(origin) = cors_allow_origin {
-        service = service.hoop(cors_handler_for_origin_spec(&origin));
-    }
-    service = service.hoop(CatchPanic::new());
-    service.catcher(Catcher::default().hoop(error_catcher))
-}
-
-pub fn service(state: AppState) -> Service {
-    let cors_allow_origin = state.config().cors_allow_origin.clone();
-    finish_service(router(state), cors_allow_origin)
-}
-
-pub fn service_with_rate_limiter_config(
-    state: AppState,
-    rate_limiter_config: RateLimiterConfig,
-) -> Service {
-    let cors_allow_origin = state.config().cors_allow_origin.clone();
-    finish_service(
-        router_with_rate_limiter_config(state, rate_limiter_config),
-        cors_allow_origin,
-    )
-}
-
-pub fn service_with_request_size_limit(state: AppState, max_request_size_bytes: usize) -> Service {
-    let cors_allow_origin = state.config().cors_allow_origin.clone();
-    finish_service(
-        router_with_rate_limiter_and_request_size_config(
-            state,
-            RateLimiterConfig::default(),
-            max_request_size_bytes,
-        ),
-        cors_allow_origin,
-    )
 }

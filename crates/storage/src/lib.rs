@@ -300,59 +300,6 @@ impl std::fmt::Display for ConflictCode {
     }
 }
 
-#[cfg(test)]
-mod conflict_code_tests {
-    use super::{ConflictCode, PersistenceError};
-
-    #[test]
-    fn bare_code_and_prefixed_detail_both_resolve() {
-        assert_eq!(
-            ConflictCode::from_detail("cas_conflict"),
-            Some(ConflictCode::CasConflict)
-        );
-        assert_eq!(
-            ConflictCode::from_detail("fork_quarantine: actor sequence sibling limit"),
-            Some(ConflictCode::ForkQuarantine)
-        );
-    }
-
-    #[test]
-    fn a_code_mentioned_inside_diagnostics_does_not_route() {
-        // The old substring matcher classified this as `cas_conflict`.
-        assert_eq!(
-            ConflictCode::from_detail("localpart `cas_conflict` is already assigned"),
-            None
-        );
-        assert_eq!(
-            ConflictCode::from_detail("schema_violation is not the prefix here"),
-            None
-        );
-    }
-
-    #[test]
-    fn unregistered_conflicts_are_reported_as_such() {
-        assert_eq!(
-            ConflictCode::from_detail("organization registration current pointer CAS failed"),
-            None
-        );
-        assert_eq!(
-            PersistenceError::Internal("cas_conflict".to_owned()).conflict_code(),
-            None
-        );
-    }
-
-    #[test]
-    fn every_code_round_trips_through_its_wire_token() {
-        for code in ConflictCode::ALL {
-            assert_eq!(ConflictCode::from_detail(code.as_str()), Some(code));
-            assert_eq!(
-                ConflictCode::from_detail(&format!("{code}: detail")),
-                Some(code)
-            );
-        }
-    }
-}
-
 /// Account, identity, messaging, and device persistence registry.
 pub trait IdentityStoreRegistry: Send + Sync {
     fn accounts(&self) -> &dyn AccountStore;
@@ -480,4 +427,57 @@ pub trait PersistenceStore:
     + Send
     + Sync
 {
+}
+
+#[cfg(test)]
+mod conflict_code_tests {
+    use super::{ConflictCode, PersistenceError};
+
+    #[test]
+    fn bare_code_and_prefixed_detail_both_resolve() {
+        assert_eq!(
+            ConflictCode::from_detail("cas_conflict"),
+            Some(ConflictCode::CasConflict)
+        );
+        assert_eq!(
+            ConflictCode::from_detail("fork_quarantine: actor sequence sibling limit"),
+            Some(ConflictCode::ForkQuarantine)
+        );
+    }
+
+    #[test]
+    fn a_code_mentioned_inside_diagnostics_does_not_route() {
+        // The old substring matcher classified this as `cas_conflict`.
+        assert_eq!(
+            ConflictCode::from_detail("localpart `cas_conflict` is already assigned"),
+            None
+        );
+        assert_eq!(
+            ConflictCode::from_detail("schema_violation is not the prefix here"),
+            None
+        );
+    }
+
+    #[test]
+    fn unregistered_conflicts_are_reported_as_such() {
+        assert_eq!(
+            ConflictCode::from_detail("organization registration current pointer CAS failed"),
+            None
+        );
+        assert_eq!(
+            PersistenceError::Internal("cas_conflict".to_owned()).conflict_code(),
+            None
+        );
+    }
+
+    #[test]
+    fn every_code_round_trips_through_its_wire_token() {
+        for code in ConflictCode::ALL {
+            assert_eq!(ConflictCode::from_detail(code.as_str()), Some(code));
+            assert_eq!(
+                ConflictCode::from_detail(&format!("{code}: detail")),
+                Some(code)
+            );
+        }
+    }
 }

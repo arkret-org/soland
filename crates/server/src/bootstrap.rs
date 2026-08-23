@@ -20,7 +20,7 @@ use arkret_models_identity::service_identity::{
     CanonicalServiceUrl, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
     ServiceRegistrationOutcome, ServiceRegistrationReceipt,
 };
-use arkret_wire::{DidCoreId, PayloadProof, ServiceKind, project_full_id_to_core_id, proof_kind};
+use arkret_wire::{PayloadProof, ServiceKind, project_full_id_to_core_id, proof_kind};
 use ed25519_dalek::SigningKey;
 use rand_chacha::rand_core::SeedableRng;
 use serde_json::{Value, json};
@@ -1150,9 +1150,9 @@ fn sign_registration_receipt(
     let log_head_digest = request.inception_operation.log_head_digest()?;
     let control_key_digest = request.inception_operation.control_key_digest()?;
     let full_id = request.inception_operation.state.id.clone();
-    let service_id = DidCoreId::from(project_full_id_to_core_id(&full_id)?);
+    let service_id = project_full_id_to_core_id(&full_id)?;
     let provider_full_id = provider_service_id;
-    let provider_service_id = DidCoreId::from(project_full_id_to_core_id(provider_full_id)?);
+    let provider_service_id = project_full_id_to_core_id(provider_full_id)?;
     let verification_method = arkret_wire::DidUrl::new(format!("{provider_full_id}#notary-key"))
         .map_err(|error| {
             anyhow::anyhow!("provider notary verification method is invalid: {error}")

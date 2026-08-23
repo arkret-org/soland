@@ -2752,7 +2752,7 @@ fn fixture_actor_seq(authoring_step: u64) -> u64 {
         .expect("HTTP fixture authoring sequence")
 }
 
-fn fixture_prev_refs<'a>(prev_refs: Vec<&'a str>) -> Vec<&'a str> {
+fn fixture_prev_refs(prev_refs: Vec<&str>) -> Vec<&str> {
     if prev_refs.is_empty() {
         vec![
             DEMO_REALM_ACTOR_FRONTIER_EVENT_ID

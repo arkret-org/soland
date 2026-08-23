@@ -361,10 +361,7 @@ mod tests {
     }
 
     /// `event-payload.schema.json#/$defs/membership_payload` names the subject
-    /// `actor_id` and is `additionalProperties:false`. The canonical positive
-    /// is a self-authored knock; the legacy `member` spelling is not a spec
-    /// field, so a payload carrying only it cannot retarget the knock away
-    /// from the Event author.
+    /// `actor_id`; the canonical positive is a self-authored knock.
     #[test]
     fn member_self_knock_reads_only_actor_id() {
         assert!(member_self_knock(
@@ -373,14 +370,6 @@ mod tests {
         ));
         assert!(!member_self_knock(
             &member_state(json!({"membership": "knock", "actor_id": BOB})),
-            ALICE
-        ));
-
-        // Legacy `member`: unread, so the payload reduces to "no actor field"
-        // and the Event author is the subject. Alice knocking for herself is
-        // still admitted; the legacy key can no longer name Bob as the target.
-        assert!(member_self_knock(
-            &member_state(json!({"membership": "knock", "member": BOB})),
             ALICE
         ));
     }

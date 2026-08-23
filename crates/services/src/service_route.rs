@@ -282,7 +282,6 @@ impl ServiceRouteResolver {
         let description = candidate.description;
         let record = candidate.record;
         let projected = arkret_wire::project_full_id_to_core_id(&record.record.full_id)
-            .map(DidCoreId::from)
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         if &projected != service_id
             || &record.record.service_id != service_id
@@ -491,9 +490,7 @@ mod tests {
         let full_id = DidFullId::new(full).unwrap();
         ServiceResolutionRecord {
             record: ServiceResolutionRecordCore {
-                service_id: DidCoreId::from(
-                    arkret_wire::project_full_id_to_core_id(&full_id).unwrap(),
-                ),
+                service_id: arkret_wire::project_full_id_to_core_id(&full_id).unwrap(),
                 service_kind: "principal_server".to_owned(),
                 full_id,
                 method_history_head: format!("head-{sequence}"),
@@ -583,7 +580,7 @@ mod tests {
         assert_eq!(entry.record_sequence, 1);
         assert_eq!(
             arkret_wire::project_full_id_to_core_id(&entry.full_id).unwrap(),
-            expected.into()
+            expected
         );
     }
 

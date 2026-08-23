@@ -1081,31 +1081,32 @@ async fn register_native_agent_membership_context(
         principal_id: arkret_identifiers::DidCoreId::new(controller.to_owned()).unwrap(),
         principal_server_id: crate::test_event::principal_server_id(),
     };
-    let mut projection = state.test_projection().lock();
-    projection.members.insert(
-        (realm_id.to_string(), controller.to_owned()),
-        soland_domain::reducer::SolandMembershipState {
-            member: controller.to_owned(),
-            realm_id: realm_id.to_string(),
-            state: "join".to_owned(),
-            role: "owner".to_owned(),
-            delivery_status: Some("unroutable".to_owned()),
-            recipient_service_id: None,
-            recipient_service_resolution: None,
-            membership_event_ref: Some(AGENT_CONTROLLER_MEMBERSHIP_EVENT_ID.to_owned()),
-            delivery_binding_frontier: None,
-            delivery_binding_expires_at: None,
-            invited_at: None,
-            joined_at: now,
-            updated_at: now,
-            reason: None,
-        },
-    );
-    projection.membership_authorities.insert(
-        (realm_id.to_string(), controller.to_owned()),
-        controller_authority,
-    );
-    drop(projection);
+    {
+        let mut projection = state.test_projection().lock();
+        projection.members.insert(
+            (realm_id.to_string(), controller.to_owned()),
+            soland_domain::reducer::SolandMembershipState {
+                member: controller.to_owned(),
+                realm_id: realm_id.to_string(),
+                state: "join".to_owned(),
+                role: "owner".to_owned(),
+                delivery_status: Some("unroutable".to_owned()),
+                recipient_service_id: None,
+                recipient_service_resolution: None,
+                membership_event_ref: Some(AGENT_CONTROLLER_MEMBERSHIP_EVENT_ID.to_owned()),
+                delivery_binding_frontier: None,
+                delivery_binding_expires_at: None,
+                invited_at: None,
+                joined_at: now,
+                updated_at: now,
+                reason: None,
+            },
+        );
+        projection.membership_authorities.insert(
+            (realm_id.to_string(), controller.to_owned()),
+            controller_authority,
+        );
+    }
 
     if !with_claimable_keypackage {
         return;

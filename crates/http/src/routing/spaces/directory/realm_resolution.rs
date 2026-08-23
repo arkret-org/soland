@@ -885,11 +885,10 @@ fn normalize_join_candidate_service_id(value: &str) -> Option<arkret_wire::DidCo
         .ok()
         .or_else(|| {
             let full_id = arkret_wire::DidFullId::new(value.to_owned()).ok()?;
-            arkret_wire::project_full_id_to_core_id(&full_id)
-                .ok()
-                .map(arkret_wire::DidCoreId::from)
+            arkret_wire::project_full_id_to_core_id(&full_id).ok()
         })
 }
+use arkret_identifiers::DidCoreId;
 
 #[cfg(test)]
 mod tests {
@@ -915,4 +914,3 @@ mod tests {
         );
     }
 }
-use arkret_identifiers::DidCoreId;

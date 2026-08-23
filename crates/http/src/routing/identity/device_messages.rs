@@ -811,9 +811,7 @@ fn device_message_envelope_from_record(
         && (sender_service_id.as_str() != state.service_id() || message.sender != message.recipient)
     {
         // Fail closed on persisted rows that do not carry the exact local
-        // service/holder binding the internal materializer wrote. In
-        // particular, do not reinterpret legacy `server:*` device strings or
-        // rewrite a foreign service sender into the local service identity.
+        // service/holder binding the internal materializer wrote.
         return None;
     }
     Some(DeviceMessageEnvelope {

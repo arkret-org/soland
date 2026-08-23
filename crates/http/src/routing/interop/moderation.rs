@@ -58,11 +58,8 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
         .unwrap_or(0);
     let realm_id = payload.realm_id.clone();
     let service_did = state.service_resolution_commitment().full_id.clone();
-    let service_actor_id = arkret_wire::DidCoreId::from(
-        arkret_wire::project_full_id_to_core_id(&service_did).map_err(|error| {
-            AppError::internal(format!("service DID cannot be projected: {error}"))
-        })?,
-    );
+    let service_actor_id = arkret_wire::project_full_id_to_core_id(&service_did)
+        .map_err(|error| AppError::internal(format!("service DID cannot be projected: {error}")))?;
     let created_at = now();
     let hlc = arkret_identifiers::Hlc::new(state.hlc().now())
         .map_err(|error| AppError::internal(format!("moderation HLC invalid: {error}")))?;

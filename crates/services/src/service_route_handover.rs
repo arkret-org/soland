@@ -779,9 +779,7 @@ mod tests {
         let full_id = DidFullId::new(FULL).unwrap();
         ServiceResolutionRecord {
             record: ServiceResolutionRecordCore {
-                service_id: DidCoreId::from(
-                    arkret_wire::project_full_id_to_core_id(&full_id).unwrap(),
-                ),
+                service_id: arkret_wire::project_full_id_to_core_id(&full_id).unwrap(),
                 service_kind: "principal_server".to_owned(),
                 full_id,
                 method_history_head: format!("head-{sequence}"),

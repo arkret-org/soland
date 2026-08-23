@@ -378,9 +378,7 @@ mod tests {
             "did:webvh:z6mkfixture:example.test:users:alice".to_owned(),
         )
         .unwrap();
-        let controller_id = arkret_wire::DidCoreId::from(
-            arkret_wire::project_full_id_to_core_id(&controller_full_id).unwrap(),
-        );
+        let controller_id = arkret_wire::project_full_id_to_core_id(&controller_full_id).unwrap();
 
         reconcile_self_realm_owner_projection(
             &state,
@@ -415,9 +413,7 @@ mod tests {
             "did:webvh:z6mkfixture:example.test:users:alice".to_owned(),
         )
         .unwrap();
-        let controller_id = arkret_wire::DidCoreId::from(
-            arkret_wire::project_full_id_to_core_id(&controller_full_id).unwrap(),
-        );
+        let controller_id = arkret_wire::project_full_id_to_core_id(&controller_full_id).unwrap();
         let error = reconcile_self_realm_owner_projection(
             &state,
             "ak:realm:AfnUfJvZuZpWOPXnnKIwf1dg2Dee77NZ0MxYh1uFxCLF",

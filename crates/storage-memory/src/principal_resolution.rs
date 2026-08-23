@@ -87,16 +87,15 @@ impl PrincipalResolutionStore for MemoryPrincipalResolutionStore {
             ));
         }
 
-        if let Some(current) = current {
-            if current.current.authority_key != next.authority_key
+        if let Some(current) = current
+            && (current.current.authority_key != next.authority_key
                 || current.current.pcr_realm_id != next.pcr_realm_id
-                || current.current.genesis_event.event_id != next.genesis_event.event_id
-            {
-                return Err(PersistenceError::SchemaViolation(
+                || current.current.genesis_event.event_id != next.genesis_event.event_id)
+        {
+            return Err(PersistenceError::SchemaViolation(
                     "principal resolution CAS cannot change the account authority key, PCR Realm or genesis Event"
                         .to_owned(),
                 ));
-            }
         }
 
         let mut history = current

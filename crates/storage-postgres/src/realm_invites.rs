@@ -319,7 +319,7 @@ mod tests {
                 "verification_public_key": "did:web:verify.example#invite-key"
             }),
             // Not an object at all.
-            serde_json::json!("legacy-string"),
+            serde_json::json!("not-an-object"),
         ] {
             let error = row_with_third_party_invite(Some(corrupt))
                 .try_into_record()

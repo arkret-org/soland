@@ -177,11 +177,10 @@ pub(crate) fn protocol_router() -> Router {
 async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let service_resolution = state.service_resolution_commitment();
-    let service_id = arkret_wire::DidCoreId::from(
+    let service_id =
         arkret_wire::project_full_id_to_core_id(&service_resolution.full_id).map_err(|error| {
             AppError::internal(format!("service resolution projection failed: {error}"))
-        })?,
-    );
+        })?;
     let trust_domain = state.config().trust_domain.clone();
     let supported_profiles: Vec<String> = DIRECTORY_DISCOVERY_PROFILES
         .iter()

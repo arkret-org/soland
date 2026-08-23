@@ -2203,7 +2203,7 @@ mod tests {
         let event_id = |value: u32| {
             arkret_identifiers::EventId::from_digest(
                 arkret_canonical::DigestSuite::Sha256,
-                arkret_canonical::sha256_bytes(&value.to_be_bytes()),
+                arkret_canonical::sha256_bytes(value.to_be_bytes()),
             )
             .to_string()
         };

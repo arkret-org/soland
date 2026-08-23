@@ -140,9 +140,8 @@ fn verified_peer_route(
     trust_domain: &str,
 ) -> VerifiedPeerRoute {
     let full_id = DidFullId::new(full_id.to_owned()).expect("fixture peer full DID");
-    let service_id = DidCoreId::from(
-        arkret_wire::project_full_id_to_core_id(&full_id).expect("fixture peer core projection"),
-    );
+    let service_id =
+        arkret_wire::project_full_id_to_core_id(&full_id).expect("fixture peer core projection");
     assert_eq!(service_id.as_str(), expected_core_id);
     let base_url = format!("{}/", base_url.trim_end_matches('/'));
     let method_history_head = format!("sha256:{}", "1".repeat(64));

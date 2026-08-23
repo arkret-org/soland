@@ -363,11 +363,9 @@ pub(super) async fn provision_agent(
                 ));
             }
 
-            let agent_id = arkret_wire::project_full_id_to_core_id(&full_id)
-                .map(arkret_wire::DidCoreId::from)
-                .map_err(|error| {
-                    AppError::param_invalid(format!("Agent full_id projection failed: {error}"))
-                })?;
+            let agent_id = arkret_wire::project_full_id_to_core_id(&full_id).map_err(|error| {
+                AppError::param_invalid(format!("Agent full_id projection failed: {error}"))
+            })?;
             let controller_did = controller_authority.principal_id.clone();
             let initial_resolution =
                 crate::routing::identity::managed_agent_pcr::accepted_managed_agent_initial_resolution(

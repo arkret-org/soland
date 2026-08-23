@@ -69,6 +69,25 @@ fn membership_authority_pair_acceptable(
     })
 }
 
+fn did_deployment_authority(did: &str) -> Option<String> {
+    let authority = if let Some(rest) = did
+        .strip_prefix("ak:did_core:web:")
+        .or_else(|| did.strip_prefix("did:web:"))
+    {
+        rest.split(':').next()?
+    } else {
+        let rest = did.strip_prefix("did:webvh:")?;
+        let mut parts = rest.split(':');
+        let scid = parts.next()?;
+        if scid.is_empty() {
+            return None;
+        }
+        parts.next()?
+    };
+    let authority = authority.trim_end_matches('.');
+    (!authority.is_empty()).then(|| authority.to_ascii_lowercase())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -149,23 +168,4 @@ mod tests {
             Some(arkret_wire::EventKind::MessageCreate.as_str())
         ));
     }
-}
-
-fn did_deployment_authority(did: &str) -> Option<String> {
-    let authority = if let Some(rest) = did
-        .strip_prefix("ak:did_core:web:")
-        .or_else(|| did.strip_prefix("did:web:"))
-    {
-        rest.split(':').next()?
-    } else {
-        let rest = did.strip_prefix("did:webvh:")?;
-        let mut parts = rest.split(':');
-        let scid = parts.next()?;
-        if scid.is_empty() {
-            return None;
-        }
-        parts.next()?
-    };
-    let authority = authority.trim_end_matches('.');
-    (!authority.is_empty()).then(|| authority.to_ascii_lowercase())
 }

@@ -247,21 +247,17 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
         uuid::Uuid::now_v7()
     ))
     .unwrap();
-    let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id)
-        .map(arkret_identifiers::DidCoreId::from)
-        .unwrap();
+    let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id).unwrap();
     // A genesis scope names no Realm; the Realm id is derived from this
     // Event's own id, so the fixture reads it back after construction.
     let event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
         actor_id,
-        arkret_identifiers::DidCoreId::from(
-            arkret_wire::project_full_id_to_core_id(
-                &arkret_identifiers::DidFullId::new("did:web:service.example".to_owned()).unwrap(),
-            )
-            .unwrap(),
-        ),
+        arkret_wire::project_full_id_to_core_id(
+            &arkret_identifiers::DidFullId::new("did:web:service.example".to_owned()).unwrap(),
+        )
+        .unwrap(),
         0,
         arkret_identifiers::Hlc::new("019c00000000-0000-aabbccdd").unwrap(),
         serde_json::json!({"object": {"fields": {"purpose": "principal_control"}}}),
@@ -819,9 +815,7 @@ mod control_move_ingress_negatives {
             uuid::Uuid::now_v7()
         ))
         .unwrap();
-        let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id)
-            .map(arkret_identifiers::DidCoreId::from)
-            .unwrap();
+        let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id).unwrap();
         // A genesis scope names no Realm; the Realm id is derived from this
         // Event's own id, so the fixture reads it back after construction.
         // Anything the commit path re-parses from the envelope resolves the
@@ -830,13 +824,10 @@ mod control_move_ingress_negatives {
             arkret_wire::EventKind::RealmCreate.as_str(),
             arkret_wire::ScopeRef::RealmGenesis,
             actor_id,
-            arkret_identifiers::DidCoreId::from(
-                arkret_wire::project_full_id_to_core_id(
-                    &arkret_identifiers::DidFullId::new("did:web:service.example".to_owned())
-                        .unwrap(),
-                )
-                .unwrap(),
-            ),
+            arkret_wire::project_full_id_to_core_id(
+                &arkret_identifiers::DidFullId::new("did:web:service.example".to_owned()).unwrap(),
+            )
+            .unwrap(),
             0,
             arkret_identifiers::Hlc::new("019c00000000-0000-aabbccdd").unwrap(),
             serde_json::json!({"object": {"fields": {"purpose": "principal_control"}}}),

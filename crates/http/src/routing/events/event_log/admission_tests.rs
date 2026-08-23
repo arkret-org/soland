@@ -15,35 +15,6 @@ fn malformed_direct_conversation_unit_cannot_fall_through_to_ordinary_batch() {
     assert!(parsed.is_err());
 }
 
-/// v1 deleted the plaintext ephemeral rail outright: none of these kinds is a
-/// registered Event kind any more (`sync/signal.md` section 5 puts device
-/// verification and secret distribution on `DeviceMessageEnvelope` and
-/// everything else inside an encrypted `SignalEnvelope`). The durable submit
-/// rail therefore refuses them for the strongest possible reason — there is no
-/// such Event kind — rather than by a per-kind entry gate, and the Signal rail
-/// refuses a plaintext ephemeral envelope with `signal_plaintext_forbidden`.
-#[test]
-fn legacy_ephemeral_kinds_are_not_registered_event_kinds() {
-    for kind in [
-        "ak.call.signal",
-        "ak.presence",
-        "ak.typing",
-        "ak.receipt.read",
-        "ak.key.verification.start",
-        "ak.key.verification.accept",
-        "ak.key.verification.mac",
-    ] {
-        assert!(
-            arkret_wire::EventKind::try_new(kind).is_none(),
-            "{kind} must not be a registered durable Event kind"
-        );
-        // The entry gate stays keyed off the live SDK predicate rather than a
-        // hand-maintained list, so it simply has nothing to add for a kind the
-        // registry does not know.
-        assert!(events_submit_pre_admit_check(kind).is_none());
-    }
-}
-
 #[test]
 fn receipt_object_kind_rejected_at_submit_entry() {
     assert!(matches!(

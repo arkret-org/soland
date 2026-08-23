@@ -188,7 +188,6 @@ pub(crate) async fn managed_agent_pcr_event_matches_accepted_delegation(
         .or_else(|_| {
             arkret_wire::DidFullId::new(record.controller_id.clone())
                 .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
-                .map(arkret_wire::DidCoreId::from)
         })
         .map_err(|error| format!("accepted managed Agent controller is invalid: {error}"))?;
     Ok(record.principal_control_realm_id == event.realm_id.as_str()
@@ -262,7 +261,6 @@ pub(crate) async fn verify_managed_agent_pcr_ack(
         .or_else(|_| {
             arkret_wire::DidFullId::new(record.controller_id.clone())
                 .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
-                .map(arkret_wire::DidCoreId::from)
         })
         .map_err(|error| format!("accepted managed Agent controller is invalid: {error}"))?;
     if record.principal_control_realm_id != event.realm_id.as_str()

@@ -275,7 +275,6 @@ pub(super) fn validate_signature_input(
     let expected_controller = arkret_identifiers::DidCoreId::new(expected_service_id.to_owned())
         .map_err(|_| signature_error(format!("{label} source service DID is invalid")))?;
     let controller_core = arkret_wire::project_full_id_to_core_id(&controller)
-        .map(arkret_wire::DidCoreId::from)
         .map_err(|_| signature_error(format!("{label} keyid controller cannot project")))?;
     if controller_core != expected_controller {
         return Err(signature_error(format!(

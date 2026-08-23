@@ -1317,7 +1317,7 @@ impl RealmMetaStore for PgRealmMetaStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(&format!(
+        sql_query(format!(
             "SELECT {REALM_META_COLUMNS} FROM realm_meta WHERE realm_id = $1"
         ))
         .bind::<Text, _>(realm_id)
@@ -1390,7 +1390,7 @@ impl RealmMetaStore for PgRealmMetaStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(&format!(
+        sql_query(format!(
             "SELECT {REALM_META_COLUMNS} FROM realm_meta ORDER BY realm_id"
         ))
         .load::<RealmMetaRow>(&mut *conn)

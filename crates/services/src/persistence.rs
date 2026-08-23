@@ -941,25 +941,11 @@ impl soland_storage::ServiceRouteHandoverPlanStore for PersistenceHandle {
 
     async fn advance_plan_state(
         &self,
-        service_id: &arkret_wire::DidCoreId,
-        service_kind: &str,
-        handover_id: &str,
-        expected_state: soland_storage::ServiceRouteHandoverPlanState,
-        next_state: soland_storage::ServiceRouteHandoverPlanState,
-        last_error: Option<String>,
-        updated_at: chrono::DateTime<chrono::Utc>,
+        advance: soland_storage::ServiceRouteHandoverPlanAdvance<'_>,
     ) -> PersistenceResult<soland_storage::ServiceRouteHandoverPlanWrite> {
         self.persistence
             .service_route_plans()
-            .advance_plan_state(
-                service_id,
-                service_kind,
-                handover_id,
-                expected_state,
-                next_state,
-                last_error,
-                updated_at,
-            )
+            .advance_plan_state(advance)
             .await
     }
 }

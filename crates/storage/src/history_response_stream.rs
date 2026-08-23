@@ -39,7 +39,7 @@ pub const HISTORY_RESPONSE_TOMBSTONE_RETENTION_DAYS: i64 = 30;
 pub enum HistoryRequestPutOutcome {
     Stored {
         outcome: ExactWriteOutcome,
-        record: HistoryRequestRecord,
+        record: Box<HistoryRequestRecord>,
     },
     CapabilityCommitmentCollision,
 }
@@ -552,8 +552,8 @@ impl HistoryResponseTombstone {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum HistoryResponseRetryRecord {
-    Reserved(HistoryResponseReservationRecord),
-    Accepted(HistoryKeyResponseSendReceipt),
+    Reserved(Box<HistoryResponseReservationRecord>),
+    Accepted(Box<HistoryKeyResponseSendReceipt>),
     Expired(HistoryResponseTombstone),
 }
 

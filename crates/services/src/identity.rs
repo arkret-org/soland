@@ -7,7 +7,6 @@ use arkret_models_collaboration::contact_operations::{
     ContactRoundEvidenceBundle, PeerContactMirrorReceipt, PeerContactSubmitOutcome,
     RequestAcceptanceReceipt,
 };
-use arkret_models_collaboration::governance::agent_artifacts::PublicKey;
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 use arkret_models_crypto::{
     DeviceGenerationStatus, RecoveryIdentityModel, RecoveryPublicationAuthorityContext,
@@ -1297,16 +1296,6 @@ pub trait DevicePairingPort: Send + Sync {
         &self,
         device_pairing_request_id: &str,
     ) -> ServiceResult<Option<DevicePairingState>>;
-    async fn commit_authorization(
-        &self,
-        device_pairing_request_id: &str,
-        pairing_code: &str,
-        new_device_pubkey: PublicKey,
-        device_id: &str,
-        authorized_by_actor_id: &str,
-        authorized_event_ref: &str,
-        changed_at: DateTime<Utc>,
-    ) -> ServiceResult<bool>;
     async fn prune_expired_before(&self, cutoff: DateTime<Utc>) -> ServiceResult<u64>;
 }
 
@@ -1332,30 +1321,6 @@ impl DevicePairingService {
         device_pairing_request_id: &str,
     ) -> ServiceResult<Option<DevicePairingState>> {
         self.pairing.get(device_pairing_request_id).await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn commit_authorization(
-        &self,
-        device_pairing_request_id: &str,
-        pairing_code: &str,
-        new_device_pubkey: PublicKey,
-        device_id: &str,
-        authorized_by_actor_id: &str,
-        authorized_event_ref: &str,
-        changed_at: DateTime<Utc>,
-    ) -> ServiceResult<bool> {
-        self.pairing
-            .commit_authorization(
-                device_pairing_request_id,
-                pairing_code,
-                new_device_pubkey,
-                device_id,
-                authorized_by_actor_id,
-                authorized_event_ref,
-                changed_at,
-            )
-            .await
     }
 
     pub async fn prune_expired_before(&self, cutoff: DateTime<Utc>) -> ServiceResult<u64> {

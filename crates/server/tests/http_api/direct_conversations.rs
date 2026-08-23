@@ -589,14 +589,14 @@ async fn direct_resolve_private_detail_stays_redacted_in_production_body() {
 }
 
 #[test]
-fn direct_resolve_uses_accepted_contact_scope_without_legacy_consent_overlay() {
+fn direct_resolve_uses_accepted_contact_scope() {
     run_on_deep_stack(
-        "direct_resolve_uses_accepted_contact_scope_without_legacy_consent_overlay",
-        direct_resolve_uses_accepted_contact_scope_without_legacy_consent_overlay_body,
+        "direct_resolve_uses_accepted_contact_scope",
+        direct_resolve_uses_accepted_contact_scope_body,
     );
 }
 
-async fn direct_resolve_uses_accepted_contact_scope_without_legacy_consent_overlay_body() {
+async fn direct_resolve_uses_accepted_contact_scope_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let _bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;

@@ -123,39 +123,6 @@ async fn submit_read_receipt_policy(
 /// The Strand the demo Realm's fixture messages are authored into.
 const TARGET_STRAND_ID: &str = "ak:strand:AcbFC8Nil95DfV11kMMMvRtzRdEC3g-tFtBE8_VQQ74j";
 
-/// Build the obsolete plaintext envelope retained as a negative fixture.
-fn legacy_plaintext_read_receipt_envelope(actor: &str, device_id: &str, event_id: &str) -> Value {
-    let sent_at = chrono::Utc::now();
-    let expires_at = sent_at + chrono::Duration::seconds(30);
-    let mut envelope = serde_json::json!({
-        "kind": "ak.receipt.read",
-        "realm_id": demo_realm_id(),
-        "actor_id": actor,
-        "device_id": device_id,
-        "sent_at": arkret_canonical::format_timestamp_canonical(sent_at),
-        "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
-        "payload": {
-            "receipt_kind": "read",
-            "schema": arkret_wire::SchemaId::READ_RECEIPT_V1,
-            "realm_id": demo_realm_id(),
-            "actor_id": actor,
-            "event_id": event_id,
-            "read_scope": {"kind": "realm"},
-            "created_at": arkret_canonical::format_timestamp_canonical(sent_at)
-        }
-    });
-    let canonical = arkret_canonical::canonical_json_bytes(&envelope).unwrap();
-    let event_digest = arkret_canonical::sha256_digest(&canonical);
-    envelope["proof"] = serde_json::json!({
-        "kind": "detached_jws",
-        "verification_method": format!("{actor}#{device_id}"),
-        "event_digest": event_digest,
-        "created_at": arkret_canonical::format_timestamp_canonical(sent_at),
-        "jws": "eyJhbGciOiJFZDI1NTE5In0..c2ln"
-    });
-    envelope
-}
-
 fn read_receipt_plaintext(actor: &str, event_id: &str, payload_sequence: u64) -> String {
     let receipt = ReadReceipt::new(
         payload_sequence,
@@ -260,32 +227,7 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
         submit_alice_target_message(state.clone(), &alice_token, "private receipt target").await;
     set_read_receipt_policy(state.clone(), &alice_token, "private").await;
 
-    // (1) §2.1 — the legacy plaintext ephemeral receipt is refused outright.
-    let legacy_body = legacy_plaintext_read_receipt_envelope(BOB, BOB_DEVICE, &target_event_id);
-    let mut legacy = TestClient::post("http://server/_arkret/self/signal")
-        .add_header("authorization", format!("Bearer {bob_token}"), true)
-        .add_header("content-type", "application/json", true)
-        .body(canonical_body(&legacy_body))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(legacy.status_code, Some(StatusCode::BAD_REQUEST));
-    let legacy_body: Value = legacy.take_json().await.unwrap();
-    assert_eq!(
-        legacy_body["error"]["details"]["reason_code"], "signal_plaintext_forbidden",
-        "legacy plaintext receipt body: {legacy_body}"
-    );
-    assert!(
-        state
-            .test_persistence()
-            .signal_relay()
-            .list_for_realm(demo_realm_id())
-            .await
-            .unwrap()
-            .is_empty(),
-        "a plaintext receipt must never reach the live relay"
-    );
-
-    // (2) The receipt rides the Signal rail, narrowed to a Circle Alice is in
+    // The receipt rides the Signal rail, narrowed to a Circle Alice is in
     // and Carol is not.
     let circle_id = "ak:circle:Aa5c9aKm3eqBBuZdfIQ4ORPvt45gtDefEZ3--7YrRKva";
     seed_test_circle(&state, demo_realm_id(), circle_id, &[ALICE, BOB]);

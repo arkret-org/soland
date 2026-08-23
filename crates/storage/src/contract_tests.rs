@@ -44,9 +44,10 @@ use super::{
     OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
     OrganizationRegistrationTerminalReason, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, ProjectionEventRecord,
-    ProjectionEventStore, RealmFanoutAuthorityWitness, RealmFanoutBinding, RealmMetaRecord,
-    RealmMetaStore, ServiceRouteHandoverAudienceStatus, ServiceRouteHandoverAudienceTarget,
-    ServiceRouteHandoverNoticeCommit, ServiceRouteHandoverNoticeRecord, ServiceRouteHandoverPlan,
+    ProjectionEventStore, RealmFanoutAuthorityWitness, RealmFanoutBinding, RealmFanoutOutboxInput,
+    RealmMetaRecord, RealmMetaStore, ServiceRouteHandoverAudienceStatus,
+    ServiceRouteHandoverAudienceTarget, ServiceRouteHandoverNoticeCommit,
+    ServiceRouteHandoverNoticeRecord, ServiceRouteHandoverPlan, ServiceRouteHandoverPlanAdvance,
     ServiceRouteHandoverPlanState, ServiceRouteHandoverPlanStore, ServiceRouteHandoverPlanWrite,
 };
 
@@ -2106,14 +2107,14 @@ pub async fn assert_federation_outbox_store_contract(
         0,
         database_timestamp_now(),
     );
-    let route_missing = FederationOutboxRecord::realm_fanout(
-        format!("outbox:{namespace}:pending-route"),
-        "ak:did_core:web:peer.example".to_owned(),
-        None,
-        "/_arkret/peer/events".to_owned(),
-        format!("ak:outbox:event:{namespace}:pending-route"),
-        "{}".to_owned(),
-        RealmFanoutBinding {
+    let route_missing = FederationOutboxRecord::realm_fanout(RealmFanoutOutboxInput {
+        id: format!("outbox:{namespace}:pending-route"),
+        peer_did: "ak:did_core:web:peer.example".to_owned(),
+        peer_url: None,
+        endpoint: "/_arkret/peer/events".to_owned(),
+        idempotency_key: format!("ak:outbox:event:{namespace}:pending-route"),
+        payload_json: "{}".to_owned(),
+        binding: RealmFanoutBinding {
             realm_id,
             source_event_ids: vec![source_event.event_id.clone()],
             authority_witnesses: vec![RealmFanoutAuthorityWitness {
@@ -2122,8 +2123,8 @@ pub async fn assert_federation_outbox_store_contract(
                 delivery_binding_frontier: source_event.event_id,
             }],
         },
-        1_000,
-    );
+        created_at: 1_000,
+    });
     assert!(
         store
             .enqueue(&route_missing)
@@ -3430,15 +3431,15 @@ pub async fn assert_service_route_handover_plan_store_contract(
     // A guarded lifecycle transition needs the state it expects.
     assert_eq!(
         store
-            .advance_plan_state(
+            .advance_plan_state(ServiceRouteHandoverPlanAdvance {
                 service_id,
                 service_kind,
-                "h-1",
-                ServiceRouteHandoverPlanState::Draft,
-                ServiceRouteHandoverPlanState::Preannounced,
-                None,
-                now,
-            )
+                handover_id: "h-1",
+                expected_state: ServiceRouteHandoverPlanState::Draft,
+                next_state: ServiceRouteHandoverPlanState::Preannounced,
+                last_error: None,
+                updated_at: now,
+            },)
             .await
             .unwrap(),
         ServiceRouteHandoverPlanWrite::Rejected,
@@ -3446,15 +3447,15 @@ pub async fn assert_service_route_handover_plan_store_contract(
     );
     assert_eq!(
         store
-            .advance_plan_state(
+            .advance_plan_state(ServiceRouteHandoverPlanAdvance {
                 service_id,
                 service_kind,
-                "h-1",
-                ServiceRouteHandoverPlanState::Publishing,
-                ServiceRouteHandoverPlanState::Failed,
-                Some("audience publication exhausted its retry budget".to_owned()),
-                now,
-            )
+                handover_id: "h-1",
+                expected_state: ServiceRouteHandoverPlanState::Publishing,
+                next_state: ServiceRouteHandoverPlanState::Failed,
+                last_error: Some("audience publication exhausted its retry budget".to_owned(),),
+                updated_at: now,
+            },)
             .await
             .unwrap(),
         ServiceRouteHandoverPlanWrite::Applied
@@ -3470,15 +3471,15 @@ pub async fn assert_service_route_handover_plan_store_contract(
     );
     assert_eq!(
         store
-            .advance_plan_state(
+            .advance_plan_state(ServiceRouteHandoverPlanAdvance {
                 service_id,
                 service_kind,
-                "h-1",
-                ServiceRouteHandoverPlanState::Failed,
-                ServiceRouteHandoverPlanState::Publishing,
-                None,
-                now,
-            )
+                handover_id: "h-1",
+                expected_state: ServiceRouteHandoverPlanState::Failed,
+                next_state: ServiceRouteHandoverPlanState::Publishing,
+                last_error: None,
+                updated_at: now,
+            },)
             .await
             .unwrap(),
         ServiceRouteHandoverPlanWrite::Rejected

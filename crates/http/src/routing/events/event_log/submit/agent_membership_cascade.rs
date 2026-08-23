@@ -706,7 +706,9 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
             let digest = record.cleanup_intent_digest.clone();
             prepared.push(prepared_controller);
             (
-                soland_storage::AgentMembershipCascadeCommit::EmergencyTerminal { record },
+                soland_storage::AgentMembershipCascadeCommit::EmergencyTerminal {
+                    record: Box::new(record),
+                },
                 AgentMembershipCascadeOutcomeStatus::TerminalAppliedCleanupPending,
                 Some(digest),
             )
@@ -1188,7 +1190,9 @@ async fn submit_federated_cascade_after_transport_validation(
             let digest = record.cleanup_intent_digest.clone();
             prepared.push(controller);
             (
-                soland_storage::AgentMembershipCascadeCommit::EmergencyTerminal { record },
+                soland_storage::AgentMembershipCascadeCommit::EmergencyTerminal {
+                    record: Box::new(record),
+                },
                 AgentMembershipCascadeOutcomeStatus::TerminalAppliedCleanupPending,
                 Some(digest),
             )

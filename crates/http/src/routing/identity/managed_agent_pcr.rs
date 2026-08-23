@@ -19,7 +19,6 @@ fn managed_controller_core_id(controller_id: &str) -> Result<DidCoreId, AppError
         .or_else(|_| {
             DidFullId::new(controller_id.to_owned())
                 .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
-                .map(DidCoreId::from)
         })
         .map_err(|error| schema_error(format!("managed Agent controller DID is invalid: {error}")))
 }

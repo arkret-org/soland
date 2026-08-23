@@ -52,7 +52,6 @@ use crate::wire::{
 /// Device-scope prefix carried in a `ak.session.grant`'s scope set
 /// (`urn:arkret:client:device:<device_id>`). A grant that drives
 /// `/_arkret/self/*` MUST carry one so the request is device-bound.
-
 /// TTL for the session-grant introspection cache (api-conventions.md §3.3 D2:
 /// SHOULD ≤ 120s). The revocation-visibility upper bound equals this TTL;
 /// sensitive operations bypass the cache entirely (`force_fresh`).
@@ -839,12 +838,10 @@ mod tests {
                     model_generation_ref: 1,
                 },
             ),
-            audience: arkret_wire::DidCoreId::from(
-                arkret_wire::project_full_id_to_core_id(
+            audience: arkret_wire::project_full_id_to_core_id(
                     &arkret_wire::DidFullId::new("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service").unwrap(),
                 )
                 .unwrap(),
-            ),
             scopes: vec!["ak.self.events.read.scan".to_owned()],
             expires_at: crate::wire::now() + Duration::minutes(5),
             revoked_at: None,

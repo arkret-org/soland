@@ -709,6 +709,19 @@ pub struct FederationOutboxRecord {
     pub completed_at: Option<i64>,
 }
 
+/// Complete durable input for a Realm fanout outbox record.
+#[derive(Clone, Debug)]
+pub struct RealmFanoutOutboxInput {
+    pub id: String,
+    pub peer_did: String,
+    pub peer_url: Option<String>,
+    pub endpoint: String,
+    pub idempotency_key: String,
+    pub payload_json: String,
+    pub binding: RealmFanoutBinding,
+    pub created_at: i64,
+}
+
 impl FederationOutboxRecord {
     pub fn validate_shape(&self) -> Result<(), String> {
         if self.coalescing_key.is_some() != self.coalescing_position.is_some() {
@@ -808,16 +821,17 @@ impl FederationOutboxRecord {
         }
     }
 
-    pub fn realm_fanout(
-        id: String,
-        peer_did: String,
-        peer_url: Option<String>,
-        endpoint: String,
-        idempotency_key: String,
-        payload_json: String,
-        binding: RealmFanoutBinding,
-        created_at: i64,
-    ) -> Self {
+    pub fn realm_fanout(input: RealmFanoutOutboxInput) -> Self {
+        let RealmFanoutOutboxInput {
+            id,
+            peer_did,
+            peer_url,
+            endpoint,
+            idempotency_key,
+            payload_json,
+            binding,
+            created_at,
+        } = input;
         Self {
             id,
             peer_did,

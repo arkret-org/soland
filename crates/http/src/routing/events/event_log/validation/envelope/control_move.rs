@@ -108,10 +108,13 @@ pub(super) async fn reject_revoked_actor_device_signature(
         candidate_devices.insert(device_id);
     }
 
-    let directory_actor_id = arkret_wire::DidCoreId::new(session.actor.clone())
+    let directory_actor_id = if arkret_wire::DidCoreId::new(session.actor.clone())
         .is_ok_and(|session_actor_id| session_actor_id.as_str() == actor_id)
-        .then_some(session.actor.as_str())
-        .unwrap_or(actor_id);
+    {
+        session.actor.as_str()
+    } else {
+        actor_id
+    };
     for device_id in candidate_devices {
         let revoked = state
             .identities()

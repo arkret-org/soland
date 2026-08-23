@@ -153,7 +153,7 @@ async fn stage_agent_membership_cascade(
                                 "stored Agent cleanup intent is invalid: {error}"
                             ))
                         })?;
-                if existing != *record {
+                if existing != **record {
                     return Err(PersistenceError::Conflict(
                         "duplicate_conflict: cleanup intent digest names different content"
                             .to_owned(),

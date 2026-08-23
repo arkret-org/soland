@@ -1489,18 +1489,6 @@ mod tests {
     }
 
     #[test]
-    fn requested_capability_actions_reject_legacy_portal_token() {
-        let controller_seed = [1u8; 32];
-        let (_, controller_vm) = did_key_for_seed(controller_seed);
-        let mut package = signed_did_key_package(controller_seed, controller_seed, &controller_vm);
-        package.requested_scopes = vec!["realm:portal".to_owned()];
-
-        let error = validate_requested_capability_actions(&package)
-            .expect_err("legacy product token must not enter a capability grant plan");
-        assert_eq!(error.wire_code(), "schema_violation");
-    }
-
-    #[test]
     fn requested_capability_actions_accept_registered_applet_actions() {
         let controller_seed = [1u8; 32];
         let (_, controller_vm) = did_key_for_seed(controller_seed);

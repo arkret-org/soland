@@ -40,7 +40,7 @@ pub(crate) fn service_ids(
             format!("service DidFullId cannot be projected: {error}"),
         )
     })?;
-    Ok((DidCoreId::from(core), commitment.full_id.clone()))
+    Ok((core, commitment.full_id.clone()))
 }
 
 fn current_record_url(state: &AppState, service_id: &DidCoreId) -> Result<String, AppError> {

@@ -36,7 +36,7 @@ enum ContactReservationBranch {
         granted_to_peer_scopes: Vec<ContactScope>,
         previous_terminal_contact_round_id: Option<Hash>,
         continuity_evidence: Option<ContactContinuityEvidence>,
-        introduction_evidence: ContactIntroductionEvidence,
+        introduction_evidence: Box<ContactIntroductionEvidence>,
     },
     Response {
         request_receipt: RequestAcceptanceReceipt,
@@ -957,11 +957,8 @@ fn signed_current_proof(
             let proof = proof.as_producer()?;
             let (controller, _) = proof.verification_method.rsplit_once('#')?;
             let full_id = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
-            (arkret_wire::project_full_id_to_core_id(&full_id)
-                .map(arkret_wire::DidCoreId::from)
-                .ok()
-                == Some(event.actor_id.clone()))
-            .then_some(full_id)
+            (arkret_wire::project_full_id_to_core_id(&full_id).ok() == Some(event.actor_id.clone()))
+                .then_some(full_id)
         })
         .ok_or_else(|| {
             AppError::param_invalid("Contact Event has no actor-bound proof controller")
@@ -1811,7 +1808,7 @@ async fn prepare_contact_federation_delivery(
                 signed_event: event.clone(),
                 request_receipt: request_acceptance_receipt.clone(),
                 contact_address,
-                introduction_evidence: introduction_evidence.clone(),
+                introduction_evidence: (**introduction_evidence).clone(),
                 current_proof: None,
             }
         }
@@ -2097,7 +2094,7 @@ pub(super) async fn request(
                     granted_to_peer_scopes: body.granted_to_peer_scopes,
                     previous_terminal_contact_round_id: body.previous_terminal_contact_round_id,
                     continuity_evidence: body.continuity_evidence,
-                    introduction_evidence: body.introduction_evidence,
+                    introduction_evidence: Box::new(body.introduction_evidence),
                 },
                 payload,
             )

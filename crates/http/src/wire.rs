@@ -822,10 +822,8 @@ pub fn describe(
         "org.arkret.soland.profile.limited_server.v1".to_owned(),
     ];
     let interop_surfaces = Vec::new();
-    let service_id = arkret_wire::DidCoreId::from(
-        arkret_wire::project_full_id_to_core_id(&service_resolution.full_id)
-            .expect("service resolution DidFullId must project to a stable service id"),
-    );
+    let service_id = arkret_wire::project_full_id_to_core_id(&service_resolution.full_id)
+        .expect("service resolution DidFullId must project to a stable service id");
     let plaintext_visibility = arkret_models_discovery::service_description::PlaintextVisibility {
         data_classes: vec![
             arkret_wire::PlaintextDataClassKind::MessageContent,

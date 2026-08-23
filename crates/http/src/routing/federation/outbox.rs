@@ -513,7 +513,7 @@ struct SemanticResubmission {
 
 enum KeyPackageClaimRecovery {
     Unknown,
-    Terminal(arkret_models_crypto::PeerKeyPackagesClaimQueryOutcome),
+    Terminal(Box<arkret_models_crypto::PeerKeyPackagesClaimQueryOutcome>),
 }
 
 /// `sync/federation.md` §8.5 — once a response has been received the old
@@ -1670,7 +1670,7 @@ impl FederationDispatcher {
             arkret_models_crypto::PeerKeyPackagesClaimQueryState::Pending => {
                 Err("destination still reports pending".to_owned())
             }
-            _ => Ok(KeyPackageClaimRecovery::Terminal(outcome)),
+            _ => Ok(KeyPackageClaimRecovery::Terminal(Box::new(outcome))),
         }
     }
 

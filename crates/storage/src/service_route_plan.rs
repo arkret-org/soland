@@ -201,6 +201,19 @@ pub struct ServiceRouteHandoverNoticeCommit {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Guarded lifecycle transition for a handover plan that carries no new
+/// signed notice revision.
+#[derive(Clone, Debug)]
+pub struct ServiceRouteHandoverPlanAdvance<'a> {
+    pub service_id: &'a DidCoreId,
+    pub service_kind: &'a str,
+    pub handover_id: &'a str,
+    pub expected_state: ServiceRouteHandoverPlanState,
+    pub next_state: ServiceRouteHandoverPlanState,
+    pub last_error: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// Required-notice state for one accepted Realm relationship.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ServiceRouteHandoverAudienceStatus {
@@ -362,12 +375,6 @@ pub trait ServiceRouteHandoverPlanStore: Send + Sync {
     /// (failure, quarantine, completion). `expected_state` guards the write.
     async fn advance_plan_state(
         &self,
-        service_id: &DidCoreId,
-        service_kind: &str,
-        handover_id: &str,
-        expected_state: ServiceRouteHandoverPlanState,
-        next_state: ServiceRouteHandoverPlanState,
-        last_error: Option<String>,
-        updated_at: DateTime<Utc>,
+        advance: ServiceRouteHandoverPlanAdvance<'_>,
     ) -> PersistenceResult<ServiceRouteHandoverPlanWrite>;
 }

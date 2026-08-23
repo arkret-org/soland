@@ -1936,6 +1936,13 @@ fn env_bool(values: &BTreeMap<String, String>, name: &str) -> anyhow::Result<Opt
     }
 }
 
+fn lookup(values: &BTreeMap<String, String>, name: &str) -> Result<String, std::env::VarError> {
+    values
+        .get(name)
+        .cloned()
+        .ok_or(std::env::VarError::NotPresent)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2052,11 +2059,4 @@ mod tests {
         )));
         assert!(!AppConfig::pq_hybrid_tls_probe_verified_from_value(None));
     }
-}
-
-fn lookup(values: &BTreeMap<String, String>, name: &str) -> Result<String, std::env::VarError> {
-    values
-        .get(name)
-        .cloned()
-        .ok_or(std::env::VarError::NotPresent)
 }

@@ -468,8 +468,7 @@ fn ordinary_event_device_id(record: &soland_services::events::AcceptedEvent) -> 
     {
         return None;
     }
-    Some(fragment)
-        .map(str::trim)
+    Some(str::trim(fragment))
         .filter(|fragment| !fragment.is_empty())
         .map(|fragment| {
             if fragment.starts_with("ak:device:") {
@@ -801,7 +800,7 @@ async fn try_apply_device_generation_event_seal(
                 format!("device generation quarantine state unavailable: {error}"),
             )
         })?;
-    let admitted_generation_ref = context.current_generation_ref.clone();
+    let admitted_generation_ref = context.current_generation_ref;
     let mut admitted_frontier = context.accepted_frontier_refs.clone();
     admitted_frontier.sort();
     let mut admitted_cas_frontier = context.cas_frontier_refs.clone();
@@ -1165,7 +1164,6 @@ pub(crate) async fn apply_managed_agent_event_seal(
         .or_else(|_| {
             arkret_wire::DidFullId::new(agent_record.controller_id.clone())
                 .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
-                .map(arkret_wire::DidCoreId::from)
         })
         .map_err(|error| {
             device_generation_fenced(format!(
@@ -1639,11 +1637,9 @@ fn committed_seal_effect(seal: &Seal) -> SealEffect {
 // ────────────────────────────────────────────────────────────────────────
 
 /// Validate every entry in a Seal `delta[]` is shaped as
-/// `sha256:<64 lowercase hex>` — never a legacy UUID-shaped typed-ID form.
+/// `sha256:<64 lowercase hex>`.
 ///
-/// Receivers MUST recompute and verify entries; the strict shape check
-/// here guards against the removed event-id form that was permitted in
-/// pre-T04 spec drafts.
+/// Receivers MUST recompute and verify entries.
 pub(crate) fn validate_seal_delta_entries(delta: &[String]) -> Result<(), (ErrorCode, String)> {
     for entry in delta {
         if !is_sha256_digest(entry) {

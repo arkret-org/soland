@@ -393,7 +393,7 @@ mod tests {
     fn event_ref(index: usize) -> String {
         arkret_identifiers::EventId::from_digest(
             arkret_canonical::DigestSuite::Sha256,
-            arkret_canonical::sha256_bytes(&index.to_be_bytes()),
+            arkret_canonical::sha256_bytes(index.to_be_bytes()),
         )
         .to_string()
     }

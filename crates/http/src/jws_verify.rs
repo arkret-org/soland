@@ -451,13 +451,12 @@ async fn principal_authorized_device_binding_with_account_authority_async(
                 "principal verification method DID is invalid: {error}"
             ))
         })?;
-    let method_principal_id = arkret_wire::DidCoreId::from(
+    let method_principal_id =
         arkret_wire::project_full_id_to_core_id(&method_full_id).map_err(|error| {
             fail(format!(
                 "principal verification method DID cannot be projected: {error}"
             ))
-        })?,
-    );
+        })?;
     if method_principal_id != authority.principal_id || fragment != expected_device_id.as_str() {
         return Err(fail(
             "principal verification method does not bind the session authority and device"
@@ -705,18 +704,16 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
                     "principal Event verification method DID is invalid: {error}"
                 ))
             })?;
-        let method_principal_id = arkret_wire::DidCoreId::from(
-            arkret_wire::project_full_id_to_core_id(&method_full_id).map_err(|error| {
+        let method_principal_id = arkret_wire::project_full_id_to_core_id(&method_full_id)
+            .map_err(|error| {
                 fail(format!(
                     "principal Event verification method DID cannot be projected: {error}"
                 ))
-            })?,
-        );
+            })?;
         let expected_principal_id = arkret_wire::DidCoreId::new(principal_id.to_owned())
             .or_else(|_| {
                 arkret_wire::DidFullId::new(principal_id.to_owned())
                     .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
-                    .map(arkret_wire::DidCoreId::from)
             })
             .map_err(|error| {
                 fail(format!(
@@ -762,7 +759,6 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
                 .or_else(|_| {
                     arkret_wire::DidFullId::new(agent.controller_id.clone())
                         .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
-                        .map(arkret_wire::DidCoreId::from)
                 })
                 .map_err(|error| fail(format!("managed Agent controller is invalid: {error}")))?;
             if agent_controller_id != expected_principal_id {

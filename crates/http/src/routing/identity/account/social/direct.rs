@@ -32,7 +32,7 @@ pub(super) fn direct_pair_key_participant(
         ))
     })?;
     Ok(arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
-        arkret_wire::DidCoreId::from(core_id),
+        core_id,
     ))
 }
 

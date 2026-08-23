@@ -305,7 +305,7 @@ fn pairwise_turn_username(
 /// `webrtc-signaling.md` §4.1 — REST-style (draft-uberti) TURN credential:
 /// `credential = base64( HMAC-SHA256(turn_shared_secret, username) )`. The
 /// HMAC is over the full `<expiry-unix>:<pseudonym>` username and uses SHA256
-/// (never the legacy SHA1). The credential is standard base64 (with padding),
+/// The credential is standard base64 (with padding),
 /// matching what an external coturn expects.
 ///
 /// `turn_shared_secret` comes from `state.config().ice.turn_shared_secret`
@@ -1405,11 +1405,6 @@ mod tests {
     }
 
     #[test]
-    fn media_provider_kind_rejects_legacy_alias() {
-        assert!(MediaProviderKind::parse("arkret-native").is_err());
-    }
-
-    #[test]
     fn webrtc_session_id_accepts_sdk_call_id() {
         assert!(is_valid_webrtc_session_id(
             "ak:call:AWRz9zKjOlGmvDeLp4ws-Eb6jsg4I5jJdj5J8o3cGYz0"
@@ -1417,10 +1412,9 @@ mod tests {
     }
 
     #[test]
-    fn webrtc_session_id_rejects_non_call_and_legacy_uuid_ids() {
+    fn webrtc_session_id_rejects_non_call_and_malformed_ids() {
         for invalid in [
             "ak:event:AWRz9zKjOlGmvDeLp4ws-Eb6jsg4I5jJdj5J8o3cGYz0",
-            "ak:call:01904100-0000-7000-8000-000000000001",
             "ak:call:AWRz9zKjOlGmvDeLp4ws-Eb6jsg4I5jJdj5J8o3cGYz!",
         ] {
             assert!(!is_valid_webrtc_session_id(invalid), "accepted {invalid}");

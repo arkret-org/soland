@@ -1071,10 +1071,8 @@ async fn range_completeness_for_query(
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
 
     let issuer = state.service_resolution_commitment().full_id.clone();
-    let issuer_actor = arkret_wire::DidCoreId::from(
-        arkret_wire::project_full_id_to_core_id(&issuer)
-            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
-    );
+    let issuer_actor = arkret_wire::project_full_id_to_core_id(&issuer)
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let verification_method =
         arkret_wire::DidUrl::new(format!("{issuer}#notary-key")).map_err(|error| {
             soland_http::error::AppError::internal(format!(

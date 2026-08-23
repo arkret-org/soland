@@ -1298,7 +1298,6 @@ const DATA_EVENT_ACTOR: &str = "ak:did_core:web:alice.example";
 const DATA_EVENT_PRINCIPAL_SERVER: &str = "ak:did_core:web:principal.example";
 const DATA_EVENT_STRAND: &str = "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
 /// The MLS group named by every E2EE fixture ciphertext.
-
 fn data_event_seal_id() -> arkret_identifiers::SealId {
     arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap()
 }

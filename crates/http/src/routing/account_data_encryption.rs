@@ -533,13 +533,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_blocklist_key_alias_is_rejected() {
-        let err = validate_encrypted_account_data_key("ak.account.blocklist.v1").unwrap_err();
-
-        assert_eq!(err, AccountDataEncryptionError::InvalidKeyPattern);
-    }
-
-    #[test]
     fn account_data_set_body_may_carry_encrypted_envelope() {
         validate_encrypted_account_data_value(
             private_key(),

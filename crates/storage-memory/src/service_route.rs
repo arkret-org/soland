@@ -67,7 +67,7 @@ fn notice_digest(value: &ServiceRouteHandoverNotice) -> PersistenceResult<Hash> 
 fn advance_mirror_sequence(
     state: &mut RouteState,
     entry: &ServiceResolutionMirrorEntry,
-) -> Result<(), ServiceResolutionMirrorCommit> {
+) -> Result<(), Box<ServiceResolutionMirrorCommit>> {
     if let Some(record) = entry.request.service_resolution_record.as_ref() {
         let digest = record_digest(record)
             .expect("validated service-resolution artifacts are canonically serializable");
@@ -81,15 +81,15 @@ fn advance_mirror_sequence(
                 return Ok(());
             }
             Some(current) if current.record_sequence == record.record.record_sequence => {
-                return Err(ServiceResolutionMirrorCommit::SequenceConflict {
+                return Err(Box::new(ServiceResolutionMirrorCommit::SequenceConflict {
                     accepted_digest: current.record_digest.clone(),
-                });
+                }));
             }
             Some(current)
                 if record.record.record_sequence == current.record_sequence + 1
                     && record.record.previous_record_digest.as_ref()
                         == Some(&current.record_digest) => {}
-            _ => return Err(ServiceResolutionMirrorCommit::SequenceRejected),
+            _ => return Err(Box::new(ServiceResolutionMirrorCommit::SequenceRejected)),
         }
         state.floors.insert(
             key,
@@ -107,12 +107,12 @@ fn advance_mirror_sequence(
     if let Some(notice) = entry.request.service_route_handover_notice.as_ref() {
         let floor_key = service_key(&notice.notice.service_id, &notice.notice.service_kind);
         let Some(floor) = state.floors.get(&floor_key) else {
-            return Err(ServiceResolutionMirrorCommit::SequenceRejected);
+            return Err(Box::new(ServiceResolutionMirrorCommit::SequenceRejected));
         };
         if notice.notice.from_record_sequence != floor.record_sequence
             || notice.notice.from_record_digest != floor.record_digest
         {
-            return Err(ServiceResolutionMirrorCommit::SequenceRejected);
+            return Err(Box::new(ServiceResolutionMirrorCommit::SequenceRejected));
         }
         let digest = notice_digest(notice)
             .expect("validated service-route notices are canonically serializable");
@@ -130,15 +130,15 @@ fn advance_mirror_sequence(
                 return Ok(());
             }
             Some(current) if current.notice_revision == notice.notice.notice_revision => {
-                return Err(ServiceResolutionMirrorCommit::SequenceConflict {
+                return Err(Box::new(ServiceResolutionMirrorCommit::SequenceConflict {
                     accepted_digest: current.notice_digest.clone(),
-                });
+                }));
             }
             Some(current)
                 if notice.notice.notice_revision == current.notice_revision + 1
                     && notice.notice.previous_notice_digest.as_ref()
                         == Some(&current.notice_digest) => {}
-            _ => return Err(ServiceResolutionMirrorCommit::SequenceRejected),
+            _ => return Err(Box::new(ServiceResolutionMirrorCommit::SequenceRejected)),
         }
         state.notices.insert(
             key,
@@ -158,7 +158,7 @@ fn advance_mirror_sequence(
         return Ok(());
     }
 
-    Err(ServiceResolutionMirrorCommit::SequenceRejected)
+    Err(Box::new(ServiceResolutionMirrorCommit::SequenceRejected))
 }
 
 #[async_trait]
@@ -247,7 +247,7 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
             })
             .cloned()
             .collect::<Vec<_>>();
-        entries.sort_by(|left, right| right.accepted_at.cmp(&left.accepted_at));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.accepted_at));
         entries.truncate(limit.clamp(1, 256));
         Ok(entries)
     }
@@ -266,7 +266,7 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
             .filter(|entry| &entry.service_id == service_id && entry.service_kind == service_kind)
             .cloned()
             .collect::<Vec<_>>();
-        entries.sort_by(|left, right| right.quarantined_at.cmp(&left.quarantined_at));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.quarantined_at));
         entries.truncate(limit.clamp(1, 256));
         Ok(entries)
     }
@@ -397,7 +397,7 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
             });
         }
         if let Err(outcome) = advance_mirror_sequence(&mut state, &entry) {
-            return Ok(outcome);
+            return Ok(*outcome);
         }
         state
             .request_by_artifact
@@ -535,9 +535,7 @@ mod tests {
         let full_id = DidFullId::new("did:web:route.example").unwrap();
         ServiceResolutionRecord {
             record: ServiceResolutionRecordCore {
-                service_id: DidCoreId::from(
-                    arkret_wire::project_full_id_to_core_id(&full_id).unwrap(),
-                ),
+                service_id: arkret_wire::project_full_id_to_core_id(&full_id).unwrap(),
                 service_kind: "principal_server".to_owned(),
                 full_id,
                 method_history_head: "head-1".to_owned(),

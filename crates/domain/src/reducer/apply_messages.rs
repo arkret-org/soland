@@ -29,11 +29,8 @@ impl ProjectionState {
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| operation.payload.get("encrypted_content").is_some());
 
-        match content_kind(&content) {
-            Some("ak.content.poll.response") => {
-                return self.apply_poll_response(&content, &sender, now);
-            }
-            _ => {}
+        if let Some("ak.content.poll.response") = content_kind(&content) {
+            return self.apply_poll_response(&content, &sender, now);
         }
 
         let is_poll_create = content_kind(&content) == Some("ak.content.poll");

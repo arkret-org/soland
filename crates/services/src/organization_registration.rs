@@ -711,13 +711,15 @@ fn verify_control_proof(
 ) -> Result<Hash, OrganizationRegistrationError> {
     verify_control_proof_inner(
         proof,
-        &request.challenge_id,
-        &request.organization_id,
-        &request.full_id,
-        &request.local_admin_subject,
-        &request.version_id,
-        &request.log_head_digest,
-        pinned,
+        ControlProofVerificationContext {
+            challenge_id: &request.challenge_id,
+            organization_id: &request.organization_id,
+            full_id: &request.full_id,
+            local_admin_subject: &request.local_admin_subject,
+            version_id: &request.version_id,
+            log_head_digest: &request.log_head_digest,
+            pinned,
+        },
     )
 }
 
@@ -759,13 +761,15 @@ fn verify_refresh_control_proof(
 ) -> Result<Hash, OrganizationRegistrationError> {
     verify_control_proof_inner(
         proof,
-        &request.challenge_id,
-        &request.organization_id,
-        &request.full_id,
-        &current.generation.local_admin_subject,
-        &request.version_id,
-        &request.log_head_digest,
-        pinned,
+        ControlProofVerificationContext {
+            challenge_id: &request.challenge_id,
+            organization_id: &request.organization_id,
+            full_id: &request.full_id,
+            local_admin_subject: &current.generation.local_admin_subject,
+            version_id: &request.version_id,
+            log_head_digest: &request.log_head_digest,
+            pinned,
+        },
     )
 }
 
@@ -878,16 +882,29 @@ fn control_proof_error(
     OrganizationRegistrationError::new(code, detail)
 }
 
+struct ControlProofVerificationContext<'a> {
+    challenge_id: &'a str,
+    organization_id: &'a DidCoreId,
+    full_id: &'a DidFullId,
+    local_admin_subject: &'a DidCoreId,
+    version_id: &'a str,
+    log_head_digest: &'a Hash,
+    pinned: &'a PinnedDidDocumentState,
+}
+
 fn verify_control_proof_inner(
     proof: &OrganizationControlProof,
-    challenge_id: &str,
-    organization_id: &DidCoreId,
-    full_id: &DidFullId,
-    local_admin_subject: &DidCoreId,
-    version_id: &str,
-    log_head_digest: &Hash,
-    pinned: &PinnedDidDocumentState,
+    context: ControlProofVerificationContext<'_>,
 ) -> Result<Hash, OrganizationRegistrationError> {
+    let ControlProofVerificationContext {
+        challenge_id,
+        organization_id,
+        full_id,
+        local_admin_subject,
+        version_id,
+        log_head_digest,
+        pinned,
+    } = context;
     if proof.proof_kind == OrganizationControlProofKind::GovernanceQuorum
         && proof
             .quorum_threshold
@@ -1492,8 +1509,7 @@ mod tests {
         let admin_id = DidCoreId::new("ak:did_core:webvh:z6mkadminfixture".to_owned()).unwrap();
         let issuer_full_id =
             DidFullId::new("did:webvh:z6mkregistryfixture:registry.example".to_owned()).unwrap();
-        let issuer =
-            DidCoreId::from(arkret_wire::project_full_id_to_core_id(&issuer_full_id).unwrap());
+        let issuer = arkret_wire::project_full_id_to_core_id(&issuer_full_id).unwrap();
         let control_key =
             Ed25519DetachedJwsSigner::from_seed([31; 32], format!("{full_id}#org-control-key-1"));
         let governance_key_1 = Ed25519DetachedJwsSigner::from_seed(

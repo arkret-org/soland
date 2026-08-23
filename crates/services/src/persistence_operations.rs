@@ -22,16 +22,16 @@ fn federation_delivery_record(
     let coalescing_key = record.coalescing_key.clone();
     let coalescing_position = record.coalescing_position;
     let mut persisted = match record.realm_fanout {
-        Some(binding) => FederationOutboxRecord::realm_fanout(
-            record.id,
-            record.peer_did,
-            record.peer_url,
-            record.endpoint,
-            record.idempotency_key,
-            record.payload_json,
+        Some(binding) => FederationOutboxRecord::realm_fanout(RealmFanoutOutboxInput {
+            id: record.id,
+            peer_did: record.peer_did,
+            peer_url: record.peer_url,
+            endpoint: record.endpoint,
+            idempotency_key: record.idempotency_key,
+            payload_json: record.payload_json,
             binding,
-            record.created_at,
-        ),
+            created_at: record.created_at,
+        }),
         None => FederationOutboxRecord::pending(
             record.id,
             record.peer_did,

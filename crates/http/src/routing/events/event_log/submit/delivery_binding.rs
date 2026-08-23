@@ -190,7 +190,7 @@ async fn current_handover_service_resolution(
         .service_route_cache(&evidence.new_recipient_service_id, "principal_server")
         .await
         .ok()??;
-    entry.is_routable_at(now()).then(|| {
+    entry.is_routable_at(now()).then_some({
         arkret_models_identity::ServiceResolutionCarrier::CurrentRecordUrl {
             current_record_url: entry.current_record_url,
             pinned_record_digest: Some(entry.record_digest),

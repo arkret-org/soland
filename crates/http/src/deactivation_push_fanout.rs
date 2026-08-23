@@ -367,9 +367,7 @@ impl Worker {
 /// Spawn the reconciliation worker when a gateway is configured; no-op
 /// (returns `None`) in the no-gateway posture.
 pub fn spawn(state: AppState) -> Option<Arc<tokio::task::JoinHandle<()>>> {
-    if state.config().deactivation_push_gateway_url.is_none() {
-        return None;
-    }
+    state.config().deactivation_push_gateway_url.as_ref()?;
     Some(Worker::new(state).spawn())
 }
 

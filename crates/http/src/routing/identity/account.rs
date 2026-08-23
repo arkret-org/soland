@@ -1939,9 +1939,7 @@ async fn direct_conversation_resolve(
         if !notary_available {
             send_blockers.push(DirectConversationSendBlocker::NotaryUnavailable);
         }
-        if projection
-            .realm_reducer_profile(&binding.realm_id)
-            .as_deref()
+        if projection.realm_reducer_profile(&binding.realm_id)
             != Some(arkret_wire::CORE_REDUCER_PROFILE)
         {
             send_blockers.push(DirectConversationSendBlocker::UnsupportedProfile);

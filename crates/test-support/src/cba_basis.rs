@@ -470,12 +470,10 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
     let event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
-        arkret_wire::DidCoreId::from(
-            arkret_wire::project_full_id_to_core_id(
-                &DidFullId::new(subject.to_owned()).expect("fixture genesis actor DID"),
-            )
-            .expect("fixture genesis actor projection"),
-        ),
+        arkret_wire::project_full_id_to_core_id(
+            &DidFullId::new(subject.to_owned()).expect("fixture genesis actor DID"),
+        )
+        .expect("fixture genesis actor projection"),
         crate::fixture_principal_server_id(),
         0,
         Hlc::new(FIXTURE_BASIS_HLC).expect("fixture genesis HLC"),
@@ -584,12 +582,10 @@ pub async fn seed_event_derived_realm_genesis_event(
     let event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
-        arkret_wire::DidCoreId::from(
-            arkret_wire::project_full_id_to_core_id(
-                &DidFullId::new(subject.to_owned()).expect("fixture genesis actor DID"),
-            )
-            .expect("fixture genesis actor projection"),
-        ),
+        arkret_wire::project_full_id_to_core_id(
+            &DidFullId::new(subject.to_owned()).expect("fixture genesis actor DID"),
+        )
+        .expect("fixture genesis actor projection"),
         crate::fixture_principal_server_id(),
         0,
         Hlc::new(FIXTURE_BASIS_HLC).expect("fixture genesis HLC"),

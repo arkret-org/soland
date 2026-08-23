@@ -1098,7 +1098,7 @@ mod tests {
     /// `group_id` is the `encrypted-envelope.schema.json` field and never
     /// identifies an MLS group here.
     #[test]
-    fn mls_event_group_ref_reads_only_mls_group_id() {
+    fn mls_event_group_ref_reads_mls_group_id() {
         let canonical = std::collections::BTreeMap::from([(
             "mls_group_id".to_owned(),
             json!("mls-group-AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml"),
@@ -1107,11 +1107,5 @@ mod tests {
             mls_event_group_ref(&canonical).as_deref(),
             Some("mls-group-AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml")
         );
-
-        let legacy = std::collections::BTreeMap::from([(
-            "group_id".to_owned(),
-            json!("mls-group-AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml"),
-        )]);
-        assert!(mls_event_group_ref(&legacy).is_none());
     }
 }

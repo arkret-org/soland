@@ -315,7 +315,7 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
             {
                 Ok(HistoryRequestPutOutcome::Stored {
                     outcome: ExactWriteOutcome::ExactReplay,
-                    record: record.clone(),
+                    record: Box::new(record.clone()),
                 })
             } else {
                 Err(PersistenceError::Conflict(
@@ -402,7 +402,7 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
         data.requests.insert(request_id, record.clone());
         Ok(HistoryRequestPutOutcome::Stored {
             outcome: ExactWriteOutcome::Inserted,
-            record,
+            record: Box::new(record),
         })
     }
 
@@ -780,9 +780,9 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
                 PersistenceError::Internal("history response index is corrupt".to_owned())
             })?;
         Ok(Some(if let Some(receipt) = &row.send_receipt {
-            HistoryResponseRetryRecord::Accepted(receipt.clone())
+            HistoryResponseRetryRecord::Accepted(Box::new(receipt.clone()))
         } else {
-            HistoryResponseRetryRecord::Reserved(row.reservation.clone())
+            HistoryResponseRetryRecord::Reserved(Box::new(row.reservation.clone()))
         }))
     }
 

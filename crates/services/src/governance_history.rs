@@ -35,6 +35,16 @@ pub struct GovernanceHistoryService {
     persistence: Arc<dyn PersistenceStore>,
 }
 
+struct ResolveDependenciesInput<'a> {
+    realm_id: RealmId,
+    selectors: Vec<GovernanceDependencySelector>,
+    byte_limit: u64,
+    access: Option<HistoryTraversalAccess>,
+    ordinary_realm_visible: bool,
+    caller: Option<TraversalCaller<'a>>,
+    now: DateTime<Utc>,
+}
+
 impl GovernanceHistoryService {
     #[must_use]
     pub fn new(persistence: Arc<dyn PersistenceStore>) -> Self {
@@ -55,15 +65,15 @@ impl GovernanceHistoryService {
             .history_traversal_access
             .clone()
             .map(HistoryTraversalAccess::SelfAccess);
-        self.resolve_dependencies(
-            request.realm_id,
-            request.selectors,
-            request.byte_limit,
+        self.resolve_dependencies(ResolveDependenciesInput {
+            realm_id: request.realm_id,
+            selectors: request.selectors,
+            byte_limit: request.byte_limit,
             access,
             ordinary_realm_visible,
-            Some(TraversalCaller::SelfPrincipal(caller)),
+            caller: Some(TraversalCaller::SelfPrincipal(caller)),
             now,
-        )
+        })
         .await
     }
 
@@ -81,28 +91,31 @@ impl GovernanceHistoryService {
             .history_traversal_access
             .clone()
             .map(HistoryTraversalAccess::PeerAccess);
-        self.resolve_dependencies(
-            request.realm_id,
-            request.selectors,
-            request.byte_limit,
+        self.resolve_dependencies(ResolveDependenciesInput {
+            realm_id: request.realm_id,
+            selectors: request.selectors,
+            byte_limit: request.byte_limit,
             access,
             ordinary_realm_visible,
-            Some(TraversalCaller::PeerService(caller)),
+            caller: Some(TraversalCaller::PeerService(caller)),
             now,
-        )
+        })
         .await
     }
 
     async fn resolve_dependencies(
         &self,
-        realm_id: RealmId,
-        selectors: Vec<GovernanceDependencySelector>,
-        byte_limit: u64,
-        access: Option<HistoryTraversalAccess>,
-        ordinary_realm_visible: bool,
-        caller: Option<TraversalCaller<'_>>,
-        now: DateTime<Utc>,
+        input: ResolveDependenciesInput<'_>,
     ) -> ServiceResult<GovernanceDependencyResolveOutcome> {
+        let ResolveDependenciesInput {
+            realm_id,
+            selectors,
+            byte_limit,
+            access,
+            ordinary_realm_visible,
+            caller,
+            now,
+        } = input;
         let retained_dependencies = match access.as_ref() {
             Some(access) => Some(
                 self.retained_dependencies(&realm_id, access, caller, now)

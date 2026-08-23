@@ -423,7 +423,6 @@ pub(super) async fn verify_realm_organization_proof_signature(
     )
     .map_err(|_| "organization_statement_unverified")?;
     let signer_core_id = arkret_wire::project_full_id_to_core_id(&signer_full_id)
-        .map(arkret_wire::DidCoreId::from)
         .map_err(|_| "organization_statement_unverified")?;
     if signer_core_id != payload.organization_id {
         return Err("organization_statement_unverified");

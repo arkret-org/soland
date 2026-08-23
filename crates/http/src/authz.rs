@@ -386,7 +386,7 @@ pub fn projected_grant_fixture(
         grant_id: {
             static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
             let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let digest = arkret_canonical::sha256_bytes(&seq.to_be_bytes());
+            let digest = arkret_canonical::sha256_bytes(seq.to_be_bytes());
             let event_id = arkret_identifiers::EventId::from_digest(
                 arkret_canonical::DigestSuite::Sha256,
                 digest,

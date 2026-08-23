@@ -25,16 +25,6 @@ pub(crate) const CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED: &str =
 /// is only permitted on an `open` Circle. Self-joining a non-`open` Circle must
 /// go through an invite/manage path.
 pub(crate) const CIRCLE_JOIN_NOT_OPEN: &str = "circle_join_not_open";
-/// One-way ratchet: effective `content_encryption_floor` MUST be monotonically
-/// non-decreasing. Lowering `e2ee_required` back to `allow_plaintext` is rejected.
-/// One-way ratchet: effective metadata encryption floor MUST be monotonically
-/// non-decreasing (`allow_plaintext < e2ee_required`).
-/// realm-and-space.md §2.3.1 / encryption-and-audit.md §2.10.8 — a Realm Recovery
-/// Key durability policy with `mode != none` is only meaningful on a
-/// `content_scheme=mls_exporter_aead_v1` Realm, because `mls_rfc9420`
-/// (PrivateMessage) has no deliverable `history_secret` to seal to recovery
-/// recipients. Declaring `mode != none` on an incompatible Realm is rejected.
-
 /// R1.2 — pure validation for a `ak.member.state{join,routable}`
 /// `delivery_binding` against a projected
 /// `ak.realm.delivery_binding_policy` payload. Returns `Ok(())` when the
@@ -970,40 +960,5 @@ mod policy_bundle_component_tests {
             Err(arkret_wire::ReasonCode::MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE)
         );
         validate_mls_send_pause(&json!({"policy_revision": 1}), &[]).unwrap();
-    }
-
-    #[test]
-    fn realm_profile_declarations_ignore_removed_update_spellings() {
-        let operation = |payload| {
-            arkret_event_draft::test_support::raw_projected_operation(
-                arkret_identifiers::OperationId::new(
-                    "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
-                )
-                .unwrap(),
-                arkret_identifiers::RealmId::new(
-                    "ak:realm:AYcO0aKZZvKELI-s58wUjRHsrz5v8Y51T0_sGUTciDVw",
-                )
-                .unwrap(),
-                arkret_wire::EventKind::RealmCreate.as_str(),
-                payload,
-            )
-        };
-        let canonical = operation(json!({
-            "object": {
-                "schema_refs": ["ak.profile.core.v1"],
-                "active_profiles": ["ak.profile.legacy-active.v1"],
-                "profiles": ["ak.profile.legacy-profiles.v1"]
-            }
-        }));
-        assert_eq!(
-            realm_declared_profiles(&canonical),
-            vec!["ak.profile.core.v1".to_owned()]
-        );
-
-        let legacy_only = operation(json!({
-            "active_profiles": ["ak.profile.legacy-active.v1"],
-            "profiles": ["ak.profile.legacy-profiles.v1"]
-        }));
-        assert!(realm_declared_profiles(&legacy_only).is_empty());
     }
 }

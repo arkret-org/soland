@@ -971,30 +971,6 @@ impl crate::identity::DevicePairingPort for PersistenceDevicePairing {
             .map(application_device_pairing))
     }
 
-    async fn commit_authorization(
-        &self,
-        device_pairing_request_id: &str,
-        pairing_code: &str,
-        new_device_pubkey: arkret_models_collaboration::governance::agent_artifacts::PublicKey,
-        device_id: &str,
-        authorized_by_actor_id: &str,
-        authorized_event_ref: &str,
-        changed_at: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ServiceResult<bool> {
-        Ok(self
-            .0
-            .commit_device_pairing_authorization(soland_storage::DevicePairingAuthorizationCommit {
-                device_pairing_request_id: device_pairing_request_id.to_owned(),
-                pairing_code: pairing_code.to_owned(),
-                new_device_pubkey,
-                device_id: device_id.to_owned(),
-                authorized_by_actor_id: authorized_by_actor_id.to_owned(),
-                authorized_event_ref: authorized_event_ref.to_owned(),
-                changed_at,
-            })
-            .await?)
-    }
-
     async fn prune_expired_before(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,

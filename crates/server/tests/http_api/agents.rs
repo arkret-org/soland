@@ -592,6 +592,14 @@ pub(super) async fn provision_agent_with_sdk_events(
     (status, body)
 }
 
+type AgentCommitAttempt<'a> = std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = (StatusCode, Value, Value, Option<(StatusCode, Value)>)>
+            + Send
+            + 'a,
+    >,
+>;
+
 fn provision_agent_sdk_commit_attempt<'a>(
     state: &'a AppState,
     token: &'a str,
@@ -603,13 +611,7 @@ fn provision_agent_sdk_commit_attempt<'a>(
         &'a soland_storage_memory::FaultInjector,
         soland_storage_memory::FaultPlan,
     )>,
-) -> std::pin::Pin<
-    Box<
-        dyn std::future::Future<Output = (StatusCode, Value, Value, Option<(StatusCode, Value)>)>
-            + Send
-            + 'a,
-    >,
-> {
+) -> AgentCommitAttempt<'a> {
     Box::pin(provision_agent_sdk_commit_attempt_inner(
         state,
         token,

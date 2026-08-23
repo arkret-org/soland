@@ -646,7 +646,6 @@ async fn verify_trusted_recovery_service_delete(
         arkret_identity::verification_method_did(proof.verification_method.as_str())
             .map_err(|error| AppError::capability_denied(error.to_string()))?;
     let service_core_id = arkret_wire::project_full_id_to_core_id(&service_full_id)
-        .map(arkret_wire::DidCoreId::from)
         .map_err(|error| AppError::capability_denied(error.to_string()))?;
     if service_core_id != *service_id {
         return Err(AppError::capability_denied(

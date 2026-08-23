@@ -8,7 +8,8 @@ use soland_storage::{
     PersistenceError, PersistenceResult, ServiceRouteHandoverAudienceEntry,
     ServiceRouteHandoverAudienceStatus, ServiceRouteHandoverAudienceTarget,
     ServiceRouteHandoverNoticeCommit, ServiceRouteHandoverNoticeRecord, ServiceRouteHandoverPlan,
-    ServiceRouteHandoverPlanState, ServiceRouteHandoverPlanStore, ServiceRouteHandoverPlanWrite,
+    ServiceRouteHandoverPlanAdvance, ServiceRouteHandoverPlanState, ServiceRouteHandoverPlanStore,
+    ServiceRouteHandoverPlanWrite,
 };
 
 use crate::{PgPool, PgTransactionError, async_trait, pg_conn};
@@ -679,14 +680,17 @@ impl ServiceRouteHandoverPlanStore for PgServiceRouteHandoverPlanStore {
 
     async fn advance_plan_state(
         &self,
-        service_id: &DidCoreId,
-        service_kind: &str,
-        handover_id: &str,
-        expected_state: ServiceRouteHandoverPlanState,
-        next_state: ServiceRouteHandoverPlanState,
-        last_error: Option<String>,
-        updated_at: DateTime<Utc>,
+        advance: ServiceRouteHandoverPlanAdvance<'_>,
     ) -> PersistenceResult<ServiceRouteHandoverPlanWrite> {
+        let ServiceRouteHandoverPlanAdvance {
+            service_id,
+            service_kind,
+            handover_id,
+            expected_state,
+            next_state,
+            last_error,
+            updated_at,
+        } = advance;
         let mut conn = pg_conn(&self.pool).await?;
         let service_id = service_id.clone();
         let service_kind = service_kind.to_owned();

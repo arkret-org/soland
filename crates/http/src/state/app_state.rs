@@ -337,13 +337,11 @@ pub fn development_demo_genesis_event(
         .expect("development demo genesis payload");
     arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::RealmCreate>::new(
         arkret_wire::ScopeRef::RealmGenesis,
-        DidCoreId::from(
-            arkret_wire::project_full_id_to_core_id(
-                &DidFullId::new(DEVELOPMENT_DEMO_SUBJECT_DID.to_owned())
-                    .expect("development demo subject DID"),
-            )
-            .expect("development demo subject projection"),
-        ),
+        arkret_wire::project_full_id_to_core_id(
+            &DidFullId::new(DEVELOPMENT_DEMO_SUBJECT_DID.to_owned())
+                .expect("development demo subject DID"),
+        )
+        .expect("development demo subject projection"),
         service_id.clone(),
         payload,
     )
@@ -418,15 +416,13 @@ fn development_fixture_service_identity(config: &AppConfig) -> DidCoreIdentitySt
                 "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
             )
             .expect("fixture service DID"),
-            service_id: arkret_wire::DidCoreId::from(
-                arkret_wire::project_full_id_to_core_id(
+            service_id: arkret_wire::project_full_id_to_core_id(
                     &DidFullId::new(
                         "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
                     )
                     .expect("fixture service DID"),
                 )
                 .expect("fixture service projection"),
-            ),
             registration_key,
             provider: None,
             signing_key_refs: vec![signing_key_ref.clone()],
@@ -2585,7 +2581,7 @@ mod membership_hydration_tests {
             .is_err()
         );
         assert!(
-            soland_services::hydration::parse_child_scope_policy(Some("legacy_policy"), None)
+            soland_services::hydration::parse_child_scope_policy(Some("unknown_policy"), None)
                 .is_err()
         );
         assert!(

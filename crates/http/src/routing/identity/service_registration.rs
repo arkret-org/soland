@@ -168,10 +168,8 @@ async fn sign_registration_receipt(
         .control_key_digest()
         .map_err(|error| AppError::internal(error.to_string()))?;
     let full_id = request.inception_operation.state.id.clone();
-    let service_id = DidCoreId::from(
-        project_full_id_to_core_id(&full_id)
-            .map_err(|error| AppError::internal(error.to_string()))?,
-    );
+    let service_id = project_full_id_to_core_id(&full_id)
+        .map_err(|error| AppError::internal(error.to_string()))?;
     let (_, verification_method) = state
         .current_service_receipt_binding()
         .await

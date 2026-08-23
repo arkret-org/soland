@@ -352,12 +352,12 @@ impl MemoryHistoryTraversalRetentionStore {
                 object_canonical.object_kind.to_owned(),
                 object_canonical.object_digest.as_str().to_owned(),
             );
-            if let Some(stored) = data.objects.get(&key) {
-                if stored.canonical != *object_canonical || stored.references == u64::MAX {
-                    return Err(PersistenceError::Conflict(
-                        "duplicate_conflict: retained object digest has different bytes".to_owned(),
-                    ));
-                }
+            if let Some(stored) = data.objects.get(&key)
+                && (stored.canonical != *object_canonical || stored.references == u64::MAX)
+            {
+                return Err(PersistenceError::Conflict(
+                    "duplicate_conflict: retained object digest has different bytes".to_owned(),
+                ));
             }
         }
         let normalized_objects = canonical
@@ -759,11 +759,11 @@ impl PendingRrkAcquisitionStore for MemoryPendingRrkAcquisitionStore {
             .filter(|record| {
                 let archive = &record.input.archive_replica.archive;
                 &archive.holder_principal_id == holder_principal_id
-                    && &archive.effective_scope == &query.effective_scope
-                    && &archive.recovery_key_id == &query.recovery_key_id
-                    && &archive.key_agreement_ref == &query.key_agreement_ref
-                    && &archive.accepted_key_evidence_ref == &query.accepted_key_evidence_ref
-                    && &archive.holder_trusted_basis == &query.holder_trusted_basis
+                    && archive.effective_scope == query.effective_scope
+                    && archive.recovery_key_id == query.recovery_key_id
+                    && archive.key_agreement_ref == query.key_agreement_ref
+                    && archive.accepted_key_evidence_ref == query.accepted_key_evidence_ref
+                    && archive.holder_trusted_basis == query.holder_trusted_basis
                     && query.from_epoch.is_none_or(|from| archive.epoch >= from)
                     && query.to_epoch.is_none_or(|to| archive.epoch <= to)
             })
@@ -798,7 +798,7 @@ impl PendingRrkAcquisitionStore for MemoryPendingRrkAcquisitionStore {
             .filter(|(_, record)| {
                 record.state != PendingRrkAcquisitionState::Accepted
                     && record.input.next_attempt_at <= now
-                    && record.claim_until.map_or(true, |until| until <= now)
+                    && record.claim_until.is_none_or(|until| until <= now)
                     && record.attempt_count < i64::MAX as u64
             })
             .map(|(digest, record)| (record.input.next_attempt_at, digest.clone()))
@@ -932,7 +932,7 @@ impl PendingRrkAcquisitionStore for MemoryPendingRrkAcquisitionStore {
             || record.archive_sequence != Some(outcome.archive_sequence)
             || record
                 .ready_at
-                .map_or(true, |ready_at| outcome.accepted_at < ready_at)
+                .is_none_or(|ready_at| outcome.accepted_at < ready_at)
         {
             return Ok(StorageCasOutcome::Mismatch);
         }

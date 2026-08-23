@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn invalid_realm_never_becomes_a_strand_shaped_hash_fallback() {
-        assert_eq!(strand_id_from_realm_id("legacy-realm-row"), None);
+        assert_eq!(strand_id_from_realm_id("invalid-realm-row"), None);
         assert_eq!(strand_id_from_realm_id("ak:realm:not-a-token"), None);
     }
 }

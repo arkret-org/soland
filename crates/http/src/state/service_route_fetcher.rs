@@ -617,8 +617,7 @@ mod tests {
 
     fn fixture() -> (ServiceResolutionRecord, ServiceDescribe) {
         let full_id = DidFullId::new("did:webvh:z6mkdescribe:route.example").unwrap();
-        let service_id =
-            DidCoreId::from(arkret_wire::project_full_id_to_core_id(&full_id).unwrap());
+        let service_id = arkret_wire::project_full_id_to_core_id(&full_id).unwrap();
         let base_url = "https://route.example/";
         let commitment = ResolutionCommitment {
             full_id: full_id.clone(),

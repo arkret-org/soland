@@ -161,7 +161,7 @@ pub(crate) async fn validate_event_proofs(
     // minimal-metadata profile AND the payload carries an encrypted-content
     // envelope.
     let minimal_metadata_context = minimal_metadata_author_context(object, state).await;
-    for proof in producer_proofs {
+    if let Some(proof) = producer_proofs.into_iter().next() {
         let Some(proof_object) = proof.as_object() else {
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
