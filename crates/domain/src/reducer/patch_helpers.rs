@@ -9,21 +9,10 @@ use std::collections::BTreeMap;
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use serde_json::Value;
 
-use super::{DocumentVersionProjection, PushRouteCellValue, StrandProjection};
+use super::{DocumentVersionProjection, StrandProjection};
 
 pub(crate) fn utc_timestamp_z(now: chrono::DateTime<chrono::Utc>) -> String {
     arkret_canonical::format_timestamp_canonical(now)
-}
-
-pub(crate) fn empty_push_route_cell() -> PushRouteCellValue {
-    PushRouteCellValue {
-        push_target_id: None,
-        push_gateway_did: None,
-        encryption_key: None,
-        capabilities: Vec::new(),
-        revoked: false,
-        revoked_targets: Vec::new(),
-    }
 }
 
 pub(crate) fn object_field_string(

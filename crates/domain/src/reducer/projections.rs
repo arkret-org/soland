@@ -91,12 +91,12 @@ pub struct ErasureReceiptRecord {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PushRouteCellValue {
+    pub revision: u64,
     pub push_target_id: Option<String>,
-    pub push_gateway_did: Option<String>,
+    pub push_gateway_service_id: Option<String>,
     pub encryption_key: Option<String>,
     pub capabilities: Vec<String>,
     pub revoked: bool,
-    pub revoked_targets: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

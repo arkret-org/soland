@@ -1,502 +1,158 @@
-//! Reducer-level tests for the `ak.device.push_route` actor-private
-//! event projection (T4.2 / Round C46).
-//!
-//! Spec: `event-kind-registry.json` entry for `ak.device.push_route`
-//! (composite cell_subject `(recipient_service_id, principal_id,
-//! device_id, push_route)`) plus `device-lifecycle.md §5a.2`. The reducer
-//! lives at `soland_domain::reducer::ProjectionState::apply_push_route` and is
-//! reached through the canonical `apply` dispatcher.
-//!
-//! These tests drive `ProjectionState` directly so they exercise the
-//! validation gates (recipient mismatch, missing subject components,
-//! active vs. revoked shape) without depending on the HTTP layer. The
-//! HTTP ingress that fans wire payloads into these reducer calls is
-//! out of scope for T4.2.
+//! Reducer tests for the closed, actor-private `ak.device.push_route` revision-CAS cell.
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{ProjectionEffect, ProjectionState, PushRouteSubject};
 
-const SERVICE_ID_LOCAL: &str = "did:web:principal.acme.example";
-const SERVICE_ID_OTHER: &str = "did:web:principal.rogue.example";
-// Actor-private operations still carry a Realm in the Operation envelope.
-// For control-stream actor-private use the convention is the actor's
-// principal control Realm, but a placeholder is fine for reducer-level
-// tests because the dispatcher reads everything it needs from payload.
-const PLACEHOLDER_REALM: &str = "ak:realm:ATYL-87CDhaLQem29G2JQCXbZ_8zuu7khej2MbrsGLK6";
-const PRINCIPAL_A: &str = "did:web:alice.example";
-const PRINCIPAL_B: &str = "did:web:bob.example";
-const DEVICE_A: &str = "device-a";
-const ROUTE_APNS: &str = "apns_main";
-const ROUTE_FCM: &str = "fcm_voip";
-const PSEUDONYM_1: &str = "ak:pseudonym:push:01HYZ8Z000000000000000";
-const PSEUDONYM_2: &str = "ak:pseudonym:push:01HYZ8Z000000000000001";
-const GATEWAY_DID: &str = "did:web:gateway.example";
+const SERVICE: &str = "ak:did_core:web:principal.acme.example";
+const OTHER_SERVICE: &str = "ak:did_core:web:principal.rogue.example";
+const REALM: &str = "ak:realm:ATYL-87CDhaLQem29G2JQCXbZ_8zuu7khej2MbrsGLK6";
+const PRINCIPAL: &str = "ak:did_core:web:alice.example";
+const DEVICE: &str = "ak:device:01904100-0000-7000-8000-000000000001";
+const ROUTE: &str = "apns_main";
+const TARGET_1: &str = "ak:pseudonym:push:kosc9iQ4gVct1OB-b6X364WIFIsJFVbVzn7BMBs1sm8";
+const TARGET_2: &str = "ak:pseudonym:push:lg8aqJ2eJjms1GQpkzloxGn8F802f8RfmfmfsC85eRo";
+const GATEWAY: &str = "ak:did_core:web:gateway.example";
 
 fn op(payload: Value) -> Operation {
     arkret_event_draft::test_support::raw_projected_operation(
         arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
             .unwrap(),
-        arkret_identifiers::RealmId::new(PLACEHOLDER_REALM).unwrap(),
+        arkret_identifiers::RealmId::new(REALM).unwrap(),
         arkret_wire::EventKind::DevicePushRoute.as_str(),
         payload,
     )
 }
 
-fn state_pinned() -> ProjectionState {
-    let mut s = ProjectionState::new();
-    s.set_local_service_id(SERVICE_ID_LOCAL);
-    s
+fn state() -> ProjectionState {
+    let mut state = ProjectionState::new();
+    state.set_local_service_id(SERVICE);
+    state
 }
 
-fn active_payload(
-    recipient: &str,
-    principal: &str,
-    device: &str,
-    route: &str,
-    pseudonym: &str,
-) -> Value {
+fn active(expected_revision: u64, target: &str) -> Value {
     json!({
-        "recipient_service_id": recipient,
-        "principal_id": principal,
-        "device_id": device,
-        "push_route": route,
-        "push_target_id": pseudonym,
-        "push_gateway_did": GATEWAY_DID,
+        "recipient_service_id": SERVICE,
+        "principal_id": PRINCIPAL,
+        "device_id": DEVICE,
+        "push_route": ROUTE,
+        "expected_revision": expected_revision,
+        "push_target_id": target,
+        "push_gateway_service_id": GATEWAY,
+        "encryption_key": "base64url-public-key",
         "capabilities": ["chat"],
     })
 }
 
-fn subject(recipient: &str, principal: &str, device: &str, route: &str) -> PushRouteSubject {
+fn revoked(expected_revision: u64) -> Value {
+    json!({
+        "recipient_service_id": SERVICE,
+        "principal_id": PRINCIPAL,
+        "device_id": DEVICE,
+        "push_route": ROUTE,
+        "expected_revision": expected_revision,
+        "revoked": true,
+    })
+}
+
+fn subject(service: &str, route: &str) -> PushRouteSubject {
     PushRouteSubject {
-        recipient_service_id: recipient.to_owned(),
-        principal_id: principal.to_owned(),
-        device_id: device.to_owned(),
+        recipient_service_id: service.to_owned(),
+        principal_id: PRINCIPAL.to_owned(),
+        device_id: DEVICE.to_owned(),
         push_route: route.to_owned(),
     }
 }
 
-// ── 1. Happy path: active route lands in both the structured cache
-//        and the canonical cells map. ─────────────────────────────────
-
 #[test]
-fn push_route_active_writes_cell_value() {
-    let mut state = state_pinned();
+fn push_route_create_rotate_revoke_erases_secrets() {
+    let mut state = state();
     let hlc = ServerHlc::new("test");
-
-    let payload = active_payload(
-        SERVICE_ID_LOCAL,
-        PRINCIPAL_A,
-        DEVICE_A,
-        ROUTE_APNS,
-        PSEUDONYM_1,
+    let create = active(0, TARGET_1);
+    serde_json::from_value::<
+        arkret_models_identity::delivery_binding::DevicePushRouteActivePayload,
+    >(create.clone())
+    .expect("active test payload must match the SDK contract");
+    let effect = state.apply(&op(create), &hlc);
+    assert!(
+        matches!(effect, ProjectionEffect::PushRouteUpdated { ref action, .. } if action == "active"),
+        "unexpected create effect: {effect:?}"
     );
-    let effect = state.apply(&op(payload), &hlc);
-    match effect {
-        ProjectionEffect::PushRouteUpdated {
-            ref subject,
-            action,
-        } => {
-            assert_eq!(subject.recipient_service_id, SERVICE_ID_LOCAL);
-            assert_eq!(subject.principal_id, PRINCIPAL_A);
-            assert_eq!(subject.device_id, DEVICE_A);
-            assert_eq!(subject.push_route, ROUTE_APNS);
-            assert_eq!(action, "active");
-        }
-        other => panic!("expected PushRouteUpdated{{active}}, got {other:?}"),
-    }
+    assert!(
+        matches!(state.apply(&op(active(1, TARGET_2)), &hlc), ProjectionEffect::PushRouteUpdated { ref action, .. } if action == "rotated")
+    );
+    assert!(
+        matches!(state.apply(&op(revoked(2)), &hlc), ProjectionEffect::PushRouteUpdated { ref action, .. } if action == "revoked")
+    );
 
     let cell = state
-        .push_route_cell_value(&subject(
-            SERVICE_ID_LOCAL,
-            PRINCIPAL_A,
-            DEVICE_A,
-            ROUTE_APNS,
-        ))
-        .expect("active push_route cell must be projected");
-    assert!(!cell.revoked);
-    assert_eq!(cell.push_target_id.as_deref(), Some(PSEUDONYM_1));
-    assert_eq!(cell.push_gateway_did.as_deref(), Some(GATEWAY_DID));
-    assert!(cell.revoked_targets.is_empty());
-    assert_eq!(cell.capabilities, vec!["chat".to_owned()]);
+        .push_route_cell_value(&subject(SERVICE, ROUTE))
+        .unwrap();
+    assert_eq!(cell.revision, 3);
+    assert!(cell.revoked);
+    assert!(cell.push_target_id.is_none());
+    assert!(cell.push_gateway_service_id.is_none());
+    assert!(cell.encryption_key.is_none());
+    assert!(cell.capabilities.is_empty());
 }
 
-// ── 2. recipient_service_id mismatch → reject. ────────────────────────
-
 #[test]
-fn push_route_rejects_recipient_service_id_mismatch() {
-    let mut state = state_pinned();
+fn push_route_requires_exact_current_revision() {
+    let mut state = state();
     let hlc = ServerHlc::new("test");
-
-    let payload = active_payload(
-        SERVICE_ID_OTHER,
-        PRINCIPAL_A,
-        DEVICE_A,
-        ROUTE_APNS,
-        PSEUDONYM_1,
-    );
-    match state.apply(&op(payload), &hlc) {
-        ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, "recipient_service_id_mismatch");
-        }
-        other => panic!("expected Rejected(recipient_service_id_mismatch), got {other:?}"),
+    let _ = state.apply(&op(active(0, TARGET_1)), &hlc);
+    for payload in [active(0, TARGET_1), active(0, TARGET_2), revoked(0)] {
+        assert!(
+            matches!(state.apply(&op(payload), &hlc), ProjectionEffect::Rejected { ref reason } if reason == "push_route_cas_conflict")
+        );
     }
-    // No cell stored on rejection.
-    assert!(
-        state
-            .push_route_cell_value(&subject(
-                SERVICE_ID_OTHER,
-                PRINCIPAL_A,
-                DEVICE_A,
-                ROUTE_APNS
-            ))
-            .is_none()
-    );
+    let cell = state
+        .push_route_cell_value(&subject(SERVICE, ROUTE))
+        .unwrap();
+    assert_eq!(cell.revision, 1);
+    assert_eq!(cell.push_target_id.as_deref(), Some(TARGET_1));
 }
 
-// ── 3. Same (principal, device, route) on different Principal Servers
-//        live in different cells. ─────────────────────────────────────
+#[test]
+fn push_route_rejects_wrong_recipient_and_closed_shape_violations() {
+    let mut state = state();
+    let hlc = ServerHlc::new("test");
+    let mut wrong_recipient = active(0, TARGET_1);
+    wrong_recipient["recipient_service_id"] = json!(OTHER_SERVICE);
+    assert!(
+        matches!(state.apply(&op(wrong_recipient), &hlc), ProjectionEffect::Rejected { ref reason } if reason == "recipient_service_id_mismatch")
+    );
+
+    let invalid = [
+        json!({"recipient_service_id": SERVICE, "principal_id": PRINCIPAL, "device_id": DEVICE, "push_route": ROUTE, "expected_revision": 0, "push_target_id": TARGET_1, "push_gateway_did": GATEWAY, "encryption_key": "key", "capabilities": []}),
+        json!({"recipient_service_id": SERVICE, "principal_id": PRINCIPAL, "device_id": DEVICE, "push_route": ROUTE, "expected_revision": 0, "revoked": true, "push_target_id": TARGET_1}),
+        json!({"recipient_service_id": SERVICE, "principal_id": PRINCIPAL, "device_id": DEVICE, "push_route": ROUTE, "expected_revision": 0, "push_target_id": "ak:pseudonym:push:short", "push_gateway_service_id": GATEWAY, "encryption_key": "key", "capabilities": []}),
+    ];
+    for payload in invalid {
+        assert!(
+            matches!(state.apply(&op(payload), &hlc), ProjectionEffect::Rejected { ref reason } if reason.starts_with("push_route_payload_invalid:"))
+        );
+    }
+}
 
 #[test]
-fn push_route_cell_subject_isolated_by_recipient_service_id() {
+fn push_route_subjects_are_isolated() {
+    let mut state = state();
     let hlc = ServerHlc::new("test");
-
-    // Principal Server A accepts a route for (alice, device-a, apns).
-    let mut state_a = ProjectionState::new();
-    state_a.set_local_service_id(SERVICE_ID_LOCAL);
-    let effect_a = state_a.apply(
-        &op(active_payload(
-            SERVICE_ID_LOCAL,
-            PRINCIPAL_A,
-            DEVICE_A,
-            ROUTE_APNS,
-            PSEUDONYM_1,
-        )),
-        &hlc,
-    );
+    let _ = state.apply(&op(active(0, TARGET_1)), &hlc);
+    let mut other_route = active(0, TARGET_2);
+    other_route["push_route"] = json!("fcm_voip");
     assert!(matches!(
-        effect_a,
+        state.apply(&op(other_route), &hlc),
         ProjectionEffect::PushRouteUpdated { .. }
     ));
-
-    // Principal Server B accepts a route for (alice, device-a, apns) with
-    // a different `push_target_id`.
-    let mut state_b = ProjectionState::new();
-    state_b.set_local_service_id(SERVICE_ID_OTHER);
-    let effect_b = state_b.apply(
-        &op(active_payload(
-            SERVICE_ID_OTHER,
-            PRINCIPAL_A,
-            DEVICE_A,
-            ROUTE_APNS,
-            PSEUDONYM_2,
-        )),
-        &hlc,
-    );
-    assert!(matches!(
-        effect_b,
-        ProjectionEffect::PushRouteUpdated { .. }
-    ));
-
-    // Each Principal Server's projection only carries its own cell —
-    // the subjects differ on `recipient_service_id`, so they are
-    // distinct rows.
-    let cell_a = state_a
-        .push_route_cell_value(&subject(
-            SERVICE_ID_LOCAL,
-            PRINCIPAL_A,
-            DEVICE_A,
-            ROUTE_APNS,
-        ))
-        .unwrap();
-    assert_eq!(cell_a.push_target_id.as_deref(), Some(PSEUDONYM_1));
-
-    // The other-recipient cell is NOT visible on state_a even though
-    // (principal, device, route) match.
-    assert!(
-        state_a
-            .push_route_cell_value(&subject(
-                SERVICE_ID_OTHER,
-                PRINCIPAL_A,
-                DEVICE_A,
-                ROUTE_APNS
-            ))
-            .is_none()
-    );
-}
-
-// ── 4. A different value for the same subject conflicts. ───────────────
-
-#[test]
-fn push_route_revoke_cannot_overwrite_existing_cas_value() {
-    let mut state = state_pinned();
-    let hlc = ServerHlc::new("test");
-
-    // Activate.
-    let _ = state.apply(
-        &op(active_payload(
-            SERVICE_ID_LOCAL,
-            PRINCIPAL_A,
-            DEVICE_A,
-            ROUTE_APNS,
-            PSEUDONYM_1,
-        )),
-        &hlc,
-    );
-
-    // Revoke (no push_target_id / push_gateway_did needed for revoked).
-    let revoke = op(json!({
-        "recipient_service_id": SERVICE_ID_LOCAL,
-        "principal_id": PRINCIPAL_A,
-        "device_id": DEVICE_A,
-        "push_route": ROUTE_APNS,
-        "revoked": true,
-    }));
-    match state.apply(&revoke, &hlc) {
-        ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, "push_route_cas_conflict");
-        }
-        other => panic!("expected bottom-reject CAS conflict, got {other:?}"),
-    }
-
-    let cell = state
-        .push_route_cell_value(&subject(
-            SERVICE_ID_LOCAL,
-            PRINCIPAL_A,
-            DEVICE_A,
-            ROUTE_APNS,
-        ))
-        .expect("CAS winner must remain present");
-    assert!(!cell.revoked);
-    assert_eq!(cell.push_target_id.as_deref(), Some(PSEUDONYM_1));
-}
-
-// ── 5. Exact replay is idempotent; rotation must use a new subject. ─────
-
-#[test]
-fn push_route_exact_replay_is_idempotent_and_rotation_conflicts() {
-    let mut state = state_pinned();
-    let hlc = ServerHlc::new("test");
-
-    let _ = state.apply(
-        &op(active_payload(
-            SERVICE_ID_LOCAL,
-            PRINCIPAL_A,
-            DEVICE_A,
-            ROUTE_APNS,
-            PSEUDONYM_1,
-        )),
-        &hlc,
-    );
-    let replay = state.apply(
-        &op(active_payload(
-            SERVICE_ID_LOCAL,
-            PRINCIPAL_A,
-            DEVICE_A,
-            ROUTE_APNS,
-            PSEUDONYM_1,
-        )),
-        &hlc,
-    );
-    assert!(matches!(replay, ProjectionEffect::PushRouteUpdated { .. }));
-
-    // Same subject, different value is a bottom-reject CAS conflict.
-    let effect = state.apply(
-        &op(active_payload(
-            SERVICE_ID_LOCAL,
-            PRINCIPAL_A,
-            DEVICE_A,
-            ROUTE_APNS,
-            PSEUDONYM_2,
-        )),
-        &hlc,
-    );
-    match effect {
-        ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, "push_route_cas_conflict");
-        }
-        other => panic!("expected bottom-reject CAS conflict, got {other:?}"),
-    }
-
-    let cell = state
-        .push_route_cell_value(&subject(
-            SERVICE_ID_LOCAL,
-            PRINCIPAL_A,
-            DEVICE_A,
-            ROUTE_APNS,
-        ))
-        .unwrap();
-    assert_eq!(cell.push_target_id.as_deref(), Some(PSEUDONYM_1));
-    assert!(cell.revoked_targets.is_empty());
-    assert!(!cell.revoked);
-}
-
-// ── 6. Active route missing push_target_id / push_gateway_did →
-//        reject (mirrors T4.1 chime `PushRoute::validate`). ─────────────
-
-#[test]
-fn push_route_active_missing_push_target_id_rejected() {
-    let mut state = state_pinned();
-    let hlc = ServerHlc::new("test");
-
-    let payload = json!({
-        "recipient_service_id": SERVICE_ID_LOCAL,
-        "principal_id": PRINCIPAL_A,
-        "device_id": DEVICE_A,
-        "push_route": ROUTE_APNS,
-        "push_gateway_did": GATEWAY_DID,
-    });
-    match state.apply(&op(payload), &hlc) {
-        ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, "push_route_active_missing_push_target_id");
-        }
-        other => {
-            panic!("expected Rejected(push_route_active_missing_push_target_id), got {other:?}")
-        }
-    }
-}
-
-#[test]
-fn push_route_active_missing_push_gateway_did_rejected() {
-    let mut state = state_pinned();
-    let hlc = ServerHlc::new("test");
-
-    let payload = json!({
-        "recipient_service_id": SERVICE_ID_LOCAL,
-        "principal_id": PRINCIPAL_A,
-        "device_id": DEVICE_A,
-        "push_route": ROUTE_APNS,
-        "push_target_id": PSEUDONYM_1,
-    });
-    match state.apply(&op(payload), &hlc) {
-        ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, "push_route_active_missing_push_gateway_did");
-        }
-        other => {
-            panic!("expected Rejected(push_route_active_missing_push_gateway_did), got {other:?}")
-        }
-    }
-}
-
-// ── 7. Missing cell_subject components are reported with the matching
-//        reason_code. ──────────────────────────────────────────────────
-
-#[test]
-fn push_route_rejects_missing_principal_id() {
-    let mut state = state_pinned();
-    let hlc = ServerHlc::new("test");
-
-    let payload = json!({
-        "recipient_service_id": SERVICE_ID_LOCAL,
-        // principal_id omitted
-        "device_id": DEVICE_A,
-        "push_route": ROUTE_APNS,
-        "push_target_id": PSEUDONYM_1,
-        "push_gateway_did": GATEWAY_DID,
-    });
-    match state.apply(&op(payload), &hlc) {
-        ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, "push_route_missing_principal_id");
-        }
-        other => panic!("expected Rejected(push_route_missing_principal_id), got {other:?}"),
-    }
-}
-
-#[test]
-fn push_route_rejects_missing_device_id() {
-    let mut state = state_pinned();
-    let hlc = ServerHlc::new("test");
-
-    let payload = json!({
-        "recipient_service_id": SERVICE_ID_LOCAL,
-        "principal_id": PRINCIPAL_A,
-        // device_id omitted
-        "push_route": ROUTE_APNS,
-        "push_target_id": PSEUDONYM_1,
-        "push_gateway_did": GATEWAY_DID,
-    });
-    match state.apply(&op(payload), &hlc) {
-        ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, "push_route_missing_device_id");
-        }
-        other => panic!("expected Rejected(push_route_missing_device_id), got {other:?}"),
-    }
-}
-
-// ── 8. Distinct (principal, device, route) combinations live in
-//        distinct cells. Sanity that the subject is honoured beyond
-//        the recipient_service_id test above. ─────────────────────
-
-#[test]
-fn push_route_distinct_routes_for_same_device_are_isolated() {
-    let mut state = state_pinned();
-    let hlc = ServerHlc::new("test");
-
-    let _ = state.apply(
-        &op(active_payload(
-            SERVICE_ID_LOCAL,
-            PRINCIPAL_A,
-            DEVICE_A,
-            ROUTE_APNS,
-            PSEUDONYM_1,
-        )),
-        &hlc,
-    );
-    let _ = state.apply(
-        &op(active_payload(
-            SERVICE_ID_LOCAL,
-            PRINCIPAL_A,
-            DEVICE_A,
-            ROUTE_FCM,
-            PSEUDONYM_2,
-        )),
-        &hlc,
-    );
-
-    let apns = state
-        .push_route_cell_value(&subject(
-            SERVICE_ID_LOCAL,
-            PRINCIPAL_A,
-            DEVICE_A,
-            ROUTE_APNS,
-        ))
-        .unwrap();
-    assert_eq!(apns.push_target_id.as_deref(), Some(PSEUDONYM_1));
-    let fcm = state
-        .push_route_cell_value(&subject(SERVICE_ID_LOCAL, PRINCIPAL_A, DEVICE_A, ROUTE_FCM))
-        .unwrap();
-    assert_eq!(fcm.push_target_id.as_deref(), Some(PSEUDONYM_2));
-}
-
-// ── 9. Without a pinned local_service_id, the dispatcher accepts any
-//        recipient (used by isolated reducer tests / cold-boot fixtures). ─
-
-#[test]
-fn push_route_without_local_service_id_skips_recipient_check() {
-    let mut state = ProjectionState::new();
-    // No `set_local_service_id` — the recipient gate is bypassed.
-    let hlc = ServerHlc::new("test");
-
-    let effect = state.apply(
-        &op(active_payload(
-            SERVICE_ID_OTHER,
-            PRINCIPAL_B,
-            DEVICE_A,
-            ROUTE_APNS,
-            PSEUDONYM_1,
-        )),
-        &hlc,
-    );
-    assert!(matches!(effect, ProjectionEffect::PushRouteUpdated { .. }));
-    assert!(
+    assert_eq!(
         state
-            .push_route_cell_value(&subject(
-                SERVICE_ID_OTHER,
-                PRINCIPAL_B,
-                DEVICE_A,
-                ROUTE_APNS
-            ))
-            .is_some()
+            .push_route_cell_value(&subject(SERVICE, "fcm_voip"))
+            .unwrap()
+            .push_target_id
+            .as_deref(),
+        Some(TARGET_2)
     );
 }

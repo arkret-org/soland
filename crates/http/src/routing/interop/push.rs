@@ -105,7 +105,7 @@ fn derive_push_target_id(
     device_id: &str,
     push_route_id: &str,
     salt_epoch_id: &str,
-) -> Result<String, AppError> {
+) -> Result<arkret_identifiers::PushTargetId, AppError> {
     let tag = derive_push_target_tag(
         root_key,
         recipient_service_id,
@@ -114,7 +114,8 @@ fn derive_push_target_id(
         push_route_id,
         salt_epoch_id,
     )?;
-    Ok(format!("{PUSH_TARGET_ID_PREFIX}{tag}"))
+    arkret_identifiers::PushTargetId::new(format!("{PUSH_TARGET_ID_PREFIX}{tag}"))
+        .map_err(|error| AppError::internal(format!("derived push target is invalid: {error}")))
 }
 
 /// Gateway-local registration handle for one accepted push registration.
@@ -173,7 +174,11 @@ pub(super) async fn push_register(
         &push_route_id,
         &salt_epoch_id,
     )?;
-    let push_target_id = format!("{PUSH_TARGET_ID_PREFIX}{push_target_tag}");
+    let push_target_id =
+        arkret_identifiers::PushTargetId::new(format!("{PUSH_TARGET_ID_PREFIX}{push_target_tag}"))
+            .map_err(|error| {
+                AppError::internal(format!("derived push target is invalid: {error}"))
+            })?;
     let registration_id = push_registration_id(&push_target_tag)?;
     let previous_registrations = state
         .deliveries()
@@ -188,7 +193,7 @@ pub(super) async fn push_register(
         &principal_id,
         &device_id,
         &push_route_id,
-        &push_target_id,
+        push_target_id.as_str(),
         now() + chrono::Duration::seconds(PUSH_TARGET_RETAIN_SECONDS),
     );
     state
@@ -400,8 +405,7 @@ pub(super) async fn push_notify(
     let push_target_id = body
         .notification
         .push_target_id
-        .as_deref()
-        .filter(|value| arkret_push_policy::blind_payload_sanitizer::is_valid_push_target_id(value))
+        .as_ref()
         .ok_or_else(|| AppError::param_invalid("notification.push_target_id is required"))?;
     let devices = body.notification.devices.clone();
     let notification = serde_json::to_value(&body.notification).map_err(|error| {
@@ -420,7 +424,9 @@ pub(super) async fn push_notify(
         let Some(registered_device) = registered
             .iter()
             .filter(|registered| registered["device_id"].as_str() == Some(device_id))
-            .find(|registered| push_registration_accepts_target(registered, push_target_id, now()))
+            .find(|registered| {
+                push_registration_accepts_target(registered, push_target_id.as_str(), now())
+            })
         else {
             let has_device = registered
                 .iter()
@@ -492,7 +498,7 @@ pub(super) async fn push_notify(
         );
     }
     json_ok(PushNotifyOutcome {
-        push_target_id: push_target_id.to_owned(),
+        push_target_id: push_target_id.clone(),
         outcomes,
     })
 }
@@ -624,15 +630,14 @@ mod tests {
         assert_eq!(first, again);
         assert_ne!(first, other_route);
         assert_ne!(first, other_service);
-        assert!(arkret_push_policy::blind_payload_sanitizer::is_valid_push_target_id(&first));
-        assert!(!first.contains("alice"));
-        assert!(!first.contains("device"));
+        assert!(!first.as_str().contains("alice"));
+        assert!(!first.as_str().contains("device"));
     }
 
     #[test]
     fn retained_push_target_acceptance_is_time_bounded() {
-        let current = "ak:pseudonym:push:aaaaaaaaaaaaaaaaaaaaaa";
-        let retained = "ak:pseudonym:push:bbbbbbbbbbbbbbbbbbbbbb";
+        let current = "ak:pseudonym:push:kosc9iQ4gVct1OB-b6X364WIFIsJFVbVzn7BMBs1sm8";
+        let retained = "ak:pseudonym:push:lg8aqJ2eJjms1GQpkzloxGn8F802f8RfmfmfsC85eRo";
         let now = chrono::DateTime::parse_from_rfc3339("2026-06-19T00:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
@@ -662,7 +667,7 @@ mod tests {
         ));
         assert!(!push_registration_accepts_target(
             &registration,
-            "ak:pseudonym:push:cccccccccccccccccccccc",
+            "ak:pseudonym:push:UexBBxDU_HwM4WRtsyOi991M5L1tvE3wxicZW-gZeSg",
             now
         ));
     }

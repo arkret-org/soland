@@ -728,7 +728,9 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
 fn push_notify_request(push_target_id: &str, devices: &[&str]) -> PushNotifyRequestBody {
     PushNotifyRequestBody {
         notification: PushNotificationEnvelope {
-            push_target_id: Some(push_target_id.to_owned()),
+            push_target_id: Some(
+                arkret_identifiers::PushTargetId::new(push_target_id.to_owned()).unwrap(),
+            ),
             wakeup_kind: Some("message".to_owned()),
             timing_profile_hint: Some(PushTimingProfileHint::Default),
             devices: devices

@@ -17,6 +17,7 @@ arkret-identifiers = {workspace = true}
 arkret-lattice-registry = {workspace = true}
 arkret-models-collaboration = {workspace = true}
 arkret-models-crypto = {workspace = true}
+arkret-models-identity = {workspace = true}
 arkret-policy = {workspace = true}
 arkret-schema = {workspace = true,features = ["embedded-artifacts"]}
 arkret-state = {workspace = true}
@@ -32,7 +33,6 @@ url = {workspace = true}
 
 [dev-dependencies]
 arkret-event-draft = { workspace = true, features = ["test-support"] }
-arkret-models-identity = {workspace = true}
 uuid = {workspace = true,features = ["v7"]}
 
 [lints]

@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::{ProjectionState, RealmInheritancePolicyState, RealmLinkState};
+use super::{ProjectionState, RealmInheritancePolicyState};
 
 /// Projection-local cell id for a Realm Link composite subject.
 ///

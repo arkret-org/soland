@@ -485,18 +485,19 @@ impl ProjectionState {
     }
 
     pub(crate) fn apply_device_push_route(&mut self, operation: &Operation) -> ProjectionEffect {
-        let Some(payload) = operation.payload.as_object() else {
-            return ProjectionEffect::Rejected {
-                reason: "push_route_payload_not_object".to_owned(),
-            };
+        let payload = match serde_json::from_value::<
+            arkret_models_identity::delivery_binding::DevicePushRoutePayload,
+        >(operation.payload.clone())
+        {
+            Ok(payload) => payload,
+            Err(error) => {
+                return ProjectionEffect::Rejected {
+                    reason: format!("push_route_payload_invalid:{error}"),
+                };
+            }
         };
-        let Some(recipient_service_id) =
-            payload.get("recipient_service_id").and_then(Value::as_str)
-        else {
-            return ProjectionEffect::Rejected {
-                reason: "push_route_missing_recipient_service_id".to_owned(),
-            };
-        };
+        let scope = payload.scope();
+        let recipient_service_id = scope.recipient_service_id.as_str();
         if let Some(local_service_id) = self.local_service_id.as_deref()
             && local_service_id != recipient_service_id
         {
@@ -504,21 +505,9 @@ impl ProjectionState {
                 reason: "recipient_service_id_mismatch".to_owned(),
             };
         }
-        let Some(principal_id) = payload.get("principal_id").and_then(Value::as_str) else {
-            return ProjectionEffect::Rejected {
-                reason: "push_route_missing_principal_id".to_owned(),
-            };
-        };
-        let Some(device_id) = payload.get("device_id").and_then(Value::as_str) else {
-            return ProjectionEffect::Rejected {
-                reason: "push_route_missing_device_id".to_owned(),
-            };
-        };
-        let Some(push_route) = payload.get("push_route").and_then(Value::as_str) else {
-            return ProjectionEffect::Rejected {
-                reason: "push_route_missing_push_route".to_owned(),
-            };
-        };
+        let principal_id = scope.principal_id.as_str();
+        let device_id = scope.device_id.as_str();
+        let push_route = scope.push_route.as_str();
 
         let subject = PushRouteSubject {
             recipient_service_id: recipient_service_id.to_owned(),
@@ -565,22 +554,17 @@ impl ProjectionState {
             };
         }
 
-        let revoked = payload
-            .get("revoked")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-
-        let incoming_value = serde_json::json!({
-            "recipient_service_id": recipient_service_id,
-            "principal_id": principal_id,
-            "device_id": device_id,
-            "push_route": push_route,
-            "push_target_id": payload.get("push_target_id").cloned().unwrap_or(Value::Null),
-            "push_gateway_did": payload.get("push_gateway_did").cloned().unwrap_or(Value::Null),
-            "encryption_key": payload.get("encryption_key").cloned().unwrap_or(Value::Null),
-            "capabilities": payload.get("capabilities").cloned().unwrap_or_else(|| serde_json::json!([])),
-            "revoked": revoked,
-        });
+        let expected_revision = payload.expected_revision();
+        let incoming_revision = match expected_revision.checked_add(1) {
+            Some(revision) => revision,
+            None => {
+                return ProjectionEffect::Rejected {
+                    reason: "push_route_revision_overflow".to_owned(),
+                };
+            }
+        };
+        let incoming_value = serde_json::to_value(&payload)
+            .expect("validated push-route payload remains serializable");
         let current = self.push_routes.get(&subject).map(|value| {
             arkret_lattice_registry::ActorPrivateCandidate {
                 value: serde_json::json!({
@@ -589,12 +573,12 @@ impl ProjectionState {
                     "device_id": &subject.device_id,
                     "push_route": &subject.push_route,
                     "push_target_id": &value.push_target_id,
-                    "push_gateway_did": &value.push_gateway_did,
+                    "push_gateway_service_id": &value.push_gateway_service_id,
                     "encryption_key": &value.encryption_key,
                     "capabilities": &value.capabilities,
                     "revoked": value.revoked,
                 }),
-                revision: None,
+                revision: Some(value.revision),
                 expected_revision: None,
                 causal_order: None,
                 hlc: None,
@@ -603,8 +587,8 @@ impl ProjectionState {
         });
         let incoming = arkret_lattice_registry::ActorPrivateCandidate {
             value: incoming_value,
-            revision: None,
-            expected_revision: None,
+            revision: Some(incoming_revision),
+            expected_revision: Some(expected_revision),
             causal_order: None,
             hlc: None,
             device_id: None,
@@ -630,94 +614,58 @@ impl ProjectionState {
             }
         }
 
-        if revoked {
-            let mut previous = self
-                .push_routes
-                .get(&subject)
-                .cloned()
-                .unwrap_or_else(empty_push_route_cell);
-            if let Some(target) = previous.push_target_id.take()
-                && !previous.revoked_targets.contains(&target)
-            {
-                previous.revoked_targets.push(target);
+        match payload {
+            arkret_models_identity::delivery_binding::DevicePushRoutePayload::Revoked(_) => {
+                self.store_push_route_cell(
+                    subject.clone(),
+                    PushRouteCellValue {
+                        revision: incoming_revision,
+                        push_target_id: None,
+                        push_gateway_service_id: None,
+                        encryption_key: None,
+                        capabilities: Vec::new(),
+                        revoked: true,
+                    },
+                );
+                ProjectionEffect::PushRouteUpdated {
+                    subject,
+                    action: "revoked".to_owned(),
+                }
             }
-            if let Some(target) = payload.get("push_target_id").and_then(Value::as_str)
-                && !previous
-                    .revoked_targets
-                    .iter()
-                    .any(|existing| existing == target)
-            {
-                previous.revoked_targets.push(target.to_owned());
+            arkret_models_identity::delivery_binding::DevicePushRoutePayload::Active(active) => {
+                let action = if self
+                    .push_routes
+                    .get(&subject)
+                    .and_then(|value| value.push_target_id.as_deref())
+                    .is_some_and(|previous| previous != active.push_target_id.as_str())
+                {
+                    "rotated"
+                } else {
+                    "active"
+                };
+                self.store_push_route_cell(
+                    subject.clone(),
+                    PushRouteCellValue {
+                        revision: incoming_revision,
+                        push_target_id: Some(active.push_target_id.into_string()),
+                        push_gateway_service_id: Some(active.push_gateway_service_id.into_string()),
+                        encryption_key: Some(active.encryption_key),
+                        capabilities: active.capabilities,
+                        revoked: false,
+                    },
+                );
+                ProjectionEffect::PushRouteUpdated {
+                    subject,
+                    action: action.to_owned(),
+                }
             }
-            previous.push_gateway_did = None;
-            previous.encryption_key = None;
-            previous.capabilities.clear();
-            previous.revoked = true;
-            self.store_push_route_cell(subject.clone(), previous);
-            return ProjectionEffect::PushRouteUpdated {
-                subject,
-                action: "revoked".to_owned(),
-            };
-        }
-
-        let Some(push_target_id) = payload.get("push_target_id").and_then(Value::as_str) else {
-            return ProjectionEffect::Rejected {
-                reason: "push_route_active_missing_push_target_id".to_owned(),
-            };
-        };
-        let Some(push_gateway_did) = payload.get("push_gateway_did").and_then(Value::as_str) else {
-            return ProjectionEffect::Rejected {
-                reason: "push_route_active_missing_push_gateway_did".to_owned(),
-            };
-        };
-        let capabilities = payload
-            .get("capabilities")
-            .and_then(Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let encryption_key = payload
-            .get("encryption_key")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-
-        let mut next = self
-            .push_routes
-            .get(&subject)
-            .cloned()
-            .unwrap_or_else(empty_push_route_cell);
-        let mut action = "active";
-        if let Some(previous_target) = next.push_target_id.as_deref()
-            && previous_target != push_target_id
-        {
-            action = "rotated";
-            let previous_target = previous_target.to_owned();
-            if !next.revoked_targets.contains(&previous_target) {
-                next.revoked_targets.push(previous_target);
-            }
-        }
-        next.push_target_id = Some(push_target_id.to_owned());
-        next.push_gateway_did = Some(push_gateway_did.to_owned());
-        next.encryption_key = encryption_key;
-        next.capabilities = capabilities;
-        next.revoked = false;
-        self.store_push_route_cell(subject.clone(), next);
-
-        ProjectionEffect::PushRouteUpdated {
-            subject,
-            action: action.to_owned(),
         }
     }
 
     fn store_push_route_cell(&mut self, subject: PushRouteSubject, value: PushRouteCellValue) {
         // Actor-private routes are deliberately absent from `cells`: that map
         // feeds Realm CBA/Seal/state-root resolution. The recipient Principal
-        // Server keeps this CAS register only in its private projection.
+        // Server keeps this revision-CAS value only in its private projection.
         self.push_routes.insert(subject, value);
     }
 
