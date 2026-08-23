@@ -164,7 +164,6 @@ pub(super) async fn submit_identity_anchor_batch(
             actor_id: lock_actor.clone(),
             digest_algorithm: None,
             identity_anchor_event_id: event_string_field_from_value(&envelopes[0], "event_id"),
-            self_principal_pcr_bootstrap: false,
             identity_anchor_candidate_device: identity_anchor_candidate_device(&typed_authorize)?,
             identity_anchor_resolution: None,
             direct_conversation_founding: false,
@@ -183,7 +182,6 @@ pub(super) async fn submit_identity_anchor_batch(
             actor_id: first.actor_id.to_string(),
             digest_algorithm: None,
             identity_anchor_event_id: Some(first.event_id.to_string()),
-            self_principal_pcr_bootstrap: false,
             identity_anchor_candidate_device: identity_anchor_candidate_device(&typed_authorize)?,
             identity_anchor_resolution: None,
             direct_conversation_founding: false,
@@ -952,7 +950,6 @@ fn validate_self_principal_pcr_bootstrap_context(
         actor_id: create.actor_id.to_string(),
         digest_algorithm: Some(create_payload.object.digest_algorithm.as_str().to_owned()),
         identity_anchor_event_id: Some(create.event_id.to_string()),
-        self_principal_pcr_bootstrap: true,
         identity_anchor_candidate_device: Some(candidate),
         identity_anchor_resolution: Some(initial_resolution),
         direct_conversation_founding: false,
@@ -2177,7 +2174,6 @@ mod tests {
         let authorize: arkret_wire::Event = serde_json::from_value(envelopes[1].clone()).unwrap();
         let context = validate_self_principal_pcr_bootstrap_context(&create, &authorize)
             .expect("SDK canonical two-slot bootstrap must be recognized");
-        assert!(context.self_principal_pcr_bootstrap);
         assert_eq!(
             context.identity_anchor_event_id.as_deref(),
             Some(create.event_id.as_str())

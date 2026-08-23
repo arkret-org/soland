@@ -225,10 +225,10 @@ fn decode_dependency(row: DependencyObjectRow) -> PersistenceResult<GovernanceDe
                 selector: GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
                     content_digest: digest,
                 },
-                authenticated_signer_resolution_evidence: serde_json::from_value::<
-                    AuthenticatedSignerResolutionEvidence,
-                >(object_json)
-                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+                authenticated_signer_resolution_evidence: Box::new(
+                    serde_json::from_value::<AuthenticatedSignerResolutionEvidence>(object_json)
+                        .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+                ),
             }
         }
         "minimal_metadata_mls_leaf_signer_evidence" => {

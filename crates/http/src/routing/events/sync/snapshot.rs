@@ -460,27 +460,27 @@ async fn agent_signer_evidence_bundle_for_sync(
                 verification_method,
                 agent_signer_evidence,
                 ..
-            } = authenticated_signer_resolution_evidence
+            } = authenticated_signer_resolution_evidence.as_ref()
             else {
                 continue;
             };
             let expected_signer = event.executed_by.as_ref().unwrap_or(&event.actor_id);
-            if &signer_id != expected_signer || verification_method != producer.verification_method
+            if signer_id != expected_signer || verification_method != &producer.verification_method
             {
                 continue;
             }
             let AgentSignerEvidence::HistoricalEvent {
                 event_admission_receipt,
                 ..
-            } = &agent_signer_evidence
+            } = agent_signer_evidence.as_ref()
             else {
                 continue;
             };
             if event_admission_receipt.event_id != event.event_id
                 || event_admission_receipt.event_digest != producer.event_digest
                 || event_admission_receipt.realm_id != realm_id
-                || event_admission_receipt.agent_id != signer_id
-                || event_admission_receipt.verification_method != verification_method
+                || event_admission_receipt.agent_id != *signer_id
+                || event_admission_receipt.verification_method != *verification_method
                 || event_admission_receipt.receiver_service_id != receiver_service_id
             {
                 continue;
@@ -493,9 +493,9 @@ async fn agent_signer_evidence_bundle_for_sync(
             if conflicted_receipts.contains(&receipt_key) {
                 continue;
             }
-            if let Some(previous) =
-                evidence_by_receipt.insert(receipt_key.clone(), agent_signer_evidence.clone())
-                && previous != agent_signer_evidence
+            if let Some(previous) = evidence_by_receipt
+                .insert(receipt_key.clone(), agent_signer_evidence.as_ref().clone())
+                && previous != **agent_signer_evidence
             {
                 evidence_by_receipt.remove(&receipt_key);
                 conflicted_receipts.insert(receipt_key);

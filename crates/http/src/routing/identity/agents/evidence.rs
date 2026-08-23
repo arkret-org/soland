@@ -214,13 +214,16 @@ async fn historical_authenticated_agent_signer_evidence(
     let AuthenticatedSignerResolutionEvidence::NativeAgent {
         signer_id,
         verification_method,
-        agent_signer_evidence:
-            AgentSignerEvidence::HistoricalEvent {
-                event_admission_receipt,
-                ..
-            },
+        agent_signer_evidence,
         ..
-    } = &root
+    } = root.as_ref()
+    else {
+        return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
+    };
+    let AgentSignerEvidence::HistoricalEvent {
+        event_admission_receipt,
+        ..
+    } = agent_signer_evidence.as_ref()
     else {
         return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
     };
@@ -275,9 +278,9 @@ async fn historical_authenticated_agent_signer_evidence(
             )
             .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?,
         );
-        dependencies.push(authenticated_signer_resolution_evidence);
+        dependencies.push(*authenticated_signer_resolution_evidence);
     }
-    Ok((root, dependencies))
+    Ok((*root, dependencies))
 }
 
 async fn current_service_signer_evidence(
@@ -442,18 +445,23 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
     let AuthenticatedSignerResolutionEvidence::NativeAgent {
         signer_id,
         verification_method,
-        agent_signer_evidence:
-            AgentSignerEvidence::CurrentAdmission {
-                schema,
-                admission_evidence,
-                transparency,
-                ..
-            },
+        agent_signer_evidence,
         attester_signer_evidence_digest,
         controller_signer_evidence_digest,
         account_authority_signer_evidence_digest,
         ..
-    } = original_root
+    } = *original_root
+    else {
+        return Err(AppError::internal(
+            "receipt producer evidence is not a Native Agent CurrentAdmission root",
+        ));
+    };
+    let AgentSignerEvidence::CurrentAdmission {
+        schema,
+        admission_evidence,
+        transparency,
+        ..
+    } = *agent_signer_evidence
     else {
         return Err(AppError::internal(
             "receipt producer evidence is not a Native Agent CurrentAdmission root",
@@ -486,7 +494,7 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
                 "Agent signer dependency has the wrong kind",
             ));
         };
-        Ok(authenticated_signer_resolution_evidence)
+        Ok(*authenticated_signer_resolution_evidence)
     }
     let authority_evidence = dependency_by_digest(store, &attester_signer_evidence_digest).await?;
     let controller_evidence =
@@ -592,17 +600,27 @@ fn replayed_historical_agent_signer_evidence(
     receipt: &arkret_models_identity::agent_signer_evidence::AgentEventAdmissionReceipt,
 ) -> Result<(), AppError> {
     let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-        authenticated_signer_resolution_evidence:
-            AuthenticatedSignerResolutionEvidence::NativeAgent {
-                agent_signer_evidence:
-                    AgentSignerEvidence::HistoricalEvent {
-                        event_admission_receipt,
-                        ..
-                    },
-                ..
-            },
+        authenticated_signer_resolution_evidence,
         ..
     } = materialized
+    else {
+        return Err(AppError::internal(
+            "materialized historical Agent signer evidence has the wrong kind",
+        ));
+    };
+    let AuthenticatedSignerResolutionEvidence::NativeAgent {
+        agent_signer_evidence,
+        ..
+    } = *authenticated_signer_resolution_evidence
+    else {
+        return Err(AppError::internal(
+            "materialized historical Agent signer evidence has the wrong kind",
+        ));
+    };
+    let AgentSignerEvidence::HistoricalEvent {
+        event_admission_receipt,
+        ..
+    } = *agent_signer_evidence
     else {
         return Err(AppError::internal(
             "materialized historical Agent signer evidence has the wrong kind",
@@ -633,7 +651,7 @@ async fn persist_agent_signer_evidence_closure(
             selector: GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
                 content_digest,
             },
-            authenticated_signer_resolution_evidence: evidence.clone(),
+            authenticated_signer_resolution_evidence: Box::new(evidence.clone()),
         };
         store
             .put_unscoped_signer_evidence_exact(item)

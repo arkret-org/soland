@@ -15,8 +15,7 @@ use arkret_models_integration::{
     CapabilityConstraint, DeniedScope, E2eeEffect, E2eePolicy, EventSubmission, NamespaceConflict,
     ScopeGrant, WidgetEffect,
 };
-use arkret_policy::authz::{ProtocolResourceSelectorScope, ResourceSelector};
-use arkret_wire::{CapabilityActionId, Event, ScopeRef};
+use arkret_wire::{CapabilityActionId, Event, ResourceMatchScope, ScopeRef, WireResourceSelector};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -106,24 +105,21 @@ fn validate_formal_install_events(
     }
 
     let expected_resource = match &commit.effective_scope {
-        ScopeRef::Realm { realm_id } => ResourceSelector::Realm {
-            realm_id: realm_id.to_string(),
-        },
+        ScopeRef::Realm { realm_id } => WireResourceSelector::realm(realm_id.clone()),
         ScopeRef::Circle {
             realm_id,
             circle_id,
-        } => ResourceSelector::Circle {
-            realm_id: realm_id.to_string(),
-            circle_id: Some(circle_id.clone()),
-            match_scope: ProtocolResourceSelectorScope::Exact,
-        },
+        } => {
+            let mut selector = WireResourceSelector::circle(realm_id.clone(), circle_id.clone());
+            selector.match_scope = Some(ResourceMatchScope::Exact);
+            selector
+        }
         _ => {
             return Err(AppError::param_invalid(
                 "unsupported applet effective scope",
             ));
         }
-    }
-    .to_spec_value();
+    };
     let expected_applet_id = AppletId::new(package.applet_id.clone())
         .map_err(|error| AppError::param_invalid(format!("invalid applet_id: {error}")))?;
     let requested = package
@@ -169,7 +165,7 @@ fn validate_formal_install_events(
                     if subject.as_str() == package.service_id.as_str()
             )
             || grant.resources.len() != 1
-            || serde_json::to_value(&grant.resources[0]).ok().as_ref() != Some(&expected_resource)
+            || grant.resources[0] != expected_resource
         {
             return Err(AppError::param_invalid(
                 "capability grant issuer, subject, resource, or id does not match the install",

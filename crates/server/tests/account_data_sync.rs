@@ -989,23 +989,24 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
             .starts_with("push_registration:"),
         "registration_id is an opaque_correlation handle, not the push target pseudonym"
     );
-    let push_target_id = soland_test_support::registered_push_target_id(
-        &state,
-        "ak:did_core:web:alice.example",
-        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+    let push_target_id = arkret_identifiers::PushTargetId::new(
+        soland_test_support::registered_push_target_id(
+            &state,
+            "ak:did_core:web:alice.example",
+            "ak:device:01904100-0000-7000-8000-a11ce0000001",
+        )
+        .await,
     )
-    .await;
+    .expect("stored push target id is typed");
     assert_eq!(
         registered["push_target_id"].as_str(),
         Some(push_target_id.as_str()),
         "register-device response must carry the service-derived push_target_id"
     );
-    let push_target_id = push_target_id.as_str();
-
     let rejected = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&json!({
             "notification": {
-                "push_target_id": push_target_id,
+                "push_target_id": push_target_id.as_str(),
                 "wakeup_kind": "message",
                 "timing_profile_hint": "default",
                 "event_id": "ak:event:AT4Mf1sJBtwy4lOrQHfsPt7KtsUYo1LogrjcZnl5oAco",
@@ -1029,7 +1030,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
         TestClient::post("http://server/_arkret/edge/push/notify")
             .json(&json!({
                 "notification": {
-                    "push_target_id": push_target_id,
+                    "push_target_id": push_target_id.as_str(),
                     "wakeup_kind": "message",
                     "timing_profile_hint": "default",
                     "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}]

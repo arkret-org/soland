@@ -436,7 +436,6 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
             } else {
                 None
             },
-            self_principal_pcr_bootstrap,
             identity_anchor_candidate_device: None,
             identity_anchor_resolution: None,
             direct_conversation_founding: false,

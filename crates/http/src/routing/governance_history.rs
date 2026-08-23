@@ -1162,7 +1162,9 @@ fn history_source_author_profile(
                         content_digest,
                     },
                 authenticated_signer_resolution_evidence,
-            } if content_digest == root_digest => match authenticated_signer_resolution_evidence {
+            } if content_digest == root_digest => match authenticated_signer_resolution_evidence
+                .as_ref()
+            {
                 arkret_models_identity::AuthenticatedSignerResolutionEvidence::Principal {
                     ..
                 } => AuthorProfile::OrdinaryHuman,
@@ -2451,7 +2453,7 @@ async fn collect_history_dependencies(
                 authenticated_signer_resolution_evidence,
                 ..
             } => governance_attester_evidence_selectors(std::slice::from_ref(
-                &authenticated_signer_resolution_evidence,
+                authenticated_signer_resolution_evidence,
             ))
             .map_err(|error| AppError::new(ErrorCode::DependencyMissing, error.to_string()))?,
             GovernanceDependency::GovernanceRegistrySnapshot {
@@ -4652,7 +4654,7 @@ async fn current_history_release_service_signer_evidence(
             selector: GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
                 content_digest,
             },
-            authenticated_signer_resolution_evidence: evidence,
+            authenticated_signer_resolution_evidence: Box::new(evidence),
         },
     )
 }
@@ -4663,14 +4665,22 @@ fn history_release_service_signer_evidence_coordinates(
     let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
         selector:
             GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence { content_digest },
-        authenticated_signer_resolution_evidence:
-            evidence @ arkret_models_identity::AuthenticatedSignerResolutionEvidence::Service { .. },
+        authenticated_signer_resolution_evidence,
     } = dependency
     else {
         return Err(AppError::internal(
             "history release signer evidence is not service-kind",
         ));
     };
+    let evidence = authenticated_signer_resolution_evidence.as_ref();
+    if !matches!(
+        evidence,
+        arkret_models_identity::AuthenticatedSignerResolutionEvidence::Service { .. }
+    ) {
+        return Err(AppError::internal(
+            "history release signer evidence is not service-kind",
+        ));
+    }
     if evidence
         .canonical_sha256_digest()
         .map_err(|error| AppError::internal(error.to_string()))?

@@ -401,7 +401,6 @@ pub(in crate::routing) struct RealmBootstrapBatchContext {
     /// the suite from the same signed unit rather than from durable state.
     pub(in crate::routing) digest_algorithm: Option<String>,
     pub(in crate::routing) identity_anchor_event_id: Option<String>,
-    pub(in crate::routing) self_principal_pcr_bootstrap: bool,
     /// Typed SDK payload for the candidate device in the second slot of a
     /// registration-anchor or PCR-recovery unit.  Admission parses the wire
     /// Event exactly once at the boundary and carries this DTO through proof
@@ -1538,7 +1537,6 @@ async fn submit_event_batch_outcome_with_leases(
             actor_id,
             digest_algorithm: Some(staged_realm_digest_algorithm(&envelopes[0])),
             identity_anchor_event_id: None,
-            self_principal_pcr_bootstrap: false,
             identity_anchor_candidate_device: None,
             identity_anchor_resolution: None,
             direct_conversation_founding: false,
@@ -1608,7 +1606,6 @@ async fn submit_event_batch_outcome_with_leases(
                         actor_id,
                         digest_algorithm: Some(staged_realm_digest_algorithm(&envelope)),
                         identity_anchor_event_id: None,
-                        self_principal_pcr_bootstrap: false,
                         identity_anchor_candidate_device: None,
                         identity_anchor_resolution: None,
                         direct_conversation_founding: false,

@@ -370,7 +370,6 @@ fn single_realm_create_bootstrap_context(envelope: &Value) -> Vec<RealmBootstrap
                 actor_id,
                 digest_algorithm: Some(staged_realm_digest_algorithm(envelope)),
                 identity_anchor_event_id: None,
-                self_principal_pcr_bootstrap: false,
                 identity_anchor_candidate_device: None,
                 identity_anchor_resolution: None,
                 direct_conversation_founding: false,
@@ -1395,7 +1394,7 @@ pub(super) async fn accepted_event_envelope(
         selector: arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
             content_digest: signer_resolution_evidence_digest.clone(),
         },
-        authenticated_signer_resolution_evidence: signer_evidence,
+        authenticated_signer_resolution_evidence: Box::new(signer_evidence),
     };
     state
         .persistence()
@@ -1595,7 +1594,6 @@ pub(super) async fn submit_event_value_with_context(
                 actor_id,
                 digest_algorithm: Some(staged_realm_digest_algorithm(&envelope)),
                 identity_anchor_event_id: None,
-                self_principal_pcr_bootstrap: false,
                 identity_anchor_candidate_device: None,
                 identity_anchor_resolution: None,
                 direct_conversation_founding: false,

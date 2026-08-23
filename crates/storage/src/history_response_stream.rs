@@ -342,21 +342,21 @@ impl HistoryResponseReservationInput {
                 arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
                     content_digest,
                 },
-            authenticated_signer_resolution_evidence:
-                arkret_models_identity::AuthenticatedSignerResolutionEvidence::Service { .. },
+            authenticated_signer_resolution_evidence,
         } = &self.release_service_signer_evidence
         else {
             return Err(PersistenceError::SchemaViolation(
                 "history response release signer evidence must be service-kind".to_owned(),
             ));
         };
-        let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-            authenticated_signer_resolution_evidence,
-            ..
-        } = &self.release_service_signer_evidence
-        else {
-            unreachable!()
-        };
+        if !matches!(
+            authenticated_signer_resolution_evidence.as_ref(),
+            arkret_models_identity::AuthenticatedSignerResolutionEvidence::Service { .. }
+        ) {
+            return Err(PersistenceError::SchemaViolation(
+                "history response release signer evidence must be service-kind".to_owned(),
+            ));
+        }
         if authenticated_signer_resolution_evidence
             .canonical_sha256_digest()
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?

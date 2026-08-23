@@ -620,23 +620,24 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
     );
     // push-notifications.md §3.1: the registration response carries the push
     // target pseudonym; the stored registration must agree with it.
-    let push_target_id = soland_test_support::registered_push_target_id(
-        &state,
-        "ak:did_core:web:alice.example",
-        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+    let push_target_id = arkret_identifiers::PushTargetId::new(
+        soland_test_support::registered_push_target_id(
+            &state,
+            "ak:did_core:web:alice.example",
+            "ak:device:01904100-0000-7000-8000-a11ce0000001",
+        )
+        .await,
     )
-    .await;
+    .expect("stored push target id is typed");
     assert_eq!(
         push_registration["push_target_id"].as_str(),
         Some(push_target_id.as_str()),
         "register-device response must carry the service-derived push_target_id"
     );
-    let push_target_id = push_target_id.as_str();
-
     let mut plaintext_push = TestClient::post("http://server/_arkret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
-                "push_target_id": push_target_id,
+                "push_target_id": push_target_id.as_str(),
                 "wakeup_kind": "message",
                 "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}],
                 "preview": "plaintext should not be sent to push gateway"
@@ -658,8 +659,10 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
     // exactly once, and no unrequested one appears.
     let registered_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let unregistered_device = "ak:device:01904100-0000-7000-8000-71551c000004";
-    let notify_request =
-        push_notify_request(push_target_id, &[registered_device, unregistered_device]);
+    let notify_request = push_notify_request(
+        push_target_id.as_str(),
+        &[registered_device, unregistered_device],
+    );
     let mut notify_response = TestClient::post("http://server/_arkret/edge/push/notify")
         .add_header("content-type", "application/json", true)
         .body(

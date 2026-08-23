@@ -191,13 +191,13 @@ fn stream_entry(row: &MemoryResponseRow) -> Option<HistoryResponsePageEntry> {
     }
     if let Some(lost_record) = &row.lost_record {
         return Some(HistoryResponsePageEntry::Lost {
-            lost_record: lost_record.clone(),
+            lost_record: Box::new(lost_record.clone()),
         });
     }
     row.record
         .as_ref()
         .map(|record| HistoryResponsePageEntry::Record {
-            record: record.clone(),
+            record: Box::new(record.clone()),
         })
 }
 

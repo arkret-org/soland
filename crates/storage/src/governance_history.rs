@@ -308,19 +308,25 @@ pub fn historical_agent_signer_evidence_key(
 ) -> PersistenceResult<Option<HistoricalAgentSignerEvidenceKey>> {
     governance_signer_evidence_canonical(item)?;
     let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-        authenticated_signer_resolution_evidence:
-            AuthenticatedSignerResolutionEvidence::NativeAgent {
-                signer_id,
-                verification_method,
-                agent_signer_evidence:
-                    AgentSignerEvidence::HistoricalEvent {
-                        event_admission_receipt,
-                        ..
-                    },
-                ..
-            },
+        authenticated_signer_resolution_evidence,
         ..
     } = item
+    else {
+        return Ok(None);
+    };
+    let AuthenticatedSignerResolutionEvidence::NativeAgent {
+        signer_id,
+        verification_method,
+        agent_signer_evidence,
+        ..
+    } = authenticated_signer_resolution_evidence.as_ref()
+    else {
+        return Ok(None);
+    };
+    let AgentSignerEvidence::HistoricalEvent {
+        event_admission_receipt,
+        ..
+    } = agent_signer_evidence.as_ref()
     else {
         return Ok(None);
     };
