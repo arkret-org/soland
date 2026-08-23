@@ -44,8 +44,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::ServiceError as PersistenceError;
 use soland_services::identity::{
-    RecoveryPolicyState, SecurityTransactionState as SecurityTransactionRecord,
-    SessionIdentityState as SessionRecord,
+    RecoveryPolicyState, SecurityTransactionRecord, SessionIdentityState as SessionRecord,
 };
 
 use super::{AuthArgs, append_audit_log};

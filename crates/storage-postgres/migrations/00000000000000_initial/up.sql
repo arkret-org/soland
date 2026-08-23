@@ -2438,19 +2438,17 @@ CREATE TABLE public.security_transactions (
     request_digest text NOT NULL,
     prepared_plan jsonb NOT NULL,
     prepared_plan_digest text NOT NULL,
-    state text NOT NULL,
     accepted_steps jsonb NOT NULL,
     terminal_result jsonb,
     canonical_request bytea NOT NULL,
     CONSTRAINT security_transactions_pkey PRIMARY KEY (id),
-    CONSTRAINT security_transactions_kind_check CHECK ((kind = ANY (ARRAY['recovery'::text, 'security_rotation'::text]))),
-    CONSTRAINT security_transactions_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'aborted'::text, 'expired'::text])))
+    CONSTRAINT security_transactions_kind_check CHECK ((kind = ANY (ARRAY['recovery'::text, 'security_rotation'::text])))
 );
 
 ALTER TABLE ONLY public.recovery_sessions
     ADD CONSTRAINT recovery_sessions_transaction_id_fkey FOREIGN KEY (transaction_id) REFERENCES public.security_transactions(id);
 
-CREATE INDEX security_transactions_principal_state_idx ON public.security_transactions USING btree (principal_id, state, created_at DESC);
+CREATE INDEX security_transactions_principal_created_idx ON public.security_transactions USING btree (principal_id, created_at DESC);
 
 CREATE TABLE public.security_transaction_backup_erase_progress (
     transaction_id uuid NOT NULL,

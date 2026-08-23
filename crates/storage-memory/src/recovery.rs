@@ -398,7 +398,7 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
                 "accepted step outcome must match the single appended transaction step".to_owned(),
             ));
         }
-        if record.resource.state == arkret_wire::SecurityTransactionState::Completed
+        if record.resource.is_completed()
             && let Some(binding) = record.resource.recovery_binding()
         {
             let session_id = binding.recovery_session_id.as_str();
@@ -484,7 +484,7 @@ mod tests {
         EventInitialSubmission, EventsSubmitBatchRequestBody, Hash, Hlc, LeaseBasisRef,
         PayloadProof, PreparedEventUnit, RealmId, RiskTier, SchemaId, ScopeRef, SealId,
         SecurityRotationTransactionCreateRequest, SecurityTransactionCreateRequest,
-        SecurityTransactionState, SecurityTransactionStep, TransactionId, proof_kind,
+        SecurityTransactionStep, TransactionId, proof_kind,
     };
     use chrono::{Duration, Utc};
     use serde_json::json;
@@ -800,7 +800,6 @@ mod tests {
             output_digest: hash('5'),
             accepted_at: Utc::now(),
         });
-        advanced.resource.state = SecurityTransactionState::Running;
         advanced.resource.validate_structural().unwrap();
         let outcome = SecurityTransactionStepOutcomeRecord {
             transaction_id: advanced.resource.transaction_id.as_str().to_owned(),
@@ -851,11 +850,49 @@ mod tests {
                 accepted_at: Utc::now(),
             });
         }
-        transaction.state = SecurityTransactionState::Running;
         transaction.validate_structural().unwrap();
         assert!(transaction.requires_device_attestation().unwrap());
         let encoded = serde_json::to_string(&transaction).unwrap();
-        assert!(encoded.contains(r#""state":"running""#));
+        assert!(!encoded.contains(r#""state""#));
+        let mut legacy = serde_json::to_value(&transaction).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .insert("state".to_owned(), json!("running"));
+        assert!(serde_json::from_value::<arkret_wire::SecurityTransaction>(legacy).is_err());
+    }
+
+    #[test]
+    fn terminal_result_is_the_only_terminal_source() {
+        let mut transaction = initial_rotation().resource;
+        for index in 0..5 {
+            transaction.accepted_steps.push(AcceptedStep {
+                prepared_material_digest: hash(char::from(b'a' + index)),
+                acceptor_id: "did:web:principal.example".to_owned(),
+                output_ref: format!("ak:receipt:019a7360-0000-7000-8000-00000000020{index}"),
+                output_digest: hash(char::from(b'1' + index)),
+                accepted_at: Utc::now(),
+            });
+        }
+        assert!(transaction.validate_structural().is_err());
+
+        transaction.terminal_result = Some(arkret_wire::SecurityTransactionTerminalResult {
+            result: arkret_wire::SecurityTransactionResultKind::Completed,
+            completed_at: Utc::now(),
+            receipt_id: None,
+            reason_code: None,
+            completion_attestation: None,
+        });
+        transaction.validate_structural().unwrap();
+        assert!(transaction.is_terminal());
+        assert!(transaction.is_completed());
+        assert_eq!(transaction.next_required_step().unwrap(), None);
+        let encoded = serde_json::to_value(&transaction).unwrap();
+        assert!(encoded.get("state").is_none());
+        assert_eq!(encoded["terminal_result"]["result"], "completed");
+
+        transaction.terminal_result.as_mut().unwrap().reason_code = Some("unexpected".to_owned());
+        assert!(transaction.validate_structural().is_err());
     }
 
     #[tokio::test]

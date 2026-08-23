@@ -1,6 +1,6 @@
 use arkret_wire::{
-    DidCoreId, Hash, SecurityTransaction, SecurityTransactionKind, SecurityTransactionState,
-    SecurityTransactionStep, TransactionId,
+    DidCoreId, Hash, SecurityTransaction, SecurityTransactionKind, SecurityTransactionStep,
+    TransactionId,
 };
 
 use super::{
@@ -35,8 +35,6 @@ struct SecurityTransactionRow {
     prepared_plan: Value,
     #[diesel(sql_type = Text)]
     prepared_plan_digest: String,
-    #[diesel(sql_type = Text)]
-    state: String,
     #[diesel(sql_type = Jsonb)]
     accepted_steps: Value,
     #[diesel(sql_type = Nullable<Jsonb>)]
@@ -136,7 +134,6 @@ impl TryFrom<SecurityTransactionRow> for SecurityTransactionRecord {
             prepared_plan: parse_stored("prepared_plan", row.prepared_plan)?,
             prepared_plan_digest: Hash::new(row.prepared_plan_digest)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
-            state: parse_stored("state", Value::String(row.state))?,
             accepted_steps: parse_stored("accepted_steps", row.accepted_steps)?,
             terminal_result: row
                 .terminal_result
@@ -162,7 +159,7 @@ fn parse_stored<T: serde::de::DeserializeOwned>(name: &str, value: Value) -> Per
 }
 
 const COLUMNS: &str = "id, kind, principal_id, coordinator_service_id, expires_at, created_at, \
-    request_digest, prepared_plan, prepared_plan_digest, state, accepted_steps, \
+    request_digest, prepared_plan, prepared_plan_digest, accepted_steps, \
     terminal_result, canonical_request";
 
 async fn load_one(
@@ -223,9 +220,9 @@ async fn insert_one(
     sql_query(
         "INSERT INTO security_transactions \
          (id, kind, principal_id, coordinator_service_id, expires_at, created_at, request_digest, \
-          prepared_plan, prepared_plan_digest, state, accepted_steps, \
-          terminal_result, canonical_request) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+           prepared_plan, prepared_plan_digest, accepted_steps, \
+           terminal_result, canonical_request) \
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
     )
     .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
         resource.transaction_id.as_str(),
@@ -244,13 +241,6 @@ async fn insert_one(
             .map_err(|error| PersistenceError::Internal(error.to_string()))?,
     )
     .bind::<Text, _>(resource.prepared_plan_digest.as_str())
-    .bind::<Text, _>(match resource.state {
-        SecurityTransactionState::Pending => "pending",
-        SecurityTransactionState::Running => "running",
-        SecurityTransactionState::Completed => "completed",
-        SecurityTransactionState::Aborted => "aborted",
-        SecurityTransactionState::Expired => "expired",
-    })
     .bind::<Jsonb, _>(
         serde_json::to_value(&resource.accepted_steps)
             .map_err(|error| PersistenceError::Internal(error.to_string()))?,
@@ -325,19 +315,12 @@ async fn update_mutable_fields(
     record: &SecurityTransactionRecord,
 ) -> PersistenceResult<()> {
     sql_query(
-        "UPDATE security_transactions SET state = $2, accepted_steps = $3, \
-         terminal_result = $4 WHERE id = $1",
+        "UPDATE security_transactions SET accepted_steps = $2, \
+         terminal_result = $3 WHERE id = $1",
     )
     .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
         record.resource.transaction_id.as_str(),
     ))
-    .bind::<Text, _>(match record.resource.state {
-        SecurityTransactionState::Pending => "pending",
-        SecurityTransactionState::Running => "running",
-        SecurityTransactionState::Completed => "completed",
-        SecurityTransactionState::Aborted => "aborted",
-        SecurityTransactionState::Expired => "expired",
-    })
     .bind::<Jsonb, _>(
         serde_json::to_value(&record.resource.accepted_steps)
             .map_err(|error| PersistenceError::Internal(error.to_string()))?,
@@ -635,7 +618,7 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
             .await
             .map_err(PersistenceError::database)?;
             update_mutable_fields(conn, &record).await?;
-            if record.resource.state == SecurityTransactionState::Completed
+            if record.resource.is_completed()
                 && let Some(binding) = record.resource.recovery_binding()
             {
                 let affected = sql_query(

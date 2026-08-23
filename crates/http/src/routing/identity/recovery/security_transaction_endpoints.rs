@@ -1,7 +1,7 @@
 use arkret_event_draft::EventPayloadExt as _;
 use arkret_wire::{
     AcceptedStep, RecoveryPreparedPlan, SchemaId, SecurityTransactionPreparedPlan,
-    SecurityTransactionState, SecurityTransactionStep,
+    SecurityTransactionStep,
 };
 use ed25519_dalek::Signer as _;
 use soland_services::identity::{
@@ -322,10 +322,7 @@ async fn accept_rotation_step(
         .resource
         .next_required_step()
         .map_err(|error| AppError::internal(error.to_string()))?;
-    if next.is_some() {
-        transaction.resource.state = SecurityTransactionState::Running;
-    } else {
-        transaction.resource.state = SecurityTransactionState::Completed;
+    if next.is_none() {
         transaction.resource.terminal_result =
             Some(arkret_wire::SecurityTransactionTerminalResult {
                 result: arkret_wire::SecurityTransactionResultKind::Completed,
@@ -1088,7 +1085,6 @@ pub(crate) async fn backup_series_erase_command(
         output_digest: plan.erase_confirmation_digest,
         accepted_at: chrono::Utc::now(),
     });
-    transaction.resource.state = SecurityTransactionState::Running;
     transaction
         .resource
         .validate_structural()
@@ -1586,7 +1582,6 @@ async fn continue_issue_terminal_receipt(
         output_digest: receipt_digest,
         accepted_at: completed_at,
     });
-    transaction.resource.state = SecurityTransactionState::Completed;
     transaction.resource.terminal_result = Some(arkret_wire::SecurityTransactionTerminalResult {
         result: arkret_wire::SecurityTransactionResultKind::Completed,
         completed_at,
@@ -1778,7 +1773,6 @@ async fn continue_submit_reanchor_unit(
         output_digest,
         accepted_at: batch_receipt.created_at,
     });
-    transaction.resource.state = SecurityTransactionState::Running;
     transaction
         .resource
         .validate_structural()

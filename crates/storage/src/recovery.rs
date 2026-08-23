@@ -239,7 +239,7 @@ pub fn validate_security_transaction_update(
     if current == next {
         return Ok(());
     }
-    if current.state.is_terminal() {
+    if current.is_terminal() {
         return Err(PersistenceError::Conflict(
             "terminal security transaction cannot change".to_owned(),
         ));
@@ -253,24 +253,6 @@ pub fn validate_security_transaction_update(
         return Err(PersistenceError::Conflict(
             "security transaction accepted steps must advance by at most one immutable step"
                 .to_owned(),
-        ));
-    }
-    if next.accepted_steps.len() == current.accepted_steps.len()
-        && !matches!(
-            (current.state, next.state),
-            (
-                arkret_wire::SecurityTransactionState::Pending,
-                arkret_wire::SecurityTransactionState::Running
-            ) | (
-                arkret_wire::SecurityTransactionState::Pending
-                    | arkret_wire::SecurityTransactionState::Running,
-                arkret_wire::SecurityTransactionState::Aborted
-                    | arkret_wire::SecurityTransactionState::Expired
-            )
-        )
-    {
-        return Err(PersistenceError::Conflict(
-            "security transaction state changed without accepting its next step".to_owned(),
         ));
     }
     Ok(())

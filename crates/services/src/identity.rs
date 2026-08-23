@@ -1632,7 +1632,7 @@ impl RecoverySessionService {
 }
 
 #[derive(Clone, Debug)]
-pub struct SecurityTransactionState {
+pub struct SecurityTransactionRecord {
     pub canonical_request: Vec<u8>,
     pub resource: arkret_wire::SecurityTransaction,
 }
@@ -1664,13 +1664,13 @@ pub struct BackupSeriesEraseProgressState {
 pub trait SecurityTransactionPort: Send + Sync {
     async fn create(
         &self,
-        transaction: SecurityTransactionState,
-    ) -> ServiceResult<SecurityTransactionState>;
+        transaction: SecurityTransactionRecord,
+    ) -> ServiceResult<SecurityTransactionRecord>;
     async fn transaction(
         &self,
         transaction_id: &str,
-    ) -> ServiceResult<Option<SecurityTransactionState>>;
-    async fn save(&self, transaction: SecurityTransactionState) -> ServiceResult<()>;
+    ) -> ServiceResult<Option<SecurityTransactionRecord>>;
+    async fn save(&self, transaction: SecurityTransactionRecord) -> ServiceResult<()>;
     async fn step_outcome(
         &self,
         transaction_id: &str,
@@ -1687,7 +1687,7 @@ pub trait SecurityTransactionPort: Send + Sync {
     ) -> ServiceResult<SecurityTransactionStepAttemptState>;
     async fn accept_step(
         &self,
-        transaction: SecurityTransactionState,
+        transaction: SecurityTransactionRecord,
         outcome: SecurityTransactionStepOutcomeState,
     ) -> ServiceResult<SecurityTransactionStepOutcomeState>;
     async fn backup_erase_progress(
@@ -1716,19 +1716,19 @@ impl SecurityTransactionService {
 
     pub async fn create(
         &self,
-        transaction: SecurityTransactionState,
-    ) -> ServiceResult<SecurityTransactionState> {
+        transaction: SecurityTransactionRecord,
+    ) -> ServiceResult<SecurityTransactionRecord> {
         self.transactions.create(transaction).await
     }
 
     pub async fn transaction(
         &self,
         transaction_id: &str,
-    ) -> ServiceResult<Option<SecurityTransactionState>> {
+    ) -> ServiceResult<Option<SecurityTransactionRecord>> {
         self.transactions.transaction(transaction_id).await
     }
 
-    pub async fn save(&self, transaction: SecurityTransactionState) -> ServiceResult<()> {
+    pub async fn save(&self, transaction: SecurityTransactionRecord) -> ServiceResult<()> {
         self.transactions.save(transaction).await
     }
 
@@ -1757,7 +1757,7 @@ impl SecurityTransactionService {
 
     pub async fn accept_step(
         &self,
-        transaction: SecurityTransactionState,
+        transaction: SecurityTransactionRecord,
         outcome: SecurityTransactionStepOutcomeState,
     ) -> ServiceResult<SecurityTransactionStepOutcomeState> {
         self.transactions.accept_step(transaction, outcome).await

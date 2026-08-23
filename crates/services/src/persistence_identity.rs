@@ -1704,15 +1704,15 @@ impl crate::identity::RecoverySessionPort for PersistenceRecoverySessions {
 
 fn application_security_transaction(
     record: soland_storage::SecurityTransactionRecord,
-) -> crate::identity::SecurityTransactionState {
-    crate::identity::SecurityTransactionState {
+) -> crate::identity::SecurityTransactionRecord {
+    crate::identity::SecurityTransactionRecord {
         canonical_request: record.canonical_request,
         resource: record.resource,
     }
 }
 
 fn persistence_security_transaction(
-    transaction: crate::identity::SecurityTransactionState,
+    transaction: crate::identity::SecurityTransactionRecord,
 ) -> soland_storage::SecurityTransactionRecord {
     soland_storage::SecurityTransactionRecord {
         canonical_request: transaction.canonical_request,
@@ -1788,8 +1788,8 @@ fn persistence_backup_series_erase_progress(
 impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransactions {
     async fn create(
         &self,
-        transaction: crate::identity::SecurityTransactionState,
-    ) -> crate::ServiceResult<crate::identity::SecurityTransactionState> {
+        transaction: crate::identity::SecurityTransactionRecord,
+    ) -> crate::ServiceResult<crate::identity::SecurityTransactionRecord> {
         Ok(application_security_transaction(
             self.0
                 .security_transactions()
@@ -1801,7 +1801,7 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
     async fn transaction(
         &self,
         transaction_id: &str,
-    ) -> crate::ServiceResult<Option<crate::identity::SecurityTransactionState>> {
+    ) -> crate::ServiceResult<Option<crate::identity::SecurityTransactionRecord>> {
         Ok(self
             .0
             .security_transactions()
@@ -1812,7 +1812,7 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
 
     async fn save(
         &self,
-        transaction: crate::identity::SecurityTransactionState,
+        transaction: crate::identity::SecurityTransactionRecord,
     ) -> crate::ServiceResult<()> {
         self.0
             .security_transactions()
@@ -1861,7 +1861,7 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
 
     async fn accept_step(
         &self,
-        transaction: crate::identity::SecurityTransactionState,
+        transaction: crate::identity::SecurityTransactionRecord,
         outcome: crate::identity::SecurityTransactionStepOutcomeState,
     ) -> crate::ServiceResult<crate::identity::SecurityTransactionStepOutcomeState> {
         Ok(application_security_transaction_step_outcome(
