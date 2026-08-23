@@ -288,7 +288,7 @@ pub(super) fn build_ingress_receipt_record(
 ///
 /// The proof is a detached JWS over `receipt.proof_binding_bytes(&proof)` —
 /// the same `publication_binding_bytes` shape a verifier reconstructs, whose
-/// fixed `ak.ingress-receipt-proof-v1` context keeps the signature from being
+/// fixed `ak.ingress_receipt_proof.v1` context keeps the signature from being
 /// replayed as a lease proof or an Event proof. `verification_method` is
 /// `<service_id>#notary-key`, the durable key this service publishes in its DID
 /// document.

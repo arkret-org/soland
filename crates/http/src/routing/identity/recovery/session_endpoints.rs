@@ -1294,7 +1294,7 @@ fn recovery_proof_authority_error(message: impl Into<String>) -> AppError {
 /// MUST construct this identically.
 pub(super) fn recovery_proof_transcript(record: &RecoverySessionServiceState, kind: &str) -> Value {
     json!({
-        "schema": "ak.identity.recovery_proof.v1",
+            "schema": arkret_wire::DomainSeparationId::IDENTITY_RECOVERY_PROOF_V1,
         "kind": kind,
         "principal_authority": {
             "principal_id": record.principal_id,
@@ -1322,7 +1322,7 @@ pub(super) fn generic_recovery_proof_transcript(
     proof_body: Value,
 ) -> Value {
     json!({
-        "schema": "ak.identity.recovery_proof.v1",
+            "schema": arkret_wire::DomainSeparationId::IDENTITY_RECOVERY_PROOF_V1,
         "kind": kind,
         "principal_authority": {
             "principal_id": record.principal_id,

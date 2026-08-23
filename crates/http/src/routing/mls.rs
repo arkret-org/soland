@@ -1354,8 +1354,10 @@ fn build_peer_claim_terminal_receipt(
         state.service_resolution_commitment().full_id
     );
     let mut receipt = KeyPackageClaimTerminalReceipt {
-        domain: arkret_wire::NonEmptyString::new("ak.keypackage.claim-terminal-receipt.v1")
-            .expect("terminal receipt domain is non-empty"),
+        domain: arkret_wire::NonEmptyString::new(
+            arkret_wire::DomainSeparationId::KEYPACKAGE_CLAIM_TERMINAL_RECEIPT_V1,
+        )
+        .expect("terminal receipt domain is non-empty"),
         claim_request_id,
         request_digest,
         terminal_state,
@@ -1916,7 +1918,7 @@ async fn validate_recipient_durable_receipt(
             "authenticated device consume requires a device durable signer",
         ));
     };
-    if receipt.domain.as_str() != "ak.mls.recipient-durable-receipt.v1"
+    if receipt.domain.as_str() != arkret_wire::DomainSeparationId::MLS_RECIPIENT_DURABLE_RECEIPT_V1
         || receipt.key_package_ref.as_str() != body.key_package_refs[0]
         || receipt.recipient_principal_id.as_str() != session.actor
         || recipient_device_id.as_str() != session.device_id
@@ -2015,8 +2017,10 @@ fn build_keypackage_consume_receipt(
         state.service_resolution_commitment().full_id
     );
     let mut receipt = KeyPackageConsumeReceipt {
-        domain: arkret_wire::NonEmptyString::new("ak.keypackage.consume-receipt.v1")
-            .expect("receipt domain is non-empty"),
+        domain: arkret_wire::NonEmptyString::new(
+            arkret_wire::DomainSeparationId::KEYPACKAGE_CONSUME_RECEIPT_V1,
+        )
+        .expect("receipt domain is non-empty"),
         claim_request_id: body.recipient_durable_receipt.claim_request_id.clone(),
         claim_ids: body.claim_ids.clone(),
         key_package_refs: consumed,

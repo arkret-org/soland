@@ -464,7 +464,10 @@ mod tests {
                 "service_id",
             ]
         );
-        assert_eq!(object["context"], "ak.key-backup-delete-proof-v1");
+        assert_eq!(
+            object["context"],
+            arkret_wire::ProofContextId::KEY_BACKUP_DELETE_PROOF_V1
+        );
         assert_eq!(object["operation"], "ak.self.keys.backups.resource.delete");
         assert!(
             object["reason"].is_null(),

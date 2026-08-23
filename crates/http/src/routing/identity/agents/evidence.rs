@@ -546,7 +546,7 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
         admission_evidence,
         event_admission_receipt: receipt,
         outer_attestation: AgentHistoricalEvidenceOuterAttestation {
-            domain: non_empty("ak.agent-signer-evidence.v1")
+            domain: non_empty(arkret_wire::DomainSeparationId::AGENT_SIGNER_EVIDENCE_V1)
                 .map_err(|reason| AppError::internal(format!("{reason:?}")))?,
             core_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
                 .map_err(|error| AppError::internal(error.to_string()))?,
@@ -1071,7 +1071,7 @@ async fn produce_current_agent_signer_evidence(
             expires_at,
         },
         outer_attestation: AgentEvidenceOuterAttestation {
-            domain: non_empty("ak.agent-signer-evidence.v1")?,
+            domain: non_empty(arkret_wire::DomainSeparationId::AGENT_SIGNER_EVIDENCE_V1)?,
             core_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
                 .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?,
             source_service_id: service_id,

@@ -2320,7 +2320,7 @@ fn sign_contact_mirror_receipt(
     )
     .map_err(|error| AppError::internal(format!("service verification method invalid: {error}")))?;
     let signing_bytes = canonical::canonical_json_bytes(&json!({
-        "domain": "ak.peer-contact.mirror-receipt.v1",
+            "domain": arkret_wire::DomainSeparationId::PEER_CONTACT_MIRROR_RECEIPT_V1,
         "request_digest": request_digest,
         "signed_event_ref": event.event_id,
         "signed_event_digest": signed_event_digest,
@@ -3188,7 +3188,7 @@ fn sign_contact_control_receipt(
     )
     .map_err(|error| AppError::internal(format!("service verification method invalid: {error}")))?;
     let mut signing_value = json!({
-        "domain": "ak.peer-contact.control-receipt.v1",
+            "domain": arkret_wire::DomainSeparationId::PEER_CONTACT_CONTROL_RECEIPT_V1,
         "request_kind": request_kind,
         "request_digest": request_digest,
         "outcome": outcome,
@@ -4291,7 +4291,7 @@ mod tests {
             "result_kind": "proof_refresh",
             "status": "accepted",
             "control_receipt": {
-                "domain": "ak.peer-contact.control-receipt.v1",
+            "domain": arkret_wire::DomainSeparationId::PEER_CONTACT_CONTROL_RECEIPT_V1,
                 "request_kind": "proof_refresh",
                 "request_digest": exact.clone(),
                 "outcome": "accepted",
