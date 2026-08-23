@@ -310,7 +310,7 @@ fn policy_server_view(
             }
         },
         updated_at: cfg.updated_at,
-        from_org_fallback: view.inherited_from_organization,
+        from_organization_fallback: view.inherited_from_organization,
     })
 }
 

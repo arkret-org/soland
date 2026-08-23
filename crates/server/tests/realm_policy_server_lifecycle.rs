@@ -465,7 +465,7 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
         view["policy_server_service_id"],
         "ak:did_core:web:org-policy.example"
     );
-    assert_eq!(view["from_org_fallback"], false);
+    assert_eq!(view["from_organization_fallback"], false);
 
     // The declaration is a canonical Control Move in the durable Event log,
     // authored by the caller and executed by the service.
@@ -497,7 +497,7 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
         inherited["policy_server_service_id"],
         "ak:did_core:web:org-policy.example"
     );
-    assert_eq!(inherited["from_org_fallback"], true);
+    assert_eq!(inherited["from_organization_fallback"], true);
 
     // 3. An inherited value is not a direct declaration: DELETE answers not_found and must not
     //    touch the ancestor cell.
@@ -525,7 +525,7 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "child PUT: {direct}");
-    assert_eq!(direct["from_org_fallback"], false);
+    assert_eq!(direct["from_organization_fallback"], false);
     let (status, deleted) = delete_policy_server(&state, &token, child_realm).await;
     assert_eq!(status, StatusCode::OK, "settled child DELETE: {deleted}");
     let child_events = policy_server_events(&state, &token, child_realm).await;
@@ -541,7 +541,7 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
         inherited_again["policy_server_service_id"],
         "ak:did_core:web:org-policy.example"
     );
-    assert_eq!(inherited_again["from_org_fallback"], true);
+    assert_eq!(inherited_again["from_organization_fallback"], true);
     let (status, repeated) = delete_policy_server(&state, &token, child_realm).await;
     assert_eq!(
         status,
@@ -605,7 +605,7 @@ async fn policy_server_declaration_survives_restart() {
         view["policy_server_service_id"],
         "ak:did_core:web:org-policy.example"
     );
-    assert_eq!(view["from_org_fallback"], false);
+    assert_eq!(view["from_organization_fallback"], false);
 
     let restored_policy_server_service_id = {
         let projection = restarted.test_projection().lock();

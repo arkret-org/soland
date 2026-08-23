@@ -1019,7 +1019,6 @@ fn approval_matches(approval: &Value, org_ids: &BTreeSet<String>) -> bool {
     let Some(org_id) = approval
         .get("organization_id")
         .or_else(|| approval.get("organization_principal_id"))
-        .or_else(|| approval.get("org"))
         .and_then(Value::as_str)
     else {
         return false;
