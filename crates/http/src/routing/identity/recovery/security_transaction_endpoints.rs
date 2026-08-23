@@ -322,9 +322,7 @@ async fn accept_rotation_step(
         .resource
         .next_required_step()
         .map_err(|error| AppError::internal(error.to_string()))?;
-    if next == Some(SecurityTransactionStep::LocalCommit) {
-        transaction.resource.state = SecurityTransactionState::AwaitingDeviceAttestation;
-    } else if next.is_some() {
+    if next.is_some() {
         transaction.resource.state = SecurityTransactionState::Running;
     } else {
         transaction.resource.state = SecurityTransactionState::Completed;
@@ -1090,7 +1088,7 @@ pub(crate) async fn backup_series_erase_command(
         output_digest: plan.erase_confirmation_digest,
         accepted_at: chrono::Utc::now(),
     });
-    transaction.resource.state = SecurityTransactionState::AwaitingDeviceAttestation;
+    transaction.resource.state = SecurityTransactionState::Running;
     transaction
         .resource
         .validate_structural()
@@ -1780,7 +1778,7 @@ async fn continue_submit_reanchor_unit(
         output_digest,
         accepted_at: batch_receipt.created_at,
     });
-    transaction.resource.state = SecurityTransactionState::AwaitingDeviceAttestation;
+    transaction.resource.state = SecurityTransactionState::Running;
     transaction
         .resource
         .validate_structural()

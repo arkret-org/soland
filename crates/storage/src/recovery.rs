@@ -263,8 +263,7 @@ pub fn validate_security_transaction_update(
                 arkret_wire::SecurityTransactionState::Running
             ) | (
                 arkret_wire::SecurityTransactionState::Pending
-                    | arkret_wire::SecurityTransactionState::Running
-                    | arkret_wire::SecurityTransactionState::AwaitingDeviceAttestation,
+                    | arkret_wire::SecurityTransactionState::Running,
                 arkret_wire::SecurityTransactionState::Aborted
                     | arkret_wire::SecurityTransactionState::Expired
             )

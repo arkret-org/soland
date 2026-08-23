@@ -2444,7 +2444,7 @@ CREATE TABLE public.security_transactions (
     canonical_request bytea NOT NULL,
     CONSTRAINT security_transactions_pkey PRIMARY KEY (id),
     CONSTRAINT security_transactions_kind_check CHECK ((kind = ANY (ARRAY['recovery'::text, 'security_rotation'::text]))),
-    CONSTRAINT security_transactions_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'running'::text, 'awaiting_device_attestation'::text, 'completed'::text, 'aborted'::text, 'expired'::text])))
+    CONSTRAINT security_transactions_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'aborted'::text, 'expired'::text])))
 );
 
 ALTER TABLE ONLY public.recovery_sessions

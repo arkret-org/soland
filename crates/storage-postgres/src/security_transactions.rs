@@ -247,7 +247,6 @@ async fn insert_one(
     .bind::<Text, _>(match resource.state {
         SecurityTransactionState::Pending => "pending",
         SecurityTransactionState::Running => "running",
-        SecurityTransactionState::AwaitingDeviceAttestation => "awaiting_device_attestation",
         SecurityTransactionState::Completed => "completed",
         SecurityTransactionState::Aborted => "aborted",
         SecurityTransactionState::Expired => "expired",
@@ -335,7 +334,6 @@ async fn update_mutable_fields(
     .bind::<Text, _>(match record.resource.state {
         SecurityTransactionState::Pending => "pending",
         SecurityTransactionState::Running => "running",
-        SecurityTransactionState::AwaitingDeviceAttestation => "awaiting_device_attestation",
         SecurityTransactionState::Completed => "completed",
         SecurityTransactionState::Aborted => "aborted",
         SecurityTransactionState::Expired => "expired",

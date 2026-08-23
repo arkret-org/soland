@@ -838,6 +838,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn device_attestation_readiness_is_derived_from_the_accepted_prefix() {
+        let mut transaction = initial_rotation().resource;
+        assert!(!transaction.requires_device_attestation().unwrap());
+        for index in 0..4 {
+            transaction.accepted_steps.push(AcceptedStep {
+                prepared_material_digest: hash(char::from(b'a' + index)),
+                acceptor_id: "did:web:principal.example".to_owned(),
+                output_ref: format!("ak:receipt:019a7360-0000-7000-8000-00000000010{index}"),
+                output_digest: hash(char::from(b'1' + index)),
+                accepted_at: Utc::now(),
+            });
+        }
+        transaction.state = SecurityTransactionState::Running;
+        transaction.validate_structural().unwrap();
+        assert!(transaction.requires_device_attestation().unwrap());
+        let encoded = serde_json::to_string(&transaction).unwrap();
+        assert!(encoded.contains(r#""state":"running""#));
+    }
+
     #[tokio::test]
     async fn backup_erase_progress_is_durable_monotonic_and_idempotent() {
         let sessions = Arc::new(Mutex::new(BTreeMap::new()));
