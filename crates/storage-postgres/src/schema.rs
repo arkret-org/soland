@@ -1303,16 +1303,14 @@ diesel::table! {
         principal_id -> Text,
         coordinator_service_id -> Text,
         expires_at -> Timestamptz,
+        created_at -> Timestamptz,
         request_digest -> Text,
-        binding -> Jsonb,
         prepared_plan -> Jsonb,
         prepared_plan_digest -> Text,
         state -> Text,
         accepted_steps -> Jsonb,
-        next_required_step -> Nullable<Text>,
         terminal_result -> Nullable<Jsonb>,
         canonical_request -> Binary,
-        created_at -> Timestamptz,
     }
 }
 

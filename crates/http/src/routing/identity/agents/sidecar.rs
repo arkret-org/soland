@@ -659,8 +659,6 @@ fn sidecar_event_draft(
     )
     .map_err(|error| AppError::internal(format!("Sidecar draft digest invalid: {error}")))?;
     Ok(SidecarPreparedEventDraft {
-        event_id: event.event_id.clone(),
-        kind: event.kind.clone(),
         unsigned_event_bytes: arkret_wire::Base64UrlString::new(
             URL_SAFE_NO_PAD.encode(unsigned_bytes),
         )
@@ -899,7 +897,6 @@ async fn prepare_sidecar(
         },
         digest_suite,
     )?;
-    let context_attach_event_id = attach_event.event_id.clone();
     let context_attach_event_draft = sidecar_event_draft(&attach_event, digest_suite)?;
     let reservation_handle = arkret_wire::ReservationHandle::new(ids::generate("reservation"))
         .map_err(AppError::internal)?;
@@ -909,9 +906,6 @@ async fn prepare_sidecar(
             operation_id: body.operation_id.clone(),
             reservation_handle: reservation_handle.clone(),
             expires_at,
-            sidecar_id,
-            create_event_id: create_event.event_id.clone(),
-            context_attach_event_id,
             create_event_draft: sidecar_event_draft(&create_event, digest_suite)?,
             context_attach_event_draft,
         }
@@ -921,7 +915,6 @@ async fn prepare_sidecar(
             reservation_handle: reservation_handle.clone(),
             expires_at,
             sidecar_id,
-            context_attach_event_id,
             context_attach_event_draft,
         }
     };
@@ -962,9 +955,7 @@ fn validate_signed_sidecar_draft(
             .map_err(|error| AppError::param_invalid(format!("signed Sidecar Event: {error}")))?,
     )
     .map_err(|error| AppError::param_invalid(format!("signed Sidecar Event digest: {error}")))?;
-    if signed_event.event_id != draft.event_id
-        || signed_event.kind != draft.kind
-        || actual_unsigned != expected_unsigned
+    if actual_unsigned != expected_unsigned
         || digest != draft.event_digest
         || signed_event.proofs.is_empty()
         || signed_event
@@ -1048,10 +1039,15 @@ async fn validate_sidecar_commit_reservation(
     Ok(prepared)
 }
 
-fn sidecar_prepared_sidecar_id(prepared: &SidecarPreparedOutcome) -> &SidecarId {
+fn sidecar_prepared_sidecar_id(prepared: &SidecarPreparedOutcome) -> Result<SidecarId, AppError> {
     match prepared {
-        SidecarPreparedOutcome::New { sidecar_id, .. }
-        | SidecarPreparedOutcome::Existing { sidecar_id, .. } => sidecar_id,
+        SidecarPreparedOutcome::New {
+            create_event_draft, ..
+        } => create_event_draft
+            .event_id()
+            .map(|event_id| SidecarId::from_event_id(&event_id))
+            .map_err(|error| AppError::internal(format!("stored Sidecar draft: {error}"))),
+        SidecarPreparedOutcome::Existing { sidecar_id, .. } => Ok(sidecar_id.clone()),
     }
 }
 
@@ -1061,7 +1057,7 @@ async fn finalize_sidecar_projection_records(
     prepared: &SidecarPreparedOutcome,
     context_attach_event: &arkret_wire::Event,
 ) -> Result<(), AppError> {
-    let sidecar_id = sidecar_prepared_sidecar_id(prepared);
+    let sidecar_id = sidecar_prepared_sidecar_id(prepared)?;
     let created_at = context_attach_event.created_at;
     state
         .agent_pairings()
@@ -1166,7 +1162,7 @@ async fn ensure_sidecar_impl(
                 &body.context_attach_event,
             )
             .await?;
-            let sidecar_id = sidecar_prepared_sidecar_id(&prepared);
+            let sidecar_id = sidecar_prepared_sidecar_id(&prepared)?;
             let source_context_ref = body
                 .context_attach_event
                 .typed_payload::<arkret_wire::event_spec::SidecarContextAttach>()
@@ -1246,7 +1242,7 @@ async fn ensure_sidecar_impl(
                 &body.context_attach_event,
             )
             .await?;
-            let sidecar_id = sidecar_prepared_sidecar_id(&prepared);
+            let sidecar_id = sidecar_prepared_sidecar_id(&prepared)?;
             let source_context_ref = body
                 .context_attach_event
                 .typed_payload::<arkret_wire::event_spec::SidecarContextAttach>()

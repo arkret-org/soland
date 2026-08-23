@@ -416,8 +416,6 @@ fn contact_event_draft(
     let unsigned_bytes = arkret_canonical::canonical_json_bytes(&digest_payload)
         .map_err(|error| AppError::internal(format!("Contact Event draft bytes: {error}")))?;
     Ok(ContactPreparedEventDraft {
-        event_id: event.event_id.clone(),
-        kind: event.kind.clone(),
         unsigned_event_bytes: Base64UrlString::new(URL_SAFE_NO_PAD.encode(unsigned_bytes))
             .map_err(|error| AppError::internal(format!("Contact draft encode: {error}")))?,
         event_digest: Hash::new(
@@ -793,9 +791,7 @@ fn validate_signed_event(event: &Event, draft: &ContactPreparedEventDraft) -> Re
             .map_err(|error| AppError::param_invalid(format!("signed Contact Event: {error}")))?,
     )
     .map_err(|error| AppError::param_invalid(format!("signed Contact digest: {error}")))?;
-    if event.event_id != draft.event_id
-        || event.kind != draft.kind
-        || actual != expected
+    if actual != expected
         || digest != draft.event_digest
         || event.proofs.is_empty()
         || event

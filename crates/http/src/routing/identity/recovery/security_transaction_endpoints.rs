@@ -1,7 +1,7 @@
 use arkret_event_draft::EventPayloadExt as _;
 use arkret_wire::{
-    AcceptedStep, RecoveryBinding, RecoveryPreparedPlan, SchemaId, SecurityTransactionBinding,
-    SecurityTransactionPreparedPlan, SecurityTransactionState, SecurityTransactionStep,
+    AcceptedStep, RecoveryPreparedPlan, SchemaId, SecurityTransactionPreparedPlan,
+    SecurityTransactionState, SecurityTransactionStep,
 };
 use ed25519_dalek::Signer as _;
 use soland_services::identity::{
@@ -23,7 +23,7 @@ fn recovery_transaction_session_id(
 ) -> Option<&arkret_identifiers::RecoverySessionId> {
     match request {
         SecurityTransactionCreateRequest::Recovery(request) => {
-            Some(request.binding.recovery_session_id())
+            Some(&request.prepared_plan.binding().recovery_session_id)
         }
         SecurityTransactionCreateRequest::SecurityRotation(_) => None,
     }
@@ -82,10 +82,10 @@ async fn load_owned_security_transaction(
         // transaction indistinguishable from a missing one.
         return Err(AppError::not_found("security transaction not found"));
     }
-    let recovery_session_id = match &record.resource.binding {
-        SecurityTransactionBinding::Recovery(binding) => Some(binding.recovery_session_id()),
-        SecurityTransactionBinding::SecurityRotation(_) => None,
-    };
+    let recovery_session_id = record
+        .resource
+        .recovery_binding()
+        .map(|binding| &binding.recovery_session_id);
     enforce_recovery_grant_transaction_binding(state, session, recovery_session_id).await?;
     Ok(record)
 }
@@ -179,10 +179,17 @@ pub(super) async fn security_transaction_continue(
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let session = aa.authenticated_session(state, req).await?;
     let transaction = load_owned_security_transaction(state, &session, &transaction_id).await?;
+    let requested_step = transaction
+        .resource
+        .accepted_step_kind(usize::from(request.expected_accepted_step_count))
+        .map_err(|error| {
+            AppError::conflict(error.to_string())
+                .with_wire_code("security_transaction_failed_precondition")
+        })?;
 
     if let Some(stored) = state
         .security_transactions()
-        .step_outcome(&transaction_id, request.expected_next_step)
+        .step_outcome(&transaction_id, requested_step)
         .await
         .map_err(recovery_service_error)?
     {
@@ -212,7 +219,7 @@ pub(super) async fn security_transaction_continue(
             .with_wire_code("security_transaction_expired"));
     }
 
-    match request.expected_next_step {
+    match requested_step {
         SecurityTransactionStep::SubmitReanchorUnit => {
             continue_submit_reanchor_unit(
                 state,
@@ -262,23 +269,11 @@ pub(super) async fn security_transaction_continue(
     }
 }
 
-fn rotation_parts(
+fn rotation_plan(
     transaction: &SecurityTransactionRecord,
-) -> Result<
-    (
-        arkret_wire::SecurityRotationBinding,
-        arkret_wire::SecurityRotationPlan,
-    ),
-    AppError,
-> {
-    match (
-        &transaction.resource.binding,
-        &transaction.resource.prepared_plan,
-    ) {
-        (
-            SecurityTransactionBinding::SecurityRotation(binding),
-            SecurityTransactionPreparedPlan::SecurityRotation(plan),
-        ) => Ok((binding.clone(), plan.clone())),
+) -> Result<arkret_wire::SecurityRotationPlan, AppError> {
+    match &transaction.resource.prepared_plan {
+        SecurityTransactionPreparedPlan::SecurityRotation(plan) => Ok(plan.clone()),
         _ => Err(
             AppError::conflict("rotation step requires a SecurityRotationTransaction")
                 .with_wire_code("security_transaction_failed_precondition"),
@@ -317,17 +312,16 @@ async fn accept_rotation_step(
 ) -> JsonResult<SecurityTransaction> {
     let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
     transaction.resource.accepted_steps.push(AcceptedStep {
-        step,
         prepared_material_digest,
         acceptor_id: state.service_id().clone(),
         output_ref,
         output_digest,
         accepted_at: chrono::Utc::now(),
     });
-    let next = arkret_wire::SECURITY_ROTATION_STEP_ORDER
-        .get(transaction.resource.accepted_steps.len())
-        .copied();
-    transaction.resource.next_required_step = next;
+    let next = transaction
+        .resource
+        .next_required_step()
+        .map_err(|error| AppError::internal(error.to_string()))?;
     if next == Some(SecurityTransactionStep::LocalCommit) {
         transaction.resource.state = SecurityTransactionState::AwaitingDeviceAttestation;
     } else if next.is_some() {
@@ -373,7 +367,6 @@ async fn submit_rotation_event_unit(
     state: &AppState,
     session: &SessionRecord,
     unit: &arkret_wire::PreparedEventUnit,
-    expected_event_ids: &[&arkret_wire::EventId],
 ) -> Result<Value, AppError> {
     let request: arkret_wire::EventsSubmitBatchRequestBody = serde_json::from_value(Value::Object(
         unit.request.clone().into_iter().collect(),
@@ -382,6 +375,11 @@ async fn submit_rotation_event_unit(
         AppError::param_invalid(format!("prepared rotation Event unit is invalid: {error}"))
             .with_wire_code("schema_violation")
     })?;
+    let expected_event_ids = request
+        .events
+        .iter()
+        .map(|submission| submission.event.event_id.clone())
+        .collect::<Vec<_>>();
     let outcome = crate::routing::events::event_log::submit_initial_event_batch_outcome(
         state,
         session,
@@ -421,7 +419,18 @@ async fn continue_rotation_revoke(
     canonical_request: Vec<u8>,
     res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
-    let (binding, plan) = rotation_parts(&transaction)?;
+    let plan = rotation_plan(&transaction)?;
+    let revoke_request: arkret_wire::EventsSubmitBatchRequestBody = serde_json::from_value(
+        Value::Object(plan.revoke_unit.request.clone().into_iter().collect()),
+    )
+    .map_err(|error| AppError::internal(format!("prepared revoke unit is invalid: {error}")))?;
+    let revoke_event_id = revoke_request
+        .events
+        .first()
+        .ok_or_else(|| AppError::internal("prepared revoke unit is empty"))?
+        .event
+        .event_id
+        .clone();
     let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
     begin_rotation_step(
         state,
@@ -430,13 +439,7 @@ async fn continue_rotation_revoke(
         &canonical_request,
     )
     .await?;
-    let outcome = submit_rotation_event_unit(
-        state,
-        session,
-        &plan.revoke_unit,
-        &[&binding.revoke_event_id],
-    )
-    .await?;
+    let outcome = submit_rotation_event_unit(state, session, &plan.revoke_unit).await?;
     let digest = canonical_digest(&outcome)?;
     accept_rotation_step(
         state,
@@ -444,7 +447,7 @@ async fn continue_rotation_revoke(
         SecurityTransactionStep::Revoke,
         canonical_request,
         plan.revoke_unit.request_digest,
-        binding.revoke_event_id.as_str().to_owned(),
+        revoke_event_id.as_str().to_owned(),
         digest,
         Some(outcome),
         res,
@@ -472,7 +475,7 @@ async fn continue_rotation_upload(
     canonical_request: Vec<u8>,
     res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
-    let (binding, plan) = rotation_parts(&transaction)?;
+    let plan = rotation_plan(&transaction)?;
     let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
     begin_rotation_step(
         state,
@@ -481,7 +484,8 @@ async fn continue_rotation_upload(
         &canonical_request,
     )
     .await?;
-    for (rotation, prepared) in binding.backup_rotations.iter().zip(&plan.backup_rotations) {
+    for prepared in &plan.backup_rotations {
+        let rotation = &prepared.binding;
         let values = public_backup_values(&prepared.encrypted_backup_material)?;
         if values.len() != rotation.new_backups.len() {
             return Err(
@@ -561,7 +565,7 @@ async fn continue_rotation_switch(
     canonical_request: Vec<u8>,
     res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
-    let (binding, plan) = rotation_parts(&transaction)?;
+    let plan = rotation_plan(&transaction)?;
     let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
     begin_rotation_step(
         state,
@@ -571,14 +575,9 @@ async fn continue_rotation_switch(
     )
     .await?;
     let mut outcomes = Vec::new();
-    for (rotation, prepared) in binding.backup_rotations.iter().zip(&plan.backup_rotations) {
-        let outcome = submit_rotation_event_unit(
-            state,
-            session,
-            &prepared.active_series_unit,
-            &[&rotation.active_series_event_id],
-        )
-        .await?;
+    for prepared in &plan.backup_rotations {
+        let outcome =
+            submit_rotation_event_unit(state, session, &prepared.active_series_unit).await?;
         outcomes.push(outcome);
     }
     let digest = canonical_digest(&outcomes)?;
@@ -737,13 +736,23 @@ pub(crate) async fn backup_series_erase_command(
         return json_ok(outcome);
     }
 
-    let (binding, _) = rotation_parts(&transaction)?;
+    let plan = rotation_plan(&transaction)?;
+    let planned_series_match = plan.backup_rotations.len() == request.series.len()
+        && plan
+            .backup_rotations
+            .iter()
+            .zip(&request.series)
+            .all(|(prepared, requested)| prepared.binding == *requested);
     let now = chrono::Utc::now();
-    if transaction.resource.next_required_step != Some(SecurityTransactionStep::EraseOldMaterial)
+    if transaction
+        .resource
+        .next_required_step()
+        .map_err(|error| AppError::internal(error.to_string()))?
+        != Some(SecurityTransactionStep::EraseOldMaterial)
         || transaction.resource.request_digest != request.transaction_request_digest
         || transaction.resource.prepared_plan_digest != request.prepared_plan_digest
-        || binding.erase_confirmation_digest != request.erase_confirmation_digest
-        || binding.backup_rotations != request.series
+        || plan.erase_confirmation_digest != request.erase_confirmation_digest
+        || !planned_series_match
         || request.authorization_lease.actor_id != transaction.resource.principal_id
         || request.authorization_lease.device_id.as_str() != session.device_id
         || request.authorization_lease.action
@@ -846,7 +855,8 @@ pub(crate) async fn backup_series_erase_command(
                 .with_wire_code("invalid_proof")
         })?;
     }
-    for rotation in &binding.backup_rotations {
+    for prepared in &plan.backup_rotations {
+        let rotation = &prepared.binding;
         for expected in &rotation.new_backups {
             let Some(stored) = state
                 .key_backups()
@@ -920,7 +930,8 @@ pub(crate) async fn backup_series_erase_command(
         existing_progress.is_none(),
     );
     if existing_progress.is_none() {
-        for rotation in &binding.backup_rotations {
+        for prepared in &plan.backup_rotations {
+            let rotation = &prepared.binding;
             for old in &rotation.old_backups {
                 let existing = state
                     .key_backups()
@@ -1073,15 +1084,13 @@ pub(crate) async fn backup_series_erase_command(
     }
 
     transaction.resource.accepted_steps.push(AcceptedStep {
-        step: SecurityTransactionStep::EraseOldMaterial,
-        prepared_material_digest: binding.erase_confirmation_digest.clone(),
+        prepared_material_digest: plan.erase_confirmation_digest.clone(),
         acceptor_id: state.service_id().clone(),
-        output_ref: binding.erase_confirmation_digest.as_str().to_owned(),
-        output_digest: binding.erase_confirmation_digest,
+        output_ref: plan.erase_confirmation_digest.as_str().to_owned(),
+        output_digest: plan.erase_confirmation_digest,
         accepted_at: chrono::Utc::now(),
     });
     transaction.resource.state = SecurityTransactionState::AwaitingDeviceAttestation;
-    transaction.resource.next_required_step = Some(SecurityTransactionStep::LocalCommit);
     transaction
         .resource
         .validate_structural()
@@ -1116,7 +1125,7 @@ async fn continue_rotation_local_commit(
     canonical_request: Vec<u8>,
     res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
-    let (binding, _) = rotation_parts(&transaction)?;
+    let plan = rotation_plan(&transaction)?;
     let attestation = request.client_attestation.ok_or_else(|| {
         AppError::param_invalid("local commit requires client_attestation")
             .with_wire_code("schema_violation")
@@ -1132,15 +1141,15 @@ async fn continue_rotation_local_commit(
     if commit.transaction_id != transaction.resource.transaction_id
         || commit.transaction_request_digest != transaction.resource.request_digest
         || commit.prepared_plan_digest != transaction.resource.prepared_plan_digest
-        || commit.local_commit_digest != binding.local_commit_digest
-        || commit.erase_confirmation_digest != binding.erase_confirmation_digest
+        || commit.local_commit_digest != plan.local_commit_digest
+        || commit.erase_confirmation_digest != plan.erase_confirmation_digest
         || commit.device_id.as_str() != session.device_id
         || attestation.attestation_digest != canonical_digest(commit)?
     {
-        return Err(AppError::conflict(
-            "local commit artifact changed the durable rotation binding",
-        )
-        .with_wire_code("security_transaction_failed_precondition"));
+        return Err(
+            AppError::conflict("local commit artifact changed the durable rotation plan")
+                .with_wire_code("security_transaction_failed_precondition"),
+        );
     }
     let expected_verification_method = format!(
         "{}#{}",
@@ -1179,7 +1188,7 @@ async fn continue_rotation_local_commit(
         SecurityTransactionStep::LocalCommit,
         canonical_request,
         attestation.attestation_digest.clone(),
-        binding.local_commit_digest.as_str().to_owned(),
+        plan.local_commit_digest.as_str().to_owned(),
         attestation.attestation_digest,
         Some(serde_json::to_value(commit).map_err(|error| AppError::internal(error.to_string()))?),
         res,
@@ -1225,21 +1234,15 @@ async fn continue_issue_terminal_receipt(
         proof_digest,
         authorize_event_id,
         reanchor_event_id,
-    ) = match (
-        &transaction.resource.binding,
-        &transaction.resource.prepared_plan,
-    ) {
-        (
-            SecurityTransactionBinding::Recovery(RecoveryBinding::PcrPolicy(binding)),
-            SecurityTransactionPreparedPlan::Recovery(RecoveryPreparedPlan::PcrPolicy(plan)),
-        ) => (
-            RecoveryBinding::PcrPolicy(binding.clone()),
+    ) = match &transaction.resource.prepared_plan {
+        SecurityTransactionPreparedPlan::Recovery(RecoveryPreparedPlan::PcrPolicy(plan)) => (
+            plan.binding.clone(),
             arkret_models_crypto::RecoveryIdentityModel::PcrPolicy,
             plan.previous_model_generation_ref,
             plan.result_model_generation_ref,
             plan.proof_digest.clone(),
-            binding.authorize_event_id.clone(),
-            Some(binding.reanchor_event_id.clone()),
+            plan.binding.authorize_event_id.clone(),
+            Some(plan.binding.reanchor_event_id.clone()),
         ),
         _ => {
             return Err(
@@ -1248,8 +1251,7 @@ async fn continue_issue_terminal_receipt(
             );
         }
     };
-    let expected_recovery_session_id = binding.recovery_session_id();
-    let RecoveryBinding::PcrPolicy(binding) = &binding;
+    let expected_recovery_session_id = &binding.recovery_session_id;
     let expected_device_id = &binding.replacement_device_id;
     let recovery_session = state
         .recovery_sessions()
@@ -1463,15 +1465,10 @@ async fn continue_issue_terminal_receipt(
                 )
                 .with_wire_code("security_transaction_failed_precondition"));
             }
-            let accepted_unit = transaction
-                .resource
-                .accepted_steps
-                .iter()
-                .find(|step| step.step == SecurityTransactionStep::SubmitReanchorUnit)
-                .ok_or_else(|| {
-                    AppError::conflict("re-anchor publication step is not durably accepted")
-                        .with_wire_code("security_transaction_failed_precondition")
-                })?;
+            let accepted_unit = transaction.resource.accepted_steps.first().ok_or_else(|| {
+                AppError::conflict("re-anchor publication step is not durably accepted")
+                    .with_wire_code("security_transaction_failed_precondition")
+            })?;
             if receipt
                 .reanchor_batch_receipt_id
                 .as_ref()
@@ -1585,7 +1582,6 @@ async fn continue_issue_terminal_receipt(
         .await
         .map_err(security_transaction_service_error)?;
     transaction.resource.accepted_steps.push(AcceptedStep {
-        step: SecurityTransactionStep::IssueTerminalReceipt,
         prepared_material_digest: attestation.attestation_digest.clone(),
         acceptor_id: state.service_id().clone(),
         output_ref: receipt.receipt_id.as_str().to_owned(),
@@ -1593,7 +1589,6 @@ async fn continue_issue_terminal_receipt(
         accepted_at: completed_at,
     });
     transaction.resource.state = SecurityTransactionState::Completed;
-    transaction.resource.next_required_step = None;
     transaction.resource.terminal_result = Some(arkret_wire::SecurityTransactionTerminalResult {
         result: arkret_wire::SecurityTransactionResultKind::Completed,
         completed_at,
@@ -1779,7 +1774,6 @@ async fn continue_submit_reanchor_unit(
         })?;
     let output_digest = canonical_digest(&outcome)?;
     transaction.resource.accepted_steps.push(AcceptedStep {
-        step: SecurityTransactionStep::SubmitReanchorUnit,
         prepared_material_digest,
         acceptor_id: state.service_id().clone(),
         output_ref: batch_receipt.receipt_id.as_str().to_owned(),
@@ -1787,7 +1781,6 @@ async fn continue_submit_reanchor_unit(
         accepted_at: batch_receipt.created_at,
     });
     transaction.resource.state = SecurityTransactionState::AwaitingDeviceAttestation;
-    transaction.resource.next_required_step = Some(SecurityTransactionStep::IssueTerminalReceipt);
     transaction
         .resource
         .validate_structural()
@@ -1833,11 +1826,10 @@ fn pcr_policy_parts(
     ),
     AppError,
 > {
-    match (&transaction.binding, &transaction.prepared_plan) {
-        (
-            SecurityTransactionBinding::Recovery(RecoveryBinding::PcrPolicy(binding)),
-            SecurityTransactionPreparedPlan::Recovery(RecoveryPreparedPlan::PcrPolicy(plan)),
-        ) => Ok((binding, plan)),
+    match &transaction.prepared_plan {
+        SecurityTransactionPreparedPlan::Recovery(RecoveryPreparedPlan::PcrPolicy(plan)) => {
+            Ok((&plan.binding, plan))
+        }
         _ => Err(
             AppError::conflict("operation requires a PCR-policy recovery transaction")
                 .with_wire_code("security_transaction_failed_precondition"),

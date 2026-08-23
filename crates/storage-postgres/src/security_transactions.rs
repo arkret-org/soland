@@ -1,6 +1,6 @@
 use arkret_wire::{
-    DidCoreId, Hash, SecurityTransaction, SecurityTransactionBinding, SecurityTransactionKind,
-    SecurityTransactionState, SecurityTransactionStep, TransactionId,
+    DidCoreId, Hash, SecurityTransaction, SecurityTransactionKind, SecurityTransactionState,
+    SecurityTransactionStep, TransactionId,
 };
 
 use super::{
@@ -32,8 +32,6 @@ struct SecurityTransactionRow {
     #[diesel(sql_type = Text)]
     request_digest: String,
     #[diesel(sql_type = Jsonb)]
-    binding: Value,
-    #[diesel(sql_type = Jsonb)]
     prepared_plan: Value,
     #[diesel(sql_type = Text)]
     prepared_plan_digest: String,
@@ -41,8 +39,6 @@ struct SecurityTransactionRow {
     state: String,
     #[diesel(sql_type = Jsonb)]
     accepted_steps: Value,
-    #[diesel(sql_type = Nullable<Text>)]
-    next_required_step: Option<String>,
     #[diesel(sql_type = Nullable<Jsonb>)]
     terminal_result: Option<Value>,
     #[diesel(sql_type = Binary)]
@@ -137,16 +133,11 @@ impl TryFrom<SecurityTransactionRow> for SecurityTransactionRecord {
             created_at: row.created_at,
             request_digest: Hash::new(row.request_digest)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
-            binding: parse_stored("binding", row.binding)?,
             prepared_plan: parse_stored("prepared_plan", row.prepared_plan)?,
             prepared_plan_digest: Hash::new(row.prepared_plan_digest)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             state: parse_stored("state", Value::String(row.state))?,
             accepted_steps: parse_stored("accepted_steps", row.accepted_steps)?,
-            next_required_step: row
-                .next_required_step
-                .map(|step| parse_stored("next_required_step", Value::String(step)))
-                .transpose()?,
             terminal_result: row
                 .terminal_result
                 .map(|result| parse_stored("terminal_result", result))
@@ -171,8 +162,8 @@ fn parse_stored<T: serde::de::DeserializeOwned>(name: &str, value: Value) -> Per
 }
 
 const COLUMNS: &str = "id, kind, principal_id, coordinator_service_id, expires_at, created_at, \
-    request_digest, binding, prepared_plan, prepared_plan_digest, state, accepted_steps, \
-    next_required_step, terminal_result, canonical_request";
+    request_digest, prepared_plan, prepared_plan_digest, state, accepted_steps, \
+    terminal_result, canonical_request";
 
 async fn load_one(
     conn: &mut AsyncPgConnection,
@@ -232,9 +223,9 @@ async fn insert_one(
     sql_query(
         "INSERT INTO security_transactions \
          (id, kind, principal_id, coordinator_service_id, expires_at, created_at, request_digest, \
-          binding, prepared_plan, prepared_plan_digest, state, accepted_steps, next_required_step, \
+          prepared_plan, prepared_plan_digest, state, accepted_steps, \
           terminal_result, canonical_request) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
     )
     .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
         resource.transaction_id.as_str(),
@@ -248,10 +239,6 @@ async fn insert_one(
     .bind::<Timestamptz, _>(resource.expires_at)
     .bind::<Timestamptz, _>(resource.created_at)
     .bind::<Text, _>(resource.request_digest.as_str())
-    .bind::<Jsonb, _>(
-        serde_json::to_value(&resource.binding)
-            .map_err(|error| PersistenceError::Internal(error.to_string()))?,
-    )
     .bind::<Jsonb, _>(
         serde_json::to_value(&resource.prepared_plan)
             .map_err(|error| PersistenceError::Internal(error.to_string()))?,
@@ -269,7 +256,6 @@ async fn insert_one(
         serde_json::to_value(&resource.accepted_steps)
             .map_err(|error| PersistenceError::Internal(error.to_string()))?,
     )
-    .bind::<Nullable<Text>, _>(resource.next_required_step.map(enum_text).transpose()?)
     .bind::<Nullable<Jsonb>, _>(
         resource
             .terminal_result
@@ -341,7 +327,7 @@ async fn update_mutable_fields(
 ) -> PersistenceResult<()> {
     sql_query(
         "UPDATE security_transactions SET state = $2, accepted_steps = $3, \
-         next_required_step = $4, terminal_result = $5 WHERE id = $1",
+         terminal_result = $4 WHERE id = $1",
     )
     .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
         record.resource.transaction_id.as_str(),
@@ -357,13 +343,6 @@ async fn update_mutable_fields(
     .bind::<Jsonb, _>(
         serde_json::to_value(&record.resource.accepted_steps)
             .map_err(|error| PersistenceError::Internal(error.to_string()))?,
-    )
-    .bind::<Nullable<Text>, _>(
-        record
-            .resource
-            .next_required_step
-            .map(enum_text)
-            .transpose()?,
     )
     .bind::<Nullable<Jsonb>, _>(
         record
@@ -415,12 +394,10 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
             record.resource.request_digest.as_str(),
         )
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-        let recovery_session_id = match &record.resource.binding {
-            SecurityTransactionBinding::Recovery(binding) => {
-                Some(binding.recovery_session_id().as_str().to_owned())
-            }
-            SecurityTransactionBinding::SecurityRotation(_) => None,
-        };
+        let recovery_session_id = record
+            .resource
+            .recovery_binding()
+            .map(|binding| binding.recovery_session_id.as_str().to_owned());
         let transaction_id = record.resource.transaction_id.as_str().to_owned();
         let principal_id = record.resource.principal_id.as_str().to_owned();
         let mut conn = pg_conn(&self.pool).await?;
@@ -634,7 +611,11 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
             }
             super::validate_security_transaction_update(&existing, &record)?;
             if record.resource.accepted_steps.len() != existing.resource.accepted_steps.len() + 1
-                || record.resource.accepted_steps.last().map(|step| step.step) != Some(outcome.step)
+                || existing
+                    .resource
+                    .accepted_step_kind(existing.resource.accepted_steps.len())
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+                    != outcome.step
             {
                 return Err(PersistenceError::SchemaViolation(
                     "accepted step outcome must match the single appended transaction step"
@@ -657,14 +638,14 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
             .map_err(PersistenceError::database)?;
             update_mutable_fields(conn, &record).await?;
             if record.resource.state == SecurityTransactionState::Completed
-                && let SecurityTransactionBinding::Recovery(binding) = &record.resource.binding
+                && let Some(binding) = record.resource.recovery_binding()
             {
                 let affected = sql_query(
                     "UPDATE recovery_sessions SET state = 'completed', updated_at = NOW() \
                      WHERE id = $1 AND transaction_id = $2 AND state = 'verified'",
                 )
                 .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
-                    binding.recovery_session_id().as_str(),
+                    binding.recovery_session_id.as_str(),
                 ))
                 .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
                 .execute(conn)

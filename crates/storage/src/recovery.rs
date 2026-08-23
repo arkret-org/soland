@@ -229,12 +229,11 @@ pub fn validate_security_transaction_update(
         || current.expires_at != next.expires_at
         || current.created_at != next.created_at
         || current.request_digest != next.request_digest
-        || current.binding != next.binding
         || current.prepared_plan != next.prepared_plan
         || current.prepared_plan_digest != next.prepared_plan_digest
     {
         return Err(PersistenceError::Conflict(
-            "security transaction immutable request, identity, binding, or plan changed".to_owned(),
+            "security transaction immutable request, identity, or plan changed".to_owned(),
         ));
     }
     if current == next {

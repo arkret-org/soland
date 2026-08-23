@@ -237,9 +237,8 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
                 "transaction_id `{transaction_id}` already exists with different canonical bytes"
             )));
         }
-        if let arkret_wire::SecurityTransactionBinding::Recovery(binding) = &record.resource.binding
-        {
-            let session_id = binding.recovery_session_id().as_str();
+        if let Some(binding) = record.resource.recovery_binding() {
+            let session_id = binding.recovery_session_id.as_str();
             let session = sessions.get_mut(session_id).ok_or_else(|| {
                 PersistenceError::NotFound(format!("recovery_session_id `{session_id}` not found"))
             })?;
@@ -389,17 +388,20 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
         }
         super::validate_security_transaction_update(existing, &record)?;
         if record.resource.accepted_steps.len() != existing.resource.accepted_steps.len() + 1
-            || record.resource.accepted_steps.last().map(|step| step.step) != Some(outcome.step)
+            || existing
+                .resource
+                .accepted_step_kind(existing.resource.accepted_steps.len())
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+                != outcome.step
         {
             return Err(PersistenceError::SchemaViolation(
                 "accepted step outcome must match the single appended transaction step".to_owned(),
             ));
         }
         if record.resource.state == arkret_wire::SecurityTransactionState::Completed
-            && let arkret_wire::SecurityTransactionBinding::Recovery(binding) =
-                &record.resource.binding
+            && let Some(binding) = record.resource.recovery_binding()
         {
-            let session_id = binding.recovery_session_id().as_str();
+            let session_id = binding.recovery_session_id.as_str();
             let recovery_session = sessions.get_mut(session_id).ok_or_else(|| {
                 PersistenceError::NotFound(format!("recovery_session_id `{session_id}` not found"))
             })?;
@@ -481,9 +483,8 @@ mod tests {
         BackupSeriesId, CanonicalPublicMaterial, DeviceId, DidCoreId, DidFullId, DidUrl, EventId,
         EventInitialSubmission, EventsSubmitBatchRequestBody, Hash, Hlc, LeaseBasisRef,
         PayloadProof, PreparedEventUnit, RealmId, RiskTier, SchemaId, ScopeRef, SealId,
-        SecurityRotationTransactionCreateRequest, SecurityTransactionBinding,
-        SecurityTransactionCreateRequest, SecurityTransactionState, SecurityTransactionStep,
-        TransactionId, proof_kind,
+        SecurityRotationTransactionCreateRequest, SecurityTransactionCreateRequest,
+        SecurityTransactionState, SecurityTransactionStep, TransactionId, proof_kind,
     };
     use chrono::{Duration, Utc};
     use serde_json::json;
@@ -597,16 +598,20 @@ mod tests {
     fn initial_erase_progress(
         transaction: &SecurityTransactionRecord,
     ) -> BackupSeriesEraseProgressRecord {
-        let SecurityTransactionBinding::SecurityRotation(binding) = &transaction.resource.binding
-        else {
-            panic!("test transaction must be a security rotation");
-        };
+        let plan = transaction
+            .resource
+            .security_rotation_plan()
+            .expect("test transaction must be a security rotation");
         let request = arkret_models_crypto::BackupSeriesEraseRequestBody {
             transaction_id: transaction.resource.transaction_id.clone(),
             transaction_request_digest: transaction.resource.request_digest.clone(),
             prepared_plan_digest: transaction.resource.prepared_plan_digest.clone(),
-            erase_confirmation_digest: binding.erase_confirmation_digest.clone(),
-            series: binding.backup_rotations.clone(),
+            erase_confirmation_digest: plan.erase_confirmation_digest.clone(),
+            series: plan
+                .backup_rotations
+                .iter()
+                .map(|rotation| rotation.binding.clone())
+                .collect(),
             authorization_lease: erase_authorization_lease(),
             cba_proof_bundles: Vec::new(),
         };
@@ -683,7 +688,7 @@ mod tests {
             &DidFullId::new("did:web:principal.example").unwrap(),
         )
         .unwrap();
-        let (revoke_event_id, revoke_unit) = event_unit(&service_id, "ak.device.revoke", "revoke");
+        let (_revoke_event_id, revoke_unit) = event_unit(&service_id, "ak.device.revoke", "revoke");
         let (secret_active_series_event_id, secret_active_series_unit) =
             event_unit(&service_id, "ak.key_backup.active_series", "secret-storage");
         let (mls_active_series_event_id, mls_active_series_unit) =
@@ -754,7 +759,6 @@ mod tests {
                 )
                 .unwrap(),
                 Utc::now() + Duration::hours(1),
-                revoke_event_id.clone(),
                 revoke_unit,
                 hash('1'),
                 vec![
@@ -790,7 +794,6 @@ mod tests {
 
         let mut advanced = initial;
         advanced.resource.accepted_steps.push(AcceptedStep {
-            step: SecurityTransactionStep::Revoke,
             prepared_material_digest: hash('4'),
             acceptor_id: "did:web:principal.example".to_owned(),
             output_ref: "ak:event:AaAkIzblCDjqaSCE04n-JnjSzLVYVVT9LyvaLdLiTJrW".to_owned(),
@@ -798,7 +801,6 @@ mod tests {
             accepted_at: Utc::now(),
         });
         advanced.resource.state = SecurityTransactionState::Running;
-        advanced.resource.next_required_step = Some(SecurityTransactionStep::UploadNewMaterial);
         advanced.resource.validate_structural().unwrap();
         let outcome = SecurityTransactionStepOutcomeRecord {
             transaction_id: advanced.resource.transaction_id.as_str().to_owned(),
