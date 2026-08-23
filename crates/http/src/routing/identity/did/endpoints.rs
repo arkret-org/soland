@@ -780,11 +780,8 @@ pub(crate) async fn identity_resolve(
         // `degraded_no_witness` is a spec-defined health state
         // (identity-did.md health-status section): hosting stays reachable
         // but witness evidence is missing or expired. No soland code path
-        // currently enters that state — witness verification and the
-        // degradation window are unimplemented; the gap is tracked in
-        // arkret-work
-        // (review/spec-done/
-        // 2026-08-18-2315-soland-cannot-verify-or-issue-webvh-witness-yet-advertises-support.md).
+        // currently enters that state because witness verification and the
+        // degradation window remain unimplemented.
         // Rotation control authorisation accepts a previous-controller
         // proof, a genesis-declared recovery key (key-management.md §3.3),
         // or an organization governance quorum (identity-did.md §8.1–§8.2).
