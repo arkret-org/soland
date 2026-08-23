@@ -1046,15 +1046,9 @@ async fn produce_current_agent_signer_evidence(
         state.notary_signing_key().as_ref(),
     )
     .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    #[derive(serde::Serialize)]
-    struct AdmissionCore<'a> {
-        agent_authority_snapshot: &'a AgentAuthoritySnapshot,
-        controller_account_gate_attestation: &'a ControllerAccountGateAttestation,
-    }
-    let admission_evidence_digest = canonical_digest(&AdmissionCore {
-        agent_authority_snapshot: &snapshot,
-        controller_account_gate_attestation: &gate,
-    })?;
+    let admission_evidence_digest =
+        arkret_signatures::agent_evidence::agent_admission_evidence_digest(&snapshot, &gate)
+            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let gate_digest = canonical_digest(&gate)?;
     let admission_evidence = AgentAdmissionEvidence {
         agent_authority_snapshot: snapshot,
