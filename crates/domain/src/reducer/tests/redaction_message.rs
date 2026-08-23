@@ -96,7 +96,7 @@ fn redaction_hides_message() {
     );
     let cell = state
         .redaction_cells
-        .get("ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R")
+        .get("ak:message:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R")
         .cloned()
         .unwrap();
     assert_eq!(cell.by, "ak:did_core:web:alice");
@@ -397,7 +397,7 @@ fn redaction_accepts_schema_message_id_target() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let event_id = "ak:event:ARM_vloO6RecwhzJiZLJp_sEMbLAlYxMqDRCnIx5zTYC";
-    let message_id = "ak:message:AWTw005aQJnsZUX29qLAWeCR8A5FmteYPybO7uylwJfW";
+    let message_id = message_id_from_event_id(event_id);
     let redaction_event_id = "ak:event:AeV1nAe67z8tQd57ghKnYX3pO3XHc0CWcgZeG1UtWi7m";
 
     state.apply(
@@ -406,7 +406,6 @@ fn redaction_accepts_schema_message_id_target() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": event_id,
-                "message_id": message_id,
                 "sender": "ak:did_core:web:alice",
                 "thread_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "hello"}
@@ -434,6 +433,7 @@ fn redaction_accepts_schema_message_id_target() {
     ));
     assert!(state.redactions.contains(event_id));
     assert!(!state.redactions.contains(redaction_event_id));
+    assert!(state.redaction_cells.contains_key(&message_id));
     assert!(
         state
             .projected_message(event_id, false)
@@ -448,7 +448,7 @@ fn redaction_by_message_id_hides_latest_revision() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let event_id = "ak:event:AYFOTCo9ihbm1rHVVboZzk8j6Y76eIOqKgzp0m3azE5f";
-    let message_id = "ak:message:AWZOZT9AgLT5geqcOmOD7V_v1AjKMAoPHInmsnnbsapn";
+    let message_id = message_id_from_event_id(event_id);
     let revision_event_id = "ak:event:AVvHap65LnD8zHKvce7Yq8fodmj2dYC4w32MPRABihB9";
 
     state.apply(
@@ -457,7 +457,6 @@ fn redaction_by_message_id_hides_latest_revision() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": event_id,
-                "message_id": message_id,
                 "sender": "ak:did_core:web:alice",
                 "thread_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "original"}
@@ -503,4 +502,12 @@ fn redaction_by_message_id_hides_latest_revision() {
             .content
             .is_none()
     );
+    assert!(
+        state
+            .projected_message(event_id, false)
+            .unwrap()
+            .content
+            .is_none()
+    );
+    assert!(state.redaction_cells.contains_key(&message_id));
 }

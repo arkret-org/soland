@@ -854,9 +854,8 @@ impl ObjectLifecycleState {
     }
 }
 
-/// Value of the parallel `redaction` cas-register
-/// cell on the same subject as the target message cell. Mirrors the spec
-/// shape `{redacted_at, by, reason}` and carries the triggering
+/// Cached attribution for the parallel redaction OR-Set member on the
+/// registered Message typed-ID subject. It carries the triggering
 /// `ak.message.redact` event id so the read path can surface
 /// `redaction_ref` on the message tombstone (strand-and-message.md §9).
 #[derive(Clone, Debug, PartialEq, Eq)]

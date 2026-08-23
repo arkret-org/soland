@@ -170,9 +170,9 @@ impl ProjectionState {
         }
     }
 
-    /// Writes a parallel `redaction` cas-register
-    /// cell on the same subject as the target message cell, value
-    /// `{redacted_at, by, reason}`. The ordered-log historical entry id
+    /// Writes the parallel redaction OR-Set using the registered target
+    /// subject verbatim. For `ak.message.redact`, that subject is the
+    /// Message typed ID shared by every revision in the chain. The ordered-log historical entry id
     /// (the original [`MessageState`]) is preserved unchanged; the
     /// projection layer at read time consults the redaction cell and
     /// replaces the payload with a tombstone.
@@ -201,11 +201,29 @@ impl ProjectionState {
         // resolve to a Message cell. Requiring a Message target before reaching
         // the object branch would silently ignore every Strand / Morph
         // redaction.
-        let message_target = message_redaction_target_ref(&operation.payload)
-            .map(|target_ref| self.redaction_key_for_message_target(&target_ref))
-            .filter(|target| !target.is_empty());
-        let target = message_target.clone().unwrap_or_default();
-        if let Some(target) = message_target {
+        let target_ref = message_redaction_target_ref(&operation.payload);
+        let message_redaction = crate::kinds::canonical_kind_for_operation(operation)
+            == Some(arkret_wire::EventKind::MessageRedact);
+        let resolved_message = target_ref
+            .as_deref()
+            .and_then(|target| self.message_by_target_ref(target))
+            .cloned();
+        if message_redaction && resolved_message.is_none() {
+            return self.queue_pending_replay(
+                target_ref.unwrap_or_default(),
+                operation,
+                "message_redaction_target_unknown",
+            );
+        }
+        let target = if message_redaction {
+            resolved_message
+                .as_ref()
+                .map(|message| message.message_id.clone())
+        } else {
+            target_ref.clone()
+        }
+        .unwrap_or_default();
+        if !target.is_empty() {
             let cell = RedactionCellValue {
                 redacted_at: operation.created_at,
                 by: by.clone(),
@@ -213,9 +231,17 @@ impl ProjectionState {
                 redaction_event_id: Some(redaction_event_id),
             };
             self.redaction_cells.insert(target.clone(), cell);
-            self.redactions.insert(target.clone());
-            if let Some(msg) = self.messages.get_mut(&target) {
-                msg.redacted_at = Some(operation.created_at);
+            if message_redaction {
+                for message in self
+                    .messages
+                    .values_mut()
+                    .filter(|message| message.message_id == target)
+                {
+                    message.redacted_at = Some(operation.created_at);
+                    self.redactions.insert(message.event_id.clone());
+                }
+            } else {
+                self.redactions.insert(target.clone());
             }
         }
 
@@ -269,7 +295,11 @@ impl ProjectionState {
             }
         }
 
-        ProjectionEffect::MessageRedacted { event_id: target }
+        ProjectionEffect::MessageRedacted {
+            event_id: resolved_message
+                .map(|message| message.event_id)
+                .unwrap_or(target),
+        }
     }
 
     pub(crate) fn apply_reaction_add(

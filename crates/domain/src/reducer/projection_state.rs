@@ -80,14 +80,11 @@ pub struct ProjectionState {
     /// Realm lifecycle state keyed by realm_id.
     pub realm_states: BTreeMap<String, SolandRealmState>,
     /// Redacted event IDs (tombstones). This stays as a flat
-    /// fast-lookup index over the parallel [`Self::redaction_cells`] map
-    /// — entries sit here whenever the parallel cell is `Some(_)` and are
-    /// removed when the cas-register is set back to null (un-redaction).
+    /// fast-lookup index over the parallel [`Self::redaction_cells`] map.
     pub redactions: BTreeSet<String>,
     /// Parallel `redaction` cells keyed by the target
     /// event_id (subject). Each value is a [`RedactionCellValue`] holding
-    /// `{redacted_at, by, reason}` per the spec, or `None` after an
-    /// un-redaction. The original message entry in [`Self::messages`] is
+    /// the accepted redaction fact. The original message entry in [`Self::messages`] is
     /// left intact so the ordered-log historical entry id is preserved;
     /// the projection layer consults this map at read time and replaces
     /// the payload with the tombstone.
