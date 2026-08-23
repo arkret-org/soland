@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
-use soland_services::delivery::PushContractDrift as DriftResult;
+use soland_services::delivery::PushContractDrift;
 use subtle::ConstantTimeEq;
 
 use super::audit::append_audit_log;
@@ -458,8 +458,8 @@ pub(super) async fn push_notify(
         // warmed) treats `Unknown` as a soft pass so local fixtures don't
         // need to pre-load the cache.
         let drift_blocks = match drift {
-            DriftResult::Match => false,
-            DriftResult::Unknown => !state.config().development_mode,
+            PushContractDrift::Match => false,
+            PushContractDrift::Unknown => !state.config().development_mode,
             _ => true,
         };
         if drift_blocks {
@@ -506,13 +506,13 @@ async fn verify_push_gateway_contract_drift(
     state: &AppState,
     push_gateway_url: &str,
     max_age: chrono::Duration,
-) -> DriftResult {
+) -> PushContractDrift {
     let trimmed = push_gateway_url.trim();
     if trimmed.is_empty() {
-        return DriftResult::Unknown;
+        return PushContractDrift::Unknown;
     }
     let Some(service_base_url) = derive_push_gateway_service_base_url(trimmed) else {
-        return DriftResult::Unknown;
+        return PushContractDrift::Unknown;
     };
     let bridge_describe_url =
         join_push_gateway_url(&service_base_url, "/_floria/push/bridge/describe");
@@ -522,19 +522,19 @@ async fn verify_push_gateway_contract_drift(
         .await
     {
         Ok(Some(record)) => record.contract_digest,
-        Ok(None) => return DriftResult::Unknown,
+        Ok(None) => return PushContractDrift::Unknown,
         Err(error) => {
             tracing::error!(%error, "failed to read push bridge cache snapshot");
-            return DriftResult::Unknown;
+            return PushContractDrift::Unknown;
         }
     };
     if snapshot_digest.is_empty() {
-        return DriftResult::Unknown;
+        return PushContractDrift::Unknown;
     }
     service
         .verify_push_bridge_contract_freshness(&bridge_describe_url, &snapshot_digest, max_age)
         .await
-        .unwrap_or(DriftResult::Unknown)
+        .unwrap_or(PushContractDrift::Unknown)
 }
 
 fn push_notification_leaks_private_payload(
