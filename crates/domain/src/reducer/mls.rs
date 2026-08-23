@@ -26,7 +26,8 @@ use serde_json::{Map, Value};
 
 use super::{
     KeyPackageLifetime, MlsCommitEpoch, MlsCommitEpochKey, MlsEffect, MlsKeyPackage,
-    MlsRemoveObligation, MlsRemoveProposal, MlsWelcome, MlsWelcomeQueueKey, ProjectionState,
+    MlsRemoveObligation, MlsRemoveProposal, MlsWelcome, MlsWelcomeQueueKey, ProjectionEffect,
+    ProjectionState,
 };
 
 /// Reason code emitted when a `ak.mls.keypackage` event with
@@ -87,7 +88,7 @@ pub struct MlsKeyPackagePublishProjection {
 pub fn apply_keypackage_upload_projection(
     state: &mut ProjectionState,
     projection: &MlsKeyPackagePublishProjection,
-) -> ProjectionEffectOut {
+) -> ProjectionEffect {
     if projection.keypackage_id.is_empty() {
         return reject("mls_keypackage_id_missing");
     }
@@ -155,17 +156,14 @@ pub fn apply_keypackage_upload_projection(
         .mls_key_packages
         .insert(projection.keypackage_id.clone(), row);
 
-    ProjectionEffectOut::Mls(MlsEffect::KeyPackagePublished {
+    ProjectionEffect::Mls(MlsEffect::KeyPackagePublished {
         keypackage_id: projection.keypackage_id.clone(),
         actor_id: projection.actor_id.clone(),
         device_id: projection.device_id.clone(),
     })
 }
 
-pub fn apply_keypackage_publish(
-    state: &mut ProjectionState,
-    op: &Operation,
-) -> ProjectionEffectOut {
+pub fn apply_keypackage_publish(state: &mut ProjectionState, op: &Operation) -> ProjectionEffect {
     let payload = &op.payload;
     let Some(id) = payload
         .get("keypackage_id")
@@ -262,7 +260,7 @@ pub fn apply_keypackage_publish(
         created_at,
     };
     state.mls_key_packages.insert(id.to_owned(), row);
-    ProjectionEffectOut::Mls(MlsEffect::KeyPackagePublished {
+    ProjectionEffect::Mls(MlsEffect::KeyPackagePublished {
         keypackage_id: id.to_owned(),
         actor_id: actor_id.to_owned(),
         device_id: device_id.to_owned(),
@@ -283,7 +281,7 @@ pub fn apply_keypackage_publish(
 /// `keypackage_id` MUST see exactly one `KeyPackageClaimed` effect; the
 /// loser receives `Rejected { reason: mls_keypackage_already_claimed }`.
 /// The HTTP layer maps that to 409 `cas_conflict`.
-pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {
+pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> ProjectionEffect {
     let payload = &op.payload;
     let Some(id) = payload.get("keypackage_id").and_then(Value::as_str) else {
         return reject("mls_keypackage_id_missing");
@@ -360,7 +358,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
         row.consumed_at = None;
     }
 
-    ProjectionEffectOut::Mls(MlsEffect::KeyPackageClaimed {
+    ProjectionEffect::Mls(MlsEffect::KeyPackageClaimed {
         keypackage_id: id.to_owned(),
         group_id: group_id.to_owned(),
         intended_realm_id,
@@ -388,7 +386,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
 /// the submitted envelope is rejected before the row is queued, which
 /// keeps cross-domain forwarders from learning more than the delivery
 /// key they need.
-pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {
+pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> ProjectionEffect {
     let payload = &op.payload;
     if welcome_payload_contains_forbidden_metadata(payload) {
         return reject(REASON_WELCOME_METADATA_LEAK);
@@ -478,7 +476,7 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
         .or_default()
         .push(row);
 
-    ProjectionEffectOut::Mls(MlsEffect::WelcomeEnqueued {
+    ProjectionEffect::Mls(MlsEffect::WelcomeEnqueued {
         welcome_id: welcome_id.to_owned(),
         recipient_actor_id: recipient_actor_id.to_owned(),
         recipient_device_id: recipient_device_id.to_owned(),
@@ -494,10 +492,10 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
 /// durable event payload and object store references.
 /// Record a `ak.mls.proposal{proposal_type="remove"}` so a later commit can
 /// prove it is consuming a pending remove obligation.
-pub fn apply_remove_proposal(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {
+pub fn apply_remove_proposal(state: &mut ProjectionState, op: &Operation) -> ProjectionEffect {
     let payload = &op.payload;
     if payload.get("proposal_type").and_then(Value::as_str) != Some("remove") {
-        return ProjectionEffectOut::Ignored;
+        return ProjectionEffect::Ignored;
     }
     let Some(group_id) = payload.get("mls_group_id").and_then(Value::as_str) else {
         return reject("mls_proposal_group_missing");
@@ -535,7 +533,7 @@ pub fn apply_remove_proposal(state: &mut ProjectionState, op: &Operation) -> Pro
         },
     );
 
-    ProjectionEffectOut::Mls(MlsEffect::RemoveProposalRecorded {
+    ProjectionEffect::Mls(MlsEffect::RemoveProposalRecorded {
         proposal_ref,
         group_id: group_id.to_owned(),
         effective_scope,
@@ -544,7 +542,7 @@ pub fn apply_remove_proposal(state: &mut ProjectionState, op: &Operation) -> Pro
     })
 }
 
-pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {
+pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> ProjectionEffect {
     let payload = &op.payload;
     let Some(group_id) = payload.get("mls_group_id").and_then(Value::as_str) else {
         return reject("mls_genesis_group_missing");
@@ -593,7 +591,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
         },
     );
 
-    ProjectionEffectOut::Mls(MlsEffect::GroupGenesis {
+    ProjectionEffect::Mls(MlsEffect::GroupGenesis {
         group_id: group_id.to_owned(),
         effective_scope,
         epoch: 0,
@@ -630,7 +628,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
 /// `base_epoch + 1`. Stale or out-of-order commits leave state
 /// untouched and emit `ProjectionEffect::Rejected { reason:
 /// "mls_epoch_skew" }`.
-pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {
+pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> ProjectionEffect {
     let payload = &op.payload;
     let Some(group_id) = payload.get("mls_group_id").and_then(Value::as_str) else {
         return reject("mls_commit_group_missing");
@@ -714,7 +712,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         if let Some(entry) = state.mls_commit_epochs.get_mut(&epoch_key) {
             entry.frontier_contested = true;
         }
-        return ProjectionEffectOut::Mls(MlsEffect::CommitFrontierContested {
+        return ProjectionEffect::Mls(MlsEffect::CommitFrontierContested {
             group_id: group_id.to_owned(),
             effective_scope,
             epoch: current,
@@ -771,7 +769,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
             .retain(|obligation| !pending_removals.iter().any(|landed| landed == obligation));
     }
 
-    ProjectionEffectOut::Mls(MlsEffect::CommitEpochAdvanced {
+    ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced {
         group_id: group_id.to_owned(),
         effective_scope,
         previous_epoch: current,
@@ -782,13 +780,8 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
 
 // ── private helpers ───────────────────────────────────────────────────
 
-/// Local type alias so the four `apply_*` helpers return a `ProjectionEffect`
-/// without each call site importing the parent `super::` path. Concrete
-/// type is the same `ProjectionEffect` defined in `reducer.rs`.
-type ProjectionEffectOut = super::ProjectionEffect;
-
-fn reject(reason: &str) -> ProjectionEffectOut {
-    ProjectionEffectOut::Rejected {
+fn reject(reason: &str) -> ProjectionEffect {
+    ProjectionEffect::Rejected {
         reason: reason.to_owned(),
     }
 }
