@@ -594,7 +594,7 @@ fn mls_ciphersuite_is_active(canonical_id: &str) -> bool {
 /// Map the SDK's structural rejection onto the registered wire code. The TTL
 /// ceiling has its own code (`signal_ttl_out_of_range`); everything else is a
 /// malformed envelope.
-fn structural_error(error: arkret_wire::Error) -> AppError {
+fn structural_error(error: arkret_wire::WireError) -> AppError {
     let error_code = error.error_code();
     let message = error.to_string();
     if error_code == Some(arkret_wire::ErrorCode::SignalTtlOutOfRange) {
@@ -792,7 +792,7 @@ mod tests {
 
     #[test]
     fn ttl_overrun_surfaces_the_registered_wire_code() {
-        let error = structural_error(arkret_wire::Error::ProtocolCode {
+        let error = structural_error(arkret_wire::WireError::ProtocolCode {
             code: arkret_wire::ErrorCode::SignalTtlOutOfRange,
             message: "signal TTL 90s exceeds the Session class ceiling of 30s".to_owned(),
         });
@@ -802,7 +802,7 @@ mod tests {
 
     #[test]
     fn other_structural_rejections_stay_on_the_generic_param_code() {
-        let error = structural_error(arkret_wire::Error::Protocol(
+        let error = structural_error(arkret_wire::WireError::Protocol(
             "signal expires_at must be strictly after sent_at".to_owned(),
         ));
         assert_eq!(error.wire_code(), "param_invalid");

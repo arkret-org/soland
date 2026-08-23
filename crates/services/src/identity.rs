@@ -110,7 +110,7 @@ impl arkret_wire::PayloadSigner for FrozenEd25519NotarySigner {
             &self.verification_method,
             &self.signing_key,
         )
-        .map_err(arkret_wire::Error::Protocol)?;
+        .map_err(arkret_wire::WireError::Protocol)?;
         Ok(arkret_wire::PayloadSignature {
             verification_method: self.verification_method.clone(),
             payload_digest,

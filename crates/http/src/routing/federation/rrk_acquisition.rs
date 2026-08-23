@@ -189,7 +189,7 @@ impl RrkAcquisitionWorker {
                     binding,
                     self.state.notary_signing_key().as_ref(),
                 )
-                .map_err(|error| arkret_wire::Error::Protocol(error.to_string()))
+                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))
             },
         )
         .map_err(|error| format!("acceptance_sign:{error}"))?;

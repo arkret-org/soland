@@ -4728,7 +4728,7 @@ fn placeholder_history_proof(
 
 fn history_service_jws(state: &AppState, binding: &[u8]) -> arkret_wire::Result<String> {
     arkret_signatures::jws::sign_jws_ed25519(binding, state.notary_signing_key().as_ref())
-        .map_err(|error| arkret_wire::Error::Protocol(error.to_string()))
+        .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))
 }
 
 fn zero_sha256_hash() -> Result<arkret_wire::Hash, AppError> {
@@ -5378,7 +5378,7 @@ fn sign_history_request_replica_outcome(
         |binding| {
             arkret_signatures::jws::sign_jws_ed25519(binding, state.notary_signing_key().as_ref())
                 .map_err(|error| {
-                    arkret_wire::Error::Protocol(format!(
+                    arkret_wire::WireError::Protocol(format!(
                         "history replica receipt signing failed: {error}"
                     ))
                 })

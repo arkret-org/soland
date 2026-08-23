@@ -872,7 +872,7 @@ fn validate_primary_track_transition(
     .map_err(map_primary_track_error)
 }
 
-fn map_primary_track_error(error: arkret_wire::Error) -> &'static str {
+fn map_primary_track_error(error: arkret_wire::WireError) -> &'static str {
     let message = error.to_string();
     if message.contains("track_disabled") {
         "track_disabled"
