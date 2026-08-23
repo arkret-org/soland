@@ -35,6 +35,15 @@ pub trait RecoverySessionStore: Send + Sync {
         &self,
         recovery_session_id: &str,
     ) -> PersistenceResult<Option<RecoverySessionRecord>>;
+    async fn get_by_grant_id(
+        &self,
+        session_grant_id: &str,
+    ) -> PersistenceResult<Option<RecoverySessionRecord>>;
+    async fn get_by_grant_request(
+        &self,
+        session_grant_id: &str,
+        request_id: &str,
+    ) -> PersistenceResult<Option<RecoverySessionRecord>>;
     async fn insert(&self, record: RecoverySessionRecord) -> PersistenceResult<()>;
     async fn update(&self, record: RecoverySessionRecord) -> PersistenceResult<()>;
 }

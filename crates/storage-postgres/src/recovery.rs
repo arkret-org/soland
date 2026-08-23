@@ -258,6 +258,14 @@ struct RecoverySessionRow {
     #[diesel(sql_type = sql_types::Uuid)]
     recovery_session_id: Uuid,
     #[diesel(sql_type = Text)]
+    request_id: String,
+    #[diesel(sql_type = Text)]
+    create_intent_digest: String,
+    #[diesel(sql_type = Text)]
+    session_grant_id: String,
+    #[diesel(sql_type = Text)]
+    session_grant_cnf_jkt: String,
+    #[diesel(sql_type = Text)]
     principal_id: String,
     #[diesel(sql_type = Text)]
     principal_server_id: String,
@@ -271,14 +279,14 @@ struct RecoverySessionRow {
     policy_version: i32,
     #[diesel(sql_type = Text)]
     identity_model: String,
-    #[diesel(sql_type = Nullable<Text>)]
-    current_device_generation_ref: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    device_generation_status: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    registry_head: Option<String>,
-    #[diesel(sql_type = Nullable<Jsonb>)]
-    accepted_seal_frontier: Option<Value>,
+    #[diesel(sql_type = sql_types::BigInt)]
+    current_device_generation_ref: i64,
+    #[diesel(sql_type = Text)]
+    device_generation_status: String,
+    #[diesel(sql_type = Text)]
+    registry_head: String,
+    #[diesel(sql_type = Jsonb)]
+    accepted_seal_frontier: Value,
     #[diesel(sql_type = Jsonb)]
     policy_payload: Value,
     #[diesel(sql_type = Jsonb)]
@@ -317,47 +325,37 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
                     row.recovery_session_id
                 ))
             })?;
-        let current_device_generation_ref = row
-            .current_device_generation_ref
-            .map(arkret_wire::NonEmptyString::new)
-            .transpose()
-            .map_err(|error| {
+        let current_device_generation_ref = u64::try_from(row.current_device_generation_ref)
+            .ok()
+            .filter(|generation| *generation > 0)
+            .ok_or_else(|| {
                 PersistenceError::Internal(format!(
-                    "recovery session `{}` has invalid current_device_generation_ref: {error}",
+                    "recovery session `{}` has no positive current_device_generation_ref",
                     row.recovery_session_id
                 ))
             })?;
-        let device_generation_status = row
-            .device_generation_status
-            .map(|status| serde_json::from_value(Value::String(status)))
-            .transpose()
-            .map_err(|error| {
+        let device_generation_status = serde_json::from_value(Value::String(
+            row.device_generation_status,
+        ))
+        .map_err(|error| {
+            PersistenceError::Internal(format!(
+                "recovery session `{}` has invalid device_generation_status: {error}",
+                row.recovery_session_id
+            ))
+        })?;
+        let registry_head = arkret_identifiers::Hash::new(row.registry_head).map_err(|error| {
+            PersistenceError::Internal(format!(
+                "recovery session `{}` has invalid registry_head: {error}",
+                row.recovery_session_id
+            ))
+        })?;
+        let accepted_seal_frontier =
+            serde_json::from_value(row.accepted_seal_frontier).map_err(|error| {
                 PersistenceError::Internal(format!(
-                    "recovery session `{}` has invalid device_generation_status: {error}",
+                    "recovery session `{}` has invalid accepted_seal_frontier: {error}",
                     row.recovery_session_id
                 ))
             })?;
-        let registry_head = row
-            .registry_head
-            .map(arkret_identifiers::Hash::new)
-            .transpose()
-            .map_err(|error| {
-                PersistenceError::Internal(format!(
-                    "recovery session `{}` has invalid registry_head: {error}",
-                    row.recovery_session_id
-                ))
-            })?;
-        let accepted_seal_frontier = row
-            .accepted_seal_frontier
-            .map(|value| {
-                serde_json::from_value(value).map_err(|error| {
-                    PersistenceError::Internal(format!(
-                        "recovery session `{}` has invalid accepted_seal_frontier: {error}",
-                        row.recovery_session_id
-                    ))
-                })
-            })
-            .transpose()?;
         let publication_authority_context =
             serde_json::from_value(row.publication_authority_context).map_err(|error| {
                 PersistenceError::Internal(format!(
@@ -375,10 +373,14 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             ))
         })?;
         Ok(Self {
+            request_id: row.request_id,
+            create_intent_digest: row.create_intent_digest,
             recovery_session_id: ids::format_typed_uuid(
                 "recovery_session",
                 &row.recovery_session_id,
             ),
+            session_grant_id: row.session_grant_id,
+            session_grant_cnf_jkt: row.session_grant_cnf_jkt,
             principal_id: row.principal_id,
             principal_server_id: row.principal_server_id,
             requesting_device_id: row.requesting_device_id,
@@ -405,7 +407,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
         })
     }
 }
-const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, principal_id, principal_server_id, requesting_device_id, \
+const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, principal_server_id, requesting_device_id, \
      trust_domain, policy_id, policy_version, identity_model, \
      current_device_generation_ref, device_generation_status, registry_head, accepted_seal_frontier, \
      policy_payload, publication_authority_context, publication_authority_context_digest, \
@@ -432,26 +434,72 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         .transpose()
     }
 
+    async fn get_by_grant_id(
+        &self,
+        session_grant_id: &str,
+    ) -> PersistenceResult<Option<RecoverySessionRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(format!(
+            "SELECT {RECOVERY_SESSION_COLUMNS} FROM recovery_sessions \
+             WHERE session_grant_id = $1 ORDER BY created_at DESC LIMIT 1"
+        ))
+        .bind::<Text, _>(session_grant_id)
+        .get_result::<RecoverySessionRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(RecoverySessionRecord::try_from)
+        .transpose()
+    }
+
+    async fn get_by_grant_request(
+        &self,
+        session_grant_id: &str,
+        request_id: &str,
+    ) -> PersistenceResult<Option<RecoverySessionRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(format!(
+            "SELECT {RECOVERY_SESSION_COLUMNS} FROM recovery_sessions \
+             WHERE session_grant_id = $1 AND request_id = $2 LIMIT 1"
+        ))
+        .bind::<Text, _>(session_grant_id)
+        .bind::<Text, _>(request_id)
+        .get_result::<RecoverySessionRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(RecoverySessionRecord::try_from)
+        .transpose()
+    }
+
     async fn insert(&self, record: RecoverySessionRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let device_generation_status = record.device_generation_status.map(|status| match status {
+        let device_generation_status = match record.device_generation_status {
             arkret_models_crypto::DeviceGenerationStatus::Active => "active",
             arkret_models_crypto::DeviceGenerationStatus::Conflicted => "conflicted",
-        });
+        };
         sql_query(
             "INSERT INTO recovery_sessions \
-             (id, principal_id, principal_server_id, requesting_device_id, trust_domain, policy_id, \
+             (id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, principal_server_id, requesting_device_id, trust_domain, policy_id, \
               policy_version, identity_model, current_device_generation_ref, \
               device_generation_status, registry_head, accepted_seal_frontier, policy_payload, \
               publication_authority_context, publication_authority_context_digest, challenge, \
               state, proof_payload, transaction_id, created_at, updated_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)",
         )
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
             &record.recovery_session_id,
         ))
+        .bind::<Text, _>(&record.request_id)
+        .bind::<Text, _>(&record.create_intent_digest)
+        .bind::<Text, _>(&record.session_grant_id)
+        .bind::<Text, _>(&record.session_grant_cnf_jkt)
         .bind::<Text, _>(&record.principal_id)
         .bind::<Text, _>(&record.principal_server_id)
         .bind::<Text, _>(&record.requesting_device_id)
@@ -461,26 +509,24 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         .bind::<Text, _>(match record.identity_model {
             arkret_models_crypto::RecoveryIdentityModel::PcrPolicy => "pcr_policy",
         })
-        .bind::<Nullable<Text>, _>(
-            record
-                .current_device_generation_ref
-                .as_ref()
-                .map(|value| value.as_str()),
+        .bind::<Nullable<sql_types::BigInt>, _>(Some(i64::try_from(
+            record.current_device_generation_ref,
         )
-        .bind::<Nullable<Text>, _>(device_generation_status)
-        .bind::<Nullable<Text>, _>(record.registry_head.as_ref().map(|value| value.as_str()))
-        .bind::<Nullable<Jsonb>, _>(
-            record
-                .accepted_seal_frontier
-                .as_ref()
-                .map(serde_json::to_value)
-                .transpose()
-                .map_err(|error| {
-                    PersistenceError::Internal(format!(
-                        "recovery session accepted_seal_frontier encode failed: {error}"
-                    ))
-                })?,
-        )
+        .map_err(|_| {
+            PersistenceError::Internal(
+                "recovery session current_device_generation_ref exceeds PostgreSQL bigint"
+                    .to_owned(),
+            )
+        })?))
+        .bind::<Nullable<Text>, _>(Some(device_generation_status))
+        .bind::<Nullable<Text>, _>(Some(record.registry_head.as_str()))
+        .bind::<Nullable<Jsonb>, _>(Some(
+            serde_json::to_value(&record.accepted_seal_frontier).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "recovery session accepted_seal_frontier encode failed: {error}"
+                ))
+            })?,
+        ))
         .bind::<Jsonb, _>(&record.policy_payload)
         .bind::<Jsonb, _>(
             serde_json::to_value(&record.publication_authority_context).map_err(|error| {

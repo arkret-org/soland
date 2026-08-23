@@ -17,18 +17,20 @@ use std::collections::BTreeSet;
 
 use arkret_identifiers::{Hash, PolicyId, RealmId, RecoverySessionId, TrustDomainId};
 use arkret_models_crypto::{
-    DeviceGenerationStatus, ProofSummary, RecoveryIdentityModel, RecoveryPolicy,
+    Challenge, DeviceGenerationStatus, DidRootTranscript, GenericRecoveryProofBody,
+    GenericRecoveryTranscript, ProofSummary, RecoveryIdentityModel, RecoveryPolicy,
     RecoveryPolicyActiveOutcome, RecoveryPolicyPublishOutcome, RecoveryPolicyPublishRequest,
     RecoveryPolicyRef, RecoveryPolicySummary, RecoveryProofKind, RecoveryPublicationAction,
     RecoveryPublicationAuthorityContext, RecoverySessionCreateRequestBody,
     RecoverySessionProofSubmitOutcome, RecoverySessionProofSubmitRequestBody, RecoverySessionState,
-    SecurityTransactionContinueRequest, SessionState,
+    SecurityTransactionContinueRequest, SessionState, TrustedRecoveryServiceProofBody,
+    TrustedRecoveryServiceSessionProof,
 };
 use arkret_wire::{
     AuthoritySetAuthorizationRule, AuthoritySetPolicy, AuthoritySetPolicyKind,
-    AuthoritySetPolicySource, AuthoritySetRef, AuthoritySetSourceKind, LeaseBasisRef,
-    NonEmptyString, RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID, SchemaId, SecurityTransaction,
-    SecurityTransactionCreateRequest, TransactionId,
+    AuthoritySetPolicySource, AuthoritySetRef, AuthoritySetSourceKind, DeviceId, DidCoreId, DidUrl,
+    LeaseBasisRef, PrincipalAuthorityKey, RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID, RequestId,
+    SchemaId, SecurityTransaction, SecurityTransactionCreateRequest, SessionGrantId, TransactionId,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -73,8 +75,8 @@ pub(super) fn recovery_session_proof_kind_and_digest(
 ) -> Option<(String, String)> {
     let summary = recovery_proof_summary(record)?;
     Some((
-        summary.get("kind")?.as_str()?.to_owned(),
-        summary.get("proof_digest")?.as_str()?.to_owned(),
+        summary.kind.as_wire_str().to_owned(),
+        summary.proof_digest.to_string(),
     ))
 }
 
@@ -88,8 +90,8 @@ pub(super) fn recovery_session_unlock_verifying_key(
     let summary = recovery_proof_summary(record).ok_or_else(|| {
         AppError::capability_denied("recovery session has no verified proof summary")
     })?;
-    if summary.get("kind").and_then(Value::as_str) != Some("recovery_unlock")
-        || summary.get("verification_method").and_then(Value::as_str) != Some(verification_method)
+    if summary.kind != RecoveryProofKind::RecoveryUnlock
+        || summary.verification_method.as_ref().map(DidUrl::as_str) != Some(verification_method)
     {
         return Err(AppError::capability_denied(
             "key backup unlock signature is not identified by the recovery key accepted for the session",

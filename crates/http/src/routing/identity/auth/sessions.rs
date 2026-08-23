@@ -58,8 +58,19 @@ pub async fn authenticated_session(
             request_requires_fresh_introspection(req),
         )
         .await?;
-        enforce_session_device_revocation_gate(state, &session).await?;
+        if is_recovery_session_grant(&session) {
+            enforce_recovery_session_grant_operation(state, req, &session).await?;
+        } else {
+            enforce_session_device_revocation_gate(state, &session).await?;
+        }
         return Ok(session);
+    }
+    if recovery_http_operation_requires_session_grant(req.method().as_str(), req.uri().path()) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "recovery policy and recovery session operations require a SessionGrant with matching DPoP",
+        ));
     }
     let token = bearer_token(req).ok_or((
         StatusCode::UNAUTHORIZED,
@@ -124,6 +135,187 @@ pub async fn authenticated_session(
     }
     enforce_session_device_revocation_gate(state, &session).await?;
     Ok(session)
+}
+
+fn is_recovery_session_grant(session: &SessionRecord) -> bool {
+    session.session_grant.as_ref().is_some_and(|grant| {
+        grant.credential_class
+            == arkret_models_identity::SessionGrantCredentialClass::RecoverySession
+    })
+}
+
+async fn enforce_recovery_session_grant_operation(
+    state: &AppState,
+    req: &Request,
+    session: &SessionRecord,
+) -> Result<(), (StatusCode, &'static str, &'static str)> {
+    let grant = session.session_grant.as_ref().ok_or((
+        StatusCode::UNAUTHORIZED,
+        "unauthenticated",
+        "recovery session authorization is missing grant context",
+    ))?;
+    let arkret_models_identity::SessionGrantHolderBinding::RecoveryCandidateDevice { device_id } =
+        &grant.holder_binding
+    else {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "recovery session grant has the wrong holder binding",
+        ));
+    };
+    if device_id.as_str() != session.device_id || grant.device_binding.is_some() {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "recovery session grant candidate-device binding is inconsistent",
+        ));
+    }
+    let method = req.method().as_str();
+    let path = req.uri().path();
+    let operation = recovery_operation_for_request(method, path).ok_or((
+        StatusCode::FORBIDDEN,
+        "capability_denied",
+        "recovery session grant is not authorized for this operation",
+    ))?;
+    if !grant.scopes.iter().any(|scope| scope == operation) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "recovery session grant scope omits this operation",
+        ));
+    }
+    let pre_proof = matches!(
+        operation,
+        arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_RESOURCE_GET
+            | arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_CREATE
+            | arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_RESOURCE_GET
+            | arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_SUBMIT_PROOF
+    );
+    if pre_proof {
+        return Ok(());
+    }
+    let recovery = state
+        .recovery_sessions()
+        .session_for_grant(grant.grant_id.as_str())
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                "recovery session authorization state is unavailable",
+            )
+        })?
+        .ok_or((
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "recovery proof has not been verified",
+        ))?;
+    if recovery.state != "verified"
+        || recovery.expires_at <= now()
+        || recovery.principal_id != session.actor
+        || recovery.principal_server_id != session.audience
+        || recovery.requesting_device_id != session.device_id
+        || recovery.session_grant_id != grant.grant_id.as_str()
+        || recovery.session_grant_cnf_jkt != grant.cnf_jkt
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "verified recovery session does not match the presented grant",
+        ));
+    }
+    Ok(())
+}
+
+fn path_template_matches(template: &str, actual: &str) -> bool {
+    let template = template.trim_matches('/').split('/').collect::<Vec<_>>();
+    let actual = actual.trim_matches('/').split('/').collect::<Vec<_>>();
+    template.len() == actual.len()
+        && template.iter().zip(actual).all(|(expected, observed)| {
+            (expected.starts_with('{') && expected.ends_with('}')) || *expected == observed
+        })
+}
+
+fn recovery_http_operation_requires_session_grant(method: &str, path: &str) -> bool {
+    matches!(
+        (method, path),
+        ("POST", "/_arkret/root/identity/recovery-policy")
+            | ("GET", "/_arkret/root/identity/recovery-policy")
+            | ("POST", "/_arkret/root/identity/recovery-sessions")
+    ) || (method == "GET"
+        && path_template_matches(
+            "/_arkret/root/identity/recovery-sessions/{recovery_session_id}",
+            path,
+        ))
+        || (method == "POST"
+            && path_template_matches(
+                "/_arkret/root/identity/recovery-sessions/{recovery_session_id}/proofs",
+                path,
+            ))
+}
+
+fn recovery_operation_for_request(method: &str, path: &str) -> Option<&'static str> {
+    use arkret_wire::ServiceOperationId;
+    match (method, path) {
+        ("GET", "/_arkret/root/identity/recovery-policy") => {
+            Some(ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_RESOURCE_GET)
+        }
+        ("POST", "/_arkret/root/identity/recovery-sessions") => {
+            Some(ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_CREATE)
+        }
+        ("GET", "/_arkret/root/identity/log") => {
+            Some(ServiceOperationId::ROOT_IDENTITY_LOG_READ_LIST)
+        }
+        ("QUERY", "/_arkret/self/events/frontier") => {
+            Some(ServiceOperationId::SELF_EVENTS_READ_FRONTIER)
+        }
+        ("QUERY", "/_arkret/self/events") => Some(ServiceOperationId::SELF_EVENTS_READ_SCAN),
+        ("GET", "/_arkret/self/keys/backups") => {
+            Some(ServiceOperationId::SELF_KEYS_BACKUPS_READ_LIST)
+        }
+        ("POST", "/_arkret/self/keys/query") => Some(ServiceOperationId::SELF_KEYS_READ_LOOKUP),
+        ("POST", "/_arkret/self/security-transactions") => {
+            Some(ServiceOperationId::SELF_SECURITY_TRANSACTION_COMMAND_CREATE)
+        }
+        _ if method == "GET"
+            && path_template_matches(
+                "/_arkret/root/identity/recovery-sessions/{recovery_session_id}",
+                path,
+            ) =>
+        {
+            Some(ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_RESOURCE_GET)
+        }
+        _ if method == "POST"
+            && path_template_matches(
+                "/_arkret/root/identity/recovery-sessions/{recovery_session_id}/proofs",
+                path,
+            ) =>
+        {
+            Some(ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_SUBMIT_PROOF)
+        }
+        _ if method == "POST"
+            && path_template_matches("/_arkret/self/keys/backups/{backup_id}/unlock", path) =>
+        {
+            Some(ServiceOperationId::SELF_KEYS_BACKUPS_COMMAND_UNLOCK)
+        }
+        _ if method == "GET"
+            && path_template_matches(
+                "/_arkret/self/security-transactions/{transaction_id}",
+                path,
+            ) =>
+        {
+            Some(ServiceOperationId::SELF_SECURITY_TRANSACTION_RESOURCE_GET)
+        }
+        _ if method == "POST"
+            && path_template_matches(
+                "/_arkret/self/security-transactions/{transaction_id}/continue",
+                path,
+            ) =>
+        {
+            Some(ServiceOperationId::SELF_SECURITY_TRANSACTION_COMMAND_CONTINUE)
+        }
+        _ => None,
+    }
 }
 
 async fn enforce_session_device_revocation_gate(
@@ -398,6 +590,63 @@ mod tests {
             &Method::GET,
             "/_arkret/self/realms/r1/links"
         ));
+    }
+
+    #[test]
+    fn recovery_request_gate_is_exactly_the_sdk_closed_operation_set() {
+        let admitted = [
+            ("GET", "/_arkret/root/identity/log"),
+            ("GET", "/_arkret/root/identity/recovery-policy"),
+            ("POST", "/_arkret/root/identity/recovery-sessions"),
+            (
+                "POST",
+                "/_arkret/root/identity/recovery-sessions/ak:recovery_session:1/proofs",
+            ),
+            (
+                "GET",
+                "/_arkret/root/identity/recovery-sessions/ak:recovery_session:1",
+            ),
+            ("QUERY", "/_arkret/self/events/frontier"),
+            ("QUERY", "/_arkret/self/events"),
+            ("POST", "/_arkret/self/keys/backups/ak:key_backup:1/unlock"),
+            ("GET", "/_arkret/self/keys/backups"),
+            ("POST", "/_arkret/self/keys/query"),
+            (
+                "POST",
+                "/_arkret/self/security-transactions/ak:security_transaction:1/continue",
+            ),
+            ("POST", "/_arkret/self/security-transactions"),
+            (
+                "GET",
+                "/_arkret/self/security-transactions/ak:security_transaction:1",
+            ),
+        ];
+        let mapped = admitted
+            .into_iter()
+            .map(|(method, path)| {
+                recovery_operation_for_request(method, path)
+                    .unwrap_or_else(|| panic!("recovery gate omitted {method} {path}"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            mapped,
+            arkret_models_identity::RECOVERY_SESSION_GRANT_OPERATIONS
+        );
+
+        for (method, path) in [
+            ("POST", "/_arkret/self/events"),
+            ("GET", "/_arkret/self/events"),
+            ("GET", "/_arkret/self/keys/query"),
+            ("POST", "/_arkret/root/identity/recovery-policy"),
+            ("GET", "/_arkret/root/identity/recovery-sessions"),
+            ("POST", "/_arkret/self/security-transactions/1/cancel"),
+        ] {
+            assert_eq!(
+                recovery_operation_for_request(method, path),
+                None,
+                "unexpected recovery authorization for {method} {path}"
+            );
+        }
     }
 
     #[test]

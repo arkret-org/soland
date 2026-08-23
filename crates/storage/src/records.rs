@@ -8,7 +8,7 @@ use arkret_models_crypto::{
 };
 use arkret_wire::{
     DeviceReanchorPreFenceSealFrontier, DidCoreId, EventId, FreshnessState, LeaseBasisRef,
-    NonEmptyString, PlaintextDataClassKind, RealmId,
+    PlaintextDataClassKind, RealmId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -137,7 +137,11 @@ pub struct RecoveryPolicyRecord {
 /// (C-P4) emits a `ak.device.authorize` + receipt.
 #[derive(Clone, Debug)]
 pub struct RecoverySessionRecord {
+    pub request_id: String,
+    pub create_intent_digest: String,
     pub recovery_session_id: String,
+    pub session_grant_id: String,
+    pub session_grant_cnf_jkt: String,
     pub principal_id: String,
     pub principal_server_id: String,
     pub requesting_device_id: String,
@@ -145,10 +149,10 @@ pub struct RecoverySessionRecord {
     pub policy_id: String,
     pub policy_version: u32,
     pub identity_model: RecoveryIdentityModel,
-    pub current_device_generation_ref: Option<NonEmptyString>,
-    pub device_generation_status: Option<DeviceGenerationStatus>,
-    pub registry_head: Option<Hash>,
-    pub accepted_seal_frontier: Option<DeviceReanchorPreFenceSealFrontier>,
+    pub current_device_generation_ref: u64,
+    pub device_generation_status: DeviceGenerationStatus,
+    pub registry_head: Hash,
+    pub accepted_seal_frontier: DeviceReanchorPreFenceSealFrontier,
     /// Snapshot of the active policy at session-creation time (so a later policy
     /// rotation cannot retroactively change what this session was bound to).
     pub policy_payload: Value,

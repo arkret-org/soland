@@ -15,8 +15,8 @@ use arkret_models_identity::service_identity::{
     ServiceRegistrationKey, ServiceRegistrationOutcome,
 };
 use arkret_wire::{
-    DeviceReanchorPreFenceSealFrontier, DidUrl, LeaseBasisRef, NonEmptyString, NotaryJoseAlgorithm,
-    NotaryKeyKind, NotarySignerDescriptor, OpaqueLocalId,
+    DeviceReanchorPreFenceSealFrontier, DidUrl, LeaseBasisRef, NotaryJoseAlgorithm, NotaryKeyKind,
+    NotarySignerDescriptor, OpaqueLocalId,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -1541,7 +1541,11 @@ impl RecoveryPolicyService {
 
 #[derive(Clone, Debug)]
 pub struct RecoverySessionState {
+    pub request_id: String,
+    pub create_intent_digest: String,
     pub recovery_session_id: String,
+    pub session_grant_id: String,
+    pub session_grant_cnf_jkt: String,
     pub principal_id: String,
     pub principal_server_id: String,
     pub requesting_device_id: String,
@@ -1549,10 +1553,10 @@ pub struct RecoverySessionState {
     pub policy_id: String,
     pub policy_version: u32,
     pub identity_model: RecoveryIdentityModel,
-    pub current_device_generation_ref: Option<NonEmptyString>,
-    pub device_generation_status: Option<DeviceGenerationStatus>,
-    pub registry_head: Option<Hash>,
-    pub accepted_seal_frontier: Option<DeviceReanchorPreFenceSealFrontier>,
+    pub current_device_generation_ref: u64,
+    pub device_generation_status: DeviceGenerationStatus,
+    pub registry_head: Hash,
+    pub accepted_seal_frontier: DeviceReanchorPreFenceSealFrontier,
     pub policy_payload: Value,
     pub publication_authority_context: RecoveryPublicationAuthorityContext,
     pub publication_authority_context_digest: Hash,
@@ -1570,6 +1574,15 @@ pub trait RecoverySessionPort: Send + Sync {
     async fn session(
         &self,
         recovery_session_id: &str,
+    ) -> ServiceResult<Option<RecoverySessionState>>;
+    async fn session_for_grant(
+        &self,
+        session_grant_id: &str,
+    ) -> ServiceResult<Option<RecoverySessionState>>;
+    async fn session_for_request(
+        &self,
+        session_grant_id: &str,
+        request_id: &str,
     ) -> ServiceResult<Option<RecoverySessionState>>;
     async fn insert_session(&self, session: RecoverySessionState) -> ServiceResult<()>;
     async fn update_session(&self, session: RecoverySessionState) -> ServiceResult<()>;
@@ -1590,6 +1603,23 @@ impl RecoverySessionService {
         recovery_session_id: &str,
     ) -> ServiceResult<Option<RecoverySessionState>> {
         self.sessions.session(recovery_session_id).await
+    }
+
+    pub async fn session_for_grant(
+        &self,
+        session_grant_id: &str,
+    ) -> ServiceResult<Option<RecoverySessionState>> {
+        self.sessions.session_for_grant(session_grant_id).await
+    }
+
+    pub async fn session_for_request(
+        &self,
+        session_grant_id: &str,
+        request_id: &str,
+    ) -> ServiceResult<Option<RecoverySessionState>> {
+        self.sessions
+            .session_for_request(session_grant_id, request_id)
+            .await
     }
 
     pub async fn create_session(&self, session: RecoverySessionState) -> ServiceResult<()> {

@@ -1529,12 +1529,8 @@ async fn validate_reanchor_recovery_session(
         || session.requesting_device_id != authorize.device_id.as_str()
         || session.policy_id != reanchor.recovery_policy_id.as_str()
         || u64::from(session.policy_version) != reanchor.recovery_policy_version
-        || session
-            .current_device_generation_ref
-            .as_ref()
-            .and_then(|generation| generation.as_str().parse::<u64>().ok())
-            != Some(reanchor.previous_device_generation)
-        || session.accepted_seal_frontier.as_ref() != reanchor.pre_fence_seal_frontier.as_ref()
+        || session.current_device_generation_ref != reanchor.previous_device_generation
+        || Some(&session.accepted_seal_frontier) != reanchor.pre_fence_seal_frontier.as_ref()
     {
         return Err(SubmitOneError::new(
             StatusCode::CONFLICT,

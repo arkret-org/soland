@@ -230,7 +230,7 @@ pub fn build_egress_http_client(
     connect_timeout: Duration,
     request_timeout: Duration,
 ) -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
+    egress_http_client_builder()?
         .connect_timeout(connect_timeout)
         .timeout(request_timeout)
         .redirect(reqwest::redirect::Policy::none())
@@ -276,7 +276,7 @@ pub fn validate_http_url_for_egress_with_pinned_client_allow_private(
             return Err(error);
         }
     };
-    let builder = reqwest::Client::builder()
+    let builder = egress_http_client_builder()?
         .connect_timeout(DEFAULT_CONNECT_TIMEOUT.min(request_timeout))
         .timeout(request_timeout)
         .redirect(reqwest::redirect::Policy::none())
@@ -286,6 +286,23 @@ pub fn validate_http_url_for_egress_with_pinned_client_allow_private(
         .build()
         .map_err(|error| format!("failed to build pinned egress HTTP client: {error}"))?;
     Ok((url, client))
+}
+
+fn egress_http_client_builder() -> Result<reqwest::ClientBuilder, String> {
+    let builder = reqwest::Client::builder();
+    let Some(path) = std::env::var_os("SSL_CERT_FILE") else {
+        return Ok(builder);
+    };
+    let path = std::path::PathBuf::from(path);
+    let pem = std::fs::read(&path)
+        .map_err(|error| format!("failed to read SSL_CERT_FILE {}: {error}", path.display()))?;
+    let certificates = reqwest::Certificate::from_pem_bundle(&pem).map_err(|error| {
+        format!(
+            "SSL_CERT_FILE {} contains no valid PEM certificate: {error}",
+            path.display()
+        )
+    })?;
+    Ok(builder.tls_certs_merge(certificates))
 }
 
 pub fn validate_url_for_egress(

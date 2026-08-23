@@ -2390,6 +2390,10 @@ ALTER TABLE ONLY public.recovery_policies
 
 CREATE TABLE public.recovery_sessions (
     id uuid PRIMARY KEY,
+    request_id text NOT NULL,
+    create_intent_digest text NOT NULL,
+    session_grant_id text NOT NULL,
+    session_grant_cnf_jkt text NOT NULL,
     principal_id text NOT NULL,
     principal_server_id text NOT NULL,
     requesting_device_id text NOT NULL,
@@ -2397,10 +2401,10 @@ CREATE TABLE public.recovery_sessions (
     policy_id uuid NOT NULL,
     policy_version integer NOT NULL,
     identity_model text NOT NULL,
-    current_device_generation_ref text,
-    device_generation_status text,
-    registry_head text,
-    accepted_seal_frontier jsonb,
+    current_device_generation_ref bigint NOT NULL,
+    device_generation_status text NOT NULL,
+    registry_head text NOT NULL,
+    accepted_seal_frontier jsonb NOT NULL,
     policy_payload jsonb NOT NULL,
     publication_authority_context jsonb NOT NULL,
     publication_authority_context_digest text NOT NULL,
@@ -2413,9 +2417,12 @@ CREATE TABLE public.recovery_sessions (
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT recovery_sessions_policy_version_check CHECK ((policy_version >= 1)),
     CONSTRAINT recovery_sessions_identity_model_check CHECK ((identity_model = 'pcr_policy'::text)),
-    CONSTRAINT recovery_sessions_generation_shape_check CHECK ((current_device_generation_ref IS NOT NULL) AND (device_generation_status = ANY (ARRAY['active'::text, 'conflicted'::text])) AND (registry_head IS NOT NULL)),
+    CONSTRAINT recovery_sessions_create_intent_digest_check CHECK ((create_intent_digest ~ '^sha256:[0-9a-f]{64}$')),
+    CONSTRAINT recovery_sessions_grant_cnf_jkt_check CHECK ((session_grant_cnf_jkt ~ '^[A-Za-z0-9_-]{43}$')),
+    CONSTRAINT recovery_sessions_generation_shape_check CHECK ((current_device_generation_ref > 0) AND (device_generation_status = ANY (ARRAY['active'::text, 'conflicted'::text]))),
     CONSTRAINT recovery_sessions_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'verified'::text, 'completed'::text, 'rejected'::text, 'expired'::text]))),
     CONSTRAINT recovery_sessions_trust_domain_check CHECK ((trust_domain ~ '^ak:trust_domain:[a-z0-9][-a-z0-9._:]{0,127}$')),
+    CONSTRAINT recovery_sessions_session_grant_id_key UNIQUE (session_grant_id),
     CONSTRAINT recovery_sessions_transaction_id_key UNIQUE (transaction_id)
 );
 

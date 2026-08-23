@@ -1578,7 +1578,11 @@ fn application_recovery_session(
     record: soland_storage::RecoverySessionRecord,
 ) -> crate::identity::RecoverySessionState {
     crate::identity::RecoverySessionState {
+        request_id: record.request_id,
+        create_intent_digest: record.create_intent_digest,
         recovery_session_id: record.recovery_session_id,
+        session_grant_id: record.session_grant_id,
+        session_grant_cnf_jkt: record.session_grant_cnf_jkt,
         principal_id: record.principal_id,
         principal_server_id: record.principal_server_id,
         requesting_device_id: record.requesting_device_id,
@@ -1607,7 +1611,11 @@ fn persistence_recovery_session(
     session: crate::identity::RecoverySessionState,
 ) -> soland_storage::RecoverySessionRecord {
     soland_storage::RecoverySessionRecord {
+        request_id: session.request_id,
+        create_intent_digest: session.create_intent_digest,
         recovery_session_id: session.recovery_session_id,
+        session_grant_id: session.session_grant_id,
+        session_grant_cnf_jkt: session.session_grant_cnf_jkt,
         principal_id: session.principal_id,
         principal_server_id: session.principal_server_id,
         requesting_device_id: session.requesting_device_id,
@@ -1642,6 +1650,31 @@ impl crate::identity::RecoverySessionPort for PersistenceRecoverySessions {
             .0
             .recovery_sessions()
             .get(recovery_session_id)
+            .await?
+            .map(application_recovery_session))
+    }
+
+    async fn session_for_grant(
+        &self,
+        session_grant_id: &str,
+    ) -> crate::ServiceResult<Option<crate::identity::RecoverySessionState>> {
+        Ok(self
+            .0
+            .recovery_sessions()
+            .get_by_grant_id(session_grant_id)
+            .await?
+            .map(application_recovery_session))
+    }
+
+    async fn session_for_request(
+        &self,
+        session_grant_id: &str,
+        request_id: &str,
+    ) -> crate::ServiceResult<Option<crate::identity::RecoverySessionState>> {
+        Ok(self
+            .0
+            .recovery_sessions()
+            .get_by_grant_request(session_grant_id, request_id)
             .await?
             .map(application_recovery_session))
     }

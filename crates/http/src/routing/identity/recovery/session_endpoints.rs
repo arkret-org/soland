@@ -29,85 +29,44 @@ fn constant_time_str_eq(left: &str, right: &str) -> bool {
 //   GET  recovery-sessions/{id}             — read status (principal-isolated)
 //   POST recovery-sessions/{id}/proofs      — verify a proof (pending -> verified)
 //
-// C-P3 — `/proofs` verifies the `did_root` kind cryptographically
-// (Ed25519 over the canonical recovery-proof transcript binding every
-// session-defining field) and advances `pending -> verified` ONLY on success.
-// Other policy-permitted proof kinds return 501 `recovery_proof_kind_unimplemented`
-// rather than silently leaving the session pending.
+// C-P3 — `/proofs` cryptographically verifies did_root, recovery_unlock, and
+// trusted_recovery_service over the canonical recovery-proof transcript and
+// advances `pending -> verified` ONLY on success. Policy-permitted
+// device_quorum and threshold_recovery currently return 501
+// `recovery_proof_kind_unimplemented` rather than silently leaving the session
+// pending.
 //
 // Completion is exclusively owned by the bound RecoveryTransaction. There is
 // no second public recovery-session completion command.
-
-pub(super) fn recovery_session_summary(record: &RecoverySessionServiceState) -> Value {
-    let mut out = json!({
-        "schema": arkret_wire::SchemaId::RECOVERY_SESSION_V1,
-        "recovery_session_id": record.recovery_session_id,
-        "principal_authority": {
-            "principal_id": record.principal_id,
-            "principal_server_id": record.principal_server_id,
-        },
-        "requesting_device_id": record.requesting_device_id,
-        "trust_domain": record.trust_domain,
-        "policy_id": record.policy_id,
-        "policy_version": record.policy_version,
-        "identity_model": record.identity_model,
-        "publication_authority_context": record.publication_authority_context,
-        "publication_authority_context_digest": record.publication_authority_context_digest,
-        "challenge": record.challenge,
-        "state": record.state,
-        "created_at": arkret_canonical::format_timestamp_canonical(record.created_at),
-        "updated_at": arkret_canonical::format_timestamp_canonical(record.updated_at),
-        "expires_at": arkret_canonical::format_timestamp_canonical(record.expires_at),
-    });
-    match record.identity_model {
-        RecoveryIdentityModel::PcrPolicy => {
-            out["current_device_generation_ref"] = record
-                .current_device_generation_ref
-                .as_ref()
-                .map_or(Value::Null, |value| json!(value));
-            out["device_generation_status"] = record
-                .device_generation_status
-                .as_ref()
-                .map_or(Value::Null, |value| json!(value));
-            out["registry_head"] = record
-                .registry_head
-                .as_ref()
-                .map_or(Value::Null, |value| json!(value));
-            out["accepted_seal_frontier"] = record
-                .accepted_seal_frontier
-                .as_ref()
-                .map_or(Value::Null, |value| json!(value));
-        }
-    }
-    // recovery-session.schema.json: verified/completed sessions MUST carry a
-    // proof_summary; rejected sessions MUST carry a rejection_reason_code.
-    if matches!(record.state.as_str(), "verified" | "completed")
-        && let Some(summary) = recovery_proof_summary(record)
-    {
-        out["proof_summary"] = summary;
-    }
-    if let Some(transaction_id) = &record.transaction_id {
-        out["transaction_id"] = json!(transaction_id);
-    }
-    out
-}
 
 /// Derive the `proof_summary{kind, proof_digest, verification_method}` from a
 /// session that has a recorded proof. `proof_digest` is the SHA-256 of the
 /// canonical recovery-proof transcript, deterministically recomputed from the
 /// stored session fields (no separate column needed).
-pub(super) fn recovery_proof_summary(record: &RecoverySessionServiceState) -> Option<Value> {
+pub(super) fn recovery_proof_summary(record: &RecoverySessionServiceState) -> Option<ProofSummary> {
     let proof = record.proof_payload.as_ref()?.get("proof")?.as_object()?;
-    let kind = proof.get("kind").and_then(Value::as_str)?;
-    let verification_method = proof.get("verification_method").and_then(Value::as_str);
+    let kind = match proof.get("kind").and_then(Value::as_str)? {
+        "did_root" => RecoveryProofKind::DidRoot,
+        "recovery_unlock" => RecoveryProofKind::RecoveryUnlock,
+        "device_quorum" => RecoveryProofKind::DeviceQuorum,
+        "trusted_recovery_service" => RecoveryProofKind::TrustedRecoveryService,
+        "threshold_recovery" => RecoveryProofKind::ThresholdRecovery,
+        _ => return None,
+    };
+    let verification_method = proof
+        .get("verification_method")
+        .and_then(Value::as_str)
+        .map(DidUrl::new)
+        .transpose()
+        .ok()?;
     let transcript = recovery_proof_summary_transcript(record, proof)?;
     let transcript_bytes = arkret_canonical::canonical_json_bytes(&transcript).ok()?;
-    let proof_digest = arkret_canonical::sha256_digest(&transcript_bytes);
-    let mut summary = json!({ "kind": kind, "proof_digest": proof_digest });
-    if let Some(vm) = verification_method {
-        summary["verification_method"] = json!(vm);
-    }
-    Some(summary)
+    let proof_digest = Hash::new(arkret_canonical::sha256_digest(&transcript_bytes)).ok()?;
+    Some(ProofSummary {
+        kind,
+        proof_digest,
+        verification_method,
+    })
 }
 
 fn recovery_proof_summary_transcript(
@@ -118,11 +77,12 @@ fn recovery_proof_summary_transcript(
     match kind {
         "trusted_recovery_service" => {
             let proof_body = trusted_recovery_service_proof_body(proof).ok()?;
-            Some(generic_recovery_proof_transcript(
+            let transcript = generic_recovery_proof_transcript(
                 record,
-                "trusted_recovery_service",
-                proof_body,
-            ))
+                GenericRecoveryProofBody::TrustedRecoveryService(proof_body),
+            )
+            .ok()?;
+            serde_json::to_value(transcript).ok()
         }
         "recovery_unlock" => {
             let proof = serde_json::from_value::<arkret_models_crypto::RecoverySessionUnlockProof>(
@@ -130,47 +90,127 @@ fn recovery_proof_summary_transcript(
             )
             .ok()?;
             let proof_body = proof.signature_independent_proof_body().ok()?;
-            Some(generic_recovery_proof_transcript(
+            let transcript = generic_recovery_proof_transcript(
                 record,
-                "recovery_unlock",
-                serde_json::to_value(proof_body).ok()?,
-            ))
+                GenericRecoveryProofBody::RecoveryUnlock(proof_body),
+            )
+            .ok()?;
+            serde_json::to_value(transcript).ok()
         }
-        _ => Some(recovery_proof_transcript(record, kind)),
+        "did_root" => serde_json::to_value(did_root_recovery_proof_transcript(record).ok()?).ok(),
+        _ => None,
     }
+}
+
+#[derive(Clone)]
+struct RecoveryTranscriptContext {
+    request_id: RequestId,
+    session_grant_id: SessionGrantId,
+    session_grant_cnf_jkt: String,
+    principal_authority: PrincipalAuthorityKey,
+    requesting_device_id: DeviceId,
+    trust_domain: TrustDomainId,
+    policy_id: PolicyId,
+    policy_version: u64,
+    recovery_session_id: RecoverySessionId,
+    identity_model: RecoveryIdentityModel,
+    model_generation_ref: u64,
+    publication_authority_context_digest: Hash,
+    challenge: Challenge,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+fn typed_recovery_transcript_context(
+    record: &RecoverySessionServiceState,
+) -> Result<RecoveryTranscriptContext, AppError> {
+    Ok(RecoveryTranscriptContext {
+        request_id: RequestId::new(record.request_id.clone())
+            .map_err(|error| stored_recovery_type_error("request_id", error))?,
+        session_grant_id: SessionGrantId::new(record.session_grant_id.clone())
+            .map_err(|error| stored_recovery_type_error("session_grant_id", error))?,
+        session_grant_cnf_jkt: record.session_grant_cnf_jkt.clone(),
+        principal_authority: PrincipalAuthorityKey::new(
+            DidCoreId::new(record.principal_id.clone())
+                .map_err(|error| stored_recovery_type_error("principal_id", error))?,
+            DidCoreId::new(record.principal_server_id.clone())
+                .map_err(|error| stored_recovery_type_error("principal_server_id", error))?,
+        ),
+        requesting_device_id: DeviceId::new(record.requesting_device_id.clone())
+            .map_err(|error| stored_recovery_type_error("requesting_device_id", error))?,
+        trust_domain: TrustDomainId::new(record.trust_domain.clone())
+            .map_err(|error| stored_recovery_type_error("trust_domain", error))?,
+        policy_id: PolicyId::new(record.policy_id.clone())
+            .map_err(|error| stored_recovery_type_error("policy_id", error))?,
+        policy_version: u64::from(record.policy_version),
+        recovery_session_id: RecoverySessionId::new(record.recovery_session_id.clone())
+            .map_err(|error| stored_recovery_type_error("recovery_session_id", error))?,
+        identity_model: record.identity_model,
+        model_generation_ref: record.current_device_generation_ref,
+        publication_authority_context_digest: record.publication_authority_context_digest.clone(),
+        challenge: Challenge::new(record.challenge.clone())
+            .map_err(|error| stored_recovery_type_error("challenge", error))?,
+        expires_at: record.expires_at,
+        created_at: record.created_at,
+    })
 }
 
 pub(super) fn typed_recovery_session_state(
     record: &RecoverySessionServiceState,
 ) -> Result<RecoverySessionState, AppError> {
-    serde_json::from_value(recovery_session_summary(record))
-        .map_err(|error| stored_recovery_type_error("session state", error))
-}
-
-pub(super) fn typed_recovery_proof_summary(
-    record: &RecoverySessionServiceState,
-) -> Result<Option<ProofSummary>, AppError> {
-    recovery_proof_summary(record)
-        .map(|value| {
-            serde_json::from_value(value)
-                .map_err(|error| stored_recovery_type_error("proof summary", error))
-        })
-        .transpose()
+    let transcript = typed_recovery_transcript_context(record)?;
+    let state = RecoverySessionState {
+        schema: SchemaId::RECOVERY_SESSION_V1.to_owned(),
+        request_id: transcript.request_id,
+        recovery_session_id: transcript.recovery_session_id,
+        session_grant_id: transcript.session_grant_id,
+        session_grant_cnf_jkt: transcript.session_grant_cnf_jkt,
+        principal_authority: transcript.principal_authority,
+        requesting_device_id: transcript.requesting_device_id,
+        trust_domain: transcript.trust_domain,
+        policy_id: transcript.policy_id,
+        policy_version: transcript.policy_version,
+        identity_model: transcript.identity_model,
+        current_device_generation_ref: transcript.model_generation_ref,
+        device_generation_status: record.device_generation_status,
+        registry_head: record.registry_head.clone(),
+        accepted_seal_frontier: record.accepted_seal_frontier.clone(),
+        publication_authority_context: record.publication_authority_context.clone(),
+        publication_authority_context_digest: record.publication_authority_context_digest.clone(),
+        challenge: Challenge::new(record.challenge.clone())
+            .map_err(|error| stored_recovery_type_error("challenge", error))?,
+        state: recovery_session_state_from_record(record)?,
+        proof_summary: recovery_proof_summary(record),
+        transaction_id: record
+            .transaction_id
+            .as_ref()
+            .map(|value| TransactionId::new(value.clone()))
+            .transpose()
+            .map_err(|error| stored_recovery_type_error("transaction_id", error))?,
+        rejection_reason_code: None,
+        expires_at: record.expires_at,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+    };
+    state
+        .validate()
+        .map_err(|error| stored_recovery_type_error("session state", error))?;
+    Ok(state)
 }
 
 pub(super) fn recovery_session_state_from_record(
     record: &RecoverySessionServiceState,
 ) -> Result<SessionState, AppError> {
-    serde_json::from_value(Value::String(record.state.clone()))
-        .map_err(|error| stored_recovery_type_error("session state enum", error))
-}
-
-fn recovery_model_generation_ref(record: &RecoverySessionServiceState) -> Value {
-    match record.identity_model {
-        RecoveryIdentityModel::PcrPolicy => record
-            .current_device_generation_ref
-            .as_ref()
-            .map_or(Value::Null, |generation| json!(generation)),
+    match record.state.as_str() {
+        "pending" => Ok(SessionState::Pending),
+        "verified" => Ok(SessionState::Verified),
+        "completed" => Ok(SessionState::Completed),
+        "rejected" => Ok(SessionState::Rejected),
+        "expired" => Ok(SessionState::Expired),
+        value => Err(stored_recovery_type_error(
+            "session state enum",
+            format_args!("unknown value `{value}`"),
+        )),
     }
 }
 
@@ -350,6 +390,7 @@ pub(super) async fn load_owned_recovery_session(
     recovery_session_id: &str,
 ) -> Result<RecoverySessionServiceState, AppError> {
     let session = aa.authenticated_session(state, req).await?;
+    let (grant_id, grant_jkt, candidate_device_id) = recovery_grant_coordinates(&session)?;
     let principal = session.actor;
     let record = state
         .recovery_sessions()
@@ -361,7 +402,12 @@ pub(super) async fn load_owned_recovery_session(
                 "recovery session `{recovery_session_id}` not found"
             ))
         })?;
-    if record.principal_id != principal {
+    if record.principal_id != principal
+        || record.principal_server_id != session.audience
+        || record.requesting_device_id != candidate_device_id
+        || record.session_grant_id != grant_id
+        || record.session_grant_cnf_jkt != grant_jkt
+    {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "recovery session belongs to a different principal",
@@ -370,6 +416,41 @@ pub(super) async fn load_owned_recovery_session(
         .with_wire_code("recovery_principal_isolation"));
     }
     Ok(record)
+}
+
+fn recovery_grant_coordinates(
+    session: &SessionRecord,
+) -> Result<(String, String, String), AppError> {
+    let grant = session.session_grant.as_ref().ok_or_else(|| {
+        AppError::unauthenticated("recovery operation requires a recovery_session SessionGrant")
+    })?;
+    if grant.credential_class
+        != arkret_models_identity::SessionGrantCredentialClass::RecoverySession
+        || grant.device_binding.is_some()
+    {
+        return Err(AppError::new(
+            ErrorCode::CapabilityDenied,
+            "recovery operation requires a restricted recovery_session grant",
+        )
+        .with_status(StatusCode::FORBIDDEN));
+    }
+    let arkret_models_identity::SessionGrantHolderBinding::RecoveryCandidateDevice { device_id } =
+        &grant.holder_binding
+    else {
+        return Err(AppError::unauthenticated(
+            "recovery session grant has the wrong holder binding",
+        ));
+    };
+    if device_id.as_str() != session.device_id {
+        return Err(AppError::unauthenticated(
+            "recovery candidate device does not match the authenticated session",
+        ));
+    }
+    Ok((
+        grant.grant_id.to_string(),
+        grant.cnf_jkt.clone(),
+        device_id.to_string(),
+    ))
 }
 
 #[salvo::oapi::endpoint(
@@ -389,8 +470,48 @@ pub(super) async fn recovery_session_create(
 ) -> JsonResult<RecoverySessionState> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let (session_grant_id, session_grant_cnf_jkt, candidate_device_id) =
+        recovery_grant_coordinates(&session)?;
     let principal = session.actor.clone();
     let payload = body.into_inner();
+    let create_intent_digest = Hash::new(arkret_canonical::canonical_sha256(&payload).map_err(
+        |error| AppError::internal(format!("recovery create canonicalization failed: {error}")),
+    )?)
+    .map_err(|error| AppError::internal(format!("recovery create digest failed: {error}")))?;
+    if payload.requesting_device_id.as_str() != candidate_device_id {
+        return Err(AppError::new(
+            ErrorCode::CapabilityDenied,
+            "requesting_device_id does not match the recovery grant holder",
+        )
+        .with_status(StatusCode::FORBIDDEN)
+        .with_wire_code("recovery_evidence_unbound"));
+    }
+    if let Some(existing) = state
+        .recovery_sessions()
+        .session_for_request(&session_grant_id, payload.request_id.as_str())
+        .await
+        .map_err(recovery_session_store_error)?
+    {
+        if existing.create_intent_digest == create_intent_digest.as_str() {
+            return json_ok(typed_recovery_session_state(&existing)?);
+        }
+        return Err(AppError::conflict(
+            "recovery request_id was already used with a different create intent",
+        )
+        .with_wire_code("duplicate_conflict"));
+    }
+    if state
+        .recovery_sessions()
+        .session_for_grant(&session_grant_id)
+        .await
+        .map_err(recovery_session_store_error)?
+        .is_some()
+    {
+        return Err(AppError::conflict(
+            "recovery SessionGrant is already bound to another recovery session",
+        )
+        .with_wire_code("duplicate_conflict"));
+    }
 
     let principal_authority = payload.principal_authority;
     if principal_authority.principal_id.as_str() != principal {
@@ -489,67 +610,66 @@ pub(super) async fn recovery_session_create(
         device_generation_status,
         registry_head,
         accepted_seal_frontier,
-    ) =
-        if let Some(generation) = device_generation {
-            let mut entries = state
-                .dids()
-                .log_events(&principal)
-                .await
-                .map_err(recovery_service_error)?;
-            entries.sort_by_key(|entry| entry.seq);
-            let registry_head = entries
-                .last()
-                .map(|entry| entry.event_digest.clone())
-                .ok_or_else(|| {
-                    AppError::conflict("recovery requires an accepted DID registry head")
-                        .with_wire_code("device_reanchor_entry_not_head")
-                })?;
-            let leaves =
+    ) = if let Some(generation) = device_generation {
+        let mut entries = state
+            .dids()
+            .log_events(&principal)
+            .await
+            .map_err(recovery_service_error)?;
+        entries.sort_by_key(|entry| entry.seq);
+        let registry_head = entries
+            .last()
+            .map(|entry| entry.event_digest.clone())
+            .ok_or_else(|| {
+                AppError::conflict("recovery requires an accepted DID registry head")
+                    .with_wire_code("device_reanchor_entry_not_head")
+            })?;
+        let leaves =
             crate::routing::identity::device_generation::accepted_device_generation_seal_leaves(
                 state, &principal, &realm_id,
             )
             .await
             .map_err(recovery_store_error)?;
-            let accepted_seal_frontier = if leaves.is_empty() {
-                None
-            } else {
-                let view = state
-                    .projections()
-                    .effective_seal_view(&leaves, &realm_id)
-                    .map_err(|error| {
-                        AppError::conflict(format!("accepted Seal frontier is invalid: {error}"))
-                            .with_wire_code("device_reanchor_frontier_mismatch")
-                    })?;
-                Some(arkret_wire::DeviceReanchorPreFenceSealFrontier {
-                    leaves,
-                    control_event_set_root: view.control_event_set_root,
-                    state_root: view.state_root,
-                })
-            };
-            (
+        if leaves.is_empty() {
+            return Err(
+                AppError::conflict("recovery requires a non-empty accepted Seal frontier")
+                    .with_wire_code("device_reanchor_frontier_mismatch"),
+            );
+        }
+        let view = state
+            .projections()
+            .effective_seal_view(&leaves, &realm_id)
+            .map_err(|error| {
+                AppError::conflict(format!("accepted Seal frontier is invalid: {error}"))
+                    .with_wire_code("device_reanchor_frontier_mismatch")
+            })?;
+        let accepted_seal_frontier = arkret_wire::DeviceReanchorPreFenceSealFrontier {
+            leaves,
+            control_event_set_root: view.control_event_set_root,
+            state_root: view.state_root,
+        };
+        (
             RecoveryIdentityModel::PcrPolicy,
-            Some(NonEmptyString::new(generation.current_ref.to_string()).map_err(|error| {
-                AppError::internal(format!("invalid accepted device generation ref: {error}"))
-            })?),
-            Some(match generation.status {
+            generation.current_ref,
+            match generation.status {
                 crate::routing::identity::device_generation::DeviceGenerationStatus::Active => {
                     DeviceGenerationStatus::Active
                 }
                 crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted => {
                     DeviceGenerationStatus::Conflicted
                 }
-            }),
-            Some(Hash::new(registry_head).map_err(|error| {
+            },
+            Hash::new(registry_head).map_err(|error| {
                 AppError::internal(format!("invalid accepted DID registry head: {error}"))
-            })?),
+            })?,
             accepted_seal_frontier,
         )
-        } else {
-            return Err(
-                AppError::conflict("recovery requires an accepted device generation")
-                    .with_wire_code("device_generation_missing"),
-            );
-        };
+    } else {
+        return Err(
+            AppError::conflict("recovery requires an accepted device generation")
+                .with_wire_code("device_generation_missing"),
+        );
+    };
 
     let publication_authority_context =
         pcr_policy_recovery_publication_authority_context(state, &active, &realm_id).await?;
@@ -561,7 +681,11 @@ pub(super) async fn recovery_session_create(
         })?;
     let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let record = RecoverySessionServiceState {
+        request_id: payload.request_id.to_string(),
+        create_intent_digest: create_intent_digest.to_string(),
         recovery_session_id: crate::ids::generate("recovery_session"),
+        session_grant_id,
+        session_grant_cnf_jkt,
         principal_id: principal.clone(),
         principal_server_id: principal_authority.principal_server_id.to_string(),
         requesting_device_id,
@@ -582,13 +706,45 @@ pub(super) async fn recovery_session_create(
         transaction_id: None,
         created_at: now,
         updated_at: now,
-        expires_at: now + chrono::Duration::seconds(RECOVERY_SESSION_TTL_SECS),
+        expires_at: (now + chrono::Duration::seconds(RECOVERY_SESSION_TTL_SECS))
+            .min(session.expires_at),
     };
-    state
+    if let Err(error) = state
         .recovery_sessions()
         .create_session(record.clone())
         .await
-        .map_err(recovery_session_store_error)?;
+    {
+        if error.conflict_code() == Some(soland_storage::ConflictCode::RecoverySessionAlreadyExists)
+        {
+            if let Some(existing) = state
+                .recovery_sessions()
+                .session_for_request(&record.session_grant_id, record.request_id.as_str())
+                .await
+                .map_err(recovery_session_store_error)?
+            {
+                if existing.create_intent_digest == record.create_intent_digest {
+                    return json_ok(typed_recovery_session_state(&existing)?);
+                }
+                return Err(AppError::conflict(
+                    "recovery request_id was concurrently used with a different create intent",
+                )
+                .with_wire_code("duplicate_conflict"));
+            }
+            if state
+                .recovery_sessions()
+                .session_for_grant(&record.session_grant_id)
+                .await
+                .map_err(recovery_session_store_error)?
+                .is_some()
+            {
+                return Err(AppError::conflict(
+                    "recovery SessionGrant was concurrently bound to another recovery session",
+                )
+                .with_wire_code("duplicate_conflict"));
+            }
+        }
+        return Err(recovery_session_store_error(error));
+    }
 
     append_audit_log(
         state,
@@ -742,7 +898,7 @@ pub(super) async fn recovery_session_proof_submit(
         .await
         .map_err(recovery_session_store_error)?;
 
-    let proof_summary = recovery_proof_summary(&updated).unwrap_or(Value::Null);
+    let proof_summary = recovery_proof_summary(&updated);
     append_audit_log(
         state,
         Some(&updated.principal_id),
@@ -772,7 +928,7 @@ pub(super) async fn recovery_session_proof_submit(
             .map_err(|error| stored_recovery_type_error("recovery_session_id", error))?,
         state: recovery_session_state_from_record(&updated)?,
         verification: "verified".to_owned(),
-        proof_summary: typed_recovery_proof_summary(&updated)?,
+        proof_summary: recovery_proof_summary(&updated),
     })
 }
 
@@ -900,7 +1056,7 @@ pub(super) async fn verify_did_root_proof(
             .map_err(|error| {
                 recovery_signature_error(format!("recovery signing device key is invalid: {error}"))
             })?;
-    let transcript = recovery_proof_transcript(record, "did_root");
+    let transcript = did_root_recovery_proof_transcript(record)?;
     let transcript_bytes =
         arkret_canonical::canonical_json_bytes(&transcript).map_err(|error| {
             AppError::internal(format!("recovery proof transcript failed: {error}"))
@@ -979,8 +1135,10 @@ pub(super) async fn verify_trusted_recovery_service_proof(
             recovery_proof_authority_error(format!("trusted recovery service key invalid: {error}"))
         })?;
     let proof_body = trusted_recovery_service_proof_body(proof)?;
-    let transcript =
-        generic_recovery_proof_transcript(record, "trusted_recovery_service", proof_body);
+    let transcript = generic_recovery_proof_transcript(
+        record,
+        GenericRecoveryProofBody::TrustedRecoveryService(proof_body),
+    )?;
     let transcript_bytes =
         arkret_canonical::canonical_json_bytes(&transcript).map_err(|error| {
             AppError::internal(format!("recovery proof transcript failed: {error}"))
@@ -1070,8 +1228,10 @@ pub(super) async fn verify_recovery_unlock_proof(
         .map_err(|error| {
             AppError::param_invalid(format!("invalid recovery_unlock proof: {error}"))
         })?;
-    let transcript =
-        generic_recovery_proof_transcript(record, "recovery_unlock", json!(proof_body));
+    let transcript = generic_recovery_proof_transcript(
+        record,
+        GenericRecoveryProofBody::RecoveryUnlock(proof_body),
+    )?;
     let transcript_bytes =
         arkret_canonical::canonical_json_bytes(&transcript).map_err(|error| {
             AppError::internal(format!("recovery_unlock transcript failed: {error}"))
@@ -1202,24 +1362,17 @@ fn required_proof_string<'a>(
         .ok_or_else(|| AppError::param_invalid(format!("proof.{key} is required")))
 }
 
-fn trusted_recovery_service_proof_body(proof: &Map<String, Value>) -> Result<Value, AppError> {
-    let mut body = json!({
-        "kind": "trusted_recovery_service",
-        "challenge": required_proof_string(proof, "challenge")?,
-        "service_id": required_proof_string(proof, "service_id")?,
-        "audience": required_proof_string(proof, "audience")?,
-        "verification_method": required_proof_string(proof, "verification_method")?,
-        "signature_algorithm": required_proof_string(proof, "signature_algorithm")?,
-    });
-    if let Some(attestation_ref) = proof
-        .get("attestation_ref")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        body["attestation_ref"] = json!(attestation_ref);
-    }
-    Ok(body)
+fn trusted_recovery_service_proof_body(
+    proof: &Map<String, Value>,
+) -> Result<TrustedRecoveryServiceProofBody, AppError> {
+    let proof =
+        serde_json::from_value::<TrustedRecoveryServiceSessionProof>(Value::Object(proof.clone()))
+            .map_err(|error| {
+                AppError::param_invalid(format!("invalid trusted_recovery_service proof: {error}"))
+            })?;
+    proof.signature_independent_proof_body().map_err(|error| {
+        AppError::param_invalid(format!("invalid trusted_recovery_service proof: {error}"))
+    })
 }
 
 fn recovery_policy_mentions_identifier(
@@ -1292,55 +1445,66 @@ fn recovery_proof_authority_error(message: impl Into<String>) -> AppError {
 /// Canonical recovery-proof transcript binding every session-defining field.
 /// Both the requesting device (when signing) and the server (when verifying)
 /// MUST construct this identically.
-pub(super) fn recovery_proof_transcript(record: &RecoverySessionServiceState, kind: &str) -> Value {
-    json!({
-            "schema": arkret_wire::DomainSeparationId::IDENTITY_RECOVERY_PROOF_V1,
-        "kind": kind,
-        "principal_authority": {
-            "principal_id": record.principal_id,
-            "principal_server_id": record.principal_server_id,
-        },
-        "requesting_device_id": record.requesting_device_id,
-        "trust_domain": record.trust_domain,
-        "policy_id": record.policy_id,
-        "policy_version": record.policy_version,
-        "recovery_session_id": record.recovery_session_id,
-        "identity_model": record.identity_model,
-        "model_generation_ref": recovery_model_generation_ref(record),
-        "publication_authority_context_digest": record.publication_authority_context_digest,
-        "challenge": record.challenge,
+pub(super) fn did_root_recovery_proof_transcript(
+    record: &RecoverySessionServiceState,
+) -> Result<DidRootTranscript, AppError> {
+    let context = typed_recovery_transcript_context(record)?;
+    let transcript = DidRootTranscript {
+        schema: arkret_wire::DomainSeparationId::IDENTITY_RECOVERY_PROOF_V1.to_owned(),
+        kind: RecoveryProofKind::DidRoot,
+        request_id: context.request_id,
+        session_grant_id: context.session_grant_id,
+        session_grant_cnf_jkt: context.session_grant_cnf_jkt,
+        principal_authority: context.principal_authority,
+        requesting_device_id: context.requesting_device_id,
+        trust_domain: context.trust_domain,
+        policy_id: context.policy_id,
+        policy_version: context.policy_version,
+        recovery_session_id: context.recovery_session_id,
+        identity_model: context.identity_model,
+        model_generation_ref: context.model_generation_ref,
+        publication_authority_context_digest: context.publication_authority_context_digest,
+        challenge: context.challenge,
+        expires_at: context.expires_at,
         // created_at is the SESSION creation/signing time (not proof time), per
         // recovery-session.schema.json $defs/did_root_transcript.
-        "created_at": arkret_canonical::format_timestamp_canonical(record.created_at),
-        "expires_at": arkret_canonical::format_timestamp_canonical(record.expires_at),
-    })
+        created_at: context.created_at,
+    };
+    transcript
+        .validate()
+        .map_err(|error| stored_recovery_type_error("did_root transcript", error))?;
+    Ok(transcript)
 }
 
 pub(super) fn generic_recovery_proof_transcript(
     record: &RecoverySessionServiceState,
-    kind: &str,
-    proof_body: Value,
-) -> Value {
-    json!({
-            "schema": arkret_wire::DomainSeparationId::IDENTITY_RECOVERY_PROOF_V1,
-        "kind": kind,
-        "principal_authority": {
-            "principal_id": record.principal_id,
-            "principal_server_id": record.principal_server_id,
-        },
-        "requesting_device_id": record.requesting_device_id,
-        "trust_domain": record.trust_domain,
-        "policy_id": record.policy_id,
-        "policy_version": record.policy_version,
-        "recovery_session_id": record.recovery_session_id,
-        "identity_model": record.identity_model,
-        "model_generation_ref": recovery_model_generation_ref(record),
-        "publication_authority_context_digest": record.publication_authority_context_digest,
-        "challenge": record.challenge,
-        "created_at": arkret_canonical::format_timestamp_canonical(record.created_at),
-        "expires_at": arkret_canonical::format_timestamp_canonical(record.expires_at),
-        "proof_body": proof_body,
-    })
+    proof_body: GenericRecoveryProofBody,
+) -> Result<GenericRecoveryTranscript, AppError> {
+    let context = typed_recovery_transcript_context(record)?;
+    let transcript = GenericRecoveryTranscript {
+        schema: arkret_wire::DomainSeparationId::IDENTITY_RECOVERY_PROOF_V1.to_owned(),
+        kind: proof_body.kind(),
+        request_id: context.request_id,
+        session_grant_id: context.session_grant_id,
+        session_grant_cnf_jkt: context.session_grant_cnf_jkt,
+        principal_authority: context.principal_authority,
+        requesting_device_id: context.requesting_device_id,
+        trust_domain: context.trust_domain,
+        policy_id: context.policy_id,
+        policy_version: context.policy_version,
+        recovery_session_id: context.recovery_session_id,
+        identity_model: context.identity_model,
+        model_generation_ref: context.model_generation_ref,
+        publication_authority_context_digest: context.publication_authority_context_digest,
+        challenge: context.challenge,
+        expires_at: context.expires_at,
+        created_at: context.created_at,
+        proof_body,
+    };
+    transcript
+        .validate()
+        .map_err(|error| stored_recovery_type_error("generic recovery transcript", error))?;
+    Ok(transcript)
 }
 
 /// Lazily expire a session whose TTL has elapsed: if a `pending`/`verified`

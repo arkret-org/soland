@@ -18,6 +18,52 @@ fn transaction_principal(request: &SecurityTransactionCreateRequest) -> &arkret_
     }
 }
 
+fn recovery_transaction_session_id(
+    request: &SecurityTransactionCreateRequest,
+) -> Option<&arkret_identifiers::RecoverySessionId> {
+    match request {
+        SecurityTransactionCreateRequest::Recovery(request) => {
+            Some(request.binding.recovery_session_id())
+        }
+        SecurityTransactionCreateRequest::SecurityRotation(_) => None,
+    }
+}
+
+async fn enforce_recovery_grant_transaction_binding(
+    state: &AppState,
+    session: &SessionRecord,
+    recovery_session_id: Option<&arkret_identifiers::RecoverySessionId>,
+) -> Result<(), AppError> {
+    let Some(grant) = session.session_grant.as_ref().filter(|grant| {
+        grant.credential_class
+            == arkret_models_identity::SessionGrantCredentialClass::RecoverySession
+    }) else {
+        return Ok(());
+    };
+    let recovery_session_id = recovery_session_id.ok_or_else(|| {
+        AppError::capability_denied(
+            "recovery session grant cannot authorize a security-rotation transaction",
+        )
+    })?;
+    let recovery = state
+        .recovery_sessions()
+        .session(recovery_session_id.as_str())
+        .await
+        .map_err(recovery_service_error)?
+        .ok_or_else(|| AppError::not_found("recovery session not found"))?;
+    if recovery.principal_id != session.actor
+        || recovery.principal_server_id != session.audience
+        || recovery.requesting_device_id != session.device_id
+        || recovery.session_grant_id != grant.grant_id.as_str()
+        || recovery.session_grant_cnf_jkt != grant.cnf_jkt
+    {
+        return Err(AppError::capability_denied(
+            "security transaction recovery session does not match the presented recovery grant",
+        ));
+    }
+    Ok(())
+}
+
 async fn load_owned_security_transaction(
     state: &AppState,
     session: &SessionRecord,
@@ -36,6 +82,11 @@ async fn load_owned_security_transaction(
         // transaction indistinguishable from a missing one.
         return Err(AppError::not_found("security transaction not found"));
     }
+    let recovery_session_id = match &record.resource.binding {
+        SecurityTransactionBinding::Recovery(binding) => Some(binding.recovery_session_id()),
+        SecurityTransactionBinding::SecurityRotation(_) => None,
+    };
+    enforce_recovery_grant_transaction_binding(state, session, recovery_session_id).await?;
     Ok(record)
 }
 
@@ -62,6 +113,12 @@ pub(super) async fn security_transaction_create(
         .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("security_transaction_principal_isolation"));
     }
+    enforce_recovery_grant_transaction_binding(
+        state,
+        &session,
+        recovery_transaction_session_id(&request),
+    )
+    .await?;
     let coordinator_service_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("invalid local service DID: {error}")))?;
     let (resource, canonical_request) = request
@@ -1203,11 +1260,10 @@ async fn continue_issue_terminal_receipt(
             AppError::conflict("bound recovery session is unavailable")
                 .with_wire_code("security_transaction_failed_precondition")
         })?;
-    let recovery_proof_summary =
-        typed_recovery_proof_summary(&recovery_session)?.ok_or_else(|| {
-            AppError::conflict("bound recovery session has no verified proof summary")
-                .with_wire_code("security_transaction_failed_precondition")
-        })?;
+    let recovery_proof_summary = recovery_proof_summary(&recovery_session).ok_or_else(|| {
+        AppError::conflict("bound recovery session has no verified proof summary")
+            .with_wire_code("security_transaction_failed_precondition")
+    })?;
     if recovery_session.created_at != receipt.started_at {
         return Err(AppError::conflict(
             "terminal recovery receipt started_at does not match the verified recovery session",

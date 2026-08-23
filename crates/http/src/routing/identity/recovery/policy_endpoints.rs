@@ -25,29 +25,49 @@ pub(super) async fn resolve_recovery_read_principal(
     Ok(principal)
 }
 
-pub(super) fn recovery_policy_summary(
-    record: &soland_services::identity::RecoveryPolicyState,
-) -> Value {
-    json!({
-        "policy_id": record.policy_id,
-        "principal_id": record.principal_id,
-        "version": record.version,
-        "acceptance_basis": record.acceptance_basis,
-        "trust_domain": record.trust_domain,
-        "allowed_proof_kinds": record.allowed_proof_kinds,
-        "supersedes": record.supersedes,
-        "expires_at": record.expires_at.map(arkret_canonical::format_timestamp_canonical),
-        "issued_at": arkret_canonical::format_timestamp_canonical(record.issued_at),
-        "accepted_at": arkret_canonical::format_timestamp_canonical(record.accepted_at),
-        "policy": record.raw_payload,
-    })
-}
-
 pub(super) fn typed_recovery_policy_summary(
     record: &soland_services::identity::RecoveryPolicyState,
 ) -> Result<RecoveryPolicySummary, AppError> {
-    serde_json::from_value(recovery_policy_summary(record))
-        .map_err(|error| stored_recovery_type_error("policy summary", error))
+    let allowed_proof_kinds = record
+        .allowed_proof_kinds
+        .iter()
+        .map(|kind| match kind.as_str() {
+            "did_root" => Ok(RecoveryProofKind::DidRoot),
+            "recovery_unlock" => Ok(RecoveryProofKind::RecoveryUnlock),
+            "device_quorum" => Ok(RecoveryProofKind::DeviceQuorum),
+            "trusted_recovery_service" => Ok(RecoveryProofKind::TrustedRecoveryService),
+            "threshold_recovery" => Ok(RecoveryProofKind::ThresholdRecovery),
+            value => Err(stored_recovery_type_error(
+                "policy proof kind",
+                format_args!("unknown value `{value}`"),
+            )),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(RecoveryPolicySummary {
+        policy_id: PolicyId::new(record.policy_id.clone())
+            .map_err(|error| stored_recovery_type_error("policy id", error))?,
+        principal_id: DidCoreId::new(record.principal_id.clone())
+            .map_err(|error| stored_recovery_type_error("policy principal id", error))?,
+        version: u64::from(record.version),
+        acceptance_basis: record.acceptance_basis.clone(),
+        recovery_policy_ref: None,
+        trust_domain: TrustDomainId::new(record.trust_domain.clone())
+            .map_err(|error| stored_recovery_type_error("policy trust domain", error))?,
+        allowed_proof_kinds,
+        supersedes: record
+            .supersedes
+            .as_ref()
+            .map(|value| PolicyId::new(value.clone()))
+            .transpose()
+            .map_err(|error| stored_recovery_type_error("superseded policy id", error))?,
+        expires_at: record.expires_at,
+        issued_at: record.issued_at,
+        accepted_at: record.accepted_at,
+        policy: Some(
+            serde_json::from_value(record.raw_payload.clone())
+                .map_err(|error| stored_recovery_type_error("policy payload", error))?,
+        ),
+    })
 }
 
 pub(super) fn recovery_policy_ref_from_summary(

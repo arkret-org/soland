@@ -106,6 +106,15 @@ pub(super) fn validate_initial_publication_session_context(
                     ));
                 }
             }
+            arkret_models_identity::SessionGrantHolderBinding::RecoveryCandidateDevice {
+                ..
+            } => {
+                return Err(SubmitOneError::new(
+                    StatusCode::FORBIDDEN,
+                    "capability_denied",
+                    "recovery candidate session cannot submit ordinary Events",
+                ));
+            }
         }
     }
     Ok(())

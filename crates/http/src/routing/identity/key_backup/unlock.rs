@@ -254,8 +254,7 @@ fn proof_kind_requires_recovery_session(proof_kind: &str) -> bool {
 pub(super) async fn enforce_recovery_session_binding_when_present(
     state: &AppState,
     proof: &Value,
-    actor_id: &str,
-    session_device_id: &str,
+    session: &soland_services::identity::SessionIdentityState,
 ) -> Result<(), AppError> {
     let recovery_session_id = required_proof_string(proof, "recovery_session_id")?;
     let Some(record) = state
@@ -276,9 +275,19 @@ pub(super) async fn enforce_recovery_session_binding_when_present(
         }
         return Ok(());
     };
-    if record.principal_id != actor_id || record.requesting_device_id != session_device_id {
+    if record.principal_id != session.actor || record.requesting_device_id != session.device_id {
         return Err(AppError::capability_denied(
             "key backup unlock proof recovery session binding does not match caller",
+        ));
+    }
+    if let Some(grant) = session.session_grant.as_ref()
+        && grant.credential_class
+            == arkret_models_identity::SessionGrantCredentialClass::RecoverySession
+        && (record.session_grant_id != grant.grant_id.as_str()
+            || record.session_grant_cnf_jkt != grant.cnf_jkt)
+    {
+        return Err(AppError::capability_denied(
+            "key backup unlock proof recovery session does not match the presented recovery grant",
         ));
     }
     if !matches!(record.state.as_str(), "verified" | "completed") {
@@ -312,13 +321,11 @@ pub(super) async fn enforce_recovery_session_binding_when_present(
 pub(super) async fn verify_key_backup_unlock_proof(
     state: &AppState,
     proof: &Value,
-    actor_id: &str,
-    session_device_id: &str,
+    session: &soland_services::identity::SessionIdentityState,
     backup: &Value,
 ) -> Result<(), AppError> {
-    validate_key_backup_unlock_proof_shape(proof, actor_id, session_device_id, backup)?;
-    enforce_recovery_session_binding_when_present(state, proof, actor_id, session_device_id)
-        .await?;
+    validate_key_backup_unlock_proof_shape(proof, &session.actor, &session.device_id, backup)?;
+    enforce_recovery_session_binding_when_present(state, proof, session).await?;
     verify_key_backup_unlock_proof_signature(state, proof).await
 }
 

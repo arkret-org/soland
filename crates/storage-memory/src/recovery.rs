@@ -116,6 +116,33 @@ impl RecoverySessionStore for MemoryRecoverySessionStore {
         Ok(self.by_id.lock().get(recovery_session_id).cloned())
     }
 
+    async fn get_by_grant_id(
+        &self,
+        session_grant_id: &str,
+    ) -> PersistenceResult<Option<RecoverySessionRecord>> {
+        Ok(self
+            .by_id
+            .lock()
+            .values()
+            .find(|record| record.session_grant_id == session_grant_id)
+            .cloned())
+    }
+
+    async fn get_by_grant_request(
+        &self,
+        session_grant_id: &str,
+        request_id: &str,
+    ) -> PersistenceResult<Option<RecoverySessionRecord>> {
+        Ok(self
+            .by_id
+            .lock()
+            .values()
+            .find(|record| {
+                record.session_grant_id == session_grant_id && record.request_id == request_id
+            })
+            .cloned())
+    }
+
     async fn insert(&self, record: RecoverySessionRecord) -> PersistenceResult<()> {
         let mut by_id = self.by_id.lock();
         if by_id.contains_key(&record.recovery_session_id) {
@@ -125,19 +152,33 @@ impl RecoverySessionStore for MemoryRecoverySessionStore {
                 record.recovery_session_id
             )));
         }
+        if by_id
+            .values()
+            .any(|existing| existing.session_grant_id == record.session_grant_id)
+        {
+            return Err(PersistenceError::Conflict(format!(
+                "{}: session_grant_id `{}` already owns a recovery session",
+                ConflictCode::RecoverySessionAlreadyExists,
+                record.session_grant_id
+            )));
+        }
         by_id.insert(record.recovery_session_id.clone(), record);
         Ok(())
     }
 
     async fn update(&self, record: RecoverySessionRecord) -> PersistenceResult<()> {
         let mut by_id = self.by_id.lock();
-        if !by_id.contains_key(&record.recovery_session_id) {
-            return Err(PersistenceError::NotFound(format!(
+        let existing = by_id.get_mut(&record.recovery_session_id).ok_or_else(|| {
+            PersistenceError::NotFound(format!(
                 "recovery_session_id `{}` not found",
                 record.recovery_session_id
-            )));
-        }
-        by_id.insert(record.recovery_session_id.clone(), record);
+            ))
+        })?;
+        existing.state = record.state;
+        existing.proof_payload = record.proof_payload;
+        existing.transaction_id = record.transaction_id;
+        existing.updated_at = record.updated_at;
+        existing.expires_at = record.expires_at;
         Ok(())
     }
 }

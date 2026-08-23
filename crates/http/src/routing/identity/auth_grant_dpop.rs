@@ -494,6 +494,20 @@ fn session_binding_from_introspection(
         ));
     }
 
+    if let SessionGrantHolderBinding::RecoveryCandidateDevice { device_id } = &grant.holder_binding
+    {
+        if grant.credential_class
+            != arkret_models_identity::SessionGrantCredentialClass::RecoverySession
+            || grant.device_binding.is_some()
+            || grant.device_id.as_ref() != Some(device_id)
+        {
+            return Err(unauthenticated(
+                "recovery session grant has an invalid candidate-device binding",
+            ));
+        }
+        return Ok((device_id.to_string(), None));
+    }
+
     let binding = grant.human_device_authorization_selector().map_err(|_| {
         unauthenticated("human session grant omitted its device authority selector")
     })?;

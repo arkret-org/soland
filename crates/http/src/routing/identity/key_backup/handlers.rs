@@ -483,8 +483,7 @@ pub(super) async fn unlock_key_backup(
     // The path `backup_id` and `proof.backup_id` MUST match: the envelope is
     // looked up by the path id and the shape check below requires
     // `proof.backup_id` to equal the envelope's own `backup_id`.
-    verify_key_backup_unlock_proof(state, &proof, &session.actor, &session.device_id, &backup)
-        .await?;
+    verify_key_backup_unlock_proof(state, &proof, &session, &backup).await?;
     // key-management.md §7.4.1 - anchor the released envelope's auth_data.signature
     // to the actor's current device trust root before returning the full ciphertext.
     // Without this, a malicious/compromised server could substitute an envelope
