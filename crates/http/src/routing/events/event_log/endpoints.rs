@@ -966,7 +966,7 @@ async fn resolve_events(
     }
     if body.event_ids.len() + body.event_digests.len() > MAX_EVENT_RESOLVE {
         return Err(AppError::new(
-            ErrorCode::QuotaExceeded,
+            ErrorCode::LimitExceeded,
             "too many events requested",
         ));
     }
