@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencyResolveOutcome, GovernanceDependencySelector,
-    PeerGovernanceDependencyResolveRequest, governance_artifact_selectors_for_snapshot,
-    governance_attester_evidence_selectors,
+    PeerGovernanceDependencyResolveRequest, governance_artifact_selectors_for_artifact,
+    governance_artifact_selectors_for_snapshot, governance_attester_evidence_selectors,
     governance_runtime_dependency_selector_coordinates_for_acquisition,
 };
 use arkret_models_collaboration::history_key::{
@@ -610,6 +610,16 @@ fn next_dependency_selectors<'a>(
             selectors.extend(
                 governance_artifact_selectors_for_snapshot(governance_registry_snapshot)
                     .map_err(|error| format!("registry_artifact_selectors:{error}"))?,
+            );
+        }
+        if let GovernanceDependency::GovernanceRegistryArtifact {
+            governance_registry_artifact,
+            ..
+        } = item
+        {
+            selectors.extend(
+                governance_artifact_selectors_for_artifact(governance_registry_artifact)
+                    .map_err(|error| format!("registry_manifest_selectors:{error}"))?,
             );
         }
     }

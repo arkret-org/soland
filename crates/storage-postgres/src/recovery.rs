@@ -459,7 +459,7 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
         .bind::<Integer, _>(record.policy_version as i32)
         .bind::<Text, _>(match record.identity_model {
-            arkret_models_crypto::RecoveryIdentityModel::RootAnchored => "root_anchored",
+            arkret_models_crypto::RecoveryIdentityModel::PcrPolicy => "pcr_policy",
         })
         .bind::<Nullable<Text>, _>(
             record

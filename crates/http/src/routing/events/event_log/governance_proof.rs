@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, MAX_GOVERNANCE_DEPENDENCY_SELECTORS,
-    governance_artifact_selectors_for_snapshot, governance_attester_evidence_selectors,
+    governance_artifact_selectors_for_artifact, governance_artifact_selectors_for_snapshot,
+    governance_attester_evidence_selectors,
 };
 use arkret_models_crypto::{MlsGovernanceProofBundle, MlsGovernanceProofRequestBody};
 use arkret_state::lattice::ordered_log::IssuedOp;
@@ -1126,6 +1127,10 @@ async fn load_checkpoint_dependencies(
                 governance_registry_snapshot,
                 ..
             } => governance_artifact_selectors_for_snapshot(governance_registry_snapshot),
+            GovernanceDependency::GovernanceRegistryArtifact {
+                governance_registry_artifact,
+                ..
+            } => governance_artifact_selectors_for_artifact(governance_registry_artifact),
             _ => Ok(Vec::new()),
         }
         .map_err(|error| {

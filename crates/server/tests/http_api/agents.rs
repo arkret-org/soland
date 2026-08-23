@@ -454,7 +454,7 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
                     .unwrap(),
             ),
             trust_domain: "ak:trust_domain:soland.local".to_owned(),
-            allowed_proof_kinds: vec!["principal_signing".to_owned()],
+            allowed_proof_kinds: vec!["did_root".to_owned()],
             supersedes: None,
             expires_at: Some(now + chrono::Duration::days(30)),
             issued_at: now,
@@ -464,10 +464,10 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
                 "principal_id": controller_id,
                 "version": 1,
                 "trust_domain": "ak:trust_domain:soland.local",
-                "allowed_proof_kinds": ["principal_signing"],
+                "allowed_proof_kinds": ["did_root"],
                 "publication_authorization_rules": [{
-                    "rule_id": "principal_signing",
-                    "proof_kind": "principal_signing",
+                    "rule_id": "did_root",
+                    "proof_kind": "did_root",
                     "issuer_role": "identity_recovery",
                     "allowed_actions": ["ak.device.reanchor"],
                     "issuers": [{

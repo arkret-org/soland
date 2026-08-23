@@ -156,9 +156,6 @@ pub(super) async fn security_transaction_continue(
     }
 
     match request.expected_next_step {
-        SecurityTransactionStep::PublishDidEntry => {
-            continue_publish_did_entry(state, transaction, request, canonical_request, res).await
-        }
         SecurityTransactionStep::SubmitReanchorUnit => {
             continue_submit_reanchor_unit(
                 state,
@@ -1171,23 +1168,21 @@ async fn continue_issue_terminal_receipt(
         proof_digest,
         authorize_event_id,
         reanchor_event_id,
-        did_entry_ref,
     ) = match (
         &transaction.resource.binding,
         &transaction.resource.prepared_plan,
     ) {
         (
-            SecurityTransactionBinding::Recovery(RecoveryBinding::RootAnchored(binding)),
-            SecurityTransactionPreparedPlan::Recovery(RecoveryPreparedPlan::RootAnchored(plan)),
+            SecurityTransactionBinding::Recovery(RecoveryBinding::PcrPolicy(binding)),
+            SecurityTransactionPreparedPlan::Recovery(RecoveryPreparedPlan::PcrPolicy(plan)),
         ) => (
-            RecoveryBinding::RootAnchored(binding.clone()),
-            arkret_models_crypto::RecoveryIdentityModel::RootAnchored,
+            RecoveryBinding::PcrPolicy(binding.clone()),
+            arkret_models_crypto::RecoveryIdentityModel::PcrPolicy,
             plan.previous_model_generation_ref,
             plan.result_model_generation_ref,
             plan.proof_digest.clone(),
             binding.authorize_event_id.clone(),
             Some(binding.reanchor_event_id.clone()),
-            Some(binding.did_entry_ref.clone()),
         ),
         _ => {
             return Err(
@@ -1197,7 +1192,7 @@ async fn continue_issue_terminal_receipt(
         }
     };
     let expected_recovery_session_id = binding.recovery_session_id();
-    let RecoveryBinding::RootAnchored(binding) = &binding;
+    let RecoveryBinding::PcrPolicy(binding) = &binding;
     let expected_device_id = &binding.replacement_device_id;
     let recovery_session = state
         .recovery_sessions()
@@ -1256,7 +1251,6 @@ async fn continue_issue_terminal_receipt(
         || receipt_result_generation != expected_result_generation
         || receipt.authorization_event_id != authorize_event_id
         || receipt.reanchor_event_id != reanchor_event_id
-        || receipt.did_entry_ref != did_entry_ref
         || receipt.proof_summary.proof_digest != proof_digest
         || receipt.outcome != arkret_models_crypto::RecoveryReceiptOutcome::Completed
         || attestation.step != SecurityTransactionStep::IssueTerminalReceipt
@@ -1353,9 +1347,9 @@ async fn continue_issue_terminal_receipt(
     )?;
 
     match expected_model {
-        arkret_models_crypto::RecoveryIdentityModel::RootAnchored => {
+        arkret_models_crypto::RecoveryIdentityModel::PcrPolicy => {
             let reanchor_event_id = reanchor_event_id.as_ref().ok_or_else(|| {
-                AppError::internal("root-anchored recovery has no re-anchor Event id")
+                AppError::internal("PCR-policy recovery has no re-anchor Event id")
             })?;
             let reanchor_event = state
                 .event_queries()
@@ -1608,19 +1602,6 @@ fn verify_recovery_device_signature(
     })
 }
 
-async fn continue_publish_did_entry(
-    _state: &AppState,
-    _transaction: SecurityTransactionRecord,
-    _request: SecurityTransactionContinueRequest,
-    _canonical_request: Vec<u8>,
-    _res: &mut Response,
-) -> JsonResult<SecurityTransaction> {
-    Err(AppError::conflict(
-        "device re-anchor DID publication is unavailable until the protocol carries a compatible exact-authority receipt scope",
-    )
-    .with_wire_code("security_transaction_failed_precondition"))
-}
-
 async fn continue_submit_reanchor_unit(
     state: &AppState,
     session: &SessionRecord,
@@ -1630,7 +1611,7 @@ async fn continue_submit_reanchor_unit(
     res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
     let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
-    let (binding, plan) = root_anchored_parts(&transaction.resource)?;
+    let (binding, plan) = pcr_policy_parts(&transaction.resource)?;
     let binding = binding.clone();
     let plan = plan.clone();
     if session.device_id != binding.replacement_device_id.as_str() {
@@ -1787,22 +1768,22 @@ async fn continue_submit_reanchor_unit(
     json_ok(resource)
 }
 
-fn root_anchored_parts(
+fn pcr_policy_parts(
     transaction: &SecurityTransaction,
 ) -> Result<
     (
-        &arkret_wire::RootAnchoredRecoveryBinding,
-        &arkret_wire::RootAnchoredRecoveryPlan,
+        &arkret_wire::PcrPolicyRecoveryBinding,
+        &arkret_wire::PcrPolicyRecoveryPlan,
     ),
     AppError,
 > {
     match (&transaction.binding, &transaction.prepared_plan) {
         (
-            SecurityTransactionBinding::Recovery(RecoveryBinding::RootAnchored(binding)),
-            SecurityTransactionPreparedPlan::Recovery(RecoveryPreparedPlan::RootAnchored(plan)),
+            SecurityTransactionBinding::Recovery(RecoveryBinding::PcrPolicy(binding)),
+            SecurityTransactionPreparedPlan::Recovery(RecoveryPreparedPlan::PcrPolicy(plan)),
         ) => Ok((binding, plan)),
         _ => Err(
-            AppError::conflict("operation requires a root-anchored recovery transaction")
+            AppError::conflict("operation requires a PCR-policy recovery transaction")
                 .with_wire_code("security_transaction_failed_precondition"),
         ),
     }

@@ -1,1 +1,1 @@
-//! Root-anchored recovery session coverage lives with the security-transaction flow.
+//! PCR-policy recovery session coverage lives with the security-transaction flow.

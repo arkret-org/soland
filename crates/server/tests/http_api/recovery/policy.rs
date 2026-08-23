@@ -110,9 +110,9 @@ fn recovery_policy_accepts_genesis_session_device_signature() {
 
 async fn recovery_policy_accepts_genesis_session_device_signature_body() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new())).await;
-    let principal_signing = SigningKey::from_bytes(&[82u8; 32]);
+    let did_root = SigningKey::from_bytes(&[82u8; 32]);
     let device_signing = SigningKey::from_bytes(&[83u8; 32]);
-    let (principal_id, principal_vm) = did_key_principal(&principal_signing);
+    let (principal_id, principal_vm) = did_key_principal(&did_root);
     let token = "device_signed_policy_token";
     seed_bearer_session_with_device_public_key(
         &state,

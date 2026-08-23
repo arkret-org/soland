@@ -29,7 +29,7 @@ fn constant_time_str_eq(left: &str, right: &str) -> bool {
 //   GET  recovery-sessions/{id}             — read status (principal-isolated)
 //   POST recovery-sessions/{id}/proofs      — verify a proof (pending -> verified)
 //
-// C-P3 — `/proofs` verifies the `principal_signing` kind cryptographically
+// C-P3 — `/proofs` verifies the `did_root` kind cryptographically
 // (Ed25519 over the canonical recovery-proof transcript binding every
 // session-defining field) and advances `pending -> verified` ONLY on success.
 // Other policy-permitted proof kinds return 501 `recovery_proof_kind_unimplemented`
@@ -60,7 +60,7 @@ pub(super) fn recovery_session_summary(record: &RecoverySessionServiceState) -> 
         "expires_at": arkret_canonical::format_timestamp_canonical(record.expires_at),
     });
     match record.identity_model {
-        RecoveryIdentityModel::RootAnchored => {
+        RecoveryIdentityModel::PcrPolicy => {
             out["current_device_generation_ref"] = record
                 .current_device_generation_ref
                 .as_ref()
@@ -167,7 +167,7 @@ pub(super) fn recovery_session_state_from_record(
 
 fn recovery_model_generation_ref(record: &RecoverySessionServiceState) -> Value {
     match record.identity_model {
-        RecoveryIdentityModel::RootAnchored => record
+        RecoveryIdentityModel::PcrPolicy => record
             .current_device_generation_ref
             .as_ref()
             .map_or(Value::Null, |generation| json!(generation)),
@@ -271,7 +271,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
     Ok(())
 }
 
-async fn root_anchored_recovery_publication_authority_context(
+async fn pcr_policy_recovery_publication_authority_context(
     state: &AppState,
     active: &RecoveryPolicyState,
     realm_id: &RealmId,
@@ -323,7 +323,7 @@ async fn root_anchored_recovery_publication_authority_context(
         })?,
     };
     let context = RecoveryPublicationAuthorityContext {
-        identity_model: RecoveryIdentityModel::RootAnchored,
+        identity_model: RecoveryIdentityModel::PcrPolicy,
         basis_ref: active.acceptance_basis.clone(),
         scope_ref: authority_set_policy.scope_ref.clone(),
         authority_set_ref,
@@ -331,7 +331,7 @@ async fn root_anchored_recovery_publication_authority_context(
         allowed_actions: vec![RecoveryPublicationAction::DeviceReanchor],
     };
     context
-        .validate_for(RecoveryIdentityModel::RootAnchored)
+        .validate_for(RecoveryIdentityModel::PcrPolicy)
         .map_err(|error| {
             AppError::conflict(format!(
                 "recovery publication authority context is invalid: {error}"
@@ -527,7 +527,7 @@ pub(super) async fn recovery_session_create(
                 })
             };
             (
-            RecoveryIdentityModel::RootAnchored,
+            RecoveryIdentityModel::PcrPolicy,
             Some(NonEmptyString::new(generation.current_ref.to_string()).map_err(|error| {
                 AppError::internal(format!("invalid accepted device generation ref: {error}"))
             })?),
@@ -552,7 +552,7 @@ pub(super) async fn recovery_session_create(
         };
 
     let publication_authority_context =
-        root_anchored_recovery_publication_authority_context(state, &active, &realm_id).await?;
+        pcr_policy_recovery_publication_authority_context(state, &active, &realm_id).await?;
     let publication_authority_context_digest =
         publication_authority_context.digest().map_err(|error| {
             AppError::internal(format!(
@@ -704,13 +704,13 @@ pub(super) async fn recovery_session_proof_submit(
         .with_wire_code("recovery_session_challenge_mismatch"));
     }
 
-    // C-P3 — verify the proof by kind. Only `principal_signing` is implemented;
+    // C-P3 — verify the proof by kind. Only `did_root` is implemented;
     // other (policy-permitted) kinds return 501 rather than silently leaving the
     // session pending, so a caller is never misled into thinking the server
     // accepted a proof it cannot actually check.
     match proof_kind {
-        "principal_signing" => {
-            verify_principal_signing_proof(state, &record, proof).await?;
+        "did_root" => {
+            verify_did_root_proof(state, &record, proof).await?;
         }
         "recovery_unlock" => {
             verify_recovery_unlock_proof(state, &record, proof).await?;
@@ -776,7 +776,7 @@ pub(super) async fn recovery_session_proof_submit(
     })
 }
 
-/// C-P3 — verify a `principal_signing` recovery proof.
+/// C-P3 — verify a `did_root` recovery proof.
 ///
 /// The proof MUST carry an Ed25519 signature by the principal's signing key
 /// over the canonical recovery-proof transcript, which binds every
@@ -787,7 +787,7 @@ pub(super) async fn recovery_session_proof_submit(
 /// any proof signed over a different binding (stale policy, replayed across
 /// principal/domain, different session) fails verification — this gives the
 /// `recovery_evidence_unbound` guarantee for free.
-pub(super) async fn verify_principal_signing_proof(
+pub(super) async fn verify_did_root_proof(
     state: &AppState,
     record: &RecoverySessionServiceState,
     proof: &Map<String, Value>,
@@ -799,28 +799,24 @@ pub(super) async fn verify_principal_signing_proof(
     }
     let verification_method = required_proof_string(proof, "verification_method")?;
     let (method_did, device_fragment) = verification_method.rsplit_once('#').ok_or_else(|| {
-        recovery_signature_error("principal-signing verification_method has no device fragment")
+        recovery_signature_error("did-root verification_method has no device fragment")
     })?;
     let method_did =
         arkret_identifiers::DidFullId::new(method_did.to_owned()).map_err(|error| {
-            recovery_signature_error(format!("principal-signing method DID is invalid: {error}"))
+            recovery_signature_error(format!("did-root method DID is invalid: {error}"))
         })?;
     let method_principal =
         arkret_wire::project_full_id_to_core_id(&method_did).map_err(|error| {
-            recovery_signature_error(format!(
-                "principal-signing method DID cannot be projected: {error}"
-            ))
+            recovery_signature_error(format!("did-root method DID cannot be projected: {error}"))
         })?;
     if method_principal.as_str() != record.principal_id {
         return Err(recovery_signature_error(
-            "principal-signing method does not belong to the recovery session authority pair",
+            "did-root method does not belong to the recovery session authority pair",
         ));
     }
     let device_id =
         arkret_identifiers::DeviceId::new(device_fragment.to_owned()).map_err(|error| {
-            recovery_signature_error(format!(
-                "principal-signing device fragment is invalid: {error}"
-            ))
+            recovery_signature_error(format!("did-root device fragment is invalid: {error}"))
         })?;
     let authority_key = arkret_wire::PrincipalAuthorityKey::new(
         arkret_identifiers::DidCoreId::new(record.principal_id.clone()).map_err(|error| {
@@ -904,7 +900,7 @@ pub(super) async fn verify_principal_signing_proof(
             .map_err(|error| {
                 recovery_signature_error(format!("recovery signing device key is invalid: {error}"))
             })?;
-    let transcript = recovery_proof_transcript(record, "principal_signing");
+    let transcript = recovery_proof_transcript(record, "did_root");
     let transcript_bytes =
         arkret_canonical::canonical_json_bytes(&transcript).map_err(|error| {
             AppError::internal(format!("recovery proof transcript failed: {error}"))
@@ -918,7 +914,7 @@ pub(super) async fn verify_principal_signing_proof(
         .map_err(|_| recovery_signature_error("proof.signature must be 64 Ed25519 bytes"))?;
     key.verify(&transcript_bytes, &signature).map_err(|_| {
         crate::metrics::record_digest_mismatch("recovery_proof_digest");
-        recovery_signature_error("principal-signing recovery proof signature verification failed")
+        recovery_signature_error("did-root recovery proof signature verification failed")
     })
 }
 
@@ -1314,7 +1310,7 @@ pub(super) fn recovery_proof_transcript(record: &RecoverySessionServiceState, ki
         "publication_authority_context_digest": record.publication_authority_context_digest,
         "challenge": record.challenge,
         // created_at is the SESSION creation/signing time (not proof time), per
-        // recovery-session.schema.json $defs/principal_signing_transcript.
+        // recovery-session.schema.json $defs/did_root_transcript.
         "created_at": arkret_canonical::format_timestamp_canonical(record.created_at),
         "expires_at": arkret_canonical::format_timestamp_canonical(record.expires_at),
     })

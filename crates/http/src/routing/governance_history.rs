@@ -1,8 +1,9 @@
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencyResolveOutcome, GovernanceDependencySelector,
     PeerGovernanceDependencyResolveRequest, SelfGovernanceDependencyResolveRequest,
-    governance_artifact_selectors_for_snapshot, governance_attester_evidence_selectors,
-    governance_dependency_selectors_for_replay,
+    governance_artifact_selectors_for_artifact, governance_artifact_selectors_for_snapshot,
+    governance_attester_evidence_selectors, governance_dependency_selectors_for_replay,
+    validate_governance_replay_schema_closure,
 };
 use arkret_models_collaboration::history_key::{
     AcceptedAuthorityViewVector, AccountStatusViewLocator, AgentEvidenceViewLocator, AuthorProfile,
@@ -2458,6 +2459,11 @@ async fn collect_history_dependencies(
                 ..
             } => governance_artifact_selectors_for_snapshot(&governance_registry_snapshot)
                 .map_err(|error| AppError::new(ErrorCode::DependencyMissing, error.to_string()))?,
+            GovernanceDependency::GovernanceRegistryArtifact {
+                governance_registry_artifact,
+                ..
+            } => governance_artifact_selectors_for_artifact(governance_registry_artifact)
+                .map_err(|error| AppError::new(ErrorCode::DependencyMissing, error.to_string()))?,
             _ => Vec::new(),
         };
         cursor += 1;
@@ -3077,6 +3083,16 @@ async fn validate_retained_history_cut(
                     AppError::new(ErrorCode::FrontierUnavailable, error.to_string())
                 })?,
             );
+        } else if let GovernanceDependency::GovernanceRegistryArtifact {
+            governance_registry_artifact,
+            ..
+        } = dependency
+        {
+            expected_selector_values.extend(
+                governance_artifact_selectors_for_artifact(governance_registry_artifact).map_err(
+                    |error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()),
+                )?,
+            );
         }
     }
     let retained_selectors = replay_dependencies
@@ -3145,6 +3161,48 @@ async fn validate_retained_history_cut(
                 })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let registry_artifacts = checkpoint_dependencies
+        .iter()
+        .filter_map(|dependency| match dependency {
+            GovernanceDependency::GovernanceRegistryArtifact {
+                governance_registry_artifact,
+                ..
+            } => Some(governance_registry_artifact.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let historical_closure =
+        validate_governance_replay_schema_closure(snapshot, &registry_artifacts)
+            .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
+    let mut historical_schemas = arkret_schema::ProtocolSchemaRegistry::new();
+    for schema in historical_closure.schemas.into_values() {
+        let schema_id = schema
+            .get("$id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    "historical replay JSON Schema has no absolute $id",
+                )
+            })?
+            .to_owned();
+        historical_schemas
+            .register_reference_document(schema.clone())
+            .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
+        historical_schemas.register(schema_id, schema);
+    }
+    historical_schemas
+        .ensure_all_schemas_compile()
+        .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
+    for event in &replay_events {
+        historical_schemas
+            .validate_value(
+                "https://arkret.org/v1/schemas/event-envelope.schema.json",
+                &serde_json::to_value(event)
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+            )
+            .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
+    }
     let checkpoint = arkret::verify_mls_governance_closure(
         &realm_id,
         target_basis,

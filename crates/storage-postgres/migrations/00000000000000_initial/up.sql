@@ -2412,7 +2412,7 @@ CREATE TABLE public.recovery_sessions (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT recovery_sessions_policy_version_check CHECK ((policy_version >= 1)),
-    CONSTRAINT recovery_sessions_identity_model_check CHECK ((identity_model = 'root_anchored'::text)),
+    CONSTRAINT recovery_sessions_identity_model_check CHECK ((identity_model = 'pcr_policy'::text)),
     CONSTRAINT recovery_sessions_generation_shape_check CHECK ((current_device_generation_ref IS NOT NULL) AND (device_generation_status = ANY (ARRAY['active'::text, 'conflicted'::text])) AND (registry_head IS NOT NULL)),
     CONSTRAINT recovery_sessions_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'verified'::text, 'completed'::text, 'rejected'::text, 'expired'::text]))),
     CONSTRAINT recovery_sessions_trust_domain_check CHECK ((trust_domain ~ '^ak:trust_domain:[a-z0-9][-a-z0-9._:]{0,127}$')),
