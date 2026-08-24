@@ -284,9 +284,8 @@ mod tests {
                     .parse()
                     .unwrap(),
                 expires_at: None,
-                verification_method: DidUrl::new("did:web:authority.example#account-status-key")
-                    .unwrap(),
             },
+            DidUrl::new("did:web:authority.example#account-status-key").unwrap(),
             &SigningKey::from_bytes(&[51; 32]),
         )
         .unwrap()

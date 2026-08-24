@@ -333,7 +333,6 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
     )
     .unwrap();
     let claim_request_id = URL_SAFE_NO_PAD.encode([41_u8; 16]);
-    let claim_nonce = URL_SAFE_NO_PAD.encode([42_u8; 16]);
     let realm_id = arkret_identifiers::RealmId::new(
         "ak:realm:ARaz6Z8HFGLoPkpji4ac9NxCUjXT81HDezufw7yJGiju".to_owned(),
     )
@@ -351,11 +350,9 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
             "mls_group_id": "mls-group-0196419b-0000-7000-8000-000000000296",
             "claim_purpose": "direct_conversation",
             "required_capabilities": ["ak.content.v1"],
-            "claim_nonce": claim_nonce,
             "expires_at": arkret_canonical::format_timestamp_canonical(
                 Utc::now() + chrono::Duration::minutes(4)
             ),
-            "minimal_metadata_allowed": true,
             "timeout_ms": 5000,
             "strand_id": strand_id,
             "pair_key": pair_key,
@@ -402,9 +399,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
             "mls_group_id": unsigned.mls_group_id,
             "claim_purpose": unsigned.claim_purpose,
             "required_capabilities": unsigned.required_capabilities,
-            "claim_nonce": unsigned.claim_nonce,
             "expires_at": unsigned.expires_at,
-            "minimal_metadata_allowed": unsigned.minimal_metadata_allowed,
             "timeout_ms": unsigned.timeout_ms,
             "strand_id": unsigned.strand_id,
             "pair_key": unsigned.pair_key,
@@ -470,7 +465,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
     assert_eq!(replayed.claims[0].claim_id, outcome.claims[0].claim_id);
 
     let mut conflicting_value = request_value.clone();
-    conflicting_value["claim_nonce"] = serde_json::json!(URL_SAFE_NO_PAD.encode([43_u8; 16]));
+    conflicting_value["required_capabilities"] = serde_json::json!(["ak.content.v1", "ak.mls.v1"]);
     let conflict_headers = signed_federation_push_headers_with_idempotency(
         source_service_full_id,
         &destination_service_id,

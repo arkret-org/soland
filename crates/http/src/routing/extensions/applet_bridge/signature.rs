@@ -17,7 +17,7 @@ use super::types::AppletRecord;
 use crate::state::AppState;
 
 #[derive(Clone, Debug)]
-pub(super) struct VerifiedInboundTransactionSignature {
+pub(super) struct VerifiedAppletServiceSignature {
     pub(super) install: AppletRecord,
     pub(super) request_digest: String,
     pub(super) delivery_authentication_record_digest: String,
@@ -54,7 +54,68 @@ pub(super) async fn require_inbound_transaction_signature(
                 AppError::json_invalid(format!("unable to read applet transaction body: {error}"))
             })?
             .to_vec();
-        verify_inbound_transaction_signature(&state, req, &payload, &idempotency_key).await
+        verify_inbound_applet_service_signature(
+            &state,
+            req,
+            &payload,
+            &idempotency_key,
+            "source_service_id",
+        )
+        .await
+    }
+    .await;
+
+    match verification {
+        Ok(verified) => {
+            depot.insert_typed(verified);
+            ctrl.call_next(req, depot, res).await;
+        }
+        Err(error) => error.write(req, depot, res).await,
+    }
+}
+
+/// Ghost provisioning is a service-to-service formal operation. Authenticate
+/// the installed Applet service with the same RFC 9421 registration key and
+/// exact request transcript used by transaction delivery; a bearer session is
+/// neither required nor accepted as the actor authority.
+#[handler]
+pub(super) async fn require_ghost_provision_signature(
+    req: &mut Request,
+    depot: &mut Depot,
+    res: &mut Response,
+    ctrl: &mut FlowCtrl,
+) {
+    let verification = async {
+        if !inbound_transaction_signature_present(req) {
+            return Err(applet_signature_error_required(
+                "Ghost provisioning MUST carry an RFC 9421 Signature / Signature-Input",
+            ));
+        }
+        let state = depot
+            .get_typed::<AppState>()
+            .expect("state injected")
+            .clone();
+        let idempotency_key = applet_required_header(req, "idempotency-key")?;
+        http_signature::reject_content_encoding(req, || {
+            applet_signature_error_invalid(
+                "applet signed JSON requests must not use Content-Encoding",
+            )
+        })?;
+        let payload = req
+            .payload()
+            .await
+            .map_err(|error| {
+                AppError::json_invalid(format!("unable to read Ghost provisioning body: {error}"))
+            })?
+            .to_vec();
+        verify_inbound_applet_service_signature(
+            &state,
+            req,
+            &payload,
+            &idempotency_key,
+            "service_id",
+        )
+        .await
     }
     .await;
 
@@ -81,19 +142,20 @@ pub(super) async fn require_inbound_transaction_signature(
 /// - `created` / `expires` outside the freshness window → `signature_window_invalid`
 /// - `Source-Service-ID` with no active effective install / not matching the registration service
 ///   DID → 403 `applet_registration_unauthorized`.
-async fn verify_inbound_transaction_signature(
+async fn verify_inbound_applet_service_signature(
     state: &AppState,
     req: &Request,
     body_bytes: &[u8],
     idempotency_key: &str,
-) -> Result<VerifiedInboundTransactionSignature, AppError> {
+    source_service_body_field: &str,
+) -> Result<VerifiedAppletServiceSignature, AppError> {
     // §7.3.1 ordering: a transaction push carrying only `Authorization: Bearer`
     // (no `Signature` / `Signature-Input`) MUST be rejected before any other
     // work. This is the cheapest, highest-priority gate and is what separates a
     // plain-bearer caller from a (mis)signed one.
     if !inbound_transaction_signature_present(req) {
         return Err(applet_signature_error_required(
-            "inbound transaction push MUST carry an RFC 9421 Signature / Signature-Input; \
+            "Applet service requests MUST carry an RFC 9421 Signature / Signature-Input; \
              plain bearer is rejected",
         ));
     }
@@ -116,11 +178,35 @@ async fn verify_inbound_transaction_signature(
         ));
     }
 
+    let request_body =
+        serde_json::from_slice::<serde_json::Value>(body_bytes).map_err(|error| {
+            applet_signature_error_invalid(format!("invalid Applet service request JSON: {error}"))
+        })?;
+    let source_service_id = request_body
+        .get(source_service_body_field)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            applet_signature_error_invalid(format!(
+                "signed Applet service request body requires {source_service_body_field}"
+            ))
+        })?;
+    let applet_id = request_body
+        .get("applet_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            applet_signature_error_invalid("signed Applet service request body requires applet_id")
+        })?;
+    if header_source != source_service_id {
+        return Err(applet_signature_error_invalid(format!(
+            "Source-Service-ID header does not match body {source_service_body_field}"
+        )));
+    }
+
     // §7.3.1 anchor: the signing key comes only from an active installed
     // registration. Without one there is no authenticated key source to try;
     // reject at the registration gate instead of manufacturing a method URL
     // from the Core service id.
-    let install = active_install_for_service_id(state, &header_source)
+    let install = active_install_for_service_id(state, &header_source, applet_id)
         .await?
         .ok_or_else(|| {
             AppError::capability_denied(
@@ -163,30 +249,10 @@ async fn verify_inbound_transaction_signature(
         .wire_value
         .as_str();
 
-    let transaction = serde_json::from_slice::<serde_json::Value>(body_bytes).map_err(|error| {
-        applet_signature_error_invalid(format!("invalid applet transaction JSON: {error}"))
-    })?;
-    let source_service_id = transaction
-        .get("source_service_id")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            applet_signature_error_invalid(
-                "signed applet transaction body requires source_service_id",
-            )
-        })?;
-    if header_source != source_service_id {
-        return Err(applet_signature_error_invalid(
-            "Source-Service-ID header does not match the transaction source_service_id",
-        ));
-    }
-
     // §7.3.1: a verified signature is not yet authorisation — the
     // `Source-Service-ID` MUST also hit an active effective install whose
     // registration service DID equals it (§4b.1). fail closed otherwise.
-    let package = install
-        .package
-        .as_ref()
-        .ok_or_else(|| AppError::internal("active applet install is missing its package record"))?;
+    let package = &install.package;
     let signature_header = applet_required_header(req, "signature")?;
     let delivery_authentication_record_digest = applet_delivery_authentication_record_digest(
         source_service_id,
@@ -201,7 +267,7 @@ async fn verify_inbound_transaction_signature(
         &verified.signature_input.params_value,
         &signature_header,
     );
-    Ok(VerifiedInboundTransactionSignature {
+    Ok(VerifiedAppletServiceSignature {
         install,
         request_digest,
         delivery_authentication_record_digest,
@@ -214,20 +280,17 @@ fn inbound_transaction_signature_present(req: &Request) -> bool {
 
 /// Find an active (non-revoked) effective install whose registration service
 /// DID equals `source_service_id`. The registration carries the service DID in
-/// its installed package; manifest-only registrations (no package) are not an
-/// install for §7.3.1 purposes and are skipped.
+/// its required SDK-owned installed package.
 pub(super) async fn active_install_for_service_id(
     state: &AppState,
     source_service_id: &str,
+    applet_id: &str,
 ) -> Result<Option<AppletRecord>, AppError> {
     Ok(applet_records(state).await?.into_iter().find(|record| {
         record.revoked_at.is_none()
             && matches!(record.status.as_str(), "installed" | "partially_installed")
-            && record
-                .package
-                .as_ref()
-                .map(|package| package.service_id.as_str() == source_service_id)
-                .unwrap_or(false)
+            && record.applet_id.as_str() == applet_id
+            && record.package.service_id.as_str() == source_service_id
     }))
 }
 
@@ -240,9 +303,7 @@ pub(super) fn applet_registration_verification_method(
     install: &AppletRecord,
     source_service_id: &str,
 ) -> Result<String, AppError> {
-    let package = install.package.as_ref().ok_or_else(|| {
-        applet_signature_error_invalid("active applet install is missing package webhook auth")
-    })?;
+    let package = &install.package;
     let key_ref = package.webhook_auth.key_ref.trim();
     let key_controller = key_ref
         .split_once('#')

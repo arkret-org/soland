@@ -3613,14 +3613,10 @@ async fn build_history_release_attestation(
         recipient_authorization_incarnation: request.requester_authorization_incarnation.clone(),
         source_authorization_incarnation: source_authorization_incarnation.clone(),
     };
-    let realm_projection_digest = CurrentGateProjection::Realm(realm_projection.clone())
-        .canonical_digest()
-        .map_err(|error| AppError::internal(error.to_string()))?;
     let scope_realm = RealmSealViewLocator {
         authority_realm_id: realm_id.clone(),
         seal_basis: seal_basis.clone(),
         current_gate_projection: realm_projection,
-        current_gate_projection_digest: realm_projection_digest,
         authority_sequence,
         observed_at: accepted_at,
         expires_at: response.expires_at,
@@ -3639,14 +3635,10 @@ async fn build_history_release_attestation(
                     .clone(),
                 source_authorization_incarnation: source_authorization_incarnation.clone(),
             };
-            let digest = CurrentGateProjection::Circle(circle_projection.clone())
-                .canonical_digest()
-                .map_err(|error| AppError::internal(error.to_string()))?;
             Some(CircleSealViewLocator {
                 authority_realm_id: realm_id.clone(),
                 seal_basis,
                 current_gate_projection: circle_projection,
-                current_gate_projection_digest: digest,
                 authority_sequence,
                 observed_at: accepted_at,
                 expires_at: response.expires_at,

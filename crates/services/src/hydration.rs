@@ -347,7 +347,9 @@ async fn hydrate_canonical_realm_bootstraps(
             })?;
         if matches!(
             create_payload.object.purpose,
-            RealmPurpose::PrincipalControl | RealmPurpose::ManagedAgentControl
+            RealmPurpose::PrincipalControl
+                | RealmPurpose::ManagedAgentControl
+                | RealmPurpose::AppletManagedControl
         ) {
             continue;
         }
@@ -452,6 +454,185 @@ async fn hydrate_canonical_realm_bootstraps(
     Ok(())
 }
 
+/// Rebuild Applet-managed PCR identity state from canonical Events.
+///
+/// These PCRs deliberately do not enter the ordinary Realm bootstrap unit:
+/// their genesis is admitted only inside the closed Applet install/Ghost
+/// aggregate. Once accepted, however, the canonical genesis and its ordinary
+/// `ak.identity.resolution.update` successors are the sole source of current
+/// identity state. Replay therefore derives the same registered cells as live
+/// admission, in acceptance order, including `since_join`, while the registry
+/// condition ensures no Native-Agent status cell is materialized.
+async fn hydrate_applet_managed_pcr_identity(
+    persistence: &dyn soland_storage::PersistenceStore,
+    proj: &mut ProjectionState,
+    hydration_hlc: &soland_domain::hlc::ServerHlc,
+    projection_adapter: &dyn HydrationProjectionAdapter,
+) -> soland_storage::PersistenceResult<()> {
+    use soland_domain::reducer::ProjectionEffect;
+
+    let records = persistence.events().snapshot_all().await?;
+    let mut applet_pcr_realms = BTreeSet::new();
+    for record in records
+        .iter()
+        .filter(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
+    {
+        let event = serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
+            soland_storage::PersistenceError::Internal(format!(
+                "canonical Applet PCR create failed SDK Event decode: {error}"
+            ))
+        })?;
+        let payload = event
+            .typed_payload::<arkret_wire::event_spec::RealmCreate>()
+            .map_err(|error| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "canonical Applet PCR create failed typed payload decode: {error}"
+                ))
+            })?;
+        if payload.object.purpose == RealmPurpose::AppletManagedControl {
+            applet_pcr_realms.insert(record.realm_id.clone());
+        }
+    }
+
+    let mut lineage = records
+        .into_iter()
+        .filter(|record| {
+            applet_pcr_realms.contains(&record.realm_id)
+                && matches!(
+                    arkret_wire::EventKind::from_wire(&record.kind),
+                    arkret_wire::EventKind::RealmCreate
+                        | arkret_wire::EventKind::IdentityResolutionUpdate
+                )
+        })
+        .collect::<Vec<_>>();
+    lineage.sort_by(|left, right| {
+        left.received_at
+            .cmp(&right.received_at)
+            .then_with(|| left.actor_seq.cmp(&right.actor_seq))
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+
+    let mut genesis_by_realm = BTreeMap::new();
+    let mut current_by_realm = BTreeMap::new();
+    for record in lineage {
+        let typed = serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
+            soland_storage::PersistenceError::Internal(format!(
+                "Applet PCR Event {} failed SDK Event decode: {error}",
+                record.event_id
+            ))
+        })?;
+        let operation = projection_adapter
+            .operation_from_canonical_record(&application_canonical_event(&record))
+            .ok_or_else(|| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "Applet PCR Event {} cannot rebuild its projection operation",
+                    record.event_id
+                ))
+            })?;
+        let cell_writes = arkret_schema::project_registered_cell_writes(
+            &typed,
+            realm_digest_suite(proj, typed.realm_id.as_str()),
+        )
+        .map_err(|error| {
+            soland_storage::PersistenceError::Internal(format!(
+                "Applet PCR Event {} has no derivable cell contract: {error}",
+                record.event_id
+            ))
+        })?;
+        match proj.apply_projected(&operation, &cell_writes, hydration_hlc) {
+            ProjectionEffect::Rejected { reason } => {
+                return Err(soland_storage::PersistenceError::Internal(format!(
+                    "Applet PCR Event {} failed deterministic hydration: {reason}",
+                    record.event_id
+                )));
+            }
+            ProjectionEffect::Ignored => {
+                return Err(soland_storage::PersistenceError::Internal(format!(
+                    "Applet PCR Event {} was ignored during deterministic hydration",
+                    record.event_id
+                )));
+            }
+            _ => {}
+        }
+        if typed.kind == arkret_wire::EventKind::RealmCreate {
+            genesis_by_realm.insert(typed.realm_id.clone(), typed.clone());
+        }
+        current_by_realm.insert(typed.realm_id.clone(), typed);
+    }
+
+    // Repair the durable read index from the same canonical lineage. This is
+    // intentionally part of startup hydration: a transient post-commit mirror
+    // failure must not leave public current-resolution reads permanently empty
+    // or make the next rotation unable to find its PCR lineage.
+    for (pcr_realm_id, current_event) in current_by_realm {
+        let genesis_event = genesis_by_realm
+            .get(&pcr_realm_id)
+            .cloned()
+            .ok_or_else(|| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "Applet PCR {} has no canonical genesis during hydration",
+                    pcr_realm_id
+                ))
+            })?;
+        let projection_value = proj
+            .principal_resolution_for_realm(pcr_realm_id.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "Applet PCR {} did not materialize current resolution during hydration",
+                    pcr_realm_id
+                ))
+            })?;
+        let projection = serde_json::from_value(projection_value).map_err(|error| {
+            soland_storage::PersistenceError::Internal(format!(
+                "Applet PCR {} materialized invalid resolution: {error}",
+                pcr_realm_id
+            ))
+        })?;
+        let existing = persistence
+            .principal_resolutions()
+            .for_realm(&pcr_realm_id)
+            .await?;
+        if existing
+            .as_ref()
+            .is_some_and(|record| record.current_event.event_id == current_event.event_id)
+        {
+            continue;
+        }
+        let expected = existing
+            .as_ref()
+            .map(|record| record.current_event.event_id.as_str());
+        let authority_key = arkret_wire::PrincipalAuthorityKey::new(
+            genesis_event.actor_id.clone(),
+            genesis_event.principal_server_id.clone(),
+        );
+        let expected_current_event_id = current_event.event_id.clone();
+        let next = soland_storage::PrincipalResolutionRecord {
+            authority_key,
+            pcr_realm_id: pcr_realm_id.clone(),
+            genesis_event,
+            current_event,
+            projection,
+        };
+        match persistence
+            .principal_resolutions()
+            .compare_and_set(expected, next)
+            .await?
+        {
+            soland_storage::PrincipalResolutionCasResult::Applied(_) => {}
+            soland_storage::PrincipalResolutionCasResult::Conflict(Some(record))
+                if record.current_event.event_id == expected_current_event_id => {}
+            soland_storage::PrincipalResolutionCasResult::Conflict(_) => {
+                return Err(soland_storage::PersistenceError::Internal(format!(
+                    "Applet PCR {} read-index repair CAS conflict",
+                    pcr_realm_id
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Rebuild the reducer's Realm membership cache from canonical
 /// `ak.member.state` Events.
 ///
@@ -530,6 +711,8 @@ pub async fn hydrate_projections_from_persistence(
     let hydration_hlc = soland_domain::hlc::ServerHlc::new("soland:projection-hydration");
 
     hydrate_canonical_realm_bootstraps(persistence, proj, &hydration_hlc, projection_adapter)
+        .await?;
+    hydrate_applet_managed_pcr_identity(persistence, proj, &hydration_hlc, projection_adapter)
         .await?;
     hydrate_canonical_realm_memberships(persistence, proj, projection_adapter).await?;
     hydrate_sidecar_projections(persistence, proj, &hydration_hlc).await?;
@@ -881,6 +1064,8 @@ pub async fn hydrate_projections_from_persistence(
                     keypackage_digest: row.keypackage_digest,
                     actor_id: row.actor_id,
                     device_id: row.device_id,
+                    endpoint_verification_method: row.endpoint_verification_method,
+                    intended_realm_id: row.intended_realm_id,
                     lifetime: KeyPackageLifetime {
                         not_before: row.lifetime_not_before,
                         not_after: row.lifetime_not_after,
@@ -888,7 +1073,7 @@ pub async fn hydrate_projections_from_persistence(
                     key_package_bytes: row.key_package_bytes,
                     capabilities: row.capabilities,
                     capabilities_digest: row.capabilities_digest,
-                    device_signature: row.device_signature,
+                    endpoint_signature: row.endpoint_signature,
                     last_resort: row.last_resort,
                     last_resort_realm_id: row.last_resort_realm_id,
                     claimed_by: row.claimed_by_mls_group_id,
@@ -906,17 +1091,32 @@ pub async fn hydrate_projections_from_persistence(
     if let Ok(rows) = persistence.mls_welcomes().snapshot_all().await {
         proj.mls_welcomes.clear();
         for row in rows {
-            proj.mls_welcomes
-                .entry(soland_domain::reducer::MlsWelcomeQueueKey::new(
+            let endpoint_key = match (
+                row.recipient_device_id.as_deref(),
+                row.recipient_endpoint_verification_method.as_deref(),
+            ) {
+                (Some(device_id), None) => soland_domain::reducer::MlsWelcomeQueueKey::new(
                     row.recipient_actor_id.clone(),
-                    row.recipient_device_id.clone(),
-                ))
+                    device_id,
+                ),
+                (None, Some(method)) => soland_domain::reducer::MlsWelcomeQueueKey::endpoint(
+                    row.recipient_actor_id.clone(),
+                    method,
+                    row.intended_realm_id.as_deref(),
+                ),
+                _ => continue,
+            };
+            proj.mls_welcomes
+                .entry(endpoint_key)
                 .or_default()
                 .push(MlsWelcome {
                     id: row.id,
                     group_id: row.group_id,
                     recipient_actor_id: row.recipient_actor_id,
                     recipient_device_id: row.recipient_device_id,
+                    recipient_endpoint_verification_method: row
+                        .recipient_endpoint_verification_method,
+                    intended_realm_id: row.intended_realm_id,
                     welcome_bytes: row.welcome_bytes,
                     key_package_id: row.key_package_id,
                     epoch: row.epoch,
@@ -980,19 +1180,31 @@ pub async fn hydrate_projections_from_persistence(
     }
     // The Strand mirror intentionally stores only common index fields. Replay
     // the accepted projection events after mirror hydration so Calendar
-    // fields, schema activation, the schedule revision DAG and RSVP
-    // MV-register heads survive a process restart from their canonical durable
-    // source instead of being replaced by an incomplete mirror row.
-    for event in events.into_iter().filter(|event| {
-        matches!(
-            arkret_wire::EventKind::from_wire(&event.event_kind),
-            arkret_wire::EventKind::StrandCreate
-                | arkret_wire::EventKind::StrandUpdate
-                | arkret_wire::EventKind::StrandArchive
-                | arkret_wire::EventKind::StrandRestore
-                | arkret_wire::EventKind::RsvpSet
-        )
-    }) {
+    // fields, schema activation, the schedule revision DAG, RSVP MV-register
+    // heads, and Poll Message/vote state survive a process restart from their
+    // canonical durable source. Poll responses are replayed from the Event log
+    // into PollState and deliberately do not create standalone MessageState
+    // timeline rows.
+    let mut replay_events = events
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                arkret_wire::EventKind::from_wire(&event.event_kind),
+                arkret_wire::EventKind::StrandCreate
+                    | arkret_wire::EventKind::StrandUpdate
+                    | arkret_wire::EventKind::StrandArchive
+                    | arkret_wire::EventKind::StrandRestore
+                    | arkret_wire::EventKind::RsvpSet
+                    | arkret_wire::EventKind::MessageCreate
+            )
+        })
+        .collect::<Vec<_>>();
+    replay_events.sort_by(|left, right| {
+        left.received_at
+            .cmp(&right.received_at)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    for event in replay_events {
         replay_projection_event(
             persistence,
             projection_adapter,

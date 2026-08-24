@@ -61,18 +61,7 @@ impl ProjectionState {
                 .get("version_id")
                 .and_then(Value::as_str)
                 .is_some_and(|value| !value.is_empty());
-        if !valid_next
-            || operation
-                .payload
-                .get("previous_resolution_event_ref")
-                .and_then(Value::as_str)
-                != current.get("resolution_event_ref").and_then(Value::as_str)
-            || operation
-                .payload
-                .get("previous_method_history_head")
-                .and_then(Value::as_str)
-                != current.get("method_history_head").and_then(Value::as_str)
-        {
+        if !valid_next {
             return ProjectionEffect::Rejected {
                 reason: "identity_resolution_predecessor_mismatch".to_owned(),
             };

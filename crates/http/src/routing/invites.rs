@@ -11,7 +11,7 @@ use arkret_models_collaboration::governance::invite_addressing::{
     InviteLocatorIssueOutcome, InviteLocatorIssueRequestBody, InviteLocatorResolveRequestBody,
     InviteLocatorRevokeOutcome, InviteLocatorRevokeRequestBody, InviteLocatorRotateRequestBody,
     InviteLocatorStatus, InviteReceivePolicy, PrincipalLocator, PrincipalLocatorProof,
-    PrincipalLocatorProofPurpose,
+    PrincipalLocatorProofPurpose, SelfInviteDispatchRequestBody,
 };
 use arkret_models_collaboration::governance::member_delivery_binding_candidate::{
     CandidateIntent, CandidateValidationContext, MemberDeliveryBindingCandidate,
@@ -312,7 +312,7 @@ enum InvitePrivateProjection<'a> {
     /// invite row.
     FromDeliveredEvent { session: &'a SessionRecord },
     /// Local self dispatch. This service already accepted the Event — which is
-    /// exactly what the three `invite_event` preconditions proved — so its
+    /// exactly what the two accepted-event preconditions proved — so its
     /// registered reducer contract already owns the holder-visible invite row
     /// and the notify branch owes no second write of it.
     AlreadyAcceptedLocally { record: &'a AcceptedEvent },
@@ -323,8 +323,8 @@ enum InvitePrivateProjection<'a> {
 /// `ak.self.invites.command.dispatch` branch.
 ///
 /// Steps 1-3 are the service-to-service binding and stay with the caller. The
-/// local branch substitutes "authenticated self session + the three
-/// `invite_event` preconditions" for them, and MUST NOT synthesize federation
+/// local branch substitutes "authenticated self session + the two
+/// accepted-event preconditions" for them, and MUST NOT synthesize federation
 /// trust headers or a peer session to reach this path.
 async fn receive_private_invite_delivery(
     state: &AppState,
@@ -492,8 +492,6 @@ async fn self_invites_dispatch(
 ) -> JsonResult<InviteDeliveryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    // The remote branch forwards the caller's own bytes, so the raw payload is
-    // read here instead of re-encoding a typed model back onto the wire.
     let raw_body = req
         .payload()
         .await
@@ -504,15 +502,26 @@ async fn self_invites_dispatch(
     let body: Value = serde_json::from_slice(&raw_body).map_err(|_| {
         AppError::json_invalid("invalid ak.self.invites.command.dispatch request body")
     })?;
-    let delivery: InviteDeliveryRequestBody =
+    let dispatch: SelfInviteDispatchRequestBody =
         serde_json::from_value(body.clone()).map_err(|error| {
-            AppError::param_invalid(format!("invalid invite delivery request: {error}"))
+            AppError::param_invalid(format!("invalid invite dispatch request: {error}"))
         })?;
-    delivery
+    dispatch
         .validate_minimal()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
 
-    let accepted = require_dispatchable_invite_event(state, &session, &delivery, &body).await?;
+    let accepted = require_dispatchable_invite_event(state, &session, &dispatch).await?;
+    let invite_event = serde_json::from_slice(&accepted.canonical_bytes)
+        .map_err(|error| AppError::internal(format!("stored invite Event is invalid: {error}")))?;
+    let delivery = InviteDeliveryRequestBody {
+        schema: dispatch.schema,
+        invite_event,
+        invite_address: dispatch.invite_address,
+        introduction_evidence: dispatch.introduction_evidence,
+        idempotency_key: dispatch.idempotency_key,
+    };
+    let delivery_body = serde_json::to_value(&delivery)
+        .map_err(|error| AppError::internal(format!("invite delivery encoding failed: {error}")))?;
 
     if delivery.invite_address.recipient_service_id.as_str() == state.service_id() {
         // §7 — the local target runs the same steps 4-9 the peer ingress runs.
@@ -520,7 +529,7 @@ async fn self_invites_dispatch(
             receive_private_invite_delivery(
                 state,
                 &delivery,
-                &body,
+                &delivery_body,
                 state.service_id(),
                 "self.invites.dispatch",
                 InvitePrivateProjection::AlreadyAcceptedLocally { record: &accepted },
@@ -528,31 +537,28 @@ async fn self_invites_dispatch(
             .await?,
         );
     }
-    json_ok(enqueue_remote_invite_delivery(state, &delivery, &body, &accepted).await?)
+    json_ok(enqueue_remote_invite_delivery(state, &delivery, &delivery_body, &accepted).await?)
 }
 
-/// Spec invite-addressing.md §7 — the three closed `invite_event` preconditions
+/// Spec invite-addressing.md §7 — the accepted Event preconditions
 /// of `ak.self.invites.command.dispatch`.
 ///
 /// The order is closed: resolve the accepted Event by `event_id` first, then
-/// compare its stored signing actor, then compare the stored canonical bytes.
+/// compare its stored signing actor.
 /// Each failure is `failed_precondition` carrying its own reason code, and none
 /// of them may produce a delivery, an outbox enqueue or a holder-private write,
 /// so they are evaluated before either dispatch branch does anything at all.
 ///
 /// This operation MUST NOT re-verify the signature of an Event this service
-/// already admitted: a tampered body is answered by `invite_event_bytes_mismatch`,
-/// never by a generic proof error. The comparison therefore reads the raw
-/// canonical Event bytes stored at admission and never re-serializes them.
+/// already admitted. Delivery uses the raw canonical Event bytes stored at admission.
 async fn require_dispatchable_invite_event(
     state: &AppState,
     session: &SessionRecord,
-    delivery: &InviteDeliveryRequestBody,
-    body: &Value,
+    dispatch: &SelfInviteDispatchRequestBody,
 ) -> Result<AcceptedEvent, AppError> {
     let Some(accepted) = state
         .event_queries()
-        .canonical_event(delivery.invite_event.event_id.as_str())
+        .canonical_event(dispatch.invite_event_id.as_str())
         .await
         .map_err(|error| AppError::internal(format!("invite event lookup: {error}")))?
     else {
@@ -569,19 +575,6 @@ async fn require_dispatchable_invite_event(
         return Err(invite_event_precondition(
             arkret_wire::ReasonCode::INVITE_EVENT_ACTOR_MISMATCH,
             "invite_event was not signed by the authenticated session actor",
-        ));
-    }
-    let submitted_canonical_bytes =
-        super::events::event_log::event_canonical_bytes(&body["invite_event"]).map_err(|_| {
-            invite_event_precondition(
-                arkret_wire::ReasonCode::INVITE_EVENT_BYTES_MISMATCH,
-                "invite_event does not equal the stored canonical Event bytes",
-            )
-        })?;
-    if submitted_canonical_bytes != accepted.canonical_bytes {
-        return Err(invite_event_precondition(
-            arkret_wire::ReasonCode::INVITE_EVENT_BYTES_MISMATCH,
-            "invite_event does not equal the stored canonical Event bytes",
         ));
     }
     Ok(accepted)

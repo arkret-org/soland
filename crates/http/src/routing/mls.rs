@@ -88,7 +88,8 @@ fn welcome_recipient_device_id(
         } => Some(recipient_device_id),
         arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::NativeAgent {
             ..
-        } => None,
+        }
+        | arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::MinimalMetadataPairwise { .. } => None,
     }
 }
 
@@ -96,6 +97,10 @@ fn welcome_recipient_device_id(
 enum KeyPackageTrustSelector {
     Principal(KeyPackageTrustBinding),
     PerDevice(BTreeMap<String, KeyPackageTrustBinding>),
+    MinimalMetadataPairwise {
+        verification_method: String,
+        intended_realm_id: String,
+    },
 }
 
 /// Lift the reducer's exactly-one-of validation into this layer's error type.
@@ -143,8 +148,18 @@ impl KeyPackageTrustSelector {
         match self {
             Self::Principal(binding) => trust_binding_matches_keypackage(binding, kp),
             Self::PerDevice(bindings) => bindings
-                .get(kp.device_id.as_str())
+                .get(kp.device_id.as_deref().unwrap_or(""))
                 .is_some_and(|binding| trust_binding_matches_keypackage(binding, kp)),
+            Self::MinimalMetadataPairwise {
+                verification_method,
+                intended_realm_id,
+            } => {
+                kp.device_id.is_none()
+                    && kp.device_authorize_event_id.is_none()
+                    && kp.agent_key_authorize_event_id.is_none()
+                    && kp.endpoint_verification_method.as_deref() == Some(verification_method)
+                    && kp.intended_realm_id.as_deref() == Some(intended_realm_id)
+            }
         }
     }
 }
@@ -207,23 +222,77 @@ async fn upload_keypackage(
     let session = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
+    body.validate_shape().map_err(AppError::param_invalid)?;
     let principal_id = body.principal_id.clone();
     let actor_id = body.principal_id.to_string();
-    let device_id = body.device_id.to_string();
-    if actor_id != session.actor {
+    if body.pairwise_verification_method.is_none() && actor_id != session.actor {
         return Err(AppError::capability_denied(
             "actor_id must match the calling session",
-        ));
-    }
-    if device_id != session.device_id {
-        return Err(AppError::capability_denied(
-            "device_id must match the calling session",
         ));
     }
     if body.keypackages.is_empty() {
         return Err(AppError::param_missing("keypackages is required"));
     }
-    let trust_binding = current_keypackage_trust_binding(state, &principal_id, &device_id).await?;
+    let (device_id, trust_binding, publish_trust_anchor) = if let Some(device_id) = &body.device_id
+    {
+        if device_id.as_str() != session.device_id {
+            return Err(AppError::capability_denied(
+                "device_id must match the calling session",
+            ));
+        }
+        let binding =
+            current_keypackage_trust_binding(state, &principal_id, device_id.as_str()).await?;
+        let anchor = match (
+            binding.device_authorize_event_id.as_ref(),
+            binding.agent_key_authorize_event_id.as_ref(),
+        ) {
+            (Some(event_id), None) => {
+                soland_domain::reducer::mls::MlsKeyPackagePublishTrustAnchor::DeviceAuthorize(
+                    event_id.clone(),
+                )
+            }
+            _ => {
+                return Err(AppError::param_invalid(
+                    "device upload has no active device authorization",
+                ));
+            }
+        };
+        (Some(device_id.as_str().to_owned()), Some(binding), anchor)
+    } else if let (Some(method), Some(event_id)) = (
+        &body.agent_verification_method,
+        &body.agent_key_authorize_event_id,
+    ) {
+        (
+            None,
+            Some(KeyPackageTrustBinding::agent_key_authorize(
+                event_id.as_str().to_owned(),
+            )),
+            soland_domain::reducer::mls::MlsKeyPackagePublishTrustAnchor::AgentKeyAuthorize {
+                event_id: event_id.as_str().to_owned(),
+                verification_method: method.as_str().to_owned(),
+            },
+        )
+    } else {
+        let method = body
+            .pairwise_verification_method
+            .as_ref()
+            .expect("validated pairwise method");
+        let realm_id = body
+            .intended_realm_id
+            .as_ref()
+            .expect("validated pairwise Realm");
+        ensure_pairwise_realm_affinity(state, &principal_id, method, realm_id, state.service_id())
+            .await?;
+        (
+            None,
+            None,
+            soland_domain::reducer::mls::MlsKeyPackagePublishTrustAnchor::MinimalMetadataPairwise {
+                verification_method: method.as_str().to_owned(),
+                intended_realm_id: realm_id.as_str().to_owned(),
+            },
+        )
+    };
+    let endpoint_label = device_id.as_deref().unwrap_or(actor_id.as_str());
     let unsigned_upload = body.unsigned();
     let upload_signing_input =
         arkret_models_crypto::http_bodies::keypackages_upload_signing_input(&unsigned_upload)
@@ -232,7 +301,10 @@ async fn upload_keypackage(
                     "KeyPackage upload canonical input failed: {error}"
                 ))
             })?;
-    if let Some(authorize_event_id) = trust_binding.agent_key_authorize_event_id.as_deref() {
+    if let Some(authorize_event_id) = trust_binding
+        .as_ref()
+        .and_then(|binding| binding.agent_key_authorize_event_id.as_deref())
+    {
         let first_entry = body
             .keypackages
             .first()
@@ -244,23 +316,42 @@ async fn upload_keypackage(
             &principal_id,
             authorize_event_id,
             &first_key_package,
-            &body.device_signature,
+            &body.endpoint_signature,
             &upload_signing_input,
         )
         .await
         .map_err(AppError::param_invalid)?;
-    } else {
+    } else if device_id.is_some() {
         verify_device_keypackage_signature(
             state,
             &principal_id,
-            &device_id,
-            &body.device_signature,
+            endpoint_label,
+            &body.endpoint_signature,
             &upload_signing_input,
         )
         .await?;
+    } else {
+        let method = body
+            .pairwise_verification_method
+            .as_ref()
+            .expect("validated pairwise method");
+        let first_entry = body
+            .keypackages
+            .first()
+            .expect("non-empty KeyPackage upload checked above");
+        let first_key_package =
+            decode_key_package(first_entry.keypackage.as_str()).map_err(AppError::param_invalid)?;
+        validate_pairwise_keypackage_upload(
+            &principal_id,
+            method,
+            &first_key_package,
+            &body.endpoint_signature,
+            &upload_signing_input,
+        )
+        .map_err(AppError::param_invalid)?;
     }
 
-    let default_device_signature = body.device_signature.clone();
+    let default_endpoint_signature = body.endpoint_signature.clone();
     let mut accepted = 0_u32;
     let mut key_package_refs = Vec::new();
     let mut rejected = Vec::new();
@@ -268,7 +359,7 @@ async fn upload_keypackage(
         if entry.keypackage_id.is_empty() {
             rejected.push(keypackage_failure(
                 &entry,
-                &device_id,
+                endpoint_label,
                 "keypackage_id_missing",
             ));
             continue;
@@ -277,7 +368,7 @@ async fn upload_keypackage(
         if entry.keypackage_ref.is_empty() {
             rejected.push(keypackage_failure(
                 &entry,
-                &device_id,
+                endpoint_label,
                 "keypackage_ref_missing",
             ));
             continue;
@@ -287,47 +378,39 @@ async fn upload_keypackage(
         let key_package_bytes = match decode_key_package(&key_package_bytes_b64) {
             Ok(bytes) => bytes,
             Err(reason) => {
-                rejected.push(keypackage_failure(&entry, &device_id, reason));
+                rejected.push(keypackage_failure(&entry, endpoint_label, reason));
                 continue;
             }
         };
-        let keypackage_digest = entry.keypackage_digest.to_string();
-        let computed_keypackage_digest = arkret_canonical::sha256_digest(&key_package_bytes);
-        if keypackage_digest != computed_keypackage_digest {
-            rejected.push(keypackage_failure(
-                &entry,
-                &device_id,
-                "keypackage_digest_mismatch",
-            ));
-            continue;
-        }
+        let keypackage_digest = arkret_canonical::sha256_digest(&key_package_bytes);
         let capabilities = match validate_capabilities(&entry.capabilities) {
             Ok(value) => value,
             Err(reason) => {
-                rejected.push(keypackage_failure(&entry, &device_id, reason));
+                rejected.push(keypackage_failure(&entry, endpoint_label, reason));
                 continue;
             }
         };
-        let device_signature =
-            match entry_signature(entry.device_signature.as_ref(), &default_device_signature) {
-                Ok(signature) => signature,
-                Err(reason) => {
-                    rejected.push(keypackage_failure(&entry, &device_id, reason));
-                    continue;
-                }
-            };
-        let entry_signing_input = if entry.device_signature.is_some() {
-            match arkret_models_crypto::http_bodies::keypackage_upload_entry_signing_input(
-                &body.principal_id,
-                &body.device_id,
+        let endpoint_signature = match entry_signature(
+            entry.endpoint_signature.as_ref(),
+            &default_endpoint_signature,
+        ) {
+            Ok(signature) => signature,
+            Err(reason) => {
+                rejected.push(keypackage_failure(&entry, endpoint_label, reason));
+                continue;
+            }
+        };
+        let entry_signing_input = if entry.endpoint_signature.is_some() {
+            match arkret_models_crypto::http_bodies::keypackage_upload_endpoint_entry_signing_input(
+                &unsigned_upload,
                 &entry,
             ) {
                 Ok(input) => input,
                 Err(error) => {
                     rejected.push(keypackage_failure(
                         &entry,
-                        &device_id,
-                        format!("device_signature_invalid:{error}"),
+                        endpoint_label,
+                        format!("endpoint_signature_invalid:{error}"),
                     ));
                     continue;
                 }
@@ -335,33 +418,71 @@ async fn upload_keypackage(
         } else {
             upload_signing_input.clone()
         };
-        if let Some(authorize_event_id) = trust_binding.agent_key_authorize_event_id.as_deref()
+        if let Some(authorize_event_id) = trust_binding
+            .as_ref()
+            .and_then(|binding| binding.agent_key_authorize_event_id.as_deref())
             && let Err(reason) = validate_agent_keypackage_upload(
                 state,
                 &principal_id,
                 authorize_event_id,
                 &key_package_bytes,
-                &device_signature,
+                &endpoint_signature,
                 &entry_signing_input,
             )
             .await
         {
-            rejected.push(keypackage_failure(&entry, &device_id, reason));
+            rejected.push(keypackage_failure(&entry, endpoint_label, reason));
             continue;
         }
-        if trust_binding.agent_key_authorize_event_id.is_none()
-            && entry.device_signature.is_some()
-            && let Err(error) = verify_device_keypackage_signature(
+        if device_id.is_some() {
+            if let Err(error) = validate_device_keypackage_leaf(
                 state,
                 &principal_id,
-                &device_id,
-                &device_signature,
-                &entry_signing_input,
+                endpoint_label,
+                &key_package_bytes,
             )
             .await
-        {
-            rejected.push(keypackage_failure(&entry, &device_id, error.to_string()));
-            continue;
+            {
+                rejected.push(keypackage_failure(
+                    &entry,
+                    endpoint_label,
+                    error.to_string(),
+                ));
+                continue;
+            }
+            if entry.endpoint_signature.is_some()
+                && let Err(error) = verify_device_keypackage_signature(
+                    state,
+                    &principal_id,
+                    endpoint_label,
+                    &endpoint_signature,
+                    &entry_signing_input,
+                )
+                .await
+            {
+                rejected.push(keypackage_failure(
+                    &entry,
+                    endpoint_label,
+                    error.to_string(),
+                ));
+                continue;
+            }
+        }
+        if device_id.is_none() && trust_binding.is_none() {
+            let method = body
+                .pairwise_verification_method
+                .as_ref()
+                .expect("validated pairwise method");
+            if let Err(reason) = validate_pairwise_keypackage_upload(
+                &principal_id,
+                method,
+                &key_package_bytes,
+                &endpoint_signature,
+                &entry_signing_input,
+            ) {
+                rejected.push(keypackage_failure(&entry, endpoint_label, reason));
+                continue;
+            }
         }
         let created_at = entry.created_at.timestamp();
         let expires_at = entry.expires_at.timestamp();
@@ -371,7 +492,7 @@ async fn upload_keypackage(
         {
             rejected.push(keypackage_failure(
                 &entry,
-                &device_id,
+                endpoint_label,
                 "last_resort_keypackage_lifetime_too_long",
             ));
             continue;
@@ -380,29 +501,7 @@ async fn upload_keypackage(
         // KeyPackage upload is a local HTTP/storage workflow, not an accepted
         // Event. Keep its reducer input typed instead of manufacturing a
         // `ProjectedEventOperation` with a synthetic Event identity.
-        let trust_anchor = match (
-            trust_binding.device_authorize_event_id.as_ref(),
-            trust_binding.agent_key_authorize_event_id.as_ref(),
-        ) {
-            (Some(event_id), None) => {
-                soland_domain::reducer::mls::MlsKeyPackagePublishTrustAnchor::DeviceAuthorize(
-                    event_id.clone(),
-                )
-            }
-            (None, Some(event_id)) => {
-                soland_domain::reducer::mls::MlsKeyPackagePublishTrustAnchor::AgentKeyAuthorize(
-                    event_id.clone(),
-                )
-            }
-            _ => {
-                rejected.push(keypackage_failure(
-                    &entry,
-                    &device_id,
-                    "claim_generation_mismatch",
-                ));
-                continue;
-            }
-        };
+        let trust_anchor = publish_trust_anchor.clone();
         let projection = soland_domain::reducer::mls::MlsKeyPackagePublishProjection {
             keypackage_id: keypackage_id.clone(),
             keypackage_ref: keypackage_ref.clone(),
@@ -415,7 +514,7 @@ async fn upload_keypackage(
             },
             key_package_bytes,
             capabilities,
-            device_signature,
+            endpoint_signature,
             last_resort,
             trust_anchor,
             created_at,
@@ -426,7 +525,7 @@ async fn upload_keypackage(
         match effect {
             ProjectionEffectView::Mls(MlsProjectionEffect::KeyPackagePublished { .. }) => {}
             ProjectionEffectView::Rejected { reason } => {
-                rejected.push(keypackage_failure(&entry, &device_id, reason));
+                rejected.push(keypackage_failure(&entry, endpoint_label, reason));
                 continue;
             }
             other => {
@@ -443,7 +542,7 @@ async fn upload_keypackage(
             .projections()
             .mls_key_package_record(&keypackage_id)
             .expect("publish reducer landed the row");
-        state
+        let attached = state
             .mls_key_packages()
             .store_key_package(&record)
             .await
@@ -452,6 +551,9 @@ async fn upload_keypackage(
         key_package_refs.push(keypackage_ref);
     }
 
+    let trust_selector = trust_binding
+        .as_ref()
+        .map(KeyPackageTrustSelector::Principal);
     json_ok(KeyPackagesUploadOutcome {
         accepted,
         rejected,
@@ -460,7 +562,7 @@ async fn upload_keypackage(
             state,
             &actor_id,
             None,
-            Some(&KeyPackageTrustSelector::Principal(trust_binding)),
+            trust_selector.as_ref(),
             None,
         )),
     })
@@ -569,25 +671,46 @@ async fn claim_keypackage_at_destination(
         .map(ToString::to_string)
         .collect::<BTreeSet<_>>();
     let target_principal_id = body.target_principal_id.as_str();
+    let target_keypackage_ref = body
+        .target_keypackage_ref
+        .as_ref()
+        .map(|reference| reference.as_str());
     let trust_selector = current_keypackage_claim_trust_selector(
         state,
         &body.target_principal_id,
         &target_device_ids,
         Some(body.intended_realm_id.as_str()),
+        body.target_pairwise_verification_method
+            .as_ref()
+            .map(|method| method.as_str()),
     )
     .await
     .map_err(|_| peer_claim_failed())?;
-    let now_secs = now().timestamp();
+    let now_unix_ms = now().timestamp_millis();
+    let now_secs = now_unix_ms.div_euclid(1000);
     let candidate_ids = {
         let keypackages = state.projections().mls_key_package_records();
         let mut candidates = keypackages
             .iter()
-            .filter(|keypackage| ordinary_keypackage_is_available(keypackage))
-            .filter(|keypackage| {
+            .filter_map(|keypackage| {
+                if ordinary_keypackage_is_available(keypackage) {
+                    Some((0_u8, keypackage))
+                } else if body.last_resort_allowed == Some(true)
+                    && last_resort_matches_realm(keypackage, body.intended_realm_id.as_str())
+                {
+                    Some((1_u8, keypackage))
+                } else {
+                    None
+                }
+            })
+            .filter(|(_, keypackage)| {
+                target_keypackage_ref.is_none_or(|expected| keypackage.keypackage_ref == expected)
+            })
+            .filter(|(_, keypackage)| {
                 keypackage.lifetime_not_after.saturating_mul(1000)
                     >= body.expires_at.timestamp_millis()
             })
-            .filter(|keypackage| {
+            .filter(|(_, keypackage)| {
                 keypackage_matches_claim(
                     keypackage,
                     target_principal_id,
@@ -597,19 +720,22 @@ async fn claim_keypackage_at_destination(
                     &required_capabilities,
                 )
             })
-            .map(|keypackage| {
+            .map(|(priority, keypackage)| {
                 (
+                    priority,
                     keypackage.created_at,
                     keypackage.id.clone(),
                     trust_binding_from_keypackage(keypackage),
                 )
             })
             .collect::<Vec<_>>();
-        candidates.sort_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
+        candidates.sort_by(|left, right| {
+            (&left.0, &left.1, &left.2).cmp(&(&right.0, &right.1, &right.2))
+        });
         candidates
     };
 
-    for (_, candidate_id, binding) in candidate_ids {
+    for (priority, _, candidate_id, binding) in candidate_ids {
         let binding = binding.map_err(|_| peer_claim_failed())?;
         let Some(mut predicted) = state
             .mls_key_packages()
@@ -619,13 +745,26 @@ async fn claim_keypackage_at_destination(
         else {
             continue;
         };
-        if !ordinary_keypackage_is_available(&predicted) {
+        if target_keypackage_ref
+            .is_some_and(|expected| predicted.keypackage_ref.as_str() != expected)
+        {
             continue;
         }
-        predicted.claimed_by_mls_group_id = Some(body.mls_group_id.as_str().to_owned());
-        predicted.claimed_at = Some(now_secs);
-        predicted.claim_expires_at_unix_ms = Some(body.expires_at.timestamp_millis());
-        predicted.consumed_at = None;
+        let is_last_resort = priority == 1;
+        if if is_last_resort {
+            body.last_resort_allowed != Some(true)
+                || !last_resort_matches_realm(&predicted, body.intended_realm_id.as_str())
+        } else {
+            !ordinary_keypackage_is_available(&predicted)
+        } {
+            continue;
+        }
+        if !is_last_resort {
+            predicted.claimed_by_mls_group_id = Some(body.mls_group_id.as_str().to_owned());
+            predicted.claimed_at = Some(now_secs);
+            predicted.claim_expires_at_unix_ms = Some(body.expires_at.timestamp_millis());
+            predicted.consumed_at = None;
+        }
         let outcome =
             build_peer_claim_outcome(state, body, &source_service_id, &request_digest, &predicted)
                 .await?;
@@ -636,7 +775,18 @@ async fn claim_keypackage_at_destination(
             source_service_id: source_service_id.clone(),
             claim_request_id: claim_request_id.to_owned(),
             request_digest: request_digest.clone(),
-            state: "claimed".to_owned(),
+            key_package_use: if is_last_resort {
+                "last_resort"
+            } else {
+                "single_use"
+            }
+            .to_owned(),
+            state: if is_last_resort {
+                "last_resort_claimed"
+            } else {
+                "claimed"
+            }
+            .to_owned(),
             outcome: Some(outcome_value),
             consume_receipt: None,
             terminal_receipt: None,
@@ -664,7 +814,7 @@ async fn claim_keypackage_at_destination(
                 device_authorize_event_id: binding.device_authorize_event_id.as_deref(),
                 agent_key_authorize_event_id: binding.agent_key_authorize_event_id.as_deref(),
                 device_revocation_gate: device_revocation_gate.as_ref(),
-                claimed_at: now_secs,
+                claimed_at_unix_ms: now_unix_ms,
                 claim_expires_at_unix_ms: body.expires_at.timestamp_millis(),
                 ledger: &ledger,
             })
@@ -672,12 +822,14 @@ async fn claim_keypackage_at_destination(
             .map_err(|error| AppError::internal(format!("peer KeyPackage CAS: {error}")))?
         {
             PeerKeyPackageClaimAttemptResult::Claimed(claimed) => {
-                state.projections().mark_key_package_claimed(
-                    &candidate_id,
-                    body.mls_group_id.as_str().to_owned(),
-                    now_secs,
-                    Some(body.expires_at.timestamp_millis()),
-                );
+                if !is_last_resort {
+                    state.projections().mark_key_package_claimed(
+                        &candidate_id,
+                        body.mls_group_id.as_str().to_owned(),
+                        now_secs,
+                        Some(body.expires_at.timestamp_millis()),
+                    );
+                }
                 debug_assert_eq!(claimed.id, candidate_id);
                 return json_ok(outcome);
             }
@@ -737,7 +889,7 @@ async fn peer_query_keypackage_claim(
             AppError::internal(format!("stored peer claim outcome invalid: {error}"))
         })?;
     let (state_value, error_code) = match record.state.as_str() {
-        "claimed" => (PeerKeyPackagesClaimQueryState::Claimed, None),
+        "claimed" | "last_resort_claimed" => (PeerKeyPackagesClaimQueryState::Claimed, None),
         "consumed" => (PeerKeyPackagesClaimQueryState::Consumed, None),
         "expired" => (PeerKeyPackagesClaimQueryState::Expired, None),
         "revoked" => (PeerKeyPackagesClaimQueryState::Revoked, None),
@@ -793,7 +945,7 @@ async fn peer_query_keypackage_claim(
         )?;
         let receipt_value = serde_json::to_value(&receipt)
             .map_err(|error| AppError::internal(format!("terminal receipt serialize: {error}")))?;
-        state
+        let attached = state
             .mls_key_packages()
             .attach_peer_claim_terminal_receipt(
                 &source_service_id,
@@ -878,7 +1030,10 @@ fn validate_peer_claim_time_window(body: &PeerKeyPackagesClaimRequestBody) -> Re
     let authorization = &body.requester_authorization;
     let signed_at = match authorization {
         PeerKeyPackageRequesterAuthorization::Device { signed_at, .. }
-        | PeerKeyPackageRequesterAuthorization::NativeAgent { signed_at, .. } => *signed_at,
+        | PeerKeyPackageRequesterAuthorization::NativeAgent { signed_at, .. }
+        | PeerKeyPackageRequesterAuthorization::MinimalMetadataPairwise { signed_at, .. } => {
+            *signed_at
+        }
     };
     let current = now();
     if signed_at > current + chrono::Duration::seconds(60)
@@ -923,6 +1078,52 @@ async fn verify_peer_claim_participant_authorization(
         );
         Ok::<bool, AppError>(false)
     };
+    if let PeerKeyPackageRequesterAuthorization::MinimalMetadataPairwise {
+        verification_method,
+        signature,
+        ..
+    } = authorization
+    {
+        if signature.kid.as_str() != verification_method.as_str()
+            || signature
+                .signature_algorithm
+                .as_ref()
+                .is_some_and(|algorithm| algorithm.as_str() != "Ed25519")
+            || arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(
+                body.requester.clone(),
+                verification_method.clone(),
+            )
+            .is_err()
+            || ensure_pairwise_realm_affinity(
+                state,
+                &body.requester,
+                verification_method,
+                &body.intended_realm_id,
+                body.service_binding.source_service_id.as_str(),
+            )
+            .await
+            .is_err()
+        {
+            return reject("minimal_metadata_pairwise_signature_shape");
+        }
+        let signing_bytes = keypackage_claim_authorization_signing_bytes(
+            &body.unsigned_request(),
+            &body.service_binding,
+            authorization,
+        )
+        .map_err(|error| {
+            AppError::internal(format!("peer claim authorization transcript: {error}"))
+        })?;
+        let key =
+            crate::jws_verify::resolve_ed25519_pubkey_async(state, verification_method.as_str())
+                .await
+                .map_err(|error| AppError::internal(format!("pairwise signing key: {error}")))?;
+        return Ok(crate::routing::identity::device_signing::ed25519_verify(
+            &key,
+            &signing_bytes,
+            signature.sig.as_str(),
+        ));
+    }
     if let PeerKeyPackageRequesterAuthorization::NativeAgent {
         verification_method,
         requester_agent_id,
@@ -940,8 +1141,13 @@ async fn verify_peer_claim_participant_authorization(
             return reject("native_agent_missing");
         };
         if agent.state != AgentLifecycleState::Active
-            || agent.authorized_event_ref.as_deref() != Some(agent_key_authorize_event_id.as_str())
-            || agent.authorized_verification_method.as_deref() != Some(verification_method.as_str())
+            || !current_agent_key_authorization_matches_method(
+                state,
+                requester_agent_id,
+                agent_key_authorize_event_id.as_str(),
+                verification_method.as_str(),
+            )
+            .await
             || requester_agent_id != &body.requester
         {
             return reject("native_agent_authorization_stale");
@@ -987,6 +1193,7 @@ async fn verify_peer_claim_participant_authorization(
                 device_authorize_event_id,
             ),
             PeerKeyPackageRequesterAuthorization::NativeAgent { .. } => unreachable!(),
+            PeerKeyPackageRequesterAuthorization::MinimalMetadataPairwise { .. } => unreachable!(),
         };
     if signature
         .signature_algorithm
@@ -1054,13 +1261,38 @@ async fn peer_claim_policy_authorized(
     body: &PeerKeyPackagesClaimRequestBody,
     source_service_id: &str,
 ) -> Result<bool, AppError> {
-    if state
-        .identities()
-        .account(body.target_principal_id.as_str())
+    let target_authority_current = if let Some(method) = &body.target_pairwise_verification_method {
+        ensure_pairwise_realm_affinity(
+            state,
+            &body.target_principal_id,
+            method,
+            &body.intended_realm_id,
+            state.service_id(),
+        )
         .await
-        .map_err(|error| AppError::internal(format!("target authority lookup: {error}")))?
-        .is_none()
-    {
+        .is_ok()
+    } else if let (Some(agent_id), Some(method), Some(event_id)) = (
+        &body.target_agent_id,
+        &body.target_agent_verification_method,
+        &body.target_agent_key_authorize_event_id,
+    ) {
+        agent_id == &body.target_principal_id
+            && current_agent_key_authorization_matches_method(
+                state,
+                agent_id,
+                event_id.as_str(),
+                method.as_str(),
+            )
+            .await
+    } else {
+        state
+            .identities()
+            .account(body.target_principal_id.as_str())
+            .await
+            .map_err(|error| AppError::internal(format!("target authority lookup: {error}")))?
+            .is_some()
+    };
+    if !target_authority_current {
         return Ok(false);
     }
     match body.claim_purpose {
@@ -1078,6 +1310,14 @@ async fn peer_claim_policy_authorized(
                 return Ok(false);
             }
             let projection = state.projections().snapshot();
+            if projection
+                .member(body.intended_realm_id.as_str(), body.requester.as_str())
+                .filter(|member| member.state == "join")
+                .and_then(|member| member.recipient_service_id.as_deref())
+                != Some(source_service_id)
+            {
+                return Ok(false);
+            }
             let is_participant = |actor_id: &str| {
                 projection
                     .member(body.intended_realm_id.as_str(), actor_id)
@@ -1106,15 +1346,7 @@ async fn peer_claim_policy_authorized(
             let Some(contact) = contact else {
                 return Ok(false);
             };
-            if contact.peer_service_id.as_deref() != Some(source_service_id)
-                || !crate::routing::identity::consent::has_active_consent_for_scope(
-                    state,
-                    body.target_principal_id.as_str(),
-                    body.requester.as_str(),
-                    scope,
-                    now(),
-                )
-            {
+            if contact.peer_service_id.as_deref() != Some(source_service_id) {
                 return Ok(false);
             }
             let trust_domain = state.config().trust_domain.clone();
@@ -1146,7 +1378,8 @@ async fn build_peer_claim_outcome(
     request_digest: &str,
     claimed: &MlsKeyPackageRow,
 ) -> Result<PeerKeyPackagesClaimOutcome, AppError> {
-    let claims = vec![keypackage_claim_record(state, claimed, body.claim_nonce.as_str()).await?];
+    let claims =
+        vec![keypackage_claim_record(state, claimed, body.claim_request_id.as_str()).await?];
     let claims_value = serde_json::to_value(&claims)
         .map_err(|error| AppError::internal(format!("peer claim records serialize: {error}")))?;
     let claims_digest = arkret_canonical::canonical_sha256(&claims_value)
@@ -1202,6 +1435,35 @@ pub(in crate::routing) async fn validate_federated_welcome_peer_claim(
     actor_id: &str,
     payload: &Value,
 ) -> Result<(), &'static str> {
+    validate_welcome_peer_claim_ledger(
+        state,
+        source_service_id,
+        Some(state.service_id()),
+        realm_id,
+        actor_id,
+        payload,
+    )
+    .await
+}
+
+pub(in crate::routing) async fn validate_local_welcome_peer_claim(
+    state: &AppState,
+    realm_id: &str,
+    actor_id: &str,
+    payload: &Value,
+) -> Result<(), &'static str> {
+    validate_welcome_peer_claim_ledger(state, state.service_id(), None, realm_id, actor_id, payload)
+        .await
+}
+
+async fn validate_welcome_peer_claim_ledger(
+    state: &AppState,
+    source_service_id: &str,
+    required_destination_service_id: Option<&str>,
+    realm_id: &str,
+    actor_id: &str,
+    payload: &Value,
+) -> Result<(), &'static str> {
     revoke_expired_peer_claims(state)
         .await
         .map_err(|_| "peer_claim_welcome_pending")?;
@@ -1209,27 +1471,87 @@ pub(in crate::routing) async fn validate_federated_welcome_peer_claim(
         arkret_models_collaboration::events_payloads::MlsWelcomePayload,
     >(payload.clone())
     .map_err(|_| "peer_claim_welcome_invalid")?;
-    if let arkret_models_collaboration::events_payloads::MlsClaimTrustBinding::AgentKeyAuthorizeEventId(authorize_event_id) =
-        &welcome.claim_ref.trust_binding
-        && !current_agent_key_authorization_matches(
-            state,
-            &welcome.recipient_principal_id,
-            authorize_event_id.as_str(),
-        )
-        .await
-    {
-        return Err("peer_claim_welcome_invalid");
-    }
+    let recipient_actor_id = match &welcome.recipient {
+        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Device {
+            recipient_device_id,
+        } => {
+            let principal = welcome
+                .recipient_principal_id
+                .as_ref()
+                .ok_or("peer_claim_welcome_invalid")?;
+            let arkret_models_collaboration::events_payloads::MlsClaimTrustBinding::DeviceAuthorizeEventId(event_id) =
+                &welcome.claim_ref.trust_binding
+            else {
+                return Err("peer_claim_welcome_invalid");
+            };
+            if !current_device_authorization_matches(
+                state,
+                principal,
+                recipient_device_id.as_str(),
+                event_id.as_str(),
+            )
+            .await
+            {
+                return Err("peer_claim_welcome_invalid");
+            }
+            principal
+        }
+        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::NativeAgent {
+            recipient_agent_id,
+            recipient_agent_verification_method,
+            agent_key_authorize_event_id,
+        } => {
+            if welcome.recipient_principal_id.as_ref() != Some(recipient_agent_id)
+                || !matches!(
+                    &welcome.claim_ref.trust_binding,
+                    arkret_models_collaboration::events_payloads::MlsClaimTrustBinding::AgentKeyAuthorizeEventId(claim_event_id)
+                        if claim_event_id == agent_key_authorize_event_id
+                )
+                || !current_agent_key_authorization_matches_method(
+                    state,
+                    recipient_agent_id,
+                    agent_key_authorize_event_id.as_str(),
+                    recipient_agent_verification_method.as_str(),
+                )
+                .await
+            {
+                return Err("peer_claim_welcome_invalid");
+            }
+            recipient_agent_id
+        }
+        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::MinimalMetadataPairwise {
+            recipient_pairwise_actor_id,
+            recipient_pairwise_verification_method,
+        } => {
+            let realm = RealmId::new(realm_id.to_owned())
+                .map_err(|_| "peer_claim_welcome_invalid")?;
+            if welcome.recipient_principal_id.is_some()
+                || ensure_pairwise_realm_affinity(
+                    state,
+                    recipient_pairwise_actor_id,
+                    recipient_pairwise_verification_method,
+                    &realm,
+                    state.service_id(),
+                )
+                .await
+                .is_err()
+            {
+                return Err("peer_claim_welcome_invalid");
+            }
+            recipient_pairwise_actor_id
+        }
+    };
     let receipt = &welcome.claim_receipt;
     let request = &receipt.request;
     if receipt.claim_request_id != request.claim_request_id
         || receipt.source_service_id.as_str() != source_service_id
-        || receipt.destination_service_id.as_str() != state.service_id()
+        || required_destination_service_id
+            .is_some_and(|expected| receipt.destination_service_id.as_str() != expected)
         || request.requester.as_str() != actor_id
-        || request.target_principal_id != welcome.recipient_principal_id
+        || &request.target_principal_id != recipient_actor_id
         || request.intended_realm_id.as_str() != realm_id
         || request.mls_group_id.as_str() != welcome.mls_group_id.as_str()
-        || request.claim_nonce.as_str() != welcome.claim_envelope.nonce.as_str()
+        || request.claim_request_id.as_str() != welcome.claim_envelope.nonce.as_str()
         || request.expires_at != receipt.expires_at
         || receipt.expires_at <= now()
         || welcome.claim_envelope.intended_realm_id != request.intended_realm_id
@@ -1237,23 +1559,37 @@ pub(in crate::routing) async fn validate_federated_welcome_peer_claim(
     {
         return Err("peer_claim_welcome_invalid");
     }
-    let expected_method = format!(
-        "{}#notary-key",
-        state.service_resolution_commitment().full_id
-    );
-    if receipt.signature.kid.as_str() != expected_method
-        || receipt
-            .signature
-            .signature_algorithm
-            .as_ref()
-            .is_some_and(|algorithm| algorithm.as_str() != "Ed25519")
+    if receipt
+        .signature
+        .signature_algorithm
+        .as_ref()
+        .is_some_and(|algorithm| algorithm.as_str() != "Ed25519")
     {
         return Err("peer_claim_welcome_invalid");
     }
     let signing_bytes = peer_keypackage_claim_receipt_signing_bytes(receipt)
         .map_err(|_| "peer_claim_welcome_invalid")?;
+    let verification_key = if receipt.destination_service_id.as_str() == state.service_id() {
+        let expected_method = format!(
+            "{}#notary-key",
+            state.service_resolution_commitment().full_id
+        );
+        if receipt.signature.kid.as_str() != expected_method {
+            return Err("peer_claim_welcome_invalid");
+        }
+        state.notary_verifying_key()
+    } else {
+        crate::jws_verify::validate_verification_method_controller(
+            receipt.destination_service_id.as_str(),
+            receipt.signature.kid.as_str(),
+        )
+        .map_err(|_| "peer_claim_welcome_invalid")?;
+        crate::jws_verify::resolve_ed25519_pubkey_async(state, receipt.signature.kid.as_str())
+            .await
+            .map_err(|_| "peer_claim_welcome_invalid")?
+    };
     if !crate::routing::identity::device_signing::ed25519_verify(
-        &state.notary_verifying_key(),
+        &verification_key,
         &signing_bytes,
         receipt.signature.sig.as_str(),
     ) {
@@ -1272,20 +1608,78 @@ pub(in crate::routing) async fn validate_federated_welcome_peer_claim(
         .outcome
         .and_then(|value| serde_json::from_value::<PeerKeyPackagesClaimOutcome>(value).ok())
         .ok_or("peer_claim_welcome_invalid")?;
+    outcome
+        .validate_shape()
+        .map_err(|_| "peer_claim_welcome_invalid")?;
     if serde_json::to_value(&outcome.claim_receipt).ok() != serde_json::to_value(receipt).ok()
         || outcome.claims.len() != 1
     {
         return Err("peer_claim_welcome_invalid");
     }
     let claim = &outcome.claims[0];
-    if claim.principal_id != welcome.recipient_principal_id
+    let claim_keypackage = URL_SAFE_NO_PAD
+        .decode(claim.keypackage.as_bytes())
+        .map_err(|_| "peer_claim_welcome_invalid")?;
+    let claim_keypackage_digest = arkret_canonical::sha256_digest(&claim_keypackage);
+    let claim_capabilities = arkret_canonical::canonical_json_bytes(&claim.capabilities)
+        .map_err(|_| "peer_claim_welcome_invalid")?;
+    let claim_capabilities_digest = arkret_canonical::sha256_digest(&claim_capabilities);
+    if &claim.principal_id != recipient_actor_id
         || claim.device_id.as_ref() != welcome_recipient_device_id(&welcome)
         || claim.claim_id != welcome.claim_id.as_str()
         || claim.keypackage_ref != welcome.keypackage_ref
-        || claim.keypackage_digest != welcome.keypackage_digest
+        || claim_keypackage_digest != welcome.claim_ref.keypackage_digest.as_str()
+        || claim_capabilities_digest != welcome.claim_ref.capabilities_digest.as_str()
         || claim.expires_at < receipt.expires_at
     {
         return Err("peer_claim_welcome_invalid");
+    }
+    match (&welcome.recipient, &welcome.claim_ref.trust_binding) {
+        (
+            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Device {
+                recipient_device_id,
+            },
+            arkret_models_collaboration::events_payloads::MlsClaimTrustBinding::DeviceAuthorizeEventId(claim_ref_event_id),
+        ) if claim.device_id.as_ref() == Some(recipient_device_id)
+            && claim.device_authorize_event_id.as_ref() == Some(claim_ref_event_id)
+            && claim.agent_id.is_none()
+            && claim.agent_verification_method.is_none()
+            && claim.agent_key_authorize_event_id.is_none()
+            && claim.pairwise_verification_method.is_none() => {}
+        (
+            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::NativeAgent {
+                recipient_agent_id,
+                recipient_agent_verification_method,
+                agent_key_authorize_event_id,
+            },
+            arkret_models_collaboration::events_payloads::MlsClaimTrustBinding::AgentKeyAuthorizeEventId(claim_ref_event_id),
+        ) if claim.device_id.is_none()
+            && claim.device_authorize_event_id.is_none()
+            && claim.agent_id.as_ref() == Some(recipient_agent_id)
+            && claim.agent_verification_method.as_ref() == Some(recipient_agent_verification_method)
+            && claim.agent_key_authorize_event_id.as_ref() == Some(agent_key_authorize_event_id)
+            && claim_ref_event_id == agent_key_authorize_event_id
+            && claim.pairwise_verification_method.is_none() => {}
+        (
+            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::MinimalMetadataPairwise {
+                recipient_pairwise_actor_id,
+                recipient_pairwise_verification_method,
+            },
+            arkret_models_collaboration::events_payloads::MlsClaimTrustBinding::MinimalMetadataPairwise {
+                pairwise_actor_id,
+                pairwise_verification_method,
+            },
+        ) if recipient_pairwise_actor_id == &claim.principal_id
+            && pairwise_actor_id == recipient_pairwise_actor_id
+            && pairwise_verification_method == recipient_pairwise_verification_method
+            && claim.device_id.is_none()
+            && claim.device_authorize_event_id.is_none()
+            && claim.agent_id.is_none()
+            && claim.agent_verification_method.is_none()
+            && claim.agent_key_authorize_event_id.is_none()
+            && claim.pairwise_verification_method.as_ref()
+                == Some(recipient_pairwise_verification_method) => {}
+        _ => return Err("peer_claim_welcome_invalid"),
     }
     Ok(())
 }
@@ -1313,6 +1707,7 @@ async fn record_peer_claim_failed(
         source_service_id: source_service_id.to_owned(),
         claim_request_id: body.claim_request_id.as_str().to_owned(),
         request_digest: request_digest.to_owned(),
+        key_package_use: "none".to_owned(),
         state: "claim_failed".to_owned(),
         outcome: None,
         consume_receipt: None,
@@ -1395,7 +1790,10 @@ fn replay_peer_claim(
     if record.request_digest != request_digest {
         return Err(peer_claim_duplicate_conflict());
     }
-    if !matches!(record.state.as_str(), "claimed" | "consumed") {
+    if !matches!(
+        record.state.as_str(),
+        "claimed" | "last_resort_claimed" | "consumed"
+    ) {
         return Err(peer_claim_failed());
     }
     let Some(outcome) = record.outcome else {
@@ -1464,7 +1862,11 @@ async fn claim_keypackage(
     let session = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
-    if body.requester.as_str() != session.actor {
+    if !matches!(
+        &body.requester_authorization,
+        PeerKeyPackageRequesterAuthorization::MinimalMetadataPairwise { .. }
+    ) && body.requester.as_str() != session.actor
+    {
         return Err(AppError::capability_denied(
             "requester must match the calling session",
         ));
@@ -1487,9 +1889,30 @@ async fn claim_keypackage(
         PeerKeyPackageRequesterAuthorization::NativeAgent {
             requester_agent_id, ..
         } if requester_agent_id.as_str() == session.actor => {}
+        PeerKeyPackageRequesterAuthorization::MinimalMetadataPairwise { .. } => {}
         _ => {
             return Err(AppError::capability_denied(
                 "requester authorization must match the authenticated session",
+            ));
+        }
+    }
+    if !verify_peer_claim_participant_authorization(state, &peer_body).await? {
+        return Err(AppError::capability_denied(
+            "requester authorization is not current at the source service",
+        ));
+    }
+    if body.claim_purpose == PeerKeyPackageClaimPurpose::RealmMembership {
+        let requester_is_current_member = state
+            .projections()
+            .snapshot()
+            .member(body.intended_realm_id.as_str(), body.requester.as_str())
+            .is_some_and(|member| {
+                member.state == "join"
+                    && member.recipient_service_id.as_deref() == Some(local_service_id)
+            });
+        if !requester_is_current_member {
+            return Err(AppError::capability_denied(
+                "requester has no current source-side Realm membership",
             ));
         }
     }
@@ -1590,6 +2013,10 @@ pub(crate) async fn capture_relayed_keypackage_claim_outcome(
     }
     let signing_bytes =
         peer_keypackage_claim_receipt_signing_bytes(receipt).map_err(|error| error.to_string())?;
+    crate::jws_verify::validate_verification_method_controller(
+        destination_service_id,
+        receipt.signature.kid.as_str(),
+    )?;
     let verification_key =
         crate::jws_verify::resolve_ed25519_pubkey_async(state, receipt.signature.kid.as_str())
             .await?;
@@ -1600,11 +2027,26 @@ pub(crate) async fn capture_relayed_keypackage_claim_outcome(
     ) {
         return Err("relayed KeyPackage claim receipt signature invalid".to_owned());
     }
+    let is_last_resort = outcome
+        .claims
+        .iter()
+        .any(|claim| claim.last_resort == Some(true));
     let record = PeerKeyPackageClaimLedgerRecord {
         source_service_id: state.service_id().clone(),
         claim_request_id: request.claim_request_id.as_str().to_owned(),
         request_digest,
-        state: "claimed".to_owned(),
+        key_package_use: if is_last_resort {
+            "last_resort"
+        } else {
+            "single_use"
+        }
+        .to_owned(),
+        state: if is_last_resort {
+            "last_resort_claimed"
+        } else {
+            "claimed"
+        }
+        .to_owned(),
         outcome: Some(serde_json::to_value(outcome).map_err(|error| error.to_string())?),
         consume_receipt: None,
         terminal_receipt: None,
@@ -1621,7 +2063,9 @@ pub(crate) async fn capture_relayed_keypackage_claim_outcome(
     {
         PeerKeyPackageClaimLedgerWriteResult::Inserted => Ok(()),
         PeerKeyPackageClaimLedgerWriteResult::Existing(existing)
-            if existing.request_digest == record.request_digest =>
+            if existing.request_digest == record.request_digest
+                && existing.key_package_use == record.key_package_use
+                && existing.outcome == record.outcome =>
         {
             Ok(())
         }
@@ -1646,13 +2090,97 @@ pub(crate) async fn capture_relayed_keypackage_claim_query(
             .claim_outcome
             .as_ref()
             .ok_or_else(|| "claim query omitted its outcome".to_owned())?;
-        return capture_relayed_keypackage_claim_outcome(
+        capture_relayed_keypackage_claim_outcome(
             state,
             destination_service_id,
             request_body,
             &serde_json::to_string(outcome).map_err(|error| error.to_string())?,
         )
-        .await;
+        .await?;
+        if query.state == PeerKeyPackagesClaimQueryState::Claimed {
+            return Ok(());
+        }
+        let request: KeyPackagesClaimRequestBody =
+            serde_json::from_str(request_body).map_err(|error| error.to_string())?;
+        let request_digest =
+            arkret_canonical::canonical_sha256(&request).map_err(|error| error.to_string())?;
+        let consume = query
+            .consume_receipt
+            .as_ref()
+            .ok_or_else(|| "consumed claim query omitted its consume receipt".to_owned())?;
+        consume.validate_shape().map_err(str::to_owned)?;
+        let claim = outcome
+            .claims
+            .first()
+            .filter(|_| outcome.claims.len() == 1)
+            .ok_or_else(|| "consumed claim query has no unique claim".to_owned())?;
+        if consume.recipient_durable_receipt.claim_request_id != request.claim_request_id
+            || consume
+                .recipient_durable_receipt
+                .recipient_service_id
+                .as_str()
+                != destination_service_id
+            || consume.claim_id.as_str() != claim.claim_id
+            || consume.recipient_durable_receipt.key_package_ref.as_str() != claim.keypackage_ref
+        {
+            return Err("consumed claim query receipt binding mismatch".to_owned());
+        }
+        crate::jws_verify::validate_verification_method_controller(
+            consume
+                .recipient_durable_receipt
+                .recipient_service_id
+                .as_str(),
+            consume.signature.kid.as_str(),
+        )?;
+        let signing_bytes = consume
+            .canonical_signing_bytes()
+            .map_err(|error| error.to_string())?;
+        let key =
+            crate::jws_verify::resolve_ed25519_pubkey_async(state, consume.signature.kid.as_str())
+                .await?;
+        if !crate::routing::identity::device_signing::ed25519_verify(
+            &key,
+            &signing_bytes,
+            consume.signature.sig.as_str(),
+        ) {
+            return Err("consumed claim query receipt signature invalid".to_owned());
+        }
+        let consume_value = serde_json::to_value(consume).map_err(|error| error.to_string())?;
+        let outcome_value = serde_json::to_value(outcome).map_err(|error| error.to_string())?;
+        let attached = state
+            .mls_key_packages()
+            .transition_peer_claim_consumed(
+                state.service_id(),
+                request.claim_request_id.as_str(),
+                &request_digest,
+                &outcome_value,
+                &consume_value,
+                consume.consumed_at.timestamp_millis(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        if attached.is_none() {
+            let winner = state
+                .mls_key_packages()
+                .peer_claim(state.service_id(), request.claim_request_id.as_str())
+                .await
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| {
+                    "consumed claim query could not reload its durable source ledger".to_owned()
+                })?;
+            if !consumed_query_source_winner_matches(
+                &winner.state,
+                &winner.request_digest,
+                winner.consume_receipt.as_ref(),
+                &request_digest,
+                &consume_value,
+            ) {
+                return Err(
+                    "consumed claim query conflicts with the durable source winner".to_owned(),
+                );
+            }
+        }
+        return Ok(());
     }
     let request: KeyPackagesClaimRequestBody =
         serde_json::from_str(request_body).map_err(|error| error.to_string())?;
@@ -1662,17 +2190,31 @@ pub(crate) async fn capture_relayed_keypackage_claim_query(
         .terminal_receipt
         .as_ref()
         .ok_or_else(|| "terminal claim query omitted its signed receipt".to_owned())?;
-    if terminal.claim_request_id != request.claim_request_id
+    if terminal.validate_shape().is_err()
+        || terminal.claim_request_id != request.claim_request_id
         || terminal.request_digest.as_str() != request_digest
         || terminal.source_service_id != request.service_binding.source_service_id
         || terminal.destination_service_id != request.service_binding.destination_service_id
         || terminal.destination_service_id.as_str() != destination_service_id
+        || terminal.terminal_state
+            != match query.state {
+                PeerKeyPackagesClaimQueryState::ClaimFailed => {
+                    KeyPackageClaimTerminalState::NeverClaimed
+                }
+                PeerKeyPackagesClaimQueryState::Expired => KeyPackageClaimTerminalState::Expired,
+                PeerKeyPackagesClaimQueryState::Revoked => KeyPackageClaimTerminalState::Revoked,
+                _ => return Err("non-terminal claim query cannot close relay".to_owned()),
+            }
     {
         return Err("terminal claim query binding mismatch".to_owned());
     }
     let signing_bytes = terminal
         .canonical_signing_bytes()
         .map_err(|error| error.to_string())?;
+    crate::jws_verify::validate_verification_method_controller(
+        destination_service_id,
+        terminal.signature.kid.as_str(),
+    )?;
     let verification_key =
         crate::jws_verify::resolve_ed25519_pubkey_async(state, terminal.signature.kid.as_str())
             .await?;
@@ -1689,10 +2231,35 @@ pub(crate) async fn capture_relayed_keypackage_claim_query(
         PeerKeyPackagesClaimQueryState::Revoked => "revoked",
         _ => return Err("non-terminal claim query cannot close relay".to_owned()),
     };
+    if matches!(state_name, "expired" | "revoked") {
+        let outcome = query.claim_outcome.as_ref().ok_or_else(|| {
+            "terminal successful claim query omitted its claim outcome".to_owned()
+        })?;
+        let outcome_refs = outcome
+            .claims
+            .iter()
+            .map(|claim| claim.keypackage_ref.as_str())
+            .collect::<Vec<_>>();
+        let terminal_refs = terminal.key_package_refs.as_deref().ok_or_else(|| {
+            "terminal successful claim receipt omitted KeyPackage refs".to_owned()
+        })?;
+        if !terminal_claim_coordinates_match(
+            state_name,
+            request.expires_at.timestamp_millis(),
+            terminal.terminal_at.timestamp_millis(),
+            terminal_refs.iter().map(String::as_str),
+            outcome_refs,
+        ) {
+            return Err("terminal claim query receipt coordinates mismatch".to_owned());
+        }
+    }
+    let terminal_receipt_value =
+        serde_json::to_value(terminal).map_err(|error| error.to_string())?;
     let record = PeerKeyPackageClaimLedgerRecord {
         source_service_id: state.service_id().clone(),
         claim_request_id: request.claim_request_id.as_str().to_owned(),
         request_digest,
+        key_package_use: "none".to_owned(),
         state: state_name.to_owned(),
         outcome: query
             .claim_outcome
@@ -1706,12 +2273,49 @@ pub(crate) async fn capture_relayed_keypackage_claim_query(
             .map(serde_json::to_value)
             .transpose()
             .map_err(|error| error.to_string())?,
-        terminal_receipt: Some(serde_json::to_value(terminal).map_err(|error| error.to_string())?),
+        terminal_receipt: Some(terminal_receipt_value.clone()),
         keypackage_id: None,
         claim_expires_at_unix_ms: Some(request.expires_at.timestamp_millis()),
         expires_at: (request.expires_at + chrono::Duration::minutes(10)).timestamp(),
         updated_at: now().timestamp(),
     };
+    if matches!(state_name, "expired" | "revoked") {
+        let expected_outcome = record.outcome.as_ref().ok_or_else(|| {
+            "terminal successful claim query omitted its claim outcome".to_owned()
+        })?;
+        if state
+            .mls_key_packages()
+            .transition_peer_claim_terminal(
+                state.service_id(),
+                request.claim_request_id.as_str(),
+                &record.request_digest,
+                expected_outcome,
+                state_name,
+                &terminal_receipt_value,
+                now().timestamp_millis(),
+            )
+            .await
+            .map_err(|error| error.to_string())?
+            .is_some()
+        {
+            return Ok(());
+        }
+        if let Some(existing) = state
+            .mls_key_packages()
+            .peer_claim(state.service_id(), request.claim_request_id.as_str())
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            if existing.request_digest == record.request_digest
+                && existing.state == state_name
+                && existing.outcome == record.outcome
+                && existing.terminal_receipt.as_ref() == Some(&terminal_receipt_value)
+            {
+                return Ok(());
+            }
+            return Err("terminal claim query conflicts with durable source ledger".to_owned());
+        }
+    }
     match state
         .mls_key_packages()
         .store_peer_claim_terminal(&record)
@@ -1720,7 +2324,7 @@ pub(crate) async fn capture_relayed_keypackage_claim_query(
     {
         PeerKeyPackageClaimLedgerWriteResult::Inserted => Ok(()),
         PeerKeyPackageClaimLedgerWriteResult::Existing(existing)
-            if existing.request_digest == record.request_digest =>
+            if claim_failed_source_winner_matches(&existing, &record) =>
         {
             Ok(())
         }
@@ -1728,6 +2332,44 @@ pub(crate) async fn capture_relayed_keypackage_claim_query(
             Err("terminal claim query request id conflict".to_owned())
         }
     }
+}
+
+fn consumed_query_source_winner_matches(
+    state: &str,
+    stored_request_digest: &str,
+    stored_consume_receipt: Option<&Value>,
+    expected_request_digest: &str,
+    expected_consume_receipt: &Value,
+) -> bool {
+    state == "consumed"
+        && stored_request_digest == expected_request_digest
+        && stored_consume_receipt == Some(expected_consume_receipt)
+}
+
+fn terminal_claim_coordinates_match<'a>(
+    state: &str,
+    request_expires_at_unix_ms: i64,
+    terminal_at_unix_ms: i64,
+    terminal_refs: impl IntoIterator<Item = &'a str>,
+    outcome_refs: impl IntoIterator<Item = &'a str>,
+) -> bool {
+    terminal_refs.into_iter().eq(outcome_refs)
+        && (state != "expired" || terminal_at_unix_ms >= request_expires_at_unix_ms)
+}
+
+fn claim_failed_source_winner_matches(
+    stored: &PeerKeyPackageClaimLedgerRecord,
+    expected: &PeerKeyPackageClaimLedgerRecord,
+) -> bool {
+    stored.request_digest == expected.request_digest
+        && stored.key_package_use == "none"
+        && stored.state == "claim_failed"
+        && stored.outcome.is_none()
+        && stored.consume_receipt.is_none()
+        && stored.keypackage_id.is_none()
+        && stored.claim_expires_at_unix_ms == expected.claim_expires_at_unix_ms
+        && stored.expires_at == expected.expires_at
+        && stored.terminal_receipt == expected.terminal_receipt
 }
 
 #[salvo::oapi::endpoint(
@@ -1744,23 +2386,16 @@ async fn consume_keypackages(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    if body.owner_account_id.as_str() != session.actor {
+    let durable_receipt = &body.recipient_durable_receipt;
+    if !matches!(
+        &durable_receipt.recipient,
+        arkret_models_crypto::RecipientMlsDurableSigner::MinimalMetadataPairwise { .. }
+    ) && durable_receipt.recipient_principal_id.as_str() != session.actor
+    {
         return Err(AppError::capability_denied(
-            "owner_account_id must match the calling principal",
+            "durable recipient principal must match the calling principal",
         ));
     }
-    let arkret_models_crypto::KeyPackageConsumer::Device { consumer_device_id } = &body.consumer
-    else {
-        return Err(AppError::capability_denied(
-            "authenticated device sessions cannot consume as a Native Agent",
-        ));
-    };
-    if consumer_device_id.as_str() != session.device_id {
-        return Err(AppError::capability_denied(
-            "consumer_device_id must match the calling session",
-        ));
-    }
-    let refs = non_empty_keypackage_refs(&body.key_package_refs)?;
     let consume_signing_input =
         arkret_models_crypto::http_bodies::keypackages_consume_signing_input(&body.unsigned())
             .map_err(|error| {
@@ -1768,132 +2403,293 @@ async fn consume_keypackages(
                     "KeyPackage consume canonical input failed: {error}"
                 ))
             })?;
-    verify_session_keypackage_write_signature(
+    let keypackage_refs = [durable_receipt.key_package_ref.to_string()];
+    verify_keypackage_consumer_signature(
         state,
         &session,
-        &refs,
+        &durable_receipt.recipient_principal_id,
+        &durable_receipt.recipient,
+        Some(&durable_receipt.realm_id),
+        &keypackage_refs,
         &body.signature,
         &consume_signing_input,
     )
     .await?;
     validate_recipient_durable_receipt(state, &session, &body).await?;
-    validate_direct_keypackage_consume(state, &session, &body).await?;
-    validate_sidecar_keypackage_consume(state, &session, &body).await?;
+    validate_direct_keypackage_consume(state, &body).await?;
+    validate_sidecar_keypackage_consume(state, &body).await?;
     let group_id = consume_group_ref(&body);
-    let consume_realm_id = body.realm_id.as_ref().map(ToString::to_string);
+    let record = state
+        .mls_key_packages()
+        .key_package_by_ref(durable_receipt.key_package_ref.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("KeyPackage lookup failed: {error}")))?
+        .ok_or_else(|| AppError::conflict("KeyPackage is missing or no longer claimable"))?;
+    if !keypackage_record_matches_consumer(&record, &body, &session) {
+        return Err(AppError::capability_denied(
+            "KeyPackage consume endpoint is not the published owner",
+        ));
+    }
+    let lifecycle = record.lifecycle().map_err(AppError::internal)?;
+    if matches!(
+        lifecycle.reuse_policy,
+        PersistedKeyPackageReusePolicy::LastResort { .. }
+    ) {
+        return consume_last_resort_keypackage(state, &body, &record).await;
+    }
+    if let PersistedKeyPackageClaimState::Consumed { mls_group_id, .. } = &lifecycle.claim_state {
+        if mls_group_id.as_str() != group_id.as_str() {
+            return Err(AppError::conflict(
+                "KeyPackage was consumed by another MLS group",
+            ));
+        }
+        let ledger = state
+            .mls_key_packages()
+            .peer_claim_by_keypackage_id(&record.id)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("peer claim replay lookup failed: {error}"))
+            })?
+            .ok_or_else(|| {
+                AppError::internal("consumed KeyPackage is missing its durable claim ledger")
+            })?;
+        if ledger.state != "consumed" {
+            return Err(AppError::internal(
+                "consumed KeyPackage ledger is not terminal",
+            ));
+        }
+        let stored_receipt = ledger
+            .consume_receipt
+            .map(serde_json::from_value::<KeyPackageConsumeReceipt>)
+            .transpose()
+            .map_err(|error| {
+                AppError::internal(format!("stored consume receipt invalid: {error}"))
+            })?
+            .ok_or_else(|| {
+                AppError::internal("consumed KeyPackage ledger has no durable receipt")
+            })?;
+        validate_consume_receipt_replay(state, &body, &stored_receipt)?;
+        return json_ok(KeyPackagesConsumeOutcome {
+            consume_receipt: stored_receipt,
+        });
+    }
+    if !matches!(
+        lifecycle.claim_state,
+        PersistedKeyPackageClaimState::Claimed { .. }
+    ) {
+        return Err(AppError::conflict(
+            "KeyPackage has no active claim to consume",
+        ));
+    }
     let consumed_at_datetime = now();
-    let consumed_at = consumed_at_datetime.timestamp();
+    let consumed_at_unix_ms = consumed_at_datetime.timestamp_millis();
     let prepared_consume_receipt =
-        build_keypackage_consume_receipt(state, &body, refs.clone(), consumed_at_datetime)?;
+        build_keypackage_consume_receipt(state, &body, consumed_at_datetime)?;
     let prepared_consume_receipt_value = serde_json::to_value(&prepared_consume_receipt)
         .map_err(|error| AppError::internal(format!("consume receipt serialize: {error}")))?;
-    let mut consumed = Vec::new();
-    let mut failures = Vec::new();
-    for keypackage_ref in refs {
-        let record = match state
-            .mls_key_packages()
-            .key_package_by_ref(&keypackage_ref)
-            .await
-        {
-            Ok(Some(record)) => record,
-            Ok(None) => {
-                failures.push(keypackage_ref_failure(
-                    keypackage_ref,
-                    "already_consumed_or_missing",
-                ));
-                continue;
-            }
-            Err(error) => {
-                failures.push(keypackage_ref_failure(keypackage_ref, error.to_string()));
-                continue;
-            }
-        };
-        if record.actor_id != session.actor || record.device_id != session.device_id {
-            failures.push(keypackage_ref_failure(keypackage_ref, "not_owner"));
-            continue;
-        }
-        let lifecycle = match record.lifecycle() {
-            Ok(lifecycle) => lifecycle,
-            Err(error) => {
-                failures.push(keypackage_ref_failure(keypackage_ref, error));
-                continue;
-            }
-        };
-        if let (
-            PersistedKeyPackageReusePolicy::LastResort { bound_realm_id },
-            PersistedKeyPackageClaimState::Available,
-        ) = (&lifecycle.reuse_policy, &lifecycle.claim_state)
-        {
-            if bound_realm_id
-                .as_ref()
-                .map(RealmId::as_str)
-                .zip(consume_realm_id.as_deref())
-                .is_some_and(|(bound, requested)| bound != requested)
-            {
-                failures.push(keypackage_ref_failure(
-                    keypackage_ref,
-                    soland_services::operation_semantics::REASON_KEYPACKAGE_REALM_MISMATCH,
-                ));
-                continue;
-            }
-            if bound_realm_id.is_none() {
-                failures.push(keypackage_ref_failure(keypackage_ref, "claim_missing"));
-                continue;
-            }
-            consumed.push(keypackage_ref);
-            continue;
-        }
-        if let PersistedKeyPackageClaimState::Consumed { mls_group_id, .. } = &lifecycle.claim_state
-        {
-            if record.actor_id == session.actor
-                && record.device_id == session.device_id
-                && mls_group_id.as_str() == group_id.as_str()
-            {
-                consumed.push(keypackage_ref);
-            } else {
-                failures.push(keypackage_ref_failure(keypackage_ref, "claim_mismatch"));
-            }
-            continue;
-        }
-        match state
-            .mls_key_packages()
-            .consume_key_package_claim(
-                &record.id,
-                &group_id,
-                consumed_at,
-                Some(&prepared_consume_receipt_value),
-            )
-            .await
-        {
-            Ok(Some(_)) => {
-                state
-                    .projections()
-                    .mark_key_package_consumed(&record.id, consumed_at);
-                consumed.push(keypackage_ref)
-            }
-            Ok(None) => {
-                failures.push(keypackage_ref_failure(
-                    keypackage_ref,
-                    "already_consumed_or_missing",
-                ));
-            }
-            Err(error) => {
-                failures.push(keypackage_ref_failure(keypackage_ref, error.to_string()));
-            }
-        }
-    }
-    if !failures.is_empty() || consumed.len() != body.key_package_refs.len() {
-        return Err(AppError::new(
-            ErrorCode::CasConflict,
-            "KeyPackage consume did not atomically reach the requested terminal state",
+    let Some(consumed) = state
+        .mls_key_packages()
+        .consume_key_package_claim(
+            &record.id,
+            &group_id,
+            consumed_at_unix_ms,
+            Some(&prepared_consume_receipt_value),
         )
-        .with_wire_code("consume_conflict"));
-    }
+        .await
+        .map_err(|error| AppError::internal(format!("KeyPackage consume CAS failed: {error}")))?
+    else {
+        let winner = state
+            .mls_key_packages()
+            .peer_claim_by_keypackage_id(&record.id)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("concurrent consume winner lookup failed: {error}"))
+            })?
+            .filter(|ledger| ledger.state == "consumed")
+            .and_then(|ledger| ledger.consume_receipt)
+            .map(serde_json::from_value::<KeyPackageConsumeReceipt>)
+            .transpose()
+            .map_err(|error| {
+                AppError::internal(format!("concurrent consume receipt invalid: {error}"))
+            })?
+            .ok_or_else(|| AppError::conflict("KeyPackage claim changed before consume"))?;
+        validate_consume_receipt_replay(state, &body, &winner)?;
+        return json_ok(KeyPackagesConsumeOutcome {
+            consume_receipt: winner,
+        });
+    };
+    state
+        .projections()
+        .mark_key_package_consumed(&consumed.id, consumed_at_unix_ms.div_euclid(1000));
     json_ok(KeyPackagesConsumeOutcome {
-        consumed,
         consume_receipt: prepared_consume_receipt,
-        failures,
     })
+}
+
+async fn consume_last_resort_keypackage(
+    state: &AppState,
+    body: &KeyPackagesConsumeRequestBody,
+    record: &MlsKeyPackageRow,
+) -> JsonResult<KeyPackagesConsumeOutcome> {
+    let durable = &body.recipient_durable_receipt;
+    let stored = state
+        .event_queries()
+        .accepted_event(durable.welcome_ref.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("Welcome lookup failed: {error}")))?
+        .ok_or_else(|| AppError::new(ErrorCode::FailedPrecondition, "Welcome is not accepted"))?;
+    let event = serde_json::from_value::<arkret_wire::Event>(stored.envelope)
+        .map_err(|error| AppError::internal(format!("stored Welcome invalid: {error}")))?;
+    let welcome = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::MlsWelcomePayload,
+    >(serde_json::to_value(event.payload).map_err(|error| {
+        AppError::internal(format!("stored Welcome payload serialize: {error}"))
+    })?)
+    .map_err(|error| AppError::internal(format!("stored Welcome payload invalid: {error}")))?;
+    let source_service_id = welcome.claim_receipt.source_service_id.as_str();
+    let claim_request_id = durable.claim_request_id.as_str();
+    let ledger = state
+        .mls_key_packages()
+        .peer_claim(source_service_id, claim_request_id)
+        .await
+        .map_err(|error| AppError::internal(format!("last-resort claim lookup failed: {error}")))?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "last-resort consume has no exact durable claim audit",
+            )
+        })?;
+    if ledger.keypackage_id.as_deref() != Some(record.id.as_str()) {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "last-resort claim audit names another KeyPackage",
+        ));
+    }
+    let claim_outcome = ledger
+        .outcome
+        .as_ref()
+        .map(|value| serde_json::from_value::<PeerKeyPackagesClaimOutcome>(value.clone()))
+        .transpose()
+        .map_err(|error| {
+            AppError::internal(format!("stored last-resort claim outcome invalid: {error}"))
+        })?
+        .ok_or_else(|| {
+            AppError::internal("last-resort claim audit has no durable claim outcome")
+        })?;
+    claim_outcome
+        .validate_shape()
+        .map_err(|error| AppError::internal(format!("stored claim outcome shape: {error}")))?;
+    if !last_resort_claim_coordinates_match(
+        claim_outcome.claim_request_id.as_str(),
+        durable.claim_request_id.as_str(),
+        claim_outcome
+            .claims
+            .iter()
+            .map(|claim| (claim.claim_id.as_str(), claim.keypackage_ref.as_str())),
+        body.claim_id.as_str(),
+        durable.key_package_ref.as_str(),
+    ) {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "last-resort claim audit differs from the accepted Welcome claim",
+        ));
+    }
+    if ledger.state == "consumed" {
+        let stored_receipt = ledger
+            .consume_receipt
+            .map(serde_json::from_value::<KeyPackageConsumeReceipt>)
+            .transpose()
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "stored last-resort consume receipt invalid: {error}"
+                ))
+            })?
+            .ok_or_else(|| {
+                AppError::internal("consumed last-resort claim audit has no durable receipt")
+            })?;
+        validate_consume_receipt_replay(state, body, &stored_receipt)?;
+        return json_ok(KeyPackagesConsumeOutcome {
+            consume_receipt: stored_receipt,
+        });
+    }
+    if ledger.state != "last_resort_claimed" {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "last-resort claim audit is not consumable",
+        ));
+    }
+    let consumed_at = now();
+    let receipt = build_keypackage_consume_receipt(state, body, consumed_at)?;
+    let receipt_value = serde_json::to_value(&receipt)
+        .map_err(|error| AppError::internal(format!("consume receipt serialize: {error}")))?;
+    let ledger_request_digest = ledger.request_digest.clone();
+    let attached = state
+        .mls_key_packages()
+        .attach_peer_claim_consume_receipt(
+            source_service_id,
+            claim_request_id,
+            &ledger_request_digest,
+            &receipt_value,
+            consumed_at.timestamp_millis(),
+        )
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "last-resort consume receipt persist failed: {error}"
+            ))
+        })?;
+    let Some(attached) = attached else {
+        let winner = state
+            .mls_key_packages()
+            .peer_claim(source_service_id, claim_request_id)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "concurrent last-resort consume winner lookup failed: {error}"
+                ))
+            })?
+            .filter(|ledger| {
+                ledger.state == "consumed"
+                    && ledger.request_digest == ledger_request_digest
+                    && ledger.keypackage_id.as_deref() == Some(record.id.as_str())
+            })
+            .and_then(|ledger| ledger.consume_receipt)
+            .map(serde_json::from_value::<KeyPackageConsumeReceipt>)
+            .transpose()
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "concurrent last-resort consume receipt invalid: {error}"
+                ))
+            })?
+            .ok_or_else(|| AppError::conflict("last-resort claim audit changed before consume"))?;
+        validate_consume_receipt_replay(state, body, &winner)?;
+        return json_ok(KeyPackagesConsumeOutcome {
+            consume_receipt: winner,
+        });
+    };
+    if attached.consume_receipt.as_ref() != Some(&receipt_value) {
+        return Err(AppError::internal(
+            "last-resort claim audit did not retain the exact consume receipt",
+        ));
+    }
+    // The claim audit becomes terminal, but the reusable KeyPackage row stays
+    // published: no ordinary consume CAS or projection transition is invoked.
+    json_ok(KeyPackagesConsumeOutcome {
+        consume_receipt: receipt,
+    })
+}
+
+fn last_resort_claim_coordinates_match<'a>(
+    outcome_request_id: &str,
+    durable_request_id: &str,
+    claims: impl IntoIterator<Item = (&'a str, &'a str)>,
+    expected_claim_id: &str,
+    expected_keypackage_ref: &str,
+) -> bool {
+    outcome_request_id == durable_request_id
+        && claims.into_iter().any(|(claim_id, keypackage_ref)| {
+            claim_id == expected_claim_id && keypackage_ref == expected_keypackage_ref
+        })
 }
 
 async fn validate_recipient_durable_receipt(
@@ -1901,39 +2697,9 @@ async fn validate_recipient_durable_receipt(
     session: &SessionRecord,
     body: &KeyPackagesConsumeRequestBody,
 ) -> Result<(), AppError> {
-    if body.key_package_refs.len() != 1 || body.claim_ids.len() != 1 {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "one recipient durable receipt authorizes exactly one KeyPackage claim",
-        ));
-    }
     let receipt = &body.recipient_durable_receipt;
-    let arkret_models_crypto::RecipientMlsDurableSigner::Device {
-        recipient_device_id,
-        device_verification_method,
-    } = &receipt.recipient
-    else {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "authenticated device consume requires a device durable signer",
-        ));
-    };
     if receipt.domain.as_str() != arkret_wire::DomainSeparationId::MLS_RECIPIENT_DURABLE_RECEIPT_V1
-        || receipt.key_package_ref.as_str() != body.key_package_refs[0]
-        || receipt.recipient_principal_id.as_str() != session.actor
-        || recipient_device_id.as_str() != session.device_id
         || receipt.recipient_service_id.as_str() != state.service_id()
-        || receipt.welcome_ref.as_str() != body.welcome_ref.as_str()
-        || receipt.signature.kid.as_str() != device_verification_method.as_str()
-        || body
-            .realm_id
-            .as_ref()
-            .is_some_and(|realm_id| realm_id != &receipt.realm_id)
-        || body
-            .mls_group_id
-            .as_ref()
-            .is_some_and(|group_id| group_id != &receipt.mls_group_id)
-        || body.epoch.is_some_and(|epoch| epoch != receipt.mls_epoch)
     {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -1942,7 +2708,7 @@ async fn validate_recipient_durable_receipt(
     }
     let stored = state
         .event_queries()
-        .accepted_event(body.welcome_ref.as_str())
+        .accepted_event(receipt.welcome_ref.as_str())
         .await
         .map_err(|error| AppError::internal(format!("Welcome lookup failed: {error}")))?
         .ok_or_else(|| {
@@ -1969,19 +2735,58 @@ async fn validate_recipient_durable_receipt(
     .map_err(|error| AppError::internal(format!("stored Welcome payload invalid: {error}")))?;
     let welcome_digest = arkret_canonical::canonical_sha256(&stored.envelope)
         .map_err(|error| AppError::internal(format!("Welcome digest failed: {error}")))?;
-    let welcome_recipient_device_id = match &welcome.recipient {
-        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Device {
-            recipient_device_id,
-        } => Some(recipient_device_id),
-        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::NativeAgent {
-            ..
-        } => None,
+    let welcome_recipient_matches = match (&welcome.recipient, &receipt.recipient) {
+        (
+            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Device {
+                recipient_device_id,
+            },
+            arkret_models_crypto::RecipientMlsDurableSigner::Device {
+                recipient_device_id: durable_recipient_device_id,
+                ..
+            },
+        ) => {
+            welcome.recipient_principal_id.as_ref() == Some(&receipt.recipient_principal_id)
+                && recipient_device_id == durable_recipient_device_id
+        }
+        (
+            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::NativeAgent {
+                recipient_agent_id,
+                recipient_agent_verification_method,
+                agent_key_authorize_event_id,
+            },
+            arkret_models_crypto::RecipientMlsDurableSigner::NativeAgent {
+                recipient_agent_id: durable_recipient_agent_id,
+                recipient_agent_verification_method: durable_recipient_agent_verification_method,
+                agent_key_authorize_event_id: durable_agent_key_authorize_event_id,
+            },
+        ) => {
+            welcome.recipient_principal_id.as_ref() == Some(&receipt.recipient_principal_id)
+                && recipient_agent_id == durable_recipient_agent_id
+                && recipient_agent_verification_method
+                    == durable_recipient_agent_verification_method
+                && agent_key_authorize_event_id == durable_agent_key_authorize_event_id
+        }
+        (
+            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::MinimalMetadataPairwise {
+                recipient_pairwise_actor_id,
+                recipient_pairwise_verification_method,
+            },
+            arkret_models_crypto::RecipientMlsDurableSigner::MinimalMetadataPairwise {
+                recipient_pairwise_verification_method:
+                    durable_recipient_pairwise_verification_method,
+            },
+        ) => {
+            welcome.recipient_principal_id.is_none()
+                && recipient_pairwise_actor_id == &receipt.recipient_principal_id
+                && recipient_pairwise_verification_method
+                    == durable_recipient_pairwise_verification_method
+        }
+        _ => false,
     };
-    if welcome.recipient_principal_id.as_str() != session.actor
-        || welcome_recipient_device_id
-            .is_none_or(|device_id| device_id.as_str() != session.device_id)
-        || welcome.keypackage_ref != body.key_package_refs[0]
-        || welcome.claim_id.as_str() != body.claim_ids[0].as_str()
+    if !welcome_recipient_matches
+        || welcome.claim_receipt.claim_request_id != receipt.claim_request_id
+        || welcome.keypackage_ref != receipt.key_package_ref.as_str()
+        || welcome.claim_id.as_str() != body.claim_id.as_str()
         || welcome.mls_group_id.as_str() != receipt.mls_group_id.as_str()
         || welcome.epoch != receipt.mls_epoch
         || receipt.welcome_digest.as_str() != welcome_digest
@@ -1996,20 +2801,180 @@ async fn validate_recipient_durable_receipt(
             "durable receipt signing transcript invalid: {error}"
         ))
     })?;
-    verify_session_keypackage_write_signature(
+    verify_keypackage_consumer_signature(
         state,
         session,
-        &body.key_package_refs,
+        &receipt.recipient_principal_id,
+        &receipt.recipient,
+        Some(&receipt.realm_id),
+        std::slice::from_ref(&receipt.key_package_ref.to_string()),
         &receipt.signature,
         &signing_input,
     )
     .await
 }
 
+async fn verify_keypackage_consumer_signature(
+    state: &AppState,
+    session: &SessionRecord,
+    owner: &arkret_wire::DidCoreId,
+    consumer: &arkret_models_crypto::RecipientMlsDurableSigner,
+    realm_id: Option<&RealmId>,
+    keypackage_refs: &[String],
+    signature: &KeyOperationSignature,
+    signing_input: &[u8],
+) -> Result<(), AppError> {
+    match consumer {
+        arkret_models_crypto::RecipientMlsDurableSigner::Device {
+            recipient_device_id,
+            ..
+        } => {
+            if recipient_device_id.as_str() != session.device_id {
+                return Err(AppError::capability_denied(
+                    "durable recipient device must match the calling session",
+                ));
+            }
+            verify_session_keypackage_write_signature(
+                state,
+                session,
+                keypackage_refs,
+                signature,
+                signing_input,
+            )
+            .await
+        }
+        arkret_models_crypto::RecipientMlsDurableSigner::NativeAgent {
+            recipient_agent_id,
+            recipient_agent_verification_method,
+            agent_key_authorize_event_id,
+        } => {
+            if recipient_agent_id != owner
+                || signature.kid.as_str() != recipient_agent_verification_method.as_str()
+                || !current_agent_key_authorization_matches_method(
+                    state,
+                    recipient_agent_id,
+                    agent_key_authorize_event_id.as_str(),
+                    recipient_agent_verification_method.as_str(),
+                )
+                .await
+            {
+                return Err(AppError::capability_denied(
+                    "Native Agent consume authority is not current",
+                ));
+            }
+            let key = crate::jws_verify::resolve_ed25519_pubkey_async(
+                state,
+                recipient_agent_verification_method.as_str(),
+            )
+            .await
+            .map_err(|_| AppError::capability_denied("Native Agent consume key is unavailable"))?;
+            if !crate::routing::identity::device_signing::ed25519_verify(
+                &key,
+                signing_input,
+                signature.sig.as_str(),
+            ) {
+                return Err(AppError::param_invalid("endpoint_signature_invalid"));
+            }
+            Ok(())
+        }
+        arkret_models_crypto::RecipientMlsDurableSigner::MinimalMetadataPairwise {
+            recipient_pairwise_verification_method,
+        } => {
+            let endpoint = arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(
+                owner.clone(),
+                recipient_pairwise_verification_method.clone(),
+            )
+            .map_err(|_| AppError::capability_denied("pairwise consume endpoint mismatch"))?;
+            let _ = endpoint;
+            let realm_id = realm_id.ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    "pairwise consume requires exact Realm affinity",
+                )
+            })?;
+            ensure_pairwise_realm_affinity(
+                state,
+                owner,
+                recipient_pairwise_verification_method,
+                realm_id,
+                state.service_id(),
+            )
+            .await?;
+            if signature.kid.as_str() != recipient_pairwise_verification_method.as_str() {
+                return Err(AppError::capability_denied(
+                    "pairwise consume signature kid mismatch",
+                ));
+            }
+            let multibase = recipient_pairwise_verification_method
+                .as_str()
+                .split_once('#')
+                .and_then(|(controller, _)| controller.strip_prefix("did:key:"))
+                .ok_or_else(|| AppError::capability_denied("pairwise consume method invalid"))?;
+            let raw = arkret_canonical::decode_ed25519_multibase(multibase)
+                .map_err(|_| AppError::capability_denied("pairwise consume method invalid"))?;
+            let key = ed25519_dalek::VerifyingKey::from_bytes(&raw)
+                .map_err(|_| AppError::capability_denied("pairwise consume method invalid"))?;
+            if !crate::routing::identity::device_signing::ed25519_verify(
+                &key,
+                signing_input,
+                signature.sig.as_str(),
+            ) {
+                return Err(AppError::param_invalid("endpoint_signature_invalid"));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn keypackage_record_matches_consumer(
+    record: &soland_services::events::MlsKeyPackageState,
+    body: &KeyPackagesConsumeRequestBody,
+    session: &SessionRecord,
+) -> bool {
+    let receipt = &body.recipient_durable_receipt;
+    if record.actor_id != receipt.recipient_principal_id.as_str() {
+        return false;
+    }
+    match &receipt.recipient {
+        arkret_models_crypto::RecipientMlsDurableSigner::Device {
+            recipient_device_id,
+            ..
+        } => {
+            session.actor == record.actor_id
+                && record.device_id.as_deref() == Some(recipient_device_id.as_str())
+                && record.endpoint_verification_method.is_none()
+                && record.intended_realm_id.is_none()
+        }
+        arkret_models_crypto::RecipientMlsDurableSigner::NativeAgent {
+            recipient_agent_verification_method,
+            agent_key_authorize_event_id,
+            ..
+        } => {
+            session.actor == record.actor_id
+                && record.device_id.is_none()
+                && record.endpoint_verification_method.as_deref()
+                    == Some(recipient_agent_verification_method.as_str())
+                && record.intended_realm_id.is_none()
+                && record.agent_key_authorize_event_id.as_deref()
+                    == Some(agent_key_authorize_event_id.as_str())
+        }
+        arkret_models_crypto::RecipientMlsDurableSigner::MinimalMetadataPairwise {
+            recipient_pairwise_verification_method,
+        } => {
+            record.device_id.is_none()
+                && record.endpoint_verification_method.as_deref()
+                    == Some(recipient_pairwise_verification_method.as_str())
+                && record.intended_realm_id.as_deref()
+                    == Some(body.recipient_durable_receipt.realm_id.as_str())
+                && record.device_authorize_event_id.is_none()
+                && record.agent_key_authorize_event_id.is_none()
+        }
+    }
+}
+
 fn build_keypackage_consume_receipt(
     state: &AppState,
     body: &KeyPackagesConsumeRequestBody,
-    consumed: Vec<String>,
     consumed_at: DateTime<Utc>,
 ) -> Result<KeyPackageConsumeReceipt, AppError> {
     let verification_method = format!(
@@ -2021,16 +2986,9 @@ fn build_keypackage_consume_receipt(
             arkret_wire::DomainSeparationId::KEYPACKAGE_CONSUME_RECEIPT_V1,
         )
         .expect("receipt domain is non-empty"),
-        claim_request_id: body.recipient_durable_receipt.claim_request_id.clone(),
-        claim_ids: body.claim_ids.clone(),
-        key_package_refs: consumed,
+        request_digest: consume_request_digest(body)?,
+        claim_id: body.claim_id.clone(),
         recipient_durable_receipt: body.recipient_durable_receipt.clone(),
-        welcome_ref: body.welcome_ref.clone(),
-        realm_id: body.recipient_durable_receipt.realm_id.clone(),
-        mls_group_id: body.recipient_durable_receipt.mls_group_id.clone(),
-        mls_epoch: body.recipient_durable_receipt.mls_epoch,
-        source_service_id: arkret_wire::DidCoreId::new(state.service_id().clone())
-            .map_err(|error| AppError::internal(format!("service id invalid: {error}")))?,
         consumed_at,
         signature: KeyOperationSignature {
             kid: arkret_wire::NonEmptyString::new(verification_method)
@@ -2054,31 +3012,81 @@ fn build_keypackage_consume_receipt(
     Ok(receipt)
 }
 
+fn consume_request_digest(
+    body: &KeyPackagesConsumeRequestBody,
+) -> Result<arkret_wire::Hash, AppError> {
+    arkret_canonical::canonical_sha256(&body.unsigned())
+        .map_err(|error| AppError::internal(format!("consume request digest failed: {error}")))
+}
+
+fn validate_consume_receipt_replay(
+    state: &AppState,
+    body: &KeyPackagesConsumeRequestBody,
+    receipt: &KeyPackageConsumeReceipt,
+) -> Result<(), AppError> {
+    receipt
+        .validate_shape()
+        .map_err(|error| AppError::internal(format!("stored consume receipt shape: {error}")))?;
+    if receipt
+        .recipient_durable_receipt
+        .recipient_service_id
+        .as_str()
+        != state.service_id()
+        || receipt.request_digest != consume_request_digest(body)?
+        || receipt.claim_id != body.claim_id
+        || serde_json::to_value(&receipt.recipient_durable_receipt).map_err(|error| {
+            AppError::internal(format!("stored durable receipt serialize: {error}"))
+        })? != serde_json::to_value(&body.recipient_durable_receipt).map_err(|error| {
+            AppError::internal(format!("request durable receipt serialize: {error}"))
+        })?
+    {
+        return Err(AppError::conflict(
+            "consume replay differs from the durably accepted request",
+        ));
+    }
+    let expected_method = format!(
+        "{}#notary-key",
+        state.service_resolution_commitment().full_id
+    );
+    if receipt.signature.kid.as_str() != expected_method
+        || receipt
+            .signature
+            .signature_algorithm
+            .as_ref()
+            .is_some_and(|algorithm| algorithm.as_str() != "Ed25519")
+    {
+        return Err(AppError::internal(
+            "stored consume receipt service signer is invalid",
+        ));
+    }
+    let signing_input = receipt.canonical_signing_bytes().map_err(|error| {
+        AppError::internal(format!(
+            "stored consume receipt transcript invalid: {error}"
+        ))
+    })?;
+    if !crate::routing::identity::device_signing::ed25519_verify(
+        &state.notary_verifying_key(),
+        &signing_input,
+        receipt.signature.sig.as_str(),
+    ) {
+        return Err(AppError::internal(
+            "stored consume receipt service signature is invalid",
+        ));
+    }
+    Ok(())
+}
+
 async fn validate_direct_keypackage_consume(
     state: &AppState,
-    session: &SessionRecord,
     body: &KeyPackagesConsumeRequestBody,
 ) -> Result<bool, AppError> {
-    let Some(realm_id) = body.realm_id.as_ref().map(ToString::to_string) else {
-        return Ok(false);
-    };
+    let realm_id = body.recipient_durable_receipt.realm_id.to_string();
     if !state
         .projections()
         .snapshot()
         .realm_is_direct_conversation(&realm_id)
     {
         return Ok(false);
-    }
-    if body.key_package_refs.len() != 1
-        || body.claim_ids.len() != 1
-        || body.strand_id.is_none()
-        || body.mls_group_id.is_none()
-        || body.epoch.is_none()
-    {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "Direct Conversation KeyPackage consume requires one exact claim and binding context",
-        ));
     }
     let binding = state
         .contacts()
@@ -2092,12 +3100,6 @@ async fn validate_direct_keypackage_consume(
                 "Direct Conversation binding is not canonical and active",
             )
         })?;
-    if body.strand_id.as_ref().map(ToString::to_string) != Some(binding.main_strand_id.clone()) {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "Direct Conversation consume Strand differs from the canonical binding",
-        ));
-    }
     let binding_event = state
         .event_queries()
         .accepted_event(&binding.binding_event_ref)
@@ -2124,7 +3126,7 @@ async fn validate_direct_keypackage_consume(
             "canonical direct binding payload is invalid",
         )
     })?;
-    let welcome_ref = body.welcome_ref.as_str();
+    let welcome_ref = body.recipient_durable_receipt.welcome_ref.as_str();
     let realm_scope = arkret_wire::ScopeRef::Realm {
         realm_id: RealmId::new(realm_id.clone()).map_err(|error| {
             AppError::new(
@@ -2139,7 +3141,7 @@ async fn validate_direct_keypackage_consume(
             format!("direct conversation MLS group id derivation failed: {error}"),
         )
     })?;
-    if body.mls_group_id.as_deref() != Some(group_id.as_str()) {
+    if body.recipient_durable_receipt.mls_group_id.as_str() != group_id.as_str() {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "KeyPackage consume does not reference the scope-derived direct conversation MLS group",
@@ -2184,14 +3186,12 @@ async fn validate_direct_keypackage_consume(
                 "canonical direct Welcome payload is invalid",
             )
         })?;
-    let claim_id = &body.claim_ids[0];
-    let key_package_id = &body.key_package_refs[0];
-    if welcome.recipient_principal_id.as_str() != session.actor
-        || welcome_recipient_device_id(&welcome)
-            .is_none_or(|device_id| device_id.as_str() != session.device_id)
+    let claim_id = &body.claim_id;
+    let key_package_id = body.recipient_durable_receipt.key_package_ref.as_str();
+    if !welcome_recipient_matches_consumer(&welcome, body)
         || welcome.mls_group_id.as_str() != group_id.as_str()
-        || Some(welcome.epoch) != body.epoch
-        || !direct_welcome_claim_matches_consume(
+        || welcome.epoch != body.recipient_durable_receipt.mls_epoch
+        || !welcome_claim_matches_consume(
             key_package_id,
             claim_id,
             &welcome.keypackage_ref,
@@ -2206,36 +3206,36 @@ async fn validate_direct_keypackage_consume(
     Ok(true)
 }
 
-fn direct_welcome_claim_matches_consume(
-    consumed_keypackage_ref: &str,
+fn welcome_claim_matches_consume(
+    request_keypackage_ref: &str,
     consumed_claim_id: &str,
     welcome_keypackage_ref: &str,
     welcome_claim_id: &str,
 ) -> bool {
-    consumed_keypackage_ref == welcome_keypackage_ref && consumed_claim_id == welcome_claim_id
+    request_keypackage_ref == welcome_keypackage_ref && consumed_claim_id == welcome_claim_id
 }
 
 #[cfg(test)]
 mod direct_consume_tests {
-    use super::direct_welcome_claim_matches_consume;
+    use super::welcome_claim_matches_consume;
 
     #[test]
     fn direct_consume_binds_the_wire_ref_without_assuming_claim_id_prefix() {
         let keypackage_ref = format!("sha256:{}", "a".repeat(64));
         let claim_id = "ak:mls:kp:01904100-0000-7000-8000-000000000001:claim-nonce";
-        assert!(direct_welcome_claim_matches_consume(
+        assert!(welcome_claim_matches_consume(
             &keypackage_ref,
             claim_id,
             &keypackage_ref,
             claim_id,
         ));
-        assert!(!direct_welcome_claim_matches_consume(
+        assert!(!welcome_claim_matches_consume(
             &format!("sha256:{}", "b".repeat(64)),
             claim_id,
             &keypackage_ref,
             claim_id,
         ));
-        assert!(!direct_welcome_claim_matches_consume(
+        assert!(!welcome_claim_matches_consume(
             &keypackage_ref,
             "different-claim",
             &keypackage_ref,
@@ -2246,12 +3246,9 @@ mod direct_consume_tests {
 
 async fn validate_sidecar_keypackage_consume(
     state: &AppState,
-    session: &SessionRecord,
     body: &KeyPackagesConsumeRequestBody,
 ) -> Result<(), AppError> {
-    let Some(group_id) = body.mls_group_id.as_deref() else {
-        return Ok(());
-    };
+    let group_id = body.recipient_durable_receipt.mls_group_id.as_str();
     let sidecar = {
         let projection = state.projections().snapshot();
         projection.mls_commit_epochs.values().find_map(|epoch| {
@@ -2283,13 +3280,7 @@ async fn validate_sidecar_keypackage_consume(
             &sidecar_record,
         )
         .await?;
-    if body.key_package_refs.len() != 1 || body.claim_ids.len() != 1 || body.epoch.is_none() {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "Sidecar KeyPackage consume requires one exact claim and Welcome context",
-        ));
-    }
-    let welcome_ref = body.welcome_ref.as_str();
+    let welcome_ref = body.recipient_durable_receipt.welcome_ref.as_str();
     let stored = state
         .event_queries()
         .accepted_event(welcome_ref)
@@ -2320,8 +3311,8 @@ async fn validate_sidecar_keypackage_consume(
             "Sidecar Welcome payload is invalid",
         )
     })?;
-    let key_package_id = &body.key_package_refs[0];
-    let claim_id = &body.claim_ids[0];
+    let key_package_id = body.recipient_durable_receipt.key_package_ref.as_str();
+    let claim_id = &body.claim_id;
     let sidecar_binding = welcome
         .governance_binding
         .sidecar_binding()
@@ -2347,15 +3338,15 @@ async fn validate_sidecar_keypackage_consume(
                     })
         });
     if welcome.mls_group_id.as_str() != group_id
-        || Some(welcome.epoch) != body.epoch
-        || body.realm_id.as_ref().map(ToString::to_string).as_deref()
-            != Some(sidecar.realm_id.as_str())
-        || welcome.recipient_principal_id.as_str() != session.actor
-        || welcome_recipient_device_id(&welcome)
-            .is_none_or(|device_id| device_id.as_str() != session.device_id)
-        || welcome.keypackage_ref.as_str() != key_package_id
-        || welcome.claim_id.as_str() != claim_id.as_str()
-        || !claim_id.starts_with(&format!("{key_package_id}:"))
+        || welcome.epoch != body.recipient_durable_receipt.mls_epoch
+        || body.recipient_durable_receipt.realm_id.as_str() != sidecar.realm_id.as_str()
+        || !welcome_recipient_matches_consumer(&welcome, body)
+        || !welcome_claim_matches_consume(
+            key_package_id,
+            claim_id,
+            &welcome.keypackage_ref,
+            welcome.claim_id.as_str(),
+        )
         || sidecar_binding != &expected_sidecar_binding
         || welcome.governance_binding.realm_id().as_str() != sidecar.realm_id
         || welcome
@@ -2365,13 +3356,11 @@ async fn validate_sidecar_keypackage_consume(
             .as_deref()
             != Some(sidecar.sidecar_id.as_str())
         || !current_epoch_matches
-        || welcome.commit_ref.as_ref().is_none_or(|commit_ref| {
-            !state
-                .projections()
-                .snapshot()
-                .accepted_mls_commit_refs
-                .contains(commit_ref.as_str())
-        })
+        || !state
+            .projections()
+            .snapshot()
+            .accepted_mls_commit_refs
+            .contains(welcome.commit_ref.as_str())
     {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -2386,9 +3375,8 @@ async fn validate_sidecar_keypackage_consume(
         .flatten()
         .any(|row| {
             row.group_id == group_id
-                && row.recipient_actor_id == session.actor
-                && row.recipient_device_id == session.device_id
-                && row.key_package_id == *key_package_id
+                && projected_welcome_matches_consumer(row, body)
+                && row.key_package_id == key_package_id
                 && row.epoch == welcome.epoch
                 && row.commit_ref.as_deref()
                     == welcome
@@ -2410,6 +3398,98 @@ async fn validate_sidecar_keypackage_consume(
         ));
     }
     Ok(())
+}
+
+fn welcome_recipient_matches_consumer(
+    welcome: &arkret_models_collaboration::events_payloads::MlsWelcomePayload,
+    body: &KeyPackagesConsumeRequestBody,
+) -> bool {
+    let receipt = &body.recipient_durable_receipt;
+    match (&welcome.recipient, &receipt.recipient) {
+        (
+            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Device {
+                recipient_device_id,
+            },
+            arkret_models_crypto::RecipientMlsDurableSigner::Device {
+                recipient_device_id: durable_recipient_device_id,
+                ..
+            },
+        ) => {
+            welcome.recipient_principal_id.as_ref() == Some(&receipt.recipient_principal_id)
+                && recipient_device_id == durable_recipient_device_id
+        }
+        (
+            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::NativeAgent {
+                recipient_agent_id,
+                recipient_agent_verification_method,
+                agent_key_authorize_event_id,
+            },
+            arkret_models_crypto::RecipientMlsDurableSigner::NativeAgent {
+                recipient_agent_id: durable_recipient_agent_id,
+                recipient_agent_verification_method: durable_recipient_agent_verification_method,
+                agent_key_authorize_event_id: durable_agent_key_authorize_event_id,
+            },
+        ) => {
+            welcome.recipient_principal_id.as_ref() == Some(&receipt.recipient_principal_id)
+                && recipient_agent_id == durable_recipient_agent_id
+                && recipient_agent_verification_method
+                    == durable_recipient_agent_verification_method
+                && agent_key_authorize_event_id == durable_agent_key_authorize_event_id
+        }
+        (
+            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::MinimalMetadataPairwise {
+                recipient_pairwise_actor_id,
+                recipient_pairwise_verification_method,
+            },
+            arkret_models_crypto::RecipientMlsDurableSigner::MinimalMetadataPairwise {
+                recipient_pairwise_verification_method:
+                    durable_recipient_pairwise_verification_method,
+            },
+        ) => {
+            welcome.recipient_principal_id.is_none()
+                && recipient_pairwise_actor_id == &receipt.recipient_principal_id
+                && recipient_pairwise_verification_method
+                    == durable_recipient_pairwise_verification_method
+        }
+        _ => false,
+    }
+}
+
+fn projected_welcome_matches_consumer(
+    row: &soland_domain::reducer::MlsWelcome,
+    body: &KeyPackagesConsumeRequestBody,
+) -> bool {
+    let receipt = &body.recipient_durable_receipt;
+    if row.recipient_actor_id != receipt.recipient_principal_id.as_str() {
+        return false;
+    }
+    match &receipt.recipient {
+        arkret_models_crypto::RecipientMlsDurableSigner::Device {
+            recipient_device_id,
+            ..
+        } => {
+            row.recipient_device_id.as_deref() == Some(recipient_device_id.as_str())
+                && row.recipient_endpoint_verification_method.is_none()
+        }
+        arkret_models_crypto::RecipientMlsDurableSigner::NativeAgent {
+            recipient_agent_verification_method,
+            ..
+        } => {
+            row.recipient_device_id.is_none()
+                && row.recipient_endpoint_verification_method.as_deref()
+                    == Some(recipient_agent_verification_method.as_str())
+                && row.intended_realm_id.is_none()
+        }
+        arkret_models_crypto::RecipientMlsDurableSigner::MinimalMetadataPairwise {
+            recipient_pairwise_verification_method,
+        } => {
+            row.recipient_device_id.is_none()
+                && row.recipient_endpoint_verification_method.as_deref()
+                    == Some(recipient_pairwise_verification_method.as_str())
+                && row.intended_realm_id.as_deref()
+                    == Some(body.recipient_durable_receipt.realm_id.as_str())
+        }
+    }
 }
 
 #[salvo::oapi::endpoint(
@@ -2532,7 +3612,7 @@ pub(crate) async fn retire_device_keypackages(
     let mut retired = 0usize;
     for row in rows.into_iter().filter(|row| {
         row.actor_id == actor_id
-            && row.device_id == device_id
+            && row.device_id.as_deref() == Some(device_id)
             && row.lifecycle().is_ok_and(|lifecycle| {
                 matches!(
                     lifecycle.claim_state,
@@ -2663,6 +3743,9 @@ async fn validate_agent_keypackage_upload(
     signature: &KeyOperationSignature,
     signing_input: &[u8],
 ) -> Result<(), String> {
+    if !current_agent_key_authorization_matches(state, principal, authorize_event_id).await {
+        return Err("claim_generation_mismatch".to_owned());
+    }
     let accepted = state
         .event_queries()
         .accepted_event(authorize_event_id)
@@ -2671,6 +3754,11 @@ async fn validate_agent_keypackage_upload(
         .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
     let event = serde_json::from_value::<arkret_wire::Event>(accepted.envelope)
         .map_err(|_| "claim_generation_mismatch".to_owned())?;
+    if event.kind != arkret_wire::EventKind::AgentKeyAuthorize
+        || event.actor_id.as_str() != principal.as_str()
+    {
+        return Err("claim_generation_mismatch".to_owned());
+    }
     let payload =
         serde_json::to_value(event.payload).map_err(|_| "claim_generation_mismatch".to_owned())?;
     let verification_method = payload
@@ -2728,6 +3816,136 @@ async fn validate_agent_keypackage_upload(
         signature,
     )
     .map_err(|_| "device_signature_invalid".to_owned())
+}
+
+async fn validate_device_keypackage_leaf(
+    state: &AppState,
+    principal: &arkret_wire::DidCoreId,
+    device_id: &str,
+    key_package_bytes: &[u8],
+) -> Result<(), AppError> {
+    let device = state
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
+            actor_id: principal.to_string(),
+            device_id: device_id.to_owned(),
+        })
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .filter(|device| device.verification_state == "verified" && device.revoked_at.is_none())
+        .ok_or_else(|| AppError::param_invalid("claim_generation_mismatch"))?;
+    let device_public_key = device
+        .payload
+        .get("device_public_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::param_invalid("claim_generation_mismatch"))?;
+    let verifying_key = crate::routing::identity::device_signing::decode_ed25519_key(
+        device_public_key,
+        "multibase",
+    )
+    .map_err(|_| AppError::param_invalid("claim_generation_mismatch"))?;
+    let leaf = arkret_mls::author_leaf_from_key_package_bytes(key_package_bytes, 0)
+        .map_err(|_| AppError::param_invalid("key_package_invalid"))?;
+    match leaf.credential {
+        arkret_mls::AuthorLeafCredential::Basic { identity }
+            if identity.as_slice() == format!("{}#{device_id}", principal.as_str()).as_bytes() => {}
+        _ => return Err(AppError::param_invalid("claim_generation_mismatch")),
+    }
+    if leaf.signature_key.as_slice() != verifying_key.as_bytes() {
+        return Err(AppError::param_invalid("claim_generation_mismatch"));
+    }
+    Ok(())
+}
+
+fn validate_pairwise_keypackage_upload(
+    principal: &arkret_wire::DidCoreId,
+    verification_method: &arkret_wire::DidUrl,
+    key_package_bytes: &[u8],
+    signature: &KeyOperationSignature,
+    signing_input: &[u8],
+) -> Result<(), String> {
+    arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(
+        principal.clone(),
+        verification_method.clone(),
+    )
+    .map_err(|_| "claim_generation_mismatch".to_owned())?;
+    let controller = verification_method
+        .as_str()
+        .split_once('#')
+        .map(|(controller, _)| controller)
+        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
+    let multibase = controller
+        .strip_prefix("did:key:")
+        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
+    let public_key = arkret_canonical::decode_ed25519_multibase(multibase)
+        .map_err(|_| "claim_generation_mismatch".to_owned())?;
+    let leaf = arkret_mls::author_leaf_from_key_package_bytes(key_package_bytes, 0)
+        .map_err(|_| "key_package_invalid".to_owned())?;
+    match leaf.credential {
+        arkret_mls::AuthorLeafCredential::Basic { identity }
+            if identity.as_slice() == principal.as_str().as_bytes() => {}
+        _ => return Err("claim_generation_mismatch".to_owned()),
+    }
+    if leaf.signature_key.as_slice() != public_key
+        || signature.kid.as_str() != verification_method.as_str()
+        || signature
+            .signature_algorithm
+            .as_ref()
+            .is_some_and(|algorithm| algorithm.as_str() != "Ed25519")
+    {
+        return Err("claim_generation_mismatch".to_owned());
+    }
+    arkret_signatures::keypackages::verify_keypackage_signing_input(
+        &public_key,
+        verification_method.as_str(),
+        signing_input,
+        signature,
+    )
+    .map_err(|_| "endpoint_signature_invalid".to_owned())
+}
+
+async fn ensure_pairwise_realm_affinity(
+    state: &AppState,
+    principal: &arkret_wire::DidCoreId,
+    verification_method: &arkret_wire::DidUrl,
+    realm_id: &RealmId,
+    expected_service_id: &str,
+) -> Result<(), AppError> {
+    arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(
+        principal.clone(),
+        verification_method.clone(),
+    )
+    .map_err(|_| AppError::capability_denied("pairwise endpoint binding is invalid"))?;
+    let minimal_metadata_realm = state
+        .realms()
+        .realm_metadata(realm_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .is_some_and(|record| record.minimal_metadata_realm);
+    if !minimal_metadata_realm {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "pairwise endpoint requires the current minimal-metadata Realm profile",
+        )
+        .with_wire_code("claim_generation_mismatch"));
+    }
+    let snapshot = state.projections().snapshot();
+    if snapshot
+        .member(realm_id.as_str(), principal.as_str())
+        .is_none_or(|membership| {
+            membership.state != "join"
+                || membership.recipient_service_id.as_deref() != Some(expected_service_id)
+        })
+    {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "pairwise endpoint has no current Realm membership affinity",
+        )
+        .with_wire_code("claim_generation_mismatch"));
+    }
+    Ok(())
 }
 
 async fn verify_device_keypackage_signature(
@@ -2789,6 +4007,27 @@ async fn verify_device_keypackage_signature(
     .map_err(|_| AppError::param_invalid("device_signature_invalid"))
 }
 
+async fn current_device_authorization_matches(
+    state: &AppState,
+    principal: &arkret_wire::DidCoreId,
+    device_id: &str,
+    authorize_event_id: &str,
+) -> bool {
+    state
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
+            actor_id: principal.to_string(),
+            device_id: device_id.to_owned(),
+        })
+        .await
+        .ok()
+        .flatten()
+        .and_then(|device| device_authorize_trust_binding(&device))
+        .and_then(|binding| binding.device_authorize_event_id)
+        .as_deref()
+        == Some(authorize_event_id)
+}
+
 async fn verify_session_keypackage_write_signature(
     state: &AppState,
     session: &SessionRecord,
@@ -2811,7 +4050,7 @@ async fn verify_session_keypackage_write_signature(
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| AppError::param_invalid("KeyPackage signature target is missing"))?;
             if record.actor_id != session.actor
-                || record.device_id != session.device_id
+                || record.device_id.as_deref() != Some(session.device_id.as_str())
                 || record.agent_key_authorize_event_id.as_deref() != Some(authorize_event_id)
             {
                 return Err(AppError::new(
@@ -2945,6 +4184,7 @@ async fn current_agent_keypackage_trust_binding(
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .is_some_and(|expires_at| expires_at.with_timezone(&Utc) <= now());
     if event.kind != arkret_wire::EventKind::AgentKeyAuthorize
+        || event.actor_id.as_str() != principal.as_str()
         || payload.get("agent_id").and_then(Value::as_str) != Some(principal.as_str())
         || payload.get("verification_method").and_then(Value::as_str) != Some(verification_method)
         || expired
@@ -2972,6 +4212,26 @@ pub(crate) async fn current_agent_key_authorization_matches(
         .and_then(|binding| binding.agent_key_authorize_event_id)
         .as_deref()
         == Some(authorize_event_id)
+}
+
+pub(crate) async fn current_agent_key_authorization_matches_method(
+    state: &AppState,
+    principal: &arkret_wire::DidCoreId,
+    authorize_event_id: &str,
+    verification_method: &str,
+) -> bool {
+    if !current_agent_key_authorization_matches(state, principal, authorize_event_id).await {
+        return false;
+    }
+    state
+        .agent_pairings()
+        .agent(principal.as_str())
+        .await
+        .ok()
+        .flatten()
+        .and_then(|agent| agent.authorized_verification_method)
+        .as_deref()
+        == Some(verification_method)
 }
 
 async fn current_keypackage_trust_binding(
@@ -3011,7 +4271,27 @@ async fn current_keypackage_claim_trust_selector(
     principal: &arkret_wire::DidCoreId,
     target_device_ids: &BTreeSet<String>,
     intended_realm_id: Option<&str>,
+    pairwise_verification_method: Option<&str>,
 ) -> Result<KeyPackageTrustSelector, AppError> {
+    if let Some(verification_method) = pairwise_verification_method {
+        let realm_id = intended_realm_id.ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "pairwise claim requires Realm affinity",
+            )
+            .with_wire_code("claim_generation_mismatch")
+        })?;
+        let method = arkret_wire::DidUrl::new(verification_method.to_owned())
+            .map_err(|_| AppError::param_invalid("pairwise verification method is invalid"))?;
+        let realm = RealmId::new(realm_id.to_owned())
+            .map_err(|_| AppError::param_invalid("pairwise Realm id is invalid"))?;
+        ensure_pairwise_realm_affinity(state, principal, &method, &realm, state.service_id())
+            .await?;
+        return Ok(KeyPackageTrustSelector::MinimalMetadataPairwise {
+            verification_method: verification_method.to_owned(),
+            intended_realm_id: realm_id.to_owned(),
+        });
+    }
     if let Some(binding) = current_agent_keypackage_trust_binding(state, principal).await? {
         if let Some(realm_id) = intended_realm_id {
             let agent = state
@@ -3127,12 +4407,7 @@ fn non_empty_keypackage_refs(refs: &[String]) -> Result<Vec<String>, AppError> {
 }
 
 fn consume_group_ref(body: &KeyPackagesConsumeRequestBody) -> String {
-    body.mls_group_id
-        .as_ref()
-        .map(ToString::to_string)
-        .or_else(|| body.strand_id.as_ref().map(ToString::to_string))
-        .or_else(|| body.realm_id.as_ref().map(ToString::to_string))
-        .unwrap_or_else(|| body.recipient_durable_receipt.mls_group_id.to_string())
+    body.recipient_durable_receipt.mls_group_id.to_string()
 }
 
 fn available_keypackage_count(
@@ -3163,7 +4438,7 @@ fn available_keypackage_count_from_records(
     keypackages
         .iter()
         .filter(|kp| kp.actor_id == actor_id)
-        .filter(|kp| device_id.is_none_or(|device_id| kp.device_id == device_id))
+        .filter(|kp| device_id.is_none_or(|device_id| kp.device_id.as_deref() == Some(device_id)))
         .filter(|kp| trust_selector.is_none_or(|selector| selector.matches_keypackage(kp)))
         .filter(|kp| {
             let Ok(lifecycle) = kp.lifecycle() else {
@@ -3217,7 +4492,8 @@ pub(crate) async fn has_claimable_realm_membership_keypackage(
     // paths continue to pass `Some(intended_realm_id)` and recheck effective
     // membership at commit time.
     let Ok(trust_selector) =
-        current_keypackage_claim_trust_selector(state, &principal, &target_device_ids, None).await
+        current_keypackage_claim_trust_selector(state, &principal, &target_device_ids, None, None)
+            .await
     else {
         return false;
     };
@@ -3263,7 +4539,11 @@ fn keypackage_matches_claim(
     required_capabilities: &BTreeSet<String>,
 ) -> bool {
     kp.actor_id == actor_id
-        && (target_device_ids.is_empty() || target_device_ids.contains(kp.device_id.as_str()))
+        && (target_device_ids.is_empty()
+            || kp
+                .device_id
+                .as_ref()
+                .is_some_and(|device_id| target_device_ids.contains(device_id)))
         && kp.lifecycle().is_ok_and(|lifecycle| {
             matches!(
                 lifecycle.claim_state,
@@ -3295,18 +4575,30 @@ fn last_resort_matches_realm(kp: &MlsKeyPackageRow, intended_realm_id: &str) -> 
 async fn keypackage_claim_record(
     state: &AppState,
     record: &MlsKeyPackageRow,
-    claim_nonce: &str,
+    claim_request_id: &str,
 ) -> Result<KeyPackageClaimRecord, AppError> {
-    let trust_binding = trust_binding_from_row(record)?;
     let principal_id = arkret_wire::DidCoreId::new(record.actor_id.clone())
         .map_err(|error| AppError::internal(format!("invalid principal_id: {error}")))?;
-    let device_id = arkret_wire::DeviceId::new(record.device_id.clone())
-        .map_err(|error| AppError::internal(format!("invalid device_id: {error}")))?;
-    let device_signature =
-        serde_json::from_value::<KeyOperationSignature>(record.device_signature.clone())
-            .map_err(|error| AppError::internal(format!("invalid device_signature: {error}")))?;
+    let pairwise_verification_method = if record.device_authorize_event_id.is_none()
+        && record.agent_key_authorize_event_id.is_none()
+    {
+        record
+            .endpoint_verification_method
+            .clone()
+            .map(arkret_wire::DidUrl::new)
+            .transpose()
+            .map_err(|error| AppError::internal(format!("pairwise method invalid: {error}")))?
+    } else {
+        None
+    };
+    let trust_binding = if pairwise_verification_method.is_none() {
+        Some(trust_binding_from_row(record)?)
+    } else {
+        None
+    };
     let (device_id, agent_id, agent_verification_method) = if trust_binding
-        .agent_key_authorize_event_id
+        .as_ref()
+        .and_then(|binding| binding.agent_key_authorize_event_id.as_ref())
         .is_some()
     {
         let agent = state
@@ -3323,31 +4615,39 @@ async fn keypackage_claim_record(
         })?;
         (None, Some(principal_id.clone()), Some(method))
     } else {
-        (Some(device_id), None, None)
+        (
+            record
+                .device_id
+                .clone()
+                .map(arkret_wire::DeviceId::new)
+                .transpose()
+                .map_err(|error| AppError::internal(format!("invalid device_id: {error}")))?,
+            None,
+            None,
+        )
     };
     let keypackage = URL_SAFE_NO_PAD.encode(&record.key_package_bytes);
     Ok(KeyPackageClaimRecord {
-        claim_id: format!("{}:{claim_nonce}", record.id),
+        claim_id: format!("{}:{claim_request_id}", record.id),
         keypackage_ref: record.keypackage_ref.clone(),
-        keypackage_digest: Hash::new(record.keypackage_digest.clone())
-            .map_err(|error| AppError::internal(format!("invalid keypackage_digest: {error}")))?,
         principal_id,
         device_id,
         agent_id,
         agent_verification_method,
+        pairwise_verification_method,
         keypackage,
         capabilities: record.capabilities.clone(),
-        capabilities_digest: Hash::new(record.capabilities_digest.clone())
-            .map_err(|error| AppError::internal(format!("invalid capabilities_digest: {error}")))?,
         device_authorize_event_id: trust_binding
-            .device_authorize_event_id
+            .as_ref()
+            .and_then(|binding| binding.device_authorize_event_id.clone())
             .map(arkret_wire::EventId::new)
             .transpose()
             .map_err(|error| {
                 AppError::internal(format!("device authorization Event id invalid: {error}"))
             })?,
         agent_key_authorize_event_id: trust_binding
-            .agent_key_authorize_event_id
+            .as_ref()
+            .and_then(|binding| binding.agent_key_authorize_event_id.clone())
             .map(arkret_wire::EventId::new)
             .transpose()
             .map_err(|error| {
@@ -3357,7 +4657,6 @@ async fn keypackage_claim_record(
             Some(expires_at_unix_ms) => unix_millis_datetime(expires_at_unix_ms)?,
             None => unix_timestamp_datetime(record.lifetime_not_after)?,
         },
-        device_signature,
         revocation_status: Some("active".to_owned()),
         last_resort: record.last_resort.then_some(true),
     })
@@ -3380,6 +4679,43 @@ fn unix_millis_datetime(timestamp_millis: i64) -> Result<DateTime<Utc>, AppError
 #[cfg(test)]
 mod trust_binding_tests {
     use super::*;
+
+    fn pairwise_endpoint(seed: [u8; 32]) -> (arkret_wire::DidCoreId, arkret_wire::DidUrl) {
+        let key = ed25519_dalek::SigningKey::from_bytes(&seed)
+            .verifying_key()
+            .to_bytes();
+        let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&key);
+        (
+            arkret_wire::DidCoreId::new(format!("ak:did_core:key:{multibase}")).unwrap(),
+            arkret_wire::DidUrl::new(format!("did:key:{multibase}#{multibase}")).unwrap(),
+        )
+    }
+
+    #[test]
+    fn last_resort_consume_rejects_cross_claim_coordinate_substitution() {
+        let claims = [("claim-a", "kp-ref")];
+        assert!(last_resort_claim_coordinates_match(
+            "request-a",
+            "request-a",
+            claims,
+            "claim-a",
+            "kp-ref",
+        ));
+        assert!(!last_resort_claim_coordinates_match(
+            "request-a",
+            "request-b",
+            claims,
+            "claim-a",
+            "kp-ref",
+        ));
+        assert!(!last_resort_claim_coordinates_match(
+            "request-a",
+            "request-a",
+            claims,
+            "claim-b",
+            "kp-ref",
+        ));
+    }
 
     #[test]
     fn native_agent_binding_is_an_exclusive_branch() {
@@ -3483,7 +4819,7 @@ mod trust_binding_tests {
         let record = identity.key_package_record().unwrap();
         let key_package_bytes = URL_SAFE_NO_PAD.decode(record.keypackage.as_str()).unwrap();
         let upload = identity
-            .signed_key_packages_upload_request(&[record], verification_method)
+            .signed_key_packages_upload_request(&[record], verification_method, None)
             .unwrap();
         let signing_input =
             arkret_models_crypto::http_bodies::keypackages_upload_signing_input(&upload.unsigned())
@@ -3494,10 +4830,169 @@ mod trust_binding_tests {
             &principal_core,
             &authorize_event_id,
             &key_package_bytes,
-            &upload.device_signature,
+            &upload.endpoint_signature,
             &signing_input,
         )
         .await
         .unwrap();
+    }
+
+    #[test]
+    fn pairwise_keypackage_upload_binds_outer_signature_leaf_actor_and_leaf_key() {
+        let seed = [19_u8; 32];
+        let (pairwise_actor, method) = pairwise_endpoint(seed);
+        let identity = arkret_mls::ArkretMlsIdentity::from_minimal_metadata_ed25519_signing_seed(
+            arkret_wire::DidCoreId::new("ak:did_core:webvh:z6mkprivateowner".to_owned()).unwrap(),
+            arkret_wire::DeviceId::new("ak:device:01964137-0000-7000-8000-000000000001".to_owned())
+                .unwrap(),
+            pairwise_actor.clone(),
+            method.clone(),
+            seed,
+        )
+        .unwrap();
+        let record = identity.key_package_record().unwrap();
+        let realm_id = arkret_wire::RealmId::new(
+            "ak:realm:Ac1aCK8aQdnkYImvdH3DFjq4jDCP198pXYWCGzGuVyj5".to_owned(),
+        )
+        .unwrap();
+        let upload = identity
+            .signed_key_packages_upload_request(
+                std::slice::from_ref(&record),
+                method.as_str(),
+                Some(realm_id),
+            )
+            .unwrap();
+        assert_eq!(upload.principal_id, pairwise_actor);
+        let key_package_bytes = URL_SAFE_NO_PAD.decode(record.keypackage.as_str()).unwrap();
+        let signing_input =
+            arkret_models_crypto::http_bodies::keypackages_upload_signing_input(&upload.unsigned())
+                .unwrap();
+        validate_pairwise_keypackage_upload(
+            &upload.principal_id,
+            &method,
+            &key_package_bytes,
+            &upload.endpoint_signature,
+            &signing_input,
+        )
+        .unwrap();
+
+        let other_seed = [23_u8; 32];
+        let (other_actor, other_method) = pairwise_endpoint(other_seed);
+        let other_identity =
+            arkret_mls::ArkretMlsIdentity::from_minimal_metadata_ed25519_signing_seed(
+                arkret_wire::DidCoreId::new("ak:did_core:webvh:z6mkprivateowner".to_owned())
+                    .unwrap(),
+                arkret_wire::DeviceId::new(
+                    "ak:device:01964137-0000-7000-8000-000000000002".to_owned(),
+                )
+                .unwrap(),
+                other_actor,
+                other_method,
+                other_seed,
+            )
+            .unwrap();
+        let other_record = other_identity.key_package_record().unwrap();
+        let other_bytes = URL_SAFE_NO_PAD
+            .decode(other_record.keypackage.as_str())
+            .unwrap();
+        assert_eq!(
+            validate_pairwise_keypackage_upload(
+                &upload.principal_id,
+                &method,
+                &other_bytes,
+                &upload.endpoint_signature,
+                &signing_input,
+            ),
+            Err("claim_generation_mismatch".to_owned())
+        );
+    }
+
+    #[test]
+    fn repeated_consumed_query_accepts_only_the_exact_durable_winner() {
+        let receipt = json!({"domain": "ak.keypackage.consume_receipt.v1"});
+        assert!(consumed_query_source_winner_matches(
+            "consumed",
+            "sha256:request",
+            Some(&receipt),
+            "sha256:request",
+            &receipt,
+        ));
+        assert!(!consumed_query_source_winner_matches(
+            "consumed",
+            "sha256:request",
+            Some(&receipt),
+            "sha256:other",
+            &receipt,
+        ));
+        assert!(!consumed_query_source_winner_matches(
+            "last_resort_claimed",
+            "sha256:request",
+            Some(&receipt),
+            "sha256:request",
+            &receipt,
+        ));
+    }
+
+    #[test]
+    fn terminal_query_requires_exact_refs_and_non_early_expiry() {
+        assert!(terminal_claim_coordinates_match(
+            "expired",
+            20_500,
+            20_500,
+            ["kp-a", "kp-b"],
+            ["kp-a", "kp-b"],
+        ));
+        assert!(!terminal_claim_coordinates_match(
+            "expired",
+            20_500,
+            20_499,
+            ["kp-a", "kp-b"],
+            ["kp-a", "kp-b"],
+        ));
+        assert!(!terminal_claim_coordinates_match(
+            "expired",
+            20_500,
+            20_500,
+            ["kp-b", "kp-a"],
+            ["kp-a", "kp-b"],
+        ));
+        assert!(terminal_claim_coordinates_match(
+            "revoked",
+            20_500,
+            19_000,
+            ["kp-a"],
+            ["kp-a"],
+        ));
+    }
+
+    #[test]
+    fn claim_failed_query_rejects_a_contradictory_existing_winner() {
+        let expected = PeerKeyPackageClaimLedgerRecord {
+            source_service_id: "did:web:source.example".to_owned(),
+            claim_request_id: "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+            request_digest:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            key_package_use: "none".to_owned(),
+            keypackage_id: None,
+            outcome: None,
+            terminal_receipt: Some(json!({"terminal_state": "never_claimed"})),
+            consume_receipt: None,
+            claim_expires_at_unix_ms: Some(20_500),
+            expires_at: 620,
+            state: "claim_failed".to_owned(),
+            updated_at: 10,
+        };
+        let mut replay = expected.clone();
+        replay.updated_at = 11;
+        assert!(claim_failed_source_winner_matches(&replay, &expected));
+
+        let mut contradictory = expected.clone();
+        contradictory.key_package_use = "last_resort".to_owned();
+        contradictory.state = "last_resort_claimed".to_owned();
+        contradictory.outcome = Some(json!({"claims": ["kp-a"]}));
+        assert!(!claim_failed_source_winner_matches(
+            &contradictory,
+            &expected
+        ));
     }
 }

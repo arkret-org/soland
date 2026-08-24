@@ -22,23 +22,23 @@ use chrono::{Duration, Utc};
 use super::{
     AccountDataCasCommit, AccountDataCasResult, AccountDataRecord, AccountDataStore,
     AccountStatusReplicaAppend, AccountStatusReplicaConflictKind, AccountStatusReplicaStore,
-    CanonicalEventRecord, ConsentCellRecord, ConsentCellStore, ConsentGrantDot,
-    ConsentProjectionCommit, ContactProjectionCommit, ContactRecord, ContactStore,
+    AppletRecordCommit, AppletStore, CanonicalEventRecord, ConsentCellRecord, ConsentCellStore,
+    ConsentGrantDot, ConsentProjectionCommit, ContactProjectionCommit, ContactRecord, ContactStore,
     ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore, DeviceInventoryRecord,
     DeviceInventoryStore, DeviceKeyStore, DeviceMessageBatchCommitOutcome,
     DeviceMessageBatchItemRecord, DeviceMessageBatchRecord, DeviceMessageRecord,
     DeviceMessageStore, DeviceMessageTargetSnapshotGuard, DevicePairingAuthorizationCommit,
     DevicePairingRecord, DevicePairingStore, DeviceRevocationGateSelector,
     DeviceRevocationGateStatus, DeviceRevocationStore, DeviceRevocationTargetStatus,
-    DeviceRevocationTransition, EventCommitRequest, EventCommitUnitOfWork, EventStore,
-    ExactWriteOutcome, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
+    DeviceRevocationTransition, EventBatchCommitRequest, EventCommitRequest, EventCommitUnitOfWork,
+    EventStore, ExactWriteOutcome, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
     FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
     FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
     FederationOutboxTransition, GovernanceDependencySource, GovernanceDependencyStore,
     GovernanceDependencyWrite, HandleClaimEvidenceRecord, IdempotencyRecord, IdempotencyStore,
-    InviteReceivePolicyStore, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
-    MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord, MessageStore,
-    MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsKeyPackageClaim,
+    InviteReceivePolicyStore, ManagedAuthorityClaim, MemberIdentityEventRecord,
+    MemberIdentityReplacementEdge, MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord,
+    MessageStore, MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsKeyPackageClaim,
     MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, OneTimeKeyStore,
     OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
     OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
@@ -1188,6 +1188,490 @@ fn canonical_wire_event_record(
         envelope,
         received_at: now,
     }
+}
+
+pub struct AppletFormalCommitContractStores<'a> {
+    pub unit_of_work: &'a dyn EventCommitUnitOfWork,
+    pub events: &'a dyn EventStore,
+    pub applets: &'a dyn AppletStore,
+}
+
+fn contract_applet_id() -> arkret_wire::AppletId {
+    arkret_wire::AppletId::new(format!("ak:applet:{}", uuid::Uuid::now_v7()))
+        .expect("contract Applet id")
+}
+
+fn contract_applet_record(
+    applet_id: &arkret_wire::AppletId,
+    install_marker: &str,
+    ghosts: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "applet_id": applet_id,
+        "owner_actor_id": "ak:did_core:webvh:z6mkcontractowner",
+        "status": "installed",
+        "revoked_at": null,
+        "install_body_digest": format!("sha256:{install_marker:0>64}"),
+        "ghosts": ghosts,
+    })
+}
+
+fn contract_ghost(
+    ghost_actor_id: &str,
+    protocol: &str,
+    instance_id: &str,
+    external_id: &str,
+    request_marker: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "ghost_actor_id": ghost_actor_id,
+        "actor_principal_server_id": "ak:did_core:webvh:z6mkcontractservice",
+        "managed_actor_provision_ref": "ak:event:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH",
+        "principal_control_realm_id": "ak:realm:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH",
+        "external_ref": {
+            "protocol": protocol,
+            "instance_id": instance_id,
+            "external_id": external_id,
+        },
+        "display_name": null,
+        "request_digest": format!("sha256:{request_marker:0>64}"),
+        "profile_event_ref": "ak:event:AcP3yA5jKnY2j6Rjdt6KNHMLT9DtEnVBnszNpKxeX2gR",
+        "accountability_grant_ref": "ak:event:AbAWwWC3ekOt5NnmX-QlGu2wvU1BPQmDeeubWjrKwye0",
+        "authorization_ref": "ak:grant:AXBcp13trH3bPXvj0eHppCpGqJZWL9yqE3cf2Tl43vyk",
+        "created_at": "2026-08-25T00:00:00.000Z",
+    })
+}
+
+fn contract_applet_event_request(event: CanonicalEventRecord) -> EventCommitRequest {
+    EventCommitRequest {
+        governance_dependencies: Vec::new(),
+        device_pairing_authorization: None,
+        contact_projection: None,
+        consent_projection: None,
+        event,
+        control_proposal_ingress: None,
+        device_revocation_transition: None,
+        device_revocation_gate: None,
+        projections: Vec::new(),
+        idempotency: None,
+        outbox: Vec::new(),
+    }
+}
+
+fn contract_applet_event_group(
+    namespace: &str,
+    realm_id: &str,
+    group: &str,
+    count: u64,
+) -> Vec<EventCommitRequest> {
+    let actor_id = format!("did:web:{namespace}-{group}.example");
+    let now = database_timestamp_now();
+    (0..count)
+        .map(|actor_seq| {
+            contract_applet_event_request(canonical_wire_event_record(
+                "",
+                &actor_id,
+                realm_id,
+                actor_seq,
+                now + chrono::Duration::milliseconds(actor_seq as i64),
+            ))
+        })
+        .collect()
+}
+
+fn contract_applet_batch(
+    applet_id: &arkret_wire::AppletId,
+    events: Vec<EventCommitRequest>,
+    expected_record: Option<serde_json::Value>,
+    record: serde_json::Value,
+    managed_authority_claims: Vec<ManagedAuthorityClaim>,
+) -> EventBatchCommitRequest {
+    EventBatchCommitRequest {
+        events,
+        applet_record: Some(AppletRecordCommit {
+            applet_id: applet_id.clone(),
+            expected_record,
+            record,
+            namespace_claims: Default::default(),
+            managed_authority_claims,
+        }),
+        agent_membership_cascade: None,
+    }
+}
+
+fn contract_event_ids(batch: &EventBatchCommitRequest) -> Vec<String> {
+    batch
+        .events
+        .iter()
+        .map(|request| request.event.event_id.clone())
+        .collect()
+}
+
+async fn assert_contract_event_group_visibility(
+    store: &dyn EventStore,
+    event_ids: &[String],
+    expected: bool,
+) {
+    for event_id in event_ids {
+        assert_eq!(
+            store
+                .contains(event_id)
+                .await
+                .expect("read Applet authority Event"),
+            expected,
+            "Applet authority Event group must be all-or-nothing: {event_id}"
+        );
+    }
+}
+
+async fn install_contract_applet(
+    stores: &AppletFormalCommitContractStores<'_>,
+    namespace: &str,
+    realm_id: &str,
+    applet_id: &arkret_wire::AppletId,
+    record: serde_json::Value,
+) {
+    stores
+        .unit_of_work
+        .commit_event_batch(contract_applet_batch(
+            applet_id,
+            contract_applet_event_group(namespace, realm_id, "install", 1),
+            None,
+            record,
+            Vec::new(),
+        ))
+        .await
+        .expect("install contract Applet record");
+}
+
+pub async fn assert_applet_formal_commit_transaction_contract(
+    stores: AppletFormalCommitContractStores<'_>,
+    namespace: &str,
+) {
+    let authority_server = "ak:did_core:webvh:z6mkcontractservice";
+
+    // A stale full-record CAS must roll back all four authority Events and the
+    // managed authority claim. Reusing the same group on a fresh exact record
+    // then proves that no hidden row from the failed transaction survived.
+    let stale_applet_id = contract_applet_id();
+    let stale_realm_id = contract_realm_id(&format!("{namespace}:stale"));
+    let stale_base = contract_applet_record(&stale_applet_id, "1", Vec::new());
+    install_contract_applet(
+        &stores,
+        namespace,
+        &stale_realm_id,
+        &stale_applet_id,
+        stale_base.clone(),
+    )
+    .await;
+    let committed_actor_id = format!("ak:did_core:web:{namespace}-committed.example");
+    let committed_ghost =
+        contract_ghost(&committed_actor_id, "bridge", "stale-cas", "committed", "2");
+    let committed_record =
+        contract_applet_record(&stale_applet_id, "1", vec![committed_ghost.clone()]);
+    stores
+        .unit_of_work
+        .commit_event_batch(contract_applet_batch(
+            &stale_applet_id,
+            contract_applet_event_group(namespace, &stale_realm_id, "stale-winner", 4),
+            Some(stale_base.clone()),
+            committed_record.clone(),
+            vec![ManagedAuthorityClaim {
+                actor_id: committed_actor_id,
+                principal_server_id: authority_server.to_owned(),
+            }],
+        ))
+        .await
+        .expect("commit the current Applet record mutation");
+    let stale_actor_id = format!("ak:did_core:web:{namespace}-stale.example");
+    let stale_ghost = contract_ghost(&stale_actor_id, "bridge", "stale-cas", "stale", "3");
+    let stale_record = contract_applet_record(&stale_applet_id, "1", vec![stale_ghost.clone()]);
+    let stale_batch = contract_applet_batch(
+        &stale_applet_id,
+        contract_applet_event_group(namespace, &stale_realm_id, "stale-loser", 4),
+        Some(stale_base),
+        stale_record,
+        vec![ManagedAuthorityClaim {
+            actor_id: stale_actor_id.clone(),
+            principal_server_id: authority_server.to_owned(),
+        }],
+    );
+    let stale_event_ids = contract_event_ids(&stale_batch);
+    let stale_error = stores
+        .unit_of_work
+        .commit_event_batch(stale_batch.clone())
+        .await
+        .expect_err("stale Applet record CAS must fail");
+    assert_eq!(
+        stale_error.conflict_code(),
+        Some(super::ConflictCode::CasConflict)
+    );
+    assert_eq!(
+        stores
+            .applets
+            .get(stale_applet_id.as_str())
+            .await
+            .expect("read current Applet record"),
+        Some(committed_record.clone())
+    );
+    assert_contract_event_group_visibility(stores.events, &stale_event_ids, false).await;
+    let merged_record =
+        contract_applet_record(&stale_applet_id, "1", vec![committed_ghost, stale_ghost]);
+    let mut fresh_retry = stale_batch;
+    fresh_retry.applet_record = Some(AppletRecordCommit {
+        applet_id: stale_applet_id.clone(),
+        expected_record: Some(committed_record),
+        record: merged_record.clone(),
+        namespace_claims: Default::default(),
+        managed_authority_claims: vec![ManagedAuthorityClaim {
+            actor_id: stale_actor_id,
+            principal_server_id: authority_server.to_owned(),
+        }],
+    });
+    stores
+        .unit_of_work
+        .commit_event_batch(fresh_retry)
+        .await
+        .expect("fresh exact Applet record retry must commit");
+    assert_contract_event_group_visibility(stores.events, &stale_event_ids, true).await;
+    assert_eq!(
+        stores
+            .applets
+            .get(stale_applet_id.as_str())
+            .await
+            .expect("read merged Applet record"),
+        Some(merged_record)
+    );
+
+    // Two batches for one external tuple race from the same exact record. One
+    // whole four-Event authority group wins and the other leaves no prefix.
+    let same_applet_id = contract_applet_id();
+    let same_realm_id = contract_realm_id(&format!("{namespace}:same-external"));
+    let same_base = contract_applet_record(&same_applet_id, "4", Vec::new());
+    install_contract_applet(
+        &stores,
+        namespace,
+        &same_realm_id,
+        &same_applet_id,
+        same_base.clone(),
+    )
+    .await;
+    let same_actor_id = format!("ak:did_core:web:{namespace}-same.example");
+    let same_ghost_left = contract_ghost(
+        &same_actor_id,
+        "bridge",
+        "shared-instance",
+        "shared-user",
+        "5",
+    );
+    let same_ghost_right = contract_ghost(
+        &same_actor_id,
+        "bridge",
+        "shared-instance",
+        "shared-user",
+        "6",
+    );
+    let same_left_record = contract_applet_record(&same_applet_id, "4", vec![same_ghost_left]);
+    let same_right_record = contract_applet_record(&same_applet_id, "4", vec![same_ghost_right]);
+    let same_claim = ManagedAuthorityClaim {
+        actor_id: same_actor_id,
+        principal_server_id: authority_server.to_owned(),
+    };
+    let same_left = contract_applet_batch(
+        &same_applet_id,
+        contract_applet_event_group(namespace, &same_realm_id, "same-left", 4),
+        Some(same_base.clone()),
+        same_left_record.clone(),
+        vec![same_claim.clone()],
+    );
+    let same_right = contract_applet_batch(
+        &same_applet_id,
+        contract_applet_event_group(namespace, &same_realm_id, "same-right", 4),
+        Some(same_base),
+        same_right_record.clone(),
+        vec![same_claim],
+    );
+    let same_left_ids = contract_event_ids(&same_left);
+    let same_right_ids = contract_event_ids(&same_right);
+    let (same_left_result, same_right_result) = tokio::join!(
+        stores.unit_of_work.commit_event_batch(same_left),
+        stores.unit_of_work.commit_event_batch(same_right)
+    );
+    assert_eq!(
+        usize::from(same_left_result.is_ok()) + usize::from(same_right_result.is_ok()),
+        1,
+        "one external tuple must produce one durable authority group"
+    );
+    let same_loser_error = if same_left_result.is_ok() {
+        same_right_result
+            .as_ref()
+            .expect_err("right same-tuple batch must lose the exact CAS")
+    } else {
+        same_left_result
+            .as_ref()
+            .expect_err("left same-tuple batch must lose the exact CAS")
+    };
+    assert_eq!(
+        same_loser_error.conflict_code(),
+        Some(super::ConflictCode::CasConflict)
+    );
+    let (same_winner_record, same_winner_ids, same_loser_ids) = if same_left_result.is_ok() {
+        (same_left_record, same_left_ids, same_right_ids)
+    } else {
+        (same_right_record, same_right_ids, same_left_ids)
+    };
+    assert_eq!(
+        stores
+            .applets
+            .get(same_applet_id.as_str())
+            .await
+            .expect("read same-tuple Applet record"),
+        Some(same_winner_record)
+    );
+    assert_contract_event_group_visibility(stores.events, &same_winner_ids, true).await;
+    assert_contract_event_group_visibility(stores.events, &same_loser_ids, false).await;
+
+    // Different Ghosts may race from the same observed record, but the losing
+    // stale transaction cannot overwrite the committed registration. Retrying
+    // against the exact winner then appends the second Ghost without loss.
+    let different_applet_id = contract_applet_id();
+    let different_realm_id = contract_realm_id(&format!("{namespace}:different-ghosts"));
+    let different_base = contract_applet_record(&different_applet_id, "7", Vec::new());
+    install_contract_applet(
+        &stores,
+        namespace,
+        &different_realm_id,
+        &different_applet_id,
+        different_base.clone(),
+    )
+    .await;
+    let different_left_actor_id = format!("ak:did_core:web:{namespace}-left.example");
+    let different_right_actor_id = format!("ak:did_core:web:{namespace}-right.example");
+    let different_left_ghost = contract_ghost(
+        &different_left_actor_id,
+        "bridge",
+        "different-instance",
+        "left-user",
+        "8",
+    );
+    let different_right_ghost = contract_ghost(
+        &different_right_actor_id,
+        "bridge",
+        "different-instance",
+        "right-user",
+        "9",
+    );
+    let different_left_record = contract_applet_record(
+        &different_applet_id,
+        "7",
+        vec![different_left_ghost.clone()],
+    );
+    let different_right_record = contract_applet_record(
+        &different_applet_id,
+        "7",
+        vec![different_right_ghost.clone()],
+    );
+    let different_left = contract_applet_batch(
+        &different_applet_id,
+        contract_applet_event_group(namespace, &different_realm_id, "different-left", 4),
+        Some(different_base.clone()),
+        different_left_record.clone(),
+        vec![ManagedAuthorityClaim {
+            actor_id: different_left_actor_id,
+            principal_server_id: authority_server.to_owned(),
+        }],
+    );
+    let different_right = contract_applet_batch(
+        &different_applet_id,
+        contract_applet_event_group(namespace, &different_realm_id, "different-right", 4),
+        Some(different_base),
+        different_right_record.clone(),
+        vec![ManagedAuthorityClaim {
+            actor_id: different_right_actor_id,
+            principal_server_id: authority_server.to_owned(),
+        }],
+    );
+    let different_left_ids = contract_event_ids(&different_left);
+    let different_right_ids = contract_event_ids(&different_right);
+    let (different_left_result, different_right_result) = tokio::join!(
+        stores
+            .unit_of_work
+            .commit_event_batch(different_left.clone()),
+        stores
+            .unit_of_work
+            .commit_event_batch(different_right.clone())
+    );
+    assert_eq!(
+        usize::from(different_left_result.is_ok()) + usize::from(different_right_result.is_ok()),
+        1,
+        "one exact Applet record CAS must win"
+    );
+    let different_loser_error = if different_left_result.is_ok() {
+        different_right_result
+            .as_ref()
+            .expect_err("right Ghost batch must lose the exact CAS")
+    } else {
+        different_left_result
+            .as_ref()
+            .expect_err("left Ghost batch must lose the exact CAS")
+    };
+    assert_eq!(
+        different_loser_error.conflict_code(),
+        Some(super::ConflictCode::CasConflict)
+    );
+    let (winner_record, winner_ghost, winner_ids, mut loser_batch, loser_ghost, loser_ids) =
+        if different_left_result.is_ok() {
+            (
+                different_left_record,
+                different_left_ghost,
+                different_left_ids,
+                different_right,
+                different_right_ghost,
+                different_right_ids,
+            )
+        } else {
+            (
+                different_right_record,
+                different_right_ghost,
+                different_right_ids,
+                different_left,
+                different_left_ghost,
+                different_left_ids,
+            )
+        };
+    assert_eq!(
+        stores
+            .applets
+            .get(different_applet_id.as_str())
+            .await
+            .expect("read concurrent Ghost winner"),
+        Some(winner_record.clone()),
+        "the losing stale CAS must not erase the committed Ghost"
+    );
+    assert_contract_event_group_visibility(stores.events, &winner_ids, true).await;
+    assert_contract_event_group_visibility(stores.events, &loser_ids, false).await;
+    let both_record =
+        contract_applet_record(&different_applet_id, "7", vec![winner_ghost, loser_ghost]);
+    let loser_mutation = loser_batch
+        .applet_record
+        .as_mut()
+        .expect("losing batch carries Applet mutation");
+    loser_mutation.expected_record = Some(winner_record);
+    loser_mutation.record = both_record.clone();
+    stores
+        .unit_of_work
+        .commit_event_batch(loser_batch)
+        .await
+        .expect("different Ghost retry on exact winner must commit");
+    assert_contract_event_group_visibility(stores.events, &loser_ids, true).await;
+    assert_eq!(
+        stores
+            .applets
+            .get(different_applet_id.as_str())
+            .await
+            .expect("read both concurrent Ghost registrations"),
+        Some(both_record)
+    );
 }
 
 fn contract_control_proposal_ack(
@@ -2546,12 +3030,14 @@ fn mls_keypackage_contract_row(namespace: &str, suffix: &str) -> MlsKeyPackageRo
         keypackage_digest:
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
         actor_id: format!("did:web:{namespace}.example"),
-        device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+        device_id: Some("ak:device:01904100-0000-7000-8000-000000000001".to_owned()),
+        endpoint_verification_method: None,
+        intended_realm_id: None,
         key_package_bytes: vec![1, 2, 3],
         capabilities: vec!["ak.mls.rfc9420".to_owned()],
         capabilities_digest:
             "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
-        device_signature: serde_json::json!({"kid": "contract", "sig": "AA"}),
+        endpoint_signature: serde_json::json!({"kid": "contract", "sig": "AA"}),
         last_resort: false,
         last_resort_realm_id: None,
         lifetime_not_before: 1,
@@ -2584,7 +3070,7 @@ fn mls_claim<'a>(id: &'a str, target: MlsKeyPackageClaimTarget<'a>) -> MlsKeyPac
             target_device_generation_ref: 1,
         }),
         claimed_at: 10,
-        claim_expires_at_unix_ms: Some(20_000),
+        claim_expires_at_unix_ms: Some(20_500),
     }
 }
 
@@ -2595,8 +3081,9 @@ pub async fn assert_mls_keypackage_retirement_contract(
     let published = mls_keypackage_contract_row(namespace, "published");
     let claimed = mls_keypackage_contract_row(namespace, "claimed");
     let consumed = mls_keypackage_contract_row(namespace, "consumed");
+    let late = mls_keypackage_contract_row(namespace, "late-consume");
     let revoked = mls_keypackage_contract_row(namespace, "revoked");
-    for row in [&published, &claimed, &consumed, &revoked] {
+    for row in [&published, &claimed, &consumed, &late, &revoked] {
         assert!(store.put(row).await.expect("publish KeyPackage"));
     }
 
@@ -2646,10 +3133,26 @@ pub async fn assert_mls_keypackage_retirement_contract(
         .expect("claim KeyPackage before consume")
         .expect("ordinary KeyPackage must be claimable");
     store
-        .consume_claim(&consumed.id, &group_id, 15, None)
+        .consume_claim(&consumed.id, &group_id, 15_000, None)
         .await
         .expect("consume KeyPackage")
         .expect("claimed KeyPackage must be consumable");
+    store
+        .try_claim(mls_claim(
+            &late.id,
+            MlsKeyPackageClaimTarget::Group(&group_id),
+        ))
+        .await
+        .expect("claim KeyPackage for subsecond deadline check")
+        .expect("ordinary KeyPackage must be claimable");
+    assert!(
+        store
+            .consume_claim(&late.id, &group_id, 20_900, None)
+            .await
+            .expect("consume after fractional deadline")
+            .is_none(),
+        "a consume at 20.900s must not pass a 20.500s deadline"
+    );
     assert!(
         store
             .try_claim(mls_claim(&consumed.id, MlsKeyPackageClaimTarget::Retire,))
@@ -2722,6 +3225,7 @@ pub async fn assert_last_resort_claim_ledger_contract(
         source_service_id: format!("did:web:{namespace}.example"),
         claim_request_id: format!("local-last-resort:{namespace}-{suffix}"),
         request_digest: format!("sha256:{:0>64}", suffix),
+        key_package_use: "last_resort".to_owned(),
         state: "last_resort_claimed".to_owned(),
         outcome: Some(serde_json::json!({
             "schema": "soland.last_resort_keypackage_claim.v1",
@@ -2746,27 +3250,32 @@ pub async fn assert_last_resort_claim_ledger_contract(
         consume_receipt: None,
         terminal_receipt: None,
         keypackage_id: Some(keypackage.id.clone()),
-        claim_expires_at_unix_ms: None,
+        claim_expires_at_unix_ms: Some(20_500),
         expires_at: i64::MAX,
         updated_at: 10,
     };
     let first = ledger("01", "welcome-01");
     let second = ledger("02", "welcome-02");
+    let group_id = format!("group-{namespace}");
 
-    assert!(matches!(
-        store
-            .record_peer_claim_terminal(&first)
-            .await
-            .expect("record first last-resort claim"),
-        PeerKeyPackageClaimLedgerWriteResult::Inserted
-    ));
-    assert!(matches!(
-        store
-            .record_peer_claim_terminal(&second)
-            .await
-            .expect("record second last-resort claim"),
-        PeerKeyPackageClaimLedgerWriteResult::Inserted
-    ));
+    for claim in [&first, &second] {
+        assert!(matches!(
+            store
+                .try_claim_peer(PeerKeyPackageClaimAttempt {
+                    keypackage_id: &keypackage.id,
+                    mls_group_id: &group_id,
+                    device_authorize_event_id: None,
+                    agent_key_authorize_event_id: None,
+                    device_revocation_gate: None,
+                    claimed_at_unix_ms: 10_000,
+                    claim_expires_at_unix_ms: 20_500,
+                    ledger: claim,
+                })
+                .await
+                .expect("claim reusable last-resort KeyPackage"),
+            PeerKeyPackageClaimAttemptResult::Claimed(_)
+        ));
+    }
     assert_eq!(
         store
             .record_peer_claim_terminal(&first)
@@ -2779,20 +3288,70 @@ pub async fn assert_last_resort_claim_ledger_contract(
             .get_peer_claim(&first.source_service_id, &first.claim_request_id)
             .await
             .expect("reload first last-resort claim"),
-        Some(first)
+        Some(first.clone())
     );
     assert_eq!(
         store
             .get_peer_claim(&second.source_service_id, &second.claim_request_id)
             .await
             .expect("reload second last-resort claim"),
-        Some(second)
+        Some(second.clone())
     );
+    let concurrent_receipt = serde_json::json!({"receipt": "first-writer"});
+    let (left, right) = tokio::join!(
+        store.attach_peer_claim_consume_receipt(
+            &first.source_service_id,
+            &first.claim_request_id,
+            &first.request_digest,
+            &concurrent_receipt,
+            11_000,
+        ),
+        store.attach_peer_claim_consume_receipt(
+            &first.source_service_id,
+            &first.claim_request_id,
+            &first.request_digest,
+            &concurrent_receipt,
+            12_000,
+        )
+    );
+    let attached = [
+        left.expect("first concurrent last-resort consume"),
+        right.expect("second concurrent last-resort consume"),
+    ];
+    assert_eq!(attached.iter().filter(|record| record.is_some()).count(), 1);
+    let replayed = store
+        .get_peer_claim(&first.source_service_id, &first.claim_request_id)
+        .await
+        .expect("reload concurrent last-resort consume winner")
+        .expect("consume winner is durable");
+    assert_eq!(replayed.state, "consumed");
+    assert_eq!(replayed.consume_receipt, Some(concurrent_receipt));
     assert!(
         store
-            .revoke_expired_peer_claims(i64::MAX)
+            .attach_peer_claim_consume_receipt(
+                &second.source_service_id,
+                &second.claim_request_id,
+                &second.request_digest,
+                &serde_json::json!({"receipt": "too-late"}),
+                20_900,
+            )
             .await
-            .expect("run expired-claim maintenance")
+            .expect("late last-resort consume is checked atomically")
+            .is_none()
+    );
+    let expired = store
+        .get_peer_claim(&second.source_service_id, &second.claim_request_id)
+        .await
+        .expect("reload expired last-resort audit")
+        .expect("expired last-resort audit remains durable");
+    assert_eq!(expired.state, "expired");
+    assert_eq!(expired.outcome, second.outcome.clone());
+    assert!(expired.consume_receipt.is_none());
+    assert!(
+        store
+            .revoke_expired_peer_claims(20_900)
+            .await
+            .expect("run expired-claim maintenance after atomic expiry")
             .is_empty()
     );
     let reusable = store
@@ -2808,6 +3367,143 @@ pub async fn assert_last_resort_claim_ledger_contract(
             .claim_state,
         super::PersistedKeyPackageClaimState::Available
     );
+
+    let mut delayed_source = ledger("03", "welcome-03");
+    delayed_source.keypackage_id = None;
+    assert_eq!(
+        store
+            .record_peer_claim_terminal(&delayed_source)
+            .await
+            .expect("record remote last-resort source mirror"),
+        PeerKeyPackageClaimLedgerWriteResult::Inserted
+    );
+    assert!(
+        store
+            .revoke_expired_peer_claims(20_900)
+            .await
+            .expect("expire delayed source mirror")
+            .is_empty()
+    );
+    let delayed_outcome = delayed_source.outcome.as_ref().expect("claim outcome");
+    let delayed_receipt = serde_json::json!({"receipt": "signed-before-deadline"});
+    let recovered = store
+        .transition_peer_claim_consumed(
+            &delayed_source.source_service_id,
+            &delayed_source.claim_request_id,
+            &delayed_source.request_digest,
+            delayed_outcome,
+            &delayed_receipt,
+            20_400,
+        )
+        .await
+        .expect("recover delayed consumed query")
+        .expect("signed pre-deadline consume supersedes local expiry inference");
+    assert_eq!(recovered.state, "consumed");
+    assert_eq!(recovered.key_package_use, "last_resort");
+    assert_eq!(recovered.keypackage_id, None);
+    assert_eq!(recovered.outcome.as_ref(), Some(delayed_outcome));
+    assert_eq!(recovered.consume_receipt, Some(delayed_receipt.clone()));
+    assert!(
+        store
+            .transition_peer_claim_consumed(
+                &delayed_source.source_service_id,
+                &delayed_source.claim_request_id,
+                &delayed_source.request_digest,
+                delayed_outcome,
+                &serde_json::json!({"receipt": "drift"}),
+                20_400,
+            )
+            .await
+            .expect("replay source consumed transition")
+            .is_none()
+    );
+
+    let mut terminal_source = ledger("04", "welcome-04");
+    terminal_source.keypackage_id = None;
+    assert_eq!(
+        store
+            .record_peer_claim_terminal(&terminal_source)
+            .await
+            .expect("record remote terminal source mirror"),
+        PeerKeyPackageClaimLedgerWriteResult::Inserted
+    );
+    let terminal_outcome = terminal_source.outcome.as_ref().expect("terminal outcome");
+    assert!(
+        store
+            .transition_peer_claim_terminal(
+                &terminal_source.source_service_id,
+                &terminal_source.claim_request_id,
+                &terminal_source.request_digest,
+                &serde_json::json!({"response": {"claims": ["drift"]}}),
+                "revoked",
+                &serde_json::json!({"receipt": "terminal"}),
+                19_000,
+            )
+            .await
+            .expect("reject terminal outcome drift")
+            .is_none()
+    );
+    let terminal_receipt = serde_json::json!({"receipt": "terminal"});
+    let terminal = store
+        .transition_peer_claim_terminal(
+            &terminal_source.source_service_id,
+            &terminal_source.claim_request_id,
+            &terminal_source.request_digest,
+            terminal_outcome,
+            "revoked",
+            &terminal_receipt,
+            19_000,
+        )
+        .await
+        .expect("transition source mirror terminally")
+        .expect("existing claimed source mirror must transition");
+    assert_eq!(terminal.state, "revoked");
+    assert_eq!(terminal.key_package_use, "last_resort");
+    assert_eq!(terminal.keypackage_id, None);
+    assert_eq!(terminal.outcome.as_ref(), Some(terminal_outcome));
+    assert_eq!(terminal.terminal_receipt, Some(terminal_receipt.clone()));
+    assert!(
+        store
+            .transition_peer_claim_terminal(
+                &terminal_source.source_service_id,
+                &terminal_source.claim_request_id,
+                &terminal_source.request_digest,
+                terminal_outcome,
+                "revoked",
+                &terminal_receipt,
+                19_500,
+            )
+            .await
+            .expect("replay terminal source transition")
+            .is_none()
+    );
+    let terminal_winner = store
+        .get_peer_claim(
+            &terminal_source.source_service_id,
+            &terminal_source.claim_request_id,
+        )
+        .await
+        .expect("reload terminal source winner")
+        .expect("terminal source winner is durable");
+    assert_eq!(terminal_winner, terminal);
+
+    let late_attempt = ledger("05", "welcome-05");
+    assert!(matches!(
+        store
+            .try_claim_peer(PeerKeyPackageClaimAttempt {
+                keypackage_id: &keypackage.id,
+                mls_group_id: &group_id,
+                device_authorize_event_id: None,
+                agent_key_authorize_event_id: None,
+                device_revocation_gate: None,
+                claimed_at_unix_ms: 20_900,
+                claim_expires_at_unix_ms: 20_500,
+                ledger: &late_attempt,
+            })
+            .await
+            .expect("claim after fractional deadline"),
+        PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable
+    ));
 }
 
 fn account_status_base_time() -> chrono::DateTime<Utc> {
@@ -2842,6 +3538,8 @@ fn account_status_record(
     issued_offset: i64,
 ) -> AccountStatusRecord {
     let issued_at = account_status_base_time() + Duration::seconds(issued_offset);
+    let verification_method = DidUrl::new("did:web:authority.example#account-status-key")
+        .expect("account authority verification method");
     let unsigned = UnsignedAccountStatusRecord {
         schema: SchemaId::ACCOUNT_STATUS_RECORD_V1.to_owned(),
         account_authority_id: DidCoreId::new("ak:did_core:web:authority.example")
@@ -2866,11 +3564,9 @@ fn account_status_record(
         issued_at,
         effective_at: issued_at,
         expires_at: None,
-        verification_method: DidUrl::new("did:web:authority.example#account-status-key")
-            .expect("account authority verification method"),
     };
     let proof = account_status_fixture_proof(
-        &unsigned.verification_method,
+        &verification_method,
         unsigned.payload_digest().expect("record payload digest"),
         unsigned.issued_at,
     );

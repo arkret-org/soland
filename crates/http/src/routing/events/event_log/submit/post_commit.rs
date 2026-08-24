@@ -31,10 +31,15 @@ pub(super) async fn persist_principal_resolution_projection(
         .map_err(|error| format!("load principal resolution index: {error}"))?;
     let expected = if kind == arkret_wire::EventKind::IdentityResolutionUpdate.as_str() {
         event
-            .payload
-            .get("previous_resolution_event_ref")
+            .preconditions
+            .iter()
+            .find(|precondition| precondition.predicate.op == arkret_wire::PredicateOp::HeadEq)
+            .and_then(|precondition| precondition.predicate.value.as_ref())
+            .and_then(|value| value.get("resolution_event_ref"))
             .and_then(Value::as_str)
-            .ok_or_else(|| "accepted principal resolution update omits its predecessor".to_owned())?
+            .ok_or_else(|| {
+                "accepted principal resolution update precondition omits its predecessor".to_owned()
+            })?
             .into()
     } else {
         None

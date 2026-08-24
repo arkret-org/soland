@@ -112,13 +112,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
             "applet Event realm_id is outside the installed effective scope",
         ));
     }
-    let package = record.package.as_ref().ok_or_else(|| {
-        event_validation_error(
-            StatusCode::FORBIDDEN,
-            "applet_install_required",
-            "applet delegated Event requires a package install",
-        )
-    })?;
+    let package = &record.package;
     if !applet_executor_in_subject_set(&record, package.service_id.as_str(), &executed_by) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
@@ -190,6 +184,176 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     Ok(())
 }
 
+/// Fence every write authored by an Applet-managed Bot/Ghost, including a
+/// self-signed Event that did not enter through the Applet HTTP adapter.  The
+/// immutable provision/PCR anchors identify the authority pair; runtime
+/// liveness is derived from the current durable registration and grant.
+pub(super) async fn validate_applet_managed_actor_liveness(
+    state: &AppState,
+    object: &serde_json::Map<String, Value>,
+    actor_id: &str,
+    kind: &str,
+    realm_id: &str,
+) -> Result<bool, EventValidationError> {
+    let principal_server_id =
+        event_string_field(object, &["principal_server_id"]).unwrap_or_default();
+    let applet_id = event_string_field(object, &["applet_id"]);
+    let authorization_ref = event_string_field(object, &["authorization_ref"]);
+    let records = state.event_queries().applets().await.map_err(|error| {
+        tracing::error!(%error, %actor_id, "failed to enumerate managed Applet actors");
+        event_validation_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "applet authorization store unavailable",
+        )
+    })?;
+    let mut actor_core_seen = false;
+    for value in records {
+        let record: crate::routing::extensions::applet_bridge::AppletRecord =
+            serde_json::from_value(value).map_err(|error| {
+                tracing::error!(%error, "stored applet record is invalid");
+                event_validation_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "stored applet record is invalid",
+                )
+            })?;
+        let bot_match = record.bot_actor_id == actor_id;
+        let ghost_match = record
+            .ghosts
+            .iter()
+            .find(|ghost| ghost.ghost_actor_id == actor_id);
+        if !bot_match && ghost_match.is_none() {
+            continue;
+        }
+        actor_core_seen = true;
+        let (expected_server, expected_authorization, expected_pcr_realm) = if bot_match {
+            let provision: arkret_models_integration::AppletManagedActorProvisionPayload =
+                serde_json::from_value(
+                    serde_json::to_value(&record.bot_actor_provision_event.payload).map_err(
+                        |_| {
+                            event_validation_error(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "internal_error",
+                                "stored Bot provision payload is invalid",
+                            )
+                        },
+                    )?,
+                )
+                .map_err(|_| {
+                    event_validation_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        "stored Bot provision payload is invalid",
+                    )
+                })?;
+            (
+                record.bot_actor_principal_server_id.as_str(),
+                provision.applet_authority_ref.as_str(),
+                record.bot_principal_control_realm_id.as_str(),
+            )
+        } else {
+            let ghost = ghost_match.expect("checked above");
+            (
+                ghost.actor_principal_server_id.as_str(),
+                ghost.authorization_ref.as_str(),
+                ghost.principal_control_realm_id.as_str(),
+            )
+        };
+        if expected_server != principal_server_id {
+            continue;
+        }
+        if record.revoked_at.is_some()
+            || !matches!(record.status.as_str(), "installed" | "partially_installed")
+        {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "applet_revoked",
+                "Applet-managed actor registration has been revoked",
+            ));
+        }
+        if applet_id.as_deref() != Some(record.applet_id.as_str()) {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "authorization_ref_inactive",
+                "Applet-managed actor write must carry its exact live Applet registration and grant",
+            ));
+        }
+        let grants = state.authorization().grants_for_subject(
+            record.package.service_id.as_str(),
+            Some(record.package.service_id.as_str()),
+            record.portal_realm_id.as_str(),
+        );
+        let active_authority = grants
+            .iter()
+            .any(|grant| grant.grant_id.as_str() == expected_authorization);
+        if !active_authority {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "authorization_ref_inactive",
+                "Applet-managed actor creation authority grant is no longer active",
+            ));
+        }
+        let is_rotation = kind == "ak.identity.resolution.update";
+        if is_rotation {
+            if realm_id != expected_pcr_realm {
+                return Err(event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "principal_control_realm_mismatch",
+                    "Applet-managed actor rotation must target its exact PCR",
+                ));
+            }
+        } else if realm_id != record.portal_realm_id {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "applet_effective_scope_mismatch",
+                "Applet-managed actor write is outside its portal Realm",
+            ));
+        }
+        {
+            let event_id = event_string_field(object, &["event_id"]).unwrap_or_default();
+            let resources =
+                delegated_applet_resource_candidates(state, object, realm_id, actor_id, &event_id);
+            let grant = grants.iter().find(|grant| {
+                authorization_ref.as_deref() == Some(grant.grant_id.as_str())
+                    && grant.actions.iter().any(|action| action == kind)
+                    && resources
+                        .iter()
+                        .any(|resource| crate::authz::resource_matches(&grant.resource, resource))
+            });
+            let Some(grant) = grant else {
+                return Err(event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "authorization_ref_scope",
+                    "Applet-managed actor write requires an active exact grant covering its Event kind and resource",
+                ));
+            };
+            crate::authz::validate_applet_authority_binding(
+                grant,
+                record.applet_id.as_str(),
+                record.package.service_id.as_str(),
+                record.package.registration_epoch.as_str(),
+            )
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    applet_delegation_binding_reason(error),
+                    "Applet-managed actor grant is not bound to the current registration epoch",
+                )
+            })?;
+        }
+        return Ok(true);
+    }
+    if actor_core_seen {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "principal_authority_mismatch",
+            "Applet-managed actor Event targets a different Principal Server authority",
+        ));
+    }
+    Ok(false)
+}
+
 pub(super) async fn validate_applet_registration_epoch_binding(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
@@ -213,17 +377,16 @@ pub(super) async fn validate_applet_registration_epoch_binding(
         )
     })?;
 
-    let evidence = record
-        .registration_epoch_evidence
-        .as_ref()
-        .or(package.registration_epoch_evidence.as_ref())
-        .ok_or_else(|| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "applet_registration_epoch_evidence_missing",
-                "installed applet package is missing registration_epoch evidence",
-            )
-        })?;
+    let evidence =
+        crate::routing::extensions::applet_bridge::registration_epoch_evidence_from_record(record)
+            .map_err(|reason| {
+                tracing::error!(%reason, %applet_id, "stored Applet registration Event is invalid");
+                event_validation_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "stored Applet registration Event is invalid",
+                )
+            })?;
     let document =
         crate::jws_verify::resolve_did_document(state, &evidence.full_id).map_err(|reason| {
             tracing::debug!(%reason, %applet_id, "applet registration_epoch DID resolution failed");
@@ -286,7 +449,7 @@ pub(super) fn applet_executor_in_subject_set(
         || record
             .ghosts
             .iter()
-            .any(|ghost| ghost.ghost_actor_id == executed_by && ghost.revoked_at.is_none())
+            .any(|ghost| ghost.ghost_actor_id == executed_by)
         || applet_actor_matches_exact_namespace(record, executed_by)
 }
 
@@ -298,22 +461,20 @@ pub(super) fn applet_actor_is_managed(
         || record
             .ghosts
             .iter()
-            .any(|ghost| ghost.ghost_actor_id == actor_id && ghost.revoked_at.is_none())
+            .any(|ghost| ghost.ghost_actor_id == actor_id)
 }
 
 pub(super) fn applet_actor_matches_exact_namespace(
     record: &crate::routing::extensions::applet_bridge::AppletRecord,
     actor_id: &str,
 ) -> bool {
-    record.namespaces.as_ref().is_some_and(|namespaces| {
-        namespaces.actors.iter().any(|entry| {
-            !applet_namespace_pattern_is_wildcard(&entry.pattern)
-                && arkret_models_integration::namespace_pattern_matches(
-                    arkret_models_integration::AppletNamespaceDomain::Actors,
-                    &entry.pattern,
-                    actor_id,
-                )
-        })
+    record.package.namespaces.actors.iter().any(|entry| {
+        !applet_namespace_pattern_is_wildcard(&entry.pattern)
+            && arkret_models_integration::namespace_pattern_matches(
+                arkret_models_integration::AppletNamespaceDomain::Actors,
+                &entry.pattern,
+                actor_id,
+            )
     })
 }
 

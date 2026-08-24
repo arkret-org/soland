@@ -12,6 +12,7 @@ use arkret_models_collaboration::events_payloads::ContentBlock;
 use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 use arkret_models_collaboration::objects::profiles::StrandTrack;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
+use arkret_wire::AppletId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -296,7 +297,11 @@ pub struct MlsKeyPackage {
     pub keypackage_ref: String,
     pub keypackage_digest: String,
     pub actor_id: String,
-    pub device_id: String,
+    pub device_id: Option<String>,
+    /// Exact did:key/Native-Agent verification method used by non-device endpoints.
+    pub endpoint_verification_method: Option<String>,
+    /// Realm affinity is present only for the minimal-metadata pairwise branch.
+    pub intended_realm_id: Option<String>,
     pub lifetime: KeyPackageLifetime,
     /// Opaque bytes of the MLS KeyPackage (`mls_key_package` per RFC 9420
     /// §11). Server treats this as a black box; only the recipient device
@@ -304,7 +309,7 @@ pub struct MlsKeyPackage {
     pub key_package_bytes: Vec<u8>,
     pub capabilities: Vec<String>,
     pub capabilities_digest: String,
-    pub device_signature: serde_json::Value,
+    pub endpoint_signature: serde_json::Value,
     pub last_resort: bool,
     pub last_resort_realm_id: Option<String>,
     /// `None` while the KeyPackage is still claimable; `Some(group_id)`
@@ -325,7 +330,7 @@ pub struct MlsKeyPackage {
     pub created_at: i64,
 }
 
-/// G3.S1 — single Welcome envelope queued for a recipient device.
+/// G3.S1 — single Welcome envelope queued for a closed recipient endpoint.
 ///
 /// The reducer's `apply_welcome_enqueue` appends one row per Welcome fanout
 /// target. Delivery uses the standard durable device-message stream; this
@@ -337,7 +342,11 @@ pub struct MlsWelcome {
     /// MLS group the Welcome admits the recipient into.
     pub group_id: String,
     pub recipient_actor_id: String,
-    pub recipient_device_id: String,
+    pub recipient_device_id: Option<String>,
+    /// Exact did:key/Native-Agent verification method used by non-device endpoints.
+    pub recipient_endpoint_verification_method: Option<String>,
+    /// Realm affinity is present only for the minimal-metadata pairwise branch.
+    pub intended_realm_id: Option<String>,
     /// Opaque MLSMessage / Welcome bytes per RFC 9420 §12.4.3.
     pub welcome_bytes: Vec<u8>,
     /// References the KeyPackage that was claimed to produce this
@@ -356,11 +365,13 @@ pub struct MlsWelcome {
     pub delivered_at: Option<i64>,
 }
 
-/// Projection key for the pending Welcome queue owned by one device.
+/// Projection key for the pending Welcome queue owned by one closed endpoint.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MlsWelcomeQueueKey {
     pub recipient_actor_id: String,
-    pub recipient_device_id: String,
+    pub recipient_device_id: Option<String>,
+    pub recipient_endpoint_verification_method: Option<String>,
+    pub intended_realm_id: Option<String>,
 }
 
 impl MlsWelcomeQueueKey {
@@ -370,7 +381,24 @@ impl MlsWelcomeQueueKey {
     ) -> Self {
         Self {
             recipient_actor_id: recipient_actor_id.into(),
-            recipient_device_id: recipient_device_id.into(),
+            recipient_device_id: Some(recipient_device_id.into()),
+            recipient_endpoint_verification_method: None,
+            intended_realm_id: None,
+        }
+    }
+
+    pub fn endpoint(
+        recipient_actor_id: impl Into<String>,
+        recipient_endpoint_verification_method: impl Into<String>,
+        intended_realm_id: Option<impl Into<String>>,
+    ) -> Self {
+        Self {
+            recipient_actor_id: recipient_actor_id.into(),
+            recipient_device_id: None,
+            recipient_endpoint_verification_method: Some(
+                recipient_endpoint_verification_method.into(),
+            ),
+            intended_realm_id: intended_realm_id.map(Into::into),
         }
     }
 }
@@ -770,8 +798,8 @@ pub struct DocumentVersionProjection {
 /// last-write-wins projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppletProjection {
-    pub applet_id: String,
-    /// `service_id` of the applet — canonical identity per spec.
+    pub applet_id: AppletId,
+    /// Service authority that hosts this Applet. It is not the Applet identity.
     pub service_id: String,
     pub namespace: String,
     /// Optional snapshot of the most recent `manifest` (from the latest
@@ -969,12 +997,20 @@ pub struct PollState {
     pub poll_id: String,
     pub message_event_id: String,
     pub realm_id: String,
+    pub scope_circle_id: Option<String>,
     pub question: String,
     pub options: Vec<PollOptionState>,
-    pub votes: BTreeMap<String, BTreeSet<String>>,
+    pub votes: BTreeMap<String, PollVoteState>,
     pub max_selections: u32,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PollVoteState {
+    pub selections: BTreeSet<String>,
+    pub source_event_digest: String,
+    pub causal_refs: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug)]

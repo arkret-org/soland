@@ -489,7 +489,7 @@ fn capability_summary(grant: &crate::authz::Grant) -> CapabilitySummary {
                 }),
             })
             .collect(),
-        expires_at: grant.expires_at,
+        expires_at: arkret_policy::authz::authority::grant_effective_expiry(grant),
     }
 }
 

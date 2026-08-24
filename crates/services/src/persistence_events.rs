@@ -696,6 +696,7 @@ fn application_applet_replay(
     record: soland_storage::AppletTransactionReplayRecord,
 ) -> crate::events::AppletTransactionReplayState {
     crate::events::AppletTransactionReplayState {
+        applet_id: record.applet_id,
         source_service_id: record.source_service_id,
         idempotency_key: record.idempotency_key,
         delivery_authentication_record_digest: record.delivery_authentication_record_digest,
@@ -709,6 +710,7 @@ fn persistence_applet_replay(
     record: crate::events::AppletTransactionReplayState,
 ) -> soland_storage::AppletTransactionReplayRecord {
     soland_storage::AppletTransactionReplayRecord {
+        applet_id: record.applet_id,
         source_service_id: record.source_service_id,
         idempotency_key: record.idempotency_key,
         delivery_authentication_record_digest: record.delivery_authentication_record_digest,
@@ -727,9 +729,17 @@ impl crate::events::AppletPort for PersistenceEventReader {
     async fn applets(&self) -> crate::ServiceResult<Vec<Value>> {
         Ok(self.0.applets().list().await?)
     }
-    async fn store_applet(&self, applet_id: &str, applet: Value) -> crate::ServiceResult<()> {
-        self.0.applets().put(applet_id, applet).await?;
-        Ok(())
+    async fn compare_and_swap_applet(
+        &self,
+        applet_id: &str,
+        expected: &Value,
+        replacement: Value,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .0
+            .applets()
+            .compare_and_swap(applet_id, expected, replacement)
+            .await?)
     }
     async fn begin_applet_transaction(
         &self,
@@ -755,13 +765,14 @@ impl crate::events::AppletPort for PersistenceEventReader {
     }
     async fn complete_applet_transaction(
         &self,
+        applet_id: &str,
         source_service_id: &str,
         idempotency_key: &str,
         outcome: Value,
     ) -> crate::ServiceResult<()> {
         self.0
             .applets()
-            .complete_transaction_replay(source_service_id, idempotency_key, outcome)
+            .complete_transaction_replay(applet_id, source_service_id, idempotency_key, outcome)
             .await?;
         Ok(())
     }
@@ -1044,10 +1055,12 @@ fn application_mls_key_package(
         keypackage_digest: row.keypackage_digest,
         actor_id: row.actor_id,
         device_id: row.device_id,
+        endpoint_verification_method: row.endpoint_verification_method,
+        intended_realm_id: row.intended_realm_id,
         key_package_bytes: row.key_package_bytes,
         capabilities: row.capabilities,
         capabilities_digest: row.capabilities_digest,
-        device_signature: row.device_signature,
+        endpoint_signature: row.endpoint_signature,
         last_resort: row.last_resort,
         last_resort_realm_id: row.last_resort_realm_id,
         lifetime_not_before: row.lifetime_not_before,
@@ -1071,10 +1084,12 @@ fn persistence_mls_key_package(
         keypackage_digest: row.keypackage_digest.clone(),
         actor_id: row.actor_id.clone(),
         device_id: row.device_id.clone(),
+        endpoint_verification_method: row.endpoint_verification_method.clone(),
+        intended_realm_id: row.intended_realm_id.clone(),
         key_package_bytes: row.key_package_bytes.clone(),
         capabilities: row.capabilities.clone(),
         capabilities_digest: row.capabilities_digest.clone(),
-        device_signature: row.device_signature.clone(),
+        endpoint_signature: row.endpoint_signature.clone(),
         last_resort: row.last_resort,
         last_resort_realm_id: row.last_resort_realm_id.clone(),
         lifetime_not_before: row.lifetime_not_before,
@@ -1096,6 +1111,7 @@ fn application_peer_claim(
         source_service_id: row.source_service_id,
         claim_request_id: row.claim_request_id,
         request_digest: row.request_digest,
+        key_package_use: row.key_package_use,
         keypackage_id: row.keypackage_id,
         outcome: row.outcome,
         terminal_receipt: row.terminal_receipt,
@@ -1114,6 +1130,7 @@ fn persistence_peer_claim(
         source_service_id: row.source_service_id.clone(),
         claim_request_id: row.claim_request_id.clone(),
         request_digest: row.request_digest.clone(),
+        key_package_use: row.key_package_use.clone(),
         keypackage_id: row.keypackage_id.clone(),
         outcome: row.outcome.clone(),
         terminal_receipt: row.terminal_receipt.clone(),
@@ -1193,13 +1210,13 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
         &self,
         id: &str,
         mls_group_id: &str,
-        consumed_at: i64,
+        now_unix_ms: i64,
         peer_consume_receipt: Option<&Value>,
     ) -> crate::ServiceResult<Option<crate::events::MlsKeyPackageState>> {
         Ok(self
             .0
             .mls_key_packages()
-            .consume_claim(id, mls_group_id, consumed_at, peer_consume_receipt)
+            .consume_claim(id, mls_group_id, now_unix_ms, peer_consume_receipt)
             .await?
             .map(application_mls_key_package))
     }
@@ -1212,6 +1229,17 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
             .0
             .mls_key_packages()
             .get_peer_claim(source_service_id, claim_request_id)
+            .await?
+            .map(application_peer_claim))
+    }
+    async fn peer_claim_by_keypackage_id(
+        &self,
+        keypackage_id: &str,
+    ) -> crate::ServiceResult<Option<crate::events::PeerKeyPackageClaimLedgerState>> {
+        Ok(self
+            .0
+            .mls_key_packages()
+            .get_peer_claim_by_keypackage_id(keypackage_id)
             .await?
             .map(application_peer_claim))
     }
@@ -1230,7 +1258,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
                     device_authorize_event_id: attempt.device_authorize_event_id,
                     agent_key_authorize_event_id: attempt.agent_key_authorize_event_id,
                     device_revocation_gate: attempt.device_revocation_gate.cloned(),
-                    claimed_at: attempt.claimed_at,
+                    claimed_at_unix_ms: attempt.claimed_at_unix_ms,
                     claim_expires_at_unix_ms: attempt.claim_expires_at_unix_ms,
                     ledger: &ledger,
                 })
@@ -1291,6 +1319,75 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
                 request_digest,
                 terminal_receipt,
                 updated_at,
+            )
+            .await?
+            .map(application_peer_claim))
+    }
+    async fn attach_peer_claim_consume_receipt(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        consume_receipt: &Value,
+        now_unix_ms: i64,
+    ) -> crate::ServiceResult<Option<crate::events::PeerKeyPackageClaimLedgerState>> {
+        Ok(self
+            .0
+            .mls_key_packages()
+            .attach_peer_claim_consume_receipt(
+                source_service_id,
+                claim_request_id,
+                request_digest,
+                consume_receipt,
+                now_unix_ms,
+            )
+            .await?
+            .map(application_peer_claim))
+    }
+    async fn transition_peer_claim_consumed(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        expected_outcome: &Value,
+        consume_receipt: &Value,
+        consumed_at_unix_ms: i64,
+    ) -> crate::ServiceResult<Option<crate::events::PeerKeyPackageClaimLedgerState>> {
+        Ok(self
+            .0
+            .mls_key_packages()
+            .transition_peer_claim_consumed(
+                source_service_id,
+                claim_request_id,
+                request_digest,
+                expected_outcome,
+                consume_receipt,
+                consumed_at_unix_ms,
+            )
+            .await?
+            .map(application_peer_claim))
+    }
+    async fn transition_peer_claim_terminal(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        expected_outcome: &Value,
+        terminal_state: &str,
+        terminal_receipt: &Value,
+        now_unix_ms: i64,
+    ) -> crate::ServiceResult<Option<crate::events::PeerKeyPackageClaimLedgerState>> {
+        Ok(self
+            .0
+            .mls_key_packages()
+            .transition_peer_claim_terminal(
+                source_service_id,
+                claim_request_id,
+                request_digest,
+                expected_outcome,
+                terminal_state,
+                terminal_receipt,
+                now_unix_ms,
             )
             .await?
             .map(application_peer_claim))
@@ -1383,6 +1480,8 @@ fn persistence_mls_welcome(
         group_id: welcome.group_id,
         recipient_actor_id: welcome.recipient_actor_id,
         recipient_device_id: welcome.recipient_device_id,
+        recipient_endpoint_verification_method: welcome.recipient_endpoint_verification_method,
+        intended_realm_id: welcome.intended_realm_id,
         welcome_bytes: welcome.welcome_bytes,
         key_package_id: welcome.key_package_id,
         epoch: welcome.epoch,
@@ -1692,10 +1791,13 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
                     .into_iter()
                     .map(persistence_event_commit_request)
                     .collect(),
-                applet_ghosts: command.applet_ghosts.map(|mutation| {
-                    soland_storage::AppletGhostCommit {
+                applet_record: command.applet_record.map(|mutation| {
+                    soland_storage::AppletRecordCommit {
                         applet_id: mutation.applet_id,
-                        ghost: mutation.ghost,
+                        expected_record: mutation.expected_record,
+                        record: mutation.record,
+                        namespace_claims: mutation.namespace_claims,
+                        managed_authority_claims: mutation.managed_authority_claims,
                     }
                 }),
                 agent_membership_cascade: command.agent_membership_cascade,

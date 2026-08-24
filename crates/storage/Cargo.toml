@@ -17,6 +17,7 @@ arkret-identity.workspace = true
 arkret-models-collaboration.workspace = true
 arkret-models-crypto.workspace = true
 arkret-models-identity.workspace = true
+arkret-models-integration.workspace = true
 arkret-state.workspace = true
 arkret-wire = { workspace = true, features = ["test-support"] }
 async-trait = {workspace = true}
@@ -27,6 +28,7 @@ serde_json = {workspace = true}
 soland-domain = {workspace = true}
 thiserror = {workspace = true}
 subtle = {workspace = true}
+tokio.workspace = true
 uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]

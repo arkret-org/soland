@@ -26,8 +26,8 @@ fn applet_projection_namespace(payload: &serde_json::Value) -> String {
 
 impl ProjectionState {
     /// Apply `ak.applet.registration`. Upserts the
-    /// AppletProjection keyed by `service_id`. Re-registration with
-    /// the same DID is allowed (replace capabilities + bump
+    /// AppletProjection keyed by `applet_id`. Re-registration with
+    /// the same Applet id is allowed (replace capabilities + bump
     /// updated_at), matching the spec convention that registration is
     /// idempotent for the same identity.
     pub(crate) fn apply_applet_registration(
@@ -50,7 +50,7 @@ impl ProjectionState {
             .payload
             .get("applet_id")
             .and_then(|value| value.as_str())
-            .map(ToOwned::to_owned)
+            .and_then(|value| arkret_wire::AppletId::new(value.to_owned()).ok())
         else {
             return ProjectionEffect::Rejected {
                 reason: "applet_registration_missing_applet_id".to_owned(),
@@ -91,15 +91,15 @@ impl ProjectionState {
             .or_else(|| operation.payload.get("capabilities").cloned());
         let existing_manifest = self
             .applets
-            .get(&service_id)
+            .get(&applet_id)
             .and_then(|p| p.manifest.clone());
         let registered_at = self
             .applets
-            .get(&service_id)
+            .get(&applet_id)
             .map(|p| p.registered_at)
             .unwrap_or(now);
         let projection = AppletProjection {
-            applet_id,
+            applet_id: applet_id.clone(),
             service_id: service_id.clone(),
             namespace,
             manifest: existing_manifest,
@@ -110,49 +110,50 @@ impl ProjectionState {
             registered_at,
             updated_at: now,
         };
-        self.applets.insert(service_id.clone(), projection);
-        ProjectionEffect::AppletProjectionUpdated { service_id }
+        self.applets.insert(applet_id.clone(), projection);
+        ProjectionEffect::AppletProjectionUpdated { applet_id }
     }
 
-    /// Apply `ak.applet.discovery`. Updates the manifest
-    /// on an existing AppletProjection. If the applet hasn't registered
-    /// yet (causal / backfill window), creates a stub entry with the
-    /// manifest and empty namespace; subsequent registration will fill
-    /// in the namespace + capabilities.
+    /// Apply `ak.applet.discovery` to an existing exact Applet projection.
+    /// Discovery never creates a service-keyed or empty-id placeholder.
     pub(crate) fn apply_applet_discovery(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(service_id) = operation
+        let Some(applet_id) = operation
             .payload
-            .get("service_id")
+            .get("resource_id")
             .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
+            .and_then(|value| arkret_wire::AppletId::new(value.to_owned()).ok())
         else {
             return ProjectionEffect::Rejected {
-                reason: "applet_discovery_missing_service_id".to_owned(),
+                reason: "applet_discovery_missing_applet_id".to_owned(),
             };
         };
-        let manifest = operation.payload.get("manifest").cloned();
-        let entry = self
-            .applets
-            .entry(service_id.clone())
-            .or_insert_with(|| AppletProjection {
-                applet_id: String::new(),
-                service_id: service_id.clone(),
-                namespace: String::new(),
-                manifest: None,
-                capabilities: None,
-                claimed_profiles: Vec::new(),
-                registration_epoch: String::new(),
-                registration_scope_ref: None,
-                registered_at: now,
-                updated_at: now,
-            });
-        entry.manifest = manifest;
+        let Some(manifest) = operation
+            .payload
+            .get("value")
+            .filter(|value| {
+                value
+                    .get("resource_kind")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("applet")
+            })
+            .cloned()
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "applet_discovery_resource_kind_mismatch".to_owned(),
+            };
+        };
+        let Some(entry) = self.applets.get_mut(&applet_id) else {
+            return ProjectionEffect::Rejected {
+                reason: "applet_discovery_unknown_applet_id".to_owned(),
+            };
+        };
+        entry.manifest = Some(manifest);
         entry.updated_at = now;
-        ProjectionEffect::AppletProjectionUpdated { service_id }
+        ProjectionEffect::AppletProjectionUpdated { applet_id }
     }
 
     /// REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — apply

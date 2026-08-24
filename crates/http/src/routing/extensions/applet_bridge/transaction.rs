@@ -9,7 +9,7 @@ use soland_http::error::AppError;
 use soland_services::events::{AppletTransactionReplayResult, AppletTransactionReplayState};
 use soland_services::identity::SessionIdentityState as SessionRecord;
 
-use super::signature::VerifiedInboundTransactionSignature;
+use super::signature::VerifiedAppletServiceSignature;
 use super::types::AppletRecord;
 use crate::routing::events::event_log::submit_event_value;
 use crate::state::AppState;
@@ -18,12 +18,14 @@ pub(super) async fn process_verified_transaction(
     state: &AppState,
     transaction: AppletTransactionRequestBody,
     idempotency_key: &str,
-    verified: VerifiedInboundTransactionSignature,
+    verified: VerifiedAppletServiceSignature,
 ) -> Result<AppletTransactionOutcome, AppError> {
+    let applet_id = transaction.applet_id.clone();
     let source_service_id = transaction.source_service_id.to_string();
     let begin = state
         .event_queries()
         .begin_applet_transaction(AppletTransactionReplayState {
+            applet_id: applet_id.clone(),
             source_service_id: source_service_id.clone(),
             idempotency_key: idempotency_key.to_owned(),
             delivery_authentication_record_digest: verified
@@ -98,7 +100,12 @@ pub(super) async fn process_verified_transaction(
     })?;
     state
         .event_queries()
-        .complete_applet_transaction(&source_service_id, idempotency_key, outcome_value)
+        .complete_applet_transaction(
+            applet_id.as_str(),
+            &source_service_id,
+            idempotency_key,
+            outcome_value,
+        )
         .await
         .map_err(|error| {
             tracing::error!(%error, "failed to complete applet transaction replay record");
@@ -109,7 +116,7 @@ pub(super) async fn process_verified_transaction(
 
 fn replayed_transaction_outcome(
     existing: AppletTransactionReplayState,
-    verified: &VerifiedInboundTransactionSignature,
+    verified: &VerifiedAppletServiceSignature,
 ) -> Result<AppletTransactionOutcome, AppError> {
     if existing.request_digest != verified.request_digest
         || existing.delivery_authentication_record_digest
@@ -158,7 +165,7 @@ fn validate_transaction_event_binding(
     source_service_id: &str,
     event: &Event,
 ) -> Result<(), &'static str> {
-    let package = install.package.as_ref().ok_or("applet_install_required")?;
+    let package = &install.package;
     if package.service_id.as_str() != source_service_id {
         return Err("applet_registration_unauthorized");
     }
@@ -187,14 +194,11 @@ fn validate_transaction_event_binding(
     if install
         .ghosts
         .iter()
-        .any(|ghost| ghost.ghost_actor_id == actor_id && ghost.revoked_at.is_none())
+        .any(|ghost| ghost.ghost_actor_id == actor_id)
     {
         return Ok(());
     }
-    let Some(namespaces) = install.namespaces.as_ref() else {
-        return Err("applet_namespace_mismatch");
-    };
-    let matched = namespaces.actors.iter().any(|entry| {
+    let matched = install.package.namespaces.actors.iter().any(|entry| {
         !namespace_pattern_is_wildcard(&entry.pattern)
             && namespace_pattern_matches(AppletNamespaceDomain::Actors, &entry.pattern, actor_id)
     });

@@ -277,8 +277,13 @@ pub(crate) fn grant_snapshot_from_value(value: &Value) -> CapabilityGrantSnapsho
         .or_else(|| value.get("realm_id").and_then(Value::as_str))
         .map(ToOwned::to_owned);
 
-    let expires_at =
-        parse_rfc3339_utc(body, "expires_at").or_else(|| parse_rfc3339_utc(value, "expires_at"));
+    let expires_at = constraints
+        .iter()
+        .filter(|constraint| {
+            constraint.get("constraint_kind").and_then(Value::as_str) == Some("temporal")
+        })
+        .filter_map(|constraint| parse_rfc3339_utc(constraint, "expires_at"))
+        .min();
 
     let revoked = body
         .get("revoked")

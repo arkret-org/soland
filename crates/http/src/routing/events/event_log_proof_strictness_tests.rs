@@ -702,7 +702,6 @@ async fn applet_registration_requires_realm_admin() {
             issuer_authority_refs: Vec::new(),
             authority_depth: None,
             authority_root_refs: Vec::new(),
-            expires_at: None,
         });
     validate_operation_policy(&state, std::slice::from_ref(&registration(owner)))
         .await
@@ -886,7 +885,6 @@ fn schema_define_admission_executes_the_registered_definition_validator_profile(
     let state = make_state(true);
     let valid = json!({
         "payload": {
-            "schema_id": "ak.schema.example.v1",
             "value": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "$id": "ak.schema.example.v1",
@@ -906,17 +904,14 @@ fn schema_define_admission_executes_the_registered_definition_validator_profile(
     for invalid in [
         json!({
             "payload": {
-                "schema_id": "ak.schema.example.v1",
                 "value": {
                     "$schema": "https://json-schema.org/draft/2020-12/schema",
-                    "$id": "ak.schema.other.v1",
                     "type": "string"
                 }
             }
         }),
         json!({
             "payload": {
-                "schema_id": "ak.schema.example.v1",
                 "value": {
                     "$schema": "https://json-schema.org/draft/2020-12/schema",
                     "$id": "ak.schema.example.v1",
@@ -1374,7 +1369,6 @@ fn data_event_grant(grant_id: &str, action: &str, revoked: bool) -> crate::authz
         issuer_authority_refs: Vec::new(),
         authority_depth: None,
         authority_root_refs: Vec::new(),
-        expires_at: None,
     }
 }
 

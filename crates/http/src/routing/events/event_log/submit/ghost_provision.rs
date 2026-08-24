@@ -5,11 +5,15 @@ use arkret_state::state::store::ControlProposalIngress;
 use super::*;
 
 struct PreparedGhostEvent {
+    canonical_event: Event,
     command: soland_services::events::CommitAcceptedEventCommand,
     operation: Option<arkret_event_draft::ProjectedEventOperation>,
     projected_cell_writes: Vec<arkret_wire::cba::ProjectedCellWrite>,
     projected_event: Option<soland_services::events::ProjectedEvent>,
     actor_id: String,
+    realm_id: String,
+    actor_seq: u64,
+    event_id: String,
     device_id: String,
 }
 
@@ -18,7 +22,7 @@ async fn prepare_ghost_event(
     session: &SessionRecord,
     envelope: Value,
     admission: &InternalEventAdmission,
-    _batch_event_ids: &BTreeSet<String>,
+    preceding_events: &BTreeMap<String, (String, String, u64)>,
     preceding_operations: &[arkret_event_draft::ProjectedEventOperation],
 ) -> Result<PreparedGhostEvent, SubmitOneError> {
     let raw_bytes = serde_json::to_vec(&envelope).map_err(|_| {
@@ -103,6 +107,22 @@ async fn prepare_ghost_event(
                 )
             })?;
         let Some(predecessor) = predecessor else {
+            if let Some((realm_id, actor_id, actor_seq)) = preceding_events.get(prev_ref.as_str()) {
+                if realm_id != parsed.realm_id.as_str() {
+                    return Err(SubmitOneError::new(
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        "prev_refs must not reference a staged Event in another Realm",
+                    ));
+                }
+                if actor_id == parsed.actor_id.as_str() {
+                    max_actor_predecessor_seq = Some(
+                        max_actor_predecessor_seq
+                            .map_or(*actor_seq, |current: u64| current.max(*actor_seq)),
+                    );
+                }
+                continue;
+            }
             return Err(SubmitOneError::new(
                 StatusCode::CONFLICT,
                 "dependency_missing",
@@ -264,22 +284,14 @@ async fn prepare_ghost_event(
             Some(parsed.actor_id.as_str()),
         )
     });
-    let outbox = peer_event_fanout_records(
-        state,
-        &parsed,
-        &envelope,
-        control_proposal_ack.as_ref(),
-        &[],
-        None,
-    )
-    .await
-    .map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "federation_fanout_unavailable",
-            format!("applet ghost federation delivery intent unavailable: {error}"),
-        )
-    })?;
+    // Applet-managed authority creation is Principal-Server-local. The unit
+    // spans the portal registration lineage and the actor's new PCR, so
+    // splitting it into ordinary per-Event federation deliveries would lose
+    // its closed aggregate admission and would let a remote peer observe a
+    // partial authority. Peers learn later collaboration facts through their
+    // normal Realm events; the immutable provision/PCR authority remains on
+    // the exact actor_principal_server_id named by the unit.
+    let outbox = Vec::new();
     let device_id = parsed.device_id_str().to_owned();
     let command = soland_services::events::CommitAcceptedEventCommand {
         governance_dependencies: Vec::new(),
@@ -320,31 +332,49 @@ async fn prepare_ghost_event(
         deliveries: outbox,
     };
     Ok(PreparedGhostEvent {
+        canonical_event: typed,
         command,
         operation,
         projected_cell_writes,
         projected_event,
         actor_id: parsed.actor_id.to_string(),
+        realm_id: parsed.realm_id.to_string(),
+        actor_seq: parsed.actor_seq,
+        event_id: parsed.event_id.to_string(),
         device_id: device_id.to_owned(),
     })
 }
 
-pub(in crate::routing) async fn submit_ghost_provision_batch(
+async fn submit_applet_record_event_batch(
     state: &AppState,
-    service_id: &str,
-    ghost_actor_id: &str,
-    realm_id: &str,
-    accountability: Event,
-    profile: Event,
+    events: Vec<Event>,
     applet_id: String,
-    ghost: Value,
+    expected_applet_record: Option<Value>,
+    applet_record: Value,
+    namespace_claims: arkret_models_integration::AppletWireNamespaces,
+    managed_authority_claims: Vec<soland_storage::ManagedAuthorityClaim>,
     idempotency: EventCommitIdempotency,
     response_body: Value,
+    response_status: StatusCode,
 ) -> Result<(), SubmitOneError> {
-    let mut lock_keys = vec![
-        (realm_id.to_owned(), service_id.to_owned()),
-        (realm_id.to_owned(), ghost_actor_id.to_owned()),
-    ];
+    let applet_id = arkret_wire::AppletId::new(applet_id).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("Applet record id is invalid: {error}"),
+        )
+    })?;
+    if events.is_empty() {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "Applet formal Event unit must not be empty",
+        ));
+    }
+    let mut lock_keys = events
+        .iter()
+        .map(|event| (event.realm_id.to_string(), event.actor_id.to_string()))
+        .collect::<Vec<_>>();
     lock_keys.sort();
     lock_keys.dedup();
     let locks = lock_keys
@@ -356,12 +386,7 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
         guards.push(lock.lock().await);
     }
 
-    let event_ids = [
-        accountability.event_id.to_string(),
-        profile.event_id.to_string(),
-    ]
-    .into_iter()
-    .collect::<BTreeSet<_>>();
+    let mut preceding_events = BTreeMap::new();
     let provision_time = now();
     let session = |actor: &str| SessionRecord {
         token_hash: "applet-ghost-provision".to_owned(),
@@ -376,51 +401,42 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
         created_at: provision_time,
         revoked_at: None,
     };
-    let accountability_value = typed_event_to_canonical_value(accountability)?;
-    let profile_value = typed_event_to_canonical_value(profile)?;
-    let accountability_admission = InternalEventAdmission::applet_formal(
-        realm_id,
-        service_id,
-        arkret_wire::EventKind::IdentityAccountabilityGrant.as_str(),
-        event_string_field_from_value(&accountability_value, "event_id").unwrap_or_default(),
-    );
-    let profile_admission = InternalEventAdmission::applet_formal(
-        realm_id,
-        ghost_actor_id,
-        arkret_wire::EventKind::ProfileCreate.as_str(),
-        event_string_field_from_value(&profile_value, "event_id").unwrap_or_default(),
-    );
-    let accountability_prepared = prepare_ghost_event(
-        state,
-        &session(service_id),
-        accountability_value,
-        &accountability_admission,
-        &event_ids,
-        &[],
-    )
-    .await?;
-    let preceding_operations = accountability_prepared
-        .operation
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
-    let profile_prepared = prepare_ghost_event(
-        state,
-        &session(ghost_actor_id),
-        profile_value,
-        &profile_admission,
-        &event_ids,
-        &preceding_operations,
-    )
-    .await?;
-    let mut prepared = vec![accountability_prepared, profile_prepared];
+    let mut preceding_operations = Vec::new();
+    let mut prepared = Vec::with_capacity(events.len());
+    for event in events {
+        let actor_id = event.actor_id.to_string();
+        let realm_id = event.realm_id.to_string();
+        let kind = event.kind.as_str().to_owned();
+        let envelope = typed_event_to_canonical_value(event)?;
+        let admission = InternalEventAdmission::applet_formal(
+            realm_id.as_str(),
+            actor_id.as_str(),
+            kind.as_str(),
+            event_string_field_from_value(&envelope, "event_id").unwrap_or_default(),
+        );
+        let next = prepare_ghost_event(
+            state,
+            &session(actor_id.as_str()),
+            envelope,
+            &admission,
+            &preceding_events,
+            &preceding_operations,
+        )
+        .await?;
+        preceding_events.insert(
+            next.event_id.clone(),
+            (next.realm_id.clone(), next.actor_id.clone(), next.actor_seq),
+        );
+        preceding_operations.extend(next.operation.iter().cloned());
+        prepared.push(next);
+    }
     let created_at = now();
     prepared[0].command.idempotency = Some(soland_services::events::IdempotentResponse {
         principal_id: idempotency.principal_id,
         key: idempotency.key,
         service_id: idempotency.service_id,
         request_hash: idempotency.request_hash,
-        status: StatusCode::CREATED.as_u16() as i32,
+        status: response_status.as_u16() as i32,
         body: response_body,
         created_at,
         expires_at: created_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS),
@@ -429,7 +445,13 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
         .events()
         .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
             events: prepared.iter().map(|event| event.command.clone()).collect(),
-            applet_ghosts: Some(soland_services::events::CommitAppletGhosts { applet_id, ghost }),
+            applet_record: Some(soland_services::events::CommitAppletRecord {
+                applet_id,
+                expected_record: expected_applet_record,
+                record: applet_record,
+                namespace_claims,
+                managed_authority_claims,
+            }),
             agent_membership_cascade: None,
         })
         .await
@@ -476,6 +498,21 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
             )
             .await;
         }
+        if (event.canonical_event.kind == arkret_wire::EventKind::RealmCreate
+            || event.canonical_event.kind == arkret_wire::EventKind::IdentityResolutionUpdate)
+            && let Err(error) =
+                persist_principal_resolution_projection(state, &event.canonical_event).await
+        {
+            // `principal_resolutions` is a rebuildable read index. The canonical
+            // Event and its reducer cells are already durable, so a mirror
+            // failure is repairable by canonical replay and must never turn an
+            // accepted aggregate into an apparent rejection.
+            tracing::error!(
+                %error,
+                event_id = %event.event_id,
+                "applet managed actor resolution read-index update failed"
+            );
+        }
         if let Some(projected) = event.projected_event {
             let _ = state.publish_event_notification(crate::state::EventNotification::event(
                 projected.realm_id.clone(),
@@ -486,4 +523,74 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
     }
     drop(guards);
     Ok(())
+}
+
+pub(in crate::routing) async fn submit_ghost_provision_batch(
+    state: &AppState,
+    service_id: &str,
+    ghost_actor_id: &str,
+    realm_id: &str,
+    managed_provision: Event,
+    pcr_genesis: Event,
+    accountability: Event,
+    profile: Event,
+    applet_id: String,
+    expected_applet_record: Value,
+    applet_record: Value,
+    actor_principal_server_id: String,
+    idempotency: EventCommitIdempotency,
+    response_body: Value,
+) -> Result<(), SubmitOneError> {
+    if managed_provision.actor_id.as_str() != service_id
+        || pcr_genesis.actor_id.as_str() != ghost_actor_id
+        || accountability.realm_id.as_str() != realm_id
+        || profile.realm_id.as_str() != realm_id
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "Ghost formal Event unit actor or Realm binding differs from the validated request",
+        ));
+    }
+    submit_applet_record_event_batch(
+        state,
+        vec![managed_provision, pcr_genesis, accountability, profile],
+        applet_id,
+        Some(expected_applet_record),
+        applet_record,
+        arkret_models_integration::AppletWireNamespaces::default(),
+        vec![soland_storage::ManagedAuthorityClaim {
+            actor_id: ghost_actor_id.to_owned(),
+            principal_server_id: actor_principal_server_id,
+        }],
+        idempotency,
+        response_body,
+        StatusCode::CREATED,
+    )
+    .await
+}
+
+pub(in crate::routing) async fn submit_applet_install_batch(
+    state: &AppState,
+    events: Vec<Event>,
+    applet_id: String,
+    applet_record: Value,
+    namespace_claims: arkret_models_integration::AppletWireNamespaces,
+    managed_authority_claims: Vec<soland_storage::ManagedAuthorityClaim>,
+    idempotency: EventCommitIdempotency,
+    response_body: Value,
+) -> Result<(), SubmitOneError> {
+    submit_applet_record_event_batch(
+        state,
+        events,
+        applet_id,
+        None,
+        applet_record,
+        namespace_claims,
+        managed_authority_claims,
+        idempotency,
+        response_body,
+        StatusCode::CREATED,
+    )
+    .await
 }

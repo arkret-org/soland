@@ -202,7 +202,12 @@ async fn device_generation_event_seal_context(
                     .pointer("/payload/object/purpose")
                     .and_then(serde_json::Value::as_str)
                     .is_some_and(|purpose| {
-                        matches!(purpose, "principal_control" | "managed_agent_control")
+                        matches!(
+                            purpose,
+                            "principal_control"
+                                | "managed_agent_control"
+                                | "applet_managed_control"
+                        )
                     })
         })
         .collect::<Vec<_>>();

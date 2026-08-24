@@ -50,23 +50,25 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .map_err(PersistenceError::database)?;
         let inserted = sql_query(
             "INSERT INTO mls_key_packages \
-             (id, keypackage_ref, keypackage_digest, actor_id, device_id, key_package_bytes, \
-              capabilities, capabilities_digest, device_signature, last_resort, \
+             (id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, key_package_bytes, \
+              capabilities, capabilities_digest, endpoint_signature, last_resort, \
               last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
               claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
               claim_expires_at_unix_ms, consumed_at, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind::<Text, _>(&record.id)
         .bind::<Text, _>(&record.keypackage_ref)
         .bind::<Text, _>(&record.keypackage_digest)
         .bind::<Text, _>(&record.actor_id)
-        .bind::<Text, _>(&record.device_id)
+        .bind::<Nullable<Text>, _>(&record.device_id)
+        .bind::<Nullable<Text>, _>(&record.endpoint_verification_method)
+        .bind::<Nullable<Text>, _>(&record.intended_realm_id)
         .bind::<Binary, _>(&record.key_package_bytes)
         .bind::<Jsonb, _>(serde_json::json!(record.capabilities))
         .bind::<Text, _>(&record.capabilities_digest)
-        .bind::<Jsonb, _>(&record.device_signature)
+        .bind::<Jsonb, _>(&record.endpoint_signature)
         .bind::<Bool, _>(record.last_resort)
         .bind::<Nullable<Text>, _>(&record.last_resort_realm_id)
         .bind::<BigInt, _>(record.lifetime_not_before)
@@ -92,8 +94,8 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
-             key_package_bytes, capabilities, capabilities_digest, device_signature, \
+             "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+             key_package_bytes, capabilities, capabilities_digest, endpoint_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at \
@@ -116,8 +118,8 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
-             key_package_bytes, capabilities, capabilities_digest, device_signature, \
+             "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+             key_package_bytes, capabilities, capabilities_digest, endpoint_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at \
@@ -186,8 +188,8 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                AND ($2 IN ('revoked', 'retired') OR (lifetime_not_after > $6 \
                     AND ($7 IS NULL OR ($7 > $6 * 1000 AND $7 <= lifetime_not_after * 1000)))) \
                AND ((NOT last_resort) OR $2 = 'revoked' OR (last_resort_realm_id IS NULL AND $3 IS NOT NULL) OR last_resort_realm_id = $3) \
-             RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \
-             key_package_bytes, capabilities, capabilities_digest, device_signature, \
+             RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+             key_package_bytes, capabilities, capabilities_digest, endpoint_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at",
@@ -215,7 +217,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         &self,
         id: &str,
         mls_group_id: &str,
-        consumed_at: i64,
+        now_unix_ms: i64,
         peer_consume_receipt: Option<&Value>,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
         let mut conn = pg_conn(&self.pool)
@@ -224,20 +226,20 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             let row = sql_query(
                 "UPDATE mls_key_packages \
-             SET consumed_at = $3 \
+             SET consumed_at = $3 / 1000 \
              WHERE id = $1 AND NOT last_resort \
                AND claimed_by_mls_group_id = $2 \
                AND consumed_at IS NULL \
-               AND (claim_expires_at_unix_ms IS NULL OR claim_expires_at_unix_ms > $3 * 1000) \
-             RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \
-             key_package_bytes, capabilities, capabilities_digest, device_signature, \
+               AND claim_expires_at_unix_ms > $3 \
+             RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+             key_package_bytes, capabilities, capabilities_digest, endpoint_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at",
                 )
                 .bind::<Text, _>(id)
                 .bind::<Text, _>(mls_group_id)
-                .bind::<BigInt, _>(consumed_at)
+                .bind::<BigInt, _>(now_unix_ms)
                 .get_result::<MlsKeyPackagePgRow>(conn)
                 .await
                 .optional()
@@ -248,12 +250,12 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             if let Some(receipt) = peer_consume_receipt {
                 let updated = sql_query(
                     "UPDATE peer_keypackage_claims \
-                     SET state = 'consumed', consume_receipt = $2, updated_at = $3 \
-                     WHERE keypackage_id = $1 AND state = 'claimed'",
+                     SET state = 'consumed', consume_receipt = $2, updated_at = $3 / 1000 \
+                     WHERE key_package_use = 'single_use' AND keypackage_id = $1 AND state = 'claimed'",
                 )
                 .bind::<Text, _>(id)
                 .bind::<Jsonb, _>(receipt)
-                .bind::<BigInt, _>(consumed_at)
+                .bind::<BigInt, _>(now_unix_ms)
                 .execute(conn)
                 .await
                 .map_err(PersistenceError::database)?;
@@ -279,6 +281,25 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .await
             .map_err(PersistenceError::database)?;
         load_peer_claim(&mut conn, source_service_id, claim_request_id).await
+    }
+
+    async fn get_peer_claim_by_keypackage_id(
+        &self,
+        keypackage_id: &str,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT source_service_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at \
+             FROM peer_keypackage_claims WHERE key_package_use = 'single_use' AND keypackage_id = $1",
+        )
+        .bind::<Text, _>(keypackage_id)
+        .get_result::<PeerKeyPackageClaimPgRow>(&mut conn)
+        .await
+        .optional()
+        .map(|row| row.map(PeerKeyPackageClaimLedgerRecord::from))
+        .map_err(PersistenceError::database)
     }
 
     async fn try_claim_peer(
@@ -318,18 +339,66 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                         }
                     }
                 }
+                if attempt.ledger.key_package_use == "last_resort" {
+                    if attempt.ledger.state != "last_resort_claimed"
+                        || attempt.ledger.claim_expires_at_unix_ms
+                            != Some(attempt.claim_expires_at_unix_ms)
+                    {
+                        return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
+                    }
+                    let claimed = sql_query(
+                        "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+                         key_package_bytes, capabilities, capabilities_digest, endpoint_signature, \
+                         last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
+                         claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
+                         claim_expires_at_unix_ms, consumed_at, created_at \
+                         FROM mls_key_packages \
+                         WHERE id = $1 AND last_resort AND claimed_by_mls_group_id IS NULL \
+                           AND ($2 IS NULL OR device_authorize_event_id = $2) \
+                           AND ($3 IS NULL OR agent_key_authorize_event_id = $3) \
+                           AND lifetime_not_after * 1000 > $4 \
+                           AND $5 > $4 AND $5 <= lifetime_not_after * 1000 \
+                         FOR SHARE",
+                    )
+                    .bind::<Text, _>(attempt.keypackage_id)
+                    .bind::<Nullable<Binary>, _>(parse_authorize_event_id(
+                        attempt.device_authorize_event_id,
+                    )?)
+                    .bind::<Nullable<Binary>, _>(parse_authorize_event_id(
+                        attempt.agent_key_authorize_event_id,
+                    )?)
+                    .bind::<BigInt, _>(attempt.claimed_at_unix_ms)
+                    .bind::<BigInt, _>(attempt.claim_expires_at_unix_ms)
+                    .get_result::<MlsKeyPackagePgRow>(conn)
+                    .await
+                    .optional()
+                    .map_err(PersistenceError::database)?;
+                    let Some(claimed) = claimed else {
+                        return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
+                    };
+                    insert_peer_claim_strict(conn, attempt.ledger).await?;
+                    return Ok(PeerKeyPackageClaimAttemptResult::Claimed(Box::new(
+                        validated_keypackage_row(claimed)?,
+                    )));
+                }
+                if attempt.ledger.key_package_use != "single_use"
+                    || attempt.ledger.claim_expires_at_unix_ms
+                        != Some(attempt.claim_expires_at_unix_ms)
+                {
+                    return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
+                }
                 let claimed = sql_query(
                     "UPDATE mls_key_packages \
-                 SET claimed_by_mls_group_id = $2, claimed_at = $5, claim_expires_at_unix_ms = $6, consumed_at = NULL \
+                 SET claimed_by_mls_group_id = $2, claimed_at = $5 / 1000, claim_expires_at_unix_ms = $6, consumed_at = NULL \
                  WHERE id = $1 \
                    AND NOT last_resort \
                    AND claimed_by_mls_group_id IS NULL \
                    AND ($3 IS NULL OR device_authorize_event_id = $3) \
                    AND ($4 IS NULL OR agent_key_authorize_event_id = $4) \
-                   AND lifetime_not_after > $5 \
-                   AND $6 > $5 * 1000 AND $6 <= lifetime_not_after * 1000 \
-                 RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \
-                 key_package_bytes, capabilities, capabilities_digest, device_signature, \
+                   AND lifetime_not_after * 1000 > $5 \
+                   AND $6 > $5 AND $6 <= lifetime_not_after * 1000 \
+             RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+             key_package_bytes, capabilities, capabilities_digest, endpoint_signature, \
                  last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
                  claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
                  claim_expires_at_unix_ms, consumed_at, created_at",
@@ -342,7 +411,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                 .bind::<Nullable<Binary>, _>(parse_authorize_event_id(
                     attempt.agent_key_authorize_event_id,
                 )?)
-                .bind::<BigInt, _>(attempt.claimed_at)
+                .bind::<BigInt, _>(attempt.claimed_at_unix_ms)
                 .bind::<BigInt, _>(attempt.claim_expires_at_unix_ms)
                 .get_result::<MlsKeyPackagePgRow>(conn)
                 .await
@@ -419,7 +488,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
              SET terminal_receipt = $4, updated_at = $5 \
              WHERE source_service_id = $1 AND claim_request_id = $2 \
                AND request_digest = $3 AND state IN ('expired', 'revoked') \
-             RETURNING source_service_id, claim_request_id, request_digest, keypackage_id, \
+             RETURNING source_service_id, claim_request_id, request_digest, key_package_use, keypackage_id, \
                outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, \
                expires_at, state, updated_at",
         )
@@ -428,6 +497,118 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<Text, _>(request_digest)
         .bind::<Jsonb, _>(terminal_receipt)
         .bind::<BigInt, _>(updated_at)
+        .get_result::<PeerKeyPackageClaimPgRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(PeerKeyPackageClaimLedgerRecord::from))
+        .map_err(PersistenceError::database)
+    }
+
+    async fn attach_peer_claim_consume_receipt(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        consume_receipt: &Value,
+        now_unix_ms: i64,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "WITH expired_last_resort AS ( \
+               UPDATE peer_keypackage_claims \
+               SET state = 'expired', updated_at = $5 / 1000 \
+               WHERE source_service_id = $1 AND claim_request_id = $2 AND request_digest = $3 \
+                 AND state = 'last_resort_claimed' \
+                 AND (claim_expires_at_unix_ms IS NULL OR claim_expires_at_unix_ms <= $5) \
+               RETURNING claim_request_id \
+             ) \
+             UPDATE peer_keypackage_claims SET state = 'consumed', consume_receipt = $4, updated_at = $5 / 1000 \
+             WHERE source_service_id = $1 AND claim_request_id = $2 AND request_digest = $3 \
+               AND state IN ('claimed', 'last_resort_claimed') \
+               AND claim_expires_at_unix_ms > $5 \
+             RETURNING source_service_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at",
+        )
+        .bind::<Text, _>(source_service_id)
+        .bind::<Text, _>(claim_request_id)
+        .bind::<Text, _>(request_digest)
+        .bind::<Jsonb, _>(consume_receipt)
+        .bind::<BigInt, _>(now_unix_ms)
+        .get_result::<PeerKeyPackageClaimPgRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(PeerKeyPackageClaimLedgerRecord::from))
+        .map_err(PersistenceError::database)
+    }
+
+    async fn transition_peer_claim_consumed(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        expected_outcome: &Value,
+        consume_receipt: &Value,
+        consumed_at_unix_ms: i64,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "UPDATE peer_keypackage_claims \
+             SET state = 'consumed', consume_receipt = $5, updated_at = $6 / 1000 \
+             WHERE source_service_id = $1 AND claim_request_id = $2 \
+               AND request_digest = $3 AND outcome = $4 \
+               AND state IN ('claimed', 'last_resort_claimed', 'expired') \
+               AND (state <> 'expired' OR terminal_receipt IS NULL) \
+               AND claim_expires_at_unix_ms > $6 \
+             RETURNING source_service_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at",
+        )
+        .bind::<Text, _>(source_service_id)
+        .bind::<Text, _>(claim_request_id)
+        .bind::<Text, _>(request_digest)
+        .bind::<Jsonb, _>(expected_outcome)
+        .bind::<Jsonb, _>(consume_receipt)
+        .bind::<BigInt, _>(consumed_at_unix_ms)
+        .get_result::<PeerKeyPackageClaimPgRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(PeerKeyPackageClaimLedgerRecord::from))
+        .map_err(PersistenceError::database)
+    }
+
+    async fn transition_peer_claim_terminal(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        expected_outcome: &Value,
+        terminal_state: &str,
+        terminal_receipt: &Value,
+        now_unix_ms: i64,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
+        if !matches!(terminal_state, "expired" | "revoked") {
+            return Ok(None);
+        }
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "UPDATE peer_keypackage_claims \
+             SET state = $5, terminal_receipt = $6, updated_at = $7 / 1000 \
+             WHERE source_service_id = $1 AND claim_request_id = $2 \
+               AND request_digest = $3 AND outcome = $4 \
+               AND (state IN ('claimed', 'last_resort_claimed') \
+                    OR (state = $5 AND terminal_receipt IS NULL)) \
+             RETURNING source_service_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at",
+        )
+        .bind::<Text, _>(source_service_id)
+        .bind::<Text, _>(claim_request_id)
+        .bind::<Text, _>(request_digest)
+        .bind::<Jsonb, _>(expected_outcome)
+        .bind::<Text, _>(terminal_state)
+        .bind::<Jsonb, _>(terminal_receipt)
+        .bind::<BigInt, _>(now_unix_ms)
         .get_result::<PeerKeyPackageClaimPgRow>(&mut *conn)
         .await
         .optional()
@@ -446,11 +627,23 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .await
             .map_err(PersistenceError::database)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            sql_query(
+                "UPDATE peer_keypackage_claims \
+                 SET state = 'expired', updated_at = $1 / 1000 \
+                 WHERE key_package_use = 'last_resort' \
+                   AND state = 'last_resort_claimed' \
+                   AND claim_expires_at_unix_ms <= $1",
+            )
+            .bind::<BigInt, _>(now_unix_ms)
+            .execute(conn)
+            .await
+            .map_err(PersistenceError::database)?;
             let rows = sql_query(
                 "WITH expired AS ( \
                    SELECT source_service_id, claim_request_id, keypackage_id \
                    FROM peer_keypackage_claims \
-                   WHERE state = 'claimed' AND claim_expires_at_unix_ms <= $1 \
+                   WHERE key_package_use = 'single_use' \
+                     AND state = 'claimed' AND claim_expires_at_unix_ms <= $1 \
                  ), revoked AS ( \
                    UPDATE mls_key_packages kp \
                    SET claimed_by_mls_group_id = 'revoked', \
@@ -484,8 +677,8 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
-             key_package_bytes, capabilities, capabilities_digest, device_signature, \
+             "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+             key_package_bytes, capabilities, capabilities_digest, endpoint_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at \
@@ -510,8 +703,8 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
-             key_package_bytes, capabilities, capabilities_digest, device_signature, \
+             "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+             key_package_bytes, capabilities, capabilities_digest, endpoint_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at \
@@ -534,13 +727,14 @@ async fn insert_peer_claim(
 ) -> Result<usize, diesel::result::Error> {
     sql_query(
         "INSERT INTO peer_keypackage_claims \
-         (source_service_id, claim_request_id, request_digest, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+         (source_service_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
          ON CONFLICT (source_service_id, claim_request_id) DO NOTHING",
     )
     .bind::<Text, _>(&record.source_service_id)
     .bind::<Text, _>(&record.claim_request_id)
     .bind::<Text, _>(&record.request_digest)
+    .bind::<Text, _>(&record.key_package_use)
     .bind::<Nullable<Text>, _>(&record.keypackage_id)
     .bind::<Nullable<Jsonb>, _>(&record.outcome)
     .bind::<Nullable<Jsonb>, _>(&record.terminal_receipt)
@@ -559,12 +753,13 @@ async fn insert_peer_claim_strict(
 ) -> Result<(), diesel::result::Error> {
     sql_query(
         "INSERT INTO peer_keypackage_claims \
-         (source_service_id, claim_request_id, request_digest, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+         (source_service_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
     )
     .bind::<Text, _>(&record.source_service_id)
     .bind::<Text, _>(&record.claim_request_id)
     .bind::<Text, _>(&record.request_digest)
+    .bind::<Text, _>(&record.key_package_use)
     .bind::<Nullable<Text>, _>(&record.keypackage_id)
     .bind::<Nullable<Jsonb>, _>(&record.outcome)
     .bind::<Nullable<Jsonb>, _>(&record.terminal_receipt)
@@ -584,7 +779,7 @@ async fn load_peer_claim(
     claim_request_id: &str,
 ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
     sql_query(
-        "SELECT source_service_id, claim_request_id, request_digest, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at \
+        "SELECT source_service_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at \
          FROM peer_keypackage_claims \
          WHERE source_service_id = $1 AND claim_request_id = $2",
     )
@@ -604,15 +799,18 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO mls_welcomes \
-             (id, mls_group_id, recipient_actor_id, recipient_device_id, welcome_bytes, \
+             (id, mls_group_id, recipient_actor_id, recipient_device_id, \
+              recipient_endpoint_verification_method, intended_realm_id, welcome_bytes, \
               key_package_id, epoch, commit_ref, governance_binding, enqueued_at, delivered_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind::<Text, _>(&record.id)
         .bind::<Text, _>(&record.group_id)
         .bind::<Text, _>(&record.recipient_actor_id)
-        .bind::<Text, _>(&record.recipient_device_id)
+        .bind::<Nullable<Text>, _>(&record.recipient_device_id)
+        .bind::<Nullable<Text>, _>(&record.recipient_endpoint_verification_method)
+        .bind::<Nullable<Text>, _>(&record.intended_realm_id)
         .bind::<Binary, _>(&record.welcome_bytes)
         .bind::<Text, _>(&record.key_package_id)
         .bind::<BigInt, _>(
@@ -635,7 +833,8 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id, mls_group_id, recipient_actor_id, recipient_device_id, welcome_bytes, \
+            "SELECT id, mls_group_id, recipient_actor_id, recipient_device_id, \
+             recipient_endpoint_verification_method, intended_realm_id, welcome_bytes, \
              key_package_id, epoch, commit_ref, governance_binding, enqueued_at, delivered_at \
              FROM mls_welcomes ORDER BY enqueued_at ASC, id ASC",
         )
@@ -818,8 +1017,12 @@ struct MlsKeyPackagePgRow {
     keypackage_digest: String,
     #[diesel(sql_type = Text)]
     actor_id: String,
-    #[diesel(sql_type = Text)]
-    device_id: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    device_id: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    endpoint_verification_method: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    intended_realm_id: Option<String>,
     #[diesel(sql_type = Binary)]
     key_package_bytes: Vec<u8>,
     #[diesel(sql_type = Jsonb)]
@@ -827,7 +1030,7 @@ struct MlsKeyPackagePgRow {
     #[diesel(sql_type = Text)]
     capabilities_digest: String,
     #[diesel(sql_type = Jsonb)]
-    device_signature: Value,
+    endpoint_signature: Value,
     #[diesel(sql_type = Bool)]
     last_resort: bool,
     #[diesel(sql_type = Nullable<Text>)]
@@ -860,6 +1063,8 @@ struct PeerKeyPackageClaimPgRow {
     claim_request_id: String,
     #[diesel(sql_type = Text)]
     request_digest: String,
+    #[diesel(sql_type = Text)]
+    key_package_use: String,
     #[diesel(sql_type = Nullable<Text>)]
     keypackage_id: Option<String>,
     #[diesel(sql_type = Nullable<Jsonb>)]
@@ -884,6 +1089,7 @@ impl From<PeerKeyPackageClaimPgRow> for PeerKeyPackageClaimLedgerRecord {
             source_service_id: row.source_service_id,
             claim_request_id: row.claim_request_id,
             request_digest: row.request_digest,
+            key_package_use: row.key_package_use,
             keypackage_id: row.keypackage_id,
             outcome: row.outcome,
             terminal_receipt: row.terminal_receipt,
@@ -903,10 +1109,12 @@ impl From<MlsKeyPackagePgRow> for MlsKeyPackageRow {
             keypackage_digest: row.keypackage_digest,
             actor_id: row.actor_id,
             device_id: row.device_id,
+            endpoint_verification_method: row.endpoint_verification_method,
+            intended_realm_id: row.intended_realm_id,
             key_package_bytes: row.key_package_bytes,
             capabilities: json_string_array(row.capabilities),
             capabilities_digest: row.capabilities_digest,
-            device_signature: row.device_signature,
+            endpoint_signature: row.endpoint_signature,
             last_resort: row.last_resort,
             last_resort_realm_id: row.last_resort_realm_id,
             lifetime_not_before: row.lifetime_not_before,
@@ -945,8 +1153,12 @@ struct MlsWelcomeRow {
     mls_group_id: String,
     #[diesel(sql_type = Text)]
     recipient_actor_id: String,
-    #[diesel(sql_type = Text)]
-    recipient_device_id: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    recipient_device_id: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    recipient_endpoint_verification_method: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    intended_realm_id: Option<String>,
     #[diesel(sql_type = Binary)]
     welcome_bytes: Vec<u8>,
     #[diesel(sql_type = Text)]
@@ -969,6 +1181,8 @@ impl From<MlsWelcomeRow> for MlsWelcomeRecord {
             group_id: row.mls_group_id,
             recipient_actor_id: row.recipient_actor_id,
             recipient_device_id: row.recipient_device_id,
+            recipient_endpoint_verification_method: row.recipient_endpoint_verification_method,
+            intended_realm_id: row.intended_realm_id,
             welcome_bytes: row.welcome_bytes,
             key_package_id: row.key_package_id,
             epoch: row.epoch.max(0) as u64,

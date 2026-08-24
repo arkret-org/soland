@@ -2519,7 +2519,6 @@ mod tests {
                     .unwrap(),
             );
             event.auth_context = Some(arkret_wire::event_envelope::AuthContext {
-                actor_id: crate::test_actor_id(&actor_full_id),
                 key_id: arkret_wire::OpaqueLocalId::new("device-1").unwrap(),
                 key_epoch: 0,
                 credential_epoch: None,
@@ -2637,8 +2636,14 @@ mod tests {
                 .unwrap(),
                 event_digest,
                 authorization_lease_id: lease.authorization_lease_id.clone(),
+                qualified_ingress_id: arkret_identifiers::DidFullId::new(
+                    "did:web:authority.example",
+                )
+                .unwrap(),
                 received_at,
-                service_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:alpha.example")
+                ingress_basis: lease.basis_ref.clone(),
+                ingress_frontier: vec![event.event_id.clone()],
+                service_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:authority.example")
                     .unwrap(),
                 authority_set_ref: authority_set_ref.clone(),
                 proofs: Vec::new(),
@@ -2646,7 +2651,7 @@ mod tests {
             let receipt_digest = receipt.receipt_digest().unwrap();
             receipt.proofs = vec![arkret_wire::primitives::PayloadProof {
                 kind: "detached_jws".to_owned(),
-                verification_method: arkret_wire::DidUrl::new("did:web:alpha.example#notary-key")
+                verification_method: arkret_wire::DidUrl::new("did:web:authority.example#key-1")
                     .unwrap(),
                 payload_digest: receipt_digest,
                 created_at: received_at,

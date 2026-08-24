@@ -115,7 +115,6 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
             .with_status(StatusCode::SERVICE_UNAVAILABLE)
         })?;
     let auth_context = arkret_wire::AuthContext {
-        actor_id: service_actor_id.clone(),
         key_id: arkret_wire::OpaqueLocalId::new("notary-key").expect("notary key id is opaque"),
         key_epoch: 0,
         credential_epoch: None,

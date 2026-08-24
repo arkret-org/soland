@@ -94,11 +94,6 @@ mod tests {
     }
 
     fn key_backup_body(backup_kind: &str, item_kind: &str, encryption: Value) -> Value {
-        let recipient_method = encryption["recipient_method"].clone();
-        let recipient_key_ref = encryption
-            .get("recipient_key_ref")
-            .cloned()
-            .unwrap_or(Value::Null);
         let mut body = json!({
             "backup_id": BACKUP_ID,
             "actor_id": ACTOR,
@@ -116,19 +111,7 @@ mod tests {
             "ciphertext": "AAAA",
             "ciphertext_digest": "sha256:709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c",
             "domain_separation": {
-                "hkdf_info": format!("arkret-key-backup/{backup_kind}/test/v1"),
-                "subdomain": "test",
-                "aead_aad": {
-                    "schema": "ak.schema.key_backup.v1",
-                    "actor_id": ACTOR,
-                    "device_id": DEVICE_ID,
-                    "backup_kind": backup_kind,
-                    "backup_version": "kb_1",
-                    "created_at": "2026-05-30T00:00:00.000Z",
-                    "item_kinds": [item_kind],
-                    "recipient_method": recipient_method,
-                    "recipient_key_ref": recipient_key_ref
-                }
+                "subdomain": "test"
             },
             "auth_data": {
                 "device_id": DEVICE_ID,

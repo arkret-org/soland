@@ -941,38 +941,109 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             }
         }
 
-        if let Some(mutation) = request.applet_ghosts {
-            let record = staged_applets
-                .get_mut(&mutation.applet_id)
-                .ok_or_else(|| PersistenceError::NotFound("applet registration".to_owned()))?;
-            let active = record
-                .get("revoked_at")
-                .is_none_or(serde_json::Value::is_null)
-                && matches!(
-                    record.get("status").and_then(serde_json::Value::as_str),
-                    Some("installed" | "partially_installed")
-                );
-            if !active {
-                return Err(PersistenceError::Conflict("applet_revoked".to_owned()));
-            }
-            let record = record.as_object_mut().ok_or_else(|| {
-                PersistenceError::Internal("applet record is not an object".to_owned())
-            })?;
-            let ghosts = record
-                .entry("ghosts")
-                .or_insert_with(|| serde_json::Value::Array(Vec::new()))
-                .as_array_mut()
-                .ok_or_else(|| {
-                    PersistenceError::Internal("applet ghosts is not an array".to_owned())
+        if let Some(mutation) = request.applet_record {
+            for (existing_applet_id, existing_record) in &staged_applets {
+                if existing_applet_id == mutation.applet_id.as_str() {
+                    continue;
+                }
+                let active = existing_record
+                    .get("revoked_at")
+                    .is_none_or(serde_json::Value::is_null)
+                    && matches!(
+                        existing_record
+                            .get("status")
+                            .and_then(serde_json::Value::as_str),
+                        Some("installed" | "partially_installed")
+                    );
+                if !active {
+                    continue;
+                }
+                let Some(namespaces) = existing_record
+                    .get("package")
+                    .and_then(|package| package.get("namespaces"))
+                    .cloned()
+                else {
+                    continue;
+                };
+                let namespaces = serde_json::from_value::<
+                    arkret_models_integration::AppletWireNamespaces,
+                >(namespaces)
+                .map_err(|error| {
+                    PersistenceError::Conflict(format!(
+                        "schema_violation: stored Applet namespaces are invalid: {error}"
+                    ))
                 })?;
-            let duplicate = ghosts.iter().any(|existing| {
-                existing.get("external_id") == mutation.ghost.get("external_id")
-                    || existing.get("ghost_actor_id") == mutation.ghost.get("ghost_actor_id")
-            });
-            if duplicate {
+                if !mutation
+                    .namespace_claims
+                    .conflicts_with(&namespaces)
+                    .is_empty()
+                {
+                    return Err(PersistenceError::Conflict(
+                        "applet_namespace_conflict".to_owned(),
+                    ));
+                }
+            }
+            let mut requested_authorities = std::collections::BTreeSet::new();
+            for claim in &mutation.managed_authority_claims {
+                if !requested_authorities
+                    .insert((claim.actor_id.as_str(), claim.principal_server_id.as_str()))
+                {
+                    return Err(PersistenceError::Conflict(
+                        "applet_managed_authority_conflict".to_owned(),
+                    ));
+                }
+                let already_claimed = staged_applets.values().any(|record| {
+                    record
+                        .get("bot_actor_id")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(claim.actor_id.as_str())
+                        && record
+                            .get("bot_actor_principal_server_id")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(claim.principal_server_id.as_str())
+                        || record
+                            .get("ghosts")
+                            .and_then(serde_json::Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .any(|ghost| {
+                                ghost
+                                    .get("ghost_actor_id")
+                                    .and_then(serde_json::Value::as_str)
+                                    == Some(claim.actor_id.as_str())
+                                    && ghost
+                                        .get("actor_principal_server_id")
+                                        .and_then(serde_json::Value::as_str)
+                                        == Some(claim.principal_server_id.as_str())
+                            })
+                });
+                if already_claimed {
+                    return Err(PersistenceError::Conflict(
+                        "applet_managed_authority_conflict".to_owned(),
+                    ));
+                }
+            }
+            if let Some(expected) = mutation.expected_record {
+                let existing = staged_applets
+                    .get(mutation.applet_id.as_str())
+                    .ok_or_else(|| PersistenceError::NotFound("applet registration".to_owned()))?;
+                if existing != &expected {
+                    return Err(PersistenceError::Conflict("cas_conflict".to_owned()));
+                }
+                let active = existing
+                    .get("revoked_at")
+                    .is_none_or(serde_json::Value::is_null)
+                    && matches!(
+                        existing.get("status").and_then(serde_json::Value::as_str),
+                        Some("installed" | "partially_installed")
+                    );
+                if !active {
+                    return Err(PersistenceError::Conflict("applet_revoked".to_owned()));
+                }
+            } else if staged_applets.contains_key(mutation.applet_id.as_str()) {
                 return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
             }
-            ghosts.push(mutation.ghost);
+            staged_applets.insert(mutation.applet_id.to_string(), mutation.record);
         }
 
         *events = staged_events;
@@ -1004,7 +1075,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
 mod tests {
     use chrono::{Duration, Utc};
     use soland_storage::{
-        AgentMembershipCascadeCommit, AgentMembershipCascadeStore, AppletGhostCommit,
+        AgentMembershipCascadeCommit, AgentMembershipCascadeStore, AppletRecordCommit,
         CanonicalEventRecord, DeviceMessageRecord, DeviceRevocationGateAction,
         DeviceRevocationGateLinearizationRequest, DeviceRevocationGateSelector,
         DeviceRevocationGateStatus, DeviceRevocationStore, DeviceRevocationTransition,
@@ -1496,7 +1567,7 @@ mod tests {
 
         let mut incomplete = EventBatchCommitRequest {
             events: vec![controller.clone(), agent_a.clone()],
-            applet_ghosts: None,
+            applet_record: None,
             agent_membership_cascade: Some(AgentMembershipCascadeCommit::AtomicSelfLeave {
                 controller_transition_event_id: controller_event_id.clone(),
                 agent_transition_event_ids: agent_event_ids.clone(),
@@ -1544,7 +1615,7 @@ mod tests {
         store
             .commit_event_batch(EventBatchCommitRequest {
                 events: vec![terminal.clone()],
-                applet_ghosts: None,
+                applet_record: None,
                 agent_membership_cascade: Some(AgentMembershipCascadeCommit::EmergencyTerminal {
                     record: Box::new(record.clone()),
                 }),
@@ -1577,7 +1648,7 @@ mod tests {
         store
             .commit_event_batch(EventBatchCommitRequest {
                 events: vec![cleanup_a, cleanup_b],
-                applet_ghosts: None,
+                applet_record: None,
                 agent_membership_cascade: Some(AgentMembershipCascadeCommit::EmergencyCleanup {
                     cleanup_intent_digest: cleanup_digest.clone(),
                     controller_terminal_event_id: terminal_event_id,
@@ -1847,12 +1918,23 @@ mod tests {
                     expires_at: now + Duration::hours(1),
                 }),
             )],
-            applet_ghosts: Some(AppletGhostCommit {
-                applet_id: applet_id.clone(),
-                ghost: serde_json::json!({
-                    "ghost_actor_id": "did:web:bridge.example:ghost:one",
-                    "external_id": "one",
+            applet_record: Some(AppletRecordCommit {
+                applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
+                expected_record: Some(serde_json::json!({
+                    "status": "installed",
+                    "revoked_at": null,
+                    "ghosts": [],
+                })),
+                record: serde_json::json!({
+                    "status": "installed",
+                    "revoked_at": null,
+                    "ghosts": [{
+                        "ghost_actor_id": "did:web:bridge.example:ghost:one",
+                        "external_id": "one",
+                    }],
                 }),
+                namespace_claims: Default::default(),
+                managed_authority_claims: Vec::new(),
             }),
             agent_membership_cascade: None,
         };
@@ -1887,12 +1969,29 @@ mod tests {
                 "did:web:bridge.example:ghost:second",
                 None,
             )],
-            applet_ghosts: Some(AppletGhostCommit {
-                applet_id: applet_id.clone(),
-                ghost: serde_json::json!({
-                    "ghost_actor_id": "did:web:bridge.example:ghost:second",
-                    "external_id": "second",
+            applet_record: Some(AppletRecordCommit {
+                applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
+                expected_record: Some(serde_json::json!({
+                    "status": "installed",
+                    "revoked_at": null,
+                    "ghosts": [{
+                        "ghost_actor_id": "did:web:bridge.example:ghost:first",
+                        "external_id": "first",
+                    }],
+                })),
+                record: serde_json::json!({
+                    "status": "installed",
+                    "revoked_at": null,
+                    "ghosts": [{
+                        "ghost_actor_id": "did:web:bridge.example:ghost:first",
+                        "external_id": "first",
+                    }, {
+                        "ghost_actor_id": "did:web:bridge.example:ghost:second",
+                        "external_id": "second",
+                    }],
                 }),
+                namespace_claims: Default::default(),
+                managed_authority_claims: Vec::new(),
             }),
             agent_membership_cascade: None,
         };
@@ -1905,5 +2004,108 @@ mod tests {
                 .len(),
             2
         );
+
+        let stale_event_id = typed_id("ak:event:");
+        let stale = EventBatchCommitRequest {
+            events: vec![event_request(
+                stale_event_id.clone(),
+                realm_id(),
+                "did:web:bridge.example:ghost:third",
+                None,
+            )],
+            applet_record: Some(AppletRecordCommit {
+                applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
+                expected_record: Some(serde_json::json!({
+                    "status": "installed",
+                    "revoked_at": null,
+                    "ghosts": [{
+                        "ghost_actor_id": "did:web:bridge.example:ghost:first",
+                        "external_id": "first",
+                    }],
+                })),
+                record: serde_json::json!({
+                    "status": "installed",
+                    "revoked_at": null,
+                    "ghosts": [{
+                        "ghost_actor_id": "did:web:bridge.example:ghost:first",
+                        "external_id": "first",
+                    }, {
+                        "ghost_actor_id": "did:web:bridge.example:ghost:third",
+                        "external_id": "third",
+                    }],
+                }),
+                namespace_claims: Default::default(),
+                managed_authority_claims: Vec::new(),
+            }),
+            agent_membership_cascade: None,
+        };
+
+        let error = store.commit_event_batch(stale).await.unwrap_err();
+        assert_eq!(
+            error.conflict_code(),
+            Some(soland_storage::ConflictCode::CasConflict)
+        );
+        assert!(!store.events.data.lock().contains_key(&stale_event_id));
+        let applets = store.applets.records.lock();
+        let ghosts = applets[&applet_id]["ghosts"].as_array().unwrap();
+        assert_eq!(ghosts.len(), 2);
+        assert!(
+            ghosts
+                .iter()
+                .any(|ghost| { ghost["ghost_actor_id"] == "did:web:bridge.example:ghost:second" })
+        );
+        assert!(
+            !ghosts
+                .iter()
+                .any(|ghost| { ghost["ghost_actor_id"] == "did:web:bridge.example:ghost:third" })
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_applet_claims_commit_one_complete_batch_only() {
+        let store = SolandMemoryPersistenceStore::new();
+        let authority = soland_storage::ManagedAuthorityClaim {
+            actor_id: "ak:did_core:web:managed.example".to_owned(),
+            principal_server_id: "ak:did_core:web:soland.example".to_owned(),
+        };
+        let namespaces = arkret_models_integration::AppletWireNamespaces {
+            realms: vec![arkret_models_integration::AppletNamespaceEntry::exclusive(
+                "bridge:workspace:*",
+            )],
+            ..Default::default()
+        };
+        let build = |suffix: &str| {
+            let applet_id = typed_id("ak:applet:");
+            let event_id = typed_id("ak:event:");
+            EventBatchCommitRequest {
+                events: vec![event_request(
+                    event_id,
+                    realm_id(),
+                    &format!("did:web:{suffix}.example"),
+                    None,
+                )],
+                applet_record: Some(AppletRecordCommit {
+                    applet_id: arkret_wire::AppletId::new(applet_id).unwrap(),
+                    expected_record: None,
+                    record: serde_json::json!({
+                        "status": "installed",
+                        "revoked_at": null,
+                        "package": {"namespaces": namespaces.clone()},
+                    }),
+                    namespace_claims: namespaces.clone(),
+                    managed_authority_claims: vec![authority.clone()],
+                }),
+                agent_membership_cascade: None,
+            }
+        };
+        let left = build("claim-left");
+        let right = build("claim-right");
+        let (left, right) = tokio::join!(
+            store.commit_event_batch(left),
+            store.commit_event_batch(right)
+        );
+        assert_eq!(usize::from(left.is_ok()) + usize::from(right.is_ok()), 1);
+        assert_eq!(store.applets.records.lock().len(), 1);
+        assert_eq!(store.events.data.lock().len(), 1);
     }
 }

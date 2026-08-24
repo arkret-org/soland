@@ -1,12 +1,12 @@
 //! Integration tests — private invite delivery dispatch.
 //!
 //! `ak.self.invites.command.dispatch` (`POST /_arkret/self/invites/dispatch`)
-//! per `zh/sync/invite-addressing.md` §7: three closed `invite_event`
+//! per `zh/sync/invite-addressing.md` §7: closed accepted-event lookup and actor
 //! preconditions, then a local target replays the peer receive chain from
 //! step 4 while a remote target enters the durable exact-body outbox.
 
 use arkret_models_collaboration::governance::invite_addressing::{
-    IntroductionEvidence, InviteAddress, InviteDeliveryRequestBody, InviteReceivePolicy,
+    IntroductionEvidence, InviteAddress, InviteReceivePolicy, SelfInviteDispatchRequestBody,
 };
 use arkret_models_identity::ServiceResolutionCarrier;
 
@@ -33,19 +33,20 @@ struct DispatchFixture {
 }
 
 impl DispatchFixture {
-    fn delivery(&self, idempotency_key: &str) -> InviteDeliveryRequestBody {
-        InviteDeliveryRequestBody::new(
-            self.invite_event.clone(),
-            self.invite_address.clone(),
-            self.evidence.clone(),
-            idempotency_key,
-        )
+    fn delivery(&self, idempotency_key: &str) -> SelfInviteDispatchRequestBody {
+        SelfInviteDispatchRequestBody {
+            schema: arkret_wire::SchemaId::INVITE_DELIVERY_REQUEST_V1.to_owned(),
+            invite_event_id: self.invite_event.event_id.clone(),
+            invite_address: self.invite_address.clone(),
+            introduction_evidence: self.evidence.clone(),
+            idempotency_key: idempotency_key.to_owned(),
+        }
     }
 
     async fn dispatch(
         &self,
         token: &str,
-        delivery: &InviteDeliveryRequestBody,
+        delivery: &SelfInviteDispatchRequestBody,
     ) -> (StatusCode, Value) {
         let mut response = TestClient::post("http://server/_arkret/self/invites/dispatch")
             .add_header("authorization", format!("Bearer {token}"), true)
@@ -317,7 +318,7 @@ async fn self_invite_dispatch_rejects_an_invite_event_this_service_never_accepte
     bind_default_receive_policy(&fixture).await;
 
     let mut delivery = fixture.delivery("ak:idempotency:unaccepted");
-    delivery.invite_event.event_id =
+    delivery.invite_event_id =
         arkret_identifiers::EventId::new(UNKNOWN_EVENT_ID.to_owned()).expect("unknown Event id");
     let (status, body) = fixture.dispatch(&fixture.alice_token, &delivery).await;
     assert_eq!(status, StatusCode::CONFLICT, "dispatch response: {body}");
@@ -352,37 +353,6 @@ async fn self_invite_dispatch_rejects_an_invite_event_signed_by_another_actor_bo
     assert_eq!(body["error"]["code"], "failed_precondition", "{body}");
     assert_eq!(
         body["error"]["details"]["reason_code"], "invite_event_actor_mismatch",
-        "{body}"
-    );
-    assert!(
-        fixture.quarantine_entries().await.is_empty(),
-        "a closed precondition rejection MUST NOT produce a holder-private write"
-    );
-}
-
-#[test]
-fn self_invite_dispatch_rejects_an_invite_event_that_is_not_the_stored_canonical_bytes() {
-    run_on_deep_stack(
-        "self_invite_dispatch_rejects_an_invite_event_that_is_not_the_stored_canonical_bytes",
-        self_invite_dispatch_rejects_an_invite_event_that_is_not_the_stored_canonical_bytes_body,
-    );
-}
-
-async fn self_invite_dispatch_rejects_an_invite_event_that_is_not_the_stored_canonical_bytes_body()
-{
-    let fixture = seed_dispatch_fixture(explicit_address_evidence).await;
-    bind_default_receive_policy(&fixture).await;
-
-    // Keep the accepted `event_id` and the signing actor, and change only the
-    // signed content: the canonical Event bytes no longer equal the stored
-    // ones, which is exactly what a locally re-authored Event looks like.
-    let mut delivery = fixture.delivery("ak:idempotency:bytes-mismatch");
-    delivery.invite_event.created_at += chrono::Duration::milliseconds(1);
-    let (status, body) = fixture.dispatch(&fixture.alice_token, &delivery).await;
-    assert_eq!(status, StatusCode::CONFLICT, "dispatch response: {body}");
-    assert_eq!(body["error"]["code"], "failed_precondition", "{body}");
-    assert_eq!(
-        body["error"]["details"]["reason_code"], "invite_event_bytes_mismatch",
         "{body}"
     );
     assert!(

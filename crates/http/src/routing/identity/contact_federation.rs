@@ -27,7 +27,7 @@ use arkret_models_collaboration::contact_operations::{
     PeerContactEventSubmitOutcome, PeerContactMirrorReceipt, PeerContactMirrorReceiptDomain,
     PeerContactOutcome, PeerContactSubmitOutcome, PeerContactSubmitRequestBody,
     RejectAcceptanceReceipt, RequestAcceptanceReceipt, bilateral_checkpoint_digest,
-    bilateral_prefix_accumulator,
+    bilateral_continuity_root_basis_digest, bilateral_prefix_accumulator,
 };
 use arkret_models_collaboration::events_payloads::contact::{
     ContactAcceptedPayload, ContactRejectedPayload, ContactRequestedPayload,
@@ -866,11 +866,8 @@ fn continuity_invalid(message: impl Into<String>) -> AppError {
 }
 
 fn contact_bundle_digest(bundle: &ContactRoundEvidenceBundle) -> Result<Hash, AppError> {
-    Hash::new(
-        canonical::canonical_sha256(&uncheckpointed_bundle(bundle))
-            .map_err(|error| AppError::internal(format!("Contact basis digest: {error}")))?,
-    )
-    .map_err(|error| AppError::internal(format!("Contact basis digest invalid: {error}")))
+    bilateral_continuity_root_basis_digest(&uncheckpointed_bundle(bundle))
+        .map_err(|error| AppError::internal(format!("Contact basis digest: {error}")))
 }
 
 fn latest_continuity_checkpoint(record: &ContactRecord) -> Option<BilateralContinuityCheckpoint> {
@@ -970,11 +967,10 @@ pub(crate) fn next_continuity_checkpoint_core(
         .rev()
         .map(contact_bundle_digest)
         .collect::<Result<Vec<_>, _>>()?;
-    let (root_basis, root_basis_digest, previous_accumulator, covered_prefix_count, sequence) =
+    let (root_basis, previous_accumulator, covered_prefix_count, sequence) =
         if let Some(previous) = &previous {
             (
                 previous.core.root_basis.clone(),
-                previous.core.root_basis_digest.clone(),
                 Some(&previous.core.prefix_accumulator_root),
                 previous
                     .core
@@ -998,8 +994,7 @@ pub(crate) fn next_continuity_checkpoint_core(
                 ));
             }
             let root = Box::new(uncheckpointed_bundle(root));
-            let root_digest = contact_bundle_digest(root.as_ref())?;
-            (root, root_digest, None, extension_digests.len() as u64, 1)
+            (root, None, extension_digests.len() as u64, 1)
         };
     let participants = participant_authority_pair(state, record, local_principal_id)?;
     let current_pair = match &current.contact_round {
@@ -1026,7 +1021,6 @@ pub(crate) fn next_continuity_checkpoint_core(
         context: CONTACT_CONTINUITY_CONTEXT.to_owned(),
         participants,
         root_basis,
-        root_basis_digest,
         covered_through_contact_round_id: covered_through,
         prefix_accumulator_root,
         covered_prefix_count,

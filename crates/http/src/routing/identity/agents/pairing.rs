@@ -215,21 +215,13 @@ pub(super) async fn submit_agent_runtime_key_request(
         pairing_failed_precondition("agent pairing metadata is incomplete")
             .with_reason_detail("missing approval_requested_at")
     })?;
-    let projection_action = if existing_binding.is_none()
-        && approval_request_id == proposed_approval_request_id
-        && notification_id == proposed_notification_id
-    {
-        arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Add
-    } else {
-        arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Update
-    };
     let delta =
         arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
             arkret_wire::NotificationId::new(notification_id.clone()).map_err(|error| {
                 AppError::internal(format!("approval notification id is invalid: {error}"))
             })?,
             arkret_wire::NotificationKind::Agent,
-            projection_action,
+            arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Upsert,
             Some(
                 arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApproval(
                     arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalNotificationData {
@@ -1173,7 +1165,13 @@ async fn validate_requested_scope_disclosure(
             "stored Agent requested_scope digest failed: {error}"
         ))
     })?;
-    if disclosure.requested_scope_digest != stored_digest {
+    let disclosed_digest = arkret_signatures::agent::agent_requested_scope_digest(
+        &disclosure.agent_id,
+        &disclosure.controller_id,
+        &disclosure.requested_scope,
+    )
+    .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    if disclosed_digest != stored_digest {
         return Err(AppError::param_invalid(
             "requested_scope_disclosure does not match the provisioned Agent ceiling",
         ));

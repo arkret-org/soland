@@ -16,7 +16,7 @@ use arkret_models_collaboration::governance::agent_membership_cascade::AgentCont
 use arkret_state::lattice::CellState;
 use arkret_state::state::{CellRegistry, CellStore, StoreError};
 use arkret_wire::cba::ProjectedCellWrite;
-use arkret_wire::{PrincipalAuthorityKey, ProfileId};
+use arkret_wire::{AppletId, PrincipalAuthorityKey, ProfileId};
 use serde_json::Value;
 
 use super::*;
@@ -184,14 +184,14 @@ pub struct ProjectionState {
     /// Server-side Morph projection. Same shape as Strand. Mirror table
     /// is `projection_morphs` (durable).
     pub morphs: BTreeMap<String, MorphProjection>,
-    /// Server-side Applet registry projection, keyed by `service_id`
-    /// (the canonical applet identity per spec
-    /// `extensions/applet-integration.md`). Populated by
+    /// Server-side Applet registry projection, keyed by canonical `applet_id`.
+    /// `service_id` remains an authority attribute and may identify multiple
+    /// Applets. Populated by
     /// `ak.applet.registration` (initial registration / re-registration)
     /// and updated by `ak.applet.discovery` (manifest refresh). Used by
     /// `GET /_soland/admin/applets` admin snapshot. Runtime-private applet
     /// session progress is not a durable Arkret event and is not mirrored here.
-    pub applets: BTreeMap<String, AppletProjection>,
+    pub applets: BTreeMap<AppletId, AppletProjection>,
     /// R3 spec-sync (2026-05-27, arkret-spec b47ff6ec) — FSM lifecycle
     /// state for each agent_id. Driven by
     /// `ak.agent.{pause,resume,deactivate}` (REDU-1). Default `Active`

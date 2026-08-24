@@ -379,10 +379,10 @@ pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
         state.config().sovereign_enclave_enabled,
     );
 
-    // Round 4 (B1) — validate the v2 invariants. development_mode=true MUST
+    // Validate the Arkret v1 invariants. development_mode=true MUST
     // forbid non-empty verified_profiles; protocol_version MUST equal the
     // SDK constant. A failure here means the producer drifted from the
-    // round-4 ServiceDescribe schema.
+    // canonical ServiceDescribe schema.
     if let Err(err) = description.validate() {
         tracing::error!(
             error = %err,

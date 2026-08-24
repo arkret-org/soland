@@ -342,6 +342,25 @@ async fn validate_event_envelope_with_ingress(
     // equality gate below, not after it.
     let is_authorized_internal_adapter =
         internal_admission.is_some_and(|admission| admission.matches(session, object));
+    let is_applet_managed_pcr_genesis = kind == "ak.realm.create"
+        && object
+            .get("payload")
+            .and_then(Value::as_object)
+            .and_then(|payload| payload.get("object"))
+            .and_then(Value::as_object)
+            .and_then(|genesis| genesis.get("purpose"))
+            .and_then(Value::as_str)
+            == Some("applet_managed_control");
+    let is_verified_applet_formal_aggregate = internal_admission
+        .filter(|admission| admission.matches(session, object))
+        .is_some_and(InternalEventAdmission::is_applet_formal);
+    if is_applet_managed_pcr_genesis && !is_verified_applet_formal_aggregate {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "applet_managed_pcr_genesis_requires_closed_aggregate",
+            "Applet-managed PCR genesis is accepted only inside the verified formal install/provision aggregate",
+        ));
+    }
     let ephemeral_pairwise_author = if actor_id != session_actor_id
         && !is_authorized_internal_adapter
     {
@@ -467,7 +486,15 @@ async fn validate_event_envelope_with_ingress(
     // this exact signed Event. Its first formal profile Event is authorized by
     // the accountability-grant Event persisted immediately before it, rather
     // than by an `ak:grant:*` capability object in the runtime grant index.
-    if !is_authorized_internal_adapter {
+    let managed_actor = validate_applet_managed_actor_liveness(
+        state,
+        object,
+        actor_id.as_str(),
+        &kind,
+        realm_id.as_str(),
+    )
+    .await?;
+    if !is_authorized_internal_adapter && !managed_actor {
         validate_applet_delegated_authorization_chain(
             state,
             object,
@@ -612,17 +639,27 @@ async fn validate_event_envelope_with_ingress(
     let is_member_self_knock = member_self_knock(object, session_actor_id.as_str());
     let is_authorized_internal_adapter = internal_admission
         .is_some_and(|admission| admission.authorizes_realm_membership_bypass(session, object));
-    let membership_subject = if ephemeral_pairwise_author {
+    let membership_subject = if ephemeral_pairwise_author || managed_actor {
         actor_id.as_str()
     } else {
         session_actor_id.as_str()
     };
+    // An Applet-managed actor is an independent principal. Its immutable
+    // provision and live Applet authority grant do not make it a member of the
+    // portal Realm. Only its own PCR resolution rotation bypasses Realm
+    // membership; ordinary writes require the managed actor's current member
+    // state, even though the envelope also carries `applet_id`.
+    let managed_actor_pcr_rotation =
+        managed_actor && kind == arkret_wire::EventKind::IdentityResolutionUpdate.as_str();
+    let applet_membership_bypass =
+        applet_delegated_membership_bypass(is_applet_delegated, managed_actor);
     if !is_realm_create_bootstrap
         && !is_invite_acceptance_join
         && !is_invitee_invite_cancel
         && !is_third_party_invite_claim
         && !is_private_invite_delivery
-        && !is_applet_delegated
+        && !applet_membership_bypass
+        && !managed_actor_pcr_rotation
         && !managed_agent_delegation
         && !is_member_self_knock
         && !is_realm_bootstrap_followup
@@ -879,6 +916,10 @@ async fn validate_event_envelope_with_ingress(
     })
 }
 
+fn applet_delegated_membership_bypass(is_applet_delegated: bool, managed_actor: bool) -> bool {
+    is_applet_delegated && !managed_actor
+}
+
 fn event_id_digest_mismatch_error() -> EventValidationError {
     EventValidationError {
         status: StatusCode::BAD_REQUEST,
@@ -1095,16 +1136,19 @@ async fn event_uses_active_applet_registration_epoch(
     {
         return Ok(false);
     }
-    let Some(package) = record.package.as_ref() else {
-        return Ok(false);
-    };
-    let evidence = record
-        .registration_epoch_evidence
-        .as_ref()
-        .or(package.registration_epoch_evidence.as_ref());
+    let package = &record.package;
+    let evidence =
+        crate::routing::extensions::applet_bridge::registration_epoch_evidence_from_record(&record)
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("stored Applet registration Event is invalid: {error}"),
+                )
+            })?;
     Ok(package.service_id.as_str() == signer_id
         && package.webhook_auth.key_ref.as_str() == verification_method
-        && evidence.is_some_and(|evidence| evidence.contains_signing_key(verification_method)))
+        && evidence.contains_signing_key(verification_method))
 }
 
 /// Run the registry cell contract for every reducer-input kind whose registry
@@ -1448,5 +1492,12 @@ mod security_frontier_material_tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn managed_applet_actor_never_inherits_the_delegated_membership_bypass() {
+        assert!(applet_delegated_membership_bypass(true, false));
+        assert!(!applet_delegated_membership_bypass(true, true));
+        assert!(!applet_delegated_membership_bypass(false, true));
     }
 }

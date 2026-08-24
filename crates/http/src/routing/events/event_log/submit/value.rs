@@ -2148,6 +2148,20 @@ pub(super) async fn submit_event_value_with_context(
                 reason,
             ));
         }
+        if context.internal_admission.is_none()
+            && let Some(reason) = preflight_mls_welcome_claim_ledger_reject(
+                state,
+                parsed.actor_id.as_str(),
+                operation,
+            )
+            .await
+        {
+            return Err(SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                reason.clone(),
+                reason,
+            ));
+        }
         // The typed decode above proves the validated envelope is a JSON
         // object, so this deref cannot fail.
         let envelope_object = envelope
@@ -2334,6 +2348,20 @@ pub(super) async fn submit_event_value_with_context(
                 ));
             }
             if let Some(reason) = state.projections().preflight_mls_rejection(operation) {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason.clone(),
+                    reason,
+                ));
+            }
+            // Poll response validity is admission state, not a best-effort
+            // post-commit projection. This path is shared by local and peer
+            // federation submission, so an unresolved/cross-scope Poll or an
+            // invalid selection can never enter the canonical Event log.
+            if let Some(reason) = state
+                .projections()
+                .preflight_poll_rejection(operation, &projected_cell_writes)
+            {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
                     reason.clone(),

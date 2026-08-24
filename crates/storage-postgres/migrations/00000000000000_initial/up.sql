@@ -294,36 +294,38 @@ CREATE INDEX agent_membership_cleanup_incomplete_idx
 
 CREATE TABLE public.applet_registrations (
     id text PRIMARY KEY,
-    namespace text NOT NULL,
-    owner_actor_id text NOT NULL,
-    registry_did text NOT NULL,
-    bot_actor_id text NOT NULL,
-    portal_realm_id text NOT NULL,
-    capabilities jsonb DEFAULT '[]'::jsonb NOT NULL,
-    manifest jsonb NOT NULL,
-    package jsonb,
-    namespaces jsonb,
-    ghost_actors_allowed boolean DEFAULT false NOT NULL,
-    status text NOT NULL,
-    registered_at timestamp with time zone NOT NULL,
-    revoked_at timestamp with time zone,
-    idempotency_key text,
-    install_body_digest text,
-    install_id text,
-    install_response jsonb,
-    install_execution jsonb,
-    ghosts jsonb DEFAULT '[]'::jsonb NOT NULL,
+    record jsonb NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT applet_registrations_status_check CHECK ((status = ANY (ARRAY['registered'::text, 'installed'::text, 'partially_installed'::text, 'rejected'::text, 'revoked'::text])))
+    CONSTRAINT applet_registrations_status_check CHECK ((record->>'status' = ANY (ARRAY['installed'::text, 'partially_installed'::text, 'rejected'::text, 'revoked'::text])))
 );
 
-CREATE UNIQUE INDEX applet_registrations_active_namespace_idx ON public.applet_registrations USING btree (namespace) WHERE (revoked_at IS NULL);
+CREATE INDEX applet_registrations_owner_idx ON public.applet_registrations USING btree ((record->>'owner_actor_id'));
 
-CREATE INDEX applet_registrations_owner_idx ON public.applet_registrations USING btree (owner_actor_id);
+CREATE INDEX applet_registrations_status_idx ON public.applet_registrations USING btree ((record->>'status'));
 
-CREATE INDEX applet_registrations_status_idx ON public.applet_registrations USING btree (status);
+CREATE TABLE public.applet_namespace_claims (
+    applet_id text NOT NULL REFERENCES public.applet_registrations(id),
+    domain text NOT NULL CHECK (domain IN ('actors', 'realms', 'handles')),
+    pattern text NOT NULL,
+    exclusive boolean NOT NULL,
+    PRIMARY KEY (applet_id, domain, pattern)
+);
+
+CREATE INDEX applet_namespace_claims_domain_pattern_idx
+    ON public.applet_namespace_claims (domain, pattern);
+
+CREATE TABLE public.managed_authority_claims (
+    actor_id text NOT NULL,
+    principal_server_id text NOT NULL,
+    applet_id text NOT NULL REFERENCES public.applet_registrations(id),
+    PRIMARY KEY (actor_id, principal_server_id)
+);
+
+CREATE INDEX managed_authority_claims_applet_idx
+    ON public.managed_authority_claims (applet_id);
 
 CREATE TABLE public.applet_transactions (
+    applet_id text NOT NULL,
     source_service_id text NOT NULL,
     idempotency_key text NOT NULL,
     delivery_authentication_record_digest text NOT NULL,
@@ -331,7 +333,7 @@ CREATE TABLE public.applet_transactions (
     outcome jsonb,
     received_at timestamp with time zone DEFAULT now() NOT NULL,
     completed_at timestamp with time zone,
-    CONSTRAINT applet_transactions_pkey PRIMARY KEY (source_service_id, idempotency_key)
+    CONSTRAINT applet_transactions_pkey PRIMARY KEY (applet_id, source_service_id, idempotency_key)
 );
 
 CREATE INDEX applet_transactions_received_idx ON public.applet_transactions USING btree (received_at);
@@ -1653,11 +1655,13 @@ CREATE TABLE public.mls_key_packages (
     keypackage_ref text NOT NULL,
     keypackage_digest text NOT NULL,
     actor_id text NOT NULL,
-    device_id text NOT NULL,
+    device_id text,
+    endpoint_verification_method text,
+    intended_realm_id text,
     key_package_bytes bytea NOT NULL,
     capabilities jsonb DEFAULT '[]'::jsonb NOT NULL,
     capabilities_digest text NOT NULL,
-    device_signature jsonb DEFAULT '{}'::jsonb NOT NULL,
+    endpoint_signature jsonb DEFAULT '{}'::jsonb NOT NULL,
     last_resort boolean DEFAULT false NOT NULL,
     last_resort_realm_id text,
     lifetime_not_before bigint NOT NULL,
@@ -1673,20 +1677,31 @@ CREATE TABLE public.mls_key_packages (
     claim_expires_at_unix_ms bigint,
     consumed_at bigint,
     created_at bigint NOT NULL,
-    CONSTRAINT mls_key_packages_trust_binding_check CHECK (
-        num_nonnulls(device_authorize_event_id, agent_key_authorize_event_id) = 1
+    CONSTRAINT mls_key_packages_endpoint_binding_check CHECK (
+        (device_id IS NOT NULL AND device_authorize_event_id IS NOT NULL
+            AND endpoint_verification_method IS NULL AND intended_realm_id IS NULL
+            AND agent_key_authorize_event_id IS NULL)
+        OR
+        (device_id IS NULL AND device_authorize_event_id IS NULL
+            AND endpoint_verification_method IS NOT NULL AND intended_realm_id IS NULL
+            AND agent_key_authorize_event_id IS NOT NULL)
+        OR
+        (device_id IS NULL AND device_authorize_event_id IS NULL
+            AND endpoint_verification_method IS NOT NULL AND intended_realm_id IS NOT NULL
+            AND agent_key_authorize_event_id IS NULL)
     )
 );
 
 ALTER TABLE ONLY public.mls_key_packages
     ADD CONSTRAINT mls_key_packages_keypackage_ref_key UNIQUE (keypackage_ref);
 
-CREATE INDEX mls_key_packages_by_actor_device ON public.mls_key_packages USING btree (actor_id, device_id, claimed_by_mls_group_id);
+CREATE INDEX mls_key_packages_by_actor_endpoint ON public.mls_key_packages USING btree (actor_id, device_id, endpoint_verification_method, intended_realm_id, claimed_by_mls_group_id);
 
 CREATE TABLE public.peer_keypackage_claims (
     source_service_id text NOT NULL,
     claim_request_id text NOT NULL,
     request_digest text NOT NULL,
+    key_package_use text NOT NULL,
     keypackage_id text,
     outcome jsonb,
     terminal_receipt jsonb,
@@ -1695,25 +1710,39 @@ CREATE TABLE public.peer_keypackage_claims (
     expires_at bigint NOT NULL,
     state text NOT NULL,
     updated_at bigint NOT NULL,
+    CONSTRAINT peer_keypackage_claims_key_package_use_check CHECK (key_package_use IN ('single_use', 'last_resort', 'none')),
     CONSTRAINT peer_keypackage_claims_state_check CHECK (state IN ('claimed', 'consumed', 'claim_failed', 'expired', 'revoked', 'last_resort_claimed')),
+    CONSTRAINT peer_keypackage_claims_deadline_check CHECK (key_package_use = 'none' OR claim_expires_at_unix_ms IS NOT NULL),
+    CONSTRAINT peer_keypackage_claims_last_resort_state_check CHECK (state <> 'last_resort_claimed' OR key_package_use = 'last_resort'),
     PRIMARY KEY (source_service_id, claim_request_id)
 );
+
+CREATE UNIQUE INDEX peer_keypackage_claims_single_use_keypackage_id_key ON public.peer_keypackage_claims USING btree (keypackage_id) WHERE key_package_use = 'single_use' AND keypackage_id IS NOT NULL;
 
 CREATE TABLE public.mls_welcomes (
     id text PRIMARY KEY,
     mls_group_id text NOT NULL,
     recipient_actor_id text NOT NULL,
-    recipient_device_id text NOT NULL,
+    recipient_device_id text,
+    recipient_endpoint_verification_method text,
+    intended_realm_id text,
     welcome_bytes bytea NOT NULL,
     key_package_id text NOT NULL,
     epoch bigint NOT NULL,
     commit_ref text,
     governance_binding jsonb NOT NULL,
     enqueued_at bigint NOT NULL,
-    delivered_at bigint
+    delivered_at bigint,
+    CONSTRAINT mls_welcomes_endpoint_binding_check CHECK (
+        (recipient_device_id IS NOT NULL
+            AND recipient_endpoint_verification_method IS NULL
+            AND intended_realm_id IS NULL)
+        OR (recipient_device_id IS NULL
+            AND recipient_endpoint_verification_method IS NOT NULL)
+    )
 );
 
-CREATE INDEX mls_welcomes_recipient_pending ON public.mls_welcomes USING btree (recipient_actor_id, recipient_device_id, delivered_at, enqueued_at);
+CREATE INDEX mls_welcomes_recipient_pending ON public.mls_welcomes USING btree (recipient_actor_id, recipient_device_id, recipient_endpoint_verification_method, intended_realm_id, delivered_at, enqueued_at);
 
 -- `report` is an Event-derived kind: `id` is the create Event's 33-byte token
 -- behind a local sequential `pk`. `target_event_id` is the protocol identity of

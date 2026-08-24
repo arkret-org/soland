@@ -32,13 +32,6 @@ pub(super) fn is_sha_digest(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-pub(super) fn backup_class_wire(backup_kind: BackupKind) -> &'static str {
-    match backup_kind {
-        BackupKind::SecretStorage => "secret_storage",
-        BackupKind::MlsHistory => "mls_history",
-    }
-}
-
 pub(super) fn key_backup_to_value(backup: &KeyBackup) -> Result<Value, AppError> {
     serde_json::to_value(backup)
         .map_err(|error| AppError::internal(format!("key backup body re-encode failed: {error}")))
@@ -185,66 +178,6 @@ pub(super) fn validate_key_backup_domain_separation_typed(
     if !valid_key_backup_subdomain(&domain.subdomain) {
         return Err(schema_error(
             "domain_separation.subdomain must match [a-z][a-z0-9_]{0,63}",
-        ));
-    }
-    let expected_hkdf_info = format!(
-        "arkret-key-backup/{}/{}/v1",
-        backup_class_wire(backup.backup_kind),
-        domain.subdomain
-    );
-    if domain.hkdf_info != expected_hkdf_info {
-        return Err(schema_error(
-            "domain_separation.hkdf_info does not match backup_kind/subdomain",
-        ));
-    }
-    let aad = &domain.aead_aad;
-    if aad.schema != arkret_wire::SchemaId::KEY_BACKUP_V1 {
-        return Err(schema_error("domain_separation.aead_aad.schema mismatch"));
-    }
-    if aad.actor_id.as_str() != backup.actor_id.as_str() {
-        return Err(schema_error(
-            "domain_separation.aead_aad.actor_id must match actor_id",
-        ));
-    }
-    if aad.backup_kind != backup.backup_kind {
-        return Err(schema_error(
-            "domain_separation.aead_aad.backup_kind must match backup_kind",
-        ));
-    }
-    if aad.backup_version != backup.backup_version {
-        return Err(schema_error(
-            "domain_separation.aead_aad.backup_version must match backup_version",
-        ));
-    }
-    if aad.created_at != backup.created_at {
-        return Err(schema_error(
-            "domain_separation.aead_aad.created_at must match created_at",
-        ));
-    }
-    let expected_device = backup
-        .device_id
-        .as_ref()
-        .map(|device_id| device_id.as_str())
-        .or(backup.encryption.recipient_key_ref.as_deref());
-    if aad.device_id.as_deref() != expected_device {
-        return Err(schema_error(
-            "domain_separation.aead_aad.device_id must match device_id or recipient_key_ref",
-        ));
-    }
-    let expected_item_kinds: Vec<&str> = backup
-        .contents
-        .iter()
-        .map(arkret_models_crypto::KeyBackupContentItem::item_kind)
-        .collect();
-    if aad
-        .item_kinds
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        != expected_item_kinds
-    {
-        return Err(schema_error(
-            "domain_separation.aead_aad.item_kinds must match contents[].item_kind",
         ));
     }
     Ok(())

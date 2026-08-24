@@ -407,7 +407,6 @@ pub fn projected_grant_fixture(
         issuer_authority_refs: Vec::new(),
         authority_depth: None,
         authority_root_refs: Vec::new(),
-        expires_at: None,
     }
 }
 

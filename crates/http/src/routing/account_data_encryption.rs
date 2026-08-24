@@ -617,7 +617,6 @@ mod tests {
                     "message_id": "ak:message:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                     "content": {"kind": "ak.content.text", "body": "secret"}
                 },
-                "message_payload_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
                 "updated_hlc": "01904100-0000-7000-8000-000000000001",
                 "encrypted_payload": encrypted_envelope(key)
             }),

@@ -1,10 +1,8 @@
 //! Applet package install, bot/ghost provisioning, and portal routing.
 //!
-//! This closes the runnable surface for the `extensions/applet-bridge`
-//! contract: a verified Applet Package installs an applet, soland issues a
-//! stable bot DID and `ak.applet.registration` projection, ghost DIDs can be
-//! minted for external users, and portal messages are mirrored into the
-//! canonical space timeline.
+//! Formal `/_arkret` operations consume SDK-owned Applet types and
+//! caller-authored protocol Events. Soland never mints Applet-managed actor
+//! identities and exposes no deployment-local Applet protocol.
 
 mod endpoints;
 mod ghost;
@@ -17,14 +15,10 @@ mod types;
 #[cfg(test)]
 mod inbound_signature_tests;
 
-pub(in crate::routing::extensions) use endpoints::{protocol_router, router};
-pub use ghost::did_document_for_extension_actor;
-// SOL-HYG-01: the sibling `bot_actor` view derives bot/ghost rows directly
-// from the durable applet records, so expose the record accessors and the
-// manifest display-name helper to the `extensions` module scope.
-pub use types::{
-    AppletExternalUserInput, AppletGhostIngressOutcome, AppletGhostIngressRequestBody,
-    AppletInstallPaths, AppletManifestRegisterRequestBody, AppletPortalMessageOutcome,
-    AppletPortalMessageRequestBody, AppletProtocolDescribeOutcome, AppletRecord,
-    AppletRevokeRecordOutcome, AppletView, GhostActorRecord,
+pub(in crate::routing::extensions) use endpoints::protocol_router;
+// The formal Applet routes project Bot/Ghost authority directly from the
+// durable SDK-owned Applet record; no sibling legacy actor view exists.
+pub use types::{AppletRecord, AppletRevokeRecordOutcome, GhostActorRecord};
+pub(crate) use types::{
+    registration_epoch_evidence_from_event, registration_epoch_evidence_from_record,
 };

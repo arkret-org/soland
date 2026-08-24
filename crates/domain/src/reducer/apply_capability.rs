@@ -1163,7 +1163,23 @@ impl ProjectionState {
         let Some(subject) = body.get("subject").and_then(Value::as_str) else {
             return false;
         };
-        let Some(registration) = self.applets.get(subject) else {
+        let Some(constraints) = body.get("constraints").and_then(Value::as_array) else {
+            return false;
+        };
+        let Some(applet_id) = constraints
+            .iter()
+            .filter(|constraint| {
+                constraint.get("constraint_subkind").and_then(Value::as_str)
+                    == Some("applet_authority")
+            })
+            .map(|constraint| constraint.get("applet_id").and_then(Value::as_str))
+            .collect::<Option<Vec<_>>>()
+            .filter(|values| values.len() == 1)
+            .and_then(|values| arkret_wire::AppletId::new(values[0].to_owned()).ok())
+        else {
+            return false;
+        };
+        let Some(registration) = self.applets.get(&applet_id) else {
             return false;
         };
         let Some(registration_scope_ref) = registration.registration_scope_ref.as_ref() else {
@@ -1173,9 +1189,6 @@ impl ProjectionState {
         if resources.len() != 1 || resources.first() != Some(registration_scope_ref) {
             return false;
         }
-        let Some(constraints) = body.get("constraints").and_then(Value::as_array) else {
-            return false;
-        };
 
         registration.claimed_profiles.iter().any(|profile_id| {
             let Some(rule) =
@@ -1556,7 +1569,11 @@ impl ProjectionState {
         }
         if let Err(reason) =
             validate_nonhuman_subject_grant_constraints(grant_body(&operation.payload), |subject| {
-                self.agent_lifecycles.contains_key(subject) || self.applets.contains_key(subject)
+                self.agent_lifecycles.contains_key(subject)
+                    || self
+                        .applets
+                        .values()
+                        .any(|registration| registration.service_id == subject)
             })
         {
             return ProjectionEffect::Rejected {
@@ -2496,6 +2513,46 @@ mod agent_key_tests {
         assert!(matches!(
             effect,
             crate::reducer::ProjectionEffect::AppletProjectionUpdated { .. }
+        ));
+    }
+
+    #[test]
+    fn applet_projection_keeps_two_applets_hosted_by_the_same_service() {
+        let mut state = ProjectionState::default();
+        seed_realm_authority(&mut state);
+        project_bridge_registration(&mut state);
+        let second_id = "ak:applet:01970000-0000-7000-8000-0000000000b1";
+        let effect = state.apply_applet_registration(
+            &op(
+                EventKind::AppletRegistration,
+                json!({
+                    "applet_id": second_id,
+                    "service_id": "ak:did_core:web:bridge.example",
+                    "namespace": "bridge-two",
+                    "claimed_profiles": ["ak.profile.applet_service.v1"],
+                    "requested_scopes": ["ak.applet.ghost.provision"],
+                    "registration_epoch": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                }),
+            ),
+            chrono::Utc::now(),
+        );
+        assert!(matches!(
+            effect,
+            crate::reducer::ProjectionEffect::AppletProjectionUpdated { .. }
+        ));
+        assert_eq!(state.applets.len(), 2);
+        assert!(
+            state
+                .applets
+                .contains_key(&arkret_wire::AppletId::new(second_id.to_owned()).unwrap())
+        );
+        let exact_first = state.apply_capability_grant(
+            &op(EventKind::CapabilityGrant, bridge_grant_payload()),
+            chrono::Utc::now(),
+        );
+        assert!(matches!(
+            exact_first,
+            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
         ));
     }
 

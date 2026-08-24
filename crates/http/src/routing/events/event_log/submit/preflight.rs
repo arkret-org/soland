@@ -49,6 +49,31 @@ pub(super) async fn preflight_mls_welcome_claim_signature_reject(
     .map(str::to_owned)
 }
 
+pub(super) async fn preflight_mls_welcome_claim_ledger_reject(
+    state: &AppState,
+    actor_id: &str,
+    operation: &Operation,
+) -> Option<String> {
+    if kinds::canonical_kind(operation) != arkret_wire::EventKind::MlsWelcome {
+        return None;
+    }
+    crate::routing::mls::validate_local_welcome_peer_claim(
+        state,
+        operation.realm_id.as_str(),
+        actor_id,
+        &operation.payload,
+    )
+    .await
+    .err()
+    .map(|reason| {
+        if reason == "peer_claim_welcome_pending" {
+            "dependency_missing".to_owned()
+        } else {
+            arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned()
+        }
+    })
+}
+
 pub(super) async fn preflight_mls_welcome_recipient_reject(
     state: &AppState,
     operation: &Operation,
@@ -56,40 +81,38 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
     if kinds::canonical_kind(operation) != arkret_wire::EventKind::MlsWelcome {
         return None;
     }
-    // `mls_welcome_payload` requires `recipient_principal_id`; the payload is
-    // `additionalProperties:false`, so no other recipient carrier exists.
-    let recipient_actor_id =
-        crate::routing::mls::payload_fields::welcome_recipient_principal_id(&operation.payload)?;
-    let recipient_device_id = operation
-        .payload
-        .get("recipient_device_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    if let Some(authorize_event_id) = operation
-        .payload
-        .get("claim_ref")
-        .and_then(Value::as_object)
-        .and_then(|claim_ref| claim_ref.get("agent_key_authorize_event_id"))
-        .and_then(Value::as_str)
-    {
-        let Ok(recipient) = arkret_identifiers::DidCoreId::new(recipient_actor_id.to_owned())
-        else {
-            return Some(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH.to_owned());
-        };
+    let welcome = operation
+        .typed_payload::<arkret_wire::event_spec::MlsWelcome>()
+        .ok()?;
+    let (recipient_actor_id, recipient_device_id) = match &welcome.recipient {
+        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Device {
+            recipient_device_id,
+        } => (
+            welcome.recipient_principal_id.as_ref()?.as_str(),
+            recipient_device_id.as_str(),
+        ),
+        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::NativeAgent {
+            recipient_agent_id,
+            agent_key_authorize_event_id,
+            ..
+        } => {
         let authorization_matches = crate::routing::mls::current_agent_key_authorization_matches(
             state,
-            &recipient,
-            authorize_event_id,
+                recipient_agent_id,
+                agent_key_authorize_event_id.as_str(),
         )
         .await;
         return welcome_recipient_trust_reject_reason(
-            Some(authorize_event_id),
+                Some(agent_key_authorize_event_id.as_str()),
             authorization_matches,
             false,
         )
         .map(str::to_owned);
-    }
+        }
+        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::MinimalMetadataPairwise {
+            ..
+        } => return None,
+    };
     let recipient_service_id = state
         .projections()
         .snapshot()

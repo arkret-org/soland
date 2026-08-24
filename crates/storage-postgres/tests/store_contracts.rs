@@ -1,6 +1,7 @@
 use soland_storage::contract_tests::{
-    ConsentCommitContractStores, DeviceRevocationSealSettlementStores, EventCommitContractStores,
-    assert_atomic_batch_outbox_rollback_contract,
+    AppletFormalCommitContractStores, ConsentCommitContractStores,
+    DeviceRevocationSealSettlementStores, EventCommitContractStores,
+    assert_applet_formal_commit_transaction_contract, assert_atomic_batch_outbox_rollback_contract,
     assert_atomic_control_event_governance_dependency_contract,
     assert_consent_projection_commit_contract,
     assert_control_proposal_authority_ack_store_contract,
@@ -17,7 +18,7 @@ use soland_storage::{
     PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult,
 };
 use soland_storage_postgres::{
-    Db, PgAccountDataStore, PgContactStore, PgControlProposalAuthorityAckStore,
+    Db, PgAccountDataStore, PgAppletStore, PgContactStore, PgControlProposalAuthorityAckStore,
     PgDeviceInventoryStore, PgDeviceMessageStore, PgEventCommitUnitOfWork, PgEventStore,
     PgFederationOutboxStore, PgGovernanceDependencyStore, PgIdempotencyStore,
     PgInviteReceivePolicyStore, PgMimiConsentCorrelationStore, PgMlsKeyPackageStore,
@@ -169,6 +170,27 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract_when_configured
             device_pairings: &device_pairings,
             contacts: &contacts,
             invite_policies: &invite_policies,
+        },
+        &namespace,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn postgres_adapter_satisfies_formal_applet_commit_transaction_contract_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
+    let events = PgEventStore { pool: pool.clone() };
+    let applets = PgAppletStore { pool };
+    let namespace = format!("postgres-formal-applet-{}", uuid::Uuid::now_v7().simple());
+    assert_applet_formal_commit_transaction_contract(
+        AppletFormalCommitContractStores {
+            unit_of_work: &unit_of_work,
+            events: &events,
+            applets: &applets,
         },
         &namespace,
     )
@@ -570,7 +592,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
                     outbox: Vec::new(),
                 },
             ],
-            applet_ghosts: None,
+            applet_record: None,
             agent_membership_cascade: None,
         })
         .await
@@ -668,19 +690,75 @@ async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract_when_confi
         .expect("reload last-resort ledger after store restart")
         .expect("last-resort ledger survives store restart");
     assert_eq!(replayed.claim_request_id, claim_request_id);
-    assert_eq!(replayed.state, "last_resort_claimed");
+    assert_eq!(replayed.state, "consumed");
+    assert_eq!(
+        replayed.consume_receipt,
+        Some(serde_json::json!({"receipt": "first-writer"}))
+    );
+    let expired = restarted_store
+        .get_peer_claim(
+            &format!("did:web:{namespace}.example"),
+            &format!("local-last-resort:{namespace}-02"),
+        )
+        .await
+        .expect("reload expired last-resort ledger after store restart")
+        .expect("expired last-resort ledger survives store restart");
+    assert_eq!(expired.state, "expired");
+    assert!(expired.outcome.is_some());
+    assert!(expired.consume_receipt.is_none());
+
+    let delayed = restarted_store
+        .get_peer_claim(
+            &format!("did:web:{namespace}.example"),
+            &format!("local-last-resort:{namespace}-03"),
+        )
+        .await
+        .expect("reload delayed consumed source mirror after restart")
+        .expect("delayed consumed source mirror survives restart");
+    assert_eq!(delayed.state, "consumed");
+    assert_eq!(delayed.key_package_use, "last_resort");
+    assert_eq!(
+        delayed.consume_receipt,
+        Some(serde_json::json!({"receipt": "signed-before-deadline"}))
+    );
+
+    let terminal = restarted_store
+        .get_peer_claim(
+            &format!("did:web:{namespace}.example"),
+            &format!("local-last-resort:{namespace}-04"),
+        )
+        .await
+        .expect("reload terminal source mirror after restart")
+        .expect("terminal source mirror survives restart");
+    assert_eq!(terminal.state, "revoked");
+    assert_eq!(terminal.key_package_use, "last_resort");
+    assert_eq!(
+        terminal.terminal_receipt,
+        Some(serde_json::json!({"receipt": "terminal"}))
+    );
+    assert!(
+        restarted_store
+            .get_peer_claim(
+                &format!("did:web:{namespace}.example"),
+                &format!("local-last-resort:{namespace}-05"),
+            )
+            .await
+            .expect("check rejected fractional-deadline claim")
+            .is_none()
+    );
 
     let concurrent = PeerKeyPackageClaimLedgerRecord {
         source_service_id: format!("did:web:{namespace}.example"),
         claim_request_id: format!("local-last-resort:{namespace}-concurrent"),
         request_digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
             .to_owned(),
+        key_package_use: "last_resort".to_owned(),
         state: "last_resort_claimed".to_owned(),
         outcome: Some(serde_json::json!({"response": {"claims": ["concurrent"]}})),
         consume_receipt: None,
         terminal_receipt: None,
         keypackage_id: Some(format!("{namespace}-keypackage-last-resort")),
-        claim_expires_at_unix_ms: None,
+        claim_expires_at_unix_ms: Some(20_000),
         expires_at: i64::MAX,
         updated_at: 10,
     };

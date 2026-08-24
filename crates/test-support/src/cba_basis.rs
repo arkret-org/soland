@@ -825,16 +825,6 @@ pub fn apply_registered_cba_plane_seal(
         Some("data") => {
             event.seal_ref = Some(seal_id);
             event.auth_context = Some(arkret_wire::AuthContext {
-                actor_id: arkret_wire::project_full_id_to_core_id(
-                    &DidFullId::new(
-                        verification_method
-                            .split_once('#')
-                            .map_or(verification_method, |(did, _)| did)
-                            .to_owned(),
-                    )
-                    .expect("fixture verification method DID"),
-                )
-                .expect("fixture verification method projection"),
                 key_id: fixture_auth_context_key_id(verification_method),
                 key_epoch: 0,
                 credential_epoch: None,

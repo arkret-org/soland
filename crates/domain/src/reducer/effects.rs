@@ -4,7 +4,7 @@
 //! `crate::reducer::ProjectionEffect` / `MlsEffect` paths stay unchanged.
 
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
-use arkret_wire::EventKind;
+use arkret_wire::{AppletId, EventKind};
 use serde_json::Value;
 
 use super::{
@@ -131,9 +131,8 @@ pub enum ProjectionEffect {
         level_public: Option<bool>,
     },
     /// Applet registry projection updated (registration or discovery).
-    /// Keyed by the applet's `service_id`.
     AppletProjectionUpdated {
-        service_id: String,
+        applet_id: AppletId,
     },
     /// R1.2 — `ak.realm.delivery_binding_policy` event was projected
     /// into the canonical `ak.component.realm.delivery_binding_policy.v1`
@@ -356,11 +355,11 @@ pub enum ProjectionEffect {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MlsEffect {
     /// `apply_keypackage_publish` — a fresh KeyPackage row was stored
-    /// for `(actor_id, device_id)`.
+    /// for the exact endpoint branch under `actor_id`.
     KeyPackagePublished {
         keypackage_id: String,
         actor_id: String,
-        device_id: String,
+        device_id: Option<String>,
     },
     /// `apply_keypackage_claim` — the named KeyPackage was atomically
     /// claimed for `group_id`. CAS guarantees at-most-one of these per
@@ -373,11 +372,13 @@ pub enum MlsEffect {
         claimed_at: i64,
     },
     /// `apply_welcome_enqueue` — a Welcome envelope was appended to the
-    /// per-`(recipient_actor_id, recipient_device_id)` queue.
+    /// per-closed-endpoint queue.
     WelcomeEnqueued {
         welcome_id: String,
         recipient_actor_id: String,
-        recipient_device_id: String,
+        recipient_device_id: Option<String>,
+        recipient_endpoint_verification_method: Option<String>,
+        intended_realm_id: Option<String>,
         group_id: String,
     },
     /// `apply_remove_proposal` — a `ak.mls.proposal{proposal_type="remove"}`

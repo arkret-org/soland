@@ -294,12 +294,7 @@ async fn attested_device_record(
 
     let record = QueryDeviceRecord {
         algorithms,
-        device_signing_key,
-        hpke_key,
         trust_algorithms,
-        device_status: DeviceStatus::Active,
-        device_authorize_event_id,
-        authorized_generation_ref,
         device_projection_attestation: attestation,
     };
     record

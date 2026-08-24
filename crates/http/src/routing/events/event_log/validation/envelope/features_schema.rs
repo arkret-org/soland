@@ -336,7 +336,7 @@ pub(crate) async fn validate_member_identity_proof(
         )
     })?;
     if identity.proof.payload_digest.as_str() != payload_digest {
-        crate::metrics::record_digest_mismatch("member_identity_payload_digest");
+        crate::metrics::record_digest_mismatch("member_identity_carrier_digest");
         return Err(event_validation_error(
             StatusCode::CONFLICT,
             "proof_event_digest_mismatch",

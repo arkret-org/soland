@@ -15,11 +15,13 @@ pub struct MlsKeyPackageRow {
     pub keypackage_ref: String,
     pub keypackage_digest: String,
     pub actor_id: String,
-    pub device_id: String,
+    pub device_id: Option<String>,
+    pub endpoint_verification_method: Option<String>,
+    pub intended_realm_id: Option<String>,
     pub key_package_bytes: Vec<u8>,
     pub capabilities: Vec<String>,
     pub capabilities_digest: String,
-    pub device_signature: Value,
+    pub endpoint_signature: Value,
     pub last_resort: bool,
     pub last_resort_realm_id: Option<String>,
     pub lifetime_not_before: i64,
@@ -268,8 +270,13 @@ pub struct PeerKeyPackageClaimLedgerRecord {
     pub source_service_id: String,
     pub claim_request_id: String,
     pub request_digest: String,
-    /// Single-use KeyPackage transitioned by this ledger row. Absent for an
-    /// opaque failure row.
+    /// Durable use class of the claimed KeyPackage (`single_use`,
+    /// `last_resort`, or `none` for an opaque failure/remote mirror without a
+    /// local package row). This remains stable after the ledger reaches a
+    /// terminal state and therefore must not be inferred from `state`.
+    pub key_package_use: String,
+    /// KeyPackage referenced by this ledger row. Absent for an opaque failure
+    /// or a source-side mirror of a remote claim.
     pub keypackage_id: Option<String>,
     pub outcome: Option<Value>,
     pub terminal_receipt: Option<Value>,
@@ -290,7 +297,7 @@ pub struct PeerKeyPackageClaimAttempt<'a> {
     pub device_authorize_event_id: Option<&'a str>,
     pub agent_key_authorize_event_id: Option<&'a str>,
     pub device_revocation_gate: Option<DeviceRevocationGateSelector>,
-    pub claimed_at: i64,
+    pub claimed_at_unix_ms: i64,
     pub claim_expires_at_unix_ms: i64,
     pub ledger: &'a PeerKeyPackageClaimLedgerRecord,
 }
@@ -324,13 +331,15 @@ pub enum PeerKeyPackageClaimLedgerWriteResult {
     Inserted,
     Existing(Box<PeerKeyPackageClaimLedgerRecord>),
 }
-/// G3.S1 — durable Welcome envelope row (per recipient device).
+/// G3.S1 — durable Welcome envelope row (per closed recipient endpoint).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsWelcomeRecord {
     pub id: String,
     pub group_id: String,
     pub recipient_actor_id: String,
-    pub recipient_device_id: String,
+    pub recipient_device_id: Option<String>,
+    pub recipient_endpoint_verification_method: Option<String>,
+    pub intended_realm_id: Option<String>,
     pub welcome_bytes: Vec<u8>,
     pub key_package_id: String,
     pub epoch: u64,
@@ -385,7 +394,7 @@ pub trait MlsKeyPackageStore: Send + Sync {
         &self,
         id: &str,
         mls_group_id: &str,
-        consumed_at: i64,
+        now_unix_ms: i64,
         peer_consume_receipt: Option<&Value>,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>>;
     /// Read a peer claim ledger row without revealing KeyPackage inventory.
@@ -393,6 +402,13 @@ pub trait MlsKeyPackageStore: Send + Sync {
         &self,
         source_service_id: &str,
         claim_request_id: &str,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>>;
+    /// Resolve the unique durable ordinary single-use peer-claim fact that
+    /// owns a KeyPackage. Reusable last-resort packages intentionally have
+    /// multiple independent claim audit rows and are excluded.
+    async fn get_peer_claim_by_keypackage_id(
+        &self,
+        keypackage_id: &str,
     ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>>;
     /// Atomically claim one ordinary KeyPackage and persist the exact terminal
     /// success outcome. Last-resort rows are never eligible on this path.
@@ -417,8 +433,44 @@ pub trait MlsKeyPackageStore: Send + Sync {
         terminal_receipt: &Value,
         updated_at: i64,
     ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>>;
-    /// Revoke expired, still-unconsumed peer claims atomically with their
-    /// ledger transitions. Returns newly revoked KeyPackage ids.
+    async fn attach_peer_claim_consume_receipt(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        consume_receipt: &Value,
+        now_unix_ms: i64,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>>;
+    /// Replicate a destination-accepted consume fact into an existing source
+    /// claim mirror. The signed consume time, rather than replication arrival
+    /// time, is checked against the original claim deadline.
+    async fn transition_peer_claim_consumed(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        expected_outcome: &Value,
+        consume_receipt: &Value,
+        consumed_at_unix_ms: i64,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>>;
+    /// Atomically transition an existing source-side successful claim mirror
+    /// to its signed terminal state while preserving its use class, claimed
+    /// coordinates, and exact outcome. Returns `None` for a missing row,
+    /// state/digest/outcome drift, or a non-terminal target.
+    async fn transition_peer_claim_terminal(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        expected_outcome: &Value,
+        terminal_state: &str,
+        terminal_receipt: &Value,
+        now_unix_ms: i64,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>>;
+    /// Close expired peer claim audits atomically. Ordinary single-use claims
+    /// revoke their KeyPackage and return its id; last-resort claims only move
+    /// their independent audit to `expired` and never return the reusable
+    /// KeyPackage id.
     async fn revoke_expired_peer_claims(&self, now_unix_ms: i64) -> PersistenceResult<Vec<String>>;
     /// Snapshot all rows. Diagnostics + the integration test rely on it.
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRow>>;

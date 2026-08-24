@@ -473,8 +473,6 @@ fn capability_grant_from_authz_grant(
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| AppError::internal(error.to_string()))?,
         issued_at: grant.created_at,
-        not_before: None,
-        expires_at: grant.expires_at,
         updated_by: None,
         updated_at: None,
         revoked_by: None,

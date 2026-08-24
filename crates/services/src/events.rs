@@ -722,6 +722,7 @@ pub trait MessagePort: Send + Sync {
 
 #[derive(Clone, Debug)]
 pub struct AppletTransactionReplayState {
+    pub applet_id: arkret_wire::AppletId,
     pub source_service_id: String,
     pub idempotency_key: String,
     pub delivery_authentication_record_digest: String,
@@ -741,13 +742,19 @@ pub enum AppletTransactionReplayResult {
 pub trait AppletPort: Send + Sync {
     async fn applet(&self, applet_id: &str) -> ServiceResult<Option<Value>>;
     async fn applets(&self) -> ServiceResult<Vec<Value>>;
-    async fn store_applet(&self, applet_id: &str, applet: Value) -> ServiceResult<()>;
+    async fn compare_and_swap_applet(
+        &self,
+        applet_id: &str,
+        expected: &Value,
+        replacement: Value,
+    ) -> ServiceResult<bool>;
     async fn begin_applet_transaction(
         &self,
         replay: AppletTransactionReplayState,
     ) -> ServiceResult<AppletTransactionReplayResult>;
     async fn complete_applet_transaction(
         &self,
+        applet_id: &str,
         source_service_id: &str,
         idempotency_key: &str,
         outcome: Value,
@@ -838,15 +845,18 @@ pub struct CommitDevicePairingAuthorization {
 }
 
 #[derive(Clone, Debug)]
-pub struct CommitAppletGhosts {
-    pub applet_id: String,
-    pub ghost: Value,
+pub struct CommitAppletRecord {
+    pub applet_id: arkret_wire::AppletId,
+    pub expected_record: Option<Value>,
+    pub record: Value,
+    pub namespace_claims: arkret_models_integration::AppletWireNamespaces,
+    pub managed_authority_claims: Vec<soland_storage::ManagedAuthorityClaim>,
 }
 
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventBatchCommand {
     pub events: Vec<CommitAcceptedEventCommand>,
-    pub applet_ghosts: Option<CommitAppletGhosts>,
+    pub applet_record: Option<CommitAppletRecord>,
     pub agent_membership_cascade: Option<soland_storage::AgentMembershipCascadeCommit>,
 }
 
@@ -1482,8 +1492,15 @@ impl EventQueryService {
     pub async fn applets(&self) -> ServiceResult<Vec<Value>> {
         self.applets.applets().await
     }
-    pub async fn store_applet(&self, applet_id: &str, applet: Value) -> ServiceResult<()> {
-        self.applets.store_applet(applet_id, applet).await
+    pub async fn compare_and_swap_applet(
+        &self,
+        applet_id: &str,
+        expected: &Value,
+        replacement: Value,
+    ) -> ServiceResult<bool> {
+        self.applets
+            .compare_and_swap_applet(applet_id, expected, replacement)
+            .await
     }
     pub async fn begin_applet_transaction(
         &self,
@@ -1493,12 +1510,13 @@ impl EventQueryService {
     }
     pub async fn complete_applet_transaction(
         &self,
+        applet_id: &str,
         source_service_id: &str,
         idempotency_key: &str,
         outcome: Value,
     ) -> ServiceResult<()> {
         self.applets
-            .complete_applet_transaction(source_service_id, idempotency_key, outcome)
+            .complete_applet_transaction(applet_id, source_service_id, idempotency_key, outcome)
             .await
     }
 
@@ -1683,11 +1701,13 @@ pub struct MlsKeyPackageState {
     pub keypackage_ref: String,
     pub keypackage_digest: String,
     pub actor_id: String,
-    pub device_id: String,
+    pub device_id: Option<String>,
+    pub endpoint_verification_method: Option<String>,
+    pub intended_realm_id: Option<String>,
     pub key_package_bytes: Vec<u8>,
     pub capabilities: Vec<String>,
     pub capabilities_digest: String,
-    pub device_signature: Value,
+    pub endpoint_signature: Value,
     pub last_resort: bool,
     pub last_resort_realm_id: Option<String>,
     pub lifetime_not_before: i64,
@@ -1719,6 +1739,7 @@ pub struct PeerKeyPackageClaimLedgerState {
     pub source_service_id: String,
     pub claim_request_id: String,
     pub request_digest: String,
+    pub key_package_use: String,
     pub keypackage_id: Option<String>,
     pub outcome: Option<Value>,
     pub terminal_receipt: Option<Value>,
@@ -1735,7 +1756,7 @@ pub struct PeerKeyPackageClaimCommand<'a> {
     pub device_authorize_event_id: Option<&'a str>,
     pub agent_key_authorize_event_id: Option<&'a str>,
     pub device_revocation_gate: Option<&'a soland_storage::DeviceRevocationGateSelector>,
-    pub claimed_at: i64,
+    pub claimed_at_unix_ms: i64,
     pub claim_expires_at_unix_ms: i64,
     pub ledger: &'a PeerKeyPackageClaimLedgerState,
 }
@@ -1769,13 +1790,17 @@ pub trait MlsKeyPackageMaintenancePort: Send + Sync {
         &self,
         id: &str,
         mls_group_id: &str,
-        consumed_at: i64,
+        now_unix_ms: i64,
         peer_consume_receipt: Option<&Value>,
     ) -> ServiceResult<Option<MlsKeyPackageState>>;
     async fn peer_claim(
         &self,
         source_service_id: &str,
         claim_request_id: &str,
+    ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
+    async fn peer_claim_by_keypackage_id(
+        &self,
+        keypackage_id: &str,
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
     async fn claim_peer_key_package(
         &self,
@@ -1792,6 +1817,33 @@ pub trait MlsKeyPackageMaintenancePort: Send + Sync {
         request_digest: &str,
         terminal_receipt: &Value,
         updated_at: i64,
+    ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
+    async fn attach_peer_claim_consume_receipt(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        consume_receipt: &Value,
+        now_unix_ms: i64,
+    ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
+    async fn transition_peer_claim_consumed(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        expected_outcome: &Value,
+        consume_receipt: &Value,
+        consumed_at_unix_ms: i64,
+    ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
+    async fn transition_peer_claim_terminal(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        expected_outcome: &Value,
+        terminal_state: &str,
+        terminal_receipt: &Value,
+        now_unix_ms: i64,
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
     async fn revoke_expired_peer_claims(&self, now_unix_ms: i64) -> ServiceResult<Vec<String>>;
     async fn key_packages(&self) -> ServiceResult<Vec<MlsKeyPackageState>>;
@@ -1812,7 +1864,9 @@ pub struct MlsWelcomeState {
     pub id: String,
     pub group_id: String,
     pub recipient_actor_id: String,
-    pub recipient_device_id: String,
+    pub recipient_device_id: Option<String>,
+    pub recipient_endpoint_verification_method: Option<String>,
+    pub intended_realm_id: Option<String>,
     pub welcome_bytes: Vec<u8>,
     pub key_package_id: String,
     pub epoch: u64,
@@ -1864,11 +1918,11 @@ impl MlsKeyPackageService {
         &self,
         id: &str,
         mls_group_id: &str,
-        consumed_at: i64,
+        now_unix_ms: i64,
         peer_consume_receipt: Option<&Value>,
     ) -> ServiceResult<Option<MlsKeyPackageState>> {
         self.key_packages
-            .consume_key_package_claim(id, mls_group_id, consumed_at, peer_consume_receipt)
+            .consume_key_package_claim(id, mls_group_id, now_unix_ms, peer_consume_receipt)
             .await
     }
     pub async fn peer_claim(
@@ -1878,6 +1932,14 @@ impl MlsKeyPackageService {
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>> {
         self.key_packages
             .peer_claim(source_service_id, claim_request_id)
+            .await
+    }
+    pub async fn peer_claim_by_keypackage_id(
+        &self,
+        keypackage_id: &str,
+    ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>> {
+        self.key_packages
+            .peer_claim_by_keypackage_id(keypackage_id)
             .await
     }
     pub async fn claim_peer_key_package(
@@ -1907,6 +1969,66 @@ impl MlsKeyPackageService {
                 request_digest,
                 terminal_receipt,
                 updated_at,
+            )
+            .await
+    }
+    pub async fn attach_peer_claim_consume_receipt(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        consume_receipt: &Value,
+        now_unix_ms: i64,
+    ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>> {
+        self.key_packages
+            .attach_peer_claim_consume_receipt(
+                source_service_id,
+                claim_request_id,
+                request_digest,
+                consume_receipt,
+                now_unix_ms,
+            )
+            .await
+    }
+    pub async fn transition_peer_claim_terminal(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        expected_outcome: &Value,
+        terminal_state: &str,
+        terminal_receipt: &Value,
+        now_unix_ms: i64,
+    ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>> {
+        self.key_packages
+            .transition_peer_claim_terminal(
+                source_service_id,
+                claim_request_id,
+                request_digest,
+                expected_outcome,
+                terminal_state,
+                terminal_receipt,
+                now_unix_ms,
+            )
+            .await
+    }
+    pub async fn transition_peer_claim_consumed(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        expected_outcome: &Value,
+        consume_receipt: &Value,
+        consumed_at_unix_ms: i64,
+    ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>> {
+        self.key_packages
+            .transition_peer_claim_consumed(
+                source_service_id,
+                claim_request_id,
+                request_digest,
+                expected_outcome,
+                consume_receipt,
+                consumed_at_unix_ms,
             )
             .await
     }
@@ -2343,7 +2465,7 @@ mod tests {
             command: CommitAcceptedEventBatchCommand,
         ) -> ServiceResult<CommitAcceptedEventResult> {
             assert_eq!(command.events.len(), 2);
-            assert!(command.applet_ghosts.is_some());
+            assert!(command.applet_record.is_some());
             Ok(CommitAcceptedEventResult {
                 projections_inserted: 2,
                 deliveries_inserted: 0,

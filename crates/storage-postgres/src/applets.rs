@@ -1,56 +1,18 @@
 use super::{
-    AppletStore, AppletTransactionReplayBegin, AppletTransactionReplayRecord, Bool, Jsonb,
-    Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName,
-    RunQueryDsl, Text, Timestamptz, Value, applet_registration_select_sql,
-    applet_transaction_replay_select_sql, async_trait, optional_record_str,
-    optional_record_timestamp, optional_record_value, pg_conn, required_record_str,
-    required_record_timestamp, sql_query,
+    AppletStore, AppletTransactionReplayBegin, AppletTransactionReplayRecord, Jsonb, Nullable,
+    OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl,
+    Text, Timestamptz, Value, applet_registration_select_sql, applet_transaction_replay_select_sql,
+    async_trait, pg_conn, sql_query,
 };
 #[derive(QueryableByName)]
 struct AppletRegistrationRow {
-    #[diesel(sql_type = Text)]
-    id: String,
-    #[diesel(sql_type = Text)]
-    namespace: String,
-    #[diesel(sql_type = Text)]
-    owner_actor_id: String,
-    #[diesel(sql_type = Text)]
-    registry_did: String,
-    #[diesel(sql_type = Text)]
-    bot_actor_id: String,
-    #[diesel(sql_type = Text)]
-    portal_realm_id: String,
     #[diesel(sql_type = Jsonb)]
-    capabilities: Value,
-    #[diesel(sql_type = Jsonb)]
-    manifest: Value,
-    #[diesel(sql_type = Nullable<Jsonb>)]
-    package: Option<Value>,
-    #[diesel(sql_type = Nullable<Jsonb>)]
-    namespaces: Option<Value>,
-    #[diesel(sql_type = Bool)]
-    ghost_actors_allowed: bool,
-    #[diesel(sql_type = Text)]
-    status: String,
-    #[diesel(sql_type = Timestamptz)]
-    registered_at: chrono::DateTime<chrono::Utc>,
-    #[diesel(sql_type = Nullable<Timestamptz>)]
-    revoked_at: Option<chrono::DateTime<chrono::Utc>>,
-    #[diesel(sql_type = Nullable<Text>)]
-    idempotency_key: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    install_body_digest: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    install_id: Option<String>,
-    #[diesel(sql_type = Nullable<Jsonb>)]
-    install_response: Option<Value>,
-    #[diesel(sql_type = Nullable<Jsonb>)]
-    install_execution: Option<Value>,
-    #[diesel(sql_type = Jsonb)]
-    ghosts: Value,
+    record: Value,
 }
 #[derive(QueryableByName)]
 struct AppletTransactionReplayRow {
+    #[diesel(sql_type = Text)]
+    applet_id: String,
     #[diesel(sql_type = Text)]
     source_service_id: String,
     #[diesel(sql_type = Text)]
@@ -68,33 +30,14 @@ struct AppletTransactionReplayRow {
 }
 impl From<AppletRegistrationRow> for Value {
     fn from(row: AppletRegistrationRow) -> Self {
-        serde_json::json!({
-            "applet_id": row.id,
-            "namespace": row.namespace,
-            "owner_actor_id": row.owner_actor_id,
-            "registry_did": row.registry_did,
-            "bot_actor_id": row.bot_actor_id,
-            "portal_realm_id": row.portal_realm_id,
-            "capabilities": row.capabilities,
-            "manifest": row.manifest,
-            "package": row.package,
-            "namespaces": row.namespaces,
-            "ghost_actors_allowed": row.ghost_actors_allowed,
-            "status": row.status,
-            "registered_at": row.registered_at,
-            "revoked_at": row.revoked_at,
-            "idempotency_key": row.idempotency_key,
-            "install_body_digest": row.install_body_digest,
-            "install_id": row.install_id,
-            "install_response": row.install_response,
-            "install_execution": row.install_execution,
-            "ghosts": row.ghosts,
-        })
+        row.record
     }
 }
 impl From<AppletTransactionReplayRow> for AppletTransactionReplayRecord {
     fn from(row: AppletTransactionReplayRow) -> Self {
         Self {
+            applet_id: arkret_wire::AppletId::new(row.applet_id)
+                .expect("stored applet transaction id must be canonical"),
             source_service_id: row.source_service_id,
             idempotency_key: row.idempotency_key,
             delivery_authentication_record_digest: row.delivery_authentication_record_digest,
@@ -123,94 +66,25 @@ impl AppletStore for PgAppletStore {
             .map_err(PersistenceError::database)
     }
 
-    async fn put(&self, applet_id: &str, record: Value) -> PersistenceResult<()> {
+    async fn compare_and_swap(
+        &self,
+        applet_id: &str,
+        expected: &Value,
+        replacement: Value,
+    ) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let namespace = required_record_str(&record, "namespace")?;
-        let owner_actor_id = required_record_str(&record, "owner_actor_id")?;
-        let registry_did = required_record_str(&record, "registry_did")?;
-        let bot_actor_id = required_record_str(&record, "bot_actor_id")?;
-        let portal_realm_id = required_record_str(&record, "portal_realm_id")?;
-        let capabilities = record
-            .get("capabilities")
-            .cloned()
-            .unwrap_or_else(|| Value::Array(Vec::new()));
-        let manifest = record.get("manifest").cloned().ok_or_else(|| {
-            PersistenceError::Internal("applet record missing manifest".to_owned())
-        })?;
-        let package = optional_record_value(&record, "package");
-        let namespaces = optional_record_value(&record, "namespaces");
-        let ghost_actors_allowed = record
-            .get("ghost_actors_allowed")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let status = required_record_str(&record, "status")?;
-        let registered_at = required_record_timestamp(&record, "registered_at")?;
-        let revoked_at = optional_record_timestamp(&record, "revoked_at")?;
-        let idempotency_key = optional_record_str(&record, "idempotency_key");
-        let install_body_digest = optional_record_str(&record, "install_body_digest");
-        let install_id = optional_record_str(&record, "install_id");
-        let install_response = optional_record_value(&record, "install_response");
-        let install_execution = optional_record_value(&record, "install_execution");
-        let ghosts = record
-            .get("ghosts")
-            .cloned()
-            .unwrap_or_else(|| Value::Array(Vec::new()));
-
         sql_query(
-            "INSERT INTO applet_registrations \
-             (id, namespace, owner_actor_id, registry_did, bot_actor_id, portal_realm_id, \
-              capabilities, manifest, package, namespaces, ghost_actors_allowed, status, \
-              registered_at, revoked_at, idempotency_key, install_body_digest, install_id, \
-              install_response, install_execution, ghosts, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
-                     $16, $17, $18, $19, $20, NOW()) \
-             ON CONFLICT (id) DO UPDATE SET \
-              namespace = EXCLUDED.namespace, \
-              owner_actor_id = EXCLUDED.owner_actor_id, \
-              registry_did = EXCLUDED.registry_did, \
-              bot_actor_id = EXCLUDED.bot_actor_id, \
-              portal_realm_id = EXCLUDED.portal_realm_id, \
-              capabilities = EXCLUDED.capabilities, \
-              manifest = EXCLUDED.manifest, \
-              package = EXCLUDED.package, \
-              namespaces = EXCLUDED.namespaces, \
-              ghost_actors_allowed = EXCLUDED.ghost_actors_allowed, \
-              status = EXCLUDED.status, \
-              registered_at = EXCLUDED.registered_at, \
-              revoked_at = EXCLUDED.revoked_at, \
-              idempotency_key = EXCLUDED.idempotency_key, \
-              install_body_digest = EXCLUDED.install_body_digest, \
-              install_id = EXCLUDED.install_id, \
-              install_response = EXCLUDED.install_response, \
-              install_execution = EXCLUDED.install_execution, \
-              ghosts = EXCLUDED.ghosts, \
-              updated_at = NOW()",
+            "UPDATE applet_registrations SET record = $3, updated_at = NOW() \
+             WHERE id = $1 AND record = $2",
         )
         .bind::<Text, _>(applet_id)
-        .bind::<Text, _>(&namespace)
-        .bind::<Text, _>(&owner_actor_id)
-        .bind::<Text, _>(&registry_did)
-        .bind::<Text, _>(&bot_actor_id)
-        .bind::<Text, _>(&portal_realm_id)
-        .bind::<Jsonb, _>(&capabilities)
-        .bind::<Jsonb, _>(&manifest)
-        .bind::<Nullable<Jsonb>, _>(&package)
-        .bind::<Nullable<Jsonb>, _>(&namespaces)
-        .bind::<Bool, _>(ghost_actors_allowed)
-        .bind::<Text, _>(&status)
-        .bind::<Timestamptz, _>(registered_at)
-        .bind::<Nullable<Timestamptz>, _>(revoked_at)
-        .bind::<Nullable<Text>, _>(&idempotency_key)
-        .bind::<Nullable<Text>, _>(&install_body_digest)
-        .bind::<Nullable<Text>, _>(&install_id)
-        .bind::<Nullable<Jsonb>, _>(&install_response)
-        .bind::<Nullable<Jsonb>, _>(&install_execution)
-        .bind::<Jsonb, _>(&ghosts)
+        .bind::<Jsonb, _>(expected)
+        .bind::<Jsonb, _>(&replacement)
         .execute(&mut *conn)
         .await
-        .map(|_| ())
+        .map(|updated| updated == 1)
         .map_err(PersistenceError::database)
     }
 
@@ -218,11 +92,13 @@ impl AppletStore for PgAppletStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(applet_registration_select_sql("ORDER BY registered_at, id"))
-            .load::<AppletRegistrationRow>(&mut *conn)
-            .await
-            .map(|rows| rows.into_iter().map(Value::from).collect())
-            .map_err(PersistenceError::database)
+        sql_query(applet_registration_select_sql(
+            "ORDER BY record->>'registered_at', id",
+        ))
+        .load::<AppletRegistrationRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(Value::from).collect())
+        .map_err(PersistenceError::database)
     }
 
     async fn begin_transaction_replay(
@@ -234,11 +110,12 @@ impl AppletStore for PgAppletStore {
             .map_err(PersistenceError::database)?;
         let inserted = sql_query(
             "INSERT INTO applet_transactions \
-             (source_service_id, idempotency_key, delivery_authentication_record_digest, request_digest, \
+             (applet_id, source_service_id, idempotency_key, delivery_authentication_record_digest, request_digest, \
               outcome, received_at, completed_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7) \
-             ON CONFLICT (source_service_id, idempotency_key) DO NOTHING",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (applet_id, source_service_id, idempotency_key) DO NOTHING",
         )
+        .bind::<Text, _>(record.applet_id.as_str())
         .bind::<Text, _>(&record.source_service_id)
         .bind::<Text, _>(&record.idempotency_key)
         .bind::<Text, _>(&record.delivery_authentication_record_digest)
@@ -253,6 +130,7 @@ impl AppletStore for PgAppletStore {
             return Ok(AppletTransactionReplayBegin::Fresh);
         }
         sql_query(applet_transaction_replay_select_sql())
+            .bind::<Text, _>(record.applet_id.as_str())
             .bind::<Text, _>(&record.source_service_id)
             .bind::<Text, _>(&record.idempotency_key)
             .get_result::<AppletTransactionReplayRow>(&mut *conn)
@@ -270,6 +148,7 @@ impl AppletStore for PgAppletStore {
 
     async fn complete_transaction_replay(
         &self,
+        applet_id: &str,
         source_service_id: &str,
         idempotency_key: &str,
         outcome: Value,
@@ -279,9 +158,10 @@ impl AppletStore for PgAppletStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "UPDATE applet_transactions \
-             SET outcome = $3, completed_at = NOW() \
-             WHERE source_service_id = $1 AND idempotency_key = $2",
+             SET outcome = $4, completed_at = NOW() \
+             WHERE applet_id = $1 AND source_service_id = $2 AND idempotency_key = $3",
         )
+        .bind::<Text, _>(applet_id)
         .bind::<Text, _>(source_service_id)
         .bind::<Text, _>(idempotency_key)
         .bind::<Jsonb, _>(&outcome)
@@ -291,7 +171,7 @@ impl AppletStore for PgAppletStore {
         .and_then(|updated| {
             if updated == 0 {
                 Err(PersistenceError::NotFound(format!(
-                    "applet transaction replay missing for {source_service_id}/{idempotency_key}"
+                    "applet transaction replay missing for {applet_id}/{source_service_id}/{idempotency_key}"
                 )))
             } else {
                 Ok(())

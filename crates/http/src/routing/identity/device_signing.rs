@@ -133,50 +133,122 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
     {
         return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
-    let requester_device_id = envelope
-        .trust_binding
-        .requester_device_id()
-        .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?
-        .as_str();
-    if let Some(sender_device_id) = sender_device_id
-        && sender_device_id != requester_device_id
-    {
-        return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+    match &envelope.trust_binding {
+        arkret_models_collaboration::events_payloads::MlsRequesterTrustBinding::RequesterDevice {
+            requester_device_id,
+            requester_device_authorize_event_id,
+        } => {
+            if sender_device_id.is_some_and(|sender| sender != requester_device_id.as_str()) {
+                return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+            }
+            let record = state
+                .identities()
+                .find_device(FindDeviceQuery {
+                    actor_id: envelope.requester_actor_id.as_str().to_owned(),
+                    device_id: requester_device_id.as_str().to_owned(),
+                })
+                .await
+                .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?
+                .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+            if record.revoked_at.is_some() || record.verification_state != "verified" {
+                return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+            }
+            if record
+                .payload
+                .get("device_authorize_event_id")
+                .and_then(Value::as_str)
+                != Some(requester_device_authorize_event_id.as_str())
+            {
+                return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+            }
+            let device_public_key = record
+                .payload
+                .get("device_public_key")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+            if let Some(producer_signing_key) = producer_signing_key {
+                let producer_public_key = producer_signing_key
+                    .as_str()
+                    .strip_prefix("did:key:")
+                    .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+                let expected_public_key = device_public_key
+                    .strip_prefix("did:key:")
+                    .unwrap_or(device_public_key);
+                if producer_public_key != expected_public_key {
+                    return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+                }
+            }
+            if !device_signature_kid_points_to_device_key(
+                envelope.signature.kid.as_str(),
+                envelope.requester_actor_id.as_str(),
+                device_public_key,
+            ) {
+                return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+            }
+            verify_welcome_signature(envelope, device_public_key)
+        }
+        arkret_models_collaboration::events_payloads::MlsRequesterTrustBinding::RequesterNativeAgent {
+            requester_agent_id,
+            requester_agent_verification_method,
+            requester_agent_key_authorize_event_id,
+        } => {
+            if sender_device_id.is_some()
+                || requester_agent_id != &envelope.requester_actor_id
+                || envelope.signature.kid.as_str()
+                    != requester_agent_verification_method.as_str()
+                || !crate::routing::mls::current_agent_key_authorization_matches_method(
+                    state,
+                    requester_agent_id,
+                    requester_agent_key_authorize_event_id.as_str(),
+                    requester_agent_verification_method.as_str(),
+                )
+                .await
+            {
+                return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+            }
+            let public_key = if let Some(producer_signing_key) = producer_signing_key {
+                let multibase = producer_signing_key
+                    .as_str()
+                    .strip_prefix("did:key:")
+                    .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+                arkret_canonical::decode_ed25519_multibase(multibase)
+                    .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?
+            } else {
+                crate::jws_verify::resolve_ed25519_pubkey_async(
+                    state,
+                    requester_agent_verification_method.as_str(),
+                )
+                .await
+                .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?
+            };
+            verify_welcome_signature_with_key(envelope, &public_key)
+        }
+        arkret_models_collaboration::events_payloads::MlsRequesterTrustBinding::RequesterMinimalMetadataPairwise {
+            requester_pairwise_verification_method,
+        } => {
+            if sender_device_id.is_some()
+                || envelope.signature.kid.as_str()
+                    != requester_pairwise_verification_method.as_str()
+                || arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(
+                    envelope.requester_actor_id.clone(),
+                    requester_pairwise_verification_method.clone(),
+                )
+                .is_err()
+            {
+                return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+            }
+            let multibase = requester_pairwise_verification_method
+                .as_str()
+                .split_once('#')
+                .and_then(|(controller, _)| controller.strip_prefix("did:key:"))
+                .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+            let public_key = arkret_canonical::decode_ed25519_multibase(multibase)
+                .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+            verify_welcome_signature_with_key(envelope, &public_key)
+        }
     }
-    if let Some(producer_signing_key) = producer_signing_key {
-        let device_public_key = producer_signing_key
-            .as_str()
-            .strip_prefix("did:key:")
-            .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
-        return verify_welcome_signature(envelope, device_public_key);
-    }
-    let record = state
-        .identities()
-        .find_device(FindDeviceQuery {
-            actor_id: envelope.requester_actor_id.as_str().to_owned(),
-            device_id: requester_device_id.to_owned(),
-        })
-        .await
-        .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?
-        .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
-    if record.revoked_at.is_some() || record.verification_state != "verified" {
-        return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
-    }
-    let device_public_key = record
-        .payload
-        .get("device_public_key")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
-    if !device_signature_kid_points_to_device_key(
-        envelope.signature.kid.as_str(),
-        envelope.requester_actor_id.as_str(),
-        device_public_key,
-    ) {
-        return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
-    }
-    verify_welcome_signature(envelope, device_public_key)
 }
 
 fn verify_welcome_signature(
@@ -185,10 +257,19 @@ fn verify_welcome_signature(
 ) -> Result<(), &'static str> {
     let device_key = decode_ed25519_key(device_public_key, "multibase")
         .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    verify_welcome_signature_with_key(envelope, &device_key.to_bytes())
+}
+
+fn verify_welcome_signature_with_key(
+    envelope: &MlsWelcomeClaimEnvelope,
+    key: &[u8; 32],
+) -> Result<(), &'static str> {
     let signing_bytes = envelope
         .canonical_signing_bytes()
         .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
-    if !ed25519_verify(&device_key, &signing_bytes, &envelope.signature.sig) {
+    let key = VerifyingKey::from_bytes(key)
+        .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    if !ed25519_verify(&key, &signing_bytes, &envelope.signature.sig) {
         return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     Ok(())

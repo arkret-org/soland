@@ -935,12 +935,6 @@ pub(crate) async fn identity_did_document(
     if validate_did(&did).is_err() {
         return Err(AppError::param_invalid("invalid did"));
     }
-    if let Some(document) =
-        crate::routing::extensions::applet_bridge::did_document_for_extension_actor(state, &did)
-            .await?
-    {
-        return json_ok(RawDidDocumentJson(document));
-    }
     let record = identity_document_record(state, &did).await;
     json_ok(RawDidDocumentJson(record.did_document))
 }

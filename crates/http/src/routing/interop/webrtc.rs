@@ -13,7 +13,7 @@
 //! operator-configurable via `AppConfig::ice`.
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{CallId, CellRef, DeviceId, DidCoreId, Hash, RealmId};
+use arkret_identifiers::{CallId, CellRef, DeviceId, DidCoreId, RealmId};
 use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
 use arkret_models_collaboration::events_payloads::{
     RealmMediaServicePayload, RealmMediaServiceValue,
@@ -23,7 +23,6 @@ use arkret_models_collaboration::objects::media::{
     ArkretNativeMediaSignatureAlgorithm, ArkretNativeMediaTokenPayload, MediaBackendKind,
     MediaBackendToken, MediaIceConfigOutcome, MediaIceConfigRequestBody, MediaIceConfigSignature,
     MediaIceCredentialType, MediaIceMode, MediaIceServer, MediaIceSignatureAlgorithm,
-    MediaIceSignatureInput,
 };
 use arkret_wire::{CapabilityActionId, DidUrl, REALM_MEDIA_SERVICE_CELL_FAMILY, XExtensionMap};
 use base64::Engine;
@@ -201,9 +200,6 @@ async fn issue_ice_config(
         signature: MediaIceConfigSignature {
             kid: format!("{}#notary-key", state.service_full_id()),
             signature_algorithm: MediaIceSignatureAlgorithm::Ed25519,
-            signature_input: MediaIceSignatureInput::IceConfigV1,
-            payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64)))
-                .map_err(|error| AppError::internal(format!("ICE config digest: {error}")))?,
             sig: String::new(),
         },
         extensions: XExtensionMap::default(),
@@ -328,16 +324,10 @@ fn sign_ice_config_outcome(
     state: &AppState,
     outcome: &mut MediaIceConfigOutcome,
 ) -> Result<(), AppError> {
-    let payload_bytes = outcome
-        .canonical_signature_payload()
-        .map_err(|error| AppError::internal(format!("ICE config canonicalize: {error}")))?;
-    let payload_digest = arkret_canonical::sha256_digest(&payload_bytes);
     let signing_input = outcome
         .signature_input()
         .map_err(|error| AppError::internal(format!("ICE config transcript: {error}")))?;
     let signature = state.notary_signing_key().sign(&signing_input);
-    outcome.signature.payload_digest = Hash::new(payload_digest)
-        .map_err(|error| AppError::internal(format!("ICE config digest: {error}")))?;
     outcome.signature.sig = URL_SAFE_NO_PAD.encode(signature.to_bytes());
     Ok(())
 }

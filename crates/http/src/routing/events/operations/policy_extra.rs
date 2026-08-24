@@ -513,16 +513,15 @@ pub(crate) async fn actor_governs_realm(
 }
 
 pub(crate) fn grant_has_broadcast_safety_constraints(grant: &crate::authz::Grant) -> bool {
-    let has_temporal = grant.expires_at.is_some()
-        || grant.constraints.iter().any(|constraint| {
-            matches!(
-                constraint,
-                crate::authz::GrantConstraint::Temporal {
-                    expires_at: Some(_),
-                    ..
-                }
-            )
-        });
+    let has_temporal = grant.constraints.iter().any(|constraint| {
+        matches!(
+            constraint,
+            crate::authz::GrantConstraint::Temporal {
+                expires_at: Some(_),
+                ..
+            }
+        )
+    });
     let has_rate_limit = grant.constraints.iter().any(|constraint| {
         matches!(
             constraint,

@@ -360,12 +360,6 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         .expect("typed pairing request id");
     let requested_scope_typed: arkret_models_collaboration::events_payloads::agent::AgentKeyScope =
         serde_json::from_value(ceremony_requested_scope()).unwrap();
-    let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
-        &outcome.agent_id,
-        &controller_core,
-        &requested_scope_typed,
-    )
-    .unwrap();
     let mut disclosure =
         arkret_models_collaboration::agent_operations::AgentRequestedScopeDisclosure {
             schema: arkret_wire::SchemaId::AgentRequestedScopeDisclosureV1,
@@ -374,7 +368,6 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
             agent_id: outcome.agent_id.clone(),
             controller_id: controller_core.clone(),
             requested_scope: requested_scope_typed,
-            requested_scope_digest,
             verifier_service_id: service_core.clone(),
             audience: arkret_wire::NonEmptyString::new(
                 arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY,

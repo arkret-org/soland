@@ -10,7 +10,7 @@ mod governance_history;
 pub(crate) mod circles;
 pub(crate) mod conformance;
 pub(crate) mod events;
-// G3.S9: extensions (applet manifest verifier, bot/ghost actor, TSP, sovereign enclave).
+// Protocol Applet bridge plus deployment-local sovereign-enclave administration.
 pub mod extensions;
 pub mod federation;
 pub(crate) mod identity;

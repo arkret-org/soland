@@ -714,12 +714,7 @@ async fn verify_with_installed_applet_registration_epoch(
             "Applet Event proof registration is not active",
         ));
     }
-    let package = record.package.as_ref().ok_or_else(|| {
-        fail(
-            "applet_install_required",
-            "Applet Event proof requires a package install",
-        )
-    })?;
+    let package = &record.package;
     if package.service_id.as_str() != signer_controller
         || package.webhook_auth.key_ref.as_str() != verification_method
     {
@@ -728,16 +723,16 @@ async fn verify_with_installed_applet_registration_epoch(
             "Applet Event proof does not use the installed service signing key",
         ));
     }
-    let evidence = record
-        .registration_epoch_evidence
-        .as_ref()
-        .or(package.registration_epoch_evidence.as_ref())
-        .ok_or_else(|| {
-            fail(
-                "applet_registration_epoch_evidence_missing",
-                "Applet Event proof has no registration-epoch evidence",
-            )
-        })?;
+    let evidence =
+        crate::routing::extensions::applet_bridge::registration_epoch_evidence_from_record(&record)
+            .map_err(|reason| {
+                tracing::error!(%reason, %applet_id, "stored Applet registration Event is invalid");
+                event_validation_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "stored Applet registration Event is invalid",
+                )
+            })?;
     if !evidence.contains_signing_key(verification_method) {
         return Err(fail(
             "applet_registration_epoch_signing_key_mismatch",

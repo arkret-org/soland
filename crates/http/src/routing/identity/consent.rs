@@ -725,16 +725,8 @@ async fn request_consent_cell(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let peer = match body.peer_principal_id {
-        Some(peer) => peer,
-        None => arkret_identifiers::DidCoreId::new(session.actor.clone())
-            .map_err(|e| AppError::param_invalid(format!("peer_principal_id: {e}")))?,
-    };
-    if peer.as_str() != session.actor {
-        return Err(AppError::capability_denied(
-            "consent request peer must match authenticated actor",
-        ));
-    }
+    let _peer = arkret_identifiers::DidCoreId::new(session.actor.clone())
+        .map_err(|e| AppError::internal(format!("authenticated actor is invalid: {e}")))?;
     // Syntactic validation is safe, but holder existence, policy, rate-limit,
     // silent drop and quarantine admission are intentionally indistinguishable.
     // This operation never creates a consent cell or a pending consent state.

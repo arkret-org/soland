@@ -1414,11 +1414,7 @@ impl NotaryWorker {
         {
             return Ok(Vec::new());
         }
-        if policy.min_holders != 1
-            || !policy
-                .holder_roles
-                .contains(&arkret_models_collaboration::objects::realm::AvailabilityHolderRole::JoinedMemberPrincipalServer)
-        {
+        if policy.min_holders != 1 {
             return Err(NotaryError::Construction(
                 "local Seal coordinator cannot satisfy the predecessor availability holder quorum"
                     .to_owned(),

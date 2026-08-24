@@ -88,13 +88,13 @@ fn signed_keypackage_claim_request(
     target_device_ids: &[&str],
     intended_realm_id: &str,
     required_capabilities: &[&str],
-    claim_nonce: &[u8],
+    claim_random: &[u8],
     expires_at: chrono::DateTime<Utc>,
     mls_group_id: &str,
 ) -> arkret_models_crypto::KeyPackagesClaimRequestBody {
     assert!(
-        claim_nonce.len() >= 16,
-        "self KeyPackage claim nonce must carry at least 128 bits"
+        claim_random.len() >= 16,
+        "self KeyPackage claim request id must carry at least 128 bits"
     );
     let created_at = Utc::now();
     let requester_full = arkret_identifiers::DidFullId::new(requester.to_owned()).unwrap();
@@ -102,7 +102,7 @@ fn signed_keypackage_claim_request(
     let target_full = arkret_identifiers::DidFullId::new(target_principal_id.to_owned()).unwrap();
     let target_principal_id = arkret_wire::project_full_id_to_core_id(&target_full).unwrap();
     let verification_method = format!("{}#{requester_device}", requester_full.as_str());
-    let claim_request_id = b64(claim_nonce);
+    let claim_request_id = b64(claim_random);
     let mut body: arkret_models_crypto::KeyPackagesClaimRequestBody =
         serde_json::from_value(json!({
             "claim_request_id": claim_request_id,
@@ -110,9 +110,8 @@ fn signed_keypackage_claim_request(
             "target_device_ids": target_device_ids,
             "intended_realm_id": intended_realm_id,
             "requester": requester_id,
-        "claim_purpose": "realm_membership",
+            "claim_purpose": "realm_membership",
             "required_capabilities": required_capabilities,
-            "claim_nonce": b64(claim_nonce),
             "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
             "mls_group_id": mls_group_id,
             "service_binding": {
@@ -542,7 +541,6 @@ async fn mls_lifecycle_end_to_end() {
     )
     .unwrap();
     let publish_body = publish_unsigned.into_signed(publish_signature);
-    let device_signature = serde_json::to_value(&publish_body.device_signature).unwrap();
     let mut publish_resp = TestClient::post("http://server/_arkret/self/keys/keypackages/upload")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .add_header("content-type", "application/json", true)
@@ -630,7 +628,7 @@ async fn mls_lifecycle_end_to_end() {
         claims[0]["device_authorize_event_id"],
         json!(alice_device_authorize_event_id)
     );
-    assert_eq!(claims[0]["device_signature"], device_signature);
+    assert!(claims[0].get("endpoint_signature").is_none());
     // ── 2b. a new request cannot re-claim the package for the same group ─
     let same_group_claim = signed_keypackage_claim_request(
         state.service_id(),

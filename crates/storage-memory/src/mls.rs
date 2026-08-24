@@ -166,7 +166,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         &self,
         id: &str,
         mls_group_id: &str,
-        consumed_at: i64,
+        now_unix_ms: i64,
         peer_consume_receipt: Option<&Value>,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
         let mut state = self.state.lock();
@@ -190,14 +190,13 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         if row.last_resort
             || row.claimed_by_mls_group_id.as_deref() != Some(mls_group_id)
             || row.consumed_at.is_some()
-            || row
+            || !row
                 .claim_expires_at_unix_ms
-                .is_some_and(|expires_at_unix_ms| {
-                    consumed_at.saturating_mul(1000) >= expires_at_unix_ms
-                })
+                .is_some_and(|expires_at_unix_ms| now_unix_ms < expires_at_unix_ms)
         {
             return Ok(None);
         }
+        let consumed_at = now_unix_ms.div_euclid(1000);
         row.consumed_at = Some(consumed_at);
         let consumed = row.clone();
         if let (Some(receipt), Some(ledger_key)) = (peer_consume_receipt, matching_ledger)
@@ -221,6 +220,29 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             .peer_claims
             .get(&(source_service_id.to_owned(), claim_request_id.to_owned()))
             .cloned())
+    }
+
+    async fn get_peer_claim_by_keypackage_id(
+        &self,
+        keypackage_id: &str,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
+        let mut matches = self
+            .state
+            .lock()
+            .peer_claims
+            .values()
+            .filter(|ledger| {
+                ledger.key_package_use == "single_use"
+                    && ledger.keypackage_id.as_deref() == Some(keypackage_id)
+            })
+            .cloned();
+        let first = matches.next();
+        if matches.next().is_some() {
+            return Err(PersistenceError::Internal(
+                "multiple peer claim ledgers reference one KeyPackage".to_owned(),
+            ));
+        }
+        Ok(first)
     }
 
     async fn try_claim_peer(
@@ -265,11 +287,19 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         let Some(row) = state.rows.get_mut(attempt.keypackage_id) else {
             return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
         };
-        if row.last_resort || row.claimed_by_mls_group_id.is_some() {
+        let is_last_resort = attempt.ledger.key_package_use == "last_resort";
+        if attempt.ledger.claim_expires_at_unix_ms != Some(attempt.claim_expires_at_unix_ms)
+            || (!is_last_resort && attempt.ledger.key_package_use != "single_use")
+            || is_last_resort != row.last_resort
+            || (!is_last_resort && row.claimed_by_mls_group_id.is_some())
+            || (is_last_resort
+                && (row.claimed_by_mls_group_id.is_some()
+                    || attempt.ledger.state != "last_resort_claimed"))
+        {
             return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
         }
-        if attempt.claimed_at >= row.lifetime_not_after
-            || attempt.claim_expires_at_unix_ms <= attempt.claimed_at.saturating_mul(1000)
+        if attempt.claimed_at_unix_ms >= row.lifetime_not_after.saturating_mul(1000)
+            || attempt.claim_expires_at_unix_ms <= attempt.claimed_at_unix_ms
             || attempt.claim_expires_at_unix_ms > row.lifetime_not_after.saturating_mul(1000)
         {
             return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
@@ -285,10 +315,12 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         {
             return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
         }
-        row.claimed_by_mls_group_id = Some(attempt.mls_group_id.to_owned());
-        row.claimed_at = Some(attempt.claimed_at);
-        row.claim_expires_at_unix_ms = Some(attempt.claim_expires_at_unix_ms);
-        row.consumed_at = None;
+        if !is_last_resort {
+            row.claimed_by_mls_group_id = Some(attempt.mls_group_id.to_owned());
+            row.claimed_at = Some(attempt.claimed_at_unix_ms.div_euclid(1000));
+            row.claim_expires_at_unix_ms = Some(attempt.claim_expires_at_unix_ms);
+            row.consumed_at = None;
+        }
         let claimed = row.clone();
         state.peer_claims.insert(ledger_key, attempt.ledger.clone());
         Ok(PeerKeyPackageClaimAttemptResult::Claimed(Box::new(claimed)))
@@ -298,6 +330,13 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         &self,
         record: &PeerKeyPackageClaimLedgerRecord,
     ) -> PersistenceResult<PeerKeyPackageClaimLedgerWriteResult> {
+        if (record.key_package_use != "none" && record.claim_expires_at_unix_ms.is_none())
+            || (record.state == "last_resort_claimed" && record.key_package_use != "last_resort")
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "peer claim ledger use/state/deadline shape is invalid".to_owned(),
+            ));
+        }
         let mut state = self.state.lock();
         let key = (
             record.source_service_id.clone(),
@@ -337,8 +376,122 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         Ok(Some(record.clone()))
     }
 
+    async fn attach_peer_claim_consume_receipt(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        consume_receipt: &Value,
+        now_unix_ms: i64,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
+        let mut state = self.state.lock();
+        let Some(record) = state
+            .peer_claims
+            .get_mut(&(source_service_id.to_owned(), claim_request_id.to_owned()))
+        else {
+            return Ok(None);
+        };
+        if record.request_digest != request_digest
+            || !matches!(record.state.as_str(), "claimed" | "last_resort_claimed")
+        {
+            return Ok(None);
+        }
+        if !record
+            .claim_expires_at_unix_ms
+            .is_some_and(|expires_at| expires_at > now_unix_ms)
+        {
+            if record.state == "last_resort_claimed" {
+                record.state = "expired".to_owned();
+                record.updated_at = now_unix_ms.div_euclid(1000);
+            }
+            return Ok(None);
+        }
+        record.state = "consumed".to_owned();
+        record.consume_receipt = Some(consume_receipt.clone());
+        record.updated_at = now_unix_ms.div_euclid(1000);
+        Ok(Some(record.clone()))
+    }
+
+    async fn transition_peer_claim_consumed(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        expected_outcome: &Value,
+        consume_receipt: &Value,
+        consumed_at_unix_ms: i64,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
+        let mut state = self.state.lock();
+        let Some(record) = state
+            .peer_claims
+            .get_mut(&(source_service_id.to_owned(), claim_request_id.to_owned()))
+        else {
+            return Ok(None);
+        };
+        if record.request_digest != request_digest
+            || record.outcome.as_ref() != Some(expected_outcome)
+            || !matches!(
+                record.state.as_str(),
+                "claimed" | "last_resort_claimed" | "expired"
+            )
+            || (record.state == "expired" && record.terminal_receipt.is_some())
+            || !record
+                .claim_expires_at_unix_ms
+                .is_some_and(|expires_at| consumed_at_unix_ms < expires_at)
+        {
+            return Ok(None);
+        }
+        record.state = "consumed".to_owned();
+        record.consume_receipt = Some(consume_receipt.clone());
+        record.updated_at = consumed_at_unix_ms.div_euclid(1000);
+        Ok(Some(record.clone()))
+    }
+
+    async fn transition_peer_claim_terminal(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        expected_outcome: &Value,
+        terminal_state: &str,
+        terminal_receipt: &Value,
+        now_unix_ms: i64,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
+        if !matches!(terminal_state, "expired" | "revoked") {
+            return Ok(None);
+        }
+        let mut state = self.state.lock();
+        let Some(record) = state
+            .peer_claims
+            .get_mut(&(source_service_id.to_owned(), claim_request_id.to_owned()))
+        else {
+            return Ok(None);
+        };
+        if record.request_digest != request_digest
+            || record.outcome.as_ref() != Some(expected_outcome)
+            || !(matches!(record.state.as_str(), "claimed" | "last_resort_claimed")
+                || (record.state == terminal_state && record.terminal_receipt.is_none()))
+        {
+            return Ok(None);
+        }
+        record.state = terminal_state.to_owned();
+        record.terminal_receipt = Some(terminal_receipt.clone());
+        record.updated_at = now_unix_ms.div_euclid(1000);
+        Ok(Some(record.clone()))
+    }
+
     async fn revoke_expired_peer_claims(&self, now_unix_ms: i64) -> PersistenceResult<Vec<String>> {
         let mut state = self.state.lock();
+        for ledger in state.peer_claims.values_mut().filter(|ledger| {
+            ledger.key_package_use == "last_resort"
+                && ledger.state == "last_resort_claimed"
+                && ledger
+                    .claim_expires_at_unix_ms
+                    .is_some_and(|expires_at_unix_ms| expires_at_unix_ms <= now_unix_ms)
+        }) {
+            ledger.state = "expired".to_owned();
+            ledger.updated_at = now_unix_ms.div_euclid(1000);
+        }
         let expired = state
             .peer_claims
             .iter()
@@ -538,12 +691,14 @@ mod tests {
             keypackage_digest:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             actor_id: "did:web:bob.example".to_owned(),
-            device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+            device_id: Some("ak:device:01904100-0000-7000-8000-000000000001".to_owned()),
+            endpoint_verification_method: None,
+            intended_realm_id: None,
             key_package_bytes: vec![1, 2, 3],
             capabilities: vec!["ak.mls.rfc9420".to_owned()],
             capabilities_digest:
                 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
-            device_signature: serde_json::json!({"kid":"did:web:bob.example#device","sig":"AA"}),
+            endpoint_signature: serde_json::json!({"kid":"did:web:bob.example#device","sig":"AA"}),
             last_resort,
             last_resort_realm_id: None,
             lifetime_not_before: 1,
@@ -566,6 +721,7 @@ mod tests {
             claim_request_id: "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
             request_digest:
                 "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_owned(),
+            key_package_use: "single_use".to_owned(),
             state: "claimed".to_owned(),
             outcome: Some(serde_json::json!({"winner": outcome})),
             consume_receipt: None,
@@ -610,7 +766,7 @@ mod tests {
                 ),
                 agent_key_authorize_event_id: None,
                 device_revocation_gate: None,
-                claimed_at: 10,
+                claimed_at_unix_ms: 10_000,
                 claim_expires_at_unix_ms: i64::MAX - 1,
                 ledger: &first_ledger,
             }),
@@ -622,7 +778,7 @@ mod tests {
                 ),
                 agent_key_authorize_event_id: None,
                 device_revocation_gate: None,
-                claimed_at: 10,
+                claimed_at_unix_ms: 10_000,
                 claim_expires_at_unix_ms: i64::MAX - 1,
                 ledger: &second_ledger,
             })
@@ -653,7 +809,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn peer_claim_never_claims_last_resort_keypackage() {
+    async fn ordinary_peer_claim_path_never_claims_last_resort_keypackage() {
         let store = MemoryMlsKeyPackageStore::default();
         store.put(&keypackage("last-resort", true)).await.unwrap();
         let ledger = ledger("last-resort");
@@ -666,7 +822,7 @@ mod tests {
                 ),
                 agent_key_authorize_event_id: None,
                 device_revocation_gate: None,
-                claimed_at: 10,
+                claimed_at_unix_ms: 10_000,
                 claim_expires_at_unix_ms: i64::MAX - 1,
                 ledger: &ledger,
             })
@@ -686,6 +842,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn peer_claim_rejects_ledger_and_attempt_expiry_drift() {
+        let store = MemoryMlsKeyPackageStore::default();
+        store.put(&keypackage("expiry-drift", false)).await.unwrap();
+        let mut ledger = ledger("expiry-drift");
+        ledger.claim_request_id = "expiry-drift-request".to_owned();
+        ledger.claim_expires_at_unix_ms = Some(20_001);
+        let result = store
+            .try_claim_peer(PeerKeyPackageClaimAttempt {
+                keypackage_id: "expiry-drift",
+                mls_group_id: "group-expiry",
+                device_authorize_event_id: Some(
+                    "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD",
+                ),
+                agent_key_authorize_event_id: None,
+                device_revocation_gate: None,
+                claimed_at_unix_ms: 10_000,
+                claim_expires_at_unix_ms: 20_000,
+                ledger: &ledger,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable
+        );
+        assert!(
+            store
+                .get_peer_claim("did:web:alpha.example", "expiry-drift-request")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn last_resort_claim_audit_is_immutable_without_claiming_the_reusable_package() {
         let store = MemoryMlsKeyPackageStore::default();
         store
@@ -696,7 +887,7 @@ mod tests {
         let mut first = ledger("last-resort-audit");
         first.claim_request_id = "local-last-resort:fixture".to_owned();
         first.state = "last_resort_claimed".to_owned();
-        first.claim_expires_at_unix_ms = None;
+        first.claim_expires_at_unix_ms = Some(20_500);
         first.outcome = Some(serde_json::json!({
             "schema": "soland.last_resort_keypackage_claim.v1",
             "response": {"claims": ["first"]}
@@ -720,6 +911,21 @@ mod tests {
             PeerKeyPackageClaimLedgerWriteResult::Existing(Box::new(first.clone()))
         );
 
+        let receipt = serde_json::json!({"receipt": "last-resort-consume-ack"});
+        let consumed_audit = store
+            .attach_peer_claim_consume_receipt(
+                &first.source_service_id,
+                &first.claim_request_id,
+                &first.request_digest,
+                &receipt,
+                11_000,
+            )
+            .await
+            .unwrap()
+            .expect("last-resort claim audit accepts a consume acknowledgement");
+        assert_eq!(consumed_audit.state, "consumed");
+        assert_eq!(consumed_audit.consume_receipt, Some(receipt));
+
         assert!(
             store
                 .revoke_expired_peer_claims(i64::MAX)
@@ -736,13 +942,12 @@ mod tests {
                 .claimed_by_mls_group_id,
             None
         );
-        assert_eq!(
-            store
-                .get_peer_claim("did:web:alpha.example", "local-last-resort:fixture")
-                .await
-                .unwrap(),
-            Some(first)
-        );
+        let stored_audit = store
+            .get_peer_claim("did:web:alpha.example", "local-last-resort:fixture")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored_audit.state, "consumed");
     }
 
     #[tokio::test]
@@ -772,7 +977,7 @@ mod tests {
                         ),
                         agent_key_authorize_event_id: None,
                         device_revocation_gate: None,
-                        claimed_at: 10,
+                        claimed_at_unix_ms: 10_000,
                         claim_expires_at_unix_ms: 20_000,
                         ledger,
                     })
@@ -782,7 +987,7 @@ mod tests {
             ));
         }
         store
-            .consume_claim("kp-consumed", "group-consumed", 19, None)
+            .consume_claim("kp-consumed", "group-consumed", 19_000, None)
             .await
             .unwrap()
             .expect("consume before claim deadline");

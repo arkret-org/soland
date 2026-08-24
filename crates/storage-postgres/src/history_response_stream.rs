@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arkret_models_collaboration::history_key::{
-    CurrentGateProjection, HistoryKeyRequest, HistoryKeyRequestReceipt, HistoryKeyRequestReplica,
+    HistoryKeyRequest, HistoryKeyRequestReceipt, HistoryKeyRequestReplica,
     HistoryKeyResponseAckRequest, HistoryKeyResponseLostRecord, HistoryKeyResponseRecord,
     HistoryKeyResponseSendReceipt, HistoryKeyResponseSendRequest, HistoryManifestAdmission,
     HistoryReleaseAttestation, HistoryResponseAckEntry, HistoryResponseAckTokenClaims,
@@ -65,17 +65,6 @@ fn release_authority_seal_bases(
     attestation: &HistoryReleaseAttestation,
 ) -> PersistenceResult<BTreeMap<String, Vec<String>>> {
     let views = &attestation.accepted_authority_views;
-    let realm_projection =
-        CurrentGateProjection::Realm(views.scope_realm.current_gate_projection.clone());
-    if realm_projection
-        .canonical_digest()
-        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
-        != views.scope_realm.current_gate_projection_digest
-    {
-        return Err(PersistenceError::SchemaViolation(
-            "history Realm current-gate projection digest mismatch".to_owned(),
-        ));
-    }
     let mut bases = BTreeMap::new();
     insert_authority_seal_basis(
         &mut bases,
@@ -89,17 +78,6 @@ fn release_authority_seal_bases(
             .collect(),
     )?;
     if let Some(circle) = &views.scope_circle {
-        let circle_projection =
-            CurrentGateProjection::Circle(circle.current_gate_projection.clone());
-        if circle_projection
-            .canonical_digest()
-            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
-            != circle.current_gate_projection_digest
-        {
-            return Err(PersistenceError::SchemaViolation(
-                "history Circle current-gate projection digest mismatch".to_owned(),
-            ));
-        }
         insert_authority_seal_basis(
             &mut bases,
             circle.authority_realm_id.as_str(),

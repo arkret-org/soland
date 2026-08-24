@@ -523,6 +523,25 @@ async fn submit_projection_event(
     kind: &str,
     payload: Value,
 ) -> String {
+    let (accepted_event_id, sent) =
+        submit_projection_event_result(state, token, actor_id, device_id, realm_id, kind, payload)
+            .await;
+    assert!(
+        sent["accepted"][0].as_str() == Some(accepted_event_id.as_str()),
+        "{kind} submit failed: {sent:?}"
+    );
+    accepted_event_id
+}
+
+async fn submit_projection_event_result(
+    state: AppState,
+    token: &str,
+    actor_id: &str,
+    device_id: &str,
+    realm_id: &str,
+    kind: &str,
+    payload: Value,
+) -> (String, Value) {
     let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let event = signed_event(SignedEvent {
         state: &state,
@@ -547,11 +566,7 @@ async fn submit_projection_event(
         .take_json()
         .await
         .unwrap();
-    assert!(
-        sent["accepted"][0].as_str() == Some(accepted_event_id.as_str()),
-        "{kind} submit failed: {sent:?}"
-    );
-    accepted_event_id
+    (accepted_event_id, sent)
 }
 
 struct SignedEvent<'a> {
@@ -1315,6 +1330,39 @@ async fn poll_content_projection_replaces_votes() {
     )
     .await;
     let poll_ref = poll_event_id.replacen("ak:event:", "ak:message:", 1);
+    let (invalid_event_id, invalid) = submit_projection_event_result(
+        state.clone(),
+        &bob,
+        bob_did,
+        bob_device_id,
+        &realm_id,
+        "ak.message.create",
+        json!({
+            "strand_id": strand_id_for_realm(&realm_id),
+            "track_name": "discussion",
+            "content": {
+                "kind": "ak.content.poll.response",
+                "body": "invalid poll response",
+                "poll_response": {
+                    "poll_ref": poll_ref,
+                    "selections": ["unknown"]
+                }
+            }
+        }),
+    )
+    .await;
+    assert!(
+        invalid["accepted"].as_array().is_none_or(|accepted| {
+            !accepted
+                .iter()
+                .any(|id| id.as_str() == Some(invalid_event_id.as_str()))
+        }),
+        "invalid Poll response entered the canonical Event log: {invalid:?}"
+    );
+    assert!(
+        invalid.to_string().contains("poll_selection_unknown"),
+        "invalid Poll response did not expose the semantic rejection: {invalid:?}"
+    );
     submit_projection_event(
         state.clone(),
         &bob,

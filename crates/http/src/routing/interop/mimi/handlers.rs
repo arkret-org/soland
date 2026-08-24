@@ -232,7 +232,8 @@ pub(super) async fn mimi_room_message(
     let room_id = strand_id.into_inner();
     let body = body.into_inner();
     let room_uri = mimi_room_uri(state, &room_id)?;
-    verify_mimi_write_service_proof(state, req, Some(room_uri.as_str())).await?;
+    let source_provider =
+        verify_mimi_write_service_proof(state, req, Some(room_uri.as_str())).await?;
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::param_invalid("invalid MIMI room id"));
     }
@@ -260,9 +261,9 @@ pub(super) async fn mimi_room_message(
     // Map the MIMI message into the canonical Arkret timeline.
     // Append a MessageRecord + a `ak.message.create` projection event so
     // the message shows up in `QUERY /_arkret/self/events`. The
-    // MIMI provenance metadata is preserved verbatim under
-    // `payload.mimi_provenance` so audit consumers can verify the
-    // message arrived through the facade.
+    // MIMI provenance is bound in the closed top-level payload branch so
+    // admission and audit consumers can verify service authorship separately
+    // from external sender attribution.
     let room_binding = latest_mimi_room_binding(state, &room_id)
         .await?
         .ok_or_else(|| {
@@ -280,26 +281,21 @@ pub(super) async fn mimi_room_message(
         .or_else(|| crate::routing::events::strand::strand_id_from_realm_id(&realm_id))
         .ok_or_else(|| AppError::param_invalid("MIMI binding carries a non-canonical realm_id"))?;
     let created_at = chrono::Utc::now();
-    let mimi_provenance = json!({
-        "facade": "soland.mimi.v1",
-        "mimi_provider_id": mimi_provider_id(state),
-        "mimi_room_uri": mimi_room_uri(state, &room_id)?,
-        "mimi_room_id": room_id,
-        "mimi_room_binding_ref": room_binding.event_id.clone(),
-        "mimi_message_id": mimi_message_id,
-        "original_sender": sender,
-        "original_envelope_hash": original_hash,
-        "source_format": source_format,
-        "accepted_at": arkret_canonical::format_timestamp_canonical(created_at),
-    });
     let event_payload = json!({
         "strand_id": thread_id.clone(),
         "track_name": "discussion",
         "content": mapped_content.content.clone(),
         "metadata": {
-            "mimi_provenance": mimi_provenance.clone(),
             "mimi_policy": mapped_content.policy.clone(),
             "quarantine": mapped_content.quarantine.clone(),
+        },
+        "mimi_provenance": {
+            "provenance": "mimi_facade",
+            "source_provider": source_provider,
+            "attributed_sender_actor_id": body.sender_actor_id,
+            "attributed_sender_device_id": body.device_id,
+            "source_envelope_digest": original_hash,
+            "room_binding_ref": room_binding.event_id.clone(),
         },
     });
     let event_id =

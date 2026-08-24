@@ -626,11 +626,6 @@ fn profile_limitations() -> Vec<Value> {
             "reason": "TSP transport/route/audit handlers remain unmounted until real envelope verify/decrypt and persistent signed audit chain exist"
         }),
         json!({
-            "area": "extensions.bot_actor",
-            "status": "unmounted",
-            "reason": "bot/ghost actor HTTP handlers remain unmounted until durable provisioning, accountability grants, and restart-safe state exist"
-        }),
-        json!({
             "area": "extensions.sovereign",
             "status": "stub_contract",
             "reason": "sovereign deployment endpoints are local boundary/scenario scaffolding; outbound guard integration is incomplete outside startup/profile checks"

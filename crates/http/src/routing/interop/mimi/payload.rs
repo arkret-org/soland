@@ -76,7 +76,6 @@ pub(super) async fn persist_mimi_canonical_message_event(
     // draft. Attaching it after authoring only worked while signing silently
     // re-derived `event_id`, which is exactly the identity hole this closes.
     let auth_context = arkret_wire::AuthContext {
-        actor_id: service_actor_id.clone(),
         key_id: arkret_wire::OpaqueLocalId::new("notary-key").expect("notary key id is opaque"),
         key_epoch: 0,
         credential_epoch: None,
@@ -134,9 +133,8 @@ pub(super) async fn persist_mimi_canonical_message_event(
         .map_err(|error| AppError::internal(format!("MIMI Event serialize failed: {error}")))?;
     let binding_ref = envelope
         .get("payload")
-        .and_then(|payload| payload.get("metadata"))
-        .and_then(|metadata| metadata.get("mimi_provenance"))
-        .and_then(|provenance| provenance.get("mimi_room_binding_ref"))
+        .and_then(|payload| payload.get("mimi_provenance"))
+        .and_then(|provenance| provenance.get("room_binding_ref"))
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::internal("MIMI room binding ref missing from Event payload"))?
         .to_owned();

@@ -120,7 +120,7 @@ pub use projections::{
     KeyPackageLifetime, MessageState, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage,
     MlsRemoveObligation, MlsRemoveProposal, MlsWelcome, MlsWelcomeQueueKey, MorphProjection,
     ObjectLifecycleState, PendingReplayEntry, PinProjection, PollOptionState, PollState,
-    ProjectedMessageView, PushRouteCellValue, PushRouteSubject, ReactionState,
+    PollVoteState, ProjectedMessageView, PushRouteCellValue, PushRouteSubject, ReactionState,
     RealmInheritancePolicyState, RealmLinkState, RealmOrganizationStatementState,
     RealmPolicyServerConfig, RealmPolicyServerHead, RedactionCellValue, RsvpHead, RsvpProjection,
     SidecarContextProjection, SidecarProjection, SolandKeyBackupActiveSeries,

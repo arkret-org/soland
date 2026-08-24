@@ -131,7 +131,9 @@ use identity_anchor::{
     PcrGenesisPins, batch_contains_identity_anchor, submit_identity_anchor_batch,
 };
 mod ghost_provision;
-pub(in crate::routing) use ghost_provision::submit_ghost_provision_batch;
+pub(in crate::routing) use ghost_provision::{
+    submit_applet_install_batch, submit_ghost_provision_batch,
+};
 mod sidecar_ensure;
 pub(crate) use sidecar_ensure::submit_sidecar_ensure_batch;
 mod agent_membership_cascade;
@@ -506,6 +508,10 @@ enum InternalEventBinding {
 }
 
 impl InternalEventAdmission {
+    pub(in crate::routing::events::event_log) fn is_applet_formal(&self) -> bool {
+        matches!(self.binding, InternalEventBinding::AppletFormal { .. })
+    }
+
     pub(in crate::routing) fn mimi_provider(
         realm_id: impl Into<String>,
         actor_id: impl Into<String>,
@@ -691,9 +697,8 @@ impl InternalEventAdmission {
                 InternalEventBinding::MimiProvider { binding_ref } => {
                     object
                         .get("payload")
-                        .and_then(|payload| payload.get("metadata"))
-                        .and_then(|metadata| metadata.get("mimi_provenance"))
-                        .and_then(|provenance| provenance.get("mimi_room_binding_ref"))
+                        .and_then(|payload| payload.get("mimi_provenance"))
+                        .and_then(|provenance| provenance.get("room_binding_ref"))
                         .and_then(Value::as_str)
                         == Some(binding_ref.as_str())
                 }
@@ -1344,7 +1349,6 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         main_strand_id: plan.main_strand_id.clone(),
         founding_unit_digest: plan.founding_unit_digest.clone(),
         authorization_core,
-        slot_committed: true,
         issuer_service_id,
         accepted_at,
         proof: arkret_wire::ProtocolSignature {

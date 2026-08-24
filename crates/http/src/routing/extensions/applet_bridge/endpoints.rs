@@ -3,14 +3,17 @@
 use arkret_identifiers::{AppletId, RealmId};
 use arkret_models_collaboration::account_lifecycle::AppletRevokeRequestBody;
 use arkret_models_collaboration::http_bodies::AppletTransactionRequestBody;
+use arkret_models_discovery::ServiceDescribe;
 use arkret_models_integration::{
-    AppletActorView, AppletCapabilityRevokeIntent, AppletInstallOutcome, AppletInstallPlan,
-    AppletInstallPreviewRequestBody, AppletInstallRequestBody, AppletManagedMembershipRemoval,
-    AppletMembershipRemoveIntent, AppletPingOutcome, AppletProtocolMetadata, AppletRealmView,
-    AppletRevokeEffectKind, AppletRevokeOutcome, AppletRevokePlan, AppletRevokePreviewOutcome,
+    AppletActorView, AppletCapabilityRevokeIntent, AppletInstallOutcome,
+    AppletInstallPreviewOutcome, AppletInstallPreviewRequestBody, AppletInstallRequestBody,
+    AppletManagedMembershipRemoval, AppletMembershipRemoveIntent, AppletNamespaceDomain,
+    AppletPingOutcome, AppletProtocolMetadata, AppletRealmView, AppletRevokeEffectKind,
+    AppletRevokeOutcome, AppletRevokePlan, AppletRevokePreviewOutcome,
     AppletRevokePreviewRequestBody, AppletRevokeSagaStatus, AppletRevokeStep,
     AppletRevokeStepStatus, AppletTransactionOutcome, ExternalRef, FieldDefinition,
     GhostActorProvisionOutcome, GhostActorProvisionRequestBody, ProtocolInstance,
+    namespace_pattern_matches,
 };
 use arkret_wire::{AppletRevokeMode, EventKind, Hash, ProtocolOperationId};
 use salvo::http::StatusCode;
@@ -20,45 +23,28 @@ use serde_json::{Value, json};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
-use super::super::applet_manifest::verify_manifest;
 use super::ghost::{
-    ensure_formal_ghost_provision_allowed, external_user_from_ghost_request, provision_ghost,
-    revoke_applet_record_after_admin_gate, validate_ghost_actor_provision_request,
-    validate_signed_ghost_provision_events,
+    ensure_formal_ghost_provision_allowed, revoke_applet_record_after_admin_gate,
+    validate_ghost_actor_provision_request, validate_signed_ghost_provision_events,
 };
 use super::install::{
-    append_portal_message, applet_response, approved_scopes_from_approval_request,
+    approved_scope_grants, approved_scopes_from_approval_request,
     approved_scopes_from_formal_install_events, build_install_plan, effective_scope_realm_id,
-    parse_manifest, portal_message_payload, register_package_install, register_verified_applet,
-    require_realm_admin, validate_applet_package,
+    register_package_install, registration_epoch_evidence_from_event, require_realm_admin,
+    validate_admin_install_events, validate_applet_package,
 };
 use super::record::{
-    accountability_chain, applet_display_name, applet_id_param, applet_record, applet_records,
-    ensure_not_revoked, idempotency_key, persist_applet_record, query_value,
+    applet_id_param, applet_record, applet_records, ensure_not_revoked, idempotency_key,
+    persist_applet_record, query_value,
 };
 use super::signature::{
-    VerifiedInboundTransactionSignature, require_inbound_transaction_signature,
+    VerifiedAppletServiceSignature, require_ghost_provision_signature,
+    require_inbound_transaction_signature,
 };
 use super::transaction::process_verified_transaction;
-use super::types::{
-    AppletGhostIngressOutcome, AppletGhostIngressRequestBody, AppletInstallPaths,
-    AppletManifestRegisterRequestBody, AppletPortalMessageOutcome, AppletPortalMessageRequestBody,
-    AppletProtocolDescribeOutcome, AppletRecord, AppletView, GhostActorRecord,
-    SOLAND_EDGE_APPLET_ID,
-};
+use super::types::{AppletRecord, GhostActorRecord, SOLAND_EDGE_APPLET_ID};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
-
-pub(in crate::routing::extensions) fn router() -> Router {
-    Router::with_path("applets")
-        .push(Router::with_path("register").post(register_endpoint))
-        .push(
-            Router::with_path("{applet_id}")
-                .get(get_endpoint)
-                .push(Router::with_path("ghosts").post(ghost_endpoint))
-                .push(Router::with_path("bot/messages").post(bot_message_endpoint)),
-        )
-}
 
 pub(in crate::routing::extensions) fn protocol_router() -> Router {
     Router::new()
@@ -98,6 +84,7 @@ pub(in crate::routing::extensions) fn protocol_router() -> Router {
                         Router::with_path("{applet_id}")
                             .push(
                                 Router::with_path("ghosts/provision")
+                                    .hoop(require_ghost_provision_signature)
                                     .post(provision_ghost_actor_endpoint),
                             )
                             .push(
@@ -122,7 +109,9 @@ async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutco
         })?;
     json_ok(AppletPingOutcome {
         ok: true,
-        applet_id: SOLAND_EDGE_APPLET_ID.to_owned(),
+        applet_id: arkret_identifiers::AppletId::new(SOLAND_EDGE_APPLET_ID.to_owned()).map_err(
+            |error| AppError::internal(format!("configured applet_id is invalid: {error}")),
+        )?,
         service_id,
         protocol_version: "1.0".to_owned(),
     })
@@ -130,42 +119,11 @@ async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutco
 
 #[salvo::oapi::endpoint(operation_id = "ak.edge.applet.read.describe", tags("extensions"))]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.read.describe"))]
-async fn protocol_describe_endpoint() -> JsonResult<AppletProtocolDescribeOutcome> {
-    json_ok(AppletProtocolDescribeOutcome {
-        contract: "ak.applet.v1".to_owned(),
-        install: AppletInstallPaths {
-            preview_path: "/_arkret/self/applets/install/preview".to_owned(),
-            commit_path: "/_arkret/self/applets/install".to_owned(),
-            revoke_preview_path: "/_arkret/self/applets/{applet_id}/revoke/preview".to_owned(),
-            revoke_path: "/_arkret/self/applets/{applet_id}/revoke".to_owned(),
-            ghost_actor_provision_path: "/_arkret/self/applets/{applet_id}/ghosts/provision"
-                .to_owned(),
-        },
-        transaction_path: "/_arkret/edge/applet/transactions".to_owned(),
-        transaction_auth: json!({
-            "mode": "rfc9421_http_message_signature",
-            "required_headers": [
-                "Signature",
-                "Signature-Input",
-                "Content-Digest",
-                "Source-Service-ID",
-                "Destination-Service-ID",
-                "Idempotency-Key"
-            ],
-            "covered_components": [
-                "@method",
-                "@target-uri",
-                "@authority",
-                "content-digest",
-                "source-service-id",
-                "destination-service-id",
-                "idempotency-key"
-            ],
-            "delivery_authentication_record_digest": arkret_wire::DomainSeparationId::APPLET_DELIVERY_AUTHENTICATION_RECORD_DIGEST_V1,
-            "bearer_only": false
-        }),
-        package_schema: arkret_wire::SchemaId::APPLET_PACKAGE_V1.to_owned(),
-    })
+async fn protocol_describe_endpoint(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    json_ok(crate::routing::system::describe::build_server_description(
+        state,
+    ))
 }
 
 #[salvo::oapi::endpoint(
@@ -178,24 +136,91 @@ async fn install_preview_endpoint(
     body: JsonBody<AppletInstallPreviewRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AppletInstallPlan> {
+) -> JsonResult<AppletInstallPreviewOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
-    let mut preview = body.into_inner();
-    validate_applet_package(state, &mut preview.applet_package)?;
-    let approved_scopes = approved_scopes_from_approval_request(
-        &preview.applet_package,
-        &preview.effective_scope,
-        &preview.approval_request,
-    )?;
+    let session = aa.authenticated_session(state, req).await?;
+    let preview = body.into_inner();
+    let basis = &preview.authoring_request_basis;
+    if basis.target_principal_server_id.as_str() != state.service_id()
+        || basis.install_actor_id != session.actor
+        || basis.applet_id != preview.applet_package.applet_id
+        || basis.service_id != preview.applet_package.service_id
+        || preview.applet_package.package_digest.as_ref() != Some(&basis.package_digest)
+    {
+        return Err(AppError::conflict("install authoring request basis does not match the authenticated actor, target Principal Server, or Applet package")
+            .with_wire_code("applet_install_plan_mismatch"));
+    }
+    let now = arkret_canonical::canonical::normalize_timestamp_canonical(chrono::Utc::now());
+    let max_expires_at = now + chrono::Duration::minutes(5);
+    if basis.requested_at > now + chrono::Duration::seconds(30)
+        || basis.requested_expires_at <= now
+        || basis.requested_expires_at > max_expires_at
+        || basis.requested_expires_at > basis.requested_at + chrono::Duration::minutes(5)
+    {
+        return Err(AppError::param_invalid(
+            "install authoring request expiry must be within the next five minutes",
+        ));
+    }
+    for event in
+        std::iter::once(&basis.registration_event).chain(basis.capability_grant_events.iter())
+    {
+        let envelope = serde_json::to_value(event).map_err(|error| {
+            AppError::param_invalid(format!("install admin Event is not encodable: {error}"))
+        })?;
+        crate::routing::events::event_log::validate_event_envelope_with_context(
+            state,
+            &session,
+            &envelope,
+            &[],
+            None,
+        )
+        .await
+        .map_err(|error| {
+            AppError::new(
+                soland_http::error::ErrorCode::from_wire(error.code)
+                    .unwrap_or(soland_http::error::ErrorCode::ParamInvalid),
+                error.message,
+            )
+            .with_status(error.status)
+            .with_wire_code(error.code)
+        })?;
+    }
+    let validated_admin =
+        validate_admin_install_events(&preview.applet_package, basis, session.actor.as_str())?;
+    let registration_epoch_evidence =
+        registration_epoch_evidence_from_event(&basis.registration_event)?;
+    validate_applet_package(state, &preview.applet_package, &registration_epoch_evidence)?;
+    let approved_scopes =
+        approved_scope_grants(&basis.effective_scope, validated_admin.approved_actions)?;
     let plan = build_install_plan(
         state,
         &preview.applet_package,
-        &preview.effective_scope,
+        &registration_epoch_evidence,
+        &basis.effective_scope,
         approved_scopes,
     )
     .await?;
-    json_ok(plan)
+    let requested_expires_at = basis.requested_expires_at;
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
+        state.notary_signing_key().as_ref().clone(),
+        state.service_full_id(),
+        state
+            .service_verification_method("notary-key")
+            .map_err(AppError::internal)?,
+    );
+    let authoring_request = arkret_models_integration::AppletInstallAuthoringRequest::sign(
+        preview.authoring_request_basis,
+        plan.plan_digest.clone(),
+        requested_expires_at,
+        &signer,
+    )
+    .map_err(|error| {
+        AppError::internal(format!("install authoring request sign failed: {error}"))
+    })?;
+    json_ok(AppletInstallPreviewOutcome {
+        plan,
+        authoring_request,
+    })
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.applet.command.install", tags("extensions"))]
@@ -216,20 +241,114 @@ async fn install_endpoint(
             "Idempotency-Key length exceeds 128 bytes",
         ));
     }
-    let mut commit = body.into_inner();
+    let commit = body.into_inner();
     let body = serde_json::to_value(&commit)
         .map_err(|error| AppError::internal(format!("install commit serialize: {error}")))?;
     let body_digest = super::install::canonical_digest(&body)?;
-    validate_applet_package(state, &mut commit.applet_package)?;
-    let approved_scopes = approved_scopes_from_formal_install_events(&commit, &session.actor)?;
+    if let Some(existing) = applet_record(state, commit.applet_package.applet_id.as_str()).await? {
+        if exact_successful_install_replay(
+            &existing.idempotency_key,
+            &existing.install_body_digest,
+            &idempotency_key,
+            &body_digest,
+        )? {
+            res.status_code(StatusCode::OK);
+            return json_ok(existing.install_response);
+        }
+    }
+    let authoring_request = &commit.authoring_request;
+    let basis = &authoring_request.basis;
+    authoring_request.validate_bindings().map_err(|error| {
+        AppError::param_invalid(format!("install authoring request is invalid: {error}"))
+    })?;
+    if !first_install_commit_is_fresh(authoring_request.expires_at, chrono::Utc::now()) {
+        return Err(AppError::param_invalid(
+            "install authoring request is expired",
+        ));
+    }
+    let expected_ps_method = state
+        .service_verification_method("notary-key")
+        .map_err(AppError::internal)?;
+    if basis.target_principal_server_id.as_str() != state.service_id()
+        || authoring_request.proof.verification_method != expected_ps_method
+    {
+        return Err(AppError::param_invalid(
+            "install authoring request targets or is signed by the wrong Principal Server",
+        ));
+    }
+    arkret_signatures::Ed25519DetachedJwsVerifier::new()
+        .verify_detached_jws(
+            &authoring_request.proof.jws,
+            &authoring_request.proof_binding_bytes().map_err(|error| {
+                AppError::param_invalid(format!("authoring proof binding is invalid: {error}"))
+            })?,
+            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                bytes: state.notary_verifying_key().as_bytes().to_vec(),
+            },
+        )
+        .map_err(|error| {
+            AppError::param_invalid(format!("authoring request proof is invalid: {error}"))
+        })?;
+    commit
+        .managed_actor_bundle
+        .validate_bindings(authoring_request)
+        .map_err(|error| {
+            AppError::param_invalid(format!("managed actor bundle is invalid: {error}"))
+        })?;
+    if commit.managed_actor_bundle.proof.created_at
+        > chrono::Utc::now() + chrono::Duration::seconds(30)
+    {
+        return Err(AppError::param_invalid(
+            "managed actor bundle proof created_at is in the future",
+        ));
+    }
+    let registration_epoch_evidence =
+        registration_epoch_evidence_from_event(&basis.registration_event)?;
+    validate_applet_package(state, &commit.applet_package, &registration_epoch_evidence)?;
+    if !registration_epoch_evidence.contains_signing_key(
+        commit
+            .managed_actor_bundle
+            .proof
+            .verification_method
+            .as_str(),
+    ) {
+        return Err(AppError::param_invalid(
+            "managed actor bundle proof key is not in the accepted registration epoch",
+        ));
+    }
+    crate::jws_verify::verify_did_controlled_jws_async(
+        &commit
+            .managed_actor_bundle
+            .proof_binding_bytes()
+            .map_err(|error| {
+                AppError::param_invalid(format!("bundle proof binding is invalid: {error}"))
+            })?,
+        &commit.managed_actor_bundle.proof.jws,
+        commit
+            .managed_actor_bundle
+            .proof
+            .verification_method
+            .as_str(),
+        registration_epoch_evidence.full_id.as_str(),
+        state,
+    )
+    .await
+    .map_err(|error| AppError::param_invalid(format!("bundle proof is invalid: {error}")))?;
+    let approved_scopes = approved_scopes_from_formal_install_events(
+        state,
+        &commit,
+        &session.actor,
+        state.service_id(),
+    )?;
     let recomputed_plan = build_install_plan(
         state,
         &commit.applet_package,
-        &commit.effective_scope,
+        &registration_epoch_evidence,
+        &basis.effective_scope,
         approved_scopes,
     )
     .await?;
-    if recomputed_plan.plan_digest != commit.plan_digest {
+    if recomputed_plan.plan_digest != authoring_request.plan_digest {
         return Err(
             AppError::conflict("install plan digest does not match recomputed plan")
                 .with_wire_code("applet_install_plan_mismatch"),
@@ -241,12 +360,37 @@ async fn install_endpoint(
     // Authentication alone is insufficient â€” the actor MUST hold realm admin
     // over that realm. P1 projected capability grants into the authz index, so
     // `state.authorization().check` is authoritative here. fail-closed.
-    require_realm_admin(state, &session.actor, &commit.effective_scope).await?;
+    require_realm_admin(state, &session.actor, &basis.effective_scope).await?;
 
     let response =
         register_package_install(state, &session, commit, idempotency_key, body_digest, res)
             .await?;
     json_ok(response)
+}
+
+fn exact_successful_install_replay(
+    stored_key: &str,
+    stored_digest: &str,
+    requested_key: &str,
+    requested_digest: &str,
+) -> Result<bool, AppError> {
+    if stored_key != requested_key {
+        return Ok(false);
+    }
+    if stored_digest == requested_digest {
+        return Ok(true);
+    }
+    Err(
+        AppError::conflict("Idempotency-Key was already used with a different applet install body")
+            .with_wire_code("duplicate_conflict"),
+    )
+}
+
+fn first_install_commit_is_fresh(
+    expires_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    expires_at > now
 }
 
 #[salvo::oapi::endpoint(
@@ -360,7 +504,7 @@ async fn revoke_install_endpoint(
                     reason_code: None,
                 });
             }
-            let outcome = AppletRevokeOutcome {
+            let mut outcome = AppletRevokeOutcome {
                 ok: false,
                 operation_id,
                 revoke_plan_digest: revoke.revoke_plan_digest.clone(),
@@ -376,7 +520,7 @@ async fn revoke_install_endpoint(
                 &idempotency_key,
                 &request_digest,
                 &request_value,
-                &outcome,
+                &mut outcome,
             )
             .await?;
             outcome
@@ -446,7 +590,7 @@ async fn revoke_install_endpoint(
                     &idempotency_key,
                     &request_digest,
                     &request_value,
-                    &outcome,
+                    &mut outcome,
                 )
                 .await?;
                 return json_ok(outcome);
@@ -459,7 +603,7 @@ async fn revoke_install_endpoint(
             &idempotency_key,
             &request_digest,
             &request_value,
-            &outcome,
+            &mut outcome,
         )
         .await?;
     }
@@ -491,7 +635,7 @@ async fn revoke_install_endpoint(
         &idempotency_key,
         &request_digest,
         &request_value,
-        &outcome,
+        &mut outcome,
     )
     .await?;
     crate::routing::append_audit_log(
@@ -516,9 +660,7 @@ fn validate_revoke_scope(
     effective_scope: &arkret_wire::ScopeRef,
 ) -> Result<(), AppError> {
     let scope_realm = effective_scope_realm_id(effective_scope);
-    if record.portal_realm_id != scope_realm
-        || record.effective_scope.as_ref() != Some(effective_scope)
-    {
+    if record.portal_realm_id != scope_realm || &record.effective_scope != effective_scope {
         return Err(
             AppError::conflict("effective_scope does not match active applet install")
                 .with_wire_code("applet_effective_scope_mismatch"),
@@ -578,10 +720,7 @@ fn build_revoke_plan(
         )
         .with_wire_code("failed_precondition"));
     }
-    let response = record.install_response.as_ref().ok_or_else(|| {
-        AppError::conflict("applet install projection is incomplete")
-            .with_wire_code("applet_install_projection_incomplete")
-    })?;
+    let response = &record.install_response;
     if matches!(
         preview.revoke_mode,
         AppletRevokeMode::RevokeAll | AppletRevokeMode::RevokeWidgetOnly
@@ -592,10 +731,7 @@ fn build_revoke_plan(
         )
         .with_wire_code("failed_precondition"));
     }
-    let package = record.package.as_ref().ok_or_else(|| {
-        AppError::conflict("applet install projection is missing package metadata")
-            .with_wire_code("applet_install_projection_incomplete")
-    })?;
+    let package = &record.package;
     let mut capability_revocations = Vec::new();
     let mut membership_removals: Vec<AppletMembershipRemoveIntent> = Vec::new();
     if revoke_mode_fences_runtime(preview.revoke_mode) {
@@ -632,8 +768,7 @@ fn build_revoke_plan(
     membership_removals
         .sort_by(|left, right| left.member_id.as_str().cmp(right.member_id.as_str()));
     let plan = AppletRevokePlan {
-        applet_id: AppletId::new(record.applet_id.clone())
-            .map_err(|error| AppError::internal(format!("stored applet id is invalid: {error}")))?,
+        applet_id: record.applet_id.clone(),
         effective_scope: preview.effective_scope.clone(),
         registration_epoch: package.registration_epoch.clone(),
         reason_code: preview.reason_code.clone(),
@@ -763,17 +898,76 @@ async fn persist_revoke_execution(
     idempotency_key: &str,
     request_digest: &str,
     request: &Value,
-    outcome: &AppletRevokeOutcome,
+    outcome: &mut AppletRevokeOutcome,
 ) -> Result<(), AppError> {
-    record.revoke_execution = Some(json!({
+    let execution = json!({
         "principal_service_id": state.service_id(),
         "admin_actor_id": admin_actor_id,
         "idempotency_key": idempotency_key,
         "request_digest": request_digest,
         "request": request,
         "outcome": outcome,
-    }));
-    persist_applet_record(state, record).await
+    });
+    for _ in 0..8 {
+        let current = record.clone();
+        let mut replacement = current.clone();
+        replacement.revoke_execution = Some(execution.clone());
+        if persist_applet_record(state, &current, &replacement).await? {
+            *record = replacement;
+            return Ok(());
+        }
+        let applet_id = record.applet_id.clone();
+        *record = applet_record(state, applet_id.as_str())
+            .await?
+            .ok_or_else(|| AppError::not_found("applet disappeared during revoke"))?;
+        if let Some(stored) = load_stored_revoke_outcome(
+            record.revoke_execution.as_ref(),
+            state.service_id(),
+            admin_actor_id,
+            idempotency_key,
+            request_digest,
+        )? && revoke_outcome_progress(&stored) >= revoke_outcome_progress(outcome)
+        {
+            // A concurrent request has already persisted the same or a later
+            // prefix of this deterministic saga. Its record is the winner;
+            // never overwrite it with this request's stale outcome.
+            *outcome = stored;
+            return Ok(());
+        }
+    }
+    Err(
+        AppError::conflict("Applet record changed repeatedly during revoke progress persistence")
+            .with_wire_code("cas_conflict"),
+    )
+}
+
+fn revoke_outcome_progress(outcome: &AppletRevokeOutcome) -> (bool, usize, usize, u8) {
+    let completed_prefix = outcome
+        .steps
+        .iter()
+        .take_while(|step| step.status != AppletRevokeStepStatus::Pending)
+        .count();
+    let accepted = outcome
+        .steps
+        .iter()
+        .filter(|step| {
+            matches!(
+                step.status,
+                AppletRevokeStepStatus::Accepted | AppletRevokeStepStatus::Duplicate
+            )
+        })
+        .count();
+    let status_rank = match outcome.status {
+        AppletRevokeSagaStatus::InProgress => 0,
+        AppletRevokeSagaStatus::PartiallyCompleted => 1,
+        AppletRevokeSagaStatus::Complete => 2,
+    };
+    (
+        outcome.status == AppletRevokeSagaStatus::Complete,
+        completed_prefix,
+        accepted,
+        status_rank,
+    )
 }
 
 #[salvo::oapi::endpoint(
@@ -782,20 +976,23 @@ async fn persist_revoke_execution(
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.ghost.command.provision"))]
 async fn provision_ghost_actor_endpoint(
-    aa: AuthArgs,
     body: JsonBody<GhostActorProvisionRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
     res: &mut Response,
 ) -> JsonResult<GhostActorProvisionOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let verified = depot
+        .remove_typed::<VerifiedAppletServiceSignature>()
+        .map_err(|_| AppError::unauthorized("Applet service signature verification missing"))?;
     let path_applet_id = applet_id_param(req)?;
     let provision = body.into_inner();
     validate_ghost_actor_provision_request(&path_applet_id, &provision)?;
-    if session.actor != provision.service_id.as_str() {
+    if verified.install.applet_id.as_str() != path_applet_id
+        || verified.install.package.service_id != provision.service_id
+    {
         return Err(AppError::capability_denied(
-            "authenticated caller must be the installed Applet service DID",
+            "authenticated Applet service registration does not match the provisioning request",
         )
         .with_wire_code("applet_registration_unauthorized"));
     }
@@ -813,7 +1010,7 @@ async fn provision_ghost_actor_endpoint(
         .to_string();
     if let Some(replay) = state
         .jobs()
-        .idempotency_record(&session.actor, &idempotency_key)
+        .idempotency_record(provision.service_id.as_str(), &idempotency_key)
         .await
         .map_err(|error| AppError::internal(format!("idempotency lookup failed: {error}")))?
     {
@@ -836,19 +1033,18 @@ async fn provision_ghost_actor_endpoint(
     let ghost_actor_id = provision.ghost_actor_id.clone();
     // G3.S9 — ghost actor DID recorded against the applet MUST be a
     // well-formed bare DID scalar (no DID URL fragment).
-    crate::routing::extensions::bot_actor::validate_extension_actor_did(ghost_actor_id.as_str())?;
     let realm_id = provision.realm_id.clone();
 
-    let record = applet_record(state, &path_applet_id)
+    let mut record = applet_record(state, &path_applet_id)
         .await?
         .ok_or_else(|| AppError::not_found("applet is not installed"))?;
     ensure_not_revoked(&record)?;
     ensure_formal_ghost_provision_allowed(&record, &provision)?;
     if let Some(existing) = record.ghosts.iter().find(|ghost| {
-        ghost.external_id == provision.external_user_id
+        ghost.external_ref == provision.external_ref
             || ghost.ghost_actor_id == provision.ghost_actor_id.as_str()
     }) {
-        if existing.request_digest.as_deref() != Some(request_digest.as_str()) {
+        if existing.request_digest != request_digest {
             return Err(AppError::conflict(
                 "Ghost provisioning tuple already exists with different signed Events",
             )
@@ -856,15 +1052,36 @@ async fn provision_ghost_actor_endpoint(
         }
         let outcome = GhostActorProvisionOutcome {
             ghost_actor_id,
-            profile_event_ref: existing.profile_event_ref.clone().ok_or_else(|| {
-                AppError::internal("stored Ghost record is missing profile_event_ref")
+            actor_principal_server_id: arkret_wire::DidCoreId::new(
+                existing.actor_principal_server_id.clone(),
+            )
+            .map_err(|error| {
+                AppError::internal(format!("stored Ghost authority invalid: {error}"))
             })?,
-            accountability_grant_ref: existing.accountability_grant_ref.clone().ok_or_else(
-                || AppError::internal("stored Ghost record is missing accountability_grant_ref"),
-            )?,
-            authorization_ref: existing.authorization_ref.clone().ok_or_else(|| {
-                AppError::internal("stored Ghost record is missing authorization_ref")
+            managed_actor_provision_ref: arkret_wire::EventId::new(
+                existing.managed_actor_provision_ref.clone(),
+            )
+            .map_err(|error| {
+                AppError::internal(format!("stored Ghost provision ref invalid: {error}"))
             })?,
+            principal_control_realm_id: arkret_wire::RealmId::new(
+                existing.principal_control_realm_id.clone(),
+            )
+            .map_err(|error| AppError::internal(format!("stored Ghost PCR invalid: {error}")))?,
+            profile_event_ref: arkret_wire::EventId::new(existing.profile_event_ref.clone())
+                .map_err(|error| {
+                    AppError::internal(format!("stored Ghost profile ref invalid: {error}"))
+                })?,
+            accountability_grant_ref: arkret_wire::EventId::new(
+                existing.accountability_grant_ref.clone(),
+            )
+            .map_err(|error| {
+                AppError::internal(format!("stored Ghost accountability ref invalid: {error}"))
+            })?,
+            authorization_ref: arkret_wire::GrantId::new(existing.authorization_ref.clone())
+                .map_err(|error| {
+                    AppError::internal(format!("stored Ghost authorization ref invalid: {error}"))
+                })?,
             display_name: existing.display_name.clone(),
         };
         res.status_code(StatusCode::OK);
@@ -872,12 +1089,38 @@ async fn provision_ghost_actor_endpoint(
     }
 
     let now = chrono::Utc::now();
-    let authorization_ref =
+    for existing_record in applet_records(state).await? {
+        let candidate = provision.ghost_actor_id.as_str();
+        if existing_record.package.service_id.as_str() == candidate
+            || existing_record.package.controller_id.as_str() == candidate
+            || existing_record.package.bot_actor_id.as_str() == candidate
+            || existing_record
+                .ghosts
+                .iter()
+                .any(|ghost| ghost.ghost_actor_id == candidate)
+        {
+            return Err(AppError::conflict(
+                "Ghost actor identity is already used by an Applet service, controller, Bot, or Ghost",
+            )
+            .with_wire_code("applet_managed_actor_provision_invalid"));
+        }
+    }
+    let (authorization_ref, managed_provision) =
         validate_signed_ghost_provision_events(state, &record, &provision).await?;
-    let profile_event_ref = provision.profile_event.event_id.to_string();
-    let accountability_grant_ref = provision.accountability_grant_event.event_id.to_string();
+    let profile_event_ref = provision.profile_event.event_id.clone();
+    let accountability_grant_ref = provision.accountability_grant_event.event_id.clone();
+    let authorization_ref = arkret_wire::GrantId::new(authorization_ref).map_err(|error| {
+        AppError::internal(format!(
+            "validated Ghost authorization ref invalid: {error}"
+        ))
+    })?;
     let outcome = GhostActorProvisionOutcome {
         ghost_actor_id: ghost_actor_id.clone(),
+        actor_principal_server_id: managed_provision.actor_principal_server_id.clone(),
+        managed_actor_provision_ref: provision.managed_actor_provision_event.event_id.clone(),
+        principal_control_realm_id: arkret_wire::RealmId::from_event_id(
+            &provision.pcr_genesis_event.event_id,
+        ),
         profile_event_ref: profile_event_ref.clone(),
         accountability_grant_ref: accountability_grant_ref.clone(),
         authorization_ref: authorization_ref.clone(),
@@ -885,27 +1128,40 @@ async fn provision_ghost_actor_endpoint(
     };
     let ghost = GhostActorRecord {
         ghost_actor_id: ghost_actor_id.to_string(),
-        external_id: provision.external_user_id.clone(),
+        actor_principal_server_id: managed_provision.actor_principal_server_id.to_string(),
+        managed_actor_provision_ref: provision.managed_actor_provision_event.event_id.to_string(),
+        principal_control_realm_id: arkret_wire::RealmId::from_event_id(
+            &provision.pcr_genesis_event.event_id,
+        )
+        .to_string(),
+        external_ref: provision.external_ref.clone(),
         display_name: provision.display_name.clone(),
-        request_digest: Some(request_digest.clone()),
-        profile_event_ref: Some(profile_event_ref.clone()),
-        accountability_grant_ref: Some(accountability_grant_ref.clone()),
-        authorization_ref: Some(authorization_ref.clone()),
+        request_digest: request_digest.clone(),
+        profile_event_ref: profile_event_ref.to_string(),
+        accountability_grant_ref: accountability_grant_ref.to_string(),
+        authorization_ref: authorization_ref.to_string(),
         created_at: now,
-        revoked_at: None,
     };
+    let expected_applet_record = serde_json::to_value(&record)
+        .map_err(|error| AppError::internal(format!("Applet record invalid: {error}")))?;
+    record.ghosts.push(ghost);
+    let applet_record_value = serde_json::to_value(&record)
+        .map_err(|error| AppError::internal(format!("Applet record invalid: {error}")))?;
     let commit_result = crate::routing::events::event_log::submit_ghost_provision_batch(
         state,
         service_id.as_str(),
         ghost_actor_id.as_str(),
         realm_id.as_str(),
+        provision.managed_actor_provision_event.clone(),
+        provision.pcr_genesis_event.clone(),
         provision.accountability_grant_event.clone(),
         provision.profile_event.clone(),
         path_applet_id,
-        serde_json::to_value(&ghost)
-            .map_err(|error| AppError::internal(format!("Ghost record invalid: {error}")))?,
+        expected_applet_record,
+        applet_record_value,
+        managed_provision.actor_principal_server_id.to_string(),
         crate::routing::events::event_log::EventCommitIdempotency {
-            principal_id: session.actor.clone(),
+            principal_id: provision.service_id.to_string(),
             key: idempotency_key.clone(),
             service_id: state.service_id().clone(),
             request_hash: request_digest.clone(),
@@ -918,14 +1174,16 @@ async fn provision_ghost_actor_endpoint(
         // A replica or concurrent request may win after the optimistic lookup
         // above. Re-read the durable first response so an exact retry still
         // receives replay semantics; a different body remains a conflict.
-        if matches!(error.code.as_str(), "duplicate" | "duplicate_conflict")
-            && let Some(replay) = state
-                .jobs()
-                .idempotency_record(&session.actor, &idempotency_key)
-                .await
-                .map_err(|lookup_error| {
-                    AppError::internal(format!("idempotency lookup failed: {lookup_error}"))
-                })?
+        if matches!(
+            error.code.as_str(),
+            "duplicate" | "duplicate_conflict" | "cas_conflict"
+        ) && let Some(replay) = state
+            .jobs()
+            .idempotency_record(provision.service_id.as_str(), &idempotency_key)
+            .await
+            .map_err(|lookup_error| {
+                AppError::internal(format!("idempotency lookup failed: {lookup_error}"))
+            })?
         {
             if replay.request_hash != request_digest {
                 return Err(AppError::conflict(
@@ -1003,7 +1261,7 @@ async fn transaction_endpoint(
     // against the raw canonical body before this typed extractor or any event
     // processing runs. A successful verification is consumed exactly once.
     let verified = depot
-        .remove_typed::<VerifiedInboundTransactionSignature>()
+        .remove_typed::<VerifiedAppletServiceSignature>()
         .map_err(|_| AppError::internal("verified applet transaction signature is unavailable"))?;
     let outcome =
         process_verified_transaction(&state, transaction, &idempotency_key, verified).await?;
@@ -1020,18 +1278,32 @@ async fn resolve_actor_endpoint(
     let actor_id = req
         .param::<String>("actor_id")
         .ok_or_else(|| AppError::param_missing("actor_id path segment required"))?;
-    if let Some(doc) = super::ghost::did_document_for_extension_actor(state, &actor_id).await? {
-        let actor_id = arkret_identifiers::DidCoreId::new(actor_id)
-            .map_err(|error| AppError::param_invalid(format!("actor_id is invalid: {error}")))?;
-        return json_ok(AppletActorView {
-            exists: true,
-            actor_id: Some(actor_id),
-            display_name: doc
-                .get("display_name")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            external_ref: None,
-        });
+    let actor_id = arkret_identifiers::DidCoreId::new(actor_id)
+        .map_err(|error| AppError::param_invalid(format!("actor_id is invalid: {error}")))?;
+    for record in applet_records(state).await? {
+        if record.revoked_at.is_some() {
+            continue;
+        }
+        if record.bot_actor_id == actor_id.as_str() {
+            return json_ok(AppletActorView {
+                exists: true,
+                actor_id: Some(actor_id),
+                display_name: Some(record.package.package_id.clone()),
+                external_ref: None,
+            });
+        }
+        if let Some(ghost) = record
+            .ghosts
+            .iter()
+            .find(|ghost| ghost.ghost_actor_id == actor_id.as_str())
+        {
+            return json_ok(AppletActorView {
+                exists: true,
+                actor_id: Some(actor_id),
+                display_name: ghost.display_name.clone(),
+                external_ref: None,
+            });
+        }
     }
     json_ok(AppletActorView {
         exists: false,
@@ -1053,8 +1325,14 @@ async fn resolve_realm_endpoint(
         .ok_or_else(|| AppError::param_missing("realm_id_or_alias path segment required"))?;
     let record = applet_records(state).await?.into_iter().find(|record| {
         record.portal_realm_id == realm_id_or_alias
-            || record.namespace == realm_id_or_alias
-            || record.applet_id == realm_id_or_alias
+            || record.package.namespaces.realms.iter().any(|claim| {
+                namespace_pattern_matches(
+                    AppletNamespaceDomain::Realms,
+                    &claim.pattern,
+                    &realm_id_or_alias,
+                )
+            })
+            || record.applet_id.as_str() == realm_id_or_alias
     });
     if let Some(record) = record {
         let realm_id = RealmId::new(record.portal_realm_id).map_err(|error| {
@@ -1063,15 +1341,16 @@ async fn resolve_realm_endpoint(
         return json_ok(AppletRealmView {
             exists: true,
             realm_id: Some(realm_id),
-            title: Some(applet_display_name(&record.manifest).unwrap_or(record.namespace)),
+            title: Some(record.package.package_id.clone()),
             external_ref: Some(ExternalRef {
                 protocol: record
                     .package
-                    .as_ref()
-                    .and_then(|package| package.protocols.first().cloned())
+                    .protocols
+                    .first()
+                    .cloned()
                     .unwrap_or_else(|| "applet".to_owned()),
-                external_id: record.applet_id,
-                instance_id: record.install_id,
+                external_id: record.applet_id.to_string(),
+                instance_id: Some(record.install_id),
                 display_name: None,
                 url: None,
             }),
@@ -1104,18 +1383,17 @@ async fn protocol_metadata_endpoint(
         .filter(|record| {
             record
                 .package
-                .as_ref()
-                .map(|package| package.protocols.iter().any(|item| item == &protocol))
-                .unwrap_or(false)
+                .protocols
+                .iter()
+                .any(|item| item == &protocol)
         })
         .map(|record| ProtocolInstance {
-            instance_id: record.applet_id.clone(),
-            display_name: applet_display_name(&record.manifest)
-                .unwrap_or_else(|| record.namespace.clone()),
+            instance_id: record.applet_id.to_string(),
+            display_name: record.package.package_id.clone(),
             external_ref: Some(ExternalRef {
                 protocol: protocol.clone(),
-                external_id: record.applet_id,
-                instance_id: record.install_id,
+                external_id: record.applet_id.to_string(),
+                instance_id: Some(record.install_id),
                 display_name: None,
                 url: None,
             }),
@@ -1157,37 +1435,30 @@ async fn third_party_users_endpoint(
     depot: &mut Depot,
 ) -> JsonResult<AppletActorView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    let protocol = query_value(req, "protocol")
+        .ok_or_else(|| AppError::param_missing("protocol is required"))?;
+    let instance_id = query_value(req, "instance_id")
+        .ok_or_else(|| AppError::param_missing("instance_id is required"))?;
     let external_id = query_value(req, "user")
         .or_else(|| query_value(req, "user_id"))
-        .or_else(|| query_value(req, "external_id"));
-    if let Some(external_id) = external_id {
-        for record in applet_records(state).await? {
-            if let Some(ghost) = record
-                .ghosts
-                .iter()
-                .find(|ghost| ghost.external_id == external_id)
-            {
-                let actor_id = arkret_identifiers::DidCoreId::new(ghost.ghost_actor_id.clone())
-                    .map_err(|error| {
-                        AppError::internal(format!("stored ghost actor id is invalid: {error}"))
-                    })?;
-                return json_ok(AppletActorView {
-                    exists: true,
-                    actor_id: Some(actor_id),
-                    display_name: ghost.display_name.clone(),
-                    external_ref: Some(ExternalRef {
-                        protocol: record
-                            .package
-                            .as_ref()
-                            .and_then(|package| package.protocols.first().cloned())
-                            .unwrap_or_else(|| "applet".to_owned()),
-                        external_id: ghost.external_id.clone(),
-                        instance_id: record.install_id.clone(),
-                        display_name: ghost.display_name.clone(),
-                        url: None,
-                    }),
-                });
-            }
+        .or_else(|| query_value(req, "external_id"))
+        .ok_or_else(|| AppError::param_missing("external_id is required"))?;
+    for record in applet_records(state).await? {
+        if let Some(ghost) = record.ghosts.iter().find(|ghost| {
+            ghost.external_ref.protocol == protocol
+                && ghost.external_ref.instance_id.as_deref() == Some(instance_id.as_str())
+                && ghost.external_ref.external_id == external_id
+        }) {
+            let actor_id = arkret_identifiers::DidCoreId::new(ghost.ghost_actor_id.clone())
+                .map_err(|error| {
+                    AppError::internal(format!("stored ghost actor id is invalid: {error}"))
+                })?;
+            return json_ok(AppletActorView {
+                exists: true,
+                actor_id: Some(actor_id),
+                display_name: ghost.display_name.clone(),
+                external_ref: Some(ghost.external_ref.clone()),
+            });
         }
     }
     json_ok(AppletActorView {
@@ -1215,10 +1486,16 @@ async fn third_party_locations_endpoint(
         .or_else(|| query_value(req, "channel"))
         .or_else(|| query_value(req, "realm"));
     if let Some(location) = location
-        && let Some(record) = applet_records(state)
-            .await?
-            .into_iter()
-            .find(|record| record.namespace == location || record.portal_realm_id == location)
+        && let Some(record) = applet_records(state).await?.into_iter().find(|record| {
+            record.portal_realm_id == location
+                || record.package.namespaces.realms.iter().any(|claim| {
+                    namespace_pattern_matches(
+                        AppletNamespaceDomain::Realms,
+                        &claim.pattern,
+                        &location,
+                    )
+                })
+        })
     {
         let realm_id = RealmId::new(record.portal_realm_id.clone()).map_err(|error| {
             AppError::internal(format!("stored applet portal realm_id is invalid: {error}"))
@@ -1226,15 +1503,16 @@ async fn third_party_locations_endpoint(
         return json_ok(AppletRealmView {
             exists: true,
             realm_id: Some(realm_id),
-            title: Some(applet_display_name(&record.manifest).unwrap_or(record.namespace.clone())),
+            title: Some(record.package.package_id.clone()),
             external_ref: Some(ExternalRef {
                 protocol: record
                     .package
-                    .as_ref()
-                    .and_then(|package| package.protocols.first().cloned())
+                    .protocols
+                    .first()
+                    .cloned()
                     .unwrap_or_else(|| "applet".to_owned()),
                 external_id: location,
-                instance_id: record.install_id,
+                instance_id: Some(record.install_id),
                 display_name: None,
                 url: None,
             }),
@@ -1246,148 +1524,6 @@ async fn third_party_locations_endpoint(
         title: None,
         external_ref: None,
     })
-}
-
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.applets.register",
-    tags("extensions")
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.applets.register"))]
-async fn register_endpoint(
-    aa: AuthArgs,
-    body: JsonBody<AppletManifestRegisterRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-    res: &mut Response,
-) -> JsonResult<AppletView> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
-    let manifest = parse_manifest(&body)?;
-    let trusted_registry_did = body
-        .trusted_registry_did
-        .as_deref()
-        .unwrap_or(manifest.signer_did.as_str())
-        .to_owned();
-    let verified = verify_manifest(&manifest, &trusted_registry_did).map_err(|err| {
-        AppError::param_invalid(format!("applet manifest verification failed: {err}"))
-            .with_wire_code(err.code())
-    })?;
-    let idempotency_key = idempotency_key(req);
-    let response = register_verified_applet(
-        state,
-        &session.actor,
-        manifest,
-        verified,
-        idempotency_key,
-        res,
-    )
-    .await?;
-    json_ok(response)
-}
-
-#[salvo::oapi::endpoint(operation_id = "org.arkret.soland.applets.get", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.applets.get"))]
-async fn get_endpoint(req: &mut Request, depot: &mut Depot) -> JsonResult<AppletView> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let applet_id = applet_id_param(req)?;
-    let record = applet_record(state, &applet_id)
-        .await?
-        .ok_or_else(|| AppError::not_found("applet is not registered"))?;
-    json_ok(applet_response(&record))
-}
-
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.applets.ghosts.provision",
-    tags("extensions")
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.applets.ghosts.provision"))]
-async fn ghost_endpoint(
-    aa: AuthArgs,
-    body: JsonBody<AppletGhostIngressRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AppletGhostIngressOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
-    let applet_id = applet_id_param(req)?;
-    let body = body.into_inner();
-    let (external_id, display_name) = external_user_from_ghost_request(&body)?;
-
-    let (record, ghost) = provision_ghost(state, &applet_id, &external_id, display_name).await?;
-    let message_result = if let Some(realm_id) = body.realm_id {
-        if let Some(message) = portal_message_payload(&body.payload)? {
-            Some(append_portal_message(state, &record, &ghost, &realm_id, message).await?)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-    let accountability = accountability_chain(&record);
-    let response = AppletGhostIngressOutcome {
-        applet_id: record.applet_id,
-        ghost_actor_id: ghost.ghost_actor_id,
-        external_id: ghost.external_id,
-        display_name: ghost.display_name,
-        accountability,
-        message_id: message_result
-            .as_ref()
-            .map(|message| message.message_id.clone()),
-        event_id: message_result
-            .as_ref()
-            .map(|message| message.event_id.clone()),
-        operation_id: message_result
-            .as_ref()
-            .map(|message| message.operation_id.clone()),
-        realm_id: message_result
-            .as_ref()
-            .map(|message| message.realm_id.clone()),
-        portal_realm_id: message_result.map(|message| message.portal_realm_id),
-    };
-    json_ok(response)
-}
-
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.applets.bot.message",
-    tags("extensions")
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.applets.bot.message"))]
-async fn bot_message_endpoint(
-    aa: AuthArgs,
-    body: JsonBody<AppletPortalMessageRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AppletPortalMessageOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
-    let applet_id = applet_id_param(req)?;
-    let body = body.into_inner();
-    let record = applet_record(state, &applet_id)
-        .await?
-        .ok_or_else(|| AppError::not_found("applet is not registered"))?;
-    ensure_not_revoked(&record).map_err(|_| {
-        AppError::capability_denied("bot actor capability has been revoked")
-            .with_status(StatusCode::FORBIDDEN)
-            .with_wire_code("bot_actor_revoked")
-    })?;
-    let content = portal_message_payload(&body.payload)?.ok_or_else(|| {
-        AppError::param_invalid("payload.kind must be \"message\" and payload.text is required")
-    })?;
-    let synthetic_ghost = GhostActorRecord {
-        ghost_actor_id: record.bot_actor_id.clone(),
-        external_id: "bot".to_owned(),
-        display_name: Some("Applet Bot".to_owned()),
-        request_digest: None,
-        profile_event_ref: None,
-        accountability_grant_ref: None,
-        authorization_ref: None,
-        created_at: record.registered_at,
-        revoked_at: None,
-    };
-    let message_result =
-        append_portal_message(state, &record, &synthetic_ghost, &body.realm_id, content).await?;
-    json_ok(message_result)
 }
 
 #[cfg(test)]
@@ -1427,6 +1563,39 @@ mod revoke_saga_tests {
     }
 
     #[test]
+    fn first_install_commit_rejects_expiry_but_exact_success_replay_does_not() {
+        let now = chrono::Utc::now();
+        assert!(!first_install_commit_is_fresh(
+            now - chrono::Duration::seconds(1),
+            now,
+        ));
+        assert!(
+            exact_successful_install_replay(
+                "install-key",
+                "sha256:exact",
+                "install-key",
+                "sha256:exact",
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn successful_install_replay_rejects_changed_body() {
+        let error = exact_successful_install_replay(
+            "install-key",
+            "sha256:first",
+            "install-key",
+            "sha256:changed",
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.wire_code_override.as_deref(),
+            Some("duplicate_conflict")
+        );
+    }
+
+    #[test]
     fn replay_binding_rejects_another_actor_or_service() {
         let execution = completed_execution();
         for (service, actor) in [
@@ -1456,5 +1625,26 @@ mod revoke_saga_tests {
         assert!(revoke_mode_fences_runtime(
             AppletRevokeMode::RevokeRuntimeOnly
         ));
+    }
+
+    #[test]
+    fn concurrent_revoke_progress_never_regresses_from_step_three_to_step_two() {
+        let outcome = |statuses: &[&str]| {
+            serde_json::from_value::<AppletRevokeOutcome>(json!({
+                "ok": false,
+                "operation_id": "ak:operation:01904100-0000-7000-8000-000000000001",
+                "revoke_plan_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "status": "in_progress",
+                "steps": statuses.iter().enumerate().map(|(index, status)| json!({
+                    "effect_kind": "capability_revoke_event",
+                    "effect_ref": format!("ak:event:step-{index}"),
+                    "status": status,
+                })).collect::<Vec<_>>(),
+            }))
+            .unwrap()
+        };
+        let step_two = outcome(&["accepted", "accepted", "pending"]);
+        let step_three = outcome(&["accepted", "accepted", "accepted"]);
+        assert!(revoke_outcome_progress(&step_three) > revoke_outcome_progress(&step_two));
     }
 }

@@ -263,16 +263,29 @@ mod tests {
 
 /// Applet projection mutation committed with a closed Event aggregate.
 #[derive(Clone, Debug)]
-pub struct AppletGhostCommit {
-    pub applet_id: String,
-    pub ghost: serde_json::Value,
+pub struct AppletRecordCommit {
+    pub applet_id: arkret_wire::AppletId,
+    /// Exact durable record observed while validating the aggregate. `None`
+    /// means the Applet must not exist and this mutation is an insert.
+    pub expected_record: Option<serde_json::Value>,
+    pub record: serde_json::Value,
+    /// Complete namespace set claimed by a new install. Empty for an update.
+    pub namespace_claims: arkret_models_integration::AppletWireNamespaces,
+    /// Managed authority pairs acquired by this aggregate.
+    pub managed_authority_claims: Vec<ManagedAuthorityClaim>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManagedAuthorityClaim {
+    pub actor_id: String,
+    pub principal_server_id: String,
 }
 
 /// All durable writes produced by accepting a closed multi-Event aggregate.
 #[derive(Clone, Debug)]
 pub struct EventBatchCommitRequest {
     pub events: Vec<EventCommitRequest>,
-    pub applet_ghosts: Option<AppletGhostCommit>,
+    pub applet_record: Option<AppletRecordCommit>,
     pub agent_membership_cascade: Option<crate::AgentMembershipCascadeCommit>,
 }
 

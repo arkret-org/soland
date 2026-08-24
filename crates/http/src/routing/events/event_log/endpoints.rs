@@ -1318,7 +1318,7 @@ async fn events_frontier(
                 .projections()
                 .snapshot()
                 .realm_is_principal_control_for_actor(&realm_value, &actor);
-        let managed_actor_pcr = state
+        let managed_agent_pcr = state
             .agent_pairings()
             .agent(&actor)
             .await
@@ -1328,6 +1328,17 @@ async fn events_frontier(
                     && record.state != AgentLifecycleState::Deactivated
                     && record.principal_control_realm_id == realm_value
             });
+        let applet_managed_access =
+            applet_managed_actor_pcr_access(state, actor_id.as_str(), &session.actor).await?;
+        let applet_managed_actor_pcr = applet_managed_access
+            .as_ref()
+            .is_some_and(|access| access.active && access.pcr_realm_id == realm_value);
+        if applet_managed_access
+            .as_ref()
+            .is_some_and(|access| access.pcr_realm_id == realm_value && !access.active)
+        {
+            return Err(AppError::not_found("realm not found"));
+        }
         let invited_actor = is_session_actor
             && crate::routing::spaces::space::realm_member_invited_or_joined_at(
                 state,
@@ -1355,7 +1366,8 @@ async fn events_frontier(
             false
         };
         if !own_actor_pcr
-            && !managed_actor_pcr
+            && !managed_agent_pcr
+            && !applet_managed_actor_pcr
             && !invited_actor
             && !authored_realm_history
             && !crate::routing::spaces::space::realm_id_accessible(
@@ -1374,7 +1386,7 @@ async fn events_frontier(
         });
     }
 
-    let managed_actor_pcr = state
+    let managed_agent_pcr = state
         .agent_pairings()
         .agent(&actor)
         .await
@@ -1384,18 +1396,32 @@ async fn events_frontier(
                 && record.state != AgentLifecycleState::Deactivated
         })
         .map(|record| record.principal_control_realm_id);
+    // Applet-managed principals are not Native Agents. Their immutable
+    // provision/PCR anchors live in the Applet record and are visible only to
+    // the exact registration service. Revocation keeps historical reads
+    // available while the combined selector above refuses authoring access.
+    let applet_managed_access =
+        applet_managed_actor_pcr_access(state, actor_id.as_str(), &session.actor).await?;
+    let applet_managed_actor_pcr = applet_managed_access
+        .as_ref()
+        .filter(|access| access.owned_by_session)
+        .map(|access| access.pcr_realm_id.as_str());
     let principal_server_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|_| AppError::internal("local principal server id is invalid"))?;
     let actor_authority =
         arkret_wire::PrincipalAuthorityKey::new(actor_id.clone(), principal_server_id);
-    let own_actor_pcr = state
-        .persistence()
-        .principal_resolution_by_authority_key(&actor_authority)
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("principal resolution lookup failed: {error}"))
-        })?
-        .map(|resolution| resolution.pcr_realm_id.to_string());
+    let own_actor_pcr = if actor_id == session_core_id {
+        state
+            .persistence()
+            .principal_resolution_by_authority_key(&actor_authority)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("principal resolution lookup failed: {error}"))
+            })?
+            .map(|resolution| resolution.pcr_realm_id.to_string())
+    } else {
+        None
+    };
     let records = state
         .event_queries()
         .canonical_events_for_actor(actor_id.as_str())
@@ -1409,14 +1435,21 @@ async fn events_frontier(
     realm_ids.dedup();
     let mut realms = Vec::new();
     for realm_value in realm_ids {
-        let visible = own_actor_pcr.as_deref() == Some(realm_value.as_str())
-            || managed_actor_pcr.as_deref() == Some(realm_value.as_str())
-            || crate::routing::spaces::space::realm_id_accessible(
-                state,
-                &realm_value,
-                Some(&session),
-            )
-            .await;
+        let is_applet_pcr = applet_managed_access
+            .as_ref()
+            .is_some_and(|access| access.pcr_realm_id == realm_value);
+        let visible = if is_applet_pcr {
+            applet_managed_actor_pcr == Some(realm_value.as_str())
+        } else {
+            own_actor_pcr.as_deref() == Some(realm_value.as_str())
+                || managed_agent_pcr.as_deref() == Some(realm_value.as_str())
+                || crate::routing::spaces::space::realm_id_accessible(
+                    state,
+                    &realm_value,
+                    Some(&session),
+                )
+                .await
+        };
         if !visible {
             continue;
         }
@@ -1436,6 +1469,92 @@ async fn events_frontier(
         frontier: EventsFrontierView::ActorAggregate(aggregate),
         receipts: Vec::new(),
     })
+}
+
+struct AppletManagedActorPcrAccess {
+    pcr_realm_id: String,
+    owned_by_session: bool,
+    active: bool,
+}
+
+/// Resolve an Applet-managed principal through its immutable provision/PCR
+/// anchor without pretending it is a Native Agent. The exact registration
+/// service is the only caller allowed to observe the actor's PCR aggregate.
+/// A revoked record remains readable for historical recovery, but `active`
+/// becomes false so the Realm+actor authoring selector fails closed.
+async fn applet_managed_actor_pcr_access(
+    state: &AppState,
+    actor_id: &str,
+    session_service_id: &str,
+) -> Result<Option<AppletManagedActorPcrAccess>, AppError> {
+    let records = state.event_queries().applets().await.map_err(|error| {
+        AppError::internal(format!("managed Applet actor lookup failed: {error}"))
+    })?;
+    for value in records {
+        let record: crate::routing::extensions::applet_bridge::AppletRecord =
+            serde_json::from_value(value).map_err(|error| {
+                AppError::internal(format!("stored Applet record is invalid: {error}"))
+            })?;
+        let owned_by_session = record.package.service_id.as_str() == session_service_id;
+        let record_active = record.revoked_at.is_none()
+            && matches!(record.status.as_str(), "installed" | "partially_installed");
+        if record.bot_actor_id == actor_id {
+            if record.bot_actor_principal_server_id != state.service_id() {
+                continue;
+            }
+            let provision: arkret_models_integration::AppletManagedActorProvisionPayload =
+                serde_json::from_value(
+                    serde_json::to_value(&record.bot_actor_provision_event.payload).map_err(
+                        |error| {
+                            AppError::internal(format!(
+                                "stored Bot provision payload is invalid: {error}"
+                            ))
+                        },
+                    )?,
+                )
+                .map_err(|error| {
+                    AppError::internal(format!("stored Bot provision payload is invalid: {error}"))
+                })?;
+            let authority_active = state
+                .authorization()
+                .grants_for_subject(
+                    record.package.service_id.as_str(),
+                    Some(record.package.service_id.as_str()),
+                    record.portal_realm_id.as_str(),
+                )
+                .iter()
+                .any(|grant| grant.grant_id == provision.applet_authority_ref);
+            return Ok(Some(AppletManagedActorPcrAccess {
+                pcr_realm_id: record.bot_principal_control_realm_id,
+                owned_by_session,
+                active: owned_by_session && record_active && authority_active,
+            }));
+        }
+        if let Some(ghost) = record
+            .ghosts
+            .iter()
+            .find(|ghost| ghost.ghost_actor_id == actor_id)
+        {
+            if ghost.actor_principal_server_id != state.service_id() {
+                continue;
+            }
+            let authority_active = state
+                .authorization()
+                .grants_for_subject(
+                    record.package.service_id.as_str(),
+                    Some(record.package.service_id.as_str()),
+                    record.portal_realm_id.as_str(),
+                )
+                .iter()
+                .any(|grant| grant.grant_id.as_str() == ghost.authorization_ref);
+            return Ok(Some(AppletManagedActorPcrAccess {
+                pcr_realm_id: ghost.principal_control_realm_id.clone(),
+                owned_by_session,
+                active: owned_by_session && record_active && authority_active,
+            }));
+        }
+    }
+    Ok(None)
 }
 
 pub(crate) async fn load_realm_actor_frontier(

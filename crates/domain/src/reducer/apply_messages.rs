@@ -30,7 +30,7 @@ impl ProjectionState {
             .unwrap_or_else(|| operation.payload.get("encrypted_content").is_some());
 
         if let Some("ak.content.poll.response") = content_kind(&content) {
-            return self.apply_poll_response(&content, &sender, now);
+            return self.apply_poll_response(&content, operation, now);
         }
 
         let is_poll_create = content_kind(&content) == Some("ak.content.poll");
@@ -72,6 +72,11 @@ impl ProjectionState {
                 poll_id,
                 message_event_id: message.event_id.clone(),
                 realm_id: message.realm_id.clone(),
+                scope_circle_id: message
+                    .content
+                    .get("scope_circle_id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
                 question,
                 options,
                 votes: BTreeMap::new(),
@@ -91,33 +96,71 @@ impl ProjectionState {
     pub(crate) fn apply_poll_response(
         &mut self,
         content: &Value,
-        actor: &str,
+        operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         let Some(poll_id) = poll_id_from_content(content) else {
-            return ProjectionEffect::Ignored;
+            return ProjectionEffect::Rejected {
+                reason: "poll_ref_missing".to_owned(),
+            };
         };
         let choices = poll_choices_from_content(content);
         if choices.is_empty() {
-            return ProjectionEffect::Ignored;
+            return ProjectionEffect::Rejected {
+                reason: "poll_selection_empty".to_owned(),
+            };
         }
         let Some(poll) = self.polls.get_mut(&poll_id) else {
-            return ProjectionEffect::Ignored;
+            return ProjectionEffect::Rejected {
+                reason: "poll_ref_unknown".to_owned(),
+            };
         };
+        if poll.realm_id != operation.realm_id.as_str()
+            || poll.scope_circle_id.as_deref()
+                != content.get("scope_circle_id").and_then(Value::as_str)
+        {
+            return ProjectionEffect::Rejected {
+                reason: "poll_ref_cross_scope".to_owned(),
+            };
+        }
+        if choices.len() > poll.max_selections.max(1) as usize {
+            return ProjectionEffect::Rejected {
+                reason: "poll_selection_limit_exceeded".to_owned(),
+            };
+        }
         let valid: BTreeSet<String> = poll
             .options
             .iter()
             .map(|option| option.id.clone())
             .collect();
-        let selected: BTreeSet<String> = choices
-            .into_iter()
-            .filter(|choice| valid.contains(choice))
-            .take(poll.max_selections.max(1) as usize)
-            .collect();
-        if selected.is_empty() {
+        if choices.iter().any(|choice| !valid.contains(choice)) {
+            return ProjectionEffect::Rejected {
+                reason: "poll_selection_unknown".to_owned(),
+            };
+        }
+        let selected: BTreeSet<String> = choices.into_iter().collect();
+        if selected.len() > poll.max_selections.max(1) as usize {
+            return ProjectionEffect::Rejected {
+                reason: "poll_selection_limit_exceeded".to_owned(),
+            };
+        }
+        let actor = operation.context.sender.to_string();
+        let candidate = PollVoteState {
+            selections: selected,
+            source_event_digest: operation.context.canonical_event_digest.to_string(),
+            causal_refs: operation
+                .context
+                .envelope_causal_refs
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+        };
+        if let Some(current) = poll.votes.get(&actor)
+            && !poll_vote_candidate_wins(current, &candidate)
+        {
             return ProjectionEffect::Ignored;
         }
-        poll.votes.insert(actor.to_owned(), selected);
+        poll.votes.insert(actor, candidate);
         poll.updated_at = now;
         ProjectionEffect::Ignored
     }
@@ -796,6 +839,16 @@ impl ProjectionState {
         self.read_cursors.insert(key, marker.clone());
         ProjectionEffect::ReadMarkerUpdated(marker)
     }
+}
+
+fn poll_vote_candidate_wins(current: &PollVoteState, candidate: &PollVoteState) -> bool {
+    if candidate.causal_refs.contains(&current.source_event_digest) {
+        return true;
+    }
+    if current.causal_refs.contains(&candidate.source_event_digest) {
+        return false;
+    }
+    candidate.source_event_digest > current.source_event_digest
 }
 
 fn read_cursor_causal_relation(operation: &Operation) -> ReadCursorCausalRelation {

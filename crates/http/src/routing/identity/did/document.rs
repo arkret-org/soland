@@ -120,30 +120,6 @@ pub(in crate::routing) async fn identity_document_record(
     state: &AppState,
     did: &str,
 ) -> WebvhDocumentRecord {
-    if let Some(did_document) =
-        crate::routing::extensions::applet_bridge::did_document_for_extension_actor(state, did)
-            .await
-            .map_err(|error| {
-                tracing::warn!(%error, %did, "failed to read applet extension DID document");
-                error
-            })
-            .ok()
-            .flatten()
-    {
-        return WebvhDocumentRecord {
-            did: did.to_owned(),
-            did_document,
-            key_log_head: None,
-            seq: 0,
-            method_evidence: json!({"mode": "extension_actor_registry"}),
-            // Local immediate temporary projection, treated as fresh and not
-            // entered into the high-risk persistence gate.
-            fetched_at: now(),
-            expires_at: now()
-                + chrono::Duration::seconds(crate::jws_verify::HIGH_RISK_DID_FRESHNESS_MAX_SECS),
-            updated_at: now(),
-        };
-    }
     let record = state
         .dids()
         .document(did)

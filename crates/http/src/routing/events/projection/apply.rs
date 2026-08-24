@@ -175,11 +175,14 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             welcome_id,
             recipient_actor_id,
             recipient_device_id,
-            ..
+            recipient_endpoint_verification_method,
+            intended_realm_id,
         } => {
             let record = state.projections().mls_welcome_record(
                 recipient_actor_id,
-                recipient_device_id,
+                recipient_device_id.as_deref(),
+                recipient_endpoint_verification_method.as_deref(),
+                intended_realm_id.as_deref(),
                 welcome_id,
             );
             if let Some(record) = record {
@@ -190,15 +193,17 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 {
                     tracing::warn!(%error, welcome_id = %welcome_id, "failed to mirror MLS Welcome enqueue");
                 }
-                project_mls_welcome_to_device(
-                    state,
-                    origin,
-                    source_device_id,
-                    operation,
-                    &record,
-                    welcome_id,
-                )
-                .await;
+                if record.recipient_device_id.is_some() {
+                    project_mls_welcome_to_device(
+                        state,
+                        origin,
+                        source_device_id,
+                        operation,
+                        &record,
+                        welcome_id,
+                    )
+                    .await;
+                }
             }
         }
         MlsProjectionEffect::RemoveProposalRecorded => {}
@@ -893,6 +898,9 @@ async fn project_mls_welcome_to_device(
     record: &MlsWelcomeState,
     welcome_id: &str,
 ) {
+    let Some(recipient_device_id) = record.recipient_device_id.as_deref() else {
+        return;
+    };
     let Ok(welcome) = operation.typed_payload::<arkret_wire::event_spec::MlsWelcome>() else {
         tracing::warn!(%welcome_id, operation_id = %operation.operation_id, "accepted MLS Welcome payload is not the typed wire shape");
         return;
@@ -936,7 +944,7 @@ async fn project_mls_welcome_to_device(
         idempotency_key: format!("mls_welcome:{welcome_id}"),
         sender: origin.to_owned(),
         recipient: record.recipient_actor_id.clone(),
-        device_id: record.recipient_device_id.clone(),
+        device_id: recipient_device_id.to_owned(),
         position: state.next_to_device_position(),
         content,
         created_at: operation.created_at,

@@ -574,7 +574,7 @@ async fn account_notification_delta(
             match arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
                 delta.id,
                 delta.notification_kind,
-                arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Add,
+                arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Upsert,
                 delta.data,
             ) {
                 Ok(delta) => items.push(delta),
@@ -1695,7 +1695,7 @@ mod account_notification_tests {
                 )
                 .expect("test notification id"),
                 arkret_wire::NotificationKind::Agent,
-                arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Add,
+                arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Upsert,
                 Some(
                     arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApproval(
                         arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalNotificationData {
@@ -1725,7 +1725,7 @@ mod account_notification_tests {
             wire.get("notification_kind").and_then(Value::as_str),
             Some("agent")
         );
-        assert_eq!(wire.get("action").and_then(Value::as_str), Some("add"));
+        assert_eq!(wire.get("action").and_then(Value::as_str), Some("upsert"));
         assert_eq!(
             wire.pointer("/data/kind").and_then(Value::as_str),
             Some("agent_runtime_approval")

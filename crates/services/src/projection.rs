@@ -172,7 +172,9 @@ pub enum MlsProjectionEffect {
     WelcomeEnqueued {
         welcome_id: String,
         recipient_actor_id: String,
-        recipient_device_id: String,
+        recipient_device_id: Option<String>,
+        recipient_endpoint_verification_method: Option<String>,
+        intended_realm_id: Option<String>,
     },
     RemoveProposalRecorded,
     GroupGenesis {
@@ -290,11 +292,15 @@ impl From<ProjectionEffect> for ProjectionEffectView {
                     welcome_id,
                     recipient_actor_id,
                     recipient_device_id,
+                    recipient_endpoint_verification_method,
+                    intended_realm_id,
                     ..
                 } => MlsProjectionEffect::WelcomeEnqueued {
                     welcome_id,
                     recipient_actor_id,
                     recipient_device_id,
+                    recipient_endpoint_verification_method,
+                    intended_realm_id,
                 },
                 soland_domain::reducer::MlsEffect::RemoveProposalRecorded { .. } => {
                     MlsProjectionEffect::RemoveProposalRecorded
@@ -2137,10 +2143,12 @@ impl ProjectionService {
                 keypackage_digest: row.keypackage_digest,
                 actor_id: row.actor_id,
                 device_id: row.device_id,
+                endpoint_verification_method: row.endpoint_verification_method,
+                intended_realm_id: row.intended_realm_id,
                 key_package_bytes: row.key_package_bytes,
                 capabilities: row.capabilities,
                 capabilities_digest: row.capabilities_digest,
-                device_signature: row.device_signature,
+                endpoint_signature: row.endpoint_signature,
                 last_resort: row.last_resort,
                 last_resort_realm_id: row.last_resort_realm_id,
                 lifetime_not_before: row.lifetime.not_before,
@@ -2171,10 +2179,18 @@ impl ProjectionService {
     pub fn mls_welcome_record(
         &self,
         recipient_actor_id: &str,
-        recipient_device_id: &str,
+        recipient_device_id: Option<&str>,
+        recipient_endpoint_verification_method: Option<&str>,
+        intended_realm_id: Option<&str>,
         welcome_id: &str,
     ) -> Option<crate::events::MlsWelcomeState> {
-        let key = MlsWelcomeQueueKey::new(recipient_actor_id, recipient_device_id);
+        let key = match (recipient_device_id, recipient_endpoint_verification_method) {
+            (Some(device_id), None) => MlsWelcomeQueueKey::new(recipient_actor_id, device_id),
+            (None, Some(method)) => {
+                MlsWelcomeQueueKey::endpoint(recipient_actor_id, method, intended_realm_id)
+            }
+            _ => return None,
+        };
         self.state
             .lock()
             .mls_welcomes
@@ -2188,6 +2204,9 @@ impl ProjectionService {
                     group_id: row.group_id,
                     recipient_actor_id: row.recipient_actor_id,
                     recipient_device_id: row.recipient_device_id,
+                    recipient_endpoint_verification_method: row
+                        .recipient_endpoint_verification_method,
+                    intended_realm_id: row.intended_realm_id,
                     welcome_bytes: row.welcome_bytes,
                     key_package_id: row.key_package_id,
                     epoch: row.epoch,
@@ -2320,6 +2339,34 @@ impl ProjectionService {
             ProjectionEffect::Rejected { reason } => Some(reason),
             _ => None,
         }
+    }
+
+    /// Validate a plaintext Poll response against the current accepted Poll
+    /// projection before the Event is made durable. The reducer remains the
+    /// deterministic fold, but semantic rejection must not be deferred until
+    /// the post-commit projection lane.
+    pub fn preflight_poll_rejection(
+        &self,
+        operation: &Operation,
+        cell_writes: &[ProjectedCellWrite],
+    ) -> Option<String> {
+        if soland_domain::kinds::canonical_kind_for_operation(operation)
+            != Some(arkret_wire::EventKind::MessageCreate)
+            || operation
+                .payload
+                .get("content")
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("kind"))
+                .and_then(Value::as_str)
+                != Some("ak.content.poll.response")
+        {
+            return None;
+        }
+        self.preflight_apply_rejection(
+            operation,
+            cell_writes,
+            &[arkret_wire::EventKind::MessageCreate],
+        )
     }
 
     fn preflight_apply_rejection(
@@ -3080,12 +3127,7 @@ impl HistoryAuthorityViewCas for ProjectionService {
         let mut live_realm_projection = views.scope_realm.current_gate_projection.clone();
         live_realm_projection.history_access = live_history_access;
         live_realm_projection.realm_tombstoned = realm_tombstoned;
-        let live_realm_digest = CurrentGateProjection::Realm(live_realm_projection.clone())
-            .canonical_digest()
-            .map_err(|error| PersistenceError::Internal(error.to_string()))?;
-        if live_realm_projection != views.scope_realm.current_gate_projection
-            || live_realm_digest != views.scope_realm.current_gate_projection_digest
-        {
+        if live_realm_projection != views.scope_realm.current_gate_projection {
             return Err(PersistenceError::Conflict(
                 "failed_precondition: history Realm current-gate projection changed".to_owned(),
             ));
@@ -3109,13 +3151,7 @@ impl HistoryAuthorityViewCas for ProjectionService {
                     })?;
                 live_circle_projection.realm_tombstoned = realm_tombstoned;
                 live_circle_projection.circle_tombstoned = circle.state.as_str() != "active";
-                let live_circle_digest =
-                    CurrentGateProjection::Circle(live_circle_projection.clone())
-                        .canonical_digest()
-                        .map_err(|error| PersistenceError::Internal(error.to_string()))?;
-                if live_circle_projection != locator.current_gate_projection
-                    || live_circle_digest != locator.current_gate_projection_digest
-                {
+                if live_circle_projection != locator.current_gate_projection {
                     return Err(PersistenceError::Conflict(
                         "failed_precondition: history Circle current-gate projection changed"
                             .to_owned(),

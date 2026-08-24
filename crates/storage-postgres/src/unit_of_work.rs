@@ -29,6 +29,16 @@ struct DevicePairingCasRow {
     accepted: bool,
 }
 
+#[derive(diesel::QueryableByName)]
+struct AppletNamespaceClaimRow {
+    #[diesel(sql_type = Text)]
+    domain: String,
+    #[diesel(sql_type = Text)]
+    pattern: String,
+    #[diesel(sql_type = Bool)]
+    exclusive: bool,
+}
+
 #[derive(Clone)]
 pub struct PgEventCommitUnitOfWork {
     pool: PgPool,
@@ -506,7 +516,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
     ) -> PersistenceResult<EventCommitOutcome> {
         self.commit_event_batch(EventBatchCommitRequest {
             events: vec![request],
-            applet_ghosts: None,
+            applet_record: None,
             agent_membership_cascade: None,
         })
         .await
@@ -1078,26 +1088,117 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             }
             }
 
-            if let Some(mutation) = request.applet_ghosts {
-                let updated = sql_query(
-                    "UPDATE applet_registrations \
-                     SET ghosts = COALESCE(ghosts, '[]'::jsonb) || jsonb_build_array($2::jsonb), \
-                         updated_at = NOW() \
-                     WHERE id = $1 AND revoked_at IS NULL \
-                     AND status IN ('installed', 'partially_installed') \
-                     AND NOT EXISTS ( \
-                         SELECT 1 FROM jsonb_array_elements(COALESCE(ghosts, '[]'::jsonb)) existing \
-                         WHERE existing->>'external_id' = ($2::jsonb)->>'external_id' \
-                            OR existing->>'ghost_actor_id' = ($2::jsonb)->>'ghost_actor_id' \
-                     )",
-                )
-                .bind::<Text, _>(&mutation.applet_id)
-                .bind::<Jsonb, _>(&mutation.ghost)
-                .execute(conn)
-                .await
-                .map_err(PersistenceError::database)?;
+            if let Some(mutation) = request.applet_record {
+                let replacing = mutation.expected_record.is_some();
+                let updated = if let Some(expected_record) = mutation.expected_record {
+                    sql_query(
+                        "UPDATE applet_registrations SET record = $3, updated_at = NOW() \
+                         WHERE id = $1 AND record = $2 AND record->>'revoked_at' IS NULL \
+                         AND record->>'status' IN ('installed', 'partially_installed')",
+                    )
+                    .bind::<Text, _>(mutation.applet_id.as_str())
+                    .bind::<Jsonb, _>(&expected_record)
+                    .bind::<Jsonb, _>(&mutation.record)
+                    .execute(conn)
+                    .await
+                    .map_err(PersistenceError::database)?
+                } else {
+                    sql_query(
+                        "INSERT INTO applet_registrations (id, record, updated_at) \
+                         VALUES ($1, $2, NOW()) ON CONFLICT (id) DO NOTHING",
+                    )
+                    .bind::<Text, _>(mutation.applet_id.as_str())
+                    .bind::<Jsonb, _>(&mutation.record)
+                    .execute(conn)
+                    .await
+                    .map_err(PersistenceError::database)?
+                };
                 if updated != 1 {
-                    return Err(PersistenceError::Conflict("applet_revoked".to_owned()).into());
+                    let code = if replacing {
+                        "cas_conflict"
+                    } else {
+                        "duplicate_conflict"
+                    };
+                    return Err(PersistenceError::Conflict(code.to_owned()).into());
+                }
+
+                let namespace_claims = [
+                    (
+                        arkret_models_integration::AppletNamespaceDomain::Actors,
+                        "actors",
+                        mutation.namespace_claims.actors,
+                    ),
+                    (
+                        arkret_models_integration::AppletNamespaceDomain::Realms,
+                        "realms",
+                        mutation.namespace_claims.realms,
+                    ),
+                    (
+                        arkret_models_integration::AppletNamespaceDomain::Handles,
+                        "handles",
+                        mutation.namespace_claims.handles,
+                    ),
+                ];
+                if namespace_claims.iter().any(|(_, _, claims)| !claims.is_empty()) {
+                    sql_query(
+                        "SELECT pg_advisory_xact_lock(hashtextextended('arkret.applet.namespace.claims', 0))",
+                    )
+                    .execute(conn)
+                    .await
+                    .map_err(PersistenceError::database)?;
+                    let existing = sql_query(
+                        "SELECT claims.domain, claims.pattern, claims.exclusive FROM applet_namespace_claims claims JOIN applet_registrations registrations ON registrations.id = claims.applet_id WHERE claims.applet_id <> $1 AND registrations.record->>'revoked_at' IS NULL AND registrations.record->>'status' IN ('installed', 'partially_installed')",
+                    )
+                    .bind::<Text, _>(mutation.applet_id.as_str())
+                    .load::<AppletNamespaceClaimRow>(conn)
+                    .await
+                    .map_err(PersistenceError::database)?;
+                    for (domain, domain_wire, claims) in &namespace_claims {
+                        for claim in claims {
+                            if existing.iter().any(|stored| {
+                                stored.domain == *domain_wire
+                                    && (claim.exclusive || stored.exclusive)
+                                    && arkret_models_integration::namespace_patterns_overlap(
+                                        *domain,
+                                        &claim.pattern,
+                                        &stored.pattern,
+                                    )
+                            }) {
+                                return Err(PersistenceError::Conflict(
+                                    "applet_namespace_conflict".to_owned(),
+                                )
+                                .into());
+                            }
+                            sql_query(
+                                "INSERT INTO applet_namespace_claims (applet_id, domain, pattern, exclusive) VALUES ($1, $2, $3, $4)",
+                            )
+                            .bind::<Text, _>(mutation.applet_id.as_str())
+                            .bind::<Text, _>(*domain_wire)
+                            .bind::<Text, _>(&claim.pattern)
+                            .bind::<Bool, _>(claim.exclusive)
+                            .execute(conn)
+                            .await
+                            .map_err(PersistenceError::database)?;
+                        }
+                    }
+                }
+
+                for claim in mutation.managed_authority_claims {
+                    let inserted = sql_query(
+                        "INSERT INTO managed_authority_claims (actor_id, principal_server_id, applet_id) VALUES ($1, $2, $3) ON CONFLICT (actor_id, principal_server_id) DO NOTHING",
+                    )
+                    .bind::<Text, _>(&claim.actor_id)
+                    .bind::<Text, _>(&claim.principal_server_id)
+                    .bind::<Text, _>(mutation.applet_id.as_str())
+                    .execute(conn)
+                    .await
+                    .map_err(PersistenceError::database)?;
+                    if inserted != 1 {
+                        return Err(PersistenceError::Conflict(
+                            "applet_managed_authority_conflict".to_owned(),
+                        )
+                        .into());
+                    }
                 }
             }
 

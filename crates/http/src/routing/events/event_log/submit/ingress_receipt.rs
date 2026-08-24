@@ -143,6 +143,13 @@ pub(super) async fn validate_ingress_receipt_proofs(
     receipts: &[IngressReceipt],
 ) -> Result<(), SubmitOneError> {
     for receipt in receipts {
+        receipt.validate_structural().map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                format!("ingress receipt is structurally invalid: {error}"),
+            )
+        })?;
         for proof in &receipt.proofs {
             let issuer = arkret_identity::verification_method_did(&proof.verification_method)
                 .map_err(|error| {
@@ -160,11 +167,11 @@ pub(super) async fn validate_ingress_receipt_proofs(
                         format!("ingress receipt issuer cannot be projected: {error}"),
                     )
                 })?;
-            if issuer_service_id != receipt.service_id {
+            if issuer != receipt.qualified_ingress_id || issuer_service_id != receipt.service_id {
                 return Err(SubmitOneError::new(
                     StatusCode::FORBIDDEN,
                     "invalid_proof",
-                    "ingress receipt signer does not match receipt service_id",
+                    "ingress receipt signer does not match qualified_ingress_id and service_id",
                 ));
             }
             let binding = receipt.proof_binding_bytes(proof).map_err(|error| {
@@ -275,7 +282,7 @@ pub(super) fn build_ingress_receipt_record(
             "authorization lease does not cover the time this Event was received",
         ));
     }
-    let receipt = sign_ingress_receipt(state, &event_digest, lease, received_at)?;
+    let receipt = sign_ingress_receipt(state, &parsed.event_id, &event_digest, lease, received_at)?;
     Ok(soland_services::events::PublicationEvidenceRecord {
         event_digest: parsed.canonical_digest.clone(),
         realm_id: parsed.realm_id.to_string(),
@@ -294,6 +301,7 @@ pub(super) fn build_ingress_receipt_record(
 /// document.
 fn sign_ingress_receipt(
     state: &AppState,
+    event_id: &arkret_wire::EventId,
     event_digest: &arkret_identifiers::Hash,
     lease: &AuthorizationLease,
     received_at: chrono::DateTime<chrono::Utc>,
@@ -315,7 +323,10 @@ fn sign_ingress_receipt(
         receipt_id,
         event_digest: event_digest.clone(),
         authorization_lease_id: lease.authorization_lease_id.clone(),
+        qualified_ingress_id: state.service_resolution_commitment().full_id.clone(),
         received_at,
+        ingress_basis: lease.basis_ref.clone(),
+        ingress_frontier: vec![event_id.clone()],
         service_id,
         // The receipt is checked against the same accepted authority-set policy
         // the lease cited: `offline-publication.md` §1/§2 make
@@ -355,7 +366,7 @@ fn sign_ingress_receipt(
         .validate_structural()
         .map_err(|error| publication_reject(format!("minted receipt is not valid: {error}")))?;
     receipt
-        .validate_against_lease(lease, event_digest)
+        .validate_against_lease(lease, event_digest, event_id)
         .map_err(|error| {
             publication_reject(format!("minted receipt does not bind its lease: {error}"))
         })?;

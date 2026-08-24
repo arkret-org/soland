@@ -1062,7 +1062,11 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
         .unwrap(),
         event_digest: event_digest.clone(),
         authorization_lease_id: lease.authorization_lease_id.clone(),
+        qualified_ingress_id: arkret_identifiers::DidFullId::new(PEER_SOURCE_DID.to_owned())
+            .unwrap(),
         received_at: issued_at,
+        ingress_basis: lease.basis_ref.clone(),
+        ingress_frontier: vec![event.event_id.clone()],
         service_id: arkret_wire::project_full_id_to_core_id(
             &arkret_identifiers::DidFullId::new(PEER_SOURCE_DID.to_owned()).unwrap(),
         )
@@ -1071,7 +1075,7 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
         proofs: Vec::new(),
     };
     receipt.proofs = vec![publication_proof(
-        &format!("{PEER_SOURCE_DID}#notary-key"),
+        &format!("{PEER_SOURCE_DID}#authorization-lease-key"),
         receipt.receipt_digest().expect("fixture receipt digest"),
         issued_at,
     )];

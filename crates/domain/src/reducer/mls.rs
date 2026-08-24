@@ -7,9 +7,8 @@
 //!    grab the same KeyPackage; the second claim returns `ProjectionEffect::Rejected { reason:
 //!    "mls_keypackage_already_claimed" }` which the routing layer maps to HTTP 409 `cas_conflict`.
 //!
-//! 2. **Welcome to-device persistence** — `apply_welcome_enqueue`. Each accepted Welcome is
-//!    appended to a per-`(recipient_actor_id, recipient_device_id)` binding projection while the
-//!    standard durable device-message stream carries delivery.
+//! 2. **Welcome endpoint persistence** — `apply_welcome_enqueue`. Each accepted Welcome is appended
+//!    to an exact device, Native-Agent method, or Realm-local pairwise method projection.
 //!
 //! 3. **group genesis** — `apply_group_genesis`. Installs epoch 0 for a new MLS group.
 //!
@@ -61,7 +60,14 @@ const REASON_REMOVE_PROPOSAL_MISSING: &str = "mls_remove_proposal_missing";
 #[derive(Clone, Debug)]
 pub enum MlsKeyPackagePublishTrustAnchor {
     DeviceAuthorize(String),
-    AgentKeyAuthorize(String),
+    AgentKeyAuthorize {
+        event_id: String,
+        verification_method: String,
+    },
+    MinimalMetadataPairwise {
+        verification_method: String,
+        intended_realm_id: String,
+    },
 }
 
 /// Strongly typed local projection input for a KeyPackage upload.
@@ -75,11 +81,11 @@ pub struct MlsKeyPackagePublishProjection {
     pub keypackage_ref: String,
     pub keypackage_digest: String,
     pub actor_id: String,
-    pub device_id: String,
+    pub device_id: Option<String>,
     pub lifetime: KeyPackageLifetime,
     pub key_package_bytes: Vec<u8>,
     pub capabilities: Vec<String>,
-    pub device_signature: arkret_models_crypto::KeyOperationSignature,
+    pub endpoint_signature: arkret_models_crypto::KeyOperationSignature,
     pub last_resort: bool,
     pub trust_anchor: MlsKeyPackagePublishTrustAnchor,
     pub created_at: i64,
@@ -94,9 +100,6 @@ pub fn apply_keypackage_upload_projection(
     }
     if projection.actor_id.is_empty() {
         return reject("mls_keypackage_actor_missing");
-    }
-    if projection.device_id.is_empty() {
-        return reject("mls_keypackage_device_missing");
     }
     if projection.lifetime.not_after <= projection.lifetime.not_before {
         return reject("mls_keypackage_lifetime_invalid");
@@ -113,17 +116,40 @@ pub fn apply_keypackage_upload_projection(
         Ok(bytes) => arkret_canonical::sha256_digest(bytes),
         Err(_) => return reject("mls_keypackage_capabilities_digest_failed"),
     };
-    let device_signature = match serde_json::to_value(&projection.device_signature) {
+    let endpoint_signature = match serde_json::to_value(&projection.endpoint_signature) {
         Ok(value) => value,
-        Err(_) => return reject("mls_keypackage_device_signature_invalid"),
+        Err(_) => return reject("mls_keypackage_endpoint_signature_invalid"),
     };
-    let (device_authorize_event_id, agent_key_authorize_event_id) = match &projection.trust_anchor {
+    let (
+        device_authorize_event_id,
+        agent_key_authorize_event_id,
+        endpoint_verification_method,
+        intended_realm_id,
+    ) = match &projection.trust_anchor {
         MlsKeyPackagePublishTrustAnchor::DeviceAuthorize(event_id) => {
-            (Some(event_id.clone()), None)
+            if projection.device_id.is_none() {
+                return reject("mls_keypackage_device_missing");
+            }
+            (Some(event_id.clone()), None, None, None)
         }
-        MlsKeyPackagePublishTrustAnchor::AgentKeyAuthorize(event_id) => {
-            (None, Some(event_id.clone()))
-        }
+        MlsKeyPackagePublishTrustAnchor::AgentKeyAuthorize {
+            event_id,
+            verification_method,
+        } => (
+            None,
+            Some(event_id.clone()),
+            Some(verification_method.clone()),
+            None,
+        ),
+        MlsKeyPackagePublishTrustAnchor::MinimalMetadataPairwise {
+            verification_method,
+            intended_realm_id,
+        } => (
+            None,
+            None,
+            Some(verification_method.clone()),
+            Some(intended_realm_id.clone()),
+        ),
     };
     let row = MlsKeyPackage {
         id: projection.keypackage_id.clone(),
@@ -131,11 +157,13 @@ pub fn apply_keypackage_upload_projection(
         keypackage_digest: projection.keypackage_digest.clone(),
         actor_id: projection.actor_id.clone(),
         device_id: projection.device_id.clone(),
+        endpoint_verification_method,
+        intended_realm_id,
         lifetime: projection.lifetime.clone(),
         key_package_bytes: projection.key_package_bytes.clone(),
         capabilities: projection.capabilities.clone(),
         capabilities_digest,
-        device_signature,
+        endpoint_signature,
         last_resort: projection.last_resort,
         last_resort_realm_id: None,
         claimed_by: None,
@@ -175,9 +203,18 @@ pub fn apply_keypackage_publish(state: &mut ProjectionState, op: &Operation) -> 
     let Some(actor_id) = payload.get("principal_id").and_then(Value::as_str) else {
         return reject("mls_keypackage_actor_missing");
     };
-    let Some(device_id) = payload.get("device_id").and_then(Value::as_str) else {
-        return reject("mls_keypackage_device_missing");
-    };
+    let device_id = payload
+        .get("device_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let endpoint_verification_method = payload
+        .get("endpoint_verification_method")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let intended_realm_id = payload
+        .get("intended_realm_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
     let lifetime = match parse_lifetime(payload.get("lifetime")) {
         Ok(l) => l,
         Err(reason) => return reject(reason),
@@ -219,8 +256,8 @@ pub fn apply_keypackage_publish(state: &mut ProjectionState, op: &Operation) -> 
     {
         return reject("mls_keypackage_capabilities_digest_mismatch");
     }
-    let device_signature = payload
-        .get("device_signature")
+    let endpoint_signature = payload
+        .get("endpoint_signature")
         .cloned()
         .unwrap_or(Value::Null);
     let last_resort = payload
@@ -234,26 +271,58 @@ pub fn apply_keypackage_publish(state: &mut ProjectionState, op: &Operation) -> 
         .map(ToOwned::to_owned);
     let created_at =
         parse_timestamp(payload.get("created_at")).unwrap_or_else(|| op.created_at.timestamp());
-    let trust_binding = match keypackage_claim_trust_binding(payload) {
-        Ok(binding) => binding,
-        Err(reason) => return reject(reason),
-    };
+    let device_authorize_event_id = payload
+        .get("device_authorize_event_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let agent_key_authorize_event_id = payload
+        .get("agent_key_authorize_event_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let valid_endpoint = matches!(
+        (
+            &device_id,
+            &endpoint_verification_method,
+            &intended_realm_id,
+            &device_authorize_event_id,
+            &agent_key_authorize_event_id
+        ),
+        (Some(_), None, None, Some(_), None)
+            | (None, Some(_), None, None, Some(_))
+            | (None, Some(_), Some(_), None, None)
+    );
+    if !valid_endpoint {
+        return reject("claim_generation_mismatch");
+    }
+    if intended_realm_id.is_some()
+        && let Err(reason) = validate_pairwise_keypackage_leaf(
+            actor_id,
+            endpoint_verification_method
+                .as_deref()
+                .expect("pairwise endpoint shape validated above"),
+            &key_package_bytes,
+        )
+    {
+        return reject(reason);
+    }
     let row = MlsKeyPackage {
         id: id.to_owned(),
         keypackage_ref,
         keypackage_digest,
         actor_id: actor_id.to_owned(),
-        device_id: device_id.to_owned(),
+        device_id: device_id.clone(),
+        endpoint_verification_method,
+        intended_realm_id,
         lifetime,
         key_package_bytes,
         capabilities,
         capabilities_digest,
-        device_signature,
+        endpoint_signature,
         last_resort,
         last_resort_realm_id,
         claimed_by: None,
-        device_authorize_event_id: trust_binding.device_authorize_event_id,
-        agent_key_authorize_event_id: trust_binding.agent_key_authorize_event_id,
+        device_authorize_event_id,
+        agent_key_authorize_event_id,
         claimed_at: None,
         claim_expires_at_unix_ms: None,
         consumed_at: None,
@@ -263,8 +332,40 @@ pub fn apply_keypackage_publish(state: &mut ProjectionState, op: &Operation) -> 
     ProjectionEffect::Mls(MlsEffect::KeyPackagePublished {
         keypackage_id: id.to_owned(),
         actor_id: actor_id.to_owned(),
-        device_id: device_id.to_owned(),
+        device_id,
     })
+}
+
+fn validate_pairwise_keypackage_leaf(
+    actor_id: &str,
+    verification_method: &str,
+    key_package_bytes: &[u8],
+) -> Result<(), &'static str> {
+    let actor = actor_id
+        .parse::<arkret_identifiers::DidCoreId>()
+        .map_err(|_| "claim_generation_mismatch")?;
+    let method = verification_method
+        .parse::<arkret_identifiers::DidUrl>()
+        .map_err(|_| "claim_generation_mismatch")?;
+    arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(actor, method)
+        .map_err(|_| "claim_generation_mismatch")?;
+    let multibase = verification_method
+        .split_once('#')
+        .and_then(|(controller, _)| controller.strip_prefix("did:key:"))
+        .ok_or("claim_generation_mismatch")?;
+    let public_key = arkret_canonical::decode_ed25519_multibase(multibase)
+        .map_err(|_| "claim_generation_mismatch")?;
+    let leaf = arkret_mls::author_leaf_from_key_package_bytes(key_package_bytes, 0)
+        .map_err(|_| "mls_keypackage_invalid")?;
+    match leaf.credential {
+        arkret_mls::AuthorLeafCredential::Basic { identity }
+            if identity.as_slice() == actor_id.as_bytes() => {}
+        _ => return Err("claim_generation_mismatch"),
+    }
+    if leaf.signature_key.as_slice() != public_key {
+        return Err("claim_generation_mismatch");
+    }
+    Ok(())
 }
 
 /// G3.S1 — atomic CAS claim of a published KeyPackage.
@@ -402,15 +503,53 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
     let Some(group_id) = payload.get("mls_group_id").and_then(Value::as_str) else {
         return reject("mls_welcome_group_missing");
     };
-    let Some(recipient_actor_id) = payload
+    let recipient_principal_id = payload
         .get("recipient_principal_id")
-        .and_then(Value::as_str)
-    else {
-        return reject("mls_welcome_recipient_actor_missing");
-    };
-    let Some(recipient_device_id) = payload.get("recipient_device_id").and_then(Value::as_str)
-    else {
-        return reject("mls_welcome_recipient_device_missing");
+        .and_then(Value::as_str);
+    let recipient_device_id = payload.get("recipient_device_id").and_then(Value::as_str);
+    let recipient_agent_id = payload.get("recipient_agent_id").and_then(Value::as_str);
+    let recipient_agent_method = payload
+        .get("recipient_agent_verification_method")
+        .and_then(Value::as_str);
+    let recipient_pairwise_actor_id = payload
+        .get("recipient_pairwise_actor_id")
+        .and_then(Value::as_str);
+    let recipient_pairwise_method = payload
+        .get("recipient_pairwise_verification_method")
+        .and_then(Value::as_str);
+    let (recipient_actor_id, recipient_endpoint_verification_method, intended_realm_id) = match (
+        recipient_principal_id,
+        recipient_device_id,
+        recipient_agent_id,
+        recipient_agent_method,
+        recipient_pairwise_actor_id,
+        recipient_pairwise_method,
+    ) {
+        (Some(principal), Some(_), None, None, None, None) => (principal, None, None),
+        (Some(principal), None, Some(agent), Some(method), None, None) if principal == agent => {
+            (principal, Some(method), None)
+        }
+        (None, None, None, None, Some(actor), Some(method)) => {
+            let actor = match actor.parse::<arkret_identifiers::DidCoreId>() {
+                Ok(actor) => actor,
+                Err(_) => return reject("mls_welcome_pairwise_actor_invalid"),
+            };
+            let method = match method.parse::<arkret_identifiers::DidUrl>() {
+                Ok(method) => method,
+                Err(_) => return reject("mls_welcome_pairwise_method_invalid"),
+            };
+            if arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(actor, method)
+                .is_err()
+            {
+                return reject("mls_welcome_pairwise_endpoint_mismatch");
+            }
+            (
+                recipient_pairwise_actor_id.expect("matched pairwise actor"),
+                recipient_pairwise_method,
+                Some(op.realm_id.as_str()),
+            )
+        }
+        _ => return reject("mls_welcome_recipient_endpoint_invalid"),
     };
     let Some(key_package_id) = payload.get("keypackage_ref").and_then(Value::as_str) else {
         return reject("mls_welcome_key_package_id_missing");
@@ -458,7 +597,10 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
         id: welcome_id.to_owned(),
         group_id: group_id.to_owned(),
         recipient_actor_id: recipient_actor_id.to_owned(),
-        recipient_device_id: recipient_device_id.to_owned(),
+        recipient_device_id: recipient_device_id.map(ToOwned::to_owned),
+        recipient_endpoint_verification_method: recipient_endpoint_verification_method
+            .map(ToOwned::to_owned),
+        intended_realm_id: intended_realm_id.map(ToOwned::to_owned),
         welcome_bytes,
         key_package_id: key_package_id.to_owned(),
         epoch,
@@ -469,17 +611,25 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
     };
     state
         .mls_welcomes
-        .entry(MlsWelcomeQueueKey::new(
-            recipient_actor_id,
-            recipient_device_id,
-        ))
+        .entry(
+            match (recipient_device_id, recipient_endpoint_verification_method) {
+                (Some(device_id), None) => MlsWelcomeQueueKey::new(recipient_actor_id, device_id),
+                (None, Some(method)) => {
+                    MlsWelcomeQueueKey::endpoint(recipient_actor_id, method, intended_realm_id)
+                }
+                _ => unreachable!("closed Welcome endpoint validated above"),
+            },
+        )
         .or_default()
         .push(row);
 
     ProjectionEffect::Mls(MlsEffect::WelcomeEnqueued {
         welcome_id: welcome_id.to_owned(),
         recipient_actor_id: recipient_actor_id.to_owned(),
-        recipient_device_id: recipient_device_id.to_owned(),
+        recipient_device_id: recipient_device_id.map(ToOwned::to_owned),
+        recipient_endpoint_verification_method: recipient_endpoint_verification_method
+            .map(ToOwned::to_owned),
+        intended_realm_id: intended_realm_id.map(ToOwned::to_owned),
         group_id: group_id.to_owned(),
     })
 }
@@ -1034,14 +1184,14 @@ fn validate_welcome_trust_binding(
     if keypackage_ref != key_package_id {
         return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
-    let keypackage_digest = payload
-        .get("keypackage_digest")
-        .and_then(Value::as_str)
-        .filter(|value| is_sha256_digest(value))
-        .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let claim_ref = payload
         .get("claim_ref")
         .and_then(Value::as_object)
+        .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    let keypackage_digest = claim_ref
+        .get("keypackage_digest")
+        .and_then(Value::as_str)
+        .filter(|value| is_sha256_digest(value))
         .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let claim_trust_binding = keypackage_claim_trust_binding_object(claim_ref)
         .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
@@ -1056,7 +1206,6 @@ fn validate_welcome_trust_binding(
     }
     if claim_ref.get("claim_id").and_then(Value::as_str) != Some(claim_id)
         || claim_ref.get("keypackage_ref").and_then(Value::as_str) != Some(keypackage_ref)
-        || claim_ref.get("keypackage_digest").and_then(Value::as_str) != Some(keypackage_digest)
         || claim_ref
             .get("capabilities_digest")
             .and_then(Value::as_str)
@@ -1064,6 +1213,24 @@ fn validate_welcome_trust_binding(
     {
         return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
+    if let Some(row) = state
+        .mls_key_packages
+        .values()
+        .find(|row| row.keypackage_ref == keypackage_ref)
+    {
+        let claimed_for_group = row.last_resort || row.claimed_by.as_deref() == Some(group_id);
+        if row.keypackage_digest != keypackage_digest
+            || row.capabilities_digest
+                != claim_ref
+                    .get("capabilities_digest")
+                    .and_then(Value::as_str)
+                    .expect("validated above")
+            || !claimed_for_group
+        {
+            return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+        }
+    }
+    validate_welcome_claim_recipient_binding(payload, &claim_trust_binding)?;
 
     let envelope = payload
         .get("claim_envelope")
@@ -1167,16 +1334,54 @@ fn validate_welcome_recipient_binding(
     payload: &Value,
     recipient_actor_id: &str,
 ) -> Result<(), &'static str> {
-    let Some(bound_recipient) = payload
+    let bound_recipient = payload
         .get("recipient_principal_id")
-        .and_then(Value::as_str)
-    else {
-        return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
-    };
-    if bound_recipient == recipient_actor_id {
+        .or_else(|| payload.get("recipient_pairwise_actor_id"))
+        .and_then(Value::as_str);
+    if bound_recipient == Some(recipient_actor_id) {
         Ok(())
     } else {
         Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)
+    }
+}
+
+fn validate_welcome_claim_recipient_binding(
+    payload: &Value,
+    claim_binding: &KeyPackageTrustBinding,
+) -> Result<(), &'static str> {
+    match (
+        claim_binding.pairwise_actor_id.as_deref(),
+        claim_binding.pairwise_verification_method.as_deref(),
+    ) {
+        (Some(actor_id), Some(method)) => {
+            let top_actor = payload
+                .get("recipient_pairwise_actor_id")
+                .and_then(Value::as_str);
+            let top_method = payload
+                .get("recipient_pairwise_verification_method")
+                .and_then(Value::as_str);
+            if top_actor != Some(actor_id) || top_method != Some(method) {
+                return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+            }
+            let actor = actor_id
+                .parse::<arkret_identifiers::DidCoreId>()
+                .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+            let method = method
+                .parse::<arkret_identifiers::DidUrl>()
+                .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+            arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(actor, method)
+                .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+            Ok(())
+        }
+        (None, None)
+            if payload.get("recipient_pairwise_actor_id").is_none()
+                && payload
+                    .get("recipient_pairwise_verification_method")
+                    .is_none() =>
+        {
+            Ok(())
+        }
+        _ => Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH),
     }
 }
 
@@ -1247,6 +1452,8 @@ fn parse_lifetime(v: Option<&Value>) -> Result<KeyPackageLifetime, &'static str>
 pub struct KeyPackageTrustBinding {
     pub device_authorize_event_id: Option<String>,
     pub agent_key_authorize_event_id: Option<String>,
+    pub pairwise_actor_id: Option<String>,
+    pub pairwise_verification_method: Option<String>,
 }
 
 impl KeyPackageTrustBinding {
@@ -1254,6 +1461,8 @@ impl KeyPackageTrustBinding {
         Self {
             device_authorize_event_id: Some(device_authorize_event_id),
             agent_key_authorize_event_id: None,
+            pairwise_actor_id: None,
+            pairwise_verification_method: None,
         }
     }
 
@@ -1261,6 +1470,17 @@ impl KeyPackageTrustBinding {
         Self {
             device_authorize_event_id: None,
             agent_key_authorize_event_id: Some(agent_key_authorize_event_id),
+            pairwise_actor_id: None,
+            pairwise_verification_method: None,
+        }
+    }
+
+    pub fn minimal_metadata_pairwise(actor_id: String, verification_method: String) -> Self {
+        Self {
+            device_authorize_event_id: None,
+            agent_key_authorize_event_id: None,
+            pairwise_actor_id: Some(actor_id),
+            pairwise_verification_method: Some(verification_method),
         }
     }
 
@@ -1302,7 +1522,7 @@ fn keypackage_claim_trust_binding(payload: &Value) -> Result<KeyPackageTrustBind
 fn keypackage_claim_trust_binding_object(
     object: &Map<String, Value>,
 ) -> Result<KeyPackageTrustBinding, &'static str> {
-    KeyPackageTrustBinding::from_parts(
+    let device_or_agent = KeyPackageTrustBinding::from_parts(
         object
             .get("device_authorize_event_id")
             .and_then(Value::as_str)
@@ -1311,24 +1531,47 @@ fn keypackage_claim_trust_binding_object(
             .get("agent_key_authorize_event_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-    )
+    );
+    if device_or_agent.is_ok() {
+        return device_or_agent;
+    }
+    match (
+        object.get("pairwise_actor_id").and_then(Value::as_str),
+        object
+            .get("pairwise_verification_method")
+            .and_then(Value::as_str),
+    ) {
+        (Some(actor_id), Some(method)) if !actor_id.is_empty() && !method.is_empty() => {
+            let actor = actor_id
+                .parse::<arkret_identifiers::DidCoreId>()
+                .map_err(|_| arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
+            let method_id = method
+                .parse::<arkret_identifiers::DidUrl>()
+                .map_err(|_| arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
+            arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(actor, method_id)
+                .map_err(|_| arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
+            Ok(KeyPackageTrustBinding::minimal_metadata_pairwise(
+                actor_id.to_owned(),
+                method.to_owned(),
+            ))
+        }
+        _ => Err(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH),
+    }
 }
 
 fn welcome_requester_signature_binding(
     object: &Map<String, Value>,
 ) -> Result<WelcomeRequesterSignatureBinding, &'static str> {
-    let requester_device_id = object
-        .get("requester_device_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    match requester_device_id {
-        Some(requester_device_id) => Ok(WelcomeRequesterSignatureBinding {
-            requester_device_id: Some(requester_device_id),
-        }),
-        _ => Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH),
-    }
+    let envelope = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::MlsWelcomeClaimEnvelope,
+    >(Value::Object(object.clone()))
+    .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+    Ok(WelcomeRequesterSignatureBinding {
+        requester_device_id: envelope
+            .trust_binding
+            .requester_device_id()
+            .map(ToString::to_string),
+    })
 }
 
 fn parse_timestamp(value: Option<&Value>) -> Option<i64> {

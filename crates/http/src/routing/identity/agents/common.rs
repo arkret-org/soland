@@ -630,14 +630,6 @@ pub(super) fn agent_key_state_from_record(
                 "persisted Agent controller DID is invalid: {error}"
             ))
         })?;
-    let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
-        &agent_id,
-        &controller_id,
-        &requested_scope,
-    )
-    .map_err(|error| {
-        AppError::internal(format!("persisted Agent ceiling digest failed: {error}"))
-    })?;
     // pairing handle presence and its branch are a projection of the single
     // derived runtime_state (key-management.md §3.6.1): an open handle appears
     // exactly for pending_runtime_key (bootstrap) and replacing (replacement).
@@ -671,7 +663,6 @@ pub(super) fn agent_key_state_from_record(
             })?,
         controller_authorization_ref: record.controller_authorization_ref.clone(),
         requested_scope,
-        requested_scope_digest,
         pairing_request_id: open_handle.map(|handle| handle.pairing_request_id.clone()),
         pairing_mode,
         pairing_code: open_handle.map(|handle| handle.pairing_code.clone()),

@@ -507,7 +507,7 @@ fn controller_device_completed_group_join(
     projection.mls_welcomes.values().flatten().any(|welcome| {
         welcome.group_id == group_id
             && welcome.recipient_actor_id == controller_id
-            && welcome.recipient_device_id == controller_device_id
+            && welcome.recipient_device_id.as_deref() == Some(controller_device_id)
             && projection
                 .mls_key_packages
                 .get(&welcome.key_package_id)
@@ -1524,7 +1524,9 @@ mod tests {
                 keypackage_ref: "ak:keypackage:controller-02".to_owned(),
                 keypackage_digest: format!("sha256:{}", "2".repeat(64)),
                 actor_id: controller.to_owned(),
-                device_id: device.to_owned(),
+                device_id: Some(device.to_owned()),
+                endpoint_verification_method: None,
+                intended_realm_id: None,
                 lifetime: soland_domain::reducer::KeyPackageLifetime {
                     not_before: 0,
                     not_after: i64::MAX,
@@ -1532,7 +1534,7 @@ mod tests {
                 key_package_bytes: vec![1, 2, 3],
                 capabilities: Vec::new(),
                 capabilities_digest: format!("sha256:{}", "3".repeat(64)),
-                device_signature: json!({}),
+                endpoint_signature: json!({}),
                 last_resort: false,
                 last_resort_realm_id: None,
                 claimed_by: claimed_group_id.map(ToOwned::to_owned),
@@ -1550,7 +1552,9 @@ mod tests {
                 id: "ak:mls_welcome:controller-02".to_owned(),
                 group_id: welcome_group_id.to_owned(),
                 recipient_actor_id: controller.to_owned(),
-                recipient_device_id: device.to_owned(),
+                recipient_device_id: Some(device.to_owned()),
+                recipient_endpoint_verification_method: None,
+                intended_realm_id: None,
                 welcome_bytes: vec![4, 5, 6],
                 key_package_id: "keypackage-controller-02".to_owned(),
                 epoch: 1,

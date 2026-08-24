@@ -715,9 +715,7 @@ async fn read_receipt_child_policy_allows_required_floor_escape() {
             "disclosure": "required",
             "visibility": "members",
             "scope_overrides_allowed": true,
-            "receipt_compliance_opt_in": {
-                "child_privacy_tightening_against_required": true
-            }
+            "child_privacy_tightening_against_required": true
         }),
     );
 
@@ -1178,7 +1176,9 @@ async fn register_native_agent_membership_context(
             keypackage_ref: "keypackage-01904100-0000-7000-8000-0000000007d1".to_owned(),
             keypackage_digest: format!("sha256:{}", "1".repeat(64)),
             actor_id: agent.to_owned(),
-            device_id: device_id.to_owned(),
+            device_id: None,
+            endpoint_verification_method: Some(format!("{agent}#runtime-key")),
+            intended_realm_id: None,
             lifetime: soland_domain::reducer::KeyPackageLifetime {
                 not_before: now.timestamp() - 60,
                 not_after: now.timestamp() + 3600,
@@ -1186,7 +1186,7 @@ async fn register_native_agent_membership_context(
             key_package_bytes: vec![1, 2, 3],
             capabilities: vec!["mimi.content.v1".to_owned(), "ak.content.v1".to_owned()],
             capabilities_digest: format!("sha256:{}", "2".repeat(64)),
-            device_signature: json!({"kid": "test", "sig": "test"}),
+            endpoint_signature: json!({"kid": "test", "sig": "test"}),
             last_resort: false,
             last_resort_realm_id: None,
             claimed_by: None,
