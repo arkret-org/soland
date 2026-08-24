@@ -376,11 +376,11 @@ async fn accept_external_outcome(
     outcome: ServiceRegistrationOutcome,
 ) -> anyhow::Result<DidCoreIdentityState> {
     if let Some(prior) = prior
-        && prior.identity.service_id != outcome.service_id
+        && prior.identity.service_id != *outcome.service_id()
     {
         return Ok(DidCoreIdentityState::Conflict {
             stored_service_id: prior.identity.service_id.clone(),
-            provider_service_id: outcome.service_id,
+            provider_service_id: outcome.service_id().clone(),
         });
     }
     let stored =
@@ -496,14 +496,14 @@ fn stored_external_identity_from_outcome(
     let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let stored = StoredDidCoreIdentity {
         identity: LocalDidCoreIdentity {
-            service_id: outcome.service_id,
-            full_id: outcome.full_id,
+            service_id: outcome.service_id().clone(),
+            full_id: outcome.full_id().clone(),
             registration_key: registration_key.clone(),
             provider: Some(provider.clone()),
             signing_key_refs: vec![material.signing_key_ref.clone()],
             active_signing_key_ref: material.signing_key_ref.clone(),
             control_key_ref: material.control_key_ref.clone(),
-            version_id: outcome.version_id,
+            version_id: outcome.version_id().to_owned(),
             last_verified_at: now,
         },
         did_document: outcome.did_document,
@@ -722,10 +722,7 @@ async fn restore_identity_bundle(
     .map_err(|error| anyhow::anyhow!("identity bundle inception is invalid: {error}"))?;
     validate_signed_service_inception(&request)?;
     let outcome = ServiceRegistrationOutcome {
-        service_id: bundle.identity.identity.service_id.clone(),
-        full_id: bundle.identity.identity.full_id.clone(),
         did_document: bundle.identity.did_document.clone(),
-        version_id: bundle.identity.identity.version_id.clone(),
         registration_receipt: bundle.identity.registration_receipt.clone(),
         created: true,
     };
@@ -744,7 +741,7 @@ async fn restore_identity_bundle(
             "operation": arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
             "service_kind": registration_key.service_kind().as_str(),
             "public_base": registration_key.public_base().as_str(),
-            "version_id": outcome.version_id,
+            "version_id": outcome.version_id(),
         }),
         fetched_at: now,
         expires_at: now,
@@ -857,18 +854,18 @@ fn stored_identity_from_outcome(
     outcome
         .validate_for(&registration_key)
         .map_err(|error| anyhow::anyhow!("stored service registration is invalid: {error}"))?;
-    let signing_key_ref = signing_key_ref(config, &outcome.full_id, key_store)?;
-    let generation = webvh_version_number(&outcome.version_id)?;
+    let signing_key_ref = signing_key_ref(config, outcome.full_id(), key_store)?;
+    let generation = webvh_version_number(outcome.version_id())?;
     let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let identity = LocalDidCoreIdentity {
-        service_id: outcome.service_id,
-        full_id: outcome.full_id,
+        service_id: outcome.service_id().clone(),
+        full_id: outcome.full_id().clone(),
         registration_key,
         provider: None,
         signing_key_refs: vec![signing_key_ref.clone()],
         active_signing_key_ref: signing_key_ref,
         control_key_ref: control_key_ref(&outcome.did_document.id, generation)?,
-        version_id: outcome.version_id,
+        version_id: outcome.version_id().to_owned(),
         last_verified_at: now,
     };
     let stored = StoredDidCoreIdentity {
@@ -1069,10 +1066,7 @@ async fn mint_local_service_identity(
         issued_at,
     )?;
     let outcome = ServiceRegistrationOutcome {
-        service_id: receipt.service_id.clone(),
-        full_id: service_id.clone(),
         did_document: request.inception_operation.state.clone(),
-        version_id: request.inception_operation.version_id.clone(),
         registration_receipt: receipt,
         created: true,
     };
@@ -1090,7 +1084,7 @@ async fn mint_local_service_identity(
             "operation": arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
             "service_kind": registration_key.service_kind().as_str(),
             "public_base": registration_key.public_base().as_str(),
-            "version_id": outcome.version_id,
+            "version_id": outcome.version_id(),
             "self_provisioned": true,
         }),
         fetched_at: issued_at,

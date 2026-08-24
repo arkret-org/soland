@@ -213,28 +213,21 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
                 audience: principal_server_id,
             },
         ),
-        frontier: arkret_wire::EventBatchReceiptFrontier::Event(
-            arkret_wire::EventBatchReceiptEventFrontier {
-                event_id: authorize.event_id.clone(),
-                actor_seq: Some(authorize.actor_seq),
-                hlc: None,
-            },
-        ),
         events: vec![
-            arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
+            arkret_wire::EventBatchReceiptItem {
                 event_id: genesis.event_id,
                 kind: arkret_wire::NonEmptyString::new(
                     arkret_wire::EventKind::RealmCreate.as_str(),
                 )
                 .unwrap(),
-            }),
-            arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
+            },
+            arkret_wire::EventBatchReceiptItem {
                 event_id: authorize.event_id,
                 kind: arkret_wire::NonEmptyString::new(
                     arkret_wire::EventKind::DeviceAuthorize.as_str(),
                 )
                 .unwrap(),
-            }),
+            },
         ],
         created_at: genesis.created_at,
         proofs: Vec::new(),
@@ -687,8 +680,8 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks_body() {
         serde_json::from_value(created_body).unwrap();
     assert!(created.created);
     assert_eq!(
-        created.service_id,
-        arkret_wire::project_full_id_to_core_id(&request.inception_operation.state.id).unwrap()
+        created.service_id(),
+        &arkret_wire::project_full_id_to_core_id(&request.inception_operation.state.id).unwrap()
     );
     created.validate_for(&key).unwrap();
 
@@ -703,7 +696,7 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks_body() {
             .await
             .unwrap();
     assert!(!existing.created);
-    assert_eq!(existing.service_id, created.service_id);
+    assert_eq!(existing.service_id(), created.service_id());
     assert_eq!(
         existing.registration_receipt.registration_receipt_id,
         created.registration_receipt.registration_receipt_id
@@ -719,7 +712,7 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks_body() {
     .await
     .unwrap();
     assert!(!fetched.created);
-    assert_eq!(fetched.service_id, created.service_id);
+    assert_eq!(fetched.service_id(), created.service_id());
 
     let mut fork_rng = rand_chacha::ChaCha20Rng::from_seed([82u8; 32]);
     let fork = arkret_signatures::webvh::prepare_service_registration_inception(

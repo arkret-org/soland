@@ -188,7 +188,7 @@ pub(crate) async fn trusted_account_authority_service_id(
                 "Account Authority service identity registration is invalid: {error}"
             ))
         })?;
-    arkret_wire::project_full_id_to_core_id(&registration.full_id).map_err(|error| {
+    arkret_wire::project_full_id_to_core_id(registration.full_id()).map_err(|error| {
         AppError::internal(format!(
             "registered Account Authority full-id cannot be projected: {error}"
         ))

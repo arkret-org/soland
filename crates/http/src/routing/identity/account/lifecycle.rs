@@ -552,7 +552,7 @@ pub(crate) async fn execute_account_status_erasure(
     .await;
     append_audit_redaction_marker(state, actor).await;
     let completed_at = now();
-    let receipt_value = build_erasure_receipt_value(
+    let package = build_erasure_receipt_package(
         state,
         deterministic_erasure_receipt_id(
             triggering_status_record_id,
@@ -578,20 +578,6 @@ pub(crate) async fn execute_account_status_erasure(
         ],
         completed_at,
     )?;
-    let receipt: ErasureReceipt = serde_json::from_value(receipt_value)
-        .map_err(|error| AppError::internal(format!("typed erasure receipt: {error}")))?;
-    let retained_stub = receipt
-        .retained_stub
-        .clone()
-        .ok_or_else(|| AppError::internal("account-status erasure receipt has no retained stub"))?;
-    let mut package = ErasureReceiptPackage {
-        receipt,
-        receipt_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).expect("static digest"),
-        retained_stub,
-    };
-    package.receipt_digest = package
-        .computed_receipt_digest()
-        .map_err(|error| AppError::internal(error.to_string()))?;
     package
         .validate_bindings()
         .map_err(|error| AppError::internal(format!("erasure package self-check: {error}")))?;
@@ -604,15 +590,13 @@ pub(crate) async fn fanout_account_status_erasure_receipt(
     package: &ErasureReceiptPackage,
 ) -> Result<(), AppError> {
     let affected_realms = affected_erasure_realms_for_actor(state, actor).await?;
-    let receipt = serde_json::to_value(&package.receipt)
-        .map_err(|error| AppError::internal(format!("erasure receipt fanout encode: {error}")))?;
-    enqueue_erasure_receipt_fanout(state, &affected_realms, std::iter::once(&receipt)).await
+    enqueue_erasure_receipt_fanout(state, &affected_realms, package).await
 }
 
-async fn enqueue_erasure_receipt_fanout<'a>(
+async fn enqueue_erasure_receipt_fanout(
     state: &AppState,
     affected_realms: &[String],
-    receipts: impl Iterator<Item = &'a Value>,
+    package: &ErasureReceiptPackage,
 ) -> Result<(), AppError> {
     let affected = affected_realms
         .iter()
@@ -648,42 +632,28 @@ async fn enqueue_erasure_receipt_fanout<'a>(
         .into_iter()
         .filter(|peer| recipient_services.contains(&peer.did))
         .collect::<Vec<_>>();
-    for receipt in receipts {
-        let receipt: ErasureReceipt = serde_json::from_value(receipt.clone())
-            .map_err(|error| AppError::internal(format!("typed erasure receipt: {error}")))?;
-        let retained_stub = receipt.retained_stub.clone().ok_or_else(|| {
-            AppError::internal("outbound erasure receipt has no retained verification stub")
-        })?;
-        let mut package = ErasureReceiptPackage {
-            receipt,
-            receipt_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
-                .expect("static digest"),
-            retained_stub,
-        };
-        package.receipt_digest = package
-            .computed_receipt_digest()
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        package
-            .validate_bindings()
-            .map_err(|error| AppError::internal(format!("outbound erasure package: {error}")))?;
-        let body = ErasureReceiptSubmitRequestBody { package };
-        let payload = arkret_canonical::canonical_json_string(&body)
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        for peer in &peers {
-            crate::routing::federation::outbox::enqueue_outbound(
-                state,
-                &peer.url,
-                &peer.did,
-                "/_arkret/peer/erasure-receipts",
-                &format!(
-                    "ak:outbox:erasure-receipt:{}",
-                    body.package.receipt.receipt_id
-                ),
-                &payload,
-            )
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        }
+    package
+        .validate_bindings()
+        .map_err(|error| AppError::internal(format!("outbound erasure package: {error}")))?;
+    let body = ErasureReceiptSubmitRequestBody {
+        package: package.clone(),
+    };
+    let payload = arkret_canonical::canonical_json_string(&body)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    for peer in &peers {
+        crate::routing::federation::outbox::enqueue_outbound(
+            state,
+            &peer.url,
+            &peer.did,
+            "/_arkret/peer/erasure-receipts",
+            &format!(
+                "ak:outbox:erasure-receipt:{}",
+                body.package.receipt.receipt_id
+            ),
+            &payload,
+        )
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     }
     Ok(())
 }
@@ -762,7 +732,7 @@ async fn affected_erasure_realms_for_actor(
     Ok(realms.into_iter().collect())
 }
 
-fn build_erasure_receipt_value(
+fn build_erasure_receipt_package(
     state: &AppState,
     receipt_id: String,
     triggering_status_record_id: &arkret_wire::AccountStatusRecordId,
@@ -770,7 +740,7 @@ fn build_erasure_receipt_value(
     scope: ErasureScope,
     erased_classes: Vec<ErasedClass>,
     completed_at: chrono::DateTime<chrono::Utc>,
-) -> Result<Value, AppError> {
+) -> Result<ErasureReceiptPackage, AppError> {
     let issuer = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
     let retained_stub = erasure_retained_stub(
@@ -785,10 +755,8 @@ fn build_erasure_receipt_value(
     // self-check compares the same wire value instead of the pre-serialization
     // nanoseconds carried by `Utc::now()`.
     let completed_at = retained_stub.completed_at;
-    let retained_stub_value = serde_json::to_value(&retained_stub)
-        .map_err(|error| AppError::internal(format!("erasure retained stub: {error}")))?;
     let retained_stub_digest = arkret_identifiers::Hash::new(
-        arkret_canonical::canonical_sha256(&retained_stub_value)
+        arkret_canonical::canonical_sha256(&retained_stub)
             .map_err(|error| AppError::internal(format!("erasure retained stub: {error}")))?,
     )
     .map_err(|error| AppError::internal(format!("erasure retained stub digest: {error}")))?;
@@ -804,7 +772,7 @@ fn build_erasure_receipt_value(
         outcome: ErasureOutcome::Completed,
         erased_classes,
         retained_stub_digest,
-        retained_stub: Some(retained_stub),
+        retained_stub: None,
         legal_hold_ref: None,
         completed_at,
         issued_at: Some(completed_at),
@@ -843,10 +811,12 @@ fn build_erasure_receipt_value(
         extra,
     });
     receipt
-        .validate_with_inline_retained_stub()
+        .validate_with_retained_stub(&retained_stub)
         .map_err(|error| AppError::internal(format!("erasure receipt self-check: {error}")))?;
-    serde_json::to_value(receipt)
-        .map_err(|error| AppError::internal(format!("erasure receipt encode: {error}")))
+    Ok(ErasureReceiptPackage {
+        receipt,
+        retained_stub,
+    })
 }
 
 fn erasure_retained_stub(

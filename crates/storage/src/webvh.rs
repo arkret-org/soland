@@ -67,8 +67,8 @@ pub fn registrations_match(
     left: &arkret_models_identity::service_identity::ServiceRegistrationOutcome,
     right: &arkret_models_identity::service_identity::ServiceRegistrationOutcome,
 ) -> bool {
-    left.service_id == right.service_id
-        && left.version_id == right.version_id
+    left.registration_receipt.service_id == right.registration_receipt.service_id
+        && left.registration_receipt.version_id == right.registration_receipt.version_id
         && left.registration_receipt.log_head_digest == right.registration_receipt.log_head_digest
         && left.registration_receipt.control_key_digest
             == right.registration_receipt.control_key_digest
@@ -79,8 +79,8 @@ pub fn valid_new_service_registration_records(
     document: &WebvhDocumentRecord,
     event: &WebvhLogRecord,
 ) -> bool {
-    document.did == outcome.full_id.as_str()
-        && event.did == outcome.full_id.as_str()
+    document.did == outcome.registration_receipt.full_id.as_str()
+        && event.did == outcome.registration_receipt.full_id.as_str()
         && document.seq == 1
         && event.seq == 1
         && document.key_log_head.as_deref() == Some(event.event_digest.as_str())

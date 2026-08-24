@@ -366,7 +366,7 @@ async fn mark_control_event_sealed_in_transaction(
             ))
         })?;
     let accepted_event_bytes = availability_preimage
-        .strip_prefix(b"ak.availability-event-bytes-v1\0")
+        .strip_prefix(b"ak.availability_event_bytes.v1\0")
         .ok_or_else(|| {
             StoreError::Backend(
                 "accepted Control Event availability projection has an invalid domain separator"

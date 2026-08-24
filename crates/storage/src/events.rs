@@ -284,10 +284,10 @@ pub fn identity_anchor_slot_conflicts(
 }
 #[doc(hidden)]
 pub fn receipt_covers_event(receipt: &EventBatchReceipt, event_id: &str) -> bool {
-    receipt.events.iter().any(|event| match event {
-        arkret_wire::EventBatchReceiptEvent::Item(item) => item.event_id.as_str() == event_id,
-        arkret_wire::EventBatchReceiptEvent::Digest(_) => false,
-    })
+    receipt
+        .events
+        .iter()
+        .any(|event| event.event_id.as_str() == event_id)
 }
 #[doc(hidden)]
 pub fn event_position_cmp(

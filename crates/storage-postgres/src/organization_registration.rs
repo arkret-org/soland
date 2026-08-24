@@ -130,8 +130,8 @@ impl TryFrom<OutcomeRow> for OrganizationRegistrationOutcome {
             .validate()
             .map_err(|error| PersistenceError::Internal(error.to_string()))?;
         if outcome.registration_receipt.registration_receipt_id != row.outcome_id
-            || outcome.organization_id.as_str() != row.organization_id
-            || i64::try_from(outcome.registration_generation).ok()
+            || outcome.registration_receipt.organization_id.as_str() != row.organization_id
+            || i64::try_from(outcome.registration_receipt.registration_generation).ok()
                 != Some(row.registration_generation)
         {
             return Err(PersistenceError::Internal(
@@ -527,16 +527,19 @@ async fn persist_outcomes(
     for (outcome_id, outcome) in outcomes {
         let value = serde_json::to_value(outcome)
             .map_err(|error| PersistenceError::Internal(error.to_string()))?;
-        let generation = i64::try_from(outcome.registration_generation).map_err(|_| {
-            PersistenceError::Conflict("organization registration generation overflow".to_owned())
-        })?;
+        let generation = i64::try_from(outcome.registration_receipt.registration_generation)
+            .map_err(|_| {
+                PersistenceError::Conflict(
+                    "organization registration generation overflow".to_owned(),
+                )
+            })?;
         sql_query(
             "INSERT INTO organization_registration_outcomes \
                 (outcome_id, organization_id, registration_generation, outcome, committed_at) \
              VALUES ($1, $2, $3, $4, $5) ON CONFLICT (outcome_id) DO NOTHING",
         )
         .bind::<Text, _>(outcome_id)
-        .bind::<Text, _>(outcome.organization_id.as_str())
+        .bind::<Text, _>(outcome.registration_receipt.organization_id.as_str())
         .bind::<BigInt, _>(generation)
         .bind::<Jsonb, _>(&value)
         .bind::<Timestamptz, _>(committed_at)

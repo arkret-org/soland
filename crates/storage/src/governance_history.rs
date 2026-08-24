@@ -84,12 +84,18 @@ pub fn governance_dependency_canonical(
             availability_receipt
                 .validate_structural()
                 .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-            availability_receipt
-                .validate_receipt_digest(|bytes| {
-                    Ok(Hash::new(arkret_canonical::sha256_digest(bytes))?)
+            let digest_suite = content_digest
+                .digest_suite()
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            let computed_digest = availability_receipt
+                .full_receipt_digest(|bytes| {
+                    Ok(Hash::new(arkret_canonical::canonical::digest(
+                        digest_suite,
+                        bytes,
+                    ))?)
                 })
                 .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-            if content_digest != &availability_receipt.receipt_digest {
+            if content_digest != &computed_digest {
                 return Err(PersistenceError::SchemaViolation(
                     "availability receipt selector digest mismatch".to_owned(),
                 ));
@@ -557,7 +563,7 @@ pub fn history_traversal_retained_object_canonical(
             let preimage = arkret_wire::AvailabilityReceipt::event_bytes_digest_preimage(event)
                 .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
             let canonical_bytes = preimage
-                .strip_prefix(b"ak.availability-event-bytes-v1\0")
+                .strip_prefix(b"ak.availability_event_bytes.v1\0")
                 .ok_or_else(|| {
                     PersistenceError::Internal(
                         "accepted Event bytes preimage has an invalid domain separator".to_owned(),

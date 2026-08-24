@@ -2532,7 +2532,7 @@ async fn collect_history_dependencies(
                     ))?)
                 })
                 .map_err(|error| AppError::capability_denied(error.to_string()))?;
-            let digest = availability_receipt.receipt.bytes_digest.clone();
+            let digest = availability_receipt.bytes_digest.clone();
             if event_bytes_digest
                 .as_ref()
                 .is_some_and(|current| current != &digest)
@@ -2999,7 +2999,7 @@ async fn validate_retained_history_cut(
             else {
                 return false;
             };
-            availability_receipt.receipt.bytes_digest == object_digest
+            availability_receipt.bytes_digest == object_digest
                 && availability_receipt
                     .validate_event_bytes_digest(event, |bytes| {
                         Ok(arkret_wire::Hash::new(arkret_canonical::digest(

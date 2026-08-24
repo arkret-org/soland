@@ -995,10 +995,6 @@ fn registration_outcome(
         .expected_payload_digest()
         .expect("derive registration receipt digest");
     let outcome = OrganizationRegistrationOutcome {
-        organization_id: organization_id.clone(),
-        full_id: organization_full_id.clone(),
-        registration_generation: generation,
-        version_id: version_id.to_owned(),
         registration_receipt: receipt,
         created,
     };

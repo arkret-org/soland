@@ -43,10 +43,7 @@ pub(crate) async fn ensure(
     let issued_at = chrono::Utc::now();
     let receipt = sign_registration_receipt(state, &key, &request, issued_at).await?;
     let outcome = ServiceRegistrationOutcome {
-        service_id: receipt.service_id.clone(),
-        full_id: request.inception_operation.state.id.clone(),
         did_document: request.inception_operation.state.clone(),
-        version_id: request.inception_operation.version_id.clone(),
         registration_receipt: receipt,
         created: true,
     };
@@ -68,7 +65,7 @@ pub(crate) async fn ensure(
             "operation": arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
             "service_kind": key.service_kind().as_str(),
             "public_base": key.public_base().as_str(),
-            "version_id": outcome.version_id,
+            "version_id": outcome.version_id(),
         }),
         fetched_at: issued_at,
         expires_at: issued_at,

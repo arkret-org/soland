@@ -284,8 +284,8 @@ pub fn apply_organization_registration_ensure(
     outcome.created = true;
     store_immutable_outcome(outcomes, &outcome)?;
 
-    let generation = outcome.registration_generation;
     let receipt = &outcome.registration_receipt;
+    let generation = receipt.registration_generation;
     let outcome_id = receipt.registration_receipt_id.clone();
     match state {
         Some(existing_state) => {
@@ -409,7 +409,9 @@ pub fn apply_organization_registration_refresh(
         .get_mut(&state.current_generation)
         .expect("validated current generation exists");
     mutable_current.status = OrganizationRegistrationStatus::Active;
-    mutable_current.full_id = commit.outcome.full_id.clone();
+    mutable_current
+        .full_id
+        .clone_from(&commit.outcome.registration_receipt.full_id);
     mutable_current.current_outcome_id.clone_from(&outcome_id);
     mutable_current.terminal_reason = None;
     mutable_current.updated_at = commit.committed_at;
@@ -513,7 +515,9 @@ pub fn apply_organization_registration_lifecycle(
         .get_mut(&state.current_generation)
         .expect("validated current generation exists");
     mutable_current.status = OrganizationRegistrationStatus::Revoked;
-    mutable_current.full_id = commit.outcome.full_id.clone();
+    mutable_current
+        .full_id
+        .clone_from(&commit.outcome.registration_receipt.full_id);
     mutable_current.current_outcome_id = outcome_id;
     mutable_current.terminal_reason = Some(commit.reason);
     mutable_current.updated_at = commit.committed_at;
@@ -577,9 +581,9 @@ fn validate_new_generation_outcome(
             .map_err(|error| PersistenceError::Conflict(error.to_string()))?;
     let receipt = &outcome.registration_receipt;
     if !outcome.created
-        || outcome.organization_id != challenge.organization_id
-        || outcome.full_id != challenge.full_id
-        || outcome.registration_generation != expected_generation
+        || receipt.organization_id != challenge.organization_id
+        || receipt.full_id != challenge.full_id
+        || receipt.registration_generation != expected_generation
         || receipt.local_admin_subject != challenge.local_admin_subject
         || receipt.delegated_scopes != challenge.requested_scopes
         || receipt.status != OrganizationRegistrationStatus::Active
@@ -603,8 +607,8 @@ fn validate_same_generation_outcome(
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
     let receipt = &outcome.registration_receipt;
     if outcome.created != required_created
-        || outcome.organization_id != current.organization_id
-        || outcome.registration_generation != current.registration_generation
+        || receipt.organization_id != current.organization_id
+        || receipt.registration_generation != current.registration_generation
         || receipt.local_admin_subject != current.local_admin_subject
         || receipt.delegated_scopes != current.delegated_scopes
         || receipt.status != required_status

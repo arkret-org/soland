@@ -523,7 +523,7 @@ impl OrganizationRegistrationService {
             .ok_or_else(|| internal("consumed challenge outcome is missing"))?;
         let current = self
             .store()
-            .get_current(&outcome.organization_id)
+            .get_current(&outcome.registration_receipt.organization_id)
             .await
             .map_err(map_storage)?
             .ok_or_else(|| {
@@ -531,7 +531,8 @@ impl OrganizationRegistrationService {
                     "consumed challenge no longer belongs to the current generation",
                 )
             })?;
-        if current.generation.registration_generation != outcome.registration_generation
+        if current.generation.registration_generation
+            != outcome.registration_receipt.registration_generation
             || current.generation.current_outcome_id
                 != outcome.registration_receipt.registration_receipt_id
         {
@@ -732,7 +733,8 @@ fn validate_replay_current(
             "consumed challenge no longer belongs to the current generation",
         ));
     };
-    if current.generation.registration_generation != replay.registration_generation
+    if current.generation.registration_generation
+        != replay.registration_receipt.registration_generation
         || current.generation.current_outcome_id
             != replay.registration_receipt.registration_receipt_id
     {
@@ -1317,10 +1319,6 @@ fn sign_outcome(
         .validate()
         .map_err(|error| internal(error.to_string()))?;
     let outcome = OrganizationRegistrationOutcome {
-        organization_id: organization_id.clone(),
-        full_id: full_id.clone(),
-        registration_generation,
-        version_id: version_id.to_owned(),
         registration_receipt: receipt,
         created,
     };
@@ -2116,7 +2114,7 @@ mod tests {
             .await;
         let generation_two_observation = observe_registration(&generation_two_result);
         let generation_two = generation_two_result.unwrap();
-        assert_eq!(generation_two.registration_generation, 2);
+        assert_eq!(generation_two.registration_generation(), 2);
         let superseded_replay = fixture
             .service
             .ensure(
@@ -2166,7 +2164,7 @@ mod tests {
             .await;
         let scope_change_observation = observe_registration(&scope_change_result);
         let scope_change = scope_change_result.unwrap();
-        assert_eq!(scope_change.registration_generation, 3);
+        assert_eq!(scope_change.registration_generation(), 3);
 
         fixture
             .service
@@ -2386,7 +2384,7 @@ mod tests {
 
         let superseded_result = validate_organization_registration_authorization_at(
             &first.registration_receipt,
-            scope_change.registration_generation,
+            scope_change.registration_generation(),
             OrganizationRegistrationStatus::Active,
             fixture.now + Duration::days(1),
         );

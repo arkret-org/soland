@@ -259,7 +259,7 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable_bo
             .await
             .unwrap();
     assert!(outcome.created);
-    assert_eq!(outcome.registration_generation, 1);
+    assert_eq!(outcome.registration_generation(), 1);
     outcome.validate().unwrap();
 
     let visible: OrganizationRegistrationOutcome = TestClient::get(format!(
@@ -315,7 +315,7 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable_bo
             .take_json()
             .await
             .unwrap();
-    assert_eq!(refreshed.registration_generation, 1);
+    assert_eq!(refreshed.registration_generation(), 1);
     assert_eq!(
         refreshed.registration_receipt.status,
         OrganizationRegistrationStatus::Active
@@ -334,7 +334,7 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable_bo
             .take_json()
             .await
             .unwrap();
-    assert_eq!(revoked.registration_generation, 1);
+    assert_eq!(revoked.registration_generation(), 1);
     assert_eq!(
         revoked.registration_receipt.status,
         OrganizationRegistrationStatus::Revoked

@@ -1816,16 +1816,16 @@ fn build_pcr_genesis_batch_receipt(
             },
         ),
         events: vec![
-            arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
+            arkret_wire::EventBatchReceiptItem {
                 event_id: create.event_id.clone(),
                 kind: arkret_wire::NonEmptyString::new(create.kind.clone())
                     .expect("validated Event kind is non-empty"),
-            }),
-            arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
+            },
+            arkret_wire::EventBatchReceiptItem {
                 event_id: authorize.event_id.clone(),
                 kind: arkret_wire::NonEmptyString::new(authorize.kind.clone())
                     .expect("validated Event kind is non-empty"),
-            }),
+            },
         ],
         created_at,
         proofs: Vec::new(),
@@ -1887,16 +1887,16 @@ async fn build_reanchor_batch_receipt(
             },
         ),
         events: vec![
-            arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
+            arkret_wire::EventBatchReceiptItem {
                 event_id: reanchor.event_id.clone(),
                 kind: arkret_wire::NonEmptyString::new(reanchor.kind.clone())
                     .expect("validated Event kind is non-empty"),
-            }),
-            arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
+            },
+            arkret_wire::EventBatchReceiptItem {
                 event_id: authorize.event_id.clone(),
                 kind: arkret_wire::NonEmptyString::new(authorize.kind.clone())
                     .expect("validated Event kind is non-empty"),
-            }),
+            },
         ],
         created_at,
         proofs: Vec::new(),

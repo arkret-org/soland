@@ -1109,7 +1109,6 @@ async fn range_completeness_for_query(
         count: covered_event_ids.len() as u64,
         observed_at,
         witness_attestation: RangeCompletenessAttestationWitnessAttestation {
-            kind: "single_source".to_owned(),
             witnesses: vec![
                 RangeCompletenessAttestationWitnessAttestationWitnessesItem {
                     issuer: issuer_actor.clone(),

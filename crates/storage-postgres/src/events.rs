@@ -722,22 +722,9 @@ async fn insert_event_batch_receipt(
     .map_err(PersistenceError::database)?
     .pk;
     for event in &receipt.events {
-        let (digest_suite, digest) = match event {
-            arkret_wire::EventBatchReceiptEvent::Item(item) => {
-                let event_digest = item.event_id.event_digest();
-                let identity =
-                    ids::event_identity_parts(item.event_id.as_str(), event_digest.as_str())?;
-                (identity.digest_suite, identity.digest)
-            }
-            arkret_wire::EventBatchReceiptEvent::Digest(digest) => {
-                ids::parse_event_digest(digest.as_str()).ok_or_else(|| {
-                    PersistenceError::SchemaViolation(format!(
-                        "malformed Event Batch Receipt digest: {:?}",
-                        digest.as_str()
-                    ))
-                })?
-            }
-        };
+        let event_digest = event.event_id.event_digest();
+        let identity = ids::event_identity_parts(event.event_id.as_str(), event_digest.as_str())?;
+        let (digest_suite, digest) = (identity.digest_suite, identity.digest);
         let event_pk =
             sql_query("SELECT pk FROM canonical_events WHERE state = 'accepted' AND digest_suite = $1 AND digest = $2")
                 .bind::<SmallInt, _>(i16::from(digest_suite))

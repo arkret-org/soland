@@ -1495,12 +1495,7 @@ async fn continue_issue_terminal_receipt(
             ];
             if expected_receipt_events.iter().any(|(event_id, digest)| {
                 !durable_receipt.events.iter().any(|item| {
-                    matches!(
-                        item,
-                        arkret_wire::EventBatchReceiptEvent::Item(item)
-                            if &item.event_id == *event_id
-                                && item.event_id.event_digest() == **digest
-                    )
+                    &item.event_id == *event_id && item.event_id.event_digest() == **digest
                 })
             }) {
                 return Err(AppError::conflict(
@@ -1738,12 +1733,8 @@ async fn continue_submit_reanchor_unit(
         .into_iter()
         .find(|receipt| {
             receipt.events.iter().any(|event| {
-                matches!(
-                    event,
-                        arkret_wire::EventBatchReceiptEvent::Item(item)
-                        if item.event_id == binding.reanchor_event_id
-                            && item.event_id.event_digest() == reanchor_event_digest
-                )
+                event.event_id == binding.reanchor_event_id
+                    && event.event_id.event_digest() == reanchor_event_digest
             })
         })
         .ok_or_else(|| {

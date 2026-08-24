@@ -43,6 +43,10 @@ async fn submit(
         AppError::param_invalid(format!("invalid erasure receipt package: {error}"))
             .with_wire_code("erasure_receipt_stub_binding_mismatch")
     })?;
+    let receipt_digest = body
+        .package
+        .computed_receipt_digest()
+        .map_err(|error| AppError::internal(error.to_string()))?;
     let proof_input = body
         .package
         .receipt
@@ -131,7 +135,12 @@ async fn submit(
     let acceptance = if let Some(existing) = existing {
         let stored: StoredReceipt = serde_json::from_value(existing.response_body)
             .map_err(|error| AppError::internal(format!("stored erasure package: {error}")))?;
-        if stored.package.receipt_digest != body.package.receipt_digest {
+        if stored
+            .package
+            .computed_receipt_digest()
+            .map_err(|error| AppError::internal(error.to_string()))?
+            != receipt_digest
+        {
             return Err(
                 AppError::conflict("receipt_id resolves to another receipt digest")
                     .with_wire_code("duplicate_conflict"),
@@ -235,7 +244,10 @@ async fn persist_lookup(
             principal_id: state.service_id().clone(),
             idempotency_key: lookup_key,
             service_id: state.service_id().clone(),
-            request_hash: package.receipt_digest.to_string(),
+            request_hash: package
+                .computed_receipt_digest()
+                .map_err(|error| AppError::internal(error.to_string()))?
+                .to_string(),
             response_status: StatusCode::OK.as_u16() as i32,
             response_body: serde_json::to_value(StoredReceipt {
                 package: package.clone(),
@@ -287,7 +299,9 @@ async fn signed_acceptance(
     let mut acceptance = ErasureReceiptAcceptance {
         status,
         receipt_id: package.receipt.receipt_id.clone(),
-        receipt_digest: package.receipt_digest.clone(),
+        receipt_digest: package
+            .computed_receipt_digest()
+            .map_err(|error| AppError::internal(error.to_string()))?,
         issuer_service_id: package.receipt.issuer.clone(),
         receiver_service_id: arkret_identifiers::DidCoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(error.to_string()))?,

@@ -1244,12 +1244,6 @@ fn validate_encrypted_attachment_metadata(
             {
                 return Err("stream attachment envelope requires integer segment_bytes");
             }
-            if !envelope
-                .get("segment_count")
-                .is_some_and(serde_json::Value::is_u64)
-            {
-                return Err("stream attachment envelope requires integer segment_count");
-            }
         }
         None | Some(BLOB_SCHEME_WHOLE_FILE_AEAD_V1) => {
             // Whole-file AEAD (explicit or, per spec, the default when scheme

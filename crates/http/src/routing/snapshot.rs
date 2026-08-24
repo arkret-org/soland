@@ -64,7 +64,6 @@ pub(crate) async fn snapshot_manifest_for_realm(
     let event_set_commitment = arkret_state::event_set_commitment(
         arkret_state::EventSetCommitmentAlgorithm::MerkleEventSetV1,
         &event_set_entries,
-        frontier_event_ids.clone(),
     )
     .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let created_at = now();
@@ -104,7 +103,6 @@ pub(crate) async fn snapshot_manifest_for_realm(
             verification_profile: arkret_state::SnapshotSecurityClass::Standard,
             inclusion_proof_url: None,
             challenge_window_seconds: None,
-            witness_quorum: None,
             conflict_records_digest: None,
             soft_failed_digest: None,
             quarantined_digest: None,
@@ -112,7 +110,6 @@ pub(crate) async fn snapshot_manifest_for_realm(
         created_by: service_id.clone(),
         created_at,
         authority_binding: arkret_state::AuthorityBinding {
-            issuer: service_id,
             authority_kind: arkret_state::SnapshotAuthorityKind::RealmPolicySnapshotIssuer,
             auth_state_digest,
             auth_frontier: frontier_event_ids,
