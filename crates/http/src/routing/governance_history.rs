@@ -375,7 +375,7 @@ async fn create_history_key_request(
         HistoryEffectiveScope::Realm { realm_id }
         | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
     };
-    if !realm_has_member(state, realm_id.as_str(), &session.actor).await {
+    if !history_scope_has_current_member(state, &request.effective_scope, &session.actor).await {
         return Err(AppError::capability_denied(
             "history request requires current scope membership",
         ));
@@ -1234,6 +1234,9 @@ async fn accepted_history_response_retry(
     state: &AppState,
     response: &HistoryKeyResponseSendRequest,
 ) -> Result<Option<HistoryKeyResponseSendReceipt>, AppError> {
+    let source_record_digest = response
+        .source_record_digest()
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     match state
         .persistence()
         .governance_history_service()
@@ -1241,9 +1244,23 @@ async fn accepted_history_response_retry(
         .await
         .map_err(map_service_error)?
     {
-        Some(soland_storage::HistoryResponseRetryRecord::Accepted(receipt)) => Ok(Some(*receipt)),
+        Some(soland_storage::HistoryResponseRetryRecord::Accepted(receipt))
+            if receipt.source_record_digest == source_record_digest =>
+        {
+            Ok(Some(*receipt))
+        }
+        Some(soland_storage::HistoryResponseRetryRecord::Accepted(_)) => Err(AppError::conflict(
+            "history response ID is already bound to different bytes",
+        )),
+        Some(soland_storage::HistoryResponseRetryRecord::Expired(tombstone))
+            if tombstone.source_record_digest == source_record_digest =>
+        {
+            Err(AppError::conflict(
+                "history response ID belongs to an expired record",
+            ))
+        }
         Some(soland_storage::HistoryResponseRetryRecord::Expired(_)) => Err(AppError::conflict(
-            "history response ID belongs to an expired record",
+            "history response ID expired with different bytes",
         )),
         Some(soland_storage::HistoryResponseRetryRecord::Reserved(reservation))
             if reservation.input.source_record != *response =>
@@ -4834,50 +4851,81 @@ async fn list_history_key_requests(
         .as_deref()
         .map(|cursor| history_sequence_cursor_decode(state, "requests", &selector, cursor))
         .transpose()?;
-    let is_current_member = realm_has_member(state, query.realm_id.as_str(), &session.actor).await;
+    let is_current_member = history_scope_has_current_member(state, &scope, &session.actor).await;
     let caller = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
     let history = state.persistence().governance_history_service();
-    let page = history
-        .list_history_requests(
-            &scope,
-            after_sequence,
-            usize::from(query.limit.unwrap_or(100)),
-        )
-        .await
-        .map_err(map_service_error)?;
-    let accepted_rrk = if is_current_member || page.records.is_empty() {
-        Vec::new()
+    let read_at = now();
+    let limit = usize::from(query.limit.unwrap_or(100));
+    let (records, next_sequence) = if is_current_member {
+        let page = history
+            .list_history_requests(&scope, after_sequence, read_at, limit)
+            .await
+            .map_err(map_service_error)?;
+        let records: Vec<HistoryKeyRequestRecord> = page
+            .records
+            .into_iter()
+            .map(|record| HistoryKeyRequestRecord {
+                request: record.write.request,
+                request_receipt: record.write.request_receipt,
+            })
+            .collect();
+        (records, page.next_sequence)
     } else {
         let local_service_id =
             arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
                 .map_err(|error| AppError::internal(error.to_string()))?;
-        let ranges = page
-            .records
-            .iter()
-            .flat_map(|record| record.write.request.requested_ranges.iter().cloned())
-            .collect::<Vec<_>>();
-        accepted_rrk_for_ranges(state, &scope, &caller, &local_service_id, &ranges).await?
-    };
-    let records = page
-        .records
-        .iter()
-        .filter(|record| {
-            is_current_member
-                || accepted_rrk.iter().any(|archive| {
+        let mut scan_after = after_sequence;
+        let mut authorized = Vec::new();
+        loop {
+            let page = history
+                .list_history_requests(&scope, scan_after, read_at, 100)
+                .await
+                .map_err(map_service_error)?;
+            if page.records.is_empty() {
+                break;
+            }
+            let ranges = page
+                .records
+                .iter()
+                .flat_map(|record| record.write.request.requested_ranges.iter().cloned())
+                .collect::<Vec<_>>();
+            let accepted_rrk =
+                accepted_rrk_for_ranges(state, &scope, &caller, &local_service_id, &ranges).await?;
+            for record in &page.records {
+                if accepted_rrk.iter().any(|archive| {
                     rrk_record_authorizes_request(archive, &caller, &record.write.request)
-                })
-        })
-        .map(|record| HistoryKeyRequestRecord {
-            request: record.write.request.clone(),
-            request_receipt: record.write.request_receipt.clone(),
-        })
-        .collect::<Vec<_>>();
+                }) {
+                    authorized.push((
+                        record.sequence,
+                        HistoryKeyRequestRecord {
+                            request: record.write.request.clone(),
+                            request_receipt: record.write.request_receipt.clone(),
+                        },
+                    ));
+                    if authorized.len() > limit {
+                        break;
+                    }
+                }
+            }
+            if authorized.len() > limit || page.next_sequence.is_none() {
+                break;
+            }
+            scan_after = page.next_sequence;
+        }
+        let limited = authorized.len() > limit;
+        authorized.truncate(limit);
+        let next_sequence =
+            limited.then(|| authorized.last().expect("limited history request page").0);
+        (
+            authorized.into_iter().map(|(_, record)| record).collect(),
+            next_sequence,
+        )
+    };
     if records.is_empty() && !is_current_member {
         return Err(AppError::not_found("history request scope is unavailable"));
     }
-    let cursor = page
-        .next_sequence
+    let cursor = next_sequence
         .map(|sequence| history_sequence_cursor_encode(state, "requests", &selector, sequence))
         .transpose()?;
     let outcome = HistoryKeyRequestListOutcome {
@@ -4890,6 +4938,31 @@ async fn list_history_key_requests(
         .map_err(|error| AppError::internal(error.to_string()))?;
     enforce_history_response_limit(&outcome, 8 * 1024 * 1024)?;
     json_ok(outcome)
+}
+
+async fn history_scope_has_current_member(
+    state: &AppState,
+    scope: &HistoryEffectiveScope,
+    actor: &str,
+) -> bool {
+    let realm_id = match scope {
+        HistoryEffectiveScope::Realm { realm_id }
+        | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
+    };
+    if !realm_has_member(state, realm_id.as_str(), actor).await {
+        return false;
+    }
+    match scope {
+        HistoryEffectiveScope::Realm { .. } => true,
+        HistoryEffectiveScope::Circle { circle_id, .. } => {
+            let snapshot = state.projections().snapshot();
+            snapshot.circle(circle_id.as_str()).is_some_and(|circle| {
+                circle.realm_id == realm_id.as_str()
+                    && circle.state.as_str() == "active"
+                    && snapshot.circle_scope_visible_to_actor(circle_id.as_str(), actor)
+            })
+        }
+    }
 }
 
 #[salvo::oapi::endpoint(
@@ -4952,6 +5025,7 @@ async fn list_organization_recovery_archives(
         }
         let item = OrganizationRecoveryArchiveListItem {
             archive_sequence: outcome.archive_sequence,
+            archive_replica_digest: outcome.archive_replica_digest.clone(),
             archive: archive.clone(),
             container_event_ref: replica.container_event_ref.clone(),
             history_traversal_retention: replica.history_traversal_retention.clone(),

@@ -461,6 +461,7 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
         &self,
         effective_scope: &arkret_wire::HistoryEffectiveScope,
         after_sequence: Option<u64>,
+        now: chrono::DateTime<chrono::Utc>,
         limit: usize,
     ) -> PersistenceResult<HistoryRequestPage> {
         if !(1..=100).contains(&limit) {
@@ -475,6 +476,7 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
                 .filter(|record| {
                     &record.write.request.effective_scope == effective_scope
                         && after_sequence.is_none_or(|after| record.sequence > after)
+                        && record.write.request.expires_at > now
                 })
                 .cloned()
                 .collect::<Vec<_>>()

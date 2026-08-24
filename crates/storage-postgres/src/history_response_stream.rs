@@ -866,6 +866,7 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
         &self,
         scope: &HistoryEffectiveScope,
         after: Option<u64>,
+        now: DateTime<Utc>,
         limit: usize,
     ) -> PersistenceResult<HistoryRequestPage> {
         if !(1..=100).contains(&limit) {
@@ -883,11 +884,12 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
             "SELECT request_sequence,request_digest,request_receipt_digest,request_json, \
              request_receipt_json,sealed_history_response_capability_json,request_replica_digest,request_replica_json,stored_at FROM history_key_requests \
              WHERE effective_scope_kind=$1 AND realm_id=$2 AND circle_id IS NOT DISTINCT FROM $3 \
-             AND request_sequence>$4 ORDER BY request_sequence LIMIT $5",
+             AND expires_at>$4 AND request_sequence>$5 ORDER BY request_sequence LIMIT $6",
         )
         .bind::<Text, _>(kind)
         .bind::<Text, _>(realm)
         .bind::<Nullable<Text>, _>(circle)
+        .bind::<Timestamptz, _>(now)
         .bind::<BigInt, _>(after)
         .bind::<BigInt, _>(i64::try_from(limit + 1).unwrap_or(101))
         .load::<RequestRow>(&mut *conn)

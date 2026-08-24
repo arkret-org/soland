@@ -606,12 +606,13 @@ impl GovernanceHistoryService {
         &self,
         effective_scope: &HistoryEffectiveScope,
         after_sequence: Option<u64>,
+        now: DateTime<Utc>,
         limit: usize,
     ) -> ServiceResult<HistoryRequestPage> {
         Ok(self
             .persistence
             .history_response_streams()
-            .list_requests(effective_scope, after_sequence, limit)
+            .list_requests(effective_scope, after_sequence, now, limit)
             .await?)
     }
 

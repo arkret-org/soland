@@ -622,6 +622,7 @@ pub trait HistoryResponseStreamStore: Send + Sync {
         &self,
         effective_scope: &HistoryEffectiveScope,
         after_sequence: Option<u64>,
+        now: DateTime<Utc>,
         limit: usize,
     ) -> PersistenceResult<HistoryRequestPage>;
 
