@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use arkret_identifiers::{CellRef, RealmId};
-use arkret_models_collaboration::events_payloads::RealmMediaServiceValue;
+use arkret_models_collaboration::events_payloads::RealmMediaServicePayload;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
@@ -46,10 +46,11 @@ fn response_from_media_cell(
             foci: Vec::new(),
         });
     };
-    let descriptor =
-        serde_json::from_value::<RealmMediaServiceValue>(value.clone()).map_err(|error| {
+    let payload =
+        serde_json::from_value::<RealmMediaServicePayload>(value.clone()).map_err(|error| {
             AppError::internal(format!("invalid media_service projection: {error}"))
         })?;
+    let descriptor = payload.value;
     descriptor.validate().map_err(|error| {
         AppError::internal(format!("invalid media_service projection: {error}"))
     })?;

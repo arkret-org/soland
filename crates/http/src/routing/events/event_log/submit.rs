@@ -772,6 +772,15 @@ impl InternalEventAdmission {
         }
     }
 
+    pub(in crate::routing::events::event_log) fn is_mimi_provider(
+        &self,
+        session: &SessionRecord,
+        object: &serde_json::Map<String, Value>,
+    ) -> bool {
+        matches!(self.binding, InternalEventBinding::MimiProvider { .. })
+            && self.matches(session, object)
+    }
+
     pub(in crate::routing::events::event_log) fn authorizes_realm_membership_bypass(
         &self,
         session: &SessionRecord,

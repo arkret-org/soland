@@ -30,10 +30,22 @@ pub(super) fn event_digest_suite(
         // governs the remaining founding Events and the Genesis Seal.
         "sha256".to_owned()
     } else {
-        state
-            .projections()
+        let projections = state.projections();
+        projections
             .snapshot()
             .realm_digest_algorithm(realm_id)
+            .or_else(|| {
+                // apply_accepted_seal persists the cell ops before the HTTP
+                // projection cache is refreshed. A concurrent next Event may
+                // therefore observe the accepted frontier during this narrow
+                // cache window. Reload the durable cells once instead of
+                // reporting a false dependency_missing for an already
+                // materialized Realm.
+                let typed_realm_id =
+                    arkret_identifiers::RealmId::new(realm_id.to_owned()).ok()?;
+                projections.reload_cells_from_store(&typed_realm_id).ok()?;
+                projections.snapshot().realm_digest_algorithm(realm_id)
+            })
             .or_else(|| {
                 realm_bootstrap_contexts
                     .iter()

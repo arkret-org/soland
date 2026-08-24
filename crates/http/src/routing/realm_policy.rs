@@ -262,7 +262,7 @@ fn require_head_eq_precondition(field: &str, event: &arkret_wire::Event) -> Resu
 async fn submit_caller_signed_policy_server_event(
     state: &AppState,
     session: &SessionRecord,
-    realm_id: &RealmId,
+    _realm_id: &RealmId,
     submission: arkret_wire::EventInitialSubmission,
 ) -> Result<(), AppError> {
     crate::routing::events::event_log::submit_initial_event_submission(state, session, submission)
@@ -276,16 +276,12 @@ async fn submit_caller_signed_policy_server_event(
                 &error.message,
             )
         })?;
-    match crate::notary::run_one_signing_pass(state, realm_id, 1024).await {
-        Ok(_) | Err(crate::notary::NotaryError::NotAuthorized(_)) => {}
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                realm_id = %realm_id,
-                "policy server Control Move remains pending after local signing pass"
-            );
-        }
-    }
+    // Event admission already wakes the durable coordinator. Do not race it
+    // with a second, unleased signing pass here: both passes can snapshot the
+    // same pending Move and attempt to retain different time-bound
+    // availability dependencies for it. The coordinator owns the signing
+    // lease and is the single publication path.
+    state.wake_control_seal_coordinator();
     Ok(())
 }
 

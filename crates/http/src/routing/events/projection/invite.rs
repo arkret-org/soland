@@ -478,36 +478,10 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
     let Some(payload) = operation.payload.as_object() else {
         return;
     };
-    let invite = payload.get("invite").and_then(Value::as_object);
-    let Some(invite_id) = invite_string_field(payload, invite, "invite_id", "id") else {
-        tracing::warn!(
-            operation_id = %operation.operation_id,
-            "ak.invite.third_party missing invite id"
-        );
-        return;
-    };
-    if arkret_identifiers::InviteId::new(invite_id.clone()).is_err() {
-        tracing::warn!(invite_id = %invite_id, "ak.invite.third_party malformed invite id");
-        return;
-    }
-    let realm_id = invite_string_field(payload, invite, "realm_id", "realm_id")
-        .unwrap_or_else(|| operation.realm_id.to_string());
-    if realm_id != operation.realm_id.as_str() {
-        tracing::warn!(
-            invite_id = %invite_id,
-            realm_id = %realm_id,
-            operation_realm = %operation.realm_id,
-            "ak.invite.third_party realm mismatch"
-        );
-        return;
-    }
-    let Some(inviter) = invite_string_field(payload, invite, "inviter", "inviter") else {
-        tracing::warn!(invite_id = %invite_id, "ak.invite.third_party missing inviter");
-        return;
-    };
-    let Some(third_party_invite_value) =
-        invite_value_field(payload, invite, "third_party_invite").cloned()
-    else {
+    let invite_id =
+        arkret_identifiers::InviteId::from_event_id(&operation.context.event_id).to_string();
+    let inviter = operation.context.sender.to_string();
+    let Some(third_party_invite_value) = payload.get("third_party_invite").cloned() else {
         tracing::warn!(invite_id = %invite_id, "ak.invite.third_party missing third_party_invite");
         return;
     };
@@ -523,13 +497,10 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
                 return;
             }
         };
-    let expires_at = invite_string_field(payload, invite, "expires_at", "expires_at")
+    let expires_at = string_field(payload, "expires_at")
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
         .map(|value| value.with_timezone(&chrono::Utc));
-    let created_at = invite_string_field(payload, invite, "created_at", "created_at")
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
-        .map(|value| value.with_timezone(&chrono::Utc))
-        .unwrap_or(operation.created_at);
+    let created_at = operation.created_at;
     let invites = state.realm_invites();
     if matches!(invites.get(&invite_id).await, Ok(Some(_))) {
         return;
@@ -849,31 +820,6 @@ fn invite_id_for_operation(operation: &Operation) -> Option<String> {
         return None;
     }
     Some(derived)
-}
-
-fn invite_string_field(
-    payload: &serde_json::Map<String, Value>,
-    invite: Option<&serde_json::Map<String, Value>>,
-    payload_field: &str,
-    invite_field: &str,
-) -> Option<String> {
-    invite
-        .and_then(|object| object.get(invite_field))
-        .or_else(|| payload.get(payload_field))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn invite_value_field<'a>(
-    payload: &'a serde_json::Map<String, Value>,
-    invite: Option<&'a serde_json::Map<String, Value>>,
-    field: &str,
-) -> Option<&'a Value> {
-    invite
-        .and_then(|object| object.get(field))
-        .or_else(|| payload.get(field))
 }
 
 fn string_field(payload: &serde_json::Map<String, Value>, field: &str) -> Option<String> {

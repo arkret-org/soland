@@ -441,6 +441,49 @@ pub(crate) async fn validate_event_proofs(
                 )
                 .await;
             }
+            if internal_admission
+                .is_some_and(|admission| admission.is_mimi_provider(session, object))
+            {
+                let expected_method =
+                    state
+                        .service_verification_method("notary-key")
+                        .map_err(|error| {
+                            event_validation_error(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "internal_error",
+                                format!(
+                                    "local MIMI service signing method is unavailable: {error}"
+                                ),
+                            )
+                        })?;
+                if expected_method.as_str() != verification_method {
+                    return Err(event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        "MIMI Event proof does not use the local service notary key",
+                    ));
+                }
+                let public_key = state.notary_signing_key().verifying_key();
+                let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                    bytes: public_key.to_bytes().to_vec(),
+                };
+                arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+                    &typed_proof,
+                    envelope_bytes,
+                    &actor_did,
+                    &material,
+                    digest_suite,
+                )
+                .map_err(|error| {
+                    tracing::debug!(%error, "local MIMI Event proof signature failed");
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        "MIMI Event proof signature is invalid",
+                    )
+                })?;
+                return did_key_from_ed25519_bytes(public_key.as_bytes());
+            }
             if let Some(signing_key) = verify_with_installed_applet_registration_epoch(
                 state,
                 object,

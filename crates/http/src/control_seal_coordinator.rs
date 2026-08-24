@@ -7,6 +7,7 @@
 use std::time::Duration;
 
 use arkret_identifiers::RealmId;
+use futures_util::stream::{self, StreamExt};
 
 use crate::notary::NotaryWorker;
 use crate::state::AppState;
@@ -16,6 +17,12 @@ const SIGNING_LEASE_DURATION_MS: i64 = 15_000;
 const MAX_REALMS_PER_PASS: usize = 512;
 const MAX_CONTROL_MOVES_PER_REALM: usize = 256;
 const MAX_DEVICE_REVOCATION_CLEANUPS_PER_PASS: usize = 512;
+// A full Principal Server can have many independent Realms become pending at
+// once. Processing them serially lets an otherwise healthy queue age beyond
+// the Event replay window. The durable signing lease remains the per-Realm
+// exclusion mechanism; this bound only permits independent Realms to make
+// progress concurrently.
+const MAX_CONCURRENT_REALM_PASSES: usize = 16;
 
 pub fn spawn(state: AppState) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -48,9 +55,12 @@ async fn run_reconciliation_pass(state: &AppState, holder: &str) {
         pending_realm_count = realms.len(),
         "control-seal reconciliation scanned durable pending index"
     );
-    for realm_id in realms {
-        run_realm_pass(state, &worker, &realm_id, holder).await;
-    }
+    let worker = &worker;
+    stream::iter(realms)
+        .for_each_concurrent(MAX_CONCURRENT_REALM_PASSES, |realm_id| async move {
+            run_realm_pass(state, worker, &realm_id, holder).await;
+        })
+        .await;
     run_device_revocation_cleanup_pass(state).await;
 }
 
@@ -231,12 +241,15 @@ async fn run_realm_pass(state: &AppState, worker: &NotaryWorker, realm_id: &Real
         }
     };
 
-    match worker.sign_pending_for_realm(
-        state,
-        realm_id,
-        MAX_CONTROL_MOVES_PER_REALM,
-        proposal_policy,
-    ) {
+    match worker
+        .sign_pending_for_realm(
+            state,
+            realm_id,
+            MAX_CONTROL_MOVES_PER_REALM,
+            proposal_policy,
+        )
+        .await
+    {
         Ok(Some(outcome)) => tracing::info!(
             %realm_id,
             seal_id = %outcome.seal_id,

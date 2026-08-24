@@ -14,8 +14,10 @@
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{CallId, CellRef, DeviceId, DidCoreId, Hash, RealmId};
-use arkret_models_collaboration::events_payloads::RealmMediaServiceValue;
 use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
+use arkret_models_collaboration::events_payloads::{
+    RealmMediaServicePayload, RealmMediaServiceValue,
+};
 use arkret_models_collaboration::objects::media::{
     ArkretNativeMediaBackendToken, ArkretNativeMediaPermissions,
     ArkretNativeMediaSignatureAlgorithm, ArkretNativeMediaTokenPayload, MediaBackendKind,
@@ -994,11 +996,12 @@ fn media_service_epoch_for_realm(
 }
 
 fn decode_media_service_descriptor(value: Value) -> Result<RealmMediaServiceValue, AppError> {
-    let descriptor = serde_json::from_value::<RealmMediaServiceValue>(value).map_err(|error| {
+    let payload = serde_json::from_value::<RealmMediaServicePayload>(value).map_err(|error| {
         focus_unavailable_error(format!(
             "projected realm media_service epoch is malformed: {error}"
         ))
     })?;
+    let descriptor = payload.value;
     descriptor.validate().map_err(|error| {
         focus_unavailable_error(format!(
             "projected realm media_service epoch is malformed: {error}"
@@ -1382,13 +1385,15 @@ mod tests {
     #[test]
     fn media_epoch_accepts_spec_focus_id_without_private_prefix() {
         let descriptor = decode_media_service_descriptor(json!({
-            "service_id": "ak:did_core:webvh:z6mkfixturemedia",
-            "foci": [{
-                "focus_id": "fra-1",
-                "focus_kind": "livekit",
-                "token_endpoint": "https://media.example/_arkret/self/rtc/token",
-                "connect_url": "wss://media.example"
-            }]
+            "value": {
+                "service_id": "ak:did_core:webvh:z6mkfixturemedia",
+                "foci": [{
+                    "focus_id": "fra-1",
+                    "focus_kind": "livekit",
+                    "token_endpoint": "https://media.example/_arkret/self/rtc/token",
+                    "connect_url": "wss://media.example"
+                }]
+            }
         }))
         .expect("valid projected media descriptor");
         let epoch = media_service_epoch_from_descriptor(descriptor)
@@ -1404,14 +1409,16 @@ mod tests {
     #[test]
     fn a_focus_without_the_normative_endpoints_fails_closed() {
         let descriptor = decode_media_service_descriptor(json!({
-            "service_id": "ak:did_core:webvh:z6mkfixturemedia",
-            "foci": [{
-                "focus_id": "fra-1",
-                "focus_kind": "livekit",
-                "issuer_kid": "did:webvh:z6mkfixture:media.example#key-1",
-                "audience": "livekit-demo",
-                "ttl_seconds": 300
-            }]
+            "value": {
+                "service_id": "ak:did_core:webvh:z6mkfixturemedia",
+                "foci": [{
+                    "focus_id": "fra-1",
+                    "focus_kind": "livekit",
+                    "issuer_kid": "did:webvh:z6mkfixture:media.example#key-1",
+                    "audience": "livekit-demo",
+                    "ttl_seconds": 300
+                }]
+            }
         }));
         assert!(descriptor.is_err());
     }

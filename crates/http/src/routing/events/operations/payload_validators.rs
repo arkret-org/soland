@@ -26,65 +26,19 @@ pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<()
 pub(crate) fn validate_invite_third_party_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
+    event_payload_validator_catalog()
+        .map_err(|_| "operation payload validator catalog is unavailable")?
+        .validate_payload(
+            arkret_wire::event_kind_str::INVITE_THIRD_PARTY,
+            &operation.payload,
+        )
+        .map_err(|_| "operation payload violates SDK artifact schema")?;
     let payload = operation
-        .payload
-        .as_object()
-        .ok_or("ak.invite.third_party payload must be an object")?;
-    let invite = payload.get("invite").and_then(Value::as_object);
-    let invite_id = invite_field(payload, invite, "invite_id", "id")
-        .ok_or("ak.invite.third_party requires invite_id")?;
-    if arkret_identifiers::InviteId::new(invite_id).is_err() {
-        return Err("ak.invite.third_party invite_id must be ak:invite:<uuidv7>");
-    }
-    let realm_id = invite_field(payload, invite, "realm_id", "realm_id")
-        .unwrap_or_else(|| operation.realm_id.to_string());
-    if realm_id != operation.realm_id.as_str() {
-        return Err("ak.invite.third_party realm_id must match envelope realm_id");
-    }
-    let inviter = invite_field(payload, invite, "inviter", "inviter")
-        .ok_or("ak.invite.third_party requires inviter")?;
-    if arkret_identifiers::DidFullId::new(inviter).is_err() {
-        return Err("ak.invite.third_party inviter must be a DID");
-    }
-    let third_party_invite = invite_value(payload, invite, "third_party_invite")
-        .and_then(Value::as_object)
-        .ok_or("ak.invite.third_party third_party_invite must be an object")?;
-    for forbidden in ["token", "plaintext_token", "email", "phone", "address"] {
-        if third_party_invite.contains_key(forbidden) {
-            return Err("ak.invite.third_party must not carry plaintext token or 3PID");
-        }
-    }
-    let service_id = third_party_invite
-        .get("verification_service_id")
-        .and_then(Value::as_str)
-        .ok_or("third_party_invite.verification_service_id is required")?;
-    if arkret_identifiers::DidCoreId::new(service_id.to_owned()).is_err() {
-        return Err("third_party_invite.verification_service_id must be a DID");
-    }
-    if third_party_invite
-        .get("verification_public_key")
-        .and_then(Value::as_str)
-        .is_none_or(str::is_empty)
-    {
-        return Err("third_party_invite.verification_public_key is required");
-    }
-    if let Some(token_commitment) = third_party_invite
-        .get("token_commitment")
-        .and_then(Value::as_str)
-        && arkret_identifiers::Hash::new(token_commitment.to_owned()).is_err()
-    {
-        return Err("third_party_invite.token_commitment must be a hash");
-    }
-    if third_party_invite.get("lookup_table_ref").is_none()
-        && third_party_invite.get("token_commitment").is_none()
-    {
-        return Err("third_party_invite requires token_commitment or lookup_table_ref");
-    }
-    let expires_at = invite_field(payload, invite, "expires_at", "expires_at")
-        .ok_or("ak.invite.third_party requires expires_at")?;
-    if arkret_canonical::validate_timestamp_canonical(&expires_at).is_err() {
-        return Err("ak.invite.third_party expires_at must be a canonical timestamp");
-    }
+        .typed_payload::<arkret_wire::event_spec::InviteThirdParty>()
+        .map_err(|_| "operation payload violates SDK artifact schema")?;
+    payload
+        .validate()
+        .map_err(|_| "ak.invite.third_party payload is invalid")?;
     Ok(())
 }
 
@@ -164,31 +118,6 @@ pub(crate) fn validate_invite_ref_payload(operation: &Operation) -> Result<(), &
     }
     validate_operation_payload_against_sdk_artifact(operation)?;
     Ok(())
-}
-
-fn invite_field(
-    payload: &serde_json::Map<String, Value>,
-    invite: Option<&serde_json::Map<String, Value>>,
-    payload_field: &str,
-    invite_field: &str,
-) -> Option<String> {
-    invite
-        .and_then(|object| object.get(invite_field))
-        .or_else(|| payload.get(payload_field))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn invite_value<'a>(
-    payload: &'a serde_json::Map<String, Value>,
-    invite: Option<&'a serde_json::Map<String, Value>>,
-    field: &str,
-) -> Option<&'a Value> {
-    invite
-        .and_then(|object| object.get(field))
-        .or_else(|| payload.get(field))
 }
 
 fn payload_string(payload: &serde_json::Map<String, Value>, field: &str) -> Option<String> {

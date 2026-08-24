@@ -1036,6 +1036,7 @@ pub(super) async fn identical_historical_retry(
             } else {
                 None
             };
+            let pending_index_needs_recovery = indexed_ack.is_none();
             let ack = indexed_ack.or(durable_ack).ok_or_else(|| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1043,7 +1044,10 @@ pub(super) async fn identical_historical_retry(
                     "stored identity anchor is missing its durable Control Proposal Ack",
                 )
             })?;
-            let event = serde_json::from_value::<arkret_wire::Event>(record.envelope.clone())
+            if pending_index_needs_recovery {
+                let mut event = serde_json::from_value::<arkret_wire::Event>(
+                    record.envelope.clone(),
+                )
                 .map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -1051,16 +1055,32 @@ pub(super) async fn identical_historical_retry(
                         format!("stored identity anchor is not canonical Event wire: {error}"),
                     )
                 })?;
-            state
-                .projections()
-                .put_pending_control_event_with_ack(&event, &ack, record.digest_suite)
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("accepted identity anchor pending index recovery failed: {error}"),
-                    )
-                })?;
+                // The durable canonical envelope includes the Principal
+                // Server's admission proof, while the pending control index
+                // stores the producer Event and binds admission through the
+                // separate Ack. Recovery must restore that original shape.
+                if matches!(
+                    event.proofs.as_slice(),
+                    [
+                        arkret_wire::EventProof::Producer(_),
+                        arkret_wire::EventProof::PrincipalServerAdmission(_)
+                    ]
+                ) {
+                    event.proofs.truncate(1);
+                }
+                state
+                    .projections()
+                    .put_pending_control_event_with_ack(&event, &ack, record.digest_suite)
+                    .map_err(|error| {
+                        SubmitOneError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "internal_error",
+                            format!(
+                                "accepted identity anchor pending index recovery failed: {error}"
+                            ),
+                        )
+                    })?;
+            }
             outcome.control_proposal_acks.push(ack);
         }
         state.wake_control_seal_coordinator();

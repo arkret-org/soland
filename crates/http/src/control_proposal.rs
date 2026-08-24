@@ -385,13 +385,8 @@ pub(crate) async fn verify_control_proposal_ack(
                 "Control Proposal Ack signer is absent from the frozen notary value".to_owned()
             })?;
         let frozen_signature = arkret_wire::SealSignature::from(member.signature.clone());
-        arkret_signatures::verify_frozen_notary_signature(
-            &frozen_signature,
-            descriptor,
-            &bytes,
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .map_err(|error| error.to_string())?;
+        arkret_signatures::verify_frozen_notary_detached_jws(&frozen_signature, descriptor, &bytes)
+            .map_err(|error| error.to_string())?;
     }
 
     if !profile.proposal_quorum_met(&signer_methods) {
@@ -461,11 +456,10 @@ pub(crate) async fn verify_control_proposal_decision(
                 "Control Proposal decision signer is absent from the frozen notary value".to_owned()
             })?;
         let frozen_signature = arkret_wire::SealSignature::from(proof.clone());
-        arkret_signatures::verify_frozen_notary_signature(
+        arkret_signatures::verify_frozen_notary_detached_jws(
             &frozen_signature,
             descriptor,
             &binding,
-            arkret_canonical::DigestSuite::Sha256,
         )
         .map_err(|error| error.to_string())?;
     }

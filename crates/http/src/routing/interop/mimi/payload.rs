@@ -127,7 +127,10 @@ pub(super) async fn persist_mimi_canonical_message_event(
         created_at: now,
         revoked_at: None,
     };
-    let envelope = serde_json::to_value(event)
+    // `AuthoredEvent` serializes as a durable authoring record
+    // `{ digest_suite, event }`. Admission consumes the canonical Event
+    // envelope itself, so never feed the record wrapper into this boundary.
+    let envelope = serde_json::to_value(event.event())
         .map_err(|error| AppError::internal(format!("MIMI Event serialize failed: {error}")))?;
     let binding_ref = envelope
         .get("payload")
