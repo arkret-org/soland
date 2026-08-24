@@ -373,7 +373,7 @@ impl AppletRecord {
             EventSubmitContext::Standard,
             "registration",
         )?;
-        let registration: arkret_models_integration::WireAppletRegistration =
+        let registration: arkret_models_integration::AppletRegistrationPayload =
             serde_json::from_value(self.registration_event.payload.clone()).map_err(|error| {
                 format!("stored registration Event payload is invalid: {error}")
             })?;

@@ -191,7 +191,7 @@ pub fn engine_grant_from_cell_body(
         .get("capability_action_registry_digest")
         .and_then(Value::as_str)
         .and_then(|value| arkret_identifiers::Hash::new(value.to_owned()).ok());
-    let constraints = engine_constraints_from_body(body)?;
+    let mut constraints = engine_constraints_from_body(body)?;
     let created_at = body
         .get("issued_at")
         .and_then(Value::as_str)
@@ -203,6 +203,15 @@ pub fn engine_grant_from_cell_body(
         .and_then(Value::as_str)
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc));
+    if let Some(expires_at) = expires_at {
+        constraints.push(crate::capability::GrantConstraint::Temporal {
+            expires_at: Some(expires_at),
+            constraint_subkind: None,
+            message_edit_window: None,
+            message_redact_window: None,
+            redact_after_window_allowed: false,
+        });
+    }
     let issuer_authority_refs = engine_authority_refs_from_body(body);
     let authority_depth = body.get("authority_depth").and_then(Value::as_u64);
     let authority_root_refs = body
@@ -226,7 +235,6 @@ pub fn engine_grant_from_cell_body(
         issuer_authority_refs,
         authority_depth,
         authority_root_refs,
-        expires_at,
     })
 }
 

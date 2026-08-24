@@ -337,8 +337,11 @@ pub(crate) fn validate_operation_schema_from_sdk_artifact(
         .map_err(|_| "operation payload validator catalog unavailable")?
         .validate_payload(kind.as_str(), &operation.payload)
         .map_err(|_| "operation payload violates SDK artifact schema")?;
-    arkret_schema::validate_payload_validator_profile(kind, &operation.payload)
-        .map_err(|_| "operation payload violates SDK validator profile")
+    if *kind == arkret_wire::EventKind::SchemaDefine {
+        arkret_schema::validate_schema_definition_payload(&operation.payload)
+            .map_err(|_| "operation payload violates SDK validator profile")?;
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_operation_payload_schema(

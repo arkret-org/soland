@@ -1301,7 +1301,7 @@ mod tests {
             created_at,
             domain: None,
             audience: None,
-            jws: "fixture.signature".to_owned(),
+            jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
         };
         let admission = arkret_wire::PrincipalServerAdmissionProof {
             kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
@@ -1328,7 +1328,7 @@ mod tests {
             ))
             .unwrap(),
             accepted_at: created_at,
-            jws: "fixture.admission.signature".to_owned(),
+            jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
         };
         event.proofs = vec![producer.into(), admission.into()];
         event

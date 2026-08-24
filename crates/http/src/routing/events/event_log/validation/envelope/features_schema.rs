@@ -270,14 +270,15 @@ pub(crate) fn validate_event_schema_and_payload(
             )
         })?;
     }
-    arkret_schema::validate_payload_validator_profile(&arkret_wire::EventKind::from(kind), payload)
-        .map_err(|error| {
+    if kind == arkret_wire::EventKind::SchemaDefine.as_str() {
+        arkret_schema::validate_schema_definition_payload(payload).map_err(|error| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
                 format!("event payload violates its registered validator profile: {error}"),
             )
         })?;
+    }
     Ok(())
 }
 
