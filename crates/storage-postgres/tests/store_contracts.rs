@@ -11,10 +11,11 @@ use soland_storage::contract_tests::{
     assert_idempotency_store_contract, assert_last_resort_claim_ledger_contract,
     assert_mimi_consent_correlation_store_contract, assert_mls_keypackage_retirement_contract,
     assert_organization_registration_store_contract,
-    assert_service_route_handover_plan_store_contract,
+    assert_service_route_handover_plan_store_contract, minimal_history_signer_evidence,
 };
 use soland_storage::{
-    AccountDataCasResult, AccountDataRecord, AccountDataStore, MlsKeyPackageStore,
+    AccountDataCasResult, AccountDataRecord, AccountDataStore, GovernanceDependencySource,
+    GovernanceDependencyStore, GovernanceDependencyWrite, MlsKeyPackageStore,
     PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult,
 };
 use soland_storage_postgres::{
@@ -107,6 +108,44 @@ async fn postgres_adapter_satisfies_unscoped_signer_evidence_contract_when_confi
     let store = PgGovernanceDependencyStore { pool };
     let namespace = format!("postgres-unscoped-signer-{}", uuid::Uuid::now_v7());
     assert_governance_unscoped_signer_evidence_contract(&store, &namespace).await;
+}
+
+#[tokio::test]
+async fn postgres_adapter_retains_seal_dependencies_before_seal_publication_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let store = PgGovernanceDependencyStore { pool };
+    let namespace = format!(
+        "postgres-prepublish-seal-dependency-{}",
+        uuid::Uuid::now_v7()
+    );
+    let realm_id = arkret_wire::RealmId::new(event_derived_realm_id(namespace.as_bytes())).unwrap();
+    let seal_id = arkret_wire::SealId::new(format!(
+        "ak:seal:sha256:{}",
+        arkret_canonical::sha256_hex(namespace.as_bytes())
+    ))
+    .unwrap();
+    let source = GovernanceDependencySource::Seal(seal_id);
+    let item = minimal_history_signer_evidence(&namespace);
+
+    store
+        .put_exact(GovernanceDependencyWrite {
+            realm_id: realm_id.clone(),
+            source: source.clone(),
+            edge_index: 0,
+            item: item.clone(),
+        })
+        .await
+        .expect("retain dependency before its candidate Seal is published");
+
+    let retained = store
+        .list_for_source(&realm_id, &source)
+        .await
+        .expect("read pre-published Seal dependency");
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].item, item);
 }
 
 #[tokio::test]

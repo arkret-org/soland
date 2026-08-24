@@ -728,8 +728,12 @@ CREATE TABLE public.governance_dependency_edges (
     FOREIGN KEY (realm_id, dependency_kind, object_digest)
         REFERENCES public.governance_dependency_objects(realm_id, dependency_kind, object_digest)
         ON DELETE RESTRICT,
-    FOREIGN KEY (seal_id, realm_id)
-        REFERENCES public.state_seals(id, realm_id) ON DELETE RESTRICT,
+    -- Seal-scoped dependencies are retained before the Seal is published so
+    -- no reader can observe a committed Seal whose evidence is unavailable.
+    -- A failed candidate may therefore leave an unreachable content-addressed
+    -- edge; requiring state_seals to exist here would invert that safety
+    -- ordering. Control Events already exist before their edges and retain the
+    -- source-row foreign key below.
     FOREIGN KEY (event_digest, realm_id)
         REFERENCES public.state_control_events(event_digest, realm_id) ON DELETE RESTRICT,
     CONSTRAINT governance_dependency_edges_source_check CHECK (num_nonnulls(seal_id, event_digest) = 1),
