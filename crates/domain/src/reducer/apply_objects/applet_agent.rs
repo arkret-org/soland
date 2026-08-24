@@ -4,26 +4,6 @@
 
 use super::*;
 
-fn applet_projection_namespace(payload: &serde_json::Value) -> String {
-    if let Some(namespace) = payload.get("namespace").and_then(|v| v.as_str()) {
-        return namespace.to_owned();
-    }
-    payload
-        .get("namespaces")
-        .and_then(|namespaces| {
-            ["realms", "actors", "handles"].iter().find_map(|domain| {
-                namespaces
-                    .get(*domain)
-                    .and_then(|entries| entries.as_array())
-                    .and_then(|entries| entries.first())
-                    .and_then(|entry| entry.get("pattern"))
-                    .and_then(|pattern| pattern.as_str())
-            })
-        })
-        .unwrap_or("")
-        .to_owned()
-}
-
 impl ProjectionState {
     /// Apply `ak.applet.registration`. Upserts the
     /// AppletProjection keyed by `applet_id`. Re-registration with
@@ -45,7 +25,6 @@ impl ProjectionState {
                 reason: "applet_registration_missing_service_id".to_owned(),
             };
         };
-        let namespace = applet_projection_namespace(&operation.payload);
         let Some(applet_id) = operation
             .payload
             .get("applet_id")
@@ -84,15 +63,7 @@ impl ProjectionState {
         };
         let registration_scope_ref =
             serde_json::to_value(&operation.context.accepted_scope_ref).ok();
-        let capabilities = operation
-            .payload
-            .get("requested_scopes")
-            .cloned()
-            .or_else(|| operation.payload.get("capabilities").cloned());
-        let existing_manifest = self
-            .applets
-            .get(&applet_id)
-            .and_then(|p| p.manifest.clone());
+        let capabilities = operation.payload.get("requested_scopes").cloned();
         let registered_at = self
             .applets
             .get(&applet_id)
@@ -101,8 +72,6 @@ impl ProjectionState {
         let projection = AppletProjection {
             applet_id: applet_id.clone(),
             service_id: service_id.clone(),
-            namespace,
-            manifest: existing_manifest,
             capabilities,
             claimed_profiles,
             registration_epoch,
@@ -131,7 +100,7 @@ impl ProjectionState {
                 reason: "applet_discovery_missing_applet_id".to_owned(),
             };
         };
-        let Some(manifest) = operation
+        let Some(_discovery_value) = operation
             .payload
             .get("value")
             .filter(|value| {
@@ -151,7 +120,6 @@ impl ProjectionState {
                 reason: "applet_discovery_unknown_applet_id".to_owned(),
             };
         };
-        entry.manifest = Some(manifest);
         entry.updated_at = now;
         ProjectionEffect::AppletProjectionUpdated { applet_id }
     }

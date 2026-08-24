@@ -584,12 +584,6 @@ async fn sidecar_view(
                     } else {
                         PendingSidecarAccessReconciliationStage::MlsWelcome
                     },
-                    reason: NonEmptyString::new(if epoch_row.is_some() {
-                        "participant_authority_rotation_pending"
-                    } else {
-                        "native_sidecar_mls_welcome_pending"
-                    })
-                    .expect("static Sidecar reconciliation reason is non-empty"),
                     membership_frontier: None,
                 })
             })
@@ -1438,7 +1432,6 @@ mod tests {
             agent_id: DidCoreId::new("ak:did_core:web:example.com:agents:assistant".to_owned())
                 .unwrap(),
             provisioning_phase: PendingSidecarAccessReconciliationStage::MlsWelcome,
-            reason: NonEmptyString::new("native_sidecar_mls_welcome_pending").unwrap(),
             membership_frontier: None,
         };
 
@@ -1462,7 +1455,6 @@ mod tests {
             agent_id: DidCoreId::new("ak:did_core:web:example.com:agents:assistant".to_owned())
                 .unwrap(),
             provisioning_phase: PendingSidecarAccessReconciliationStage::MlsRemove,
-            reason: NonEmptyString::new("mls_remove_obligation_pending").unwrap(),
             membership_frontier: Some(vec![
                 EventId::new("ak:event:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5").unwrap(),
             ]),

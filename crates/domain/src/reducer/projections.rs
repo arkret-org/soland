@@ -792,7 +792,7 @@ pub struct DocumentVersionProjection {
 
 /// Server-side Applet registry entry. Populated by
 /// `ak.applet.registration` (creates) and `ak.applet.discovery` (refreshes
-/// the manifest). Spec `extensions/applet-integration.md` doesn't pin
+/// discovery freshness). Spec `extensions/applet-integration.md` doesn't pin
 /// down a state-machine for applet entries themselves (the bridge state
 /// machine is per-session and lives client-side), so this is a simple
 /// last-write-wins projection.
@@ -801,11 +801,6 @@ pub struct AppletProjection {
     pub applet_id: AppletId,
     /// Service authority that hosts this Applet. It is not the Applet identity.
     pub service_id: String,
-    pub namespace: String,
-    /// Optional snapshot of the most recent `manifest` (from the latest
-    /// `ak.applet.discovery` event). `None` if only registration has
-    /// landed.
-    pub manifest: Option<Value>,
     /// Optional capability list from the latest `ak.applet.registration`.
     pub capabilities: Option<Value>,
     /// Durable profile claims from the accepted registration Event.

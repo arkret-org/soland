@@ -2694,7 +2694,6 @@ async fn install_applet_package_with_approved_actions(
                     "widget_allowed": false,
                 },
                 "actor_policy": {
-                    "bot_membership": "join",
                     "ghost_actor_mode": "policy_declared"
                 },
                 "e2ee_policy": {"mls_join_allowed": false},

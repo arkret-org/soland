@@ -1131,6 +1131,13 @@ async fn event_uses_active_applet_registration_epoch(
                 format!("stored Applet proof authority is invalid: {error}"),
             )
         })?;
+    record.validate_stored_bindings().map_err(|error| {
+        event_validation_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("stored Applet proof authority bindings are invalid: {error}"),
+        )
+    })?;
     if record.revoked_at.is_some()
         || !matches!(record.status.as_str(), "installed" | "partially_installed")
     {

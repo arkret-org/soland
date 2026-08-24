@@ -188,13 +188,13 @@ fn validate_transaction_event_binding(
         return Err("authorization_ref_missing");
     }
     let actor_id = event.actor_id.as_str();
-    if actor_id == install.bot_actor_id {
+    if actor_id == install.bot_actor_id.as_str() {
         return Ok(());
     }
     if install
         .ghosts
         .iter()
-        .any(|ghost| ghost.ghost_actor_id == actor_id)
+        .any(|ghost| ghost.ghost_actor_id.as_str() == actor_id)
     {
         return Ok(());
     }

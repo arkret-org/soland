@@ -74,11 +74,11 @@ async fn revoke_applet_record_inner(
         applet_id: record.applet_id.clone(),
         status: "revoked".to_owned(),
         revoked_at: now,
-        bot_actor_id: record.bot_actor_id,
+        bot_actor_id: record.bot_actor_id.to_string(),
         ghost_actor_ids: record
             .ghosts
             .iter()
-            .map(|ghost| ghost.ghost_actor_id.clone())
+            .map(|ghost| ghost.ghost_actor_id.to_string())
             .collect(),
     })
 }
@@ -135,7 +135,7 @@ pub(super) fn ensure_formal_ghost_provision_allowed(
             "service_id does not match installed applet package",
         ));
     }
-    if record.portal_realm_id != provision.realm_id.as_str() {
+    if record.portal_realm_id != provision.realm_id {
         return Err(
             AppError::conflict("realm_id does not match installed applet effective scope")
                 .with_wire_code("applet_effective_scope_mismatch"),

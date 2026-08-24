@@ -7,7 +7,7 @@ async fn validate_applet_registration_is_live(
     realm_id: &str,
 ) -> Result<(), EventValidationError> {
     let record = load_installed_applet_record(state, applet_id).await?;
-    if record.portal_realm_id != realm_id {
+    if record.portal_realm_id.as_str() != realm_id {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "applet_effective_scope_mismatch",
@@ -49,6 +49,14 @@ async fn load_installed_applet_record(
                 "stored applet record is invalid",
             )
         })?;
+    record.validate_stored_bindings().map_err(|error| {
+        tracing::error!(%error, %applet_id, "stored applet record bindings are invalid");
+        event_validation_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "stored applet record bindings are invalid",
+        )
+    })?;
     if record.revoked_at.is_some()
         || !matches!(record.status.as_str(), "installed" | "partially_installed")
     {
@@ -105,7 +113,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     }
 
     let record = load_installed_applet_record(state, &applet_id).await?;
-    if record.portal_realm_id != realm_id {
+    if record.portal_realm_id.as_str() != realm_id {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "applet_effective_scope_mismatch",
@@ -218,11 +226,19 @@ pub(super) async fn validate_applet_managed_actor_liveness(
                     "stored applet record is invalid",
                 )
             })?;
-        let bot_match = record.bot_actor_id == actor_id;
+        record.validate_stored_bindings().map_err(|error| {
+            tracing::error!(%error, "stored applet record bindings are invalid");
+            event_validation_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "stored applet record bindings are invalid",
+            )
+        })?;
+        let bot_match = record.bot_actor_id.as_str() == actor_id;
         let ghost_match = record
             .ghosts
             .iter()
-            .find(|ghost| ghost.ghost_actor_id == actor_id);
+            .find(|ghost| ghost.ghost_actor_id.as_str() == actor_id);
         if !bot_match && ghost_match.is_none() {
             continue;
         }
@@ -248,16 +264,23 @@ pub(super) async fn validate_applet_managed_actor_liveness(
                     )
                 })?;
             (
-                record.bot_actor_principal_server_id.as_str(),
-                provision.applet_authority_ref.as_str(),
-                record.bot_principal_control_realm_id.as_str(),
+                record.bot_actor_principal_server_id.to_string(),
+                provision.applet_authority_ref.to_string(),
+                record.bot_principal_control_realm_id.to_string(),
             )
         } else {
             let ghost = ghost_match.expect("checked above");
+            let provision = ghost.provision_payload().map_err(|error| {
+                event_validation_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("stored Ghost provision bindings are invalid: {error}"),
+                )
+            })?;
             (
-                ghost.actor_principal_server_id.as_str(),
-                ghost.authorization_ref.as_str(),
-                ghost.principal_control_realm_id.as_str(),
+                ghost.actor_principal_server_id.to_string(),
+                provision.applet_authority_ref.to_string(),
+                ghost.principal_control_realm_id().to_string(),
             )
         };
         if expected_server != principal_server_id {
@@ -303,7 +326,7 @@ pub(super) async fn validate_applet_managed_actor_liveness(
                     "Applet-managed actor rotation must target its exact PCR",
                 ));
             }
-        } else if realm_id != record.portal_realm_id {
+        } else if realm_id != record.portal_realm_id.as_str() {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "applet_effective_scope_mismatch",
@@ -445,11 +468,11 @@ pub(super) fn applet_executor_in_subject_set(
     executed_by: &str,
 ) -> bool {
     executed_by == service_id
-        || executed_by == record.bot_actor_id
+        || executed_by == record.bot_actor_id.as_str()
         || record
             .ghosts
             .iter()
-            .any(|ghost| ghost.ghost_actor_id == executed_by)
+            .any(|ghost| ghost.ghost_actor_id.as_str() == executed_by)
         || applet_actor_matches_exact_namespace(record, executed_by)
 }
 
@@ -457,11 +480,11 @@ pub(super) fn applet_actor_is_managed(
     record: &crate::routing::extensions::applet_bridge::AppletRecord,
     actor_id: &str,
 ) -> bool {
-    actor_id == record.bot_actor_id
+    actor_id == record.bot_actor_id.as_str()
         || record
             .ghosts
             .iter()
-            .any(|ghost| ghost.ghost_actor_id == actor_id)
+            .any(|ghost| ghost.ghost_actor_id.as_str() == actor_id)
 }
 
 pub(super) fn applet_actor_matches_exact_namespace(

@@ -452,8 +452,7 @@ pub(super) async fn mimi_consent_request(
     );
     json_ok(MimiRequestConsentOutcome {
         consent_id,
-        status: arkret_wire::NonEmptyString::new("requested")
-            .expect("requested is a non-empty protocol literal"),
+        status: MimiRequestConsentStatus::Requested,
         challenge: None,
     })
 }
@@ -1153,8 +1152,7 @@ pub(super) async fn mimi_report_abuse(
     );
     json_ok(MimiReportAbuseOutcome {
         report_id,
-        status: arkret_wire::NonEmptyString::new("queued")
-            .expect("queued is a non-empty protocol literal"),
+        status: MimiReportAbuseStatus::Queued,
         routed_to,
     })
 }

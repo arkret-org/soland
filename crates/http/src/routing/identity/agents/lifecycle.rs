@@ -1368,12 +1368,7 @@ pub(super) async fn get_agent(
         .authorization()
         .grants_for_subject_all_realms(&agent_id, Some(state.service_id()))
         .into_iter()
-        .map(|grant| {
-            (
-                (grant.grant_id, grant.realm_id),
-                (grant.expires_at, "active".to_owned()),
-            )
-        })
+        .map(|grant| ((grant.grant_id, grant.realm_id), grant.expires_at))
         .collect::<BTreeMap<_, _>>();
     view.grants = state
         .projections()
@@ -1381,14 +1376,12 @@ pub(super) async fn get_agent(
         .unrevoked_grant_locations_for_subject(&agent_id, state.service_id())
         .into_iter()
         .filter_map(|(grant_id, realm_id)| {
-            let display = effective_grants.get(&(grant_id.clone(), realm_id.clone()));
+            let expires_at = effective_grants.get(&(grant_id.clone(), realm_id.clone()));
             Some(GrantSnapshot {
                 grant_id: GrantId::new(grant_id).ok()?,
                 realm_id: RealmId::new(realm_id).ok()?,
-                status: display
-                    .and_then(|(_, status)| arkret_wire::NonEmptyString::new(status.clone()).ok()),
                 grant_digest: None,
-                expires_at: display.and_then(|(expires_at, _)| *expires_at),
+                expires_at: expires_at.copied().flatten(),
             })
         })
         .collect();

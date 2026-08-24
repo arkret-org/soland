@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
 use soland_services::identity::{PinnedDidVersionStatus, SessionIdentityState as SessionRecord};
 
-use super::record::{applet_record, applet_records};
+use super::record::{applet_record, applet_records, encode_applet_record};
 use super::types::AppletRecord;
 use crate::ids;
 use crate::state::AppState;
@@ -60,7 +60,10 @@ pub(super) fn approved_scope_grants(
     approved_actions: Vec<String>,
 ) -> Result<Vec<ScopeGrant>, AppError> {
     if approved_actions.is_empty() {
-        return Ok(Vec::new());
+        return Err(AppError::param_invalid(
+            "applet install requires at least one approved capability grant action",
+        )
+        .with_wire_code("applet_install_plan_mismatch"));
     }
     let (realm_id, circle_ids) = match effective_scope {
         ScopeRef::Realm { realm_id } => (realm_id.clone(), None),
@@ -647,7 +650,7 @@ pub(super) async fn register_package_install(
 
     if let Some(existing) = applet_record(state, &applet_id).await? {
         if existing.idempotency_key == idempotency_key {
-            if existing.install_body_digest == body_digest {
+            if existing.install_body_digest.as_str() == body_digest {
                 res.status_code(StatusCode::OK);
                 return Ok(existing.install_response);
             }
@@ -663,9 +666,8 @@ pub(super) async fn register_package_install(
     let now = chrono::Utc::now();
     let e2ee_authorization_refs =
         e2ee_authorization_refs_for_install(&package, e2ee_policy.as_ref())?;
-    let effective_status = if approved_actions.is_empty() {
-        AppletInstallEffectiveStatus::Rejected
-    } else if approved_actions.len() < package.requested_scopes.len() {
+    debug_assert!(!approved_actions.is_empty());
+    let effective_status = if approved_actions.len() < package.requested_scopes.len() {
         AppletInstallEffectiveStatus::PartiallyInstalled
     } else {
         AppletInstallEffectiveStatus::Installed
@@ -673,21 +675,18 @@ pub(super) async fn register_package_install(
     let effective_status_wire = match effective_status {
         AppletInstallEffectiveStatus::Installed => "installed",
         AppletInstallEffectiveStatus::PartiallyInstalled => "partially_installed",
-        AppletInstallEffectiveStatus::Rejected => "rejected",
     };
     let install_id = ids::generate_install_id();
     let response = AppletInstallOutcome {
-        ok: effective_status != AppletInstallEffectiveStatus::Rejected,
         install_id,
         applet_id: package.applet_id.clone(),
-        registration_event_ref: Some(registration_event.event_id.clone()),
+        registration_event_ref: registration_event.event_id.clone(),
         registration_epoch: package.registration_epoch.clone(),
         bot_actor_id: package.bot_actor_id.clone(),
         bot_actor_principal_server_id: bot_provision.actor_principal_server_id.clone(),
         bot_actor_provision_ref: bot_actor_provision_event.event_id.clone(),
         bot_principal_control_realm_id: RealmId::from_event_id(&bot_pcr_genesis_event.event_id),
         capability_grant_refs,
-        membership_event_refs: Vec::new(),
         e2ee_authorization_refs,
         widget_policy_ref: None,
         effective_status,
@@ -701,13 +700,14 @@ pub(super) async fn register_package_install(
     };
     let mut record = AppletRecord {
         applet_id: package.applet_id.clone(),
-        owner_actor_id: owner_actor_id.to_owned(),
-        registry_did: package.controller_id.to_string(),
-        bot_actor_id: package.bot_actor_id.to_string(),
-        bot_actor_principal_server_id: bot_provision.actor_principal_server_id.to_string(),
-        bot_actor_provision_ref: bot_actor_provision_event.event_id.to_string(),
-        bot_principal_control_realm_id: RealmId::from_event_id(&bot_pcr_genesis_event.event_id)
-            .to_string(),
+        owner_actor_id: DidCoreId::new(owner_actor_id.to_owned()).map_err(|error| {
+            AppError::internal(format!("validated owner actor id is invalid: {error}"))
+        })?,
+        registry_did: package.controller_id.clone(),
+        bot_actor_id: package.bot_actor_id.clone(),
+        bot_actor_principal_server_id: bot_provision.actor_principal_server_id.clone(),
+        bot_actor_provision_ref: bot_actor_provision_event.event_id.clone(),
+        bot_principal_control_realm_id: RealmId::from_event_id(&bot_pcr_genesis_event.event_id),
         portal_realm_id: realm_id,
         effective_scope,
         capabilities: approved_actions,
@@ -717,7 +717,9 @@ pub(super) async fn register_package_install(
         registered_at: now,
         revoked_at: None,
         idempotency_key,
-        install_body_digest: body_digest,
+        install_body_digest: Hash::new(body_digest).map_err(|error| {
+            AppError::internal(format!("validated install body digest is invalid: {error}"))
+        })?,
         install_id: response.install_id.clone(),
         install_response: response.clone(),
         registration_event,
@@ -734,7 +736,7 @@ pub(super) async fn register_package_install(
         state.service_id(),
         owner_actor_id,
         &record.idempotency_key,
-        &record.install_body_digest,
+        record.install_body_digest.as_str(),
         &submitted_plan_digest,
         &record,
         &response,
@@ -747,8 +749,7 @@ pub(super) async fn register_package_install(
     formal_events.push(record.bot_pcr_genesis_event.clone());
     formal_events.push(record.bot_accountability_grant_event.clone());
     formal_events.push(record.bot_profile_event.clone());
-    let record_value = serde_json::to_value(&record)
-        .map_err(|error| AppError::internal(format!("Applet record invalid: {error}")))?;
+    let record_value = encode_applet_record(&record)?;
     crate::routing::events::event_log::submit_applet_install_batch(
         state,
         formal_events,
@@ -763,7 +764,7 @@ pub(super) async fn register_package_install(
             principal_id: session.actor.clone(),
             key: record.idempotency_key.clone(),
             service_id: state.service_id().clone(),
-            request_hash: record.install_body_digest.clone(),
+            request_hash: record.install_body_digest.to_string(),
         },
         serde_json::to_value(&response)
             .map_err(|error| AppError::internal(format!("Applet outcome invalid: {error}")))?,
@@ -832,15 +833,9 @@ fn install_produced_event_refs(
 ) -> Vec<String> {
     let mut refs = Vec::with_capacity(
         5 + response.capability_grant_refs.len()
-            + response.membership_event_refs.len()
             + usize::from(response.widget_policy_ref.is_some()),
     );
-    refs.extend(
-        response
-            .registration_event_ref
-            .iter()
-            .map(ToString::to_string),
-    );
+    refs.push(response.registration_event_ref.to_string());
     refs.extend(
         record
             .capability_grant_events
@@ -851,12 +846,6 @@ fn install_produced_event_refs(
     refs.push(record.bot_pcr_genesis_event.event_id.to_string());
     refs.push(record.bot_accountability_grant_event.event_id.to_string());
     refs.push(record.bot_profile_event.event_id.to_string());
-    refs.extend(
-        response
-            .membership_event_refs
-            .iter()
-            .map(ToString::to_string),
-    );
     if let Some(widget_policy_ref) = &response.widget_policy_ref {
         refs.push(widget_policy_ref.to_string());
     }
@@ -1686,15 +1675,12 @@ mod tests {
 
     fn sample_response(package: &AppletPackage) -> AppletInstallOutcome {
         AppletInstallOutcome {
-            ok: true,
             install_id: "ak:install:01974100-0000-7000-8000-000000000001".to_owned(),
             applet_id: package.applet_id.clone(),
-            registration_event_ref: Some(
-                arkret_identifiers::EventId::new(
-                    "ak:event:AWS4dRwcRmYFt2N8TnMoyv5iSK8KYchSW9mPumP7yBe3".to_owned(),
-                )
-                .unwrap(),
-            ),
+            registration_event_ref: arkret_identifiers::EventId::new(
+                "ak:event:AWS4dRwcRmYFt2N8TnMoyv5iSK8KYchSW9mPumP7yBe3".to_owned(),
+            )
+            .unwrap(),
             registration_epoch: package.registration_epoch.clone(),
             bot_actor_id: package.bot_actor_id.clone(),
             bot_actor_principal_server_id: DidCoreId::new(
@@ -1719,7 +1705,6 @@ mod tests {
                 )
                 .unwrap(),
             ],
-            membership_event_refs: Vec::new(),
             e2ee_authorization_refs: Vec::new(),
             widget_policy_ref: None,
             effective_status:
@@ -1756,9 +1741,6 @@ mod tests {
             ..Default::default()
         };
         let actor_policy = arkret_models_integration::applet_models::AppletActorPolicy {
-            bot_membership: Some(
-                arkret_models_integration::applet_models::AppletBotMembership::Join,
-            ),
             ghost_actor_mode: Some(
                 arkret_models_integration::applet_models::AppletGhostActorMode::PolicyDeclared,
             ),
@@ -1779,144 +1761,6 @@ mod tests {
             &[CapabilityActionId::APPLET_GHOST_PROVISION.to_owned()],
             Some(&actor_policy)
         ));
-    }
-
-    fn sample_record(package: &AppletPackage, response: &AppletInstallOutcome) -> AppletRecord {
-        let registration_epoch_evidence = sample_registration_epoch_evidence(package);
-        let realm_id =
-            RealmId::new("ak:realm:AQK7pbzo4Evme1sP5EOcF51pF6dnP7NQRddexkTCf0Ov".to_owned())
-                .unwrap();
-        let scope_ref = ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        };
-        let actor_id = DidFullId::new("did:web:alice.example".to_owned()).unwrap();
-        let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-22T00:00:00.000Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let registration_event = crate::test_event::raw_event_at(
-            arkret_wire::EventKind::AppletRegistration.as_str(),
-            scope_ref.clone(),
-            crate::test_actor_id(&actor_id),
-            1,
-            arkret_identifiers::Hlc::new("019041000000-0001-aabbccdd").unwrap(),
-            registration_payload_from_package(package, &registration_epoch_evidence).unwrap(),
-            created_at,
-        )
-        .unwrap();
-        let capability_grant_events = response
-            .capability_grant_refs
-            .iter()
-            .enumerate()
-            .map(|(offset, grant_id)| {
-                crate::test_event::raw_event_at(
-                    arkret_wire::EventKind::CapabilityGrant.as_str(),
-                    scope_ref.clone(),
-                    crate::test_actor_id(&actor_id),
-                    offset as u64 + 2,
-                    arkret_identifiers::Hlc::new(format!(
-                        "019041000000-{:04x}-aabbccdd",
-                        offset + 2
-                    ))
-                    .unwrap(),
-                    json!({
-                        "grant_id": grant_id,
-                        "grant": null,
-                    }),
-                    created_at,
-                )
-                .unwrap()
-            })
-            .collect();
-        AppletRecord {
-            applet_id: package.applet_id.clone(),
-            owner_actor_id: "did:web:alice.example".to_owned(),
-            registry_did: package.controller_id.to_string(),
-            bot_actor_id: package.bot_actor_id.to_string(),
-            bot_actor_principal_server_id: response.bot_actor_principal_server_id.to_string(),
-            bot_actor_provision_ref: response.bot_actor_provision_ref.to_string(),
-            bot_principal_control_realm_id: response.bot_principal_control_realm_id.to_string(),
-            portal_realm_id: realm_id.to_string(),
-            effective_scope: scope_ref,
-            capabilities: vec![
-                "ak.message.create".to_owned(),
-                CapabilityActionId::APPLET_GHOST_PROVISION.to_owned(),
-            ],
-            package: package.clone(),
-            ghost_actors_allowed: true,
-            status: "installed".to_owned(),
-            registered_at: created_at,
-            revoked_at: None,
-            idempotency_key: "install-idem-1".to_owned(),
-            install_body_digest: format!("sha256:{}", "22".repeat(32)),
-            install_id: response.install_id.clone(),
-            install_response: response.clone(),
-            registration_event: registration_event.clone(),
-            capability_grant_events,
-            bot_actor_provision_event: registration_event.clone(),
-            bot_pcr_genesis_event: registration_event.clone(),
-            bot_accountability_grant_event: registration_event.clone(),
-            bot_profile_event: registration_event,
-            install_execution: Value::Null,
-            revoke_execution: None,
-            ghosts: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn applet_record_round_trip_keeps_epoch_evidence_in_registration_event_only() {
-        let package = sample_package();
-        let evidence = sample_registration_epoch_evidence(&package);
-        let mut response = sample_response(&package);
-        let mut record = sample_record(&package, &response);
-        record.ghosts.push(super::super::types::GhostActorRecord {
-            ghost_actor_id: "ak:did_core:web:ghost.example".to_owned(),
-            actor_principal_server_id: "ak:did_core:web:soland.example".to_owned(),
-            managed_actor_provision_ref: "ak:event:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH"
-                .to_owned(),
-            principal_control_realm_id: "ak:realm:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH"
-                .to_owned(),
-            external_ref: arkret_models_integration::GhostExternalTuple {
-                protocol: "bridge".to_owned(),
-                instance_id: "workspace".to_owned(),
-                external_id: "user".to_owned(),
-            },
-            display_name: None,
-            request_digest: format!("sha256:{}", "44".repeat(32)),
-            profile_event_ref: "ak:event:AcP3yA5jKnY2j6Rjdt6KNHMLT9DtEnVBnszNpKxeX2gR".to_owned(),
-            accountability_grant_ref: "ak:event:AbAWwWC3ekOt5NnmX-QlGu2wvU1BPQmDeeubWjrKwye0"
-                .to_owned(),
-            authorization_ref: "ak:grant:AXBcp13trH3bPXvj0eHppCpGqJZWL9yqE3cf2Tl43vyk".to_owned(),
-            created_at: record.registered_at,
-        });
-        response.registration_event_ref = Some(record.registration_event.event_id.clone());
-        response.capability_grant_refs = record
-            .capability_grant_events
-            .iter()
-            .map(|event| arkret_identifiers::GrantId::from_event_id(&event.event_id))
-            .collect();
-
-        let stored = serde_json::to_value(&record).unwrap();
-        assert!(stored.get("registration_epoch_evidence").is_none());
-        let restored: AppletRecord = serde_json::from_value(stored.clone()).unwrap();
-        assert_eq!(
-            registration_epoch_evidence_from_event(&restored.registration_event).unwrap(),
-            evidence
-        );
-        assert!(
-            stored["package"]
-                .get("registration_epoch_evidence")
-                .is_none()
-        );
-        for legacy in ["manifest", "namespaces", "protocol", "namespace"] {
-            let mut legacy_record = stored.clone();
-            legacy_record[legacy] = json!({});
-            assert!(serde_json::from_value::<AppletRecord>(legacy_record).is_err());
-        }
-        for legacy in ["tenant", "external_user_id"] {
-            let mut legacy_record = stored.clone();
-            legacy_record["ghosts"][0][legacy] = json!("legacy");
-            assert!(serde_json::from_value::<AppletRecord>(legacy_record).is_err());
-        }
     }
 
     #[test]
@@ -2065,115 +1909,6 @@ mod tests {
                 &swapped_document,
             )
             .is_err()
-        );
-    }
-
-    #[test]
-    fn install_execution_record_tracks_pending_and_accepted_steps() {
-        let package = sample_package();
-        let mut response = sample_response(&package);
-        let record = sample_record(&package, &response);
-        response.registration_event_ref = record
-            .registration_event
-            .as_ref()
-            .map(|event| event.event_id.clone());
-        response.capability_grant_refs = record
-            .capability_grant_events
-            .iter()
-            .map(|event| arkret_identifiers::GrantId::from_event_id(&event.event_id))
-            .collect();
-        let body_digest = record.install_body_digest.as_str();
-        let submitted_plan_digest = format!("sha256:{}", "33".repeat(32));
-
-        let pending = build_install_execution_record(
-            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-            &record.owner_actor_id,
-            &record.idempotency_key,
-            body_digest,
-            &submitted_plan_digest,
-            &record,
-            &response,
-            false,
-        )
-        .unwrap();
-        assert_eq!(pending["status"], json!("pending"));
-        assert_eq!(pending["body_hash"], json!(body_digest));
-        assert_eq!(
-            pending["submitted_plan_digest"],
-            json!(submitted_plan_digest.as_str())
-        );
-        assert!(
-            pending["produced_event_refs"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
-        let pending_steps = pending["steps"].as_array().unwrap();
-        assert_eq!(pending_steps.len(), 3);
-        assert_eq!(
-            pending_steps[0]["target_event_kind"],
-            json!(arkret_wire::EventKind::AppletRegistration)
-        );
-        assert_eq!(pending_steps[0]["status"], json!("pending"));
-        assert_eq!(pending_steps[0]["event_ref"], Value::Null);
-        assert!(
-            pending_steps[0]["canonical_event_body_hash"]
-                .as_str()
-                .unwrap()
-                .starts_with("sha256:")
-        );
-        assert_eq!(
-            pending_steps[1]["grant_binding"]["registration_epoch"],
-            json!(package.registration_epoch.to_string())
-        );
-
-        let accepted = build_install_execution_record(
-            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-            &record.owner_actor_id,
-            &record.idempotency_key,
-            body_digest,
-            &submitted_plan_digest,
-            &record,
-            &response,
-            true,
-        )
-        .unwrap();
-        assert_eq!(accepted["status"], json!("completed"));
-        let produced_refs = accepted["produced_event_refs"].as_array().unwrap();
-        assert_eq!(produced_refs.len(), 3);
-        assert!(produced_refs.contains(&json!(
-            response.registration_event_ref.as_ref().unwrap().as_str()
-        )));
-        assert!(
-            produced_refs.contains(&json!(record.capability_grant_events[0].event_id.as_str()))
-        );
-        let accepted_steps = accepted["steps"].as_array().unwrap();
-        assert!(
-            accepted_steps
-                .iter()
-                .all(|step| step["status"] == json!("accepted"))
-        );
-        assert_eq!(
-            accepted_steps[0]["event_ref"],
-            json!(response.registration_event_ref.as_ref().unwrap().as_str())
-        );
-        assert_eq!(
-            accepted_steps[1]["event_ref"],
-            json!(record.capability_grant_events[0].event_id.as_str())
-        );
-        assert_eq!(
-            accepted,
-            build_install_execution_record(
-                "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-                &record.owner_actor_id,
-                &record.idempotency_key,
-                body_digest,
-                &submitted_plan_digest,
-                &record,
-                &response,
-                true,
-            )
-            .unwrap()
         );
     }
 

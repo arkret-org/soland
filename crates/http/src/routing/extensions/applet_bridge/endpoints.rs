@@ -34,8 +34,8 @@ use super::install::{
     validate_admin_install_events, validate_applet_package,
 };
 use super::record::{
-    applet_id_param, applet_record, applet_records, ensure_not_revoked, idempotency_key,
-    persist_applet_record, query_value,
+    applet_id_param, applet_record, applet_records, encode_applet_record, ensure_not_revoked,
+    idempotency_key, persist_applet_record, query_value,
 };
 use super::signature::{
     VerifiedAppletServiceSignature, require_ghost_provision_signature,
@@ -248,7 +248,7 @@ async fn install_endpoint(
     if let Some(existing) = applet_record(state, commit.applet_package.applet_id.as_str()).await? {
         if exact_successful_install_replay(
             &existing.idempotency_key,
-            &existing.install_body_digest,
+            existing.install_body_digest.as_str(),
             &idempotency_key,
             &body_digest,
         )? {
@@ -261,21 +261,16 @@ async fn install_endpoint(
     authoring_request.validate_bindings().map_err(|error| {
         AppError::param_invalid(format!("install authoring request is invalid: {error}"))
     })?;
-    if !first_install_commit_is_fresh(authoring_request.expires_at, chrono::Utc::now()) {
-        return Err(AppError::param_invalid(
-            "install authoring request is expired",
-        ));
-    }
+    require_first_install_commit_fresh(authoring_request.expires_at, chrono::Utc::now())?;
     let expected_ps_method = state
         .service_verification_method("notary-key")
         .map_err(AppError::internal)?;
-    if basis.target_principal_server_id.as_str() != state.service_id()
-        || authoring_request.proof.verification_method != expected_ps_method
-    {
-        return Err(AppError::param_invalid(
-            "install authoring request targets or is signed by the wrong Principal Server",
-        ));
-    }
+    require_current_principal_server_authoring_binding(
+        basis.target_principal_server_id.as_str(),
+        &authoring_request.proof.verification_method,
+        state.service_id(),
+        &expected_ps_method,
+    )?;
     arkret_signatures::Ed25519DetachedJwsVerifier::new()
         .verify_detached_jws(
             &authoring_request.proof.jws,
@@ -391,6 +386,37 @@ fn first_install_commit_is_fresh(
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
     expires_at > now
+}
+
+fn require_first_install_commit_fresh(
+    expires_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(), AppError> {
+    if first_install_commit_is_fresh(expires_at, now) {
+        return Ok(());
+    }
+    Err(
+        AppError::param_invalid("install authoring request is expired")
+            .with_status(StatusCode::GONE)
+            .with_wire_code("authoring_request_expired"),
+    )
+}
+
+fn require_current_principal_server_authoring_binding(
+    target_principal_server_id: &str,
+    proof_verification_method: &str,
+    current_principal_server_id: &str,
+    current_verification_method: &str,
+) -> Result<(), AppError> {
+    if target_principal_server_id == current_principal_server_id
+        && proof_verification_method == current_verification_method
+    {
+        return Ok(());
+    }
+    Err(AppError::param_invalid(
+        "install authoring request targets or is signed by a non-current Principal Server key",
+    )
+    .with_wire_code("authoring_request_proof_invalid"))
 }
 
 #[salvo::oapi::endpoint(
@@ -660,7 +686,8 @@ fn validate_revoke_scope(
     effective_scope: &arkret_wire::ScopeRef,
 ) -> Result<(), AppError> {
     let scope_realm = effective_scope_realm_id(effective_scope);
-    if record.portal_realm_id != scope_realm || &record.effective_scope != effective_scope {
+    if record.portal_realm_id.as_str() != scope_realm || &record.effective_scope != effective_scope
+    {
         return Err(
             AppError::conflict("effective_scope does not match active applet install")
                 .with_wire_code("applet_effective_scope_mismatch"),
@@ -755,12 +782,6 @@ fn build_revoke_plan(
                     reason_code: preview.reason_code.clone(),
                 });
             }
-        }
-        if !response.membership_event_refs.is_empty() {
-            return Err(AppError::unsupported_feature(
-                "managed-membership revoke preview requires the current membership projection inventory",
-            )
-            .with_wire_code("failed_precondition"));
         }
     }
     capability_revocations
@@ -1042,46 +1063,27 @@ async fn provision_ghost_actor_endpoint(
     ensure_formal_ghost_provision_allowed(&record, &provision)?;
     if let Some(existing) = record.ghosts.iter().find(|ghost| {
         ghost.external_ref == provision.external_ref
-            || ghost.ghost_actor_id == provision.ghost_actor_id.as_str()
+            || ghost.ghost_actor_id == provision.ghost_actor_id
     }) {
-        if existing.request_digest != request_digest {
+        if existing.request_digest.as_str() != request_digest {
             return Err(AppError::conflict(
                 "Ghost provisioning tuple already exists with different signed Events",
             )
             .with_wire_code("duplicate_conflict"));
         }
+        let existing_provision = existing.provision_payload().map_err(|error| {
+            AppError::internal(format!(
+                "stored Ghost provision bindings are invalid: {error}"
+            ))
+        })?;
         let outcome = GhostActorProvisionOutcome {
             ghost_actor_id,
-            actor_principal_server_id: arkret_wire::DidCoreId::new(
-                existing.actor_principal_server_id.clone(),
-            )
-            .map_err(|error| {
-                AppError::internal(format!("stored Ghost authority invalid: {error}"))
-            })?,
-            managed_actor_provision_ref: arkret_wire::EventId::new(
-                existing.managed_actor_provision_ref.clone(),
-            )
-            .map_err(|error| {
-                AppError::internal(format!("stored Ghost provision ref invalid: {error}"))
-            })?,
-            principal_control_realm_id: arkret_wire::RealmId::new(
-                existing.principal_control_realm_id.clone(),
-            )
-            .map_err(|error| AppError::internal(format!("stored Ghost PCR invalid: {error}")))?,
-            profile_event_ref: arkret_wire::EventId::new(existing.profile_event_ref.clone())
-                .map_err(|error| {
-                    AppError::internal(format!("stored Ghost profile ref invalid: {error}"))
-                })?,
-            accountability_grant_ref: arkret_wire::EventId::new(
-                existing.accountability_grant_ref.clone(),
-            )
-            .map_err(|error| {
-                AppError::internal(format!("stored Ghost accountability ref invalid: {error}"))
-            })?,
-            authorization_ref: arkret_wire::GrantId::new(existing.authorization_ref.clone())
-                .map_err(|error| {
-                    AppError::internal(format!("stored Ghost authorization ref invalid: {error}"))
-                })?,
+            actor_principal_server_id: existing.actor_principal_server_id.clone(),
+            managed_actor_provision_ref: existing.managed_actor_provision_event.event_id.clone(),
+            principal_control_realm_id: existing.principal_control_realm_id(),
+            profile_event_ref: existing.profile_event.event_id.clone(),
+            accountability_grant_ref: existing.accountability_grant_event.event_id.clone(),
+            authorization_ref: existing_provision.applet_authority_ref,
             display_name: existing.display_name.clone(),
         };
         res.status_code(StatusCode::OK);
@@ -1097,7 +1099,7 @@ async fn provision_ghost_actor_endpoint(
             || existing_record
                 .ghosts
                 .iter()
-                .any(|ghost| ghost.ghost_actor_id == candidate)
+                .any(|ghost| ghost.ghost_actor_id.as_str() == candidate)
         {
             return Err(AppError::conflict(
                 "Ghost actor identity is already used by an Applet service, controller, Bot, or Ghost",
@@ -1127,26 +1129,24 @@ async fn provision_ghost_actor_endpoint(
         display_name: provision.display_name.clone(),
     };
     let ghost = GhostActorRecord {
-        ghost_actor_id: ghost_actor_id.to_string(),
-        actor_principal_server_id: managed_provision.actor_principal_server_id.to_string(),
-        managed_actor_provision_ref: provision.managed_actor_provision_event.event_id.to_string(),
-        principal_control_realm_id: arkret_wire::RealmId::from_event_id(
-            &provision.pcr_genesis_event.event_id,
-        )
-        .to_string(),
+        ghost_actor_id: ghost_actor_id.clone(),
+        actor_principal_server_id: managed_provision.actor_principal_server_id.clone(),
         external_ref: provision.external_ref.clone(),
         display_name: provision.display_name.clone(),
-        request_digest: request_digest.clone(),
-        profile_event_ref: profile_event_ref.to_string(),
-        accountability_grant_ref: accountability_grant_ref.to_string(),
-        authorization_ref: authorization_ref.to_string(),
+        request_digest: Hash::new(request_digest.clone()).map_err(|error| {
+            AppError::internal(format!(
+                "validated Ghost request digest is invalid: {error}"
+            ))
+        })?,
+        managed_actor_provision_event: provision.managed_actor_provision_event.clone(),
+        pcr_genesis_event: provision.pcr_genesis_event.clone(),
+        accountability_grant_event: provision.accountability_grant_event.clone(),
+        profile_event: provision.profile_event.clone(),
         created_at: now,
     };
-    let expected_applet_record = serde_json::to_value(&record)
-        .map_err(|error| AppError::internal(format!("Applet record invalid: {error}")))?;
+    let expected_applet_record = encode_applet_record(&record)?;
     record.ghosts.push(ghost);
-    let applet_record_value = serde_json::to_value(&record)
-        .map_err(|error| AppError::internal(format!("Applet record invalid: {error}")))?;
+    let applet_record_value = encode_applet_record(&record)?;
     let commit_result = crate::routing::events::event_log::submit_ghost_provision_batch(
         state,
         service_id.as_str(),
@@ -1284,7 +1284,7 @@ async fn resolve_actor_endpoint(
         if record.revoked_at.is_some() {
             continue;
         }
-        if record.bot_actor_id == actor_id.as_str() {
+        if record.bot_actor_id == actor_id {
             return json_ok(AppletActorView {
                 exists: true,
                 actor_id: Some(actor_id),
@@ -1295,7 +1295,7 @@ async fn resolve_actor_endpoint(
         if let Some(ghost) = record
             .ghosts
             .iter()
-            .find(|ghost| ghost.ghost_actor_id == actor_id.as_str())
+            .find(|ghost| ghost.ghost_actor_id == actor_id)
         {
             return json_ok(AppletActorView {
                 exists: true,
@@ -1324,7 +1324,7 @@ async fn resolve_realm_endpoint(
         .param::<String>("realm_id_or_alias")
         .ok_or_else(|| AppError::param_missing("realm_id_or_alias path segment required"))?;
     let record = applet_records(state).await?.into_iter().find(|record| {
-        record.portal_realm_id == realm_id_or_alias
+        record.portal_realm_id.as_str() == realm_id_or_alias
             || record.package.namespaces.realms.iter().any(|claim| {
                 namespace_pattern_matches(
                     AppletNamespaceDomain::Realms,
@@ -1335,9 +1335,7 @@ async fn resolve_realm_endpoint(
             || record.applet_id.as_str() == realm_id_or_alias
     });
     if let Some(record) = record {
-        let realm_id = RealmId::new(record.portal_realm_id).map_err(|error| {
-            AppError::internal(format!("stored applet portal realm_id is invalid: {error}"))
-        })?;
+        let realm_id = record.portal_realm_id;
         return json_ok(AppletRealmView {
             exists: true,
             realm_id: Some(realm_id),
@@ -1449,10 +1447,7 @@ async fn third_party_users_endpoint(
                 && ghost.external_ref.instance_id.as_deref() == Some(instance_id.as_str())
                 && ghost.external_ref.external_id == external_id
         }) {
-            let actor_id = arkret_identifiers::DidCoreId::new(ghost.ghost_actor_id.clone())
-                .map_err(|error| {
-                    AppError::internal(format!("stored ghost actor id is invalid: {error}"))
-                })?;
+            let actor_id = ghost.ghost_actor_id.clone();
             return json_ok(AppletActorView {
                 exists: true,
                 actor_id: Some(actor_id),
@@ -1487,7 +1482,7 @@ async fn third_party_locations_endpoint(
         .or_else(|| query_value(req, "realm"));
     if let Some(location) = location
         && let Some(record) = applet_records(state).await?.into_iter().find(|record| {
-            record.portal_realm_id == location
+            record.portal_realm_id.as_str() == location
                 || record.package.namespaces.realms.iter().any(|claim| {
                     namespace_pattern_matches(
                         AppletNamespaceDomain::Realms,
@@ -1497,9 +1492,7 @@ async fn third_party_locations_endpoint(
                 })
         })
     {
-        let realm_id = RealmId::new(record.portal_realm_id.clone()).map_err(|error| {
-            AppError::internal(format!("stored applet portal realm_id is invalid: {error}"))
-        })?;
+        let realm_id = record.portal_realm_id.clone();
         return json_ok(AppletRealmView {
             exists: true,
             realm_id: Some(realm_id),
@@ -1565,10 +1558,13 @@ mod revoke_saga_tests {
     #[test]
     fn first_install_commit_rejects_expiry_but_exact_success_replay_does_not() {
         let now = chrono::Utc::now();
-        assert!(!first_install_commit_is_fresh(
-            now - chrono::Duration::seconds(1),
-            now,
-        ));
+        let expired = require_first_install_commit_fresh(now - chrono::Duration::seconds(1), now)
+            .unwrap_err();
+        assert_eq!(expired.status, Some(StatusCode::GONE));
+        assert_eq!(
+            expired.wire_code_override.as_deref(),
+            Some("authoring_request_expired")
+        );
         assert!(
             exact_successful_install_replay(
                 "install-key",
@@ -1577,6 +1573,40 @@ mod revoke_saga_tests {
                 "sha256:exact",
             )
             .unwrap()
+        );
+    }
+
+    #[test]
+    fn authoring_request_rejects_wrong_target_and_stale_but_valid_signing_key() {
+        let current_server = "ak:did_core:web:principal.example";
+        let current_key = "did:web:principal.example#notary-key-2";
+        let wrong_target = require_current_principal_server_authoring_binding(
+            "ak:did_core:web:other.example",
+            current_key,
+            current_server,
+            current_key,
+        )
+        .unwrap_err();
+        assert_eq!(
+            wrong_target.wire_code_override.as_deref(),
+            Some("authoring_request_proof_invalid")
+        );
+
+        // The detached signature may still be cryptographically valid under
+        // the retired key. Current trust, not bare signature validity, is the
+        // admission authority.
+        let retired_key_signature_is_valid = true;
+        assert!(retired_key_signature_is_valid);
+        let stale_key = require_current_principal_server_authoring_binding(
+            current_server,
+            "did:web:principal.example#notary-key-1",
+            current_server,
+            current_key,
+        )
+        .unwrap_err();
+        assert_eq!(
+            stale_key.wire_code_override.as_deref(),
+            Some("authoring_request_proof_invalid")
         );
     }
 

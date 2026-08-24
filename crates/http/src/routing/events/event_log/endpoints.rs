@@ -1495,11 +1495,16 @@ async fn applet_managed_actor_pcr_access(
             serde_json::from_value(value).map_err(|error| {
                 AppError::internal(format!("stored Applet record is invalid: {error}"))
             })?;
+        record.validate_stored_bindings().map_err(|error| {
+            AppError::internal(format!(
+                "stored Applet record bindings are invalid: {error}"
+            ))
+        })?;
         let owned_by_session = record.package.service_id.as_str() == session_service_id;
         let record_active = record.revoked_at.is_none()
             && matches!(record.status.as_str(), "installed" | "partially_installed");
-        if record.bot_actor_id == actor_id {
-            if record.bot_actor_principal_server_id != state.service_id() {
+        if record.bot_actor_id.as_str() == actor_id {
+            if record.bot_actor_principal_server_id.as_str() != state.service_id() {
                 continue;
             }
             let provision: arkret_models_integration::AppletManagedActorProvisionPayload =
@@ -1533,11 +1538,16 @@ async fn applet_managed_actor_pcr_access(
         if let Some(ghost) = record
             .ghosts
             .iter()
-            .find(|ghost| ghost.ghost_actor_id == actor_id)
+            .find(|ghost| ghost.ghost_actor_id.as_str() == actor_id)
         {
-            if ghost.actor_principal_server_id != state.service_id() {
+            if ghost.actor_principal_server_id.as_str() != state.service_id() {
                 continue;
             }
+            let ghost_provision = ghost.provision_payload().map_err(|error| {
+                AppError::internal(format!(
+                    "stored Ghost provision bindings are invalid: {error}"
+                ))
+            })?;
             let authority_active = state
                 .authorization()
                 .grants_for_subject(
@@ -1546,9 +1556,9 @@ async fn applet_managed_actor_pcr_access(
                     record.portal_realm_id.as_str(),
                 )
                 .iter()
-                .any(|grant| grant.grant_id.as_str() == ghost.authorization_ref);
+                .any(|grant| grant.grant_id == ghost_provision.applet_authority_ref);
             return Ok(Some(AppletManagedActorPcrAccess {
-                pcr_realm_id: ghost.principal_control_realm_id.clone(),
+                pcr_realm_id: ghost.principal_control_realm_id(),
                 owned_by_session,
                 active: owned_by_session && record_active && authority_active,
             }));

@@ -6,6 +6,25 @@ use soland_http::error::AppError;
 use super::types::AppletRecord;
 use crate::state::AppState;
 
+fn decode_applet_record(value: serde_json::Value) -> Result<AppletRecord, AppError> {
+    let record: AppletRecord = serde_json::from_value(value)
+        .map_err(|error| AppError::internal(format!("stored applet record is invalid: {error}")))?;
+    record.validate_stored_bindings().map_err(|error| {
+        AppError::internal(format!(
+            "stored applet record bindings are invalid: {error}"
+        ))
+    })?;
+    Ok(record)
+}
+
+pub(super) fn encode_applet_record(record: &AppletRecord) -> Result<serde_json::Value, AppError> {
+    record.validate_stored_bindings().map_err(|error| {
+        AppError::internal(format!("Applet record bindings are invalid: {error}"))
+    })?;
+    serde_json::to_value(record)
+        .map_err(|error| AppError::internal(format!("Applet record serialize failed: {error}")))
+}
+
 pub(super) async fn applet_record(
     state: &AppState,
     applet_id: &str,
@@ -21,9 +40,7 @@ pub(super) async fn applet_record(
     else {
         return Ok(None);
     };
-    serde_json::from_value(value)
-        .map(Some)
-        .map_err(|error| AppError::internal(format!("stored applet record is invalid: {error}")))
+    decode_applet_record(value).map(Some)
 }
 
 pub(in crate::routing::extensions) async fn applet_records(
@@ -38,11 +55,7 @@ pub(in crate::routing::extensions) async fn applet_records(
             AppError::internal("failed to list applet records")
         })?
         .into_iter()
-        .map(|value| {
-            serde_json::from_value(value).map_err(|error| {
-                AppError::internal(format!("stored applet record is invalid: {error}"))
-            })
-        })
+        .map(decode_applet_record)
         .collect()
 }
 
@@ -56,10 +69,8 @@ pub(super) async fn persist_applet_record(
             "Applet record CAS cannot change applet_id",
         ));
     }
-    let expected_value = serde_json::to_value(expected)
-        .map_err(|error| AppError::internal(format!("applet record serialize failed: {error}")))?;
-    let replacement_value = serde_json::to_value(replacement)
-        .map_err(|error| AppError::internal(format!("applet record serialize failed: {error}")))?;
+    let expected_value = encode_applet_record(expected)?;
+    let replacement_value = encode_applet_record(replacement)?;
     state
         .event_queries()
         .compare_and_swap_applet(

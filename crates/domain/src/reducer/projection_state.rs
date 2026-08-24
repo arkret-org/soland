@@ -188,7 +188,7 @@ pub struct ProjectionState {
     /// `service_id` remains an authority attribute and may identify multiple
     /// Applets. Populated by
     /// `ak.applet.registration` (initial registration / re-registration)
-    /// and updated by `ak.applet.discovery` (manifest refresh). Used by
+    /// and updated by `ak.applet.discovery` (freshness only). Used by
     /// `GET /_soland/admin/applets` admin snapshot. Runtime-private applet
     /// session progress is not a durable Arkret event and is not mirrored here.
     pub applets: BTreeMap<AppletId, AppletProjection>,

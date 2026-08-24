@@ -25,9 +25,10 @@ use arkret_models_collaboration::http_bodies::{
     MimiGroupInfoOutcome, MimiIdentifierQueryOutcome, MimiIdentifierQueryRequestBody,
     MimiKeyMaterialOutcome, MimiKeyMaterialRequestBody, MimiNotifyOutcome, MimiNotifyRequestBody,
     MimiProxyDownloadOutcome, MimiProxyDownloadRequestBody, MimiReportAbuseOutcome,
-    MimiReportAbuseRequestBody, MimiRequestConsentOutcome, MimiRequestConsentRequestBody,
-    MimiRoomUpdateOutcome, MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome,
-    MimiSubmitMessageRequestBody, MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody,
+    MimiReportAbuseRequestBody, MimiReportAbuseStatus, MimiRequestConsentOutcome,
+    MimiRequestConsentRequestBody, MimiRequestConsentStatus, MimiRoomUpdateOutcome,
+    MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome, MimiSubmitMessageRequestBody,
+    MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody,
 };
 use arkret_models_collaboration::objects::mimi::{
     MimiCiphertext, MimiConsentPurpose, MimiConsentTargetKind, MimiDelivery, MimiDeliveryStatus,

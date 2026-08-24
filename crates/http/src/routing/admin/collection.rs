@@ -424,9 +424,8 @@ async fn admin_federation_items(state: &AppState) -> Vec<Value> {
 
 /// Snapshot of the in-memory applet registry maintained
 /// by `reducer::ProjectionState::applets`. Each row is one applet
-/// identified by `service_id`, with the latest registration metadata
-/// (namespace, capabilities) and the most recent manifest (from
-/// `ak.applet.discovery`). Empty until a `ak.applet.registration` or
+/// identified by canonical `applet_id`, with the latest registration metadata.
+/// Empty until a `ak.applet.registration` or
 /// `ak.applet.discovery` event has been accepted.
 fn admin_applet_items(state: &AppState) -> Vec<Value> {
     let proj = state.projections().snapshot();
@@ -434,10 +433,11 @@ fn admin_applet_items(state: &AppState) -> Vec<Value> {
         .values()
         .map(|applet| {
             json!({
+                "applet_id": applet.applet_id,
                 "service_id": applet.service_id,
-                "namespace": applet.namespace,
-                "manifest": applet.manifest,
                 "capabilities": applet.capabilities,
+                "claimed_profiles": applet.claimed_profiles,
+                "registration_epoch": applet.registration_epoch,
                 "registered_at": arkret_canonical::format_timestamp_canonical(
                     applet.registered_at
                 ),
