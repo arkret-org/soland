@@ -18,7 +18,7 @@ fn contact_idempotency_key() -> arkret_wire::IdempotencyKey {
 }
 
 fn sign_contact_draft(
-    draft: &arkret_models_collaboration::contact_operations::ContactPreparedEventDraft,
+    draft: &arkret_models_collaboration::prepared_event_draft::PreparedEventDraft,
     actor: &str,
     device_id: &str,
     signing_key: SigningKey,

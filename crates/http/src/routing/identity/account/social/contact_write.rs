@@ -1,8 +1,8 @@
 use arkret_models_collaboration::contact_operations::{
     ContactAcceptedOutcome, ContactCommitRequestBody, ContactContinuityEvidence,
     ContactCurrentProof, ContactFailedOutcome, ContactLineage, ContactOperationRejectReason,
-    ContactPreparedEventDraft, ContactPreparedOutcome, ContactResultKind, ContactRound,
-    ContactRoundEvidenceBundle, ContactScope, ContactScopeUpdatePayload, ContactScopeUpdateSchema,
+    ContactPreparedOutcome, ContactResultKind, ContactRound, ContactRoundEvidenceBundle,
+    ContactScope, ContactScopeUpdatePayload, ContactScopeUpdateSchema,
     NormalResponseAcceptanceReceipt, PeerContactSubmitRequestBody, RejectAcceptanceReceipt,
     RequestAcceptanceReceipt, RequestAcceptanceReceiptCore,
 };
@@ -13,6 +13,7 @@ use arkret_models_collaboration::events_payloads::contact::{
 use arkret_models_collaboration::governance::peer_contact::{
     ContactIntroductionEvidence, PeerContactAddress,
 };
+use arkret_models_collaboration::prepared_event_draft::PreparedEventDraft;
 use arkret_models_identity::ServiceResolutionCarrier;
 use arkret_wire::{
     AuthoredEvent, Base64UrlString, DidUrl, Event, IdempotencyKey, ProtocolOperationId,
@@ -83,7 +84,7 @@ struct ContactReservation {
     reservation_handle: ReservationHandle,
     holder: ContactPeer,
     branch: ContactReservationBranch,
-    event_draft: ContactPreparedEventDraft,
+    event_draft: PreparedEventDraft,
     #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
     expires_at: chrono::DateTime<chrono::Utc>,
 }
@@ -409,13 +410,13 @@ fn new_unsigned_contact_event<K: arkret_event_draft::EventSpec>(
 fn contact_event_draft(
     event: &Event,
     digest_suite: arkret_canonical::DigestSuite,
-) -> Result<ContactPreparedEventDraft, AppError> {
+) -> Result<PreparedEventDraft, AppError> {
     let digest_payload = event
         .digest_payload()
         .map_err(|error| AppError::internal(format!("Contact Event draft: {error}")))?;
     let unsigned_bytes = arkret_canonical::canonical_json_bytes(&digest_payload)
         .map_err(|error| AppError::internal(format!("Contact Event draft bytes: {error}")))?;
-    Ok(ContactPreparedEventDraft {
+    Ok(PreparedEventDraft {
         unsigned_event_bytes: Base64UrlString::new(URL_SAFE_NO_PAD.encode(unsigned_bytes))
             .map_err(|error| AppError::internal(format!("Contact draft encode: {error}")))?,
         event_digest: Hash::new(
@@ -771,7 +772,7 @@ async fn contact_authority_realm(
     Ok(realm_id)
 }
 
-fn validate_signed_event(event: &Event, draft: &ContactPreparedEventDraft) -> Result<(), AppError> {
+fn validate_signed_event(event: &Event, draft: &PreparedEventDraft) -> Result<(), AppError> {
     let actual = arkret_canonical::canonical_json_bytes(
         &event
             .digest_payload()

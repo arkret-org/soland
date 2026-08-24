@@ -1665,13 +1665,10 @@ async fn continue_submit_reanchor_unit(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
-    let batch: arkret_models_collaboration::http_bodies::EventsSubmitBatchRequestBody =
-        serde_json::from_value(Value::Object(
-            plan.reanchor_unit.request.clone().into_iter().collect(),
-        ))
-        .map_err(|error| {
-            AppError::internal(format!("prepared re-anchor unit is invalid: {error}"))
-        })?;
+    let batch: arkret_wire::EventsSubmitBatchRequestBody = serde_json::from_value(Value::Object(
+        plan.reanchor_unit.request.clone().into_iter().collect(),
+    ))
+    .map_err(|error| AppError::internal(format!("prepared re-anchor unit is invalid: {error}")))?;
     let prepared_material_digest = canonical_digest(&batch)?;
     if prepared_material_digest != plan.reanchor_unit.request_digest {
         return Err(AppError::internal(

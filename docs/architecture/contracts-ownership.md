@@ -61,7 +61,7 @@
 | `admin::media` | `AdminMediaByActorRow` | local contract | Soland、Sodmin | `/_soland/admin/media/{statistics,by-actor}` 按上传者聚合行；Sodmin 经 `AdminMediaStatistics`/`AdminMediaByActorList` 内嵌消费；未命中 spec wire 类型 |
 | `admin::media` | `AdminMediaStatistics` | local contract | Soland、Sodmin | `GET /_soland/admin/media/statistics` 响应；未命中 spec wire 类型 |
 | `admin::media` | `AdminMediaByActorList` | local contract | Soland、Sodmin | `GET /_soland/admin/media/by-actor` 列表 envelope；未命中 spec wire 类型 |
-| `admin::media` | `AdminMediaServiceFocus` | local contract | Soland、Sodmin | 字段集对齐 spec `event-payload.schema.json` `$defs/media_service_focus`；作为 Realm media_service 管理投影内嵌，非独立 spec wire 类型 |
+| `admin::media` | `MediaServiceFocus` | SDK contract | Soland、Sodmin | 直接使用 `arkret-models-collaboration` 中 spec `event-payload.schema.json` `$defs/media_service_focus` 的唯一实现 |
 | `admin::media` | `AdminRealmMediaService` | local contract | Soland、Sodmin | `GET /_soland/admin/realms/{realm_id}/media-service` 只读投影；未命中 spec wire 类型 |
 | `admin::policy` | `PolicyEffect` | SDK re-export | Soland、Sodmin | 直接复用 `arkret-wire` 的规范枚举（spec `governance-objects.md` `default_effect` / `policy.schema.json` `$defs/policy_effect` 四值闭集 `allow`/`deny`/`quarantine`/`require_review`），不在本 crate 重复定义；注意与 decision 五值集（`PolicyCheckOutcome.decision`，SDK `AuthzDecision`，`soft_deny`/`hard_deny` 替代 `deny`）是两个不同枚举 |
 | `admin::policy` | `AdminPolicyPayload` | local contract | Soland、Sodmin | `/_soland/self/policies` 文档决策体；未命中 spec wire 类型 |

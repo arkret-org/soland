@@ -551,7 +551,7 @@ pub async fn validate_content_encryption_floor(
             Some(arkret_wire::EventKind::CircleUpdate)
                 if operation_touches_encryption_profile(operation) =>
             {
-                return Err(CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED);
+                return Err(arkret_wire::ReasonCode::PATCH_PATH_REDUCER_MANAGED);
             }
             Some(arkret_wire::EventKind::CircleCreate) => {
                 if let Some(profile) = operation_circle_encryption_profile(operation)

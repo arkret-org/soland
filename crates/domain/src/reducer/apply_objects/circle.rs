@@ -231,7 +231,7 @@ impl ProjectionState {
         }
         if operation_touches_encryption_profile(operation) {
             return ProjectionEffect::Rejected {
-                reason: CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED.to_owned(),
+                reason: arkret_wire::ReasonCode::PATCH_PATH_REDUCER_MANAGED.to_owned(),
             };
         }
         let realm_id = circle_ro.realm_id.clone();

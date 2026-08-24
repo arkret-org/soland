@@ -284,14 +284,10 @@ fn validate_typed_payload_shapes(
             }
             Ok(())
         }
-        arkret_wire::EventKind::RealmMediaService => {
-            if operation.payload.get("sfu_endpoint").is_some() {
-                return Err(
-                    "realm_media_service_requires_foci: ak.realm.media_service must use foci[]",
-                );
-            }
-            Ok(())
-        }
+        arkret_wire::EventKind::RealmMediaService => operation
+            .typed_payload::<arkret_wire::event_spec::RealmMediaService>()
+            .map(|_| ())
+            .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION),
         arkret_wire::EventKind::CallState => {
             let payload = operation
                 .typed_payload::<arkret_wire::event_spec::CallState>()

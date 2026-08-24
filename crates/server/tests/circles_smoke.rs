@@ -317,8 +317,8 @@ fn circle_update_rejects_encryption_profile_patch() {
 
     assert!(
         matches!(rejected, ProjectionEffect::Rejected { ref reason }
-                 if reason == "circle_encryption_profile_create_locked"),
-        "Circle encryption_profile updates MUST reject as circle_encryption_profile_create_locked; got {rejected:?}"
+                 if reason == arkret_wire::ReasonCode::PATCH_PATH_REDUCER_MANAGED),
+        "Circle encryption_profile updates MUST reject as patch_path_reducer_managed; got {rejected:?}"
     );
 }
 

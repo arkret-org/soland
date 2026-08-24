@@ -91,8 +91,6 @@ pub(crate) async fn lock_active_series_operations(
 }
 
 const CONTENT_ENCRYPTION_FLOOR_VIOLATION: &str = "content_encryption_floor_violation";
-const CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "circle_encryption_profile_create_locked";
-
 mod policy;
 pub(crate) use policy::*;
 mod policy_extra;

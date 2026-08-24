@@ -361,23 +361,15 @@ fn caller_signed_realm_moderation_policy(
             "moderation_policy_event.event.realm_id must equal the path realm_id",
         ));
     }
-    let payload =
-        serde_json::from_value::<arkret_models_collaboration::events_payloads::StatePayload>(
-            serde_json::Value::Object(event.payload.clone().into_iter().collect()),
-        )
-        .map_err(|error| {
-            AppError::param_invalid(format!("moderation_policy_event payload: {error}"))
-        })?;
-    if payload.state.is_some() || payload.reason.is_some() {
-        return Err(AppError::param_invalid(
-            "moderation_policy_event payload must carry only value",
-        ));
-    }
-    let Some(policy @ serde_json::Value::Object(_)) = payload.value else {
-        return Err(AppError::param_invalid(
-            "moderation_policy_event payload.value must be a policy object",
-        ));
-    };
+    let payload = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::RealmModerationPolicyStatePayload,
+    >(serde_json::Value::Object(
+        event.payload.clone().into_iter().collect(),
+    ))
+    .map_err(|error| {
+        AppError::param_invalid(format!("moderation_policy_event payload: {error}"))
+    })?;
+    let policy = serde_json::Value::Object(payload.value.into_iter().collect());
     let [precondition] = event.preconditions.as_slice() else {
         return Err(AppError::new(
             soland_http::error::ErrorCode::FailedPrecondition,

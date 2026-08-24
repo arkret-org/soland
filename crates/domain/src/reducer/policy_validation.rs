@@ -10,8 +10,6 @@ use arkret_event_draft::ProjectedEventOperation as Operation;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
-pub(crate) const CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED: &str =
-    "circle_encryption_profile_create_locked";
 /// AKP-0007 §8 — pulling *another* actor into a Circle (none/left → active by
 /// an actor other than the target) requires the requester to hold
 /// `ak.circle.member.manage` (narrowed by `allowed_circle_ids`) on this Circle.

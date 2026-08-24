@@ -14,6 +14,7 @@
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{CallId, CellRef, DeviceId, DidCoreId, Hash, RealmId};
+use arkret_models_collaboration::events_payloads::RealmMediaServiceValue;
 use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
 use arkret_models_collaboration::objects::media::{
     ArkretNativeMediaBackendToken, ArkretNativeMediaPermissions,
@@ -31,7 +32,6 @@ use salvo::http::HeaderValue;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
-use serde::Deserialize;
 use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
@@ -398,6 +398,20 @@ impl MediaProviderKind {
     }
 }
 
+impl TryFrom<MediaBackendKind> for MediaProviderKind {
+    type Error = AppError;
+
+    fn try_from(value: MediaBackendKind) -> Result<Self, Self::Error> {
+        match value {
+            MediaBackendKind::ArkretNative => Ok(Self::ArkretNative),
+            MediaBackendKind::Livekit => Ok(Self::LiveKit),
+            MediaBackendKind::Mediasoup => Self::parse("mediasoup"),
+            MediaBackendKind::Janus => Self::parse("janus"),
+            MediaBackendKind::MoqRelay => Self::parse("moq_relay"),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct MediaProviderConfig {
     provider: MediaProviderKind,
@@ -410,36 +424,6 @@ struct MediaProviderConfig {
 struct MediaServiceEpoch {
     service_id: String,
     foci: Vec<MediaProviderConfig>,
-}
-
-/// Typed view of the projected `ak.component.realm.media_service.v1` value.
-///
-/// The projection store is intentionally JSON-typed because it holds many
-/// unrelated cell families. Once this particular cell crosses into the media
-/// token issuer its protocol-defined fields are decoded exactly once, and the
-/// field set is exactly the one `event-payload.schema.json`
-/// `$defs/realm_media_service_payload` declares.
-///
-/// Issuance configuration is deliberately **not** read from here. Signing key
-/// ids, token audiences and TTLs are this deployment's own configuration, not
-/// Realm policy: carrying them in a signed policy cell would make an issuer key
-/// rotation require a capability-holding Realm Event and would expose issuer
-/// internals to every member (`media-service-binding.md` §2).
-#[derive(Debug, Deserialize)]
-struct MediaServiceDescriptor {
-    #[serde(default)]
-    service_id: Option<String>,
-    foci: Vec<MediaFocusDescriptor>,
-}
-
-/// Provider-independent fields consumed from one media focus descriptor.
-#[derive(Debug, Deserialize)]
-struct MediaFocusDescriptor {
-    focus_id: String,
-    #[serde(rename = "focus_kind")]
-    provider: String,
-    token_endpoint: String,
-    connect_url: String,
 }
 
 impl MediaServiceEpoch {
@@ -1019,53 +1003,43 @@ fn media_service_epoch_for_realm(
     media_service_epoch_from_descriptor(descriptor)
 }
 
-fn decode_media_service_descriptor(value: Value) -> Result<MediaServiceDescriptor, AppError> {
-    let descriptor = value.get("value").cloned().unwrap_or(value);
-    serde_json::from_value(descriptor).map_err(|error| {
+fn decode_media_service_descriptor(value: Value) -> Result<RealmMediaServiceValue, AppError> {
+    let descriptor = serde_json::from_value::<RealmMediaServiceValue>(value).map_err(|error| {
         focus_unavailable_error(format!(
             "projected realm media_service epoch is malformed: {error}"
         ))
-    })
+    })?;
+    descriptor.validate().map_err(|error| {
+        focus_unavailable_error(format!(
+            "projected realm media_service epoch is malformed: {error}"
+        ))
+    })?;
+    Ok(descriptor)
 }
 
 fn media_service_epoch_from_descriptor(
-    descriptor: MediaServiceDescriptor,
+    descriptor: RealmMediaServiceValue,
 ) -> Result<MediaServiceEpoch, AppError> {
-    let MediaServiceDescriptor {
+    let RealmMediaServiceValue {
         service_id,
         foci: focus_descriptors,
+        ..
     } = descriptor;
-    if focus_descriptors.is_empty() {
-        return Err(focus_unavailable_error(
-            "realm media_service epoch has no foci",
-        ));
-    }
 
     let mut foci = Vec::with_capacity(focus_descriptors.len());
     for focus in focus_descriptors {
-        let focus_id = focus.focus_id.trim().to_owned();
-        if focus_id.is_empty() {
-            return Err(AppError::param_invalid("focus_id is required"));
-        }
-        let provider = MediaProviderKind::parse(focus.provider.trim())?;
-        let token_endpoint = trimmed_non_empty(Some(focus.token_endpoint))
-            .ok_or_else(|| AppError::param_invalid("media focus token_endpoint is required"))?;
-        let connect_url = trimmed_non_empty(Some(focus.connect_url))
-            .ok_or_else(|| AppError::param_invalid("media focus connect_url is required"))?;
+        let provider = MediaProviderKind::try_from(focus.focus_kind)?;
         foci.push(MediaProviderConfig {
             provider,
-            focus_id,
-            token_endpoint,
-            connect_url,
+            focus_id: focus.focus_id.into_string(),
+            token_endpoint: focus.token_endpoint,
+            connect_url: focus.connect_url,
         });
     }
-    // `service_id` is required by the payload schema. It is the anchor every
-    // issued `participant_binding.issuer_kid` is checked against, so it is
-    // never derived from a focus field: a descriptor without it is unusable.
-    let service_id = trimmed_non_empty(service_id).ok_or_else(|| {
-        token_issuer_unauthorised("media_service service_id is required".to_owned())
-    })?;
-    Ok(MediaServiceEpoch { service_id, foci })
+    Ok(MediaServiceEpoch {
+        service_id: service_id.to_string(),
+        foci,
+    })
 }
 
 /// Whether a focus `token_endpoint` addresses this deployment.
@@ -1099,12 +1073,6 @@ fn token_endpoint_is_local(token_endpoint: &str, state: &AppState) -> bool {
         (Some(left), Some(right)) => left.eq_ignore_ascii_case(&right),
         _ => false,
     }
-}
-
-fn trimmed_non_empty(value: Option<String>) -> Option<String> {
-    value
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
 }
 
 fn media_token_issuer_for(provider: MediaProviderKind) -> Box<dyn MediaTokenIssuer> {
@@ -1435,26 +1403,6 @@ mod tests {
         .expect("valid projected media descriptor");
         let epoch = media_service_epoch_from_descriptor(descriptor)
             .expect("spec focus ids are not required to use a private prefix");
-
-        assert_eq!(epoch.foci[0].focus_id, "fra-1");
-    }
-
-    #[test]
-    fn projected_media_epoch_unwraps_registered_state_payload_value() {
-        let descriptor = decode_media_service_descriptor(json!({
-            "value": {
-                "service_id": "ak:did_core:webvh:z6mkfixturemedia",
-                "foci": [{
-                    "focus_id": "fra-1",
-                    "focus_kind": "livekit",
-                    "token_endpoint": "https://media.example/_arkret/self/rtc/token",
-                    "connect_url": "wss://media.example"
-                }]
-            }
-        }))
-        .expect("registered state payload wrapper");
-        let epoch = media_service_epoch_from_descriptor(descriptor)
-            .expect("wrapped projected media descriptor");
 
         assert_eq!(epoch.foci[0].focus_id, "fra-1");
     }

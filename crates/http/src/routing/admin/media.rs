@@ -3,13 +3,14 @@
 use std::collections::BTreeMap;
 
 use arkret_identifiers::{CellRef, RealmId};
+use arkret_models_collaboration::events_payloads::RealmMediaServiceValue;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_contracts::admin::{
-    AdminMediaBucket, AdminMediaByActorList, AdminMediaByActorRow, AdminMediaServiceFocus,
-    AdminMediaStatistics, AdminRealmMediaService,
+    AdminMediaBucket, AdminMediaByActorList, AdminMediaByActorRow, AdminMediaStatistics,
+    AdminRealmMediaService,
 };
 use soland_http::error::AppError;
 use soland_services::delivery::BlobState as BlobRecord;
@@ -45,20 +46,17 @@ fn response_from_media_cell(
             foci: Vec::new(),
         });
     };
-    let service_id = value
-        .get("service_id")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let foci = match value.get("foci") {
-        Some(foci) => serde_json::from_value::<Vec<AdminMediaServiceFocus>>(foci.clone()).map_err(
-            |error| AppError::internal(format!("invalid media_service foci projection: {error}")),
-        )?,
-        None => Vec::new(),
-    };
+    let descriptor =
+        serde_json::from_value::<RealmMediaServiceValue>(value.clone()).map_err(|error| {
+            AppError::internal(format!("invalid media_service projection: {error}"))
+        })?;
+    descriptor.validate().map_err(|error| {
+        AppError::internal(format!("invalid media_service projection: {error}"))
+    })?;
     Ok(AdminRealmMediaService {
         realm_id: realm_id.to_owned(),
-        service_id,
-        foci,
+        service_id: Some(descriptor.service_id.to_string()),
+        foci: descriptor.foci,
     })
 }
 

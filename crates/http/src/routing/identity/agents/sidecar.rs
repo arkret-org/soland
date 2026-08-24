@@ -10,9 +10,10 @@ use arkret_models_collaboration::agent_operations::{
 use arkret_models_collaboration::events_payloads::sidecar::{
     SidecarCreatePayload, SidecarEncryptionProfile,
 };
+use arkret_models_collaboration::prepared_event_draft::PreparedEventDraft;
 use arkret_models_collaboration::sidecar_operations::{
     SidecarContextAttachPayload, SidecarContextRef, SidecarEnsureOutcome, SidecarEnsureRequestBody,
-    SidecarPreparedEventDraft, SidecarPreparedOutcome,
+    SidecarPreparedOutcome,
 };
 use arkret_models_crypto::{MlsGovernanceBindingPayload, SidecarMlsBinding};
 use arkret_wire::{MlsGroupId, NonEmptyString};
@@ -645,7 +646,7 @@ fn sidecar_context_for_realm(
 fn sidecar_event_draft(
     event: &arkret_wire::Event,
     digest_suite: arkret_canonical::DigestSuite,
-) -> Result<SidecarPreparedEventDraft, AppError> {
+) -> Result<PreparedEventDraft, AppError> {
     let unsigned_bytes = arkret_canonical::canonical_json_bytes(
         &event
             .digest_payload()
@@ -658,7 +659,7 @@ fn sidecar_event_draft(
             .map_err(|error| AppError::internal(format!("Sidecar draft digest: {error}")))?,
     )
     .map_err(|error| AppError::internal(format!("Sidecar draft digest invalid: {error}")))?;
-    Ok(SidecarPreparedEventDraft {
+    Ok(PreparedEventDraft {
         unsigned_event_bytes: arkret_wire::Base64UrlString::new(
             URL_SAFE_NO_PAD.encode(unsigned_bytes),
         )
@@ -934,7 +935,7 @@ async fn prepare_sidecar(
 
 fn validate_signed_sidecar_draft(
     signed_event: &arkret_wire::Event,
-    draft: &SidecarPreparedEventDraft,
+    draft: &PreparedEventDraft,
 ) -> Result<(), AppError> {
     let actual_unsigned = arkret_canonical::canonical_json_bytes(
         &signed_event

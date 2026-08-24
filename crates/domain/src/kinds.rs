@@ -10,14 +10,6 @@ use crate::artifacts;
 // COT-06-004: Realm default-Strand pointer event. The canonical event kind
 // constant is exposed as `arkret_wire::EventKind::RealmSetDefaultStrand`.
 
-// Morph lifecycle (round 13). Same shape as Strand — no dedicated tombstone.
-// `ak.field.position.move` and `ak.field.position.reorder` were removed in
-// revision 0a5ab85 (see arkret-spec
-// `artifacts/registry/removed-event-kinds.json`). Field-level position move
-// was subsumed by track-relative ordering and the per-cell ordered-log
-// lattice. No replacement; reducer/wire MUST hard_reject these kinds. The
-// generic unknown-event-kind path in `event_log::submit_event` already
-// rejects them because they no longer appear in `active_durable_event_kinds`.
 // R3.1 spec-sync (2026-05-27, arkret-spec @ 7157ee8) — Realm-scoped
 // MemberIdentity append-only replacement event. Cell family
 // `ak.component.member.identity.v1`; lattice `ordered_log`; bottom

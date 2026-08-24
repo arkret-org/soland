@@ -470,14 +470,13 @@ impl ProjectionState {
     /// Project `ak.realm.media_service` into the canonical
     /// `ak.component.realm.media_service.v1` cas-register cell consumed by
     /// the AKP-0010 media token exchange (`routing::interop::webrtc`). The
-    /// payload is normalized like `apply_realm_policy_bundle`, then the
-    /// `foci[]` array is required to be non-empty so a realm cannot advertise
-    /// a media service that exposes no focus.
+    /// The SDK's exact payload type validates the closed descriptor before its
+    /// `value` is projected into the cell.
     pub(crate) fn apply_realm_media_service(&mut self, operation: &Operation) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
-        let value = state_payload_value(&operation.payload).clone();
-        let foci_non_empty = value
-            .get("foci")
+        let foci_non_empty = operation
+            .payload
+            .pointer("/value/foci")
             .and_then(Value::as_array)
             .is_some_and(|foci| !foci.is_empty());
         if !foci_non_empty {
@@ -485,6 +484,15 @@ impl ProjectionState {
                 reason: "media_service_foci_required".to_owned(),
             };
         }
+        if operation
+            .typed_payload::<arkret_wire::event_spec::RealmMediaService>()
+            .is_err()
+        {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        }
+        let value = operation.payload["value"].clone();
         self.set_realm_null_subject_cell(
             &realm_id,
             arkret_wire::CellFamilyId::REALM_MEDIA_SERVICE_V1,
