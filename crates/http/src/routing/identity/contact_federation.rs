@@ -262,10 +262,10 @@ async fn peer_contacts_submit(
                     &signed_event.actor_id,
                 )
                 || request_receipt.core.issuer.as_str() != source_service_id
-                || request_receipt.core.request_digest
+                || request_receipt.core.request_digest()
                     != event_digest_for_frozen_claim(
                         signed_event,
-                        &request_receipt.core.request_digest,
+                        &request_receipt.core.request_digest(),
                     )?
             {
                 return Err(super::super::events::peer::schema_violation(
@@ -311,10 +311,10 @@ async fn peer_contacts_submit(
                 })?;
             if response_receipt.response_event_ref != signed_event.event_id
                 || !core_id_matches_actor(&response_receipt.issuer, &signed_event.actor_id)
-                || response_receipt.response_digest
+                || response_receipt.response_digest()
                     != event_digest_for_frozen_claim(
                         signed_event,
-                        &response_receipt.response_digest,
+                        &response_receipt.response_digest(),
                     )?
             {
                 return Err(super::super::events::peer::schema_violation(
@@ -360,8 +360,8 @@ async fn peer_contacts_submit(
                 })?;
             if reject_receipt.reject_event_ref != signed_event.event_id
                 || !core_id_matches_actor(&reject_receipt.issuer, &signed_event.actor_id)
-                || reject_receipt.reject_digest
-                    != event_digest_for_frozen_claim(signed_event, &reject_receipt.reject_digest)?
+                || reject_receipt.reject_digest()
+                    != event_digest_for_frozen_claim(signed_event, &reject_receipt.reject_digest())?
             {
                 return Err(super::super::events::peer::schema_violation(
                     "Contact reject receipt does not bind signed_event",
@@ -471,8 +471,8 @@ async fn peer_contacts_submit(
     } {
         if !core_id_matches_actor(&current_proof.issuer, &signed_event.actor_id)
             || current_proof.head_event_ref != signed_event.event_id
-            || current_proof.head_digest
-                != event_digest_for_frozen_claim(signed_event, &current_proof.head_digest)?
+            || current_proof.head_digest()
+                != event_digest_for_frozen_claim(signed_event, &current_proof.head_digest())?
             || !current_proof
                 .accepted_frontier
                 .contains(&signed_event.event_id)
@@ -530,7 +530,7 @@ async fn peer_contacts_submit(
                 AppError::internal(format!("Contact mirror canonical Event: {error}"))
             })?;
         let request_digest =
-            event_digest_for_frozen_claim(signed_event, &request_receipt.core.request_digest)?
+            event_digest_for_frozen_claim(signed_event, &request_receipt.core.request_digest())?
                 .to_string();
         state
             .persistence()
@@ -1513,7 +1513,7 @@ async fn validate_proof_refresh_evidence(
     if current_proof.terminal
         || core_id_matches_actor(&current_proof.issuer, &contact_address.subject_id)
         || current_proof.head_event_ref != prior_mirror_receipt.signed_event_ref
-        || current_proof.head_digest != prior_mirror_receipt.signed_event_digest
+        || current_proof.head_digest() != prior_mirror_receipt.signed_event_digest()
         || !current_proof
             .accepted_frontier
             .contains(&current_proof.head_event_ref)
@@ -1540,7 +1540,7 @@ async fn validate_proof_refresh_evidence(
             && (remote_is_requester || remote_is_target)
             && (record.request_receipts.iter().any(|stored| {
                 stored.core.request_event_ref == current_proof.head_event_ref
-                    && stored.core.request_digest == current_proof.head_digest
+                    && stored.core.request_digest() == current_proof.head_digest()
             }) || (remote_is_requester
                 && record.request_event_ref.as_deref()
                     == Some(current_proof.head_event_ref.as_str()))
@@ -1805,7 +1805,7 @@ fn validate_glare_finalize_evidence(
         )
         || local_receipt.core.peer.contact_actor_id() != attestation.issuer
         || remote_mirror_receipt.signed_event_ref != source_receipt.core.request_event_ref
-        || remote_mirror_receipt.signed_event_digest != source_receipt.core.request_digest
+        || remote_mirror_receipt.signed_event_digest() != source_receipt.core.request_digest()
     {
         return Err(super::super::events::peer::schema_violation(
             "glare receipts, mirror, and participant request coordinates do not cross-bind",
@@ -1921,7 +1921,7 @@ async fn finalize_glare_contact_round(
         .find(|receipt| {
             receipt.issuer.as_str() == source_service_id
                 && receipt.signed_event_ref == local_request.core.request_event_ref
-                && receipt.signed_event_digest == local_request.core.request_digest
+                && receipt.signed_event_digest() == local_request.core.request_digest()
                 && matches!(
                     receipt.outcome,
                     PeerContactOutcome::Accepted | PeerContactOutcome::Duplicate
@@ -2018,7 +2018,6 @@ async fn finalize_glare_contact_round(
         issuer: local_issuer,
         terminal: false,
         head_event_ref: local_request.core.request_event_ref.clone(),
-        head_digest: local_request.core.request_digest.clone(),
         accepted_frontier: observed_frontier,
         complete_through,
         fresh_until,
@@ -2172,7 +2171,6 @@ fn mirrored_contact_current_proof(
         issuer,
         terminal: source.terminal,
         head_event_ref: source.head_event_ref.clone(),
-        head_digest: source.head_digest.clone(),
         accepted_frontier: source.accepted_frontier.clone(),
         complete_through: source.complete_through,
         fresh_until: created_at + chrono::Duration::minutes(10),
@@ -2307,9 +2305,12 @@ fn sign_contact_mirror_receipt(
             .map_err(|error| AppError::internal(format!("Contact request digest: {error}")))?,
     )
     .map_err(|error| AppError::internal(format!("Contact request digest invalid: {error}")))?;
-    let signed_digest_claim = arkret::signed_event_digest_claim(event)
-        .map_err(|error| AppError::internal(format!("Contact Event digest claim: {error}")))?;
-    let signed_event_digest = event_digest_for_frozen_claim(event, &signed_digest_claim)?;
+    let signed_event_digest = event.event_id.event_digest();
+    if event_digest_for_frozen_claim(event, &signed_event_digest)? != signed_event_digest {
+        return Err(super::super::events::peer::schema_violation(
+            "Contact EventId does not match its canonical digest",
+        ));
+    }
     let received_at = now();
     let issuer = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
@@ -2323,7 +2324,6 @@ fn sign_contact_mirror_receipt(
             "domain": arkret_wire::DomainSeparationId::PEER_CONTACT_MIRROR_RECEIPT_V1,
         "request_digest": request_digest,
         "signed_event_ref": event.event_id,
-        "signed_event_digest": signed_event_digest,
         "outcome": outcome,
         "recipient_service_id": issuer,
         "received_at": arkret_canonical::format_timestamp_canonical(received_at),
@@ -2339,7 +2339,6 @@ fn sign_contact_mirror_receipt(
         domain: PeerContactMirrorReceiptDomain::V1,
         request_digest,
         signed_event_ref: event.event_id.clone(),
-        signed_event_digest,
         outcome,
         recipient_service_id: issuer.clone(),
         received_at,
@@ -2371,7 +2370,7 @@ pub(crate) async fn persist_request_mirror_receipt(
         })?;
     let binds_retained_request = record.request_receipts.iter().any(|stored| {
         stored.core.request_event_ref == receipt.signed_event_ref
-            && stored.core.request_digest == receipt.signed_event_digest
+            && stored.core.request_digest() == receipt.signed_event_digest()
     });
     if !binds_retained_request {
         return Err(super::super::events::peer::schema_violation(
@@ -2450,7 +2449,7 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
         .find(|receipt| {
             receipt.issuer.as_str() == peer_service_id
                 && receipt.signed_event_ref == local_request.core.request_event_ref
-                && receipt.signed_event_digest == local_request.core.request_digest
+                && receipt.signed_event_digest() == local_request.core.request_digest()
                 && matches!(
                     receipt.outcome,
                     PeerContactOutcome::Accepted | PeerContactOutcome::Duplicate
@@ -2620,7 +2619,7 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                     )
                 })?;
             if remote_proof.head_event_ref != remote_request.core.request_event_ref
-                || remote_proof.head_digest != remote_request.core.request_digest
+                || remote_proof.head_digest() != remote_request.core.request_digest()
                 || !remote_proof
                     .accepted_frontier
                     .contains(&remote_proof.head_event_ref)
@@ -2701,7 +2700,6 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                     issuer: local_attestation.issuer.clone(),
                     terminal: false,
                     head_event_ref: local_request.core.request_event_ref.clone(),
-                    head_digest: local_request.core.request_digest.clone(),
                     accepted_frontier: request_receipts
                         .iter()
                         .map(|receipt| receipt.core.request_event_ref.clone())
@@ -2879,10 +2877,10 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
             PeerContactOutcome::Accepted | PeerContactOutcome::Duplicate
         )
         || outcome.mirror_receipt.signed_event_ref != signed_event.event_id
-        || outcome.mirror_receipt.signed_event_digest
+        || outcome.mirror_receipt.signed_event_digest()
             != event_digest_for_frozen_claim(
                 signed_event,
-                &outcome.mirror_receipt.signed_event_digest,
+                &outcome.mirror_receipt.signed_event_digest(),
             )?
     {
         return Err(super::super::events::peer::schema_violation(
@@ -2915,7 +2913,7 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
         || returned_proof.contact_round_id != sent_proof.contact_round_id
         || returned_proof.terminal != terminal
         || returned_proof.head_event_ref != signed_event.event_id
-        || returned_proof.head_digest != sent_proof.head_digest
+        || returned_proof.head_digest() != sent_proof.head_digest()
         || !returned_proof
             .accepted_frontier
             .contains(&signed_event.event_id)
@@ -3475,7 +3473,7 @@ async fn project_delivered_contact_fact(
                 {
                     if !existing.request_receipts.iter().any(|stored| {
                         stored.core.request_event_ref == request_receipt.core.request_event_ref
-                            && stored.core.request_digest == request_receipt.core.request_digest
+                            && stored.core.request_digest() == request_receipt.core.request_digest()
                     }) {
                         let expected_updated_at = existing.updated_at;
                         existing.request_receipts.push(request_receipt.clone());
@@ -4310,7 +4308,6 @@ mod tests {
                 "issuer": ALICE,
                 "terminal": false,
                 "head_event_ref": "ak:event:ARbUzETAsZ3suuQ0GSmBWTsNjmUnTEEl_ZnDOUWRPm-N",
-                "head_digest": format!("sha256:{}", "a".repeat(64)),
                 "accepted_frontier": ["ak:event:ARbUzETAsZ3suuQ0GSmBWTsNjmUnTEEl_ZnDOUWRPm-N"],
                 "complete_through": 1,
                 "fresh_until": "2026-08-09T00:10:00.000Z",

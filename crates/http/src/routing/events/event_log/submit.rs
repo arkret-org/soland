@@ -1128,7 +1128,6 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         }
         arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::ControllerAgent {
             agent_provision_ref,
-            agent_provision_digest,
             controller_binding_digest,
         } => {
             let member_payload: arkret_models_collaboration::governance::membership_invite::MembershipPayload =
@@ -1153,7 +1152,6 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                 founder,
                 DirectConversationFoundingAuthorizationCore::ControllerAgent {
                     agent_provision_ref: agent_provision_ref.clone(),
-                    agent_provision_digest: agent_provision_digest.clone(),
                     controller_binding_digest: controller_binding_digest.clone(),
                 },
             )
@@ -1263,7 +1261,6 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         }
         arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::ControllerAgent {
             agent_provision_ref,
-            agent_provision_digest,
             ..
         } => {
             let member_payload: arkret_models_collaboration::governance::membership_invite::MembershipPayload =
@@ -1297,7 +1294,8 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                     != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
                 || stored_provision_ref != Some(agent_provision_ref.as_str())
                 || accepted_provision.kind != arkret_wire::EventKind::AgentProvision.as_str()
-                || accepted_provision.canonical_digest != agent_provision_digest.as_str()
+                || accepted_provision.canonical_digest
+                    != agent_provision_ref.event_digest().as_str()
             {
                 return Err(SubmitOneError::new(
                     StatusCode::CONFLICT,

@@ -927,7 +927,7 @@ async fn verified_contact_mirror_event(
         receipt.core.holder.contact_actor_id().as_str() == event.actor_id.as_str()
             && receipt.core.peer.contact_actor_id().as_str() == session.actor
             && receipt.core.request_event_ref == event.event_id
-            && receipt.core.request_digest.as_str() == mirror.request_digest
+            && receipt.core.request_digest().as_str() == mirror.request_digest
             && receipt == &mirror.source_receipt
     });
     if !receipt_matches {

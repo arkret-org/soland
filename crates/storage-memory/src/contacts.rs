@@ -276,7 +276,6 @@ mod tests {
                     "peer": {"kind": "human", "principal_id": "ak:did_core:web:peer.example"},
                     "slot_version": 1,
                     "request_event_ref": "ak:event:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-",
-                    "request_digest": format!("sha256:{}", "a".repeat(64)),
                     "source_checkpoint": format!("sha256:{}", "b".repeat(64)),
                     "accepted_at": "2026-08-09T00:00:00.000Z",
                     "issuer": "ak:did_core:web:issuer.example"

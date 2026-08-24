@@ -1500,8 +1500,8 @@ impl FederationDispatcher {
                         | arkret_models_collaboration::contact_operations::PeerContactOutcome::Duplicate
                 ) || event_outcome.mirror_receipt.signed_event_ref
                     != request_receipt.core.request_event_ref
-                    || event_outcome.mirror_receipt.signed_event_digest
-                        != request_receipt.core.request_digest
+                    || event_outcome.mirror_receipt.signed_event_digest()
+                        != request_receipt.core.request_digest()
                 {
                     return Err("Contact mirror receipt does not bind the outbound request".to_owned());
                 }

@@ -302,7 +302,7 @@ async fn validate_request_acceptance_receipt(
         .ok_or_else(|| {
             AppError::new(
                 ErrorCode::FailedPrecondition,
-                "request_receipt.core.request_digest cannot be verified: the durable accepted source Event is unavailable",
+                "request_receipt.core.request_event_ref cannot be verified: the durable accepted source Event is unavailable",
             )
         })?;
     let request_event = serde_json::from_value::<Event>(stored.envelope)
@@ -331,7 +331,7 @@ async fn validate_request_acceptance_receipt(
         || request_event.event_id != receipt.core.request_event_ref
         || request_event.actor_id != receipt.core.holder.contact_actor_id()
         || requested_payload.peer != receipt.core.peer
-        || request_digest != receipt.core.request_digest
+        || request_digest != receipt.core.request_digest()
         || expected_checkpoint != receipt.core.source_checkpoint
         || receipt.core.accepted_at < request_event.created_at
     {
@@ -883,7 +883,6 @@ fn sign_request_receipt(
                 AppError::param_invalid(format!("previous terminal contact_round: {error}"))
             })?,
         request_event_ref: event.event_id.clone(),
-        request_digest: request_digest.clone(),
         source_checkpoint: contact_hash(
             arkret_wire::DomainSeparationId::CONTACT_REQUEST_SOURCE_CHECKPOINT_V1,
             &json!({"event_ref": event.event_id, "event_digest": request_digest}),
@@ -968,13 +967,17 @@ fn signed_current_proof(
             .map_err(|error| AppError::internal(format!("Contact head digest: {error}")))?,
     )
     .map_err(|error| AppError::internal(format!("Contact head digest invalid: {error}")))?;
+    if head_digest != event.event_id.event_digest() {
+        return Err(AppError::param_invalid(
+            "Contact head EventId does not match its canonical digest",
+        ));
+    }
     let fresh_until = now() + chrono::Duration::minutes(10);
     let unsigned = json!({
         "contact_round_id": contact_round_id,
         "issuer": issuer,
         "terminal": terminal,
         "head_event_ref": event.event_id,
-        "head_digest": head_digest,
         "accepted_frontier": [event.event_id.clone()],
         "complete_through": event.actor_seq,
         "fresh_until": arkret_canonical::format_timestamp_canonical(fresh_until),
@@ -984,7 +987,6 @@ fn signed_current_proof(
         issuer,
         terminal,
         head_event_ref: event.event_id.clone(),
-        head_digest,
         accepted_frontier: vec![event.event_id.clone()],
         complete_through: event.actor_seq,
         fresh_until,
@@ -1012,7 +1014,7 @@ async fn local_requester_current_proof(
     })?;
     let request_digest_suite = request_receipt
         .core
-        .request_digest
+        .request_digest()
         .digest_suite()
         .map_err(|error| AppError::internal(format!("Contact request digest suite: {error}")))?;
     if request_event.kind != arkret_wire::EventKind::ContactRequested
@@ -1025,7 +1027,7 @@ async fn local_requester_current_proof(
                 })?,
         )
         .map_err(|error| AppError::internal(format!("Contact request digest invalid: {error}")))?
-            != request_receipt.core.request_digest
+            != request_receipt.core.request_digest()
     {
         return Err(AppError::internal(
             "accepted Contact request does not match its signed receipt",
@@ -1394,14 +1396,6 @@ async fn plan_contact_commit(
                 ));
             }
             let expected_updated_at = record.updated_at;
-            let response_digest = Hash::new(
-                event
-                    .event_digest_with_digest_suite(digest_suite)
-                    .map_err(|error| {
-                        AppError::internal(format!("Contact response digest: {error}"))
-                    })?,
-            )
-            .map_err(|error| AppError::internal(format!("response digest invalid: {error}")))?;
             let outgoing_slot_absence_digest = contact_hash(
                 arkret_wire::DomainSeparationId::CONTACT_NO_OUTGOING_SLOT_V1,
                 &json!({"holder": holder, "peer": peer, "observed_at": event.created_at}),
@@ -1413,7 +1407,6 @@ async fn plan_contact_commit(
                 "contact_round_id": contact_round_id,
                 "request_receipt": request_receipt,
                 "response_event_ref": event.event_id,
-                "response_digest": response_digest,
                 "outgoing_slot_absence_digest": outgoing_slot_absence_digest,
                 "accepted_at": arkret_canonical::format_timestamp_canonical(accepted_at),
                 "issuer": issuer,
@@ -1422,7 +1415,6 @@ async fn plan_contact_commit(
                 contact_round_id: contact_round_id.clone(),
                 request_receipt: request_receipt.clone(),
                 response_event_ref: event.event_id.clone(),
-                response_digest,
                 outgoing_slot_absence_digest,
                 accepted_at,
                 issuer,
@@ -1524,21 +1516,12 @@ async fn plan_contact_commit(
                 conflict_code: "contact_lineage_conflict".to_owned(),
                 invite_policy: None,
             });
-            let reject_digest = Hash::new(
-                event
-                    .event_digest_with_digest_suite(digest_suite)
-                    .map_err(|error| {
-                        AppError::internal(format!("Contact reject digest: {error}"))
-                    })?,
-            )
-            .map_err(|error| AppError::internal(format!("reject digest invalid: {error}")))?;
             let accepted_at = now();
             let issuer = arkret_identifiers::DidCoreId::new(holder)
                 .map_err(|error| AppError::internal(format!("holder DID invalid: {error}")))?;
             let unsigned = json!({
                 "request_receipt": request_receipt,
                 "reject_event_ref": event.event_id,
-                "reject_digest": reject_digest,
                 "accepted_at": arkret_canonical::format_timestamp_canonical(accepted_at),
                 "issuer": issuer,
             });
@@ -1548,7 +1531,6 @@ async fn plan_contact_commit(
                     reject_acceptance_receipt: RejectAcceptanceReceipt {
                         request_receipt: request_receipt.clone(),
                         reject_event_ref: event.event_id.clone(),
-                        reject_digest,
                         accepted_at,
                         issuer,
                         signature: service_signature(state, &unsigned)?,
