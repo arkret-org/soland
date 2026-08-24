@@ -363,13 +363,7 @@ async fn submit_rotation_event_unit(
     session: &SessionRecord,
     unit: &arkret_wire::PreparedEventUnit,
 ) -> Result<Value, AppError> {
-    let request: arkret_wire::EventsSubmitBatchRequestBody = serde_json::from_value(Value::Object(
-        unit.request.clone().into_iter().collect(),
-    ))
-    .map_err(|error| {
-        AppError::param_invalid(format!("prepared rotation Event unit is invalid: {error}"))
-            .with_wire_code("schema_violation")
-    })?;
+    let request = unit.request.clone();
     let expected_event_ids = request
         .events
         .iter()
@@ -415,10 +409,7 @@ async fn continue_rotation_revoke(
     res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
     let plan = rotation_plan(&transaction)?;
-    let revoke_request: arkret_wire::EventsSubmitBatchRequestBody = serde_json::from_value(
-        Value::Object(plan.revoke_unit.request.clone().into_iter().collect()),
-    )
-    .map_err(|error| AppError::internal(format!("prepared revoke unit is invalid: {error}")))?;
+    let revoke_request = plan.revoke_unit.request.clone();
     let revoke_event_id = revoke_request
         .events
         .first()
@@ -1508,7 +1499,8 @@ async fn continue_issue_terminal_receipt(
                     matches!(
                         item,
                         arkret_wire::EventBatchReceiptEvent::Item(item)
-                            if &item.event_id == *event_id && &item.event_digest == *digest
+                            if &item.event_id == *event_id
+                                && item.event_id.event_digest() == **digest
                     )
                 })
             }) {
@@ -1665,16 +1657,15 @@ async fn continue_submit_reanchor_unit(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
-    let batch: arkret_wire::EventsSubmitBatchRequestBody = serde_json::from_value(Value::Object(
-        plan.reanchor_unit.request.clone().into_iter().collect(),
-    ))
-    .map_err(|error| AppError::internal(format!("prepared re-anchor unit is invalid: {error}")))?;
-    let prepared_material_digest = canonical_digest(&batch)?;
-    if prepared_material_digest != plan.reanchor_unit.request_digest {
-        return Err(AppError::internal(
-            "prepared re-anchor unit digest changed after preparation",
-        ));
-    }
+    let batch = plan.reanchor_unit.request.clone();
+    let prepared_material_digest = plan.reanchor_unit.request_digest.clone();
+    let prepared_material_bytes = arkret_canonical::canonical_json_bytes(&batch)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    arkret_canonical::canonical::verify_digest(
+        &prepared_material_bytes,
+        prepared_material_digest.as_str(),
+    )
+    .map_err(|_| AppError::internal("prepared re-anchor unit digest changed after preparation"))?;
     let reanchor_digest_suite = state
         .projections()
         .realm_digest_suite(batch.events[0].event.realm_id.as_str());
@@ -1753,9 +1744,9 @@ async fn continue_submit_reanchor_unit(
             receipt.events.iter().any(|event| {
                 matches!(
                     event,
-                    arkret_wire::EventBatchReceiptEvent::Item(item)
+                        arkret_wire::EventBatchReceiptEvent::Item(item)
                         if item.event_id == binding.reanchor_event_id
-                            && item.event_digest == reanchor_event_digest
+                            && item.event_id.event_digest() == reanchor_event_digest
                 )
             })
         })

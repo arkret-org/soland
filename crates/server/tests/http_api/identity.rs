@@ -205,7 +205,6 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
         events: vec![
             arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
                 event_id: genesis.event_id,
-                event_digest: create_digest,
                 kind: arkret_wire::NonEmptyString::new(
                     arkret_wire::EventKind::RealmCreate.as_str(),
                 )
@@ -213,7 +212,6 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
             }),
             arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
                 event_id: authorize.event_id,
-                event_digest: authorize_digest,
                 kind: arkret_wire::NonEmptyString::new(
                     arkret_wire::EventKind::DeviceAuthorize.as_str(),
                 )

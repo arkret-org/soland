@@ -266,22 +266,17 @@ CREATE TABLE public.agent_membership_cleanup_intents (
     cleanup_intent_digest text PRIMARY KEY,
     realm_id text NOT NULL,
     controller_terminal_event_id text NOT NULL UNIQUE,
-    status text NOT NULL CHECK (status IN ('agent_cleanup_pending', 'agent_cleanup_completed', 'agent_cleanup_overdue')),
     record_json jsonb NOT NULL,
     accepted_at timestamp with time zone NOT NULL,
     cleanup_due_at timestamp with time zone NOT NULL,
     completed_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL DEFAULT now(),
-    updated_at timestamp with time zone NOT NULL DEFAULT now(),
-    CHECK (
-        (status = 'agent_cleanup_completed' AND completed_at IS NOT NULL)
-        OR (status <> 'agent_cleanup_completed' AND completed_at IS NULL)
-    )
+    updated_at timestamp with time zone NOT NULL DEFAULT now()
 );
 
 CREATE INDEX agent_membership_cleanup_pending_idx
     ON public.agent_membership_cleanup_intents (cleanup_due_at, cleanup_intent_digest)
-    WHERE status IN ('agent_cleanup_pending', 'agent_cleanup_overdue');
+    WHERE completed_at IS NULL;
 
 CREATE TABLE public.applet_registrations (
     id text PRIMARY KEY,

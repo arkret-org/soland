@@ -1,10 +1,9 @@
 //! Atomic admission for caller-signed Native Agent membership cascades.
 
 use arkret_models_collaboration::governance::agent_membership_cascade::{
-    AgentCleanupPendingRecord, AgentCleanupStatus, AgentMembershipCascadeMode,
-    AgentMembershipCascadeOutcome, AgentMembershipCascadeOutcomeStatus,
-    AgentMembershipCascadeSchema, AgentMembershipCascadeSubmission,
-    MAX_AGENT_MEMBERSHIP_CASCADE_TRANSITIONS,
+    AgentCleanupRecord, AgentMembershipCascadeMode, AgentMembershipCascadeOutcome,
+    AgentMembershipCascadeOutcomeStatus, AgentMembershipCascadeSchema,
+    AgentMembershipCascadeSubmission, MAX_AGENT_MEMBERSHIP_CASCADE_TRANSITIONS,
 };
 use arkret_state::state::store::ControlProposalIngress;
 
@@ -415,7 +414,7 @@ async fn replay_outcome(
                         "emergency cleanup intent is unavailable",
                     )
                 })?;
-            if record.status != AgentCleanupStatus::AgentCleanupCompleted
+            if record.completed_at.is_none()
                 || record.agent_transition_event_ids.as_ref() != Some(&agent_event_ids)
             {
                 return Err(cascade_error(
@@ -658,7 +657,7 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
             )
             .await?;
             let accepted_at = prepared_controller.command.event.received_at;
-            let mut record = AgentCleanupPendingRecord {
+            let mut record = AgentCleanupRecord {
                 schema: AgentMembershipCascadeSchema::V1,
                 realm_id: controller_event.realm_id.clone(),
                 controller_authority: frozen.authority,
@@ -681,7 +680,6 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
                 expected_agent_ids: frozen.agent_ids,
                 cleanup_intent_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
                     .expect("fixed zero digest is valid"),
-                status: AgentCleanupStatus::AgentCleanupPending,
                 accepted_at,
                 cleanup_due_at: accepted_at
                     + chrono::Duration::hours(AGENT_CLEANUP_ALERT_AFTER_HOURS),
@@ -749,7 +747,7 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
                     "emergency cleanup does not bind the original initiator and terminal Event",
                 ));
             }
-            if record.status == AgentCleanupStatus::AgentCleanupCompleted {
+            if record.completed_at.is_some() {
                 return Err(cascade_error(
                     StatusCode::CONFLICT,
                     "duplicate_conflict",
@@ -952,7 +950,7 @@ async fn replay_federation_outcome(
                         "federated cleanup intent is unavailable",
                     )
                 })?;
-            if record.status != AgentCleanupStatus::AgentCleanupCompleted
+            if record.completed_at.is_none()
                 || record.agent_transition_event_ids.as_ref() != Some(&agent_event_ids)
             {
                 return Err(cascade_error(
@@ -1142,7 +1140,7 @@ async fn submit_federated_cascade_after_transport_validation(
             )
             .await?;
             let accepted_at = controller.command.event.received_at;
-            let mut record = AgentCleanupPendingRecord {
+            let mut record = AgentCleanupRecord {
                 schema: AgentMembershipCascadeSchema::V1,
                 realm_id: controller_event.realm_id.clone(),
                 controller_authority: frozen.authority,
@@ -1165,7 +1163,6 @@ async fn submit_federated_cascade_after_transport_validation(
                 expected_agent_ids: frozen.agent_ids,
                 cleanup_intent_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
                     .expect("fixed zero digest is valid"),
-                status: AgentCleanupStatus::AgentCleanupPending,
                 accepted_at,
                 cleanup_due_at: accepted_at
                     + chrono::Duration::hours(AGENT_CLEANUP_ALERT_AFTER_HOURS),

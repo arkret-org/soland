@@ -46,7 +46,7 @@ async fn stage_agent_membership_cascade(
     events: &[EventCommitRequest],
 ) -> PersistenceResult<()> {
     use arkret_models_collaboration::governance::agent_membership_cascade::{
-        AgentCleanupPendingRecord, AgentCleanupStatus, MAX_AGENT_MEMBERSHIP_CASCADE_TRANSITIONS,
+        AgentCleanupRecord, MAX_AGENT_MEMBERSHIP_CASCADE_TRANSITIONS,
     };
     use soland_storage::AgentMembershipCascadeCommit;
 
@@ -146,13 +146,12 @@ async fn stage_agent_membership_cascade(
             .optional()
             .map_err(PersistenceError::database)?;
             if let Some(existing) = existing {
-                let existing =
-                    serde_json::from_value::<AgentCleanupPendingRecord>(existing.record_json)
-                        .map_err(|error| {
-                            PersistenceError::Internal(format!(
-                                "stored Agent cleanup intent is invalid: {error}"
-                            ))
-                        })?;
+                let existing = serde_json::from_value::<AgentCleanupRecord>(existing.record_json)
+                    .map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "stored Agent cleanup intent is invalid: {error}"
+                    ))
+                })?;
                 if existing != **record {
                     return Err(PersistenceError::Conflict(
                         "duplicate_conflict: cleanup intent digest names different content"
@@ -167,9 +166,9 @@ async fn stage_agent_membership_cascade(
                 })?;
                 sql_query(
                     "INSERT INTO agent_membership_cleanup_intents \
-                     (cleanup_intent_digest, realm_id, controller_terminal_event_id, status, \
+                     (cleanup_intent_digest, realm_id, controller_terminal_event_id, \
                       record_json, accepted_at, cleanup_due_at, completed_at, created_at, updated_at) \
-                     VALUES ($1, $2, $3, 'agent_cleanup_pending', $4, $5, $6, NULL, $5, $5)",
+                     VALUES ($1, $2, $3, $4, $5, $6, NULL, $5, $5)",
                 )
                 .bind::<Text, _>(record.cleanup_intent_digest.as_str())
                 .bind::<Text, _>(record.realm_id.as_str())
@@ -202,14 +201,12 @@ async fn stage_agent_membership_cascade(
                     "failed_precondition: Agent cleanup intent is unavailable".to_owned(),
                 )
             })?;
-            let mut record = serde_json::from_value::<AgentCleanupPendingRecord>(
-                existing.record_json,
-            )
-            .map_err(|error| {
-                PersistenceError::Internal(format!(
-                    "stored Agent cleanup intent is invalid: {error}"
-                ))
-            })?;
+            let mut record = serde_json::from_value::<AgentCleanupRecord>(existing.record_json)
+                .map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "stored Agent cleanup intent is invalid: {error}"
+                    ))
+                })?;
             let submitted_event_ids = agent_transition_event_ids
                 .iter()
                 .map(arkret_wire::EventId::as_str)
@@ -233,7 +230,7 @@ async fn stage_agent_membership_cascade(
                         .to_owned(),
                 ));
             }
-            if record.status == AgentCleanupStatus::AgentCleanupCompleted {
+            if record.completed_at.is_some() {
                 if record.agent_transition_event_ids.as_ref() != Some(agent_transition_event_ids) {
                     return Err(PersistenceError::Conflict(
                         "duplicate_conflict: completed Agent cleanup replay differs".to_owned(),
@@ -241,7 +238,6 @@ async fn stage_agent_membership_cascade(
                 }
                 return Ok(());
             }
-            record.status = AgentCleanupStatus::AgentCleanupCompleted;
             record.completed_at = Some(*completed_at);
             record.agent_transition_event_ids = Some(agent_transition_event_ids.clone());
             record.validate().map_err(|error| {
@@ -256,7 +252,7 @@ async fn stage_agent_membership_cascade(
             })?;
             sql_query(
                 "UPDATE agent_membership_cleanup_intents SET \
-                     status = 'agent_cleanup_completed', record_json = $2, completed_at = $3, \
+                     record_json = $2, completed_at = $3, \
                      updated_at = $3 WHERE cleanup_intent_digest = $1",
             )
             .bind::<Text, _>(cleanup_intent_digest.as_str())

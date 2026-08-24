@@ -733,8 +733,9 @@ async fn insert_event_batch_receipt(
     for event in &receipt.events {
         let (digest_suite, digest) = match event {
             arkret_wire::EventBatchReceiptEvent::Item(item) => {
+                let event_digest = item.event_id.event_digest();
                 let identity =
-                    ids::event_identity_parts(item.event_id.as_str(), item.event_digest.as_str())?;
+                    ids::event_identity_parts(item.event_id.as_str(), event_digest.as_str())?;
                 (identity.digest_suite, identity.digest)
             }
             arkret_wire::EventBatchReceiptEvent::Digest(digest) => {

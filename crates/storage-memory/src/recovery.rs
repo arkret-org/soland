@@ -480,7 +480,7 @@ mod tests {
         AuthoritySetPolicy, AuthoritySetPolicyKind, AuthoritySetPolicySource, AuthoritySetRef,
         AuthoritySetSourceKind, AuthorizationLease, AuthorizationLeaseId, BackupId,
         BackupObjectRef, BackupRotationBinding, BackupRotationKind, BackupRotationPlan,
-        BackupSeriesId, CanonicalPublicMaterial, DeviceId, DidCoreId, DidFullId, DidUrl, EventId,
+        BackupSeriesId, CanonicalPublicMaterial, DeviceId, DidFullId, DidUrl, EventId,
         EventInitialSubmission, EventsSubmitBatchRequestBody, Hash, Hlc, LeaseBasisRef,
         PayloadProof, PreparedEventUnit, RealmId, RiskTier, SchemaId, ScopeRef, SealId,
         SecurityRotationTransactionCreateRequest, SecurityTransactionCreateRequest,
@@ -650,11 +650,7 @@ mod tests {
         }
     }
 
-    fn event_unit(
-        service_id: &DidCoreId,
-        kind: impl AsRef<str>,
-        seed: &str,
-    ) -> (EventId, PreparedEventUnit) {
+    fn event_unit(kind: impl AsRef<str>, seed: &str) -> (EventId, PreparedEventUnit) {
         let authorization_lease = erase_authorization_lease();
         let event = arkret_wire::test_support::raw_event_at(
             kind.as_ref(),
@@ -679,7 +675,7 @@ mod tests {
         let event_id = request.events[0].event.event_id.clone();
         (
             event_id,
-            PreparedEventUnit::new(service_id.clone(), request).unwrap(),
+            PreparedEventUnit::new(arkret_canonical::DigestSuite::Sha256, request).unwrap(),
         )
     }
 
@@ -688,11 +684,11 @@ mod tests {
             &DidFullId::new("did:web:principal.example").unwrap(),
         )
         .unwrap();
-        let (_revoke_event_id, revoke_unit) = event_unit(&service_id, "ak.device.revoke", "revoke");
+        let (_revoke_event_id, revoke_unit) = event_unit("ak.device.revoke", "revoke");
         let (secret_active_series_event_id, secret_active_series_unit) =
-            event_unit(&service_id, "ak.key_backup.active_series", "secret-storage");
+            event_unit("ak.key_backup.active_series", "secret-storage");
         let (mls_active_series_event_id, mls_active_series_unit) =
-            event_unit(&service_id, "ak.key_backup.active_series", "mls-history");
+            event_unit("ak.key_backup.active_series", "mls-history");
         let secret_binding = BackupRotationBinding {
             backup_kind: BackupRotationKind::SecretStorage,
             previous_series_id: BackupSeriesId::new(

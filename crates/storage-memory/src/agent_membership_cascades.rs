@@ -1,13 +1,11 @@
-use arkret_models_collaboration::governance::agent_membership_cascade::{
-    AgentCleanupPendingRecord, AgentCleanupStatus,
-};
+use arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupRecord;
 use arkret_wire::Hash;
 
 use super::*;
 
 #[derive(Clone, Default)]
 pub(crate) struct MemoryAgentMembershipCascadeStore {
-    pub(crate) data: Arc<Mutex<BTreeMap<String, AgentCleanupPendingRecord>>>,
+    pub(crate) data: Arc<Mutex<BTreeMap<String, AgentCleanupRecord>>>,
 }
 
 impl MemoryAgentMembershipCascadeStore {
@@ -21,57 +19,31 @@ impl soland_storage::AgentMembershipCascadeStore for MemoryAgentMembershipCascad
     async fn agent_cleanup_intent(
         &self,
         cleanup_intent_digest: &Hash,
-    ) -> PersistenceResult<Option<AgentCleanupPendingRecord>> {
-        let mut records = self.data.lock();
-        let record = records.get_mut(cleanup_intent_digest.as_str());
-        if let Some(record) = record
-            && record.status == AgentCleanupStatus::AgentCleanupPending
-            && record.cleanup_due_at <= Utc::now()
-        {
-            record.status = AgentCleanupStatus::AgentCleanupOverdue;
-        }
+    ) -> PersistenceResult<Option<AgentCleanupRecord>> {
+        let records = self.data.lock();
         Ok(records.get(cleanup_intent_digest.as_str()).cloned())
     }
 
     async fn agent_cleanup_intent_for_terminal_event(
         &self,
         controller_terminal_event_id: &arkret_wire::EventId,
-    ) -> PersistenceResult<Option<AgentCleanupPendingRecord>> {
-        let mut records = self.data.lock();
-        let digest = records.iter().find_map(|(digest, record)| {
-            (record.controller_terminal_event_id == *controller_terminal_event_id)
-                .then(|| digest.clone())
-        });
-        let Some(digest) = digest else {
-            return Ok(None);
-        };
-        let record = records
-            .get_mut(&digest)
-            .expect("selected cleanup intent exists");
-        if record.status == AgentCleanupStatus::AgentCleanupPending
-            && record.cleanup_due_at <= Utc::now()
-        {
-            record.status = AgentCleanupStatus::AgentCleanupOverdue;
-        }
-        Ok(Some(record.clone()))
+    ) -> PersistenceResult<Option<AgentCleanupRecord>> {
+        let records = self.data.lock();
+        Ok(records
+            .values()
+            .find(|record| record.controller_terminal_event_id == *controller_terminal_event_id)
+            .cloned())
     }
 
     async fn incomplete_agent_cleanup_intents(
         &self,
-        now: chrono::DateTime<Utc>,
+        _now: chrono::DateTime<Utc>,
         limit: usize,
-    ) -> PersistenceResult<Vec<AgentCleanupPendingRecord>> {
-        let mut records = self.data.lock();
-        for record in records.values_mut() {
-            if record.status == AgentCleanupStatus::AgentCleanupPending
-                && record.cleanup_due_at <= now
-            {
-                record.status = AgentCleanupStatus::AgentCleanupOverdue;
-            }
-        }
+    ) -> PersistenceResult<Vec<AgentCleanupRecord>> {
+        let records = self.data.lock();
         let mut incomplete = records
             .values()
-            .filter(|record| record.status != AgentCleanupStatus::AgentCleanupCompleted)
+            .filter(|record| record.completed_at.is_none())
             .cloned()
             .collect::<Vec<_>>();
         incomplete.sort_by(|left, right| {

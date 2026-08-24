@@ -12,14 +12,12 @@ use crate::{MemoryDeviceRevocationState, SolandMemoryPersistenceStore};
 fn stage_agent_membership_cascade(
     records: &mut std::collections::BTreeMap<
         String,
-        arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupPendingRecord,
+        arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupRecord,
     >,
     transition: Option<&soland_storage::AgentMembershipCascadeCommit>,
     events: &[EventCommitRequest],
 ) -> PersistenceResult<()> {
-    use arkret_models_collaboration::governance::agent_membership_cascade::{
-        AgentCleanupStatus, MAX_AGENT_MEMBERSHIP_CASCADE_TRANSITIONS,
-    };
+    use arkret_models_collaboration::governance::agent_membership_cascade::MAX_AGENT_MEMBERSHIP_CASCADE_TRANSITIONS;
     use soland_storage::AgentMembershipCascadeCommit;
 
     let Some(transition) = transition else {
@@ -170,7 +168,7 @@ fn stage_agent_membership_cascade(
                     "duplicate_conflict: emergency Agent cleanup actor set mismatch".to_owned(),
                 ));
             }
-            if record.status == AgentCleanupStatus::AgentCleanupCompleted {
+            if record.completed_at.is_some() {
                 if record.agent_transition_event_ids.as_ref() != Some(agent_transition_event_ids) {
                     return Err(PersistenceError::Conflict(
                         "duplicate_conflict: completed Agent cleanup replay differs".to_owned(),
@@ -178,7 +176,6 @@ fn stage_agent_membership_cascade(
                 }
                 return Ok(());
             }
-            record.status = AgentCleanupStatus::AgentCleanupCompleted;
             record.completed_at = Some(*completed_at);
             record.agent_transition_event_ids = Some(agent_transition_event_ids.clone());
             record.validate().map_err(|error| {
@@ -1135,14 +1132,13 @@ mod tests {
         controller: &EventCommitRequest,
         realm_id: &str,
         agent_ids: Vec<arkret_wire::DidCoreId>,
-    ) -> arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupPendingRecord
-    {
+    ) -> arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupRecord {
         use arkret_models_collaboration::governance::agent_membership_cascade::{
-            AgentCleanupPendingRecord, AgentCleanupStatus, AgentMembershipCascadeSchema,
+            AgentCleanupRecord, AgentMembershipCascadeSchema,
         };
 
         let accepted_at = controller.event.received_at;
-        let mut record = AgentCleanupPendingRecord {
+        let mut record = AgentCleanupRecord {
             schema: AgentMembershipCascadeSchema::V1,
             realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).unwrap(),
             controller_authority: arkret_wire::PrincipalAuthorityKey {
@@ -1176,7 +1172,6 @@ mod tests {
             expected_agent_ids: agent_ids,
             cleanup_intent_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .unwrap(),
-            status: AgentCleanupStatus::AgentCleanupPending,
             accepted_at,
             cleanup_due_at: accepted_at + Duration::hours(1),
             completed_at: None,
@@ -1604,10 +1599,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(
-            completed.status,
-            arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupStatus::AgentCleanupCompleted
-        );
+        assert!(completed.completed_at.is_some());
         assert_eq!(
             completed.agent_transition_event_ids,
             Some(cleanup_event_ids)

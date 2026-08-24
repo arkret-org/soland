@@ -151,9 +151,9 @@ impl PersistenceHandle {
         cleanup_intent_digest: &arkret_wire::Hash,
     ) -> crate::ServiceResult<
         Option<
-            arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupPendingRecord,
+            arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupRecord,
         >,
-    >{
+    > {
         Ok(self
             .persistence
             .agent_membership_cascades()
@@ -166,9 +166,9 @@ impl PersistenceHandle {
         controller_terminal_event_id: &arkret_wire::EventId,
     ) -> crate::ServiceResult<
         Option<
-            arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupPendingRecord,
+            arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupRecord,
         >,
-    >{
+    > {
         Ok(self
             .persistence
             .agent_membership_cascades()
@@ -181,10 +181,8 @@ impl PersistenceHandle {
         now: chrono::DateTime<chrono::Utc>,
         limit: usize,
     ) -> crate::ServiceResult<
-        Vec<
-            arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupPendingRecord,
-        >,
-    >{
+        Vec<arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupRecord>,
+    > {
         Ok(self
             .persistence
             .agent_membership_cascades()
