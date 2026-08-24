@@ -16,77 +16,10 @@ pub(crate) fn validate_event_envelope<'a>(
     validate_event_envelope_with_context(state, session, envelope, &[], None)
 }
 
-fn validate_mls_commit_digest(kind: &str, payload: &Value) -> Result<(), EventValidationError> {
-    if kind != arkret_wire::event_kind_str::MLS_COMMIT {
-        return Ok(());
-    }
-    let commit_bytes = payload
-        .get("commit_bytes_b64")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                arkret_wire::ErrorCode::SCHEMA_VIOLATION,
-                "MLS Commit is missing commit_bytes_b64",
-            )
-        })?;
-    let commit_bytes = URL_SAFE_NO_PAD.decode(commit_bytes).map_err(|_| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            arkret_wire::ErrorCode::SCHEMA_VIOLATION,
-            "MLS Commit commit_bytes_b64 is not canonical unpadded base64url",
-        )
-    })?;
-    let carried_digest = payload
-        .get("commit_digest")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                arkret_wire::ErrorCode::SCHEMA_VIOLATION,
-                "MLS Commit is missing commit_digest",
-            )
-        })?;
-    if canonical::sha256_digest(&commit_bytes) != carried_digest {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            arkret_wire::ErrorCode::SCHEMA_VIOLATION,
-            "MLS Commit commit_digest does not match commit_bytes_b64",
-        ));
-    }
-    Ok(())
-}
-
 fn validate_canonical_mls_group_id(
-    kind: &str,
-    payload: &Value,
+    group_id: &str,
+    scope: &arkret_wire::ScopeRef,
 ) -> Result<(), EventValidationError> {
-    if !matches!(
-        kind,
-        arkret_wire::event_kind_str::MLS_GENESIS
-            | arkret_wire::event_kind_str::MLS_COMMIT
-            | arkret_wire::event_kind_str::MLS_PROPOSAL
-            | arkret_wire::event_kind_str::MLS_WELCOME
-    ) {
-        return Ok(());
-    }
-    let Some(group_id) = crate::routing::mls::payload_fields::mls_group_id(payload) else {
-        return Ok(());
-    };
-    let Some(scope) = crate::routing::mls::payload_fields::group_state_effective_scope(payload)
-    else {
-        // A proposal without a governance binding is resolved against its
-        // already-admitted group by the reducer; it carries no scope to check
-        // at this layer.
-        return Ok(());
-    };
-    let scope = serde_json::from_value::<arkret_wire::ScopeRef>(scope).map_err(|_| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            arkret_wire::ErrorCode::SCHEMA_VIOLATION,
-            "MLS effective_scope is invalid",
-        )
-    })?;
     let expected = scope.canonical_mls_group_id().map_err(|_| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -102,6 +35,14 @@ fn validate_canonical_mls_group_id(
         ));
     }
     Ok(())
+}
+
+fn invalid_typed_mls_payload(error: serde_json::Error) -> EventValidationError {
+    event_validation_error(
+        StatusCode::BAD_REQUEST,
+        arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+        format!("MLS payload violates its closed SDK type: {error}"),
+    )
 }
 
 pub(crate) fn validate_event_envelope_with_context<'a>(
@@ -679,14 +620,49 @@ async fn validate_event_envelope_with_ingress(
     // The Principal Server owns only deterministic wire admission and epoch
     // CAS. RFC 9420 group-state/frontier verification remains receiver-owned;
     // accepting a durable Commit never authorizes a member to apply it.
-    validate_mls_commit_digest(
-        &kind,
-        object.get("payload").expect("payload required above"),
-    )?;
-    validate_canonical_mls_group_id(
-        &kind,
-        object.get("payload").expect("payload required above"),
-    )?;
+    let payload = object.get("payload").expect("payload required above");
+    match arkret_wire::EventKind::from(kind.as_str()) {
+        arkret_wire::EventKind::MlsGenesis => {
+            let payload = serde_json::from_value::<
+                arkret_models_collaboration::events_payloads::mls::MlsGenesisPayload,
+            >(payload.clone())
+            .map_err(invalid_typed_mls_payload)?;
+            validate_canonical_mls_group_id(
+                payload.mls_group_id.as_str(),
+                &payload.effective_scope,
+            )?;
+        }
+        arkret_wire::EventKind::MlsCommit => {
+            let payload =
+                serde_json::from_value::<arkret_models_crypto::MlsCommitPayload>(payload.clone())
+                    .map_err(invalid_typed_mls_payload)?;
+            validate_canonical_mls_group_id(
+                payload.mls_group_id(),
+                payload.governance_binding().effective_scope(),
+            )?;
+        }
+        arkret_wire::EventKind::MlsProposal => {
+            let payload = serde_json::from_value::<
+                arkret_models_collaboration::events_payloads::mls::MlsProposalPayload,
+            >(payload.clone())
+            .map_err(invalid_typed_mls_payload)?;
+            validate_canonical_mls_group_id(
+                payload.mls_group_id.as_str(),
+                payload.governance_binding.effective_scope(),
+            )?;
+        }
+        arkret_wire::EventKind::MlsWelcome => {
+            let payload = serde_json::from_value::<
+                arkret_models_collaboration::events_payloads::mls::MlsWelcomePayload,
+            >(payload.clone())
+            .map_err(invalid_typed_mls_payload)?;
+            validate_canonical_mls_group_id(
+                payload.mls_group_id.as_str(),
+                payload.governance_binding.effective_scope(),
+            )?;
+        }
+        _ => {}
+    }
     capability_grant::validate_capability_grant_body(&kind, actor_id.as_str(), object)?;
 
     // The capability gate needs the write set, and v1 carries none on the wire:
@@ -1448,32 +1424,6 @@ mod security_frontier_material_tests {
     }
 
     #[test]
-    fn mls_commit_digest_is_recomputed_from_inline_bytes() {
-        let bytes = b"accepted MLS commit bytes";
-        let payload = serde_json::json!({
-            "commit_bytes_b64": URL_SAFE_NO_PAD.encode(bytes),
-            "commit_digest": canonical::sha256_digest(bytes)
-        });
-        validate_mls_commit_digest(arkret_wire::EventKind::MlsCommit.as_str(), &payload).unwrap();
-
-        let mut forged = payload;
-        forged["commit_digest"] = serde_json::json!(canonical::sha256_digest(b"other bytes"));
-        let error = validate_mls_commit_digest(arkret_wire::EventKind::MlsCommit.as_str(), &forged)
-            .unwrap_err();
-        assert_eq!(error.status, StatusCode::BAD_REQUEST);
-        assert_eq!(error.code, arkret_wire::ErrorCode::SCHEMA_VIOLATION);
-    }
-
-    #[test]
-    fn non_commit_events_do_not_use_the_commit_digest_gate() {
-        validate_mls_commit_digest(
-            arkret_wire::EventKind::MlsGenesis.as_str(),
-            &serde_json::json!({}),
-        )
-        .unwrap();
-    }
-
-    #[test]
     fn mls_group_id_must_match_effective_scope() {
         let realm_id = arkret_wire::RealmId::new(
             "ak:realm:AY789mrKRCQEVlbVgiTgLdjVO5oCMJiUCrF-D-JlRNxI".to_owned(),
@@ -1483,22 +1433,8 @@ mod security_frontier_material_tests {
             realm_id: realm_id.clone(),
         };
         let group_id = scope.canonical_mls_group_id().unwrap();
-        let payload = serde_json::json!({
-            "mls_group_id": group_id,
-            "effective_scope": scope
-        });
-        validate_canonical_mls_group_id(arkret_wire::EventKind::MlsGenesis.as_str(), &payload)
-            .unwrap();
-
-        let mut mismatched = payload;
-        mismatched["mls_group_id"] = serde_json::json!("wrong-group");
-        assert!(
-            validate_canonical_mls_group_id(
-                arkret_wire::EventKind::MlsGenesis.as_str(),
-                &mismatched,
-            )
-            .is_err()
-        );
+        validate_canonical_mls_group_id(group_id.as_str(), &scope).unwrap();
+        assert!(validate_canonical_mls_group_id("wrong-group", &scope).is_err());
     }
 
     #[test]

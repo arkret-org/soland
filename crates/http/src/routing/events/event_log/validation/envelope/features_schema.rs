@@ -270,7 +270,7 @@ pub(crate) fn validate_event_schema_and_payload(
             )
         })?;
     }
-    if arkret_wire::EventKind::from(kind) == arkret_wire::EventKind::SchemaDefine {
+    if kind == arkret_wire::EventKind::SchemaDefine.as_str() {
         arkret_schema::validate_schema_definition_payload(payload).map_err(|error| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
