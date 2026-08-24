@@ -149,29 +149,22 @@ async fn issue_ice_config(
     // enough to admit it.
     let refresh_lead_seconds: u32 =
         clamp_refresh_lead_seconds(state.config().ice.refresh_lead_seconds, ttl_seconds);
-    let expires_at = issued_at + Duration::seconds(i64::from(ttl_seconds));
-    // `webrtc-signaling.md` §4.1 — coarse-grained bucket the TURN pseudonym
-    // is derived against. v1 fixes `bucket_seconds = 300`; `issued_at_bucket
-    // = floor(issued_at / bucket_seconds) * bucket_seconds`. Refreshes inside
-    // the same bucket land on the same pseudonym (§4.2 active-leg reuse),
-    // while crossing into the next bucket rotates it.
-    let bucket_seconds: u32 = ICE_PSEUDONYM_BUCKET_SECONDS;
-    let issued_at_bucket = floor_to_bucket(issued_at, bucket_seconds);
+    let credential_expires_at = issued_at
+        .checked_add_signed(Duration::seconds(i64::from(ttl_seconds)))
+        .ok_or_else(|| AppError::internal("ICE credential expiry overflow"))?;
+    // `webrtc-signaling.md` §4.1 — the TURN pseudonym binds the fixed v1
+    // `ice_bucket(issued_at)`. The bucket is derived from the signed issuance
+    // time and is never repeated on wire.
+    let ice_bucket = ice_bucket(issued_at);
     let turn_required = body.turn_required;
     // `webrtc-signaling.md` §4.1 — REST-style (draft-uberti) TURN credential.
     // username = `<expiry-unix>:<pairwise-pseudonym>`; the pseudonym keeps the
     // existing private-key-derived `ak_pseudonym_call_<16hex>` form (does not
     // leak identity), and `<expiry-unix>` is the credential's own expiry so
     // coturn enforces TTL on its side.
-    let pseudonym = pairwise_turn_username(
-        state,
-        realm_id,
-        call_id,
-        actor_id,
-        device_id,
-        issued_at_bucket,
-    );
-    let turn_username = format!("{}:{}", expires_at.timestamp(), pseudonym);
+    let pseudonym =
+        pairwise_turn_username(state, realm_id, call_id, actor_id, device_id, ice_bucket);
+    let turn_username = format!("{}:{}", credential_expires_at.timestamp(), pseudonym);
     // credential = base64( HMAC-SHA256(turn_shared_secret, username) ) — the
     // HMAC is taken over the full REST-style username (SHA256, never SHA1).
     let turn_credential = turn_rest_credential(state, &turn_username);
@@ -200,9 +193,6 @@ async fn issue_ice_config(
         ttl_seconds,
         refresh_lead_seconds,
         issued_at,
-        issued_at_bucket,
-        bucket_seconds,
-        expires_at: Some(expires_at),
         turn_required,
         constraints: None,
         next_retry_at: None,
@@ -253,9 +243,9 @@ fn clamp_refresh_lead_seconds(configured: u32, ttl_seconds: u32) -> u32 {
     }
 }
 
-/// `floor(timestamp / bucket_seconds) * bucket_seconds` as a UTC timestamp.
-fn floor_to_bucket(timestamp: DateTime<Utc>, bucket_seconds: u32) -> DateTime<Utc> {
-    let bucket = i64::from(bucket_seconds).max(1);
+/// Fixed v1 `ice_bucket(t) = floor(unix_seconds(t) / 300) * 300`.
+fn ice_bucket(timestamp: DateTime<Utc>) -> DateTime<Utc> {
+    let bucket = i64::from(ICE_PSEUDONYM_BUCKET_SECONDS);
     let floored = timestamp.timestamp().div_euclid(bucket) * bucket;
     DateTime::<Utc>::from_timestamp(floored, 0).unwrap_or(timestamp)
 }
@@ -267,7 +257,7 @@ fn floor_to_bucket(timestamp: DateTime<Utc>, bucket_seconds: u32) -> DateTime<Ut
 /// Freshness (§4.1 lines 204/213): the pseudonym is HMAC-derived under the
 /// media-service private key (the notary signing seed) — *not* a plain hash
 /// of stable ids — bound to `(realm_id, call_id, actor_id, device_id,
-/// issued_at_bucket)` plus a fresh per-bucket `nonce` derived from the same
+/// ice_bucket(issued_at))` plus a fresh per-bucket `nonce` derived from the same
 /// secret. Because the secret is private to this media service, the result is
 /// unlinkable to the TURN operator yet stable across refreshes within one
 /// bucket (§4.2 active-leg reuse) and rotates when the bucket advances.
@@ -277,10 +267,10 @@ fn pairwise_turn_username(
     call_id: &str,
     actor_id: &str,
     device_id: &str,
-    issued_at_bucket: DateTime<Utc>,
+    ice_bucket: DateTime<Utc>,
 ) -> String {
     let secret = state.notary_signing_key().to_bytes();
-    let bucket = issued_at_bucket.timestamp();
+    let bucket = ice_bucket.timestamp();
     // Fresh per-(call,actor,device,bucket) nonce, derived from the private
     // media-service secret so it is not recomputable off stable ids alone and
     // not a deterministic function of the public identifiers.
@@ -293,7 +283,7 @@ fn pairwise_turn_username(
         "call_id": call_id,
         "actor_id": actor_id,
         "device_id": device_id,
-        "issued_at_bucket": bucket,
+        "ice_bucket": bucket,
         "nonce": URL_SAFE_NO_PAD.encode(nonce),
     });
     let pseudonym_bytes = arkret_canonical::canonical_json_bytes(&pseudonym_input)

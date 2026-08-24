@@ -116,7 +116,6 @@ async fn current_authenticated_agent_signer_evidence(
         agent_id,
         verification_method,
         event_id,
-        event_digest,
         receiver_service_id,
     } = selector
     {
@@ -126,7 +125,6 @@ async fn current_authenticated_agent_signer_evidence(
                 agent_id: agent_id.clone(),
                 verification_method: verification_method.clone(),
                 event_id: event_id.clone(),
-                event_digest: event_digest.clone(),
                 receiver_service_id: receiver_service_id.clone(),
             },
         )
@@ -230,7 +228,6 @@ async fn historical_authenticated_agent_signer_evidence(
     if signer_id != &key.agent_id
         || verification_method != &key.verification_method
         || event_admission_receipt.event_id != key.event_id
-        || event_admission_receipt.event_digest != key.event_digest
         || event_admission_receipt.receiver_service_id != key.receiver_service_id
     {
         return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
@@ -408,7 +405,6 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
             agent_id: receipt.agent_id.clone(),
             verification_method: receipt.verification_method.clone(),
             event_id: receipt.event_id.clone(),
-            event_digest: receipt.event_digest.clone(),
             receiver_service_id: receipt.receiver_service_id.clone(),
         })
         .await

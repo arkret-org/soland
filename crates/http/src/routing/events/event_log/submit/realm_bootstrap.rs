@@ -410,11 +410,6 @@ pub(super) async fn submit_realm_bootstrap_batch(
                 None,
             );
             outcome.pending_delivery_count = pending_delivery_count;
-            outcome.delivery_state = if pending_delivery_count == 0 {
-                arkret_models_collaboration::http_bodies::EventDeliveryState::Complete
-            } else {
-                arkret_models_collaboration::http_bodies::EventDeliveryState::Pending
-            };
             return Ok(outcome);
         }
         soland_storage::DirectConversationFoundingCommitOutcome::IdempotencyConflict => {
@@ -516,11 +511,6 @@ pub(super) async fn submit_realm_bootstrap_batch(
     outcome.ingress_receipts = ingress_receipts;
     outcome.control_proposal_acks = control_proposal_acks;
     outcome.pending_delivery_count = pending_delivery_count;
-    outcome.delivery_state = if pending_delivery_count == 0 {
-        arkret_models_collaboration::http_bodies::EventDeliveryState::Complete
-    } else {
-        arkret_models_collaboration::http_bodies::EventDeliveryState::Pending
-    };
     Ok(outcome)
 }
 

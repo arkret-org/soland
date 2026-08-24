@@ -3211,10 +3211,9 @@ async fn validate_retained_history_cut(
         &replay_seals,
         &replay_events,
         &checkpoint_dependencies,
-        |event, digest_suite, evidence, dependencies| {
+        |event, _digest_suite, evidence, dependencies| {
             arkret::verify_native_agent_historical_event_key(
                 event,
-                digest_suite,
                 evidence,
                 dependencies,
                 |trust_request| verify_native_agent_history_trust(state, trust_request),

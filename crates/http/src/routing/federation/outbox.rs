@@ -1345,7 +1345,7 @@ impl FederationDispatcher {
             serde_json::from_str(response_body)
                 .map_err(|error| format!("federation outcome decode failed: {error}"))?;
         outcome
-            .validate_delivery_state()
+            .validate_delivery_invariants()
             .map_err(|error| format!("federation outcome validation failed: {error}"))?;
         let delivered = outcome
             .accepted
@@ -1382,7 +1382,7 @@ impl FederationDispatcher {
                 return Err("outcome contains an unexpected Agent Event receipt".to_owned());
             };
             let signer_id = event.executed_by.as_ref().unwrap_or(&event.actor_id);
-            if receipt.event_digest != admission.event_digest
+            if receipt.event_digest() != admission.event_digest
                 || receipt.realm_id != event.realm_id
                 || receipt.producer_accepted_at != admission.accepted_at
                 || receipt.agent_id != *signer_id
@@ -2699,7 +2699,6 @@ mod tests {
             r#"{{
             "status":"partial",
             "accepted":["{}"],
-            "delivery_state":"complete",
             "pending_delivery_count":0,
             "rejected":[{{
                 "id":"{pending_event_id}",

@@ -336,7 +336,7 @@ pub(in crate::routing) async fn submit_event_value(
     }
     // A cross-actor `.others` watch write needs its ak.audit.accessed partner in the same
     // batch (strand-and-message.md 8.4), so a single-Event submit can never carry one.
-    validate_watch_set_others_audit_pairs(state, std::slice::from_ref(&envelope))
+    validate_watch_set_others_audit_pairs(std::slice::from_ref(&envelope))
         .map_err(SubmitOneError::from)?;
     // `event-auth-state-resolution.md` §5(1) — a managed Agent PCR genesis is
     // the delegated branch of the closed `ak.realm.create` anchor unit and
@@ -791,11 +791,6 @@ fn apply_delivery_summary_from_intents(
         .collect::<std::collections::BTreeSet<_>>()
         .len() as u32;
     response.outcome.pending_delivery_count = pending_targets;
-    response.outcome.delivery_state = if pending_targets == 0 {
-        arkret_models_collaboration::http_bodies::EventDeliveryState::Complete
-    } else {
-        arkret_models_collaboration::http_bodies::EventDeliveryState::Pending
-    };
 }
 
 async fn apply_durable_delivery_summary(
@@ -805,11 +800,6 @@ async fn apply_durable_delivery_summary(
     let pending_targets =
         durable_pending_delivery_count(state, std::slice::from_ref(&response.event_id)).await?;
     response.outcome.pending_delivery_count = pending_targets;
-    response.outcome.delivery_state = if pending_targets == 0 {
-        arkret_models_collaboration::http_bodies::EventDeliveryState::Complete
-    } else {
-        arkret_models_collaboration::http_bodies::EventDeliveryState::Pending
-    };
     Ok(())
 }
 

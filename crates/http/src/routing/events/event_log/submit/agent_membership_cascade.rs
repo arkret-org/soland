@@ -667,16 +667,6 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
                     principal_server_id: local_service_id(state)?,
                 },
                 controller_terminal_event_id: controller_event_id.clone(),
-                controller_terminal_event_digest: arkret_wire::Hash::new(
-                    prepared_controller.command.event.canonical_digest.clone(),
-                )
-                .map_err(|error| {
-                    cascade_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("validated terminal Event digest is invalid: {error}"),
-                    )
-                })?,
                 expected_agent_ids: frozen.agent_ids,
                 cleanup_intent_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
                     .expect("fixed zero digest is valid"),
@@ -1150,16 +1140,6 @@ async fn submit_federated_cascade_after_transport_validation(
                     principal_server_id: source_service_id.clone(),
                 },
                 controller_terminal_event_id: controller_event_id.clone(),
-                controller_terminal_event_digest: arkret_wire::Hash::new(
-                    controller.command.event.canonical_digest.clone(),
-                )
-                .map_err(|error| {
-                    cascade_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("federated terminal Event digest is invalid: {error}"),
-                    )
-                })?,
                 expected_agent_ids: frozen.agent_ids,
                 cleanup_intent_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
                     .expect("fixed zero digest is valid"),

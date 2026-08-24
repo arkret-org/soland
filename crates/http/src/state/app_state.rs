@@ -2615,16 +2615,6 @@ mod membership_hydration_tests {
                 "verification_method": "did:web:alice.example#device-key",
                 "signature_algorithm": "Ed25519",
                 "signature": "AA",
-                "signed_fields": [
-                    "schema",
-                    "actor_id",
-                    "backup_kind",
-                    "active_series_id",
-                    "series_pointer_version",
-                    "previous_series_ids",
-                    "frontier_ref",
-                    "issued_at"
-                ],
                 "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
             }
         });
@@ -2688,11 +2678,6 @@ mod membership_hydration_tests {
                 "verification_method": "did:web:alice.example#device-key",
                 "signature_algorithm": "Ed25519",
                 "signature": "AA",
-                "signed_fields": [
-                    "schema", "actor_id", "backup_kind", "active_series_id",
-                    "series_pointer_version", "previous_series_ids", "frontier_ref",
-                    "issued_at"
-                ],
                 "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
             }
         });

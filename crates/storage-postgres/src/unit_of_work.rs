@@ -124,8 +124,6 @@ async fn stage_agent_membership_cascade(
             let initiator = typed.executed_by.as_ref().unwrap_or(&typed.actor_id);
             if terminal.event.actor_id != record.controller_authority.principal_id.as_str()
                 || terminal.event.realm_id.as_deref() != Some(record.realm_id.as_str())
-                || terminal.event.canonical_digest
-                    != record.controller_terminal_event_digest.as_str()
                 || typed.principal_server_id != record.controller_authority.principal_server_id
                 || initiator != &record.initiator_authority.principal_id
             {

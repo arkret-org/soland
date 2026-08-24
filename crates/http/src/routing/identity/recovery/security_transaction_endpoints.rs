@@ -1510,8 +1510,6 @@ async fn continue_issue_terminal_receipt(
             }
         }
     }
-    let authorization_event_digest = Hash::new(authorization_event.canonical_digest)
-        .map_err(|error| AppError::internal(error.to_string()))?;
     let completed_at = chrono::Utc::now();
     let completion_attestation_body = arkret_wire::UnsignedRecoveryCompletionAttestationBody {
         transaction_id: transaction.resource.transaction_id.clone(),
@@ -1524,7 +1522,6 @@ async fn continue_issue_terminal_receipt(
         terminal_receipt_digest: receipt_digest.clone(),
         replacement_device_id: expected_device_id.clone(),
         device_authorization_event_id: authorize_event_id,
-        device_authorization_event_digest: authorization_event_digest,
         result_model_generation_ref: result_generation,
         completed_at,
     };

@@ -299,7 +299,6 @@ pub struct HistoricalAgentSignerEvidenceKey {
     pub agent_id: arkret_wire::DidCoreId,
     pub verification_method: arkret_wire::DidUrl,
     pub event_id: arkret_wire::EventId,
-    pub event_digest: arkret_wire::Hash,
     pub receiver_service_id: arkret_wire::DidCoreId,
 }
 
@@ -334,7 +333,6 @@ pub fn historical_agent_signer_evidence_key(
         agent_id: signer_id.clone(),
         verification_method: verification_method.clone(),
         event_id: event_admission_receipt.event_id.clone(),
-        event_digest: event_admission_receipt.event_digest.clone(),
         receiver_service_id: event_admission_receipt.receiver_service_id.clone(),
     }))
 }

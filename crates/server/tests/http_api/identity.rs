@@ -213,6 +213,13 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
                 audience: principal_server_id,
             },
         ),
+        frontier: arkret_wire::EventBatchReceiptFrontier::Event(
+            arkret_wire::EventBatchReceiptEventFrontier {
+                event_id: authorize.event_id.clone(),
+                actor_seq: Some(authorize.actor_seq),
+                hlc: None,
+            },
+        ),
         events: vec![
             arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
                 event_id: genesis.event_id,

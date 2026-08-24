@@ -10,7 +10,6 @@ pub(in crate::routing::events::event_log) fn events_submit_outcome(
 ) -> EventsSubmitOutcome {
     EventsSubmitOutcome {
         status,
-        delivery_state: arkret_models_collaboration::http_bodies::EventDeliveryState::Complete,
         pending_delivery_count: 0,
         accepted: accepted
             .into_iter()

@@ -540,6 +540,7 @@ diesel::table! {
         id -> Uuid,
         issuer -> Text,
         scope -> Jsonb,
+        frontier -> Jsonb,
         events -> Jsonb,
         created_at -> Timestamptz,
         proofs -> Jsonb,
@@ -1598,7 +1599,6 @@ diesel::table! {
         historical_agent_id -> Nullable<Text>,
         historical_verification_method -> Nullable<Text>,
         historical_event_id -> Nullable<Text>,
-        historical_event_digest -> Nullable<Text>,
         historical_receiver_service_id -> Nullable<Text>,
         inserted_at -> Timestamptz,
     }

@@ -29,8 +29,7 @@ async fn recovery_policy_persistence_survives_state_restart_and_rejects_replays_
     let restarted = shared_recovery_state(persistence.clone()).await;
     let token = recovery_token_for_principal(restarted.clone(), &principal_id).await;
 
-    let duplicate_version =
-        signed_recovery_policy(&signing, &principal_id, &vm, 1, None, POLICY_FIELDS);
+    let duplicate_version = signed_recovery_policy(&signing, &principal_id, &vm, 1, None);
     post_recovery_policy(
         restarted,
         &token,
@@ -54,14 +53,7 @@ async fn recovery_policy_rejects_tampered_signature_body_body() {
     let signing = SigningKey::from_bytes(&[72u8; 32]);
     let (principal_id, verification_method) = did_key_principal(&signing);
     let token = recovery_token_for_principal(state.clone(), &principal_id).await;
-    let mut policy = signed_recovery_policy(
-        &signing,
-        &principal_id,
-        &verification_method,
-        1,
-        None,
-        POLICY_FIELDS,
-    );
+    let mut policy = signed_recovery_policy(&signing, &principal_id, &verification_method, 1, None);
     policy["trust_domain"] = serde_json::json!("ak:trust_domain:tampered.example");
 
     let body =
@@ -87,14 +79,7 @@ async fn recovery_policy_production_accepts_verified_payload_body() {
     let signing = SigningKey::from_bytes(&[77u8; 32]);
     let (principal_id, verification_method) = did_webvh_principal(&signing);
     seed_bearer_session(&state, token, &principal_id).await;
-    let policy = signed_recovery_policy(
-        &signing,
-        &principal_id,
-        &verification_method,
-        1,
-        None,
-        POLICY_FIELDS,
-    );
+    let policy = signed_recovery_policy(&signing, &principal_id, &verification_method, 1, None);
 
     let body = post_recovery_policy(state, token, &policy, &signing, StatusCode::CREATED).await;
     assert_eq!(body["ok"], true);
@@ -132,44 +117,11 @@ async fn recovery_policy_accepts_genesis_session_device_signature_body() {
         &verification_method,
         1,
         None,
-        POLICY_FIELDS,
     );
 
     let body =
         post_recovery_policy(state, token, &policy, &device_signing, StatusCode::CREATED).await;
     assert_eq!(body["ok"], true);
-}
-
-#[test]
-fn recovery_policy_rejects_missing_signed_field_coverage() {
-    run_on_deep_stack_multi_thread(
-        "recovery_policy_rejects_missing_signed_field_coverage",
-        recovery_policy_rejects_missing_signed_field_coverage_body,
-    );
-}
-
-async fn recovery_policy_rejects_missing_signed_field_coverage_body() {
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new())).await;
-    let signing = SigningKey::from_bytes(&[73u8; 32]);
-    let (principal_id, verification_method) = did_key_principal(&signing);
-    let token = recovery_token_for_principal(state.clone(), &principal_id).await;
-    let reduced_fields: Vec<&str> = POLICY_FIELDS
-        .iter()
-        .copied()
-        .filter(|field| *field != "trust_domain")
-        .collect();
-    let policy = signed_recovery_policy(
-        &signing,
-        &principal_id,
-        &verification_method,
-        1,
-        None,
-        &reduced_fields,
-    );
-
-    let body =
-        post_recovery_policy(state, &token, &policy, &signing, StatusCode::BAD_REQUEST).await;
-    assert_eq!(body["error"]["code"], "schema_violation");
 }
 
 #[test]
@@ -186,14 +138,7 @@ async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart_body() {
     let signing = SigningKey::from_bytes(&[76u8; 32]);
     let (principal_id, verification_method) = did_webvh_principal(&signing);
     let token = recovery_token_for_principal(state.clone(), &principal_id).await;
-    let v1 = signed_recovery_policy(
-        &signing,
-        &principal_id,
-        &verification_method,
-        1,
-        None,
-        POLICY_FIELDS,
-    );
+    let v1 = signed_recovery_policy(&signing, &principal_id, &verification_method, 1, None);
     post_recovery_policy(state.clone(), &token, &v1, &signing, StatusCode::CREATED).await;
 
     let restarted = shared_recovery_state(persistence).await;
@@ -203,7 +148,6 @@ async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart_body() {
         &verification_method,
         2,
         Some(&new_prefixed_uuid7("ak:policy:")),
-        POLICY_FIELDS,
     );
     let body = post_recovery_policy(
         restarted,

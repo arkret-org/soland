@@ -1496,7 +1496,7 @@ async fn submit_event_batch_outcome_with_leases(
     // its `ak.audit.accessed` partner in the same batch. The pairing is checked here rather
     // than per envelope because the audit Event is authored after the write it records — the
     // two cannot name each other (encoding.md 6.0.1), so neither is decidable alone.
-    validate_watch_set_others_audit_pairs(state, &envelopes).map_err(SubmitOneError::from)?;
+    validate_watch_set_others_audit_pairs(&envelopes).map_err(SubmitOneError::from)?;
     if batch_contains_identity_anchor(&envelopes) {
         return submit_identity_anchor_batch(
             state,
@@ -1652,11 +1652,6 @@ async fn submit_event_batch_outcome_with_leases(
         events_submit_outcome(status, accepted, duplicate, rejected, quarantine, cursor);
     outcome.ingress_receipts = ingress_receipts;
     outcome.pending_delivery_count = pending_delivery_count;
-    outcome.delivery_state = if pending_delivery_count == 0 {
-        arkret_models_collaboration::http_bodies::EventDeliveryState::Complete
-    } else {
-        arkret_models_collaboration::http_bodies::EventDeliveryState::Pending
-    };
     outcome.realm_actor_frontiers = realm_actor_frontiers.into_values().collect();
     Ok(outcome)
 }
@@ -3261,8 +3256,8 @@ async fn prepare_agent_event_admission_receipt(
         .await
         .map_err(|error| format!("receiver receipt method is unavailable: {error}"))?;
     let receipt_key = format!(
-        "agent-event-admission-receipt:{}:{}:{}",
-        event.event_id, admission.event_digest, receiver_service_id
+        "agent-event-admission-receipt:{}:{}",
+        event.event_id, receiver_service_id
     );
     if let Some(record) = state
         .persistence()
@@ -3282,7 +3277,6 @@ async fn prepare_agent_event_admission_receipt(
         )
         .map_err(|error| error.to_string())?,
         event_id: event.event_id.clone(),
-        event_digest: admission.event_digest.clone(),
         realm_id: event.realm_id.clone(),
         producer_accepted_at: admission.accepted_at,
         accepted_at,
@@ -3315,7 +3309,7 @@ async fn prepare_agent_event_admission_receipt(
             principal_id: receiver_service_id.as_str().to_owned(),
             key: receipt_key,
             service_id: state.service_id().clone(),
-            request_hash: admission.event_digest.as_str().to_owned(),
+            request_hash: event.event_id.as_str().to_owned(),
             status: 200,
             body,
             created_at: accepted_at,
@@ -3332,19 +3326,17 @@ async fn load_agent_event_admission_receipt(
     if event.actor_kind != Some(arkret_wire::EnvelopeActorKind::Agent) {
         return Ok(None);
     }
-    let admission = event
+    event
         .proofs
         .iter()
-        .find_map(|proof| match proof {
-            arkret_wire::EventProof::PrincipalServerAdmission(value) => Some(value),
-            arkret_wire::EventProof::Producer(_) => None,
-        })
+        .any(|proof| matches!(proof, arkret_wire::EventProof::PrincipalServerAdmission(_)))
+        .then_some(())
         .ok_or_else(|| "federated Event omitted its Principal Server admission proof".to_owned())?;
     let receiver_service_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| format!("receiver service id is invalid: {error}"))?;
     let receipt_key = format!(
-        "agent-event-admission-receipt:{}:{}:{}",
-        event.event_id, admission.event_digest, receiver_service_id
+        "agent-event-admission-receipt:{}:{}",
+        event.event_id, receiver_service_id
     );
     let stored = state
         .persistence()

@@ -430,10 +430,9 @@ impl RrkAcquisitionWorker {
             &cut_seals,
             &event_values,
             &dependency_values,
-            |event, digest_suite, evidence, dependencies| {
+            |event, _digest_suite, evidence, dependencies| {
                 arkret::verify_native_agent_historical_event_key(
                     event,
-                    digest_suite,
                     evidence,
                     dependencies,
                     |request| {

@@ -811,18 +811,8 @@ async fn event_delivery_status(
         }
     }
     let targets = targets.into_values().collect::<Vec<_>>();
-    let pending_delivery_count = targets
-        .iter()
-        .filter(|target| target.status.is_pending())
-        .count() as u32;
     let outcome = EventDeliveryStatusOutcome {
         event_id: body.event_id,
-        delivery_state: if pending_delivery_count == 0 {
-            EventDeliveryState::Complete
-        } else {
-            EventDeliveryState::Pending
-        },
-        pending_delivery_count,
         targets,
     };
     outcome

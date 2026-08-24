@@ -477,7 +477,7 @@ async fn agent_signer_evidence_bundle_for_sync(
                 continue;
             };
             if event_admission_receipt.event_id != event.event_id
-                || event_admission_receipt.event_digest != producer.event_digest
+                || event_admission_receipt.event_digest() != producer.event_digest
                 || event_admission_receipt.realm_id != realm_id
                 || event_admission_receipt.agent_id != *signer_id
                 || event_admission_receipt.verification_method != *verification_method
@@ -487,7 +487,6 @@ async fn agent_signer_evidence_bundle_for_sync(
             }
             let receipt_key = (
                 event_admission_receipt.event_id.clone(),
-                event_admission_receipt.event_digest.clone(),
                 event_admission_receipt.receiver_service_id.clone(),
             );
             if conflicted_receipts.contains(&receipt_key) {

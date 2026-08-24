@@ -55,8 +55,7 @@ fn transfer_changes_only_controller_and_epoch() {
                 "realm_id": REALM,
                 "expected_state_digest": root_digest(&state),
                 "patch": {
-                    "controller_id": SUCCESSOR,
-                    "controller_epoch": 1
+                    "controller_id": SUCCESSOR
                 },
                 "successor_acceptance": { "proof": "accepted" },
                 "sender": OWNER
@@ -86,8 +85,7 @@ fn transfer_rejects_nonmember_and_stale_expected_state() {
                 "realm_id": REALM,
                 "expected_state_digest": expected,
                 "patch": {
-                    "controller_id": "ak:did_core:web:outsider.example",
-                    "controller_epoch": 1
+                    "controller_id": "ak:did_core:web:outsider.example"
                 },
                 "successor_acceptance": "accepted",
                 "sender": OWNER
@@ -108,8 +106,7 @@ fn transfer_rejects_nonmember_and_stale_expected_state() {
                 "realm_id": REALM,
                 "expected_state_digest": format!("sha256:{}", "0".repeat(64)),
                 "patch": {
-                    "controller_id": SUCCESSOR,
-                    "controller_epoch": 1
+                    "controller_id": SUCCESSOR
                 },
                 "successor_acceptance": "accepted",
                 "sender": OWNER
@@ -133,7 +130,6 @@ fn reset_changes_only_generation_and_basis_update_fails_closed() {
             serde_json::json!({
                 "realm_id": REALM,
                 "expected_state_digest": root_digest(&state),
-                "patch": { "authority_generation": 1 },
                 "destructive_confirmation": "ak.realm.authority.reset",
                 "sender": OWNER
             }),
@@ -170,4 +166,35 @@ fn reset_changes_only_generation_and_basis_update_fails_closed() {
             if reason == "capability_registry_basis_unavailable"
     ));
     assert_eq!(state.realm_authority_root(REALM).unwrap(), after_reset);
+}
+
+#[test]
+fn successor_counter_overflow_fails_closed_without_mutation() {
+    let mut state = state_with_successor();
+    let mut root = state.realm_authority_root(REALM).unwrap();
+    root.authority_generation = 9_007_199_254_740_991;
+    state.realm_null_subject_cells.insert(
+        (
+            REALM.to_owned(),
+            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
+        ),
+        arkret_state::lattice::CellState::Value(serde_json::to_value(&root).unwrap()),
+    );
+    let effect = state.apply_realm_authority_transition(
+        &operation(
+            arkret_wire::EventKind::RealmAuthorityReset,
+            serde_json::json!({
+                "realm_id": REALM,
+                "expected_state_digest": root_digest(&state),
+                "destructive_confirmation": "ak.realm.authority.reset",
+                "sender": OWNER
+            }),
+        ),
+        arkret_wire::EventKind::RealmAuthorityReset,
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { reason } if reason == "reducer_projection_failed"
+    ));
+    assert_eq!(state.realm_authority_root(REALM).unwrap(), root);
 }

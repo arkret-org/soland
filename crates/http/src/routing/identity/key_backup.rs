@@ -60,18 +60,6 @@ pub(crate) fn admin_router() -> Router {
 }
 
 const KEY_BACKUP_CLASSES: &[&str] = &["secret_storage", "mls_history"];
-const KEY_BACKUP_AUTH_REQUIRED_SIGNED_FIELDS: &[&str] = &[
-    "backup_id",
-    "actor_id",
-    "backup_kind",
-    "backup_version",
-    "series_id",
-    "series_seq",
-    "encryption",
-    "domain_separation",
-    "contents",
-    "ciphertext_digest",
-];
 #[cfg(test)]
 mod tests {
     use arkret_identifiers::DidCoreId;
@@ -147,19 +135,7 @@ mod tests {
                 "verification_method": "did:web:alice.example#device",
                 "signature_algorithm": "Ed25519",
                 "signature": "c2lnbmF0dXJl",
-                "device_authorize_event_id": "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD",
-                "signed_fields": [
-                    "backup_id",
-                    "actor_id",
-                    "backup_kind",
-                    "backup_version",
-                    "series_id",
-                    "series_seq",
-                    "encryption",
-                    "domain_separation",
-                    "contents",
-                    "ciphertext_digest"
-                ]
+                "device_authorize_event_id": "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD"
             }
         });
         if body["encryption"]["recipient_method"].as_str() == Some("passphrase_kdf") {
@@ -190,10 +166,6 @@ mod tests {
                 "policy_id": "ak:policy:01964137-0000-7000-8000-000000000001",
                 "policy_version": 1
             });
-            body["auth_data"]["signed_fields"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!("recovery_policy_ref"));
         }
         body
     }

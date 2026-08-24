@@ -122,7 +122,7 @@ pub struct RecoveryPolicyRecord {
     pub raw_payload: Value,
     pub accepted_at: chrono::DateTime<chrono::Utc>,
     /// Verification-method DID URL of the issuer. The full proof
-    /// verification (signature + signed_fields enforcement) is flagged
+    /// verification of the fixed canonical signature transcript is flagged
     /// `TODO(R4): wire principal signing-key resolver + signature
     /// validation through DidResolver chain`.
     pub verification_method: String,

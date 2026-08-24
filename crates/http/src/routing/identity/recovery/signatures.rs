@@ -92,12 +92,6 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
 
     let device_key =
         resolve_session_device_key_for_genesis_policy(state, &record.principal_id, session).await?;
-    parse_signed_fields(
-        auth_data,
-        POLICY_ALLOWED_SIGNED_FIELDS,
-        POLICY_REQUIRED_SIGNED_FIELDS,
-        payload,
-    )?;
     let typed: RecoveryPolicy = serde_json::from_value(payload.clone()).map_err(|error| {
         AppError::param_invalid(format!("recovery policy violates SDK shape: {error}"))
             .with_wire_code("schema_violation")
@@ -273,12 +267,6 @@ pub(super) async fn verify_recovery_auth_signature(
                     "recovery authority device key is invalid: {error}"
                 ))
             })?;
-    parse_signed_fields(
-        auth_data,
-        POLICY_ALLOWED_SIGNED_FIELDS,
-        POLICY_REQUIRED_SIGNED_FIELDS,
-        payload,
-    )?;
     let typed: RecoveryPolicy = serde_json::from_value(payload.clone()).map_err(|error| {
         AppError::param_invalid(format!("recovery policy violates SDK shape: {error}"))
             .with_wire_code("schema_violation")

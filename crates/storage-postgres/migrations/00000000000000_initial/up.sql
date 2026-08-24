@@ -670,7 +670,6 @@ CREATE TABLE public.governance_unscoped_signer_evidence (
     historical_agent_id text,
     historical_verification_method text,
     historical_event_id text,
-    historical_event_digest text,
     historical_receiver_service_id text,
     inserted_at timestamp with time zone DEFAULT now() NOT NULL,
     PRIMARY KEY (dependency_kind, object_digest),
@@ -682,13 +681,11 @@ CREATE TABLE public.governance_unscoped_signer_evidence (
         (historical_agent_id IS NULL
             AND historical_verification_method IS NULL
             AND historical_event_id IS NULL
-            AND historical_event_digest IS NULL
             AND historical_receiver_service_id IS NULL)
         OR
         (historical_agent_id IS NOT NULL
             AND historical_verification_method IS NOT NULL
             AND historical_event_id IS NOT NULL
-            AND historical_event_digest IS NOT NULL
             AND historical_receiver_service_id IS NOT NULL)
     ),
     CONSTRAINT governance_unscoped_signer_evidence_size_check CHECK (octet_length(canonical_bytes) <= 1048576)
@@ -699,7 +696,6 @@ CREATE UNIQUE INDEX governance_unscoped_signer_evidence_historical_key_unique
         historical_agent_id,
         historical_verification_method,
         historical_event_id,
-        historical_event_digest,
         historical_receiver_service_id
     )
     WHERE historical_agent_id IS NOT NULL;

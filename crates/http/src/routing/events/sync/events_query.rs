@@ -1257,7 +1257,6 @@ async fn event_read_row_from_projection_json(
         kind: event.kind,
         realm_id: event.realm_id,
         created_at: Some(event.created_at),
-        event_digest: arkret_identifiers::Hash::new(record.canonical_digest).ok()?,
         payload_digest: None,
         redaction_reason: EventRedactionReason::Redacted,
         hidden_fields,
@@ -1695,7 +1694,7 @@ mod tests {
             arkret_models_collaboration::http_bodies::EventRedactionReason::Redacted
         );
         assert_eq!(
-            message.event_digest.as_str(),
+            message.event_digest().as_str(),
             message_event
                 .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
                 .unwrap()

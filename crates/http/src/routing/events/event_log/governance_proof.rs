@@ -876,10 +876,9 @@ async fn materialize_governance_frontier(
         &checkpoint,
         &group_genesis_binding,
         &leaves,
-        |event, digest_suite, evidence, dependencies| {
+        |event, _digest_suite, evidence, dependencies| {
             arkret::verify_native_agent_historical_event_key(
                 event,
-                digest_suite,
                 evidence,
                 dependencies,
                 |trust_request| verify_native_agent_history_trust(state, trust_request),
@@ -952,10 +951,9 @@ async fn load_governance_checkpoint(
         &seals.into_values().collect::<Vec<_>>(),
         &events.into_values().collect::<Vec<_>>(),
         &dependencies,
-        |event, digest_suite, evidence, dependencies| {
+        |event, _digest_suite, evidence, dependencies| {
             arkret::verify_native_agent_historical_event_key(
                 event,
-                digest_suite,
                 evidence,
                 dependencies,
                 |trust_request| verify_native_agent_history_trust(state, trust_request),
@@ -1028,10 +1026,9 @@ pub(crate) async fn load_verified_governance_checkpoint(
         &seals.into_values().collect::<Vec<_>>(),
         &events.into_values().collect::<Vec<_>>(),
         &dependencies,
-        |event, digest_suite, evidence, dependencies| {
+        |event, _digest_suite, evidence, dependencies| {
             arkret::verify_native_agent_historical_event_key(
                 event,
-                digest_suite,
                 evidence,
                 dependencies,
                 |trust_request| verify_native_agent_history_trust(state, trust_request),

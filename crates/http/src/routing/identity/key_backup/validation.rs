@@ -421,53 +421,14 @@ pub(super) fn validate_recovery_policy_ref_shape_typed(backup: &KeyBackup) -> Re
         ));
     }
 
-    let covered = backup.auth_data.as_ref().is_some_and(|auth_data| {
-        auth_data
-            .signed_fields
-            .iter()
-            .any(|field| field == "recovery_policy_ref")
-    });
-    if !covered {
-        return Err(schema_error(
-            "auth_data.signed_fields MUST cover recovery_policy_ref when it is present",
-        ));
-    }
     Ok(())
 }
 
 pub(super) fn validate_key_backup_auth_data_typed(backup: &KeyBackup) -> Result<(), AppError> {
-    let auth = backup
+    backup
         .auth_data
         .as_ref()
         .ok_or_else(|| schema_error("key backup auth_data is required"))?;
-    for field in KEY_BACKUP_AUTH_REQUIRED_SIGNED_FIELDS {
-        if !auth
-            .signed_fields
-            .iter()
-            .any(|candidate| candidate.as_str() == *field)
-        {
-            return Err(schema_error(format!(
-                "auth_data.signed_fields must cover `{field}`"
-            )));
-        }
-    }
-    for (field, present) in [
-        ("supersedes", backup.supersedes.is_some()),
-        ("supersedes_digest", backup.supersedes_digest.is_some()),
-        ("frontier_ref", backup.frontier_ref.is_some()),
-        ("recovery_policy_ref", backup.recovery_policy_ref.is_some()),
-    ] {
-        if present
-            && !auth
-                .signed_fields
-                .iter()
-                .any(|candidate| candidate.as_str() == field)
-        {
-            return Err(schema_error(format!(
-                "auth_data.signed_fields must cover `{field}` when present"
-            )));
-        }
-    }
     Ok(())
 }
 

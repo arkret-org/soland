@@ -283,7 +283,7 @@ impl MockResponse {
 fn spawn_mock_peer() -> (String, mpsc::Receiver<String>) {
     spawn_mock_peer_with_status(
         "200 OK",
-        br#"{"delivery_state":"complete","pending_delivery_count":0,"status":"accepted"}"#,
+        br#"{"pending_delivery_count":0,"status":"accepted"}"#,
     )
 }
 

@@ -484,20 +484,7 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
                 "auth_data": {
                     "verification_method": format!("{controller}#controller-key"),
                     "signature_algorithm": "Ed25519",
-                    "signature": "c2ln",
-                    "signed_fields": [
-                        "schema",
-                        "policy_id",
-                        "principal_id",
-                        "version",
-                        "supersedes",
-                        "trust_domain",
-                        "allowed_proof_kinds",
-                        "publication_authorization_rules",
-                        "recovery_key_agreements",
-                        "issued_at",
-                        "expires_at"
-                    ]
+                    "signature": "c2ln"
                 }
             }),
             accepted_at: now,

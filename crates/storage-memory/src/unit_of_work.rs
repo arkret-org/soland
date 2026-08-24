@@ -94,8 +94,6 @@ fn stage_agent_membership_cascade(
             let initiator = typed.executed_by.as_ref().unwrap_or(&typed.actor_id);
             if terminal.event.actor_id != record.controller_authority.principal_id.as_str()
                 || terminal.event.realm_id.as_deref() != Some(record.realm_id.as_str())
-                || terminal.event.canonical_digest
-                    != record.controller_terminal_event_digest.as_str()
                 || typed.principal_server_id != record.controller_authority.principal_server_id
                 || initiator != &record.initiator_authority.principal_id
             {
@@ -1163,10 +1161,6 @@ mod tests {
             },
             controller_terminal_event_id: arkret_wire::EventId::new(
                 controller.event.event_id.clone(),
-            )
-            .unwrap(),
-            controller_terminal_event_digest: arkret_wire::Hash::new(
-                controller.event.canonical_digest.clone(),
             )
             .unwrap(),
             expected_agent_ids: agent_ids,

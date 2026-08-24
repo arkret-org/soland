@@ -6,7 +6,6 @@ use arkret_models_collaboration::events_payloads::strand::{
 };
 
 use super::super::*;
-use super::envelope::{event_digest_for_suite, event_digest_suite};
 
 /// `strand-and-message.md` §8.4 — the one `refs` role that carries the
 /// `.others` audit pairing edge.
@@ -87,8 +86,8 @@ fn franking_proof_digest(proof: &Value) -> String {
 /// Everything else about the payload — the closed field set, the `access_kind`
 /// enum, DID / object-ref / cell-ref / hash / timestamp shapes, and the
 /// per-`access_kind` conditional required sets (`watch_set_others` pulls in
-/// `target_actor_id`, `target_cell_id`, `paired_event_id`,
-/// `paired_event_digest` and both cell heads) — is already enforced against
+/// `target_actor_id`, `target_cell_id`, `paired_event_id` and both cell
+/// heads) — is already enforced against
 /// `event-payload.schema.json#/$defs/audit_accessed_payload` by the SDK
 /// payload validator catalog in `validate_event_schema_and_payload`, which runs
 /// earlier in this same admission pass. A hand-written second copy of those
@@ -197,35 +196,12 @@ pub(super) fn validate_strand_watch_manage_others_levels(
 ///
 /// The direction is forced: `refs` is inside the `event_digest` preimage and `event_id`
 /// derives from that digest, so a write naming its audit while the audit commits to the
-/// write's id and digest would make the two Events preimages of each other, with no fixed
+/// write's id would make the two Events preimages of each other, with no fixed
 /// point (encoding.md 6.0.1). The write is therefore formed first and the audit second,
 /// which is also why this cannot be decided one envelope at a time.
 pub(in crate::routing) fn validate_watch_set_others_audit_pairs(
-    state: &AppState,
     envelopes: &[Value],
 ) -> Result<(), EventValidationError> {
-    validate_watch_set_others_audit_pairs_with_digest(envelopes, |envelope, object, realm_id| {
-        let suite = event_digest_suite(
-            state,
-            arkret_wire::EventKind::StrandWatchSet.as_str(),
-            realm_id,
-            object,
-            &[],
-        )?;
-        let canonical_bytes = event_canonical_bytes(envelope)?;
-        event_digest_for_suite(&canonical_bytes, &suite)
-    })
-}
-
-/// Digest resolution is injected so the pairing rule itself is testable without an
-/// `AppState`; the only thing the state supplies is the Realm's live digest suite.
-fn validate_watch_set_others_audit_pairs_with_digest<F>(
-    envelopes: &[Value],
-    write_digest: F,
-) -> Result<(), EventValidationError>
-where
-    F: Fn(&Value, &serde_json::Map<String, Value>, &str) -> Result<String, EventValidationError>,
-{
     // Audits whose payload does not parse are not collected: they cannot pair,
     // and the envelope pass that runs after this one reports the real reason.
     let audits: Vec<(&serde_json::Map<String, Value>, AuditAccessedPayload)> = envelopes
@@ -267,12 +243,6 @@ where
                 format!("strand watch payload does not resolve a watch cell: {error}"),
             )
         })?;
-        let realm_id = object
-            .get("realm_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let canonical_digest = write_digest(envelope, object, realm_id)?;
-
         let matches = audits
             .iter()
             .filter(|(audit, audit_payload)| {
@@ -286,14 +256,10 @@ where
                         .paired_event_id
                         .as_ref()
                         .is_some_and(|paired| paired.as_str() == event_id)
-                    && audit_payload
-                        .paired_event_digest
-                        .as_ref()
-                        .is_some_and(|digest| digest.as_str() == canonical_digest)
-                    // The payload binding is what the write's own digest
-                    // covers; the `refs` edge is what makes the audit a causal
-                    // dependent of it. Requiring both keeps the surviving
-                    // direction complete rather than half-authored.
+                    // The typed Event id losslessly carries the digest suite
+                    // and digest. Repeating that digest in the payload would
+                    // create a second truth source; the critical `refs` edge
+                    // keeps the audit causally dependent on the write.
                     && event_refs_with_role(audit, AUDIT_PAIR_ROLE).is_ok_and(|refs| {
                         refs.iter()
                             .any(|edge| edge.id == event_id && edge.critical)
@@ -305,8 +271,7 @@ where
             0 => {
                 return Err(manage_others_audit_error(
                     "cross-actor strand watch writes require a same-batch ak.audit.accessed event \
-                     whose refs[role=audit_pair], paired_event_id and paired_event_digest name \
-                     this write",
+                     whose refs[role=audit_pair] and paired_event_id name this write",
                 ));
             }
             _ => {
@@ -448,7 +413,6 @@ mod tests {
                 "target_ref": STRAND,
                 "target_cell_id": watch_cell_id(),
                 "paired_event_id": WRITE_ID,
-                "paired_event_digest": WRITE_DIGEST,
                 "cell_head_before": null,
                 "cell_head_after": WRITE_DIGEST,
                 "purpose": "seed strand watchers on create",
@@ -458,9 +422,7 @@ mod tests {
     }
 
     fn check(envelopes: &[Value]) -> Result<(), EventValidationError> {
-        validate_watch_set_others_audit_pairs_with_digest(envelopes, |_, _, _| {
-            Ok(WRITE_DIGEST.to_owned())
-        })
+        validate_watch_set_others_audit_pairs(envelopes)
     }
 
     #[test]
@@ -473,14 +435,6 @@ mod tests {
             arkret_wire::ReasonCode::WATCH_SET_OTHERS_AUDIT_MISSING
         );
         assert_eq!(alone.status, StatusCode::PRECONDITION_FAILED);
-
-        // The write does not name the audit, so a stale digest is the only thing that can
-        // point the audit at a different write.
-        let mut wrong_digest = paired_audit();
-        wrong_digest["payload"]["paired_event_digest"] =
-            json!("sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
-        check(&[others_watch_write(), wrong_digest])
-            .expect_err("an audit that names another write does not pair");
 
         let mut wrong_target = paired_audit();
         wrong_target["payload"]["target_actor_id"] = json!("ak:did_core:web:carol.example");

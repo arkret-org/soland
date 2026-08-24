@@ -25,16 +25,6 @@ fn active_series_payload() -> Value {
             "verification_method": "did:web:alice.example#ak_device_01964137",
             "signature_algorithm": "Ed25519",
             "signature": "signature-base64url-placeholder",
-            "signed_fields": [
-                "schema",
-                "actor_id",
-                "backup_kind",
-                "active_series_id",
-                "series_pointer_version",
-                "previous_series_ids",
-                "frontier_ref",
-                "issued_at"
-            ],
             "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }
     })
@@ -87,37 +77,6 @@ fn key_backup_active_series_projects_pointer_and_cell() {
             .cell_value(&cell)
             .is_some_and(|value| value.get("accepted_event_id").is_none())
     );
-}
-
-#[test]
-fn key_backup_active_series_requires_complete_signed_fields() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("key-backup-active-series-signed-fields");
-    let mut payload = active_series_payload();
-    payload["auth_data"]["signed_fields"] = json!([
-        "schema",
-        "actor_id",
-        "backup_kind",
-        "active_series_id",
-        "series_pointer_version",
-        "previous_series_ids",
-        "issued_at"
-    ]);
-
-    let effect = state.apply(
-        &make_operation(
-            arkret_wire::EventKind::KeyBackupActiveSeries,
-            REALM,
-            payload,
-        ),
-        &hlc,
-    );
-
-    assert!(matches!(
-        effect,
-        ProjectionEffect::Rejected { ref reason }
-            if reason == "key_backup_active_series_signed_fields_incomplete"
-    ));
 }
 
 #[test]

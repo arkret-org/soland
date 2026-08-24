@@ -7,26 +7,13 @@
 use std::sync::Arc;
 
 use arkret_identifiers::Hash;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use soland_storage::{
     DeviceInventoryRecord, PersistenceStore, RecoveryPolicyRecord, SessionRecord,
     WebvhDocumentRecord,
 };
 
 use crate::common::*;
-
-pub(crate) const POLICY_FIELDS: &[&str] = &[
-    "schema",
-    "policy_id",
-    "principal_id",
-    "version",
-    "trust_domain",
-    "allowed_proof_kinds",
-    "publication_authorization_rules",
-    "supersedes",
-    "issued_at",
-    "expires_at",
-];
 
 pub(crate) const RECOVERY_TEST_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
@@ -143,7 +130,6 @@ pub(crate) async fn seed_recovery_policy(
         "auth_data": {
             "verification_method": verification_method,
             "signature_algorithm": "Ed25519",
-            "signed_fields": POLICY_FIELDS,
             "signature": "c2lnbmF0dXJl"
         }
     });
@@ -321,7 +307,6 @@ pub(crate) fn signed_recovery_policy(
     verification_method: &str,
     version: u32,
     supersedes: Option<&str>,
-    signed_fields: &[&str],
 ) -> Value {
     let principal_core = fixture_actor_core_id(principal_id);
     let mut policy = serde_json::json!({
@@ -345,38 +330,19 @@ pub(crate) fn signed_recovery_policy(
         "auth_data": {
             "verification_method": verification_method,
             "signature_algorithm": "Ed25519",
-            "signed_fields": signed_fields,
-            "signature": ""
+            "signature": "AA"
         }
     });
-    sign_recovery_payload(
-        &mut policy,
-        "ak.identity.recovery_policy.signature.v1",
-        signed_fields,
-        signing,
-    );
+    sign_recovery_policy_payload(&mut policy, signing);
     policy
 }
 
-pub(crate) fn sign_recovery_payload(
-    payload: &mut Value,
-    transcript_type: &str,
-    signed_fields: &[&str],
-    signing: &SigningKey,
-) {
-    let mut signed_payload = Map::new();
-    for field in signed_fields {
-        signed_payload.insert(
-            (*field).to_owned(),
-            payload.get(*field).cloned().unwrap_or(Value::Null),
-        );
-    }
-    let transcript = serde_json::json!({
-        "type": transcript_type,
-        "signed_fields": signed_fields,
-        "payload": Value::Object(signed_payload),
-    });
-    let transcript_bytes = arkret_canonical::canonical_json_bytes(&transcript).unwrap();
+pub(crate) fn sign_recovery_policy_payload(payload: &mut Value, signing: &SigningKey) {
+    let typed: arkret_models_crypto::RecoveryPolicy =
+        serde_json::from_value(payload.clone()).expect("valid recovery policy fixture");
+    let transcript_bytes = typed
+        .signature_transcript_bytes()
+        .expect("canonical recovery policy transcript");
     let signature = signing.sign(&transcript_bytes);
     payload["auth_data"]["signature"] =
         serde_json::json!(URL_SAFE_NO_PAD.encode(signature.to_bytes()));

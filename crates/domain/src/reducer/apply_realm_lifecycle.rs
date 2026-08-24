@@ -224,10 +224,18 @@ impl ProjectionState {
                         reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                     };
                 };
-                if payload.patch.controller_epoch != root.controller_epoch.saturating_add(1)
-                    || self
-                        .member(&realm_id, payload.patch.controller_id.as_str())
-                        .is_none_or(|member| member.state != "join")
+                let Ok(successor_epoch) =
+                    arkret_models_collaboration::events_payloads::realm::RealmOwnerTransferPayload::successor_controller_epoch(
+                        root.controller_epoch,
+                    )
+                else {
+                    return ProjectionEffect::Rejected {
+                        reason: "reducer_projection_failed".to_owned(),
+                    };
+                };
+                if self
+                    .member(&realm_id, payload.patch.controller_id.as_str())
+                    .is_none_or(|member| member.state != "join")
                     || serde_json::to_value(&payload.successor_acceptance)
                         .ok()
                         .is_none_or(|proof| match proof {
@@ -241,7 +249,7 @@ impl ProjectionState {
                     };
                 }
                 root.controller_id = payload.patch.controller_id;
-                root.controller_epoch = payload.patch.controller_epoch;
+                root.controller_epoch = successor_epoch;
             }
             arkret_wire::EventKind::RealmAuthorityReset => {
                 let typed =
@@ -251,15 +259,21 @@ impl ProjectionState {
                         reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                     };
                 };
-                if payload.destructive_confirmation != kind.as_str()
-                    || payload.patch.authority_generation
-                        != root.authority_generation.saturating_add(1)
-                {
+                if payload.destructive_confirmation != kind.as_str() {
                     return ProjectionEffect::Rejected {
                         reason: "realm_authority_root_conflict".to_owned(),
                     };
                 }
-                root.authority_generation = payload.patch.authority_generation;
+                let Ok(successor_generation) =
+                    arkret_models_collaboration::events_payloads::realm::RealmAuthorityResetPayload::successor_authority_generation(
+                        root.authority_generation,
+                    )
+                else {
+                    return ProjectionEffect::Rejected {
+                        reason: "reducer_projection_failed".to_owned(),
+                    };
+                };
+                root.authority_generation = successor_generation;
             }
             arkret_wire::EventKind::RealmAuthorityBasisUpdate => {
                 let typed =

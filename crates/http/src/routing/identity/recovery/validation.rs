@@ -110,11 +110,6 @@ pub(super) fn validate_recovery_policy(
         .get("signature")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::param_invalid("auth_data.signature is required"))?;
-    auth_data
-        .get("signed_fields")
-        .and_then(Value::as_array)
-        .ok_or_else(|| AppError::param_invalid("auth_data.signed_fields is required"))?;
-
     Ok(ValidatedRecoveryPolicy {
         policy_id,
         principal_id,
@@ -127,74 +122,6 @@ pub(super) fn validate_recovery_policy(
         verification_method: verification_method.to_owned(),
         raw_payload: payload.clone(),
     })
-}
-
-pub(super) fn parse_signed_fields(
-    auth_data: &Map<String, Value>,
-    allowed_fields: &[&str],
-    required_fields: &[&str],
-    payload: &Value,
-) -> Result<Vec<String>, AppError> {
-    let allowed: BTreeSet<&str> = allowed_fields.iter().copied().collect();
-    let required: BTreeSet<&str> = required_fields.iter().copied().collect();
-    let mut seen = BTreeSet::new();
-    let fields = auth_data
-        .get("signed_fields")
-        .and_then(Value::as_array)
-        .ok_or_else(|| AppError::param_invalid("auth_data.signed_fields is required"))?;
-    let mut parsed = Vec::with_capacity(fields.len());
-    for field in fields {
-        let name = field
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                AppError::param_invalid("auth_data.signed_fields entries must be strings")
-            })?;
-        if !allowed.contains(name) {
-            return Err(recovery_signature_error(format!(
-                "auth_data.signed_fields contains unsupported field `{name}`"
-            )));
-        }
-        if !seen.insert(name.to_owned()) {
-            return Err(recovery_signature_error(format!(
-                "auth_data.signed_fields repeats field `{name}`"
-            )));
-        }
-        parsed.push(name.to_owned());
-    }
-    for required_field in required {
-        if !seen.contains(required_field) {
-            return Err(recovery_signature_error(format!(
-                "auth_data.signed_fields missing required field `{required_field}`"
-            )));
-        }
-    }
-    for optional_signed in [
-        "threshold",
-        "device_quorum",
-        "trusted_recovery_services",
-        "recovery_keys",
-        "recovery_key_agreements",
-        "approval_requirement",
-        "audit",
-        "not_before",
-        "expires_at",
-        "outcome_reason_code",
-        "device_list_update_event_id",
-        "reanchor_event_id",
-        "reanchor_batch_receipt_id",
-    ] {
-        if payload.get(optional_signed).is_some()
-            && allowed.contains(optional_signed)
-            && !seen.contains(optional_signed)
-        {
-            return Err(recovery_signature_error(format!(
-                "auth_data.signed_fields missing present optional field `{optional_signed}`"
-            )));
-        }
-    }
-    Ok(parsed)
 }
 
 pub(super) fn recovery_signature_error(message: impl Into<String>) -> AppError {

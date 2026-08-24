@@ -326,8 +326,8 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
                 "INSERT INTO governance_unscoped_signer_evidence \
                     (dependency_kind,object_digest,canonical_bytes,object_json, \
                      historical_agent_id,historical_verification_method,historical_event_id, \
-                     historical_event_digest,historical_receiver_service_id) \
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING",
+                     historical_receiver_service_id) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING",
             )
             .bind::<Text, _>(canonical.dependency_kind)
             .bind::<Text, _>(canonical.object_digest.as_str())
@@ -340,7 +340,6 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
                     .map(|key| key.verification_method.as_str()),
             )
             .bind::<Nullable<Text>, _>(historical_key.as_ref().map(|key| key.event_id.as_str()))
-            .bind::<Nullable<Text>, _>(historical_key.as_ref().map(|key| key.event_digest.as_str()))
             .bind::<Nullable<Text>, _>(
                 historical_key
                     .as_ref()
@@ -420,13 +419,11 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
             "SELECT dependency_kind,object_digest,canonical_bytes,object_json \
              FROM governance_unscoped_signer_evidence \
              WHERE historical_agent_id=$1 AND historical_verification_method=$2 \
-               AND historical_event_id=$3 AND historical_event_digest=$4 \
-               AND historical_receiver_service_id=$5",
+               AND historical_event_id=$3 AND historical_receiver_service_id=$4",
         )
         .bind::<Text, _>(key.agent_id.as_str())
         .bind::<Text, _>(key.verification_method.as_str())
         .bind::<Text, _>(key.event_id.as_str())
-        .bind::<Text, _>(key.event_digest.as_str())
         .bind::<Text, _>(key.receiver_service_id.as_str())
         .get_result::<DependencyObjectRow>(&mut conn)
         .await
