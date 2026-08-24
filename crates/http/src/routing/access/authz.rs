@@ -18,9 +18,11 @@ use arkret_models_collaboration::governance::grant_constraint::{
     GrantConstraintKind as WireGrantConstraintKind,
     GrantConstraintSubkind as WireGrantConstraintSubkind,
 };
-use arkret_models_collaboration::governance::invite_addressing::InviteDeliveryTarget;
+use arkret_models_collaboration::governance::invite_addressing::{
+    InviteDelivery, InviteDeliveryTarget,
+};
 use arkret_models_collaboration::governance::operation_wire::Invite;
-use arkret_wire::{AuthzDecision, DidCoreId, Facet, InviteState};
+use arkret_wire::{AccountDataKey, AuthzDecision, DidCoreId, Facet, InviteState};
 use chrono::{DateTime, Utc};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
@@ -737,6 +739,32 @@ async fn invites(
     } else {
         false
     };
+    // invite-addressing.md §7: the accepted Realm Event establishes the
+    // shared Invite lifecycle, but only the notify branch materializes the
+    // holder-private invite delivery. Quarantined, dropped, and rejected
+    // dispatches MUST therefore stay out of the holder's invite list even
+    // though their shared `ak.invite.create` Event is already durable.
+    let holder_delivery_ids = if subject_is_self {
+        let delivery = state
+            .account_data()
+            .entry(subject.as_str(), AccountDataKey::ACCOUNT_INVITE_DELIVERY)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .map(|record| serde_json::from_value::<InviteDelivery>(record.payload))
+            .transpose()
+            .map_err(|error| {
+                AppError::internal(format!("invite delivery cell does not parse: {error}"))
+            })?;
+        Some(
+            delivery
+                .into_iter()
+                .flat_map(|delivery| delivery.entries)
+                .map(|entry| entry.invite_id.to_string())
+                .collect::<std::collections::BTreeSet<_>>(),
+        )
+    } else {
+        None
+    };
     let now = now();
     let mut invite_list = Vec::new();
     for invite in state
@@ -751,6 +779,9 @@ async fn invites(
                 .as_deref()
                 .is_some_and(|realm_id| invite.realm_id.as_str() != realm_id)
             || invite.invitee.as_deref() != Some(subject.as_str())
+            || holder_delivery_ids
+                .as_ref()
+                .is_some_and(|ids| !ids.contains(&invite.invite_id))
             || (!subject_is_self
                 && invite.inviter.as_str() != session.actor.as_str()
                 && !caller_owns_realm)

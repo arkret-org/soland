@@ -44,7 +44,6 @@ use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::{
     ControlMoveReject, StoreError, compute_state_root, control_event_set_root, join_cell,
 };
-use arkret_wire::cba_proof_bundle::AvailabilityReceiptContent;
 use arkret_wire::cell::CellId;
 use arkret_wire::{
     AvailabilityReceipt, ControlProposalDecision, ControlProposalDecisionPolicy,
@@ -770,9 +769,9 @@ impl NotaryWorker {
             .iter()
             .filter_map(|dependency| match dependency {
                 GovernanceDependency::AvailabilityReceipt {
-                    availability_receipt,
+                    selector: GovernanceDependencySelector::AvailabilityReceipt { content_digest },
                     ..
-                } => Some(availability_receipt.receipt_digest.clone()),
+                } => Some(content_digest.clone()),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -1504,28 +1503,25 @@ impl NotaryWorker {
             ))
             .map_err(|error| NotaryError::Construction(error.to_string()))?;
             let mut receipt = AvailabilityReceipt {
-                receipt: AvailabilityReceiptContent {
-                    realm_id: realm_id.clone(),
-                    event_id: accepted_move.event.event_id.clone(),
-                    bytes_digest,
-                    holder_id: holder_id.clone(),
-                    retention_expires_at,
-                    holder_signer_evidence_ref: evidence_ref.clone(),
-                    holder_signer_evidence_digest: evidence_digest.clone(),
-                    signature: PayloadProof {
-                        kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-                        verification_method: verification_method.clone(),
-                        payload_digest: zero_digest.clone(),
-                        created_at: sealed_at,
-                        domain: None,
-                        audience: None,
-                        proof_purpose: None,
-                        jws: "pending".to_owned(),
-                    },
+                realm_id: realm_id.clone(),
+                event_id: accepted_move.event.event_id.clone(),
+                bytes_digest,
+                holder_id: holder_id.clone(),
+                retention_expires_at,
+                holder_signer_evidence_ref: evidence_ref.clone(),
+                holder_signer_evidence_digest: evidence_digest.clone(),
+                signature: PayloadProof {
+                    kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+                    verification_method: verification_method.clone(),
+                    payload_digest: zero_digest.clone(),
+                    created_at: sealed_at,
+                    domain: None,
+                    audience: None,
+                    proof_purpose: None,
+                    jws: "pending".to_owned(),
                 },
-                receipt_digest: zero_digest.clone(),
             };
-            receipt.receipt.signature.payload_digest = Hash::new(arkret_canonical::digest(
+            receipt.signature.payload_digest = Hash::new(arkret_canonical::digest(
                 event_digest_suite,
                 &receipt
                     .canonical_signature_payload_bytes()
@@ -1535,25 +1531,26 @@ impl NotaryWorker {
             let binding = receipt
                 .canonical_signature_binding_bytes()
                 .map_err(|error| NotaryError::Construction(error.to_string()))?;
-            receipt.receipt.signature.jws = arkret_signatures::jws::sign_jws_ed25519(
+            receipt.signature.jws = arkret_signatures::jws::sign_jws_ed25519(
                 &binding,
                 signing_key.as_ref(),
             )
             .map_err(|error| {
                 NotaryError::Construction(format!("sign availability holder receipt: {error}"))
             })?;
-            receipt.receipt_digest = Hash::new(arkret_canonical::digest(
-                event_digest_suite,
-                &receipt
-                    .canonical_receipt_bytes()
-                    .map_err(|error| NotaryError::Construction(error.to_string()))?,
-            ))
-            .map_err(|error| NotaryError::Construction(error.to_string()))?;
+            let receipt_digest = receipt
+                .full_receipt_digest(|bytes| {
+                    Ok(Hash::new(arkret_canonical::digest(
+                        event_digest_suite,
+                        bytes,
+                    ))?)
+                })
+                .map_err(|error| NotaryError::Construction(error.to_string()))?;
             receipt
                 .validate_structural()
                 .map_err(|error| NotaryError::Construction(error.to_string()))?;
             receipt
-                .validate_receipt_digest(|bytes| {
+                .validate_signature_payload_digest(|bytes| {
                     Ok(Hash::new(arkret_canonical::digest(
                         event_digest_suite,
                         bytes,
@@ -1562,7 +1559,7 @@ impl NotaryWorker {
                 .map_err(|error| NotaryError::Construction(error.to_string()))?;
             dependencies.push(GovernanceDependency::AvailabilityReceipt {
                 selector: GovernanceDependencySelector::AvailabilityReceipt {
-                    content_digest: receipt.receipt_digest.clone(),
+                    content_digest: receipt_digest,
                 },
                 availability_receipt: receipt,
             });

@@ -355,7 +355,7 @@ pub(crate) fn validate_challenge_response_gate(
     let Some(provider_did) = gate.get("provider_did").and_then(Value::as_str) else {
         return Err("challenge_response_provider_invalid");
     };
-    if arkret_identifiers::DidCoreId::new(provider_did.to_owned()).is_err() {
+    if arkret_identifiers::DidFullId::new(provider_did.to_owned()).is_err() {
         return Err("challenge_response_provider_invalid");
     }
     let Some(kinds) = gate.get("challenge_kinds").and_then(Value::as_array) else {
@@ -933,6 +933,28 @@ mod policy_bundle_component_tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn challenge_provider_is_a_resolvable_full_did_not_a_typed_core_id() {
+        let valid = json!({
+            "auto_resolve": true,
+            "provider_did": "did:webvh:z6mkfixture:captcha.example",
+            "challenge_kinds": ["captcha"],
+            "max_proof_age": "PT5M"
+        });
+        validate_challenge_response_gate(valid.as_object().unwrap()).unwrap();
+
+        let typed_core = json!({
+            "auto_resolve": true,
+            "provider_did": "ak:did_core:webvh:z6mkfixture",
+            "challenge_kinds": ["captcha"],
+            "max_proof_age": "PT5M"
+        });
+        assert_eq!(
+            validate_challenge_response_gate(typed_core.as_object().unwrap()),
+            Err("challenge_response_provider_invalid")
+        );
+    }
 
     #[test]
     fn an_over_ceiling_relaxed_window_is_not_a_schema_violation() {

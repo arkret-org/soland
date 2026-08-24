@@ -74,9 +74,9 @@ pub async fn projected_event_page_for_realms_through(
     if events.is_empty() {
         return Ok(None);
     }
-    let redacted = {
+    let durable_redactions = {
         let projection = state.projections().snapshot();
-        redaction_target_event_ids_from_events(&events, &projection)
+        message_redactions_from_events(&events, &projection)
     };
     let start = if let Some(cursor) = cursor {
         events
@@ -104,14 +104,18 @@ pub async fn projected_event_page_for_realms_through(
         .into_iter()
         .skip(start)
         .take(end - start)
-        .filter(|event| event_is_visible(event, &redacted))
+        .filter(|event| event_is_visible(event))
         .take(limit.saturating_add(1))
         .collect::<Vec<_>>();
     {
         let projection = state.projections().snapshot();
         for event in &mut page_items {
             tombstone_projection_event_for_erased_actor(&projection, event);
-            tombstone_projection_event_for_message_redaction(&projection, event);
+            tombstone_projection_event_for_message_redaction(
+                &projection,
+                &durable_redactions,
+                event,
+            );
             stub_pin_projection_event_for_invisible_target(&projection, event);
         }
     }

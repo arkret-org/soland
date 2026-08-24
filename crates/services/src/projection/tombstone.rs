@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use serde_json::{Value, json};
 
@@ -45,20 +45,57 @@ const TOMBSTONE_DERIVED_FIELD_KEYS: &[&str] = &[
     "thumbnails",
 ];
 
-pub fn redaction_target_event_ids_from_events(
-    events: &[ProjectionEventRecord],
-    projection: &soland_domain::reducer::ProjectionState,
-) -> HashSet<String> {
-    events
-        .iter()
-        .filter(|event| arkret_wire::events::kinds::is_redaction_kind(&event.event_kind))
-        .filter_map(|event| soland_domain::reducer::message_redaction_target_ref(&event.payload))
-        .map(|target_ref| projection.redaction_key_for_message_target(&target_ref))
-        .filter(|target_ref| !target_ref.trim().is_empty())
-        .collect()
+#[derive(Clone, Debug)]
+pub struct MessageRedactionMarker {
+    pub redacted_at: chrono::DateTime<chrono::Utc>,
+    pub redaction_event_id: String,
 }
 
-pub fn event_is_visible(event: &ProjectionEventRecord, _redacted: &HashSet<String>) -> bool {
+pub fn message_redactions_from_events(
+    events: &[ProjectionEventRecord],
+    projection: &soland_domain::reducer::ProjectionState,
+) -> HashMap<String, MessageRedactionMarker> {
+    let mut redactions = HashMap::new();
+    for redaction_event in events
+        .iter()
+        .filter(|event| arkret_wire::events::kinds::is_redaction_kind(&event.event_kind))
+    {
+        let Some(target_ref) =
+            soland_domain::reducer::message_redaction_target_ref(&redaction_event.payload)
+        else {
+            continue;
+        };
+        let target_message_id = projection
+            .messages
+            .values()
+            .find(|message| {
+                message.message_id == target_ref
+                    || message.event_id == target_ref
+                    || message.event_id == target_ref.replacen("ak:message:", "ak:event:", 1)
+            })
+            .map(|message| message.message_id.as_str())
+            .unwrap_or(target_ref.as_str());
+        let marker = MessageRedactionMarker {
+            redacted_at: redaction_event.created_at,
+            redaction_event_id: redaction_event.event_id.clone(),
+        };
+        let mut matched = false;
+        for message in projection
+            .messages
+            .values()
+            .filter(|message| message.message_id == target_message_id)
+        {
+            redactions.insert(message.event_id.clone(), marker.clone());
+            matched = true;
+        }
+        if !matched && target_ref.starts_with("ak:message:") {
+            redactions.insert(target_ref.replacen("ak:message:", "ak:event:", 1), marker);
+        }
+    }
+    redactions
+}
+
+pub fn event_is_visible(event: &ProjectionEventRecord) -> bool {
     // A redaction Event is durable audit history, but the projected timeline
     // exposes its target slots after applying tombstones rather than adding a
     // second visible timeline row for the reducer command itself.
@@ -104,6 +141,7 @@ pub fn tombstone_projection_event_for_erased_actor(
 
 pub fn tombstone_projection_event_for_message_redaction(
     projection: &soland_domain::reducer::ProjectionState,
+    durable_redactions: &HashMap<String, MessageRedactionMarker>,
     event: &mut ProjectionEventRecord,
 ) {
     if !matches!(
@@ -112,16 +150,24 @@ pub fn tombstone_projection_event_for_message_redaction(
     ) {
         return;
     }
-    let Some(message) = projection.messages.get(&event.event_id) else {
+    let cell = projection
+        .messages
+        .get(&event.event_id)
+        .and_then(|message| projection.redaction_cell_for_message(message));
+    let durable = durable_redactions.get(&event.event_id);
+    let Some(redacted_at) = cell
+        .map(|cell| cell.redacted_at)
+        .or_else(|| durable.map(|marker| marker.redacted_at))
+    else {
         return;
     };
-    let Some(cell) = projection.redaction_cell_for_message(message) else {
-        return;
-    };
+    let redaction_ref = cell
+        .and_then(|cell| cell.redaction_event_id.as_deref())
+        .or_else(|| durable.map(|marker| marker.redaction_event_id.as_str()));
     arkret_models_collaboration::events_payloads::redaction::redaction_tombstone_message_value(
         &mut event.payload,
-        cell.redacted_at,
-        cell.redaction_event_id.as_deref(),
+        redacted_at,
+        redaction_ref,
     );
 }
 
@@ -349,6 +395,71 @@ mod tests {
         assert!(payload.get("blob_preview").is_none());
         assert!(payload.get("message_key").is_none());
         assert!(payload.get("cache_invalidation").is_none());
+    }
+
+    #[test]
+    fn durable_redaction_event_tombstones_message_when_live_cell_is_unavailable() {
+        let event_id = "ak:event:AYqEzQ3jW02EHkMjxFQTlyeowxPQXJE4fI6JGOnzi23t";
+        let redaction_event_id = "ak:event:Adpb76fsaup_4Y_cV39of-L1_k6Nv1kSoCzXa9TM4szu";
+        let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+        let now = fixed_time("2020-01-01T00:00:00.000Z");
+        let mut projection = ProjectionState::new();
+        let message_id = soland_domain::reducer::message_id_from_event_id(event_id);
+        projection.messages.insert(
+            event_id.to_owned(),
+            MessageState {
+                event_id: event_id.to_owned(),
+                message_id: message_id.clone(),
+                realm_id: realm_id.to_owned(),
+                sender: "did:web:alice.example".to_owned(),
+                thread_id: realm_id.to_owned(),
+                content: json!({"kind": "ak.content.text", "body": "secret"}),
+                encrypted: false,
+                operation_id: "ak:operation:01904100-0000-7000-8000-0000000000a2".to_owned(),
+                created_at: now,
+                history_basis_seals: Vec::new(),
+                revision_of: None,
+                redacted_at: None,
+            },
+        );
+        let mut message_event = ProjectionEventRecord {
+            event_id: event_id.to_owned(),
+            realm_id: realm_id.to_owned(),
+            event_kind: arkret_wire::EventKind::MessageCreate,
+            operation_kind: "create".to_owned(),
+            operation_id: None,
+            sender: Some("did:web:alice.example".to_owned()),
+            payload: json!({"content": {"kind": "ak.content.text", "body": "secret"}}),
+            created_at: now,
+            received_at: now,
+        };
+        let redaction_event = ProjectionEventRecord {
+            event_id: redaction_event_id.to_owned(),
+            realm_id: realm_id.to_owned(),
+            event_kind: arkret_wire::EventKind::MessageRedact,
+            operation_kind: "redact".to_owned(),
+            operation_id: None,
+            sender: Some("did:web:alice.example".to_owned()),
+            payload: json!({"message_id": message_id}),
+            created_at: now,
+            received_at: now,
+        };
+
+        let redactions =
+            message_redactions_from_events(&[message_event.clone(), redaction_event], &projection);
+        tombstone_projection_event_for_message_redaction(
+            &projection,
+            &redactions,
+            &mut message_event,
+        );
+
+        assert_eq!(message_event.payload["redacted"], json!(true));
+        assert_eq!(message_event.payload["state"], json!("redacted"));
+        assert_eq!(
+            message_event.payload["redaction_ref"],
+            json!(redaction_event_id)
+        );
+        assert!(!message_event.payload.to_string().contains("secret"));
     }
 
     #[test]
