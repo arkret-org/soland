@@ -274,7 +274,7 @@ CREATE TABLE public.agent_membership_cleanup_intents (
     updated_at timestamp with time zone NOT NULL DEFAULT now()
 );
 
-CREATE INDEX agent_membership_cleanup_pending_idx
+CREATE INDEX agent_membership_cleanup_incomplete_idx
     ON public.agent_membership_cleanup_intents (cleanup_due_at, cleanup_intent_digest)
     WHERE completed_at IS NULL;
 
