@@ -10,7 +10,7 @@ state, and persistence adapters can be verified independently.
 | --- | --- |
 | `soland-domain` | Deterministic reducers, projection state, HLC, and domain invariants. |
 | `soland-storage` | Persistence records, narrow storage ports, and shared adapter contracts. |
-| `soland-storage-memory` | In-memory implementations used by tests and development fixtures. |
+| `soland-storage-memory` | Test-only in-memory implementations and fault-injection fixtures. |
 | `soland-storage-postgres` | Diesel/PostgreSQL schema, migrations, row mapping, and production adapters. |
 | `soland-services` | Identity, event, projection, sync, federation, governance, delivery, and job use cases. |
 | `soland-http` | Salvo routing, authentication, signatures, OpenAPI, wire validation, and response mapping. |
@@ -116,4 +116,3 @@ fanout layer when subscribers must observe changes accepted by every replica.
 - PostgreSQL adapter: `crates/storage-postgres/src`
 - Composition/runtime: `crates/server/src`
 - Deployment and operations: `DEPLOYMENT.md`, `SECURITY.md`, `docs/runbook.md`
-

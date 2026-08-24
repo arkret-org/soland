@@ -36,7 +36,6 @@ use soland_services::identity::{
     ServiceRegistrationCommitResult as ServiceRegistrationCommitOutcome,
 };
 use soland_services::persistence::PersistenceHandle;
-use soland_storage_memory::SolandMemoryPersistenceStore;
 use soland_storage_postgres::{Db, PgPersistenceStore};
 
 const SERVICE_IDENTITY_KEYSTORE_APP: &str = "soland.service-identity";
@@ -66,18 +65,19 @@ pub async fn resolve_and_build_persistence(
     config: &AppConfig,
     db: &Db,
 ) -> anyhow::Result<ServiceIdentityBootstrap> {
-    let persistence = db.pool.as_ref().map_or_else(
-        || PersistenceHandle::new(Arc::new(SolandMemoryPersistenceStore::new())),
-        |pool| PersistenceHandle::new(Arc::new(PgPersistenceStore::new(pool.clone()))),
-    );
+    let pool = db.pool.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "DATABASE_URL is required: the Soland runtime uses PostgreSQL persistence; \
+             soland-storage-memory is test-only"
+        )
+    })?;
+    let persistence = PersistenceHandle::new(Arc::new(PgPersistenceStore::new(pool.clone())));
     let key_store: Option<Arc<dyn KeyStore>> = if let Some(key_store) = config
         .key_store
         .open(SERVICE_IDENTITY_KEYSTORE_APP)
         .map_err(|error| anyhow::anyhow!("opening service identity KeyStore failed: {error}"))?
     {
         Some(Arc::from(key_store))
-    } else if config.development_mode && db.pool.is_none() {
-        Some(Arc::new(arkret_keystore::InMemoryKeyStore::new()))
     } else {
         None
     };
@@ -1287,6 +1287,7 @@ fn seed_public_multibase(seed: &[u8; 32]) -> String {
 mod tests {
     use arkret_keystore::{InMemoryKeyStore, KeyStore};
     use soland_storage::DeliveryPolicyStoreRegistry;
+    use soland_storage_memory::SolandMemoryPersistenceStore;
 
     use super::*;
 
@@ -1304,6 +1305,19 @@ mod tests {
             .expect("serving service identity")
             .full_id
             .to_string()
+    }
+
+    #[tokio::test]
+    async fn runtime_bootstrap_rejects_missing_postgres_pool() {
+        let error = resolve_and_build_persistence(&bootstrap_config(), &Db { pool: None })
+            .await
+            .err()
+            .expect("runtime bootstrap must reject memory persistence");
+
+        assert!(
+            error.to_string().contains("DATABASE_URL is required"),
+            "{error}"
+        );
     }
 
     #[tokio::test]

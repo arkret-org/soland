@@ -13,9 +13,8 @@ use super::{
 // Memory backend matches the Pg `federation_outbox_peer_idem` UNIQUE
 // INDEX semantics.
 //
-// This backend is test-and-development only: `assert_durable_outbox_backend`
-// in `soland-http::config` refuses to boot outbound federation on it, because
-// a process restart would silently drop every pending delivery intent.
+// This backend is test-only: production runtime composition requires PostgreSQL
+// because a process restart would silently drop every pending delivery intent.
 pub(crate) struct MemoryFederationOutboxStore {
     pub(crate) data: Arc<Mutex<BTreeMap<String, FederationOutboxRecord>>>,
     dead_letters: Arc<Mutex<BTreeMap<String, FederationOutboxDeadLetterRecord>>>,

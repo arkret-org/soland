@@ -41,7 +41,7 @@ We aim to:
 - The reducer + projection pipeline (event ingestion, state computation,
   redaction handling).
 - Federation transaction ingestion and signature verification.
-- Persistence layer (Diesel + PostgreSQL + the in-memory fallback).
+- Persistence layer (Diesel + PostgreSQL at runtime; in-memory test adapter).
 - Locally built Docker images, SBOM/provenance artifacts, and local binaries.
 
 ## Out of scope

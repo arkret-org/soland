@@ -40,7 +40,8 @@ init-env:
 init-dev:
     cargo run --quiet -p soland-keystore-keygen -- --output "{{ dev_keystore_master_key_file }}" --if-missing
 
-# Run soland locally. Uses DATABASE_URL from .env when set; otherwise uses memory storage.
+# Run soland locally. DATABASE_URL must be configured; use `just dev-db` to
+# start the managed local PostgreSQL container first.
 dev: init-dev
     CARGO_TARGET_DIR=target/dev cargo run -- --bind {{ bind }}
 

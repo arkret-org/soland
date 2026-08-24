@@ -14,7 +14,7 @@ claim that a third-party reviewer has completed an assessment.
   reducers.
 - Federation transaction ingestion, HTTP message signatures, outbox retry, and
   dead-letter handling.
-- Persistence abstractions for PostgreSQL and the in-memory fallback.
+- Persistence abstractions for the PostgreSQL runtime and in-memory test adapter.
 - Local Docker image, SBOM, and provenance commands documented in
   `DEPLOYMENT.md`.
 

@@ -43,8 +43,8 @@ async fn main() -> anyhow::Result<()> {
     .await?;
     if db.pool.is_none() {
         eprintln!(
-            "soland-federation-outbox: DATABASE_URL is not configured; the in-memory outbox is \
-             per-process and has nothing for an operator to inspect"
+            "soland-federation-outbox: DATABASE_URL is required; runtime persistence is \
+             PostgreSQL-only"
         );
         std::process::exit(2);
     }

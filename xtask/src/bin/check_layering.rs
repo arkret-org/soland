@@ -16,7 +16,6 @@ const ALLOWED: &[(&str, &str)] = &[
     ("soland", "soland-http"),
     ("soland", "soland-services"),
     ("soland", "soland-storage-postgres"),
-    ("soland", "soland-storage-memory"),
     ("soland-http", "soland-services"),
     ("soland-http", "soland-contracts"),
     ("soland-http", "arkret-sdk"),

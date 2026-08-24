@@ -1648,19 +1648,13 @@ fn load_notary_signing_key_seed(
     Ok(Some(seed))
 }
 
-/// `sync/federation.md` §4.1 deployment gate: outbound federation on a
-/// non-durable outbox is a silent data-loss configuration.
+/// `sync/federation.md` §4.1 deployment gate for custom composition paths:
+/// outbound federation on a non-durable outbox is a silent data-loss
+/// configuration.
 ///
-/// The in-memory outbox loses every pending delivery intent on restart, so an
-/// Event this service accepted — and told the client was accepted — would never
-/// reach its peer, with no record that it was owed. Refuse to boot instead.
-///
-/// The gate deliberately does **not** also require "a federation peer is
-/// currently configured". A remote delivery binding can appear at any moment
-/// from an accepted member join, long after boot, so that condition is not
-/// decidable when it needs to be checked. A deployment that genuinely never
-/// federates sets `SOLAND_FEDERATION_OUTBOUND=0`, which is an explicit
-/// statement rather than an accident of having no peers on the day it started.
+/// The standard Soland runtime independently requires PostgreSQL before it
+/// builds persistence. This helper remains available to callers assembling an
+/// [`AppConfig`] with their own persistence path.
 pub fn assert_durable_outbox_backend(
     config: &AppConfig,
     durable_persistence: bool,

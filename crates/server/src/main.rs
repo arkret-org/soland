@@ -93,10 +93,6 @@ async fn run() -> anyhow::Result<()> {
         },
     )
     .await?;
-    // Fail fast before anything is accepted: an outbound-federating deployment
-    // on the in-memory outbox would silently drop pending deliveries on every
-    // restart (`sync/federation.md` §4.1).
-    soland_http::config::assert_durable_outbox_backend(&config, db.pool.is_some())?;
     let bootstrap = crate::bootstrap::resolve_and_build_persistence(&config, &db).await?;
     let bootstrap = if matches!(
         bootstrap.state,

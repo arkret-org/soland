@@ -4,7 +4,7 @@ use super::{BTreeMap, MultisigPendingRecord, PersistenceResult, Value, async_tra
 /// The notary coordinator writes partials to this store so they survive
 /// restarts and can be picked up by a leader-election watchdog once the
 /// threshold is met. The read-only admin endpoint exposes pending status.
-/// Memory backend is fine for dev/tests; the Pg backend writes to the
+/// The memory backend is test-only; the Pg backend writes to the
 /// `multisig_pending` table.
 #[async_trait]
 pub trait MultisigPendingStore: Send + Sync {

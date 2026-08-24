@@ -233,7 +233,7 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_PQ_TLS_DEPLOYMENT_PROBE` | unset | Set to `verified` only after an external TLS 1.3 probe proves `X25519MLKEM768` negotiation and fail-closed classical fallback |
 | `SOLAND_FIRST_PROVISIONING` | unset | One-time class-B production authorization to create a new service identity when no stored identity, local registration, or bundle exists |
 | `SOLAND_SERVICE_IDENTITY_BUNDLE_DIR` | unset | SDK identity-bundle backend used to recover the same service DID after database loss; contains public evidence and KeyRefs, never private keys |
-| `SOLAND_KEYSTORE_BACKEND` | unset | Durable key custody: `platform` for the current user's native credential store, or `encrypted_file`; required whenever `DATABASE_URL` is set |
+| `SOLAND_KEYSTORE_BACKEND` | unset | Durable key custody: `platform` for the current user's native credential store, or `encrypted_file`; required for runtime startup together with `DATABASE_URL` |
 | `SOLAND_KEYSTORE_PATH` | unset | Ciphertext file used by the `encrypted_file` backend; it may hold multiple isolated Soland namespaces |
 | `SOLAND_KEYSTORE_MASTER_KEY` / `_FILE` | unset | Base64-encoded, random 32-byte master key for `encrypted_file`; custody and backup must be separate from `SOLAND_KEYSTORE_PATH` |
 | `SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED` | `true` | Enable soland's built-in `did:webvh` provider for coauth registration |
@@ -245,7 +245,7 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID` | unset | Account Authority service DID trusted for S2S account-status evidence; required together with `SOLAND_ACCOUNT_AUTHORITY_URL` |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_URL` | unset | coauth session-grant introspection endpoint used for `ak.session.grant + DPoP` |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` | unset | Server-to-server bearer sent to the session-grant introspection endpoint |
-| `DATABASE_URL` | unset | If set, enables PostgreSQL and runs migrations; a durable `SOLAND_KEYSTORE_BACKEND` is mandatory |
+| `DATABASE_URL` | unset | Required for runtime startup; enables PostgreSQL and runs migrations. In-memory persistence is test-only, and a durable `SOLAND_KEYSTORE_BACKEND` is mandatory |
 | `SOLAND_OBJECT_STORAGE_BACKEND` | `filesystem` | Blob object backend: `filesystem`/`local` or `s3-compatible` |
 | `SOLAND_OBJECT_STORAGE_LOCAL_ROOT` | system temp + `/soland-objects` | Local filesystem root when using `filesystem`/`local` |
 | `SOLAND_OBJECT_STORAGE_PREFIX` | unset | Optional object key prefix shared by local and S3-compatible backends |

@@ -39,8 +39,9 @@ fn migrations_applied_flag() -> &'static AtomicBool {
 }
 
 impl Db {
-    /// Connect using an already-resolved URL. `None`, or a blank string,
-    /// selects the in-memory backend.
+    /// Connect using an already-resolved URL. `None`, or a blank string, leaves
+    /// the pool absent for test-only composition; the Soland executable rejects
+    /// that shape before building runtime persistence.
     ///
     /// This is the only constructor. The `from_env` variant it replaced read
     /// `DATABASE_URL` itself, which put an environment read inside a storage

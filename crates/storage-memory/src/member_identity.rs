@@ -3,9 +3,8 @@ use super::{
     Mutex, PersistenceResult, async_trait,
 };
 
-/// In-memory member-identity registry store, retained for tests and the
-/// no-database development backend. Production durability lives in
-/// `PgMemberIdentityStore`.
+/// In-memory member-identity registry store retained for tests. Runtime
+/// durability lives in `PgMemberIdentityStore`.
 pub(crate) struct MemoryMemberIdentityStore {
     events: Arc<Mutex<BTreeMap<String, MemberIdentityEventRecord>>>,
     handle_claims: Arc<Mutex<BTreeMap<(String, String), HandleClaimEvidenceRecord>>>,

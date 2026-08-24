@@ -1,7 +1,7 @@
 //! Persistence abstraction layer.
 //!
-//! Provides a trait-based interface for storage, allowing seamless switching
-//! between in-memory and PostgreSQL backends.
+//! Provides a trait-based interface shared by the test-only in-memory adapter
+//! and the PostgreSQL runtime adapter.
 
 // Crate-private imports shared by the explicitly imported storage modules.
 pub(crate) use std::collections::{BTreeMap, BTreeSet};
