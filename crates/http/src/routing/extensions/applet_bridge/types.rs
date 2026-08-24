@@ -22,6 +22,10 @@ use serde_json::Value;
 
 pub(super) const SOLAND_EDGE_APPLET_ID: &str = "ak:applet:00000000-0000-7000-8000-000000000000";
 
+fn event_payload_value(event: &Event) -> Value {
+    Value::Object(event.payload.clone().into_iter().collect())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppletRecord {
@@ -104,7 +108,7 @@ impl GhostActorRecord {
     pub(crate) fn provision_payload(
         &self,
     ) -> Result<arkret_models_integration::AppletManagedActorProvisionPayload, String> {
-        serde_json::from_value(self.managed_actor_provision_event.payload.clone())
+        serde_json::from_value(event_payload_value(&self.managed_actor_provision_event))
             .map_err(|error| format!("stored Ghost provision payload is invalid: {error}"))
     }
 
@@ -203,7 +207,7 @@ fn validate_managed_actor_unit(
     )?;
 
     let provision: AppletManagedActorProvisionPayload =
-        serde_json::from_value(provision_event.payload.clone())
+        serde_json::from_value(event_payload_value(provision_event))
             .map_err(|error| format!("stored {label} provision payload is invalid: {error}"))?;
     provision
         .validate()
@@ -270,7 +274,7 @@ fn validate_managed_actor_unit(
         validate_registration_epoch_proof_method(event, registration_method, label)?;
     }
     let accountability: AccountabilityGrantPayload =
-        serde_json::from_value(accountability_event.payload.clone()).map_err(|error| {
+        serde_json::from_value(event_payload_value(accountability_event)).map_err(|error| {
             format!("stored {label} accountability payload is invalid: {error}")
         })?;
     accountability
@@ -302,7 +306,7 @@ fn validate_managed_actor_unit(
     }
 
     let profile: arkret_models_collaboration::events_payloads::ActorProfileCreatePayload =
-        serde_json::from_value(profile_event.payload.clone())
+        serde_json::from_value(event_payload_value(profile_event))
             .map_err(|error| format!("stored {label} profile payload is invalid: {error}"))?;
     let profile = profile.object;
     let expected_external_ref = external_ref
@@ -373,10 +377,13 @@ impl AppletRecord {
             EventSubmitContext::Standard,
             "registration",
         )?;
-        let registration: arkret_models_integration::WireAppletRegistration =
-            serde_json::from_value(self.registration_event.payload.clone()).map_err(|error| {
-                format!("stored registration Event payload is invalid: {error}")
-            })?;
+        let registration: arkret_models_integration::AppletRegistrationPayload =
+            serde_json::from_value(
+                serde_json::to_value(&self.registration_event.payload).map_err(|error| {
+                    format!("stored registration Event payload cannot be encoded: {error}")
+                })?,
+            )
+            .map_err(|error| format!("stored registration Event payload is invalid: {error}"))?;
         let evidence = registration_epoch_evidence_from_event(&self.registration_event)?;
         self.package
             .validate_with_epoch_evidence(&evidence)
@@ -463,7 +470,7 @@ impl AppletRecord {
                 return Err("stored capability grant Event envelope is invalid".to_owned());
             }
             let payload: arkret_models_collaboration::events_payloads::CapabilityGrantPayload =
-                serde_json::from_value(event.payload.clone()).map_err(|error| {
+                serde_json::from_value(event_payload_value(event)).map_err(|error| {
                     format!("stored capability grant payload is invalid: {error}")
                 })?;
             let grant = payload.grant;

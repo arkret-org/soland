@@ -542,7 +542,7 @@ async fn upload_keypackage(
             .projections()
             .mls_key_package_record(&keypackage_id)
             .expect("publish reducer landed the row");
-        let attached = state
+        let _attached = state
             .mls_key_packages()
             .store_key_package(&record)
             .await
@@ -553,6 +553,7 @@ async fn upload_keypackage(
 
     let trust_selector = trust_binding
         .as_ref()
+        .cloned()
         .map(KeyPackageTrustSelector::Principal);
     json_ok(KeyPackagesUploadOutcome {
         accepted,
@@ -795,10 +796,13 @@ async fn claim_keypackage_at_destination(
             expires_at: (body.expires_at + chrono::Duration::minutes(10)).timestamp(),
             updated_at: now_secs,
         };
+        let Some(predicted_device_id) = predicted.device_id.as_deref() else {
+            continue;
+        };
         let device_revocation_gate = match keypackage_device_revocation_gate(
             state,
             &predicted.actor_id,
-            &predicted.device_id,
+            predicted_device_id,
             binding.device_authorize_event_id.as_deref(),
         )
         .await
@@ -945,7 +949,7 @@ async fn peer_query_keypackage_claim(
         )?;
         let receipt_value = serde_json::to_value(&receipt)
             .map_err(|error| AppError::internal(format!("terminal receipt serialize: {error}")))?;
-        let attached = state
+        let _attached = state
             .mls_key_packages()
             .attach_peer_claim_terminal_receipt(
                 &source_service_id,
@@ -1505,7 +1509,7 @@ async fn validate_welcome_peer_claim_ledger(
                 || !matches!(
                     &welcome.claim_ref.trust_binding,
                     arkret_models_collaboration::events_payloads::MlsClaimTrustBinding::AgentKeyAuthorizeEventId(claim_event_id)
-                        if claim_event_id == agent_key_authorize_event_id
+                        if claim_event_id.as_str() == agent_key_authorize_event_id.as_str()
                 )
                 || !current_agent_key_authorization_matches_method(
                     state,
@@ -1617,10 +1621,10 @@ async fn validate_welcome_peer_claim_ledger(
         return Err("peer_claim_welcome_invalid");
     }
     let claim = &outcome.claims[0];
-    let claim_keypackage = URL_SAFE_NO_PAD
+    let claim_keypackage_bytes = URL_SAFE_NO_PAD
         .decode(claim.keypackage.as_bytes())
         .map_err(|_| "peer_claim_welcome_invalid")?;
-    let claim_keypackage_digest = arkret_canonical::sha256_digest(&claim_keypackage);
+    let claim_keypackage_digest = arkret_canonical::sha256_digest(&claim_keypackage_bytes);
     let claim_capabilities = arkret_canonical::canonical_json_bytes(&claim.capabilities)
         .map_err(|_| "peer_claim_welcome_invalid")?;
     let claim_capabilities_digest = arkret_canonical::sha256_digest(&claim_capabilities);
@@ -1641,7 +1645,8 @@ async fn validate_welcome_peer_claim_ledger(
             },
             arkret_models_collaboration::events_payloads::MlsClaimTrustBinding::DeviceAuthorizeEventId(claim_ref_event_id),
         ) if claim.device_id.as_ref() == Some(recipient_device_id)
-            && claim.device_authorize_event_id.as_ref() == Some(claim_ref_event_id)
+            && claim.device_authorize_event_id.as_ref().map(|id| id.as_str())
+                == Some(claim_ref_event_id.as_str())
             && claim.agent_id.is_none()
             && claim.agent_verification_method.is_none()
             && claim.agent_key_authorize_event_id.is_none()
@@ -1658,7 +1663,7 @@ async fn validate_welcome_peer_claim_ledger(
             && claim.agent_id.as_ref() == Some(recipient_agent_id)
             && claim.agent_verification_method.as_ref() == Some(recipient_agent_verification_method)
             && claim.agent_key_authorize_event_id.as_ref() == Some(agent_key_authorize_event_id)
-            && claim_ref_event_id == agent_key_authorize_event_id
+            && claim_ref_event_id.as_str() == agent_key_authorize_event_id.as_str()
             && claim.pairwise_verification_method.is_none() => {}
         (
             arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::MinimalMetadataPairwise {
@@ -3015,8 +3020,10 @@ fn build_keypackage_consume_receipt(
 fn consume_request_digest(
     body: &KeyPackagesConsumeRequestBody,
 ) -> Result<arkret_wire::Hash, AppError> {
-    arkret_canonical::canonical_sha256(&body.unsigned())
-        .map_err(|error| AppError::internal(format!("consume request digest failed: {error}")))
+    let digest = arkret_canonical::canonical_sha256(&body.unsigned())
+        .map_err(|error| AppError::internal(format!("consume request digest failed: {error}")))?;
+    arkret_wire::Hash::new(digest)
+        .map_err(|error| AppError::internal(format!("consume request digest invalid: {error}")))
 }
 
 fn validate_consume_receipt_replay(
@@ -3378,11 +3385,7 @@ async fn validate_sidecar_keypackage_consume(
                 && projected_welcome_matches_consumer(row, body)
                 && row.key_package_id == key_package_id
                 && row.epoch == welcome.epoch
-                && row.commit_ref.as_deref()
-                    == welcome
-                        .commit_ref
-                        .as_ref()
-                        .map(|event_id| event_id.as_str())
+                && row.commit_ref.as_deref() == Some(welcome.commit_ref.as_str())
                 && serde_json::from_value::<
                     arkret_models_crypto::mls_payloads::MlsGovernanceBindingPayload,
                 >(row.governance_binding.clone())

@@ -1528,9 +1528,9 @@ async fn applet_managed_actor_pcr_access(
                     record.portal_realm_id.as_str(),
                 )
                 .iter()
-                .any(|grant| grant.grant_id == provision.applet_authority_ref);
+                .any(|grant| grant.grant_id.as_str() == provision.applet_authority_ref.as_str());
             return Ok(Some(AppletManagedActorPcrAccess {
-                pcr_realm_id: record.bot_principal_control_realm_id,
+                pcr_realm_id: record.bot_principal_control_realm_id.to_string(),
                 owned_by_session,
                 active: owned_by_session && record_active && authority_active,
             }));
@@ -1556,9 +1556,11 @@ async fn applet_managed_actor_pcr_access(
                     record.portal_realm_id.as_str(),
                 )
                 .iter()
-                .any(|grant| grant.grant_id == ghost_provision.applet_authority_ref);
+                .any(|grant| {
+                    grant.grant_id.as_str() == ghost_provision.applet_authority_ref.as_str()
+                });
             return Ok(Some(AppletManagedActorPcrAccess {
-                pcr_realm_id: ghost.principal_control_realm_id(),
+                pcr_realm_id: ghost.principal_control_realm_id().to_string(),
                 owned_by_session,
                 active: owned_by_session && record_active && authority_active,
             }));

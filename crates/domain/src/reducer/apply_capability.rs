@@ -198,11 +198,6 @@ pub fn engine_grant_from_cell_body(
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .unwrap_or_else(chrono::Utc::now);
-    let expires_at = body
-        .get("expires_at")
-        .and_then(Value::as_str)
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&chrono::Utc));
     let issuer_authority_refs = engine_authority_refs_from_body(body);
     let authority_depth = body.get("authority_depth").and_then(Value::as_u64);
     let authority_root_refs = body
@@ -226,7 +221,6 @@ pub fn engine_grant_from_cell_body(
         issuer_authority_refs,
         authority_depth,
         authority_root_refs,
-        expires_at,
     })
 }
 
@@ -251,8 +245,8 @@ pub fn engine_grant_from_capability_cell_state(
 
 /// The single active-grant predicate for the accepted capability projection.
 ///
-/// Realm pin, revocation tombstone, effective expiry (top-level `expires_at`
-/// and the `temporal` constraint, stricter side wins) and action / resource
+/// Realm pin, revocation tombstone, effective expiry from temporal constraints,
+/// and action / resource
 /// matching all live here so a fix to any one of them cannot be applied at one
 /// call site while another keeps admitting the grant. Callers layer their own
 /// usage constraint — a specific issuer, a named `grant_id`, or holder
@@ -755,16 +749,8 @@ fn grant_realm_id<'a>(body: &'a Value, operation: &'a Operation) -> &'a str {
         .unwrap_or_else(|| operation.realm_id.as_str())
 }
 
-fn grant_expires_at(body: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
-    body.get("expires_at")
-        .and_then(Value::as_str)
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&chrono::Utc))
-}
-
 fn body_effective_expires_at(body: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
-    let top_level = grant_expires_at(body);
-    let constraint_expiry = value_array_field(body, "constraints")
+    value_array_field(body, "constraints")
         .into_iter()
         .filter_map(|constraint| {
             let constraint_kind = constraint.get("constraint_kind").and_then(Value::as_str);
@@ -777,13 +763,7 @@ fn body_effective_expires_at(body: &Value) -> Option<chrono::DateTime<chrono::Ut
                 .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
                 .map(|dt| dt.with_timezone(&chrono::Utc))
         })
-        .min();
-    match (top_level, constraint_expiry) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (None, None) => None,
-    }
+        .min()
 }
 
 fn body_max_authority_depth(body: &Value) -> Option<u32> {

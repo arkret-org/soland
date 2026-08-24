@@ -1,6 +1,5 @@
 //! HTTP endpoint handlers and router assembly for the applet bridge.
 
-use arkret_identifiers::{AppletId, RealmId};
 use arkret_models_collaboration::account_lifecycle::AppletRevokeRequestBody;
 use arkret_models_collaboration::http_bodies::AppletTransactionRequestBody;
 use arkret_models_discovery::ServiceDescribe;
@@ -28,10 +27,9 @@ use super::ghost::{
     validate_ghost_actor_provision_request, validate_signed_ghost_provision_events,
 };
 use super::install::{
-    approved_scope_grants, approved_scopes_from_approval_request,
-    approved_scopes_from_formal_install_events, build_install_plan, effective_scope_realm_id,
-    register_package_install, registration_epoch_evidence_from_event, require_realm_admin,
-    validate_admin_install_events, validate_applet_package,
+    approved_scope_grants, approved_scopes_from_formal_install_events, build_install_plan,
+    effective_scope_realm_id, register_package_install, registration_epoch_evidence_from_event,
+    require_realm_admin, validate_admin_install_events, validate_applet_package,
 };
 use super::record::{
     applet_id_param, applet_record, applet_records, encode_applet_record, ensure_not_revoked,
@@ -142,7 +140,7 @@ async fn install_preview_endpoint(
     let preview = body.into_inner();
     let basis = &preview.authoring_request_basis;
     if basis.target_principal_server_id.as_str() != state.service_id()
-        || basis.install_actor_id != session.actor
+        || basis.install_actor_id.as_str() != session.actor
         || basis.applet_id != preview.applet_package.applet_id
         || basis.service_id != preview.applet_package.service_id
         || preview.applet_package.package_digest.as_ref() != Some(&basis.package_digest)
@@ -1002,10 +1000,10 @@ async fn provision_ghost_actor_endpoint(
     req: &mut Request,
     res: &mut Response,
 ) -> JsonResult<GhostActorProvisionOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
     let verified = depot
         .remove_typed::<VerifiedAppletServiceSignature>()
-        .map_err(|_| AppError::unauthorized("Applet service signature verification missing"))?;
+        .map_err(|_| AppError::unauthenticated("Applet service signature verification missing"))?;
+    let state = depot.get_typed::<AppState>().expect("state injected");
     let path_applet_id = applet_id_param(req)?;
     let provision = body.into_inner();
     validate_ghost_actor_provision_request(&path_applet_id, &provision)?;
@@ -1444,7 +1442,7 @@ async fn third_party_users_endpoint(
     for record in applet_records(state).await? {
         if let Some(ghost) = record.ghosts.iter().find(|ghost| {
             ghost.external_ref.protocol == protocol
-                && ghost.external_ref.instance_id.as_deref() == Some(instance_id.as_str())
+                && ghost.external_ref.instance_id == instance_id
                 && ghost.external_ref.external_id == external_id
         }) {
             let actor_id = ghost.ghost_actor_id.clone();
@@ -1452,7 +1450,13 @@ async fn third_party_users_endpoint(
                 exists: true,
                 actor_id: Some(actor_id),
                 display_name: ghost.display_name.clone(),
-                external_ref: Some(ghost.external_ref.clone()),
+                external_ref: Some(arkret_models_integration::artifacts_applet::ExternalRef {
+                    protocol: ghost.external_ref.protocol.clone(),
+                    external_id: ghost.external_ref.external_id.clone(),
+                    instance_id: Some(ghost.external_ref.instance_id.clone()),
+                    display_name: ghost.display_name.clone(),
+                    url: None,
+                }),
             });
         }
     }

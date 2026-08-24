@@ -28,7 +28,7 @@ serde_json = {workspace = true}
 soland-domain = {workspace = true}
 thiserror = {workspace = true}
 subtle = {workspace = true}
-tokio.workspace = true
+tokio = { workspace = true, features = ["macros"] }
 uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]

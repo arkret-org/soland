@@ -1368,7 +1368,10 @@ pub(super) async fn get_agent(
         .authorization()
         .grants_for_subject_all_realms(&agent_id, Some(state.service_id()))
         .into_iter()
-        .map(|grant| ((grant.grant_id, grant.realm_id), grant.expires_at))
+        .map(|grant| {
+            let expires_at = arkret_policy::authz::authority::grant_effective_expiry(&grant);
+            ((grant.grant_id, grant.realm_id), expires_at)
+        })
         .collect::<BTreeMap<_, _>>();
     view.grants = state
         .projections()
@@ -1564,7 +1567,7 @@ pub(super) async fn pause_agent(
             agent_id.into_inner(),
             AgentLifecycleState::Paused,
             arkret_wire::event_kind_str::SELF_AGENT_PAUSE,
-            body.reason.map(arkret_wire::NonEmptyString::into_string),
+            body.reason.map(arkret_wire::AuditReasonText::into_string),
             Some(body.lifecycle_event),
         )
         .await?,
@@ -1643,7 +1646,7 @@ pub(super) async fn deactivate_agent(
             agent_id,
             AgentLifecycleState::Deactivated,
             arkret_wire::event_kind_str::SELF_AGENT_DEACTIVATE,
-            body.reason.map(arkret_wire::NonEmptyString::into_string),
+            body.reason.map(arkret_wire::AuditReasonText::into_string),
             Some(body.lifecycle_event),
         )
         .await?,

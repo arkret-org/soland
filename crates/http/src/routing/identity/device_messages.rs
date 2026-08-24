@@ -731,7 +731,7 @@ async fn active_agent_keypackage_endpoint(
             continue;
         };
         if row.actor_id == principal_id
-            && row.device_id == device_id
+            && row.device_id.as_deref() == Some(device_id)
             && matches!(
                 lifecycle.claim_state,
                 soland_services::events::PersistedKeyPackageClaimState::Available

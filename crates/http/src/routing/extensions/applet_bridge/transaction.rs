@@ -174,7 +174,7 @@ fn validate_transaction_event_binding(
     {
         return Err("applet_revoked");
     }
-    if event.realm_id.as_str() != install.portal_realm_id {
+    if event.realm_id.as_str() != install.portal_realm_id.as_str() {
         return Err("applet_effective_scope_mismatch");
     }
     if event.applet_id.as_ref().map(|id| id.as_str()) != Some(install.applet_id.as_str()) {

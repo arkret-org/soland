@@ -513,7 +513,7 @@ fn controller_device_completed_group_join(
                 .get(&welcome.key_package_id)
                 .is_some_and(|key_package| {
                     key_package.actor_id == controller_id
-                        && key_package.device_id == controller_device_id
+                        && key_package.device_id.as_deref() == Some(controller_device_id)
                         && key_package.claimed_by.as_deref() == Some(group_id)
                         && key_package.consumed_at.is_some()
                 })

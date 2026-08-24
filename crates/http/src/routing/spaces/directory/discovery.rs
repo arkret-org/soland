@@ -47,10 +47,9 @@ pub(super) async fn directory_announce(
                 .with_wire_code(code)
         })?;
     let body = body.into_inner();
-    let resource_kind = directory_resource_kind_str(body.resource_kind);
-    let resource_id = body.resource_id.as_str();
+    let (resource_kind, resource_id) = directory_resource_identity(&body.discovery_event)?;
     if resource_kind == "realm"
-        && !super::realm_has_member(state, resource_id, &session.actor).await
+        && !super::realm_has_member(state, &resource_id, &session.actor).await
     {
         return Err(AppError::capability_denied(
             "directory announcement requires realm membership",
@@ -73,6 +72,32 @@ pub(super) async fn directory_announce(
         next_revalidation_after,
         warnings: Vec::new(),
     })
+}
+
+fn directory_resource_identity(
+    event: &arkret_wire::Event,
+) -> Result<(&'static str, String), AppError> {
+    let (kind, field) = match event.kind {
+        arkret_wire::EventKind::RealmDiscovery => return Ok(("realm", event.realm_id.to_string())),
+        arkret_wire::EventKind::OrganizationDiscovery => {
+            ("organization", "organization_principal_id")
+        }
+        arkret_wire::EventKind::ActorDiscovery => ("actor", "resource_id"),
+        arkret_wire::EventKind::AppletDiscovery => ("applet", "resource_id"),
+        arkret_wire::EventKind::HandleDiscovery => ("handle", "resource_id"),
+        _ => {
+            return Err(AppError::param_invalid(
+                "discovery_event kind is not a directory discovery resource",
+            ));
+        }
+    };
+    let resource_id = event
+        .payload
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::param_invalid("discovery_event resource subject is missing"))?;
+    Ok((kind, resource_id.to_owned()))
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.find.directory.command.withdraw", tags("spaces"))]
@@ -120,16 +145,6 @@ pub(super) async fn directory_subscribe(
             .map_err(|error| AppError::internal(format!("generated subscription id: {error}")))?,
         effective_at: now(),
     })
-}
-
-pub(super) fn directory_resource_kind_str(kind: DirectoryResourceKind) -> &'static str {
-    match kind {
-        DirectoryResourceKind::Realm => "realm",
-        DirectoryResourceKind::Organization => "organization",
-        DirectoryResourceKind::Actor => "actor",
-        DirectoryResourceKind::Applet => "applet",
-        DirectoryResourceKind::Handle => "handle",
-    }
 }
 
 pub async fn has_accepted_contact(state: &AppState, left: &str, right: &str) -> bool {

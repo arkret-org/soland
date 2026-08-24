@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use soland_http::error::AppError;
 
 use super::install::registration_epoch_evidence_from_event;
-use super::record::{applet_record, applet_records, ensure_not_revoked, persist_applet_record};
+use super::record::{applet_record, persist_applet_record};
 use super::types::AppletRecord;
 use crate::state::AppState;
 
@@ -198,7 +198,8 @@ pub(super) async fn validate_signed_ghost_provision_events(
     let ghost_actor_id = provision.ghost_actor_id.clone();
     let authorization_ref = ghost_provision_authorization_ref(record)?;
     let managed_provision =
-        validate_ghost_managed_actor_unit(state, record, provision, authorization_ref.as_str())?;
+        validate_ghost_managed_actor_unit(state, record, provision, authorization_ref.as_str())
+            .await?;
     let registration_verification_method =
         super::signature::applet_registration_verification_method(
             record,
@@ -352,7 +353,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
     Ok((authorization_ref, managed_provision))
 }
 
-fn validate_ghost_managed_actor_unit(
+async fn validate_ghost_managed_actor_unit(
     state: &AppState,
     record: &AppletRecord,
     request: &GhostActorProvisionRequestBody,
@@ -446,6 +447,14 @@ fn validate_ghost_managed_actor_unit(
         .iter()
         .filter(|reference| reference.role == "applet_managed_actor_provision")
         .count();
+    let genesis_initial_resolution = serde_json::to_value(&genesis_object.initial_resolution)
+        .map_err(|error| {
+            AppError::internal(format!("failed to encode genesis resolution: {error}"))
+        })?;
+    let expected_initial_resolution = serde_json::to_value(Some(&payload.initial_resolution))
+        .map_err(|error| {
+            AppError::internal(format!("failed to encode expected resolution: {error}"))
+        })?;
     if genesis.kind != arkret_wire::EventKind::RealmCreate
         || genesis.actor_id != request.ghost_actor_id
         || genesis.executed_by.as_ref() != Some(&request.service_id)
@@ -457,8 +466,7 @@ fn validate_ghost_managed_actor_unit(
         || provision_ref_count != 1
         || genesis_object.purpose
             != arkret_models_collaboration::events_payloads::RealmPurpose::AppletManagedControl
-        || serde_json::to_value(&genesis_object.initial_resolution)
-            != serde_json::to_value(Some(&payload.initial_resolution))
+        || genesis_initial_resolution != expected_initial_resolution
     {
         return Err(AppError::param_invalid(
             "Ghost PCR genesis does not exactly cross-bind its immutable provision authority",

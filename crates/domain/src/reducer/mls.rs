@@ -344,8 +344,7 @@ fn validate_pairwise_keypackage_leaf(
     let actor = actor_id
         .parse::<arkret_identifiers::DidCoreId>()
         .map_err(|_| "claim_generation_mismatch")?;
-    let method = verification_method
-        .parse::<arkret_identifiers::DidUrl>()
+    let method = arkret_wire::DidUrl::new(verification_method.to_owned())
         .map_err(|_| "claim_generation_mismatch")?;
     arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(actor, method)
         .map_err(|_| "claim_generation_mismatch")?;
@@ -534,7 +533,7 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
                 Ok(actor) => actor,
                 Err(_) => return reject("mls_welcome_pairwise_actor_invalid"),
             };
-            let method = match method.parse::<arkret_identifiers::DidUrl>() {
+            let method = match arkret_wire::DidUrl::new(method.to_owned()) {
                 Ok(method) => method,
                 Err(_) => return reject("mls_welcome_pairwise_method_invalid"),
             };
@@ -1366,8 +1365,7 @@ fn validate_welcome_claim_recipient_binding(
             let actor = actor_id
                 .parse::<arkret_identifiers::DidCoreId>()
                 .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
-            let method = method
-                .parse::<arkret_identifiers::DidUrl>()
+            let method = arkret_wire::DidUrl::new(method.to_owned())
                 .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
             arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(actor, method)
                 .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
@@ -1545,8 +1543,7 @@ fn keypackage_claim_trust_binding_object(
             let actor = actor_id
                 .parse::<arkret_identifiers::DidCoreId>()
                 .map_err(|_| arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
-            let method_id = method
-                .parse::<arkret_identifiers::DidUrl>()
+            let method_id = arkret_wire::DidUrl::new(method.to_owned())
                 .map_err(|_| arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
             arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(actor, method_id)
                 .map_err(|_| arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)?;

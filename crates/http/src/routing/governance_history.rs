@@ -8,7 +8,7 @@ use arkret_models_collaboration::governance_dependencies::{
 use arkret_models_collaboration::history_key::{
     AcceptedAuthorityViewVector, AccountStatusViewLocator, AgentEvidenceViewLocator, AuthorProfile,
     CircleCurrentGateProjection, CircleCurrentGateProjectionKind, CircleSealViewLocator,
-    CurrentGateProjection, HistoryGovernanceTraversalIntent, HistoryGovernanceTraversalIntentKind,
+    HistoryGovernanceTraversalIntent, HistoryGovernanceTraversalIntentKind,
     HistoryGovernanceTraversalRetention, HistoryKeyRequest, HistoryKeyRequestAcceptedKind,
     HistoryKeyRequestCreateOutcome, HistoryKeyRequestListOutcome, HistoryKeyRequestListQuery,
     HistoryKeyRequestReceipt, HistoryKeyRequestReceiptKind, HistoryKeyRequestRecord,

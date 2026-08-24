@@ -226,9 +226,8 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         &self,
         keypackage_id: &str,
     ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
-        let mut matches = self
-            .state
-            .lock()
+        let state = self.state.lock();
+        let mut matches = state
             .peer_claims
             .values()
             .filter(|ledger| {

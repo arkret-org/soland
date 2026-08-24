@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_identifiers::{AppletId, DidCoreId, EventId, GrantId, Hash, RealmId};
+use arkret_identifiers::{DidCoreId, EventId, GrantId, Hash, RealmId};
 use arkret_identity::DidDocument;
 use arkret_models_collaboration::governance::accountability::{
     AccountabilityGrantPayload, AccountabilityGrantStatus, AccountabilityScope,
@@ -24,7 +24,7 @@ use arkret_wire::{CapabilityActionId, Event, ResourceMatchScope, ScopeRef, WireR
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_services::identity::{PinnedDidVersionStatus, SessionIdentityState as SessionRecord};
 
 use super::record::{applet_record, applet_records, encode_applet_record};
@@ -326,6 +326,14 @@ fn validate_bot_managed_actor_unit(
         .iter()
         .filter(|reference| reference.role == "applet_managed_actor_provision")
         .count();
+    let genesis_initial_resolution = serde_json::to_value(&genesis_object.initial_resolution)
+        .map_err(|error| {
+            AppError::internal(format!("failed to encode genesis resolution: {error}"))
+        })?;
+    let expected_initial_resolution = serde_json::to_value(Some(&provision.initial_resolution))
+        .map_err(|error| {
+            AppError::internal(format!("failed to encode expected resolution: {error}"))
+        })?;
     if genesis.kind != arkret_wire::EventKind::RealmCreate
         || genesis.actor_id != package.bot_actor_id
         || genesis.executed_by.as_ref() != Some(&package.service_id)
@@ -337,8 +345,7 @@ fn validate_bot_managed_actor_unit(
         || provision_ref_count != 1
         || genesis_object.purpose
             != arkret_models_collaboration::events_payloads::RealmPurpose::AppletManagedControl
-        || serde_json::to_value(&genesis_object.initial_resolution)
-            != serde_json::to_value(Some(&provision.initial_resolution))
+        || genesis_initial_resolution != expected_initial_resolution
     {
         return Err(AppError::param_invalid(
             "Bot PCR genesis does not exactly cross-bind its immutable provision authority",
@@ -708,7 +715,9 @@ pub(super) async fn register_package_install(
         bot_actor_principal_server_id: bot_provision.actor_principal_server_id.clone(),
         bot_actor_provision_ref: bot_actor_provision_event.event_id.clone(),
         bot_principal_control_realm_id: RealmId::from_event_id(&bot_pcr_genesis_event.event_id),
-        portal_realm_id: realm_id,
+        portal_realm_id: RealmId::new(realm_id).map_err(|error| {
+            AppError::internal(format!("validated portal realm id is invalid: {error}"))
+        })?,
         effective_scope,
         capabilities: approved_actions,
         package: package.clone(),
@@ -1535,7 +1544,8 @@ mod tests {
         let service_id = arkret_wire::project_full_id_to_core_id(&service_full_id).unwrap();
         let mut package = AppletPackage::new(
             "package:ak:applet:test".to_owned(),
-            AppletId::new("ak:applet:01974100-0000-7000-8000-000000000001").unwrap(),
+            arkret_identifiers::AppletId::new("ak:applet:01974100-0000-7000-8000-000000000001")
+                .unwrap(),
             service_id,
             service_full_id.clone(),
             controller_id.clone(),
@@ -1659,7 +1669,8 @@ mod tests {
         let service_full_id = DidFullId::new("did:web:test-applet.example".to_owned()).unwrap();
         AppletPackage::new(
             "package:ak:applet:test".to_owned(),
-            AppletId::new("ak:applet:01974100-0000-7000-8000-000000000001").unwrap(),
+            arkret_identifiers::AppletId::new("ak:applet:01974100-0000-7000-8000-000000000001")
+                .unwrap(),
             arkret_wire::project_full_id_to_core_id(&service_full_id).unwrap(),
             service_full_id,
             DidCoreId::new("ak:did_core:web:test-registry.example".to_owned()).unwrap(),

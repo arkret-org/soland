@@ -1712,16 +1712,11 @@ fn local_service_is_joined_member_principal_server(
             NotaryError::Construction(format!("serialize membership payload: {error}"))
         })?)
         .map_err(|error| NotaryError::Construction(error.to_string()))?;
-        let principal_server_id = payload
-            .principal_authority
-            .map(|authority| authority.principal_server_id)
-            .or_else(|| {
-                payload.delivery_binding.and_then(|binding| {
-                    (binding.recipient_service_kind
-                        == arkret_models_identity::RecipientServiceKind::PrincipalServer)
-                        .then_some(binding.recipient_service_id)
-                })
-            });
+        let principal_server_id = payload.delivery_binding.and_then(|binding| {
+            (binding.recipient_service_kind
+                == arkret_models_identity::RecipientServiceKind::PrincipalServer)
+                .then_some(binding.recipient_service_id)
+        });
         if principal_server_id.as_ref() == Some(service_id) {
             return Ok(true);
         }

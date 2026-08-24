@@ -222,6 +222,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
                 )
                 .await
                 .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?
+                .to_bytes()
             };
             verify_welcome_signature_with_key(envelope, &public_key)
         }

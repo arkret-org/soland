@@ -8,7 +8,7 @@ use arkret_models_collaboration::event_sync::{
     ControlProposalFaultReason, PendingControlProposal, RetainedControlProposalFault,
 };
 use arkret_models_collaboration::history_key::{
-    AuthorizationIncarnation, CurrentGateProjection, HistoryReleaseAttestation,
+    AuthorizationIncarnation, HistoryReleaseAttestation,
 };
 use arkret_models_collaboration::objects::read_receipts::ReadMarkerOutcome;
 use arkret_state::lattice::CellState;
