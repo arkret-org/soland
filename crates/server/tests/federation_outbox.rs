@@ -49,7 +49,7 @@ const DENIED_PEER_FULL_DID: &str = "did:web:denied-peer.example";
 const DENIED_PEER_DID: &str = "ak:did_core:web:denied-peer.example";
 const FEDERATION_ENDPOINT: &str = "/_arkret/peer/events";
 const IDEMPOTENCY_KEY: &str = "ak:outbox:test-idem-key-0001";
-const PAYLOAD_JSON: &str = r#"{"resource":"sha256:01"}"#;
+const PAYLOAD_JSON: &str = r#"{"cba_proof_bundles":[],"events":[],"service_binding_ref":{"delivery_binding_frontier":[],"destination_service_kind":"principal_server","membership_frontier":[],"realm_id":"ak:realm:AVskUaiQaIarVzFGmnDkUKlp-Z9EHZgindrzWbihOyvV","realm_policy_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}"#;
 
 #[derive(Clone)]
 struct VerifiedPeerRoute {
@@ -281,7 +281,10 @@ impl MockResponse {
 }
 
 fn spawn_mock_peer() -> (String, mpsc::Receiver<String>) {
-    spawn_mock_peer_with_status("200 OK", br#"{"status":"accepted"}"#)
+    spawn_mock_peer_with_status(
+        "200 OK",
+        br#"{"delivery_state":"complete","pending_delivery_count":0,"status":"accepted"}"#,
+    )
 }
 
 fn spawn_mock_peer_with_status(

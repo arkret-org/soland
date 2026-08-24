@@ -281,6 +281,17 @@ fn fixture_pcr_founding_device_descriptor(
 /// Deterministic, fully content-bound PCR create Event shared by fixtures that
 /// need to name the PCR before seeding its accepted projection.
 pub fn fixture_principal_control_realm_create(principal_id: &str) -> arkret_wire::AuthoredEvent {
+    fixture_principal_control_realm_create_for_server(
+        principal_id,
+        crate::fixture_principal_server_id(),
+    )
+}
+
+/// Deterministic PCR create Event for the exact Principal Server authority.
+pub fn fixture_principal_control_realm_create_for_server(
+    principal_id: &str,
+    principal_server_id: arkret_identifiers::DidCoreId,
+) -> arkret_wire::AuthoredEvent {
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .expect("fixture PCR genesis timestamp")
         .with_timezone(&chrono::Utc);
@@ -292,7 +303,7 @@ pub fn fixture_principal_control_realm_create(principal_id: &str) -> arkret_wire
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
             principal_id: principal.clone(),
             principal_full_id: principal_full_id.clone(),
-            principal_server_id: crate::fixture_principal_server_id(),
+            principal_server_id,
             notary: test_single_signer_notary(principal_full_id.as_str()),
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -402,7 +413,12 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
     //
     let realm = arkret_identifiers::RealmId::new(realm_id.to_owned())
         .expect("fixture Realm id is canonical");
-    let is_principal_control_realm = realm_id == crate::fixture_principal_control_realm(subject);
+    let principal_control_create = fixture_principal_control_realm_create_for_server(
+        subject,
+        arkret_identifiers::DidCoreId::new(state.service_id().clone())
+            .expect("fixture service core DID"),
+    );
+    let is_principal_control_realm = realm == principal_control_create.realm_id;
     let existing_records = state
         .test_persistence()
         .events()
@@ -446,8 +462,18 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
         return;
     }
     if is_principal_control_realm {
-        let event = fixture_principal_control_realm_create(subject);
-        project_fixture_genesis_event(state, &realm, event.into_event()).await;
+        project_fixture_genesis_event(state, &realm, principal_control_create.into_event()).await;
+        return;
+    }
+    if realm == state.development_demo_realm_id() {
+        let event = soland_http::state::development_demo_genesis_event(
+            &state.service_full_id(),
+            &arkret_identifiers::DidCoreId::new(state.service_id().clone())
+                .expect("fixture service core DID"),
+            state.notary_signing_key().to_bytes(),
+        )
+        .into_event();
+        persist_and_project_realm_genesis_event(state, &realm, "Fixture Realm", event).await;
         return;
     }
     let genesis_event_id = realm.event_id().to_string();

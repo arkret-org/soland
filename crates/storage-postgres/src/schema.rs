@@ -540,10 +540,9 @@ diesel::table! {
         id -> Uuid,
         issuer -> Text,
         scope -> Jsonb,
-        frontier -> Jsonb,
         events -> Jsonb,
-        proofs -> Jsonb,
         created_at -> Timestamptz,
+        proofs -> Jsonb,
     }
 }
 

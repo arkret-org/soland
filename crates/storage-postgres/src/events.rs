@@ -185,8 +185,6 @@ struct EventBatchReceiptRow {
     #[diesel(sql_type = Jsonb)]
     scope: Value,
     #[diesel(sql_type = Jsonb)]
-    frontier: Value,
-    #[diesel(sql_type = Jsonb)]
     events: Value,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
@@ -207,7 +205,6 @@ impl TryFrom<EventBatchReceiptRow> for EventBatchReceipt {
             "receipt_id": ids::format_typed_uuid("receipt", &row.id),
             "issuer": row.issuer,
             "scope": row.scope,
-            "frontier": row.frontier,
             "events": row.events,
             "created_at": arkret_canonical::normalize_timestamp_canonical(row.created_at),
             "proofs": row.proofs,
@@ -698,11 +695,6 @@ async fn insert_event_batch_receipt(
     let scope = serde_json::to_value(&receipt.scope).map_err(|error| {
         PersistenceError::Internal(format!("Event Batch Receipt scope encode failed: {error}"))
     })?;
-    let frontier = serde_json::to_value(&receipt.frontier).map_err(|error| {
-        PersistenceError::Internal(format!(
-            "Event Batch Receipt frontier encode failed: {error}"
-        ))
-    })?;
     let events = serde_json::to_value(&receipt.events).map_err(|error| {
         PersistenceError::Internal(format!("Event Batch Receipt events encode failed: {error}"))
     })?;
@@ -711,8 +703,8 @@ async fn insert_event_batch_receipt(
     })?;
     let receipt_pk = sql_query(
         "INSERT INTO event_batch_receipts \
-         (schema, id, issuer, scope, frontier, events, created_at, proofs) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING pk",
+         (schema, id, issuer, scope, events, created_at, proofs) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING pk",
     )
     .bind::<Text, _>(&receipt.schema)
     .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
@@ -720,7 +712,6 @@ async fn insert_event_batch_receipt(
     ))
     .bind::<Text, _>(receipt.issuer.as_str())
     .bind::<Jsonb, _>(scope)
-    .bind::<Jsonb, _>(frontier)
     .bind::<Jsonb, _>(events)
     .bind::<Timestamptz, _>(arkret_canonical::normalize_timestamp_canonical(
         receipt.created_at,
@@ -1405,7 +1396,7 @@ impl EventStore for PgEventStore {
             return Ok(Vec::new());
         };
         let rows = sql_query(
-            "SELECT receipt.schema, receipt.id, receipt.issuer, receipt.scope, receipt.frontier, \
+            "SELECT receipt.schema, receipt.id, receipt.issuer, receipt.scope, \
                     receipt.events, receipt.created_at, receipt.proofs \
              FROM event_batch_receipts receipt \
              JOIN event_batch_receipt_events binding ON binding.receipt_pk = receipt.pk \

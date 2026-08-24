@@ -819,8 +819,12 @@ pub async fn project_authorized_principal_device(
 ) -> String {
     let principal_full = DidFullId::new(principal_full_id.to_owned()).unwrap();
     let principal_id = arkret_wire::project_full_id_to_core_id(&principal_full).unwrap();
-    let principal_server_id = DidCoreId::new(state.service_id().to_owned()).unwrap();
-    let pcr_realm_id = RealmId::new(fixture_principal_control_realm(principal_full_id)).unwrap();
+    let pcr_create = cba_basis::fixture_principal_control_realm_create_for_server(
+        principal_full_id,
+        arkret_identifiers::DidCoreId::new(state.service_id().clone())
+            .expect("fixture service core DID"),
+    );
+    let pcr_realm_id = pcr_create.realm_id.clone();
     cba_basis::seed_realm_genesis_event(state, pcr_realm_id.as_str(), principal_full_id).await;
     let genesis_record = state
         .test_persistence()
@@ -832,6 +836,7 @@ pub async fn project_authorized_principal_device(
         .find(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
         .expect("PCR genesis Event");
     let genesis: arkret_wire::Event = serde_json::from_value(genesis_record.envelope).unwrap();
+    let principal_server_id = genesis.principal_server_id.clone();
     let now = chrono::Utc::now();
     let device_public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
         signing_key.verifying_key().as_bytes(),

@@ -515,10 +515,9 @@ CREATE TABLE public.event_batch_receipts (
     id uuid NOT NULL UNIQUE,
     issuer text NOT NULL,
     scope jsonb NOT NULL,
-    frontier jsonb NOT NULL,
     events jsonb NOT NULL,
-    proofs jsonb NOT NULL,
-    created_at timestamp with time zone NOT NULL
+    created_at timestamp with time zone NOT NULL,
+    proofs jsonb NOT NULL
 );
 
 CREATE TABLE public.event_batch_receipt_events (

@@ -562,7 +562,7 @@ pub(super) async fn submit_identity_anchor_batch(
         let payload = typed_device_reanchor_payload(&envelopes[0])?;
         Some(soland_services::events::IdentityAnchorReanchorState {
             actor_id: first.actor_id.to_string(),
-            principal_server_id: payload.authority.principal_server_id.to_string(),
+            principal_server_id: payload.principal_server_id.to_string(),
             new_device_generation: payload.new_device_generation,
             reanchor_digest: first.canonical_digest.clone(),
             authorize_digest: second.canonical_digest.clone(),
@@ -1781,20 +1781,6 @@ fn build_pcr_genesis_batch_receipt(
         .object
         .founding_device_descriptor
         .ok_or_else(|| unit_error("PCR genesis omits its founding device descriptor"))?;
-    let create_digest = Hash::new(create.canonical_digest.clone()).map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("PCR genesis create digest is invalid: {error}"),
-        )
-    })?;
-    let authorize_digest = Hash::new(authorize.canonical_digest.clone()).map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("PCR genesis authorize digest is invalid: {error}"),
-        )
-    })?;
     let mut receipt = arkret_wire::EventBatchReceipt {
         schema: arkret_wire::EventBatchReceipt::SCHEMA.to_owned(),
         receipt_id: arkret_identifiers::ReceiptId::new(crate::ids::generate("receipt")).map_err(
@@ -1822,8 +1808,6 @@ fn build_pcr_genesis_batch_receipt(
                 log_head_digest: pins.log_head_digest.clone(),
                 control_key_digest: pins.control_key_digest.clone(),
                 registration_evidence_digest: pins.registration_evidence_digest.clone(),
-                create_digest: create_digest.clone(),
-                founding_authorize_digest: authorize_digest.clone(),
                 accepted_device_id: descriptor.device_id,
                 device_key_digest: descriptor.device_key_digest,
                 hpke_key_digest: descriptor.hpke_key_digest,
@@ -1831,12 +1815,6 @@ fn build_pcr_genesis_batch_receipt(
                 audience: audience.clone(),
             },
         ),
-        frontier: arkret_wire::EventBatchReceiptFrontier {
-            actor_seq: Some(authorize.actor_seq),
-            event_id: Some(authorize.event_id.clone()),
-            event_digest: Some(authorize_digest.clone()),
-            hlc: None,
-        },
         events: vec![
             arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
                 event_id: create.event_id.clone(),
@@ -1873,17 +1851,74 @@ fn build_pcr_genesis_batch_receipt(
 }
 
 async fn build_reanchor_batch_receipt(
-    _state: &AppState,
-    _reanchor: &ValidatedEventEnvelope,
-    _authorize: &ValidatedEventEnvelope,
-    _reanchor_envelope: &Value,
-    _created_at: DateTime<Utc>,
+    state: &AppState,
+    reanchor: &ValidatedEventEnvelope,
+    authorize: &ValidatedEventEnvelope,
+    reanchor_envelope: &Value,
+    created_at: DateTime<Utc>,
 ) -> Result<arkret_wire::EventBatchReceipt, SubmitOneError> {
-    Err(SubmitOneError::new(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "failed_precondition",
-        "device re-anchor receipt contract still requires removed DID-version fields; refusing to fabricate receipt evidence",
-    ))
+    let payload = typed_device_reanchor_payload(reanchor_envelope)?;
+    let mut receipt = arkret_wire::EventBatchReceipt {
+        schema: arkret_wire::EventBatchReceipt::SCHEMA.to_owned(),
+        receipt_id: arkret_identifiers::ReceiptId::new(crate::ids::generate("receipt")).map_err(
+            |error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("generated Event Batch Receipt id is invalid: {error}"),
+                )
+            },
+        )?,
+        issuer: DidCoreId::new(state.service_id().clone()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("service DID is invalid: {error}"),
+            )
+        })?,
+        scope: arkret_wire::EventBatchReceiptScope::DeviceReanchor(
+            arkret_wire::DeviceReanchorReceiptScope {
+                kind: arkret_wire::DeviceReanchorReceiptScopeKind::DeviceReanchorUnit,
+                principal_id: payload.principal_id,
+                principal_server_id: payload.principal_server_id,
+                realm_id: reanchor.realm_id.clone(),
+                previous_device_generation: payload.previous_device_generation,
+                new_device_generation: payload.new_device_generation,
+            },
+        ),
+        events: vec![
+            arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
+                event_id: reanchor.event_id.clone(),
+                kind: arkret_wire::NonEmptyString::new(reanchor.kind.clone())
+                    .expect("validated Event kind is non-empty"),
+            }),
+            arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
+                event_id: authorize.event_id.clone(),
+                kind: arkret_wire::NonEmptyString::new(authorize.kind.clone())
+                    .expect("validated Event kind is non-empty"),
+            }),
+        ],
+        created_at,
+        proofs: Vec::new(),
+    };
+    receipt.canonicalize_events().map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("generated device re-anchor receipt events are invalid: {error}"),
+        )
+    })?;
+    receipt
+        .proofs
+        .push(sign_event_batch_receipt(state, &receipt)?);
+    receipt.validate().map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("generated device re-anchor receipt is invalid: {error}"),
+        )
+    })?;
+    Ok(receipt)
 }
 
 fn sign_event_batch_receipt(

@@ -274,27 +274,12 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
             arkret_state::lattice::CellState::Value(serde_json::to_value(authority_root).unwrap()),
         );
     }
-    let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
-    let create = arkret_wire::test_support::raw_event_at(
-        arkret_wire::EventKind::RealmCreate.as_str(),
-        arkret_wire::ScopeRef::RealmGenesis,
-        arkret_wire::project_full_id_to_core_id(&DidFullId::new("did:web:alice.example").unwrap())
-            .unwrap(),
-        soland_test_support::fixture_principal_server_id(),
-        0,
-        arkret_identifiers::Hlc::new("0196419b0000-0000-51c0a1ed").unwrap(),
-        soland_test_support::cba_basis::realm_genesis_payload(
-            state,
-            "did:web:alice.example",
-            "Extension test Realm",
-            "ak:trust_domain:soland.test",
-            created_at,
-        ),
-        created_at,
+    let create = soland_http::state::development_demo_genesis_event(
+        &state.service_full_id(),
+        &arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap(),
+        state.notary_signing_key().to_bytes(),
     )
-    .unwrap();
+    .into_event();
     assert_eq!(RealmId::from_event_id(&create.event_id), realm);
     let move_id = arkret_identifiers::Hash::new(
         create
@@ -344,7 +329,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                     "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                     "realm_id": demo_realm_id(),
                     "issuer": "ak:did_core:web:alice.example",
-                    "issuer_principal_server_id": soland_test_support::fixture_principal_server_id(),
+                    "issuer_principal_server_id": state.service_id(),
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": demo_realm_id(),
@@ -353,7 +338,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                         "authority_generation": 0
                     }],
                     "subject": "ak:did_core:web:alice.example",
-                    "subject_principal_server_id": soland_test_support::fixture_principal_server_id(),
+                    "subject_principal_server_id": state.service_id(),
                     "actions": soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS,
                     "resources": [{
                         "kind": "realm",
@@ -1206,7 +1191,15 @@ async fn post_signed_applet_message_transaction(
          created={created};expires={};keyid=\"{verification_method}\";alg=\"ed25519\"",
         created + 60
     );
+    let target_scheme = request
+        .state
+        .config()
+        .public_base_url
+        .split_once("://")
+        .map_or("http", |(scheme, _)| scheme);
+    let target_uri = format!("{target_scheme}://server/_arkret/edge/applet/transactions");
     let signature_base = applet_signature_base(
+        &target_uri,
         &content_digest,
         package.service_id.as_str(),
         request.state.service_id(),
@@ -1214,6 +1207,15 @@ async fn post_signed_applet_message_transaction(
         &signature_params,
     );
     let signing_key = applet_service_signing_key(&verification_method);
+    assert_eq!(
+        soland_http::jws_verify::resolve_ed25519_pubkey(
+            request.state,
+            verification_method.as_str(),
+        )
+        .expect("Applet webhook verification key resolves"),
+        signing_key.verifying_key(),
+        "Applet webhook DID document binds the fixture signing key",
+    );
     let signature = signing_key.sign(signature_base.as_bytes());
     let signature_header = format!(
         "sig1=:{}:",
@@ -1266,7 +1268,8 @@ async fn applet_message_event(
         },
         arkret_identifiers::DidCoreId::new((*actor_id).to_owned())
             .expect("fixture ghost actor DID"),
-        soland_test_support::fixture_principal_server_id(),
+        arkret_identifiers::DidCoreId::new(state.service_id().clone())
+            .expect("extension test service core DID"),
         *actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",
@@ -1347,6 +1350,7 @@ fn content_digest_header(bytes: &[u8]) -> String {
 }
 
 fn applet_signature_base(
+    target_uri: &str,
     content_digest: &str,
     source_service_id: &str,
     destination_service_id: &str,
@@ -1355,7 +1359,7 @@ fn applet_signature_base(
 ) -> String {
     format!(
         "\"@method\": POST\n\
-         \"@target-uri\": http://server/_arkret/edge/applet/transactions\n\
+         \"@target-uri\": {target_uri}\n\
          \"@authority\": server\n\
          \"content-digest\": {content_digest}\n\
          \"source-service-id\": {source_service_id}\n\
@@ -1887,7 +1891,8 @@ async fn signed_install_events(
         arkret_wire::EventKind::AppletRegistration.as_str(),
         scope_ref.clone(),
         actor_core_id.clone(),
-        soland_test_support::fixture_principal_server_id(),
+        arkret_identifiers::DidCoreId::new(state.service_id().clone())
+            .expect("extension test service core DID"),
         frontier.actor_seq + 1,
         Hlc::new(format!("{millis:012x}-0001-a11ce001")).unwrap(),
         preview["events_to_submit"][0]["payload"].clone(),
@@ -1953,7 +1958,8 @@ async fn signed_install_events(
             arkret_wire::EventKind::CapabilityGrant.as_str(),
             scope_ref.clone(),
             actor_core_id.clone(),
-            soland_test_support::fixture_principal_server_id(),
+            arkret_identifiers::DidCoreId::new(state.service_id().clone())
+                .expect("extension test service core DID"),
             frontier.actor_seq + counter as u64,
             Hlc::new(format!("{millis:012x}-{counter:04x}-a11ce001")).unwrap(),
             serde_json::to_value(payload).unwrap(),
@@ -2040,7 +2046,8 @@ async fn signed_revoke_events(
             arkret_wire::EventKind::CapabilityRevoke.as_str(),
             scope_ref.clone(),
             actor_core_id.clone(),
-            soland_test_support::fixture_principal_server_id(),
+            arkret_identifiers::DidCoreId::new(state.service_id().clone())
+                .expect("extension test service core DID"),
             frontier.actor_seq + counter as u64,
             Hlc::new(format!("{millis:012x}-{counter:04x}-a11ce001")).unwrap(),
             json!({

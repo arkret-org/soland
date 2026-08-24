@@ -140,11 +140,42 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
         .await
         .unwrap();
 
+    let mut audit_delta = [&genesis, &authorize]
+        .into_iter()
+        .map(|event| {
+            arkret_wire::Hash::new(
+                event
+                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                    .unwrap(),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    audit_delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    let audit_signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
+        state.notary_signing_key().to_bytes(),
+        state.service_full_id(),
+        state.service_verification_method("notary-key").unwrap(),
+    );
+    let audit_seal = arkret_wire::Seal::sign_single(
+        pcr_realm_id.clone(),
+        vec![basis_seal.id.clone()],
+        audit_delta,
+        basis_seal.state_root.clone(),
+        arkret_identifiers::Hlc::new("0196419b0000-0001-a11ce001").unwrap(),
+        arkret_canonical::DigestSuite::Sha256,
+        &audit_signer,
+    )
+    .unwrap();
+    state
+        .test_projections()
+        .test_put_seal(&audit_seal, arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
     state
         .test_projections()
         .test_mark_control_event_sealed(
             &genesis,
-            &basis_seal,
+            &audit_seal,
             &arkret_state::state::store::ControlProposalIngress::AcklessSelfPrincipal(
                 arkret_state::state::store::AcklessSelfPrincipalIngress {
                     device_id: "ak:device:fixture".to_owned(),
@@ -157,18 +188,6 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
         )
         .unwrap();
 
-    let create_digest = arkret_wire::Hash::new(
-        genesis
-            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-            .unwrap(),
-    )
-    .unwrap();
-    let authorize_digest = arkret_wire::Hash::new(
-        authorize
-            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-            .unwrap(),
-    )
-    .unwrap();
     let fixture_hash =
         |byte: &str| arkret_wire::Hash::new(format!("sha256:{}", byte.repeat(64))).unwrap();
     let mut receipt = arkret_wire::EventBatchReceipt {
@@ -187,8 +206,6 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
                 log_head_digest: fixture_hash("1"),
                 control_key_digest: fixture_hash("2"),
                 registration_evidence_digest: fixture_hash("3"),
-                create_digest: create_digest.clone(),
-                founding_authorize_digest: authorize_digest.clone(),
                 accepted_device_id: descriptor.device_id,
                 device_key_digest: descriptor.device_key_digest,
                 hpke_key_digest: descriptor.hpke_key_digest,
@@ -196,12 +213,6 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
                 audience: principal_server_id,
             },
         ),
-        frontier: arkret_wire::EventBatchReceiptFrontier {
-            actor_seq: Some(authorize.actor_seq),
-            event_id: Some(authorize.event_id.clone()),
-            event_digest: Some(authorize_digest.clone()),
-            hlc: None,
-        },
         events: vec![
             arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
                 event_id: genesis.event_id,
