@@ -187,7 +187,8 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
                 CellState::Value(value) => Some(value),
                 CellState::Bottom(_) => None,
             })
-            .and_then(|value| value.get("actor_id"))
+            .and_then(|value| value.get("signer"))
+            .and_then(|signer| signer.get("actor_id"))
             .and_then(Value::as_str),
         Some("ak:did_core:web:new-notary.example")
     );

@@ -1335,7 +1335,7 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
             arkret_canonical::DigestSuite::Sha256,
             arkret_wire::SecurityClass::HighAssurance,
             arkret_wire::EncryptionProfile::MlsRfc9420,
-            test_single_signer_notary("did:webvh:z6mkreducertest"),
+            test_single_signer_notary("did:webvh:z6mkreducertest:reducer-test.example"),
             arkret_policy::current_capability_action_registry_digest().unwrap(),
         )
         .unwrap();
@@ -1412,7 +1412,7 @@ fn managed_agent_genesis_requires_the_registered_status_projection() {
             arkret_canonical::DigestSuite::Sha256,
             arkret_wire::SecurityClass::HighAssurance,
             arkret_wire::EncryptionProfile::MlsRfc9420,
-            test_single_signer_notary("did:webvh:z6mkreducertest"),
+            test_single_signer_notary("did:webvh:z6mkreducertest:reducer-test.example"),
             arkret_policy::current_capability_action_registry_digest().unwrap(),
         )
         .unwrap();
@@ -1537,20 +1537,17 @@ fn realm_history_access_initializes_an_absent_cell_once() {
 #[test]
 fn realm_history_access_can_only_tighten() {
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let create = make_operation(
-        arkret_wire::EventKind::RealmCreate,
+    let initialize = make_operation(
+        arkret_wire::EventKind::RealmHistoryAccess,
         realm_id,
         serde_json::json!({
-            "object": {
-                "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
-                "encryption_profile": "plaintext",
-                "history_access": "all_history_for_current_members"
-            }
+            "from": null,
+            "to": "all_history_for_current_members"
         }),
     );
     let mut state = ProjectionState::new();
     assert!(!matches!(
-        state.apply(&create, &ServerHlc::new("test")),
+        state.apply(&initialize, &ServerHlc::new("test")),
         ProjectionEffect::Rejected { .. }
     ));
 
@@ -1655,7 +1652,6 @@ fn the_bundle_projects_every_registered_component() {
         "account_deactivation": {"member_action": "leave_all"},
         "availability_policy": {
             "min_holders": 1,
-            "holder_roles": ["notary"],
             "applies_to": ["seal_include"]
         },
         "audit_policy": {
@@ -1775,6 +1771,15 @@ fn the_policy_frontier_digest_is_a_filtered_state_root() {
     let realm_id = "ak:realm:AYzSDw0uyDZ0DpWUE57e1TNDnSVg-vp-MLwyB1Cp5Hdf";
     let other_realm = "ak:realm:AenNfapD8up-lhrrPnBwYQGpjDqNfH-xkShZCra70c3S";
     let mut state = ProjectionState::new();
+    for target_realm in [realm_id, other_realm] {
+        state.realm_null_subject_cells.insert(
+            (
+                target_realm.to_owned(),
+                arkret_wire::REALM_GENESIS_CELL.to_owned(),
+            ),
+            CellState::Value(serde_json::json!({"digest_algorithm": "sha256"})),
+        );
+    }
     let empty = state
         .realm_policy_frontier_digest(realm_id)
         .expect("empty frontier is computable");
