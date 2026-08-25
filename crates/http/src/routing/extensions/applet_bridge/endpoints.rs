@@ -559,6 +559,7 @@ async fn revoke_install_endpoint(
                 &request_digest,
                 &request_value,
                 &mut outcome,
+                false,
             )
             .await?;
             outcome
@@ -598,16 +599,12 @@ async fn revoke_install_endpoint(
                     AppletRevokeStepStatus::Accepted
                 };
                 outcome.revoked_refs.push(accepted.event_id);
-                if record.revoked_at.is_none() {
-                    record.revoked_at = Some(chrono::Utc::now());
-                    record.status = "revoking".to_owned();
-                    if let Some(fence) = outcome
-                        .steps
-                        .iter_mut()
-                        .find(|step| step.effect_kind == AppletRevokeEffectKind::LocalAppletFence)
-                    {
-                        fence.status = AppletRevokeStepStatus::Accepted;
-                    }
+                if let Some(fence) = outcome
+                    .steps
+                    .iter_mut()
+                    .find(|step| step.effect_kind == AppletRevokeEffectKind::LocalAppletFence)
+                {
+                    fence.status = AppletRevokeStepStatus::Accepted;
                 }
             }
             Err(error) => {
@@ -629,6 +626,7 @@ async fn revoke_install_endpoint(
                     &request_digest,
                     &request_value,
                     &mut outcome,
+                    false,
                 )
                 .await?;
                 return json_ok(outcome);
@@ -642,6 +640,7 @@ async fn revoke_install_endpoint(
             &request_digest,
             &request_value,
             &mut outcome,
+            revoke_mode_fences_runtime(revoke.revoke_mode),
         )
         .await?;
     }
@@ -674,6 +673,7 @@ async fn revoke_install_endpoint(
         &request_digest,
         &request_value,
         &mut outcome,
+        false,
     )
     .await?;
     crate::routing::append_audit_log(
@@ -932,6 +932,7 @@ async fn persist_revoke_execution(
     request_digest: &str,
     request: &Value,
     outcome: &mut AppletRevokeOutcome,
+    fence_applet: bool,
 ) -> Result<(), AppError> {
     let execution = json!({
         "principal_service_id": state.service_id(),
@@ -944,6 +945,10 @@ async fn persist_revoke_execution(
     for _ in 0..8 {
         let current = record.clone();
         let mut replacement = current.clone();
+        if fence_applet && replacement.revoked_at.is_none() {
+            replacement.revoked_at = Some(chrono::Utc::now());
+            replacement.status = "revoking".to_owned();
+        }
         replacement.revoke_execution = Some(execution.clone());
         if persist_applet_record(state, &current, &replacement).await? {
             *record = replacement;

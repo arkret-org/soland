@@ -2054,7 +2054,11 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(revoke["ok"], json!(true));
+    assert_eq!(
+        revoke["ok"],
+        json!(true),
+        "Applet revoke failed: {revoke:#}"
+    );
     assert_eq!(revoke["status"], json!("complete"));
 
     let replay: Value = TestClient::post(format!(

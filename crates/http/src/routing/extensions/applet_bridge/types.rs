@@ -364,8 +364,12 @@ impl AppletRecord {
             || &self.portal_realm_id != self.effective_scope.realm_id()
             || self.install_id != self.install_response.install_id
             || self.install_response.registration_epoch != self.package.registration_epoch
-            || (self.revoked_at.is_none() && self.status != original_status)
-            || (self.revoked_at.is_some() && self.status != "revoked")
+            || !applet_lifecycle_mirrors_match(
+                self.status.as_str(),
+                self.revoked_at.is_some(),
+                original_status,
+            )
+            || (self.status == "revoking" && self.revoke_execution.is_none())
         {
             return Err(
                 "stored Applet record coordinate mirrors drift from the accepted package/outcome"
@@ -585,6 +589,18 @@ impl AppletRecord {
     }
 }
 
+fn applet_lifecycle_mirrors_match(
+    status: &str,
+    has_revoked_at: bool,
+    original_status: &str,
+) -> bool {
+    if has_revoked_at {
+        matches!(status, "revoking" | "revoked")
+    } else {
+        status == original_status
+    }
+}
+
 #[derive(salvo::oapi::ToSchema, Clone, Debug, Serialize, Deserialize)]
 pub struct AppletRevokeRecordOutcome {
     pub applet_id: AppletId,
@@ -668,5 +684,40 @@ mod tests {
             "accountability",
         ));
         assert!(!exact_role_ref(&event, "accountability", &target));
+    }
+
+    #[test]
+    fn stored_applet_lifecycle_accepts_only_closed_durable_states() {
+        for original_status in ["installed", "partially_installed"] {
+            assert!(applet_lifecycle_mirrors_match(
+                original_status,
+                false,
+                original_status
+            ));
+            assert!(applet_lifecycle_mirrors_match(
+                "revoking",
+                true,
+                original_status
+            ));
+            assert!(applet_lifecycle_mirrors_match(
+                "revoked",
+                true,
+                original_status
+            ));
+
+            for (status, has_revoked_at) in [
+                (original_status, true),
+                ("revoking", false),
+                ("revoked", false),
+                ("unknown", false),
+                ("unknown", true),
+            ] {
+                assert!(!applet_lifecycle_mirrors_match(
+                    status,
+                    has_revoked_at,
+                    original_status
+                ));
+            }
+        }
     }
 }
