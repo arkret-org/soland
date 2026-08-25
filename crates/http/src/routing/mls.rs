@@ -416,7 +416,7 @@ async fn upload_keypackage(
         {
             rejected.push(keypackage_failure(
                 &entry,
-                endpoint_label,
+                endpoint_device_id,
                 "keypackage_capabilities_signed_binding_invalid",
             ));
             continue;

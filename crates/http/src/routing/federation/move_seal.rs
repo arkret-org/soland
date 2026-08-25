@@ -899,10 +899,7 @@ async fn try_apply_device_generation_event_seal(
         }
         // v1 has no producer `effects[]`: whether an Event is control material
         // is decided by its registered contract, not by an envelope array.
-        let projects_writes =
-            arkret_schema::project_registered_cell_writes(&event, event_digest_suite)
-                .map(|writes| !writes.is_empty())
-                .unwrap_or(false);
+        let projects_writes = registered_event_projects_writes(state, &event, event_digest_suite)?;
         if !projects_writes && !anchor_event_ids.contains(&record.event_id) {
             return Err(seal_admission_error(
                 "B-model Event Seal delta contains a non-control Event",
@@ -1031,6 +1028,29 @@ async fn try_apply_device_generation_event_seal(
         }
     }
     Ok(Some(committed_seal_effect(seal)))
+}
+
+/// Decide whether an accepted Event is registered control material using the
+/// same frozen reducer authority state as admission and Seal application.
+///
+/// Capability Grant writes include receiver-derived authority audit members.
+/// A resolver-free projection therefore cannot distinguish an unresolved
+/// parent from a non-control Event and must not be used at this boundary.
+fn registered_event_projects_writes(
+    state: &AppState,
+    event: &Event,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<bool, AppError> {
+    state
+        .projections()
+        .project_cell_writes_with_digest_suite(event, digest_suite)
+        .map(|writes| !writes.is_empty())
+        .map_err(|error| {
+            seal_admission_error(format!(
+                "stored Event {} registered projection failed: {error}",
+                event.event_id
+            ))
+        })
 }
 
 pub(crate) async fn apply_managed_agent_event_seal(
@@ -1669,6 +1689,65 @@ fn is_sha256_digest(s: &str) -> bool {
 #[cfg(test)]
 mod seal_delta_tests {
     use super::*;
+
+    #[test]
+    fn b_model_control_classification_projects_capability_grant_with_frozen_authority() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let realm_id =
+            RealmId::new("ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC".to_owned())
+                .unwrap();
+        let issuer_full =
+            arkret_identifiers::DidFullId::new("did:web:alice.example".to_owned()).unwrap();
+        let issuer = arkret_wire::project_full_id_to_core_id(&issuer_full).unwrap();
+        let subject_full =
+            arkret_identifiers::DidFullId::new("did:web:agent.example".to_owned()).unwrap();
+        let subject = arkret_wire::project_full_id_to_core_id(&subject_full).unwrap();
+        let event = crate::test_event::raw_event(
+            arkret_wire::EventKind::CapabilityGrant.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            issuer.clone(),
+            1,
+            arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce3".to_owned()).unwrap(),
+            serde_json::json!({
+                "grant": {
+                    "schema": "ak.schema.capability.v1",
+                    "realm_id": realm_id,
+                    "issuer": issuer,
+                    "subject": subject,
+                    "subject_principal_server_id": state.service_id(),
+                    "actions": ["ak.strand.read"],
+                    "resources": [{
+                        "kind": "realm",
+                        "realm_id": realm_id,
+                        "match_scope": "realm_wide"
+                    }],
+                    "issued_at": "2026-08-25T00:00:00.000Z",
+                    "issuer_authority_refs": [{
+                        "kind": "realm_root",
+                        "realm_id": realm_id,
+                        "cell_ref": arkret_wire::REALM_AUTHORITY_ROOT_CELL,
+                        "controller_epoch_at_issuance": 0,
+                        "authority_generation": 0
+                    }]
+                }
+            }),
+        )
+        .unwrap();
+
+        assert!(
+            registered_event_projects_writes(
+                &state,
+                &event,
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .expect("direct-root grant is registered control material")
+        );
+    }
 
     #[test]
     fn seal_delta_rejects_event_id_form() {
