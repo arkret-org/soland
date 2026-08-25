@@ -20,7 +20,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{DidFullId, EventId, Hash, ReportId};
+use arkret_identifiers::{EventId, Hash, ReportId};
 use arkret_models_collaboration::http_bodies::{
     MimiGroupInfoOutcome, MimiIdentifierQueryOutcome, MimiIdentifierQueryRequestBody,
     MimiKeyMaterialOutcome, MimiKeyMaterialRequestBody, MimiNotifyOutcome, MimiNotifyRequestBody,

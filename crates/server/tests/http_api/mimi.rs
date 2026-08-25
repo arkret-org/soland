@@ -14,6 +14,8 @@ const MIMI_TEST_DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce000000
 const MIMI_TEST_STRAND_ID: &str = "ak:strand:AeR8kl_pHP0Rj8sdg-m7-2iv0BbzptjujMXzwBoelVPt";
 const MIMI_TEST_POLICY_ROOT: &str =
     "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+const MIMI_TEST_SECURITY_FRONTIER_DIGEST: &str =
+    "sha256:2222222222222222222222222222222222222222222222222222222222222222";
 
 macro_rules! signed_mimi_post {
     ($state:expr, $url:expr, $body:expr, $room_uri:expr) => {{
@@ -269,21 +271,20 @@ fn mimi_submit_body(
 }
 
 fn mimi_governance_binding(realm_id: &str, group_id: &str, epoch: u64) -> Value {
-    json!({
-        "binding_version": 1,
-        "encoding_profile": "cbor-deterministic-rfc8949-v1",
-        "binding_profile": "ak.profile.mls_governance_binding.full.v1",
-        "reducer_profile": "ak.reducer.core.v1",
-        "mls_group_id": group_id,
-        "previous_epoch": epoch.saturating_sub(1),
-        "next_epoch": epoch,
-        "realm_id": realm_id,
-        "effective_scope": {
-            "kind": "realm",
-            "realm_id": realm_id,
-        },
-        "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-    })
+    let binding = arkret_models_crypto::MlsGovernanceBindingPayload::realm(
+        arkret_wire::RealmId::new(realm_id.to_owned()).expect("MIMI fixture realm id"),
+        group_id,
+        epoch.saturating_sub(1),
+        epoch,
+        arkret_wire::Hash::new(MIMI_TEST_SECURITY_FRONTIER_DIGEST.to_owned())
+            .expect("MIMI fixture security frontier digest"),
+        arkret_wire::ContentScheme::MlsRfc9420,
+        None,
+        arkret_wire::ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
+        arkret_wire::CORE_REDUCER_PROFILE,
+    )
+    .expect("MIMI fixture MLS governance binding");
+    serde_json::to_value(binding).expect("MIMI fixture MLS governance binding JSON")
 }
 
 fn text_mimi_message(message_id: &str, body: &str) -> Value {
