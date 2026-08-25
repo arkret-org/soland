@@ -315,6 +315,7 @@ async fn apply_authoritative_event_seal_path(
             &leaves,
             &new_ops,
             &target,
+            &[],
         ) {
             Ok(true) => {}
             Ok(false) => {

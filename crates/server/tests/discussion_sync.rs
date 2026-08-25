@@ -1363,6 +1363,18 @@ async fn poll_content_projection_replaces_votes() {
         invalid.to_string().contains("poll_selection_unknown"),
         "invalid Poll response did not expose the semantic rejection: {invalid:?}"
     );
+    assert!(
+        state
+            .test_persistence()
+            .events()
+            .realm_events_newest_first(&realm_id)
+            .await
+            .expect("canonical Realm Event log")
+            .iter()
+            .all(|record| record.event_id.as_str() != invalid_event_id.as_str()),
+        "invalid Poll response was durably written before semantic rejection"
+    );
+
     submit_projection_event(
         state.clone(),
         &bob,
@@ -1457,5 +1469,45 @@ async fn poll_content_projection_replaces_votes() {
                 .collect::<Vec<_>>(),
             expected_backup_voters
         );
+    }
+
+    let restarted = soland_test_support::app_state_with_persistence(
+        test_config(),
+        state.test_persistence().clone(),
+    )
+    .await;
+    restarted.hydrate().await.expect("restart hydration");
+    assert!(
+        restarted
+            .test_persistence()
+            .events()
+            .realm_events_newest_first(&realm_id)
+            .await
+            .expect("restarted canonical Realm Event log")
+            .iter()
+            .all(|record| record.event_id.as_str() != invalid_event_id.as_str()),
+        "invalid Poll response appeared in the canonical Event log after restart"
+    );
+    {
+        let projection = restarted.test_projection().lock();
+        let poll_state = projection
+            .poll(&poll_ref)
+            .expect("valid Poll rehydrates from the canonical Event log");
+        assert!(
+            poll_state
+                .votes
+                .values()
+                .all(|vote| vote.selections == BTreeSet::from(["backup".to_owned()])),
+            "restart rehydrated a rejected or superseded Poll vote: {poll_state:?}"
+        );
+        let mut voters = poll_state
+            .votes
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        voters.sort_unstable();
+        let mut expected_voters = vec![bob_core.as_str(), carol_core.as_str()];
+        expected_voters.sort_unstable();
+        assert_eq!(voters, expected_voters);
     }
 }

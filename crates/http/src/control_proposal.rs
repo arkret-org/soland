@@ -586,14 +586,16 @@ pub(crate) fn sign_control_proposal_reject(
             jws: String::new(),
         }],
     };
-    let bytes = decision
-        .canonical_bytes_for_signature()
-        .map_err(|error| error.to_string())?;
     let digest = decision
         .decision_digest()
         .map_err(|error| error.to_string())?;
     if let ControlProposalDecision::SignedReject { proofs, .. } = &mut decision {
         proofs[0].payload_digest = digest;
+    }
+    let bytes = decision
+        .canonical_bytes_for_signature()
+        .map_err(|error| error.to_string())?;
+    if let ControlProposalDecision::SignedReject { proofs, .. } = &mut decision {
         proofs[0].jws = soland_services::identity::sign_ed25519_frozen_notary_jws(
             &bytes,
             &proofs[0].verification_method,
@@ -641,14 +643,16 @@ pub(crate) fn sign_control_proposal_defer(
             jws: String::new(),
         }],
     };
-    let bytes = decision
-        .canonical_bytes_for_signature()
-        .map_err(|error| error.to_string())?;
     let digest = decision
         .decision_digest()
         .map_err(|error| error.to_string())?;
     if let ControlProposalDecision::SignedDefer { proofs, .. } = &mut decision {
         proofs[0].payload_digest = digest;
+    }
+    let bytes = decision
+        .canonical_bytes_for_signature()
+        .map_err(|error| error.to_string())?;
+    if let ControlProposalDecision::SignedDefer { proofs, .. } = &mut decision {
         proofs[0].jws = soland_services::identity::sign_ed25519_frozen_notary_jws(
             &bytes,
             &proofs[0].verification_method,
@@ -664,9 +668,16 @@ pub(crate) fn sign_control_proposal_defer(
 #[cfg(test)]
 mod tests {
     use arkret_identifiers::{Hash, RealmId};
-    use arkret_wire::{AuthoritySetRef, ControlProposalDecisionPolicy};
+    use arkret_wire::{
+        AuthoritySetRef, ControlProposalDecision, ControlProposalDecisionPolicy,
+        ControlProposalDeferReason, ControlProposalRejectReason, DidCoreId, NotaryValue,
+    };
+    use chrono::{Duration, TimeZone, Utc};
 
-    use super::{mint_control_proposal_ack, select_control_proposal_ack_authority};
+    use super::{
+        mint_control_proposal_ack, select_control_proposal_ack_authority,
+        sign_control_proposal_defer, sign_control_proposal_reject,
+    };
     use crate::AppState;
 
     fn authority(byte: &str) -> AuthoritySetRef {
@@ -738,5 +749,72 @@ mod tests {
                 .as_str()
                 .starts_with("did:")
         );
+    }
+
+    #[test]
+    fn locally_signed_defer_and_reject_bind_the_final_canonical_decision_digest() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let verification_method = state.service_verification_method("notary-key").unwrap();
+        let signing_key = state.notary_signing_key();
+        let descriptor = soland_services::identity::ed25519_notary_signer_descriptor(
+            DidCoreId::new(state.service_id().clone()).unwrap(),
+            verification_method,
+            signing_key.verifying_key().as_bytes(),
+        )
+        .unwrap();
+        let notary = NotaryValue::single_signer(descriptor);
+        let policy = ControlProposalDecisionPolicy::default();
+        let received_at = Utc.with_ymd_and_hms(2026, 8, 25, 0, 0, 0).single().unwrap();
+        let ack = mint_control_proposal_ack(
+            &state,
+            RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned())
+                .unwrap(),
+            Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
+            Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap(),
+            received_at,
+            policy,
+        )
+        .unwrap();
+        let defer = sign_control_proposal_defer(
+            &state,
+            &ack,
+            &[],
+            &notary,
+            ControlProposalDeferReason::TemporarilyUnavailable,
+            received_at + Duration::seconds(1),
+            ack.decision_due_at + policy.decision_window,
+            policy,
+        )
+        .unwrap();
+        defer
+            .validate_chain_for_notary(&ack, &[], policy, &notary)
+            .unwrap();
+        let reject = sign_control_proposal_reject(
+            &state,
+            &ack,
+            std::slice::from_ref(&defer),
+            &notary,
+            ControlProposalRejectReason::SchemaViolation,
+            received_at + Duration::seconds(2),
+        )
+        .unwrap();
+        reject
+            .validate_chain_for_notary(&ack, std::slice::from_ref(&defer), policy, &notary)
+            .unwrap();
+
+        for decision in [&defer, &reject] {
+            let proofs = match decision {
+                ControlProposalDecision::SignedDefer { proofs, .. }
+                | ControlProposalDecision::SignedReject { proofs, .. } => proofs,
+            };
+            assert_eq!(
+                proofs[0].payload_digest,
+                decision.decision_digest().unwrap()
+            );
+            assert!(!proofs[0].jws.is_empty());
+        }
     }
 }

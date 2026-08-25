@@ -853,8 +853,6 @@ pub struct CommitAppletRecord {
     pub applet_id: arkret_wire::AppletId,
     pub expected_record: Option<Value>,
     pub record: Value,
-    pub namespace_claims: arkret_models_integration::AppletWireNamespaces,
-    pub managed_authority_claims: Vec<soland_storage::ManagedAuthorityClaim>,
 }
 
 #[derive(Clone, Debug)]

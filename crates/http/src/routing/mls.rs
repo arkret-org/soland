@@ -313,7 +313,7 @@ async fn upload_keypackage(
             },
         )
     };
-    let endpoint_label = device_id.as_deref().unwrap_or(actor_id.as_str());
+    let endpoint_device_id = device_id.as_deref();
     let unsigned_upload = body.unsigned();
     let upload_signing_input =
         arkret_models_crypto::http_bodies::keypackages_upload_signing_input(&unsigned_upload)
@@ -346,7 +346,7 @@ async fn upload_keypackage(
         verify_device_keypackage_signature(
             state,
             &principal_id,
-            endpoint_label,
+            endpoint_device_id.expect("validated device upload has a device id"),
             &body.endpoint_signature,
             &upload_signing_input,
         )
@@ -380,7 +380,7 @@ async fn upload_keypackage(
         if entry.keypackage_id.is_empty() {
             rejected.push(keypackage_failure(
                 &entry,
-                endpoint_label,
+                endpoint_device_id,
                 "keypackage_id_missing",
             ));
             continue;
@@ -389,7 +389,7 @@ async fn upload_keypackage(
         if entry.keypackage_ref.is_empty() {
             rejected.push(keypackage_failure(
                 &entry,
-                endpoint_label,
+                endpoint_device_id,
                 "keypackage_ref_missing",
             ));
             continue;
@@ -399,7 +399,7 @@ async fn upload_keypackage(
         let key_package_bytes = match decode_key_package(&key_package_bytes_b64) {
             Ok(bytes) => bytes,
             Err(reason) => {
-                rejected.push(keypackage_failure(&entry, endpoint_label, reason));
+                rejected.push(keypackage_failure(&entry, endpoint_device_id, reason));
                 continue;
             }
         };
@@ -407,7 +407,7 @@ async fn upload_keypackage(
         let capabilities = match validate_capabilities(&entry.capabilities) {
             Ok(value) => value,
             Err(reason) => {
-                rejected.push(keypackage_failure(&entry, endpoint_label, reason));
+                rejected.push(keypackage_failure(&entry, endpoint_device_id, reason));
                 continue;
             }
         };
@@ -427,7 +427,7 @@ async fn upload_keypackage(
         ) {
             Ok(signature) => signature,
             Err(reason) => {
-                rejected.push(keypackage_failure(&entry, endpoint_label, reason));
+                rejected.push(keypackage_failure(&entry, endpoint_device_id, reason));
                 continue;
             }
         };
@@ -440,7 +440,7 @@ async fn upload_keypackage(
                 Err(error) => {
                     rejected.push(keypackage_failure(
                         &entry,
-                        endpoint_label,
+                        endpoint_device_id,
                         format!("endpoint_signature_invalid:{error}"),
                     ));
                     continue;
@@ -462,21 +462,21 @@ async fn upload_keypackage(
             )
             .await
         {
-            rejected.push(keypackage_failure(&entry, endpoint_label, reason));
+            rejected.push(keypackage_failure(&entry, endpoint_device_id, reason));
             continue;
         }
-        if device_id.is_some() {
+        if let Some(endpoint_device_id) = endpoint_device_id {
             if let Err(error) = validate_device_keypackage_leaf(
                 state,
                 &principal_id,
-                endpoint_label,
+                endpoint_device_id,
                 &key_package_bytes,
             )
             .await
             {
                 rejected.push(keypackage_failure(
                     &entry,
-                    endpoint_label,
+                    Some(endpoint_device_id),
                     error.to_string(),
                 ));
                 continue;
@@ -485,7 +485,7 @@ async fn upload_keypackage(
                 && let Err(error) = verify_device_keypackage_signature(
                     state,
                     &principal_id,
-                    endpoint_label,
+                    endpoint_device_id,
                     &endpoint_signature,
                     &entry_signing_input,
                 )
@@ -493,7 +493,7 @@ async fn upload_keypackage(
             {
                 rejected.push(keypackage_failure(
                     &entry,
-                    endpoint_label,
+                    Some(endpoint_device_id),
                     error.to_string(),
                 ));
                 continue;
@@ -511,7 +511,7 @@ async fn upload_keypackage(
                 &endpoint_signature,
                 &entry_signing_input,
             ) {
-                rejected.push(keypackage_failure(&entry, endpoint_label, reason));
+                rejected.push(keypackage_failure(&entry, endpoint_device_id, reason));
                 continue;
             }
         }
@@ -523,7 +523,7 @@ async fn upload_keypackage(
         {
             rejected.push(keypackage_failure(
                 &entry,
-                endpoint_label,
+                endpoint_device_id,
                 "last_resort_keypackage_lifetime_too_long",
             ));
             continue;
@@ -556,7 +556,7 @@ async fn upload_keypackage(
         match effect {
             ProjectionEffectView::Mls(MlsProjectionEffect::KeyPackagePublished { .. }) => {}
             ProjectionEffectView::Rejected { reason } => {
-                rejected.push(keypackage_failure(&entry, endpoint_label, reason));
+                rejected.push(keypackage_failure(&entry, endpoint_device_id, reason));
                 continue;
             }
             other => {
@@ -4396,7 +4396,7 @@ fn device_authorize_trust_binding(
 
 fn keypackage_failure(
     entry: &KeyPackageUploadEntry,
-    device_id: &str,
+    device_id: Option<&str>,
     reason_code: impl AsRef<str>,
 ) -> KeypackageFailure {
     let keypackage_ref = if entry.keypackage_ref.is_empty() {
@@ -4406,7 +4406,7 @@ fn keypackage_failure(
     };
     KeypackageFailure {
         keypackage_ref: (!keypackage_ref.is_empty()).then_some(keypackage_ref),
-        device_id: Some(device_id.to_owned()),
+        device_id: device_id.map(str::to_owned),
         reason_code: arkret_wire::ReasonCode::from_wire(reason_code.as_ref()),
         retry_after_ms: None,
     }
@@ -4723,6 +4723,33 @@ mod trust_binding_tests {
             arkret_wire::DidCoreId::new(format!("ak:did_core:key:{multibase}")).unwrap(),
             arkret_wire::DidUrl::new(format!("did:key:{multibase}#{multibase}")).unwrap(),
         )
+    }
+
+    #[test]
+    fn upload_failure_carries_only_a_real_device_selector() {
+        let entry = KeyPackageUploadEntry {
+            keypackage_id: "kp-fixture".to_owned(),
+            keypackage_ref: format!("sha256:{}", "1".repeat(64)),
+            keypackage: arkret_wire::Base64UrlString::new("AA").unwrap(),
+            cipher_suites: vec!["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_owned()],
+            capabilities: vec!["ak.content.v1".to_owned()],
+            expires_at: now() + chrono::Duration::minutes(5),
+            created_at: now(),
+            endpoint_signature: None,
+            last_resort: None,
+        };
+
+        let pairwise_failure = keypackage_failure(&entry, None, "schema_violation");
+        assert!(pairwise_failure.device_id.is_none());
+        let device_failure = keypackage_failure(
+            &entry,
+            Some("ak:device:01964137-0000-7000-8000-000000000001"),
+            "schema_violation",
+        );
+        assert_eq!(
+            device_failure.device_id.as_deref(),
+            Some("ak:device:01964137-0000-7000-8000-000000000001")
+        );
     }
 
     #[test]

@@ -1797,8 +1797,6 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
                         applet_id: mutation.applet_id,
                         expected_record: mutation.expected_record,
                         record: mutation.record,
-                        namespace_claims: mutation.namespace_claims,
-                        managed_authority_claims: mutation.managed_authority_claims,
                     }
                 }),
                 agent_membership_cascade: command.agent_membership_cascade,

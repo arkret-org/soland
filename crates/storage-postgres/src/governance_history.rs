@@ -162,6 +162,48 @@ pub(crate) async fn put_governance_dependency_exact_in_transaction(
     Ok(ExactWriteOutcome::Inserted)
 }
 
+pub(crate) async fn governance_dependencies_match_in_transaction(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+    source: &GovernanceDependencySource,
+    expected: &[GovernanceDependencyWrite],
+) -> PersistenceResult<bool> {
+    let (source_kind, source_ref) = source.storage_parts();
+    let source_column = match source_kind {
+        "seal" => "edge.seal_id",
+        "control_event" => "edge.event_digest",
+        _ => unreachable!("closed governance dependency source"),
+    };
+    let query = format!(
+        "SELECT edge.edge_index, object.dependency_kind, object.object_digest, object.canonical_bytes, \
+                object.object_json \
+         FROM governance_dependency_edges edge \
+         JOIN governance_dependency_objects object \
+           ON object.realm_id = edge.realm_id \
+          AND object.dependency_kind = edge.dependency_kind \
+          AND object.object_digest = edge.object_digest \
+         WHERE edge.realm_id = $1 AND {source_column} = $2 \
+         ORDER BY edge.edge_index"
+    );
+    let stored = sql_query(query)
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(source_ref)
+        .load::<DependencyEdgeObjectRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?
+        .into_iter()
+        .map(decode_dependency_edge)
+        .collect::<PersistenceResult<Vec<_>>>()?;
+    let expected = expected
+        .iter()
+        .map(|write| GovernanceDependencyEdgeRecord {
+            edge_index: write.edge_index,
+            item: write.item.clone(),
+        })
+        .collect::<Vec<_>>();
+    Ok(stored == expected)
+}
+
 #[derive(QueryableByName)]
 struct DependencyObjectRow {
     #[diesel(sql_type = Text)]

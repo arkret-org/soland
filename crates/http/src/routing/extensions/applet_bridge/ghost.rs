@@ -447,14 +447,6 @@ async fn validate_ghost_managed_actor_unit(
         .iter()
         .filter(|reference| reference.role == "applet_managed_actor_provision")
         .count();
-    let genesis_initial_resolution = serde_json::to_value(&genesis_object.initial_resolution)
-        .map_err(|error| {
-            AppError::internal(format!("failed to encode genesis resolution: {error}"))
-        })?;
-    let expected_initial_resolution = serde_json::to_value(Some(&payload.initial_resolution))
-        .map_err(|error| {
-            AppError::internal(format!("failed to encode expected resolution: {error}"))
-        })?;
     if genesis.kind != arkret_wire::EventKind::RealmCreate
         || genesis.actor_id != request.ghost_actor_id
         || genesis.executed_by.as_ref() != Some(&request.service_id)
@@ -466,7 +458,7 @@ async fn validate_ghost_managed_actor_unit(
         || provision_ref_count != 1
         || genesis_object.purpose
             != arkret_models_collaboration::events_payloads::RealmPurpose::AppletManagedControl
-        || genesis_initial_resolution != expected_initial_resolution
+        || genesis_object.initial_resolution.as_ref() != Some(&payload.initial_resolution)
     {
         return Err(AppError::param_invalid(
             "Ghost PCR genesis does not exactly cross-bind its immutable provision authority",

@@ -24,13 +24,12 @@ use arkret_identifiers::{DidCoreId, DidFullId, Hash, RealmId};
 use arkret_identity::{DidDocument, DidResolver, DidWebResolver};
 use arkret_models_collaboration::governance::policy_check::{
     PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody, PolicyCheckSignature,
-    PolicyCheckSource,
+    PolicyCheckSource, policy_decision_transcript_bytes,
 };
 use arkret_wire::{AuthzDecision, FreshnessState};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer, SigningKey};
-use serde::Serialize;
 use serde_json::Value;
 use soland_http::authz::obligation_executor::RequestContext;
 use soland_http::authz::policy_client::{
@@ -155,46 +154,9 @@ fn mock_allow_response(
         next_retry_at: None,
         obligations: Vec::new(),
     };
-    let transcript = policy_decision_transcript_bytes(&request, &response);
+    let transcript = policy_decision_transcript_bytes(&response).unwrap();
     response.signature.sig = URL_SAFE_NO_PAD.encode(signing.sign(&transcript).to_bytes());
     response
-}
-
-#[derive(Debug, Serialize)]
-struct PolicyDecisionTranscript<'a> {
-    kind: &'a str,
-    request_id: &'a str,
-    decision: &'a AuthzDecision,
-    bound_to: &'a PolicyCheckBoundTo,
-    freshness_state: &'a FreshnessState,
-    auth_state_digest: &'a Hash,
-    policy_frontier_digest: &'a Hash,
-    membership_frontier_digest: &'a Hash,
-    reason_code: &'a str,
-    expires_at: &'a str,
-    #[serde(skip_serializing_if = "<[_]>::is_empty")]
-    obligations: &'a [Value],
-}
-
-fn policy_decision_transcript_bytes(
-    request: &PolicyCheckRequestBody,
-    response: &PolicyCheckOutcome,
-) -> Vec<u8> {
-    let expires_at = arkret_canonical::format_timestamp_canonical(response.expires_at);
-    let transcript = PolicyDecisionTranscript {
-        kind: "ak.policy.check.transcript.v1",
-        request_id: request.request_id.as_str(),
-        decision: &response.decision,
-        bound_to: &response.bound_to,
-        freshness_state: &response.freshness_state,
-        auth_state_digest: &response.auth_state_digest,
-        policy_frontier_digest: &response.policy_frontier_digest,
-        membership_frontier_digest: &response.membership_frontier_digest,
-        reason_code: response.reason_code.as_str(),
-        expires_at: expires_at.as_str(),
-        obligations: &response.obligations,
-    };
-    arkret_canonical::canonical_json_bytes(&transcript).unwrap()
 }
 
 /// An authz engine holding an explicit `ak.event.read` grant for the test actor.

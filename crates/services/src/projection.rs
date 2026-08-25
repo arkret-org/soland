@@ -90,6 +90,7 @@ pub trait EventSealCommitPort: Send + Sync {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<Hash>,
+        governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool>;
 }
 
@@ -1472,6 +1473,7 @@ impl ProjectionService {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<Hash>,
+        governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         let _authority_guard = self.history_authority_view_cas_guard();
         self.event_seal_committer().commit_if_frontier(
@@ -1480,6 +1482,7 @@ impl ProjectionService {
             expected_store_frontier,
             new_ops,
             covered,
+            governance_dependencies,
         )
     }
 
@@ -3245,6 +3248,7 @@ mod control_governance_health_tests {
             _expected_store_frontier: &[SealId],
             _new_ops: &[(CellRef, IssuedOp)],
             _covered: &BTreeSet<Hash>,
+            _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
         ) -> StoreResult<bool> {
             panic!("governance health must not commit a Seal")
         }

@@ -348,22 +348,13 @@ async fn prepare_ghost_event(
 async fn submit_applet_record_event_batch(
     state: &AppState,
     events: Vec<Event>,
-    applet_id: String,
+    applet_id: arkret_wire::AppletId,
     expected_applet_record: Option<Value>,
     applet_record: Value,
-    namespace_claims: arkret_models_integration::AppletWireNamespaces,
-    managed_authority_claims: Vec<soland_storage::ManagedAuthorityClaim>,
     idempotency: EventCommitIdempotency,
     response_body: Value,
     response_status: StatusCode,
 ) -> Result<(), SubmitOneError> {
-    let applet_id = arkret_wire::AppletId::new(applet_id).map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            format!("Applet record id is invalid: {error}"),
-        )
-    })?;
     if events.is_empty() {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
@@ -449,8 +440,6 @@ async fn submit_applet_record_event_batch(
                 applet_id,
                 expected_record: expected_applet_record,
                 record: applet_record,
-                namespace_claims,
-                managed_authority_claims,
             }),
             agent_membership_cascade: None,
         })
@@ -534,10 +523,9 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
     pcr_genesis: Event,
     accountability: Event,
     profile: Event,
-    applet_id: String,
+    applet_id: arkret_wire::AppletId,
     expected_applet_record: Value,
     applet_record: Value,
-    actor_principal_server_id: String,
     idempotency: EventCommitIdempotency,
     response_body: Value,
 ) -> Result<(), SubmitOneError> {
@@ -558,11 +546,6 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
         applet_id,
         Some(expected_applet_record),
         applet_record,
-        arkret_models_integration::AppletWireNamespaces::default(),
-        vec![soland_storage::ManagedAuthorityClaim {
-            actor_id: ghost_actor_id.to_owned(),
-            principal_server_id: actor_principal_server_id,
-        }],
         idempotency,
         response_body,
         StatusCode::CREATED,
@@ -573,10 +556,8 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
 pub(in crate::routing) async fn submit_applet_install_batch(
     state: &AppState,
     events: Vec<Event>,
-    applet_id: String,
+    applet_id: arkret_wire::AppletId,
     applet_record: Value,
-    namespace_claims: arkret_models_integration::AppletWireNamespaces,
-    managed_authority_claims: Vec<soland_storage::ManagedAuthorityClaim>,
     idempotency: EventCommitIdempotency,
     response_body: Value,
 ) -> Result<(), SubmitOneError> {
@@ -586,8 +567,6 @@ pub(in crate::routing) async fn submit_applet_install_batch(
         applet_id,
         None,
         applet_record,
-        namespace_claims,
-        managed_authority_claims,
         idempotency,
         response_body,
         StatusCode::CREATED,

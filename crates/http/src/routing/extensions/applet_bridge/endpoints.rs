@@ -769,7 +769,7 @@ fn build_revoke_plan(
                 &scope_realm_id,
             )
             .into_iter()
-            .map(|grant| grant.grant_id)
+            .map(|grant| grant.grant_id.to_string())
             .collect::<std::collections::BTreeSet<_>>();
         for grant_id in &response.capability_grant_refs {
             if active_grant_ids.contains(grant_id.as_str()) {
@@ -1005,6 +1005,8 @@ async fn provision_ghost_actor_endpoint(
         .map_err(|_| AppError::unauthenticated("Applet service signature verification missing"))?;
     let state = depot.get_typed::<AppState>().expect("state injected");
     let path_applet_id = applet_id_param(req)?;
+    let typed_path_applet_id = arkret_wire::AppletId::new(path_applet_id.clone())
+        .map_err(|error| AppError::param_invalid(format!("applet_id is invalid: {error}")))?;
     let provision = body.into_inner();
     validate_ghost_actor_provision_request(&path_applet_id, &provision)?;
     if verified.install.applet_id.as_str() != path_applet_id
@@ -1154,10 +1156,9 @@ async fn provision_ghost_actor_endpoint(
         provision.pcr_genesis_event.clone(),
         provision.accountability_grant_event.clone(),
         provision.profile_event.clone(),
-        path_applet_id,
+        typed_path_applet_id,
         expected_applet_record,
         applet_record_value,
-        managed_provision.actor_principal_server_id.to_string(),
         crate::routing::events::event_log::EventCommitIdempotency {
             principal_id: provision.service_id.to_string(),
             key: idempotency_key.clone(),
@@ -1450,7 +1451,7 @@ async fn third_party_users_endpoint(
                 exists: true,
                 actor_id: Some(actor_id),
                 display_name: ghost.display_name.clone(),
-                external_ref: Some(arkret_models_integration::artifacts_applet::ExternalRef {
+                external_ref: Some(ExternalRef {
                     protocol: ghost.external_ref.protocol.clone(),
                     external_id: ghost.external_ref.external_id.clone(),
                     instance_id: Some(ghost.external_ref.instance_id.clone()),

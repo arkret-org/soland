@@ -92,7 +92,6 @@ async fn opaque_consent_request_does_not_create_a_pending_cell() {
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
         .json(&serde_json::json!({
             "holder_principal_id": bob,
-            "peer_principal_id": alice,
             "consent_scope": "direct_message",
         }))
         .send(&app)

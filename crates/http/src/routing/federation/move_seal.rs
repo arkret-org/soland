@@ -1014,6 +1014,7 @@ async fn try_apply_device_generation_event_seal(
         &context.cas_frontier_refs,
         &new_ops,
         &target,
+        &[],
     ) {
         Ok(true) => {}
         Ok(false) => {
@@ -1354,6 +1355,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
         &leaves,
         &new_ops,
         &target,
+        &[],
     ) {
         Ok(true) => {}
         Ok(false) => {

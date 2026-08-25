@@ -990,85 +990,63 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         }
 
         if let Some(mutation) = request.applet_record {
-            for (existing_applet_id, existing_record) in &staged_applets {
-                if existing_applet_id == mutation.applet_id.as_str() {
-                    continue;
-                }
-                let active = existing_record
-                    .get("revoked_at")
-                    .is_none_or(serde_json::Value::is_null)
-                    && matches!(
-                        existing_record
-                            .get("status")
-                            .and_then(serde_json::Value::as_str),
-                        Some("installed" | "partially_installed")
-                    );
-                if !active {
-                    continue;
-                }
-                let Some(namespaces) = existing_record
-                    .get("package")
-                    .and_then(|package| package.get("namespaces"))
-                    .cloned()
-                else {
-                    continue;
-                };
-                let namespaces = serde_json::from_value::<
-                    arkret_models_integration::AppletWireNamespaces,
-                >(namespaces)
-                .map_err(|error| {
-                    PersistenceError::Conflict(format!(
-                        "schema_violation: stored Applet namespaces are invalid: {error}"
-                    ))
-                })?;
-                if !mutation
-                    .namespace_claims
-                    .conflicts_with(&namespaces)
-                    .is_empty()
-                {
+            let namespace_claims = soland_storage::applet_namespaces_from_record(&mutation.record)?;
+            if let Some(expected_record) = mutation.expected_record.as_ref() {
+                let expected_namespaces =
+                    soland_storage::applet_namespaces_from_record(expected_record)?;
+                if namespace_claims != expected_namespaces {
                     return Err(PersistenceError::Conflict(
-                        "applet_namespace_conflict".to_owned(),
+                        "schema_violation: Applet package.namespaces are immutable".to_owned(),
                     ));
+                }
+            } else {
+                for (existing_applet_id, existing_record) in &staged_applets {
+                    if existing_applet_id == mutation.applet_id.as_str() {
+                        continue;
+                    }
+                    let active = existing_record
+                        .get("revoked_at")
+                        .is_none_or(serde_json::Value::is_null)
+                        && matches!(
+                            existing_record
+                                .get("status")
+                                .and_then(serde_json::Value::as_str),
+                            Some("installed" | "partially_installed")
+                        );
+                    if !active {
+                        continue;
+                    }
+                    let namespaces =
+                        soland_storage::applet_namespaces_from_record(existing_record)?;
+                    if !namespace_claims.conflicts_with(&namespaces).is_empty() {
+                        return Err(PersistenceError::Conflict(
+                            "applet_namespace_conflict".to_owned(),
+                        ));
+                    }
                 }
             }
-            let mut requested_authorities = std::collections::BTreeSet::new();
-            for claim in &mutation.managed_authority_claims {
-                if !requested_authorities
-                    .insert((claim.actor_id.as_str(), claim.principal_server_id.as_str()))
-                {
-                    return Err(PersistenceError::Conflict(
-                        "applet_managed_authority_conflict".to_owned(),
-                    ));
-                }
-                let already_claimed = staged_applets.values().any(|record| {
-                    record
-                        .get("bot_actor_id")
-                        .and_then(serde_json::Value::as_str)
-                        == Some(claim.actor_id.as_str())
-                        && record
-                            .get("bot_actor_principal_server_id")
-                            .and_then(serde_json::Value::as_str)
-                            == Some(claim.principal_server_id.as_str())
-                        || record
-                            .get("ghosts")
-                            .and_then(serde_json::Value::as_array)
-                            .into_iter()
-                            .flatten()
-                            .any(|ghost| {
-                                ghost
-                                    .get("ghost_actor_id")
-                                    .and_then(serde_json::Value::as_str)
-                                    == Some(claim.actor_id.as_str())
-                                    && ghost
-                                        .get("actor_principal_server_id")
-                                        .and_then(serde_json::Value::as_str)
-                                        == Some(claim.principal_server_id.as_str())
-                            })
-                });
-                if already_claimed {
-                    return Err(PersistenceError::Conflict(
-                        "applet_managed_authority_conflict".to_owned(),
-                    ));
+            let managed_authorities =
+                soland_storage::applet_managed_authorities_from_record(&mutation.record)?;
+            let previous_managed_authorities = mutation
+                .expected_record
+                .as_ref()
+                .map(soland_storage::applet_managed_authorities_from_record)
+                .transpose()?
+                .unwrap_or_default();
+            if !previous_managed_authorities.is_subset(&managed_authorities) {
+                return Err(PersistenceError::Conflict(
+                    "schema_violation: Applet managed authority anchors are immutable".to_owned(),
+                ));
+            }
+            for claim in managed_authorities.difference(&previous_managed_authorities) {
+                for existing_record in staged_applets.values() {
+                    if soland_storage::applet_managed_authorities_from_record(existing_record)?
+                        .contains(claim)
+                    {
+                        return Err(PersistenceError::Conflict(
+                            "applet_managed_authority_conflict".to_owned(),
+                        ));
+                    }
                 }
             }
             if let Some(expected) = mutation.expected_record {
@@ -1931,6 +1909,9 @@ mod tests {
             serde_json::json!({
                 "status": "installed",
                 "revoked_at": null,
+                "bot_actor_id": "ak:did_core:web:fixture-bot.example",
+                "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+                "package": {"namespaces": {}},
                 "ghosts": [],
             }),
         );
@@ -1972,18 +1953,23 @@ mod tests {
                 expected_record: Some(serde_json::json!({
                     "status": "installed",
                     "revoked_at": null,
+                    "bot_actor_id": "ak:did_core:web:fixture-bot.example",
+                    "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+                    "package": {"namespaces": {}},
                     "ghosts": [],
                 })),
                 record: serde_json::json!({
                     "status": "installed",
                     "revoked_at": null,
+                    "bot_actor_id": "ak:did_core:web:fixture-bot.example",
+                    "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+                    "package": {"namespaces": {}},
                     "ghosts": [{
                         "ghost_actor_id": "did:web:bridge.example:ghost:one",
+                        "actor_principal_server_id": "ak:did_core:web:soland.example",
                         "external_id": "one",
                     }],
                 }),
-                namespace_claims: Default::default(),
-                managed_authority_claims: Vec::new(),
             }),
             agent_membership_cascade: None,
         };
@@ -2005,8 +1991,12 @@ mod tests {
             serde_json::json!({
                 "status": "installed",
                 "revoked_at": null,
+                "bot_actor_id": "ak:did_core:web:fixture-bot.example",
+                "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+                "package": {"namespaces": {}},
                 "ghosts": [{
                     "ghost_actor_id": "did:web:bridge.example:ghost:first",
+                    "actor_principal_server_id": "ak:did_core:web:soland.example",
                     "external_id": "first",
                 }],
             }),
@@ -2023,24 +2013,31 @@ mod tests {
                 expected_record: Some(serde_json::json!({
                     "status": "installed",
                     "revoked_at": null,
+                    "bot_actor_id": "ak:did_core:web:fixture-bot.example",
+                    "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+                    "package": {"namespaces": {}},
                     "ghosts": [{
                         "ghost_actor_id": "did:web:bridge.example:ghost:first",
+                        "actor_principal_server_id": "ak:did_core:web:soland.example",
                         "external_id": "first",
                     }],
                 })),
                 record: serde_json::json!({
                     "status": "installed",
                     "revoked_at": null,
+                    "bot_actor_id": "ak:did_core:web:fixture-bot.example",
+                    "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+                    "package": {"namespaces": {}},
                     "ghosts": [{
                         "ghost_actor_id": "did:web:bridge.example:ghost:first",
+                        "actor_principal_server_id": "ak:did_core:web:soland.example",
                         "external_id": "first",
                     }, {
                         "ghost_actor_id": "did:web:bridge.example:ghost:second",
+                        "actor_principal_server_id": "ak:did_core:web:soland.example",
                         "external_id": "second",
                     }],
                 }),
-                namespace_claims: Default::default(),
-                managed_authority_claims: Vec::new(),
             }),
             agent_membership_cascade: None,
         };
@@ -2067,24 +2064,31 @@ mod tests {
                 expected_record: Some(serde_json::json!({
                     "status": "installed",
                     "revoked_at": null,
+                    "bot_actor_id": "ak:did_core:web:fixture-bot.example",
+                    "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+                    "package": {"namespaces": {}},
                     "ghosts": [{
                         "ghost_actor_id": "did:web:bridge.example:ghost:first",
+                        "actor_principal_server_id": "ak:did_core:web:soland.example",
                         "external_id": "first",
                     }],
                 })),
                 record: serde_json::json!({
                     "status": "installed",
                     "revoked_at": null,
+                    "bot_actor_id": "ak:did_core:web:fixture-bot.example",
+                    "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+                    "package": {"namespaces": {}},
                     "ghosts": [{
                         "ghost_actor_id": "did:web:bridge.example:ghost:first",
+                        "actor_principal_server_id": "ak:did_core:web:soland.example",
                         "external_id": "first",
                     }, {
                         "ghost_actor_id": "did:web:bridge.example:ghost:third",
+                        "actor_principal_server_id": "ak:did_core:web:soland.example",
                         "external_id": "third",
                     }],
                 }),
-                namespace_claims: Default::default(),
-                managed_authority_claims: Vec::new(),
             }),
             agent_membership_cascade: None,
         };
@@ -2139,10 +2143,11 @@ mod tests {
                     record: serde_json::json!({
                         "status": "installed",
                         "revoked_at": null,
+                        "bot_actor_id": authority.actor_id.clone(),
+                        "bot_actor_principal_server_id": authority.principal_server_id.clone(),
                         "package": {"namespaces": namespaces.clone()},
+                        "ghosts": [],
                     }),
-                    namespace_claims: namespaces.clone(),
-                    managed_authority_claims: vec![authority.clone()],
                 }),
                 agent_membership_cascade: None,
             }

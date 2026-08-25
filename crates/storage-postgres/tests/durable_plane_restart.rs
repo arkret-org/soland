@@ -63,7 +63,7 @@ async fn postgres_realm_meta_survives_restart_when_configured() {
         owner: format!("did:web:{namespace}-owner.example"),
         deleted: false,
         discoverability: "public".to_owned(),
-        history_access: "shared".to_owned(),
+        history_access: "since_join".to_owned(),
         preview_policy: None,
         preview_policy_digest: None,
         asset_privacy_policy: None,

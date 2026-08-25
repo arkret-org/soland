@@ -757,6 +757,115 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain_body(
 }
 
 #[test]
+fn peer_events_submit_preflights_poll_prerequisites_before_durable_acceptance() {
+    run_on_deep_stack(
+        "peer_events_submit_preflights_poll_prerequisites_before_durable_acceptance",
+        peer_events_submit_preflights_poll_prerequisites_before_durable_acceptance_body,
+    );
+}
+
+async fn peer_events_submit_preflights_poll_prerequisites_before_durable_acceptance_body() {
+    let state = soland_test_support::app_state(test_config());
+    seed_peer_delivery_binding(&state).await;
+    authorize_test_plaintext_message_service(&state, "did:web:alice.example", test_realm_id())
+        .await;
+
+    let missing_poll_ref = soland_test_support::fixture_content_bound_id("ak:message:");
+    let mut out_of_order_response = signed_event_after_current_alice_frontier(
+        &state,
+        "ak:event:AZfzSfQ4D0yWWnbLzkTmEgHV7LuLoUTQZ4YeVDMIX5Ey",
+    )
+    .await;
+    out_of_order_response["payload"]["content"] = serde_json::json!({
+        "kind": "ak.content.poll.response",
+        "body": "response before Poll prerequisite",
+        "poll_response": {
+            "poll_ref": missing_poll_ref,
+            "selections": ["now"]
+        }
+    });
+    let out_of_order_response = resign_federation_event(out_of_order_response);
+    let rejected_event_id = authored_event_id(&out_of_order_response).to_owned();
+    let rejected = submit_peer_event(state.clone(), &out_of_order_response).await;
+    assert_eq!(rejected["status"], "partial", "{rejected:?}");
+    assert!(
+        rejected["accepted"].as_array().is_some_and(Vec::is_empty),
+        "out-of-order Poll response was accepted: {rejected:?}"
+    );
+    assert!(
+        rejected.to_string().contains("poll_ref_unknown"),
+        "federation Poll prerequisite rejection was not surfaced: {rejected:?}"
+    );
+    assert!(
+        state
+            .test_persistence()
+            .events()
+            .realm_events_newest_first(test_realm_id())
+            .await
+            .expect("canonical federated Realm Event log")
+            .iter()
+            .all(|record| record.event_id.as_str() != rejected_event_id.as_str()),
+        "out-of-order federated Poll response was durably written"
+    );
+
+    let mut poll = signed_event_after_current_alice_frontier(
+        &state,
+        "ak:event:Ac5IXRYjBUHgxuJBt2sIyfVAJSUF8o2btX3LI3t2pd2s",
+    )
+    .await;
+    poll["payload"]["content"] = serde_json::json!({
+        "kind": "ak.content.poll",
+        "body": "Which window?",
+        "poll": {
+            "kind": "disclosed",
+            "max_selections": 1,
+            "answers": [
+                {"id": "now", "text": {"kind": "ak.content.text", "body": "Now"}},
+                {"id": "backup", "text": {"kind": "ak.content.text", "body": "After backup"}}
+            ]
+        }
+    });
+    let poll = resign_federation_event(poll);
+    let poll_event_id = authored_event_id(&poll).to_owned();
+    let poll_ref = poll_event_id.replacen("ak:event:", "ak:message:", 1);
+    let poll_outcome = submit_peer_event(state.clone(), &poll).await;
+    assert_eq!(poll_outcome["status"], "accepted", "{poll_outcome:?}");
+
+    let mut response = signed_event_after_current_alice_frontier(
+        &state,
+        "ak:event:Ae7kT0W9KeHJdyYZjMC7uxjDEiW_cXdh-oHBqm6RYNnA",
+    )
+    .await;
+    response["payload"]["content"] = serde_json::json!({
+        "kind": "ak.content.poll.response",
+        "body": "response after Poll prerequisite",
+        "poll_response": {
+            "poll_ref": poll_ref,
+            "selections": ["now"]
+        }
+    });
+    let response = resign_federation_event(response);
+    let response_outcome = submit_peer_event(state.clone(), &response).await;
+    assert_eq!(
+        response_outcome["status"], "accepted",
+        "valid Poll successor was rejected after its prerequisite: {response_outcome:?}"
+    );
+    assert!(
+        state
+            .test_projection()
+            .lock()
+            .poll(&poll_ref)
+            .is_some_and(|poll_state| {
+                poll_state.votes.iter().any(|(actor, vote)| {
+                    actor == fixture_actor_core_id("did:web:alice.example").as_str()
+                        && vote.selections == BTreeSet::from(["now".to_owned()])
+                })
+            }),
+        "accepted federated Poll successor did not fold into PollState"
+    );
+}
+
+#[test]
 fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration() {
     run_on_deep_stack(
         "peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration",
@@ -1196,13 +1305,16 @@ fn peer_submit_body(event: &Value) -> Value {
 
 async fn submit_peer_event(state: AppState, event: &Value) -> Value {
     let body = peer_submit_body(event);
-    let target = "http://server/_arkret/peer/events";
-    let mut submit = TestClient::post(target).json(&body);
+    let target = format!(
+        "{}/_arkret/peer/events",
+        state.config().public_base_url.trim_end_matches('/')
+    );
+    let mut submit = TestClient::post(&target).json(&body);
     for (name, value) in signed_federation_push_headers(
         PEER_SOURCE_DID,
         service_id(),
         DESTINATION_TRUST_DOMAIN,
-        target,
+        &target,
         &body,
     ) {
         submit = submit.add_header(name, value, true);

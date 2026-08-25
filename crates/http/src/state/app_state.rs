@@ -593,6 +593,7 @@ mod test_construction {
                 arkret_state::lattice::ordered_log::IssuedOp,
             )],
             covered: &BTreeSet<arkret_identifiers::Hash>,
+            governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
         ) -> arkret_state::state::StoreResult<bool> {
             self.0.commit_if_frontier(
                 seal,
@@ -600,6 +601,7 @@ mod test_construction {
                 expected_store_frontier,
                 new_ops,
                 covered,
+                governance_dependencies,
             )
         }
     }

@@ -5,7 +5,7 @@
 //! batches, verifies each against the current effective Seal view's
 //! pre-state, accepts those that pass, computes the post-state's
 //! `state_root` (canonical Merkle, §4.2), signs a Seal over the result,
-//! and submits it through `apply_seal` (§4.3).
+//! and commits it through the durable frontier compare-and-swap (§4.3).
 //!
 //! # v1 scope
 //!
@@ -833,17 +833,11 @@ impl NotaryWorker {
             digest_suites.seal_digest_suite,
         )?);
 
-        // The Seal commits these content-addressed dependencies. Retain both
-        // the receipts and their signer evidence before publishing the Seal,
-        // so a concurrent governance-proof reader can never observe a
-        // commitment whose objects are not yet resolvable. An apply failure
-        // may leave harmless content-addressed orphans; it must never leave a
-        // Seal with missing evidence.
-        for (edge_index, dependency) in availability_dependencies.into_iter().enumerate() {
-            state
-                .persistence()
-                .governance_dependency_store()
-                .put_exact(soland_storage::GovernanceDependencyWrite {
+        let availability_dependency_writes = availability_dependencies
+            .into_iter()
+            .enumerate()
+            .map(|(edge_index, dependency)| {
+                Ok(soland_storage::GovernanceDependencyWrite {
                     realm_id: realm_id.clone(),
                     source: soland_storage::GovernanceDependencySource::Seal(seal.id.clone()),
                     edge_index: u64::try_from(edge_index).map_err(|error| {
@@ -853,33 +847,73 @@ impl NotaryWorker {
                     })?,
                     item: dependency,
                 })
-                .await
-                .map_err(|error| {
-                    NotaryError::Store(format!("retain Seal availability dependency: {error}"))
-                })?;
-        }
+            })
+            .collect::<Result<Vec<_>, NotaryError>>()?;
 
-        // Step 8: submit through apply_seal — this re-runs steps 1-8 of
-        // the SDK pipeline and writes Seal + marks Moves sealed.
-        // Reuse `verifier` from step 5; same closure satisfies the
-        // `Copy` bound apply_seal's `F: Copy` requires.
-        let effect = state
-            .projections()
-            .apply_accepted_seal_in_context(
-                &seal,
-                verifier,
-                if leaves.is_empty() {
-                    arkret_wire::event_envelope::EventSubmitContext::AnchorUnit
-                } else {
-                    arkret_wire::event_envelope::EventSubmitContext::Standard
-                },
-            )
-            .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
+        // Step 8: publish the receiver-derived effects, Seal lineage and
+        // sealed Move markers at one durable frontier-CAS boundary.  The
+        // generic SDK apply path deliberately remains backend-agnostic and
+        // cannot make three stores crash-atomic; production PostgreSQL owns
+        // that guarantee in EventSealCommitStore's single transaction.
+        let new_ops = accepted
+            .iter()
+            .flat_map(|entry| {
+                entry.effects.iter().map(|effect| {
+                    (
+                        effect.cell.clone(),
+                        IssuedOp {
+                            issuer: entry.actor_id.clone(),
+                            op: SealedOp::from_projection(entry.event_digest.clone(), effect),
+                        },
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        match state.projections().commit_event_seal_if_frontier(
+            &seal,
+            digest_suites.seal_digest_suite,
+            &leaves,
+            &new_ops,
+            &covered,
+            &availability_dependency_writes,
+        ) {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::debug!(
+                    %realm_id,
+                    seal_id = %seal.id,
+                    "control Seal lost the durable frontier compare-and-swap"
+                );
+                return Ok(None);
+            }
+            Err(error) => {
+                return Err(NotaryError::Store(format!(
+                    "commit control Seal atomically: {error}"
+                )));
+            }
+        }
+        // PostgreSQL retained these writes inside the frontier-CAS
+        // transaction. The non-durable memory runtime has no cross-store
+        // transaction and retains them only after the Seal is visible.
+        if state.storage_mode() == "memory" {
+            for dependency in availability_dependency_writes {
+                state
+                    .persistence()
+                    .governance_dependency_store()
+                    .put_exact(dependency)
+                    .await
+                    .map_err(|error| {
+                        NotaryError::Store(format!(
+                            "retain in-memory Seal availability dependency: {error}"
+                        ))
+                    })?;
+            }
+        }
         if tracing::enabled!(tracing::Level::DEBUG) {
             let projected_cells = state.projections().realm_cells(realm_id)?;
             tracing::debug!(
                 %realm_id,
-                seal_id = %effect.seal,
+                seal_id = %seal.id,
                 ?projected_cells,
                 "control Seal persisted receiver-derived cell effects"
             );
@@ -901,14 +935,14 @@ impl NotaryWorker {
         if let Err(error) = state.projections().reload_cells_from_store(realm_id) {
             tracing::warn!(
                 error = %error,
-                "notary worker failed to refresh ProjectionState::cells after apply_seal"
+                "notary worker failed to refresh ProjectionState::cells after atomic Seal commit"
             );
         }
         // Broadcast Frontier (always) + EpochRotation (conditional).
         let _ = state.publish_event_notification(crate::state::EventNotification::frontier(
             realm_id.as_str().to_owned(),
-            effect.seal.as_str().to_owned(),
-            effect.post_state_root.as_str().to_owned(),
+            seal.id.as_str().to_owned(),
+            predicted_state_root.as_str().to_owned(),
         ));
         if let Some(cell_id) = mls_epoch_cell {
             let new_epoch_value: Option<serde_json::Value> =
@@ -926,9 +960,9 @@ impl NotaryWorker {
             }
         }
 
-        let accepted_event_digests = effect.wire_accepted_event_digests();
+        let accepted_event_digests = seal.delta.clone();
         Ok(Some(NotaryOutcome {
-            seal_id: effect.seal,
+            seal_id: seal.id,
             accepted_event_digests,
             // `apply_seal` rejects nothing: `SealEffect::rejected_events` is
             // constructed empty on every SDK path, so the coordinator's own
@@ -937,7 +971,7 @@ impl NotaryWorker {
                 .into_iter()
                 .map(|(digest, _, _, _, rejection)| (digest, rejection))
                 .collect(),
-            post_state_root: effect.post_state_root,
+            post_state_root: predicted_state_root,
         }))
     }
 

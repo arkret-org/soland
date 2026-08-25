@@ -36,9 +36,9 @@ use super::{
     FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
     FederationOutboxTransition, GovernanceDependencySource, GovernanceDependencyStore,
     GovernanceDependencyWrite, HandleClaimEvidenceRecord, IdempotencyRecord, IdempotencyStore,
-    InviteReceivePolicyStore, ManagedAuthorityClaim, MemberIdentityEventRecord,
-    MemberIdentityReplacementEdge, MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord,
-    MessageStore, MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsKeyPackageClaim,
+    InviteReceivePolicyStore, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
+    MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord, MessageStore,
+    MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsKeyPackageClaim,
     MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, OneTimeKeyStore,
     OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
     OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
@@ -1204,9 +1204,16 @@ fn contract_applet_record(
     install_marker: &str,
     ghosts: Vec<serde_json::Value>,
 ) -> serde_json::Value {
+    let bot_suffix = applet_id
+        .as_str()
+        .strip_prefix("ak:applet:")
+        .expect("typed Applet id has its registered prefix");
     serde_json::json!({
         "applet_id": applet_id,
         "owner_actor_id": "ak:did_core:webvh:z6mkcontractowner",
+        "bot_actor_id": format!("ak:did_core:web:bot-{bot_suffix}.example"),
+        "bot_actor_principal_server_id": "ak:did_core:webvh:z6mkcontractservice",
+        "package": {"namespaces": {}},
         "status": "installed",
         "revoked_at": null,
         "install_body_digest": format!("sha256:{install_marker:0>64}"),
@@ -1241,13 +1248,18 @@ fn contract_ghost(
 }
 
 fn contract_applet_event_request(event: CanonicalEventRecord) -> EventCommitRequest {
+    let realm_id = event
+        .realm_id
+        .as_deref()
+        .expect("contract Applet Control Move has a Realm");
+    let control_proposal_ack = contract_control_proposal_ack(&event, realm_id, event.received_at);
     EventCommitRequest {
         governance_dependencies: Vec::new(),
         device_pairing_authorization: None,
         contact_projection: None,
         consent_projection: None,
         event,
-        control_proposal_ingress: None,
+        control_proposal_ingress: Some(ControlProposalIngress::AckRequired(control_proposal_ack)),
         device_revocation_transition: None,
         device_revocation_gate: None,
         projections: Vec::new(),
@@ -1282,7 +1294,6 @@ fn contract_applet_batch(
     events: Vec<EventCommitRequest>,
     expected_record: Option<serde_json::Value>,
     record: serde_json::Value,
-    managed_authority_claims: Vec<ManagedAuthorityClaim>,
 ) -> EventBatchCommitRequest {
     EventBatchCommitRequest {
         events,
@@ -1290,8 +1301,6 @@ fn contract_applet_batch(
             applet_id: applet_id.clone(),
             expected_record,
             record,
-            namespace_claims: Default::default(),
-            managed_authority_claims,
         }),
         agent_membership_cascade: None,
     }
@@ -1336,7 +1345,6 @@ async fn install_contract_applet(
             contract_applet_event_group(namespace, realm_id, "install", 1),
             None,
             record,
-            Vec::new(),
         ))
         .await
         .expect("install contract Applet record");
@@ -1346,8 +1354,6 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     stores: AppletFormalCommitContractStores<'_>,
     namespace: &str,
 ) {
-    let authority_server = "ak:did_core:webvh:z6mkcontractservice";
-
     // A stale full-record CAS must roll back all four authority Events and the
     // managed authority claim. Reusing the same group on a fresh exact record
     // then proves that no hidden row from the failed transaction survived.
@@ -1374,10 +1380,6 @@ pub async fn assert_applet_formal_commit_transaction_contract(
             contract_applet_event_group(namespace, &stale_realm_id, "stale-winner", 4),
             Some(stale_base.clone()),
             committed_record.clone(),
-            vec![ManagedAuthorityClaim {
-                actor_id: committed_actor_id,
-                principal_server_id: authority_server.to_owned(),
-            }],
         ))
         .await
         .expect("commit the current Applet record mutation");
@@ -1389,10 +1391,6 @@ pub async fn assert_applet_formal_commit_transaction_contract(
         contract_applet_event_group(namespace, &stale_realm_id, "stale-loser", 4),
         Some(stale_base),
         stale_record,
-        vec![ManagedAuthorityClaim {
-            actor_id: stale_actor_id.clone(),
-            principal_server_id: authority_server.to_owned(),
-        }],
     );
     let stale_event_ids = contract_event_ids(&stale_batch);
     let stale_error = stores
@@ -1420,11 +1418,6 @@ pub async fn assert_applet_formal_commit_transaction_contract(
         applet_id: stale_applet_id.clone(),
         expected_record: Some(committed_record),
         record: merged_record.clone(),
-        namespace_claims: Default::default(),
-        managed_authority_claims: vec![ManagedAuthorityClaim {
-            actor_id: stale_actor_id,
-            principal_server_id: authority_server.to_owned(),
-        }],
     });
     stores
         .unit_of_work
@@ -1471,23 +1464,17 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     );
     let same_left_record = contract_applet_record(&same_applet_id, "4", vec![same_ghost_left]);
     let same_right_record = contract_applet_record(&same_applet_id, "4", vec![same_ghost_right]);
-    let same_claim = ManagedAuthorityClaim {
-        actor_id: same_actor_id,
-        principal_server_id: authority_server.to_owned(),
-    };
     let same_left = contract_applet_batch(
         &same_applet_id,
         contract_applet_event_group(namespace, &same_realm_id, "same-left", 4),
         Some(same_base.clone()),
         same_left_record.clone(),
-        vec![same_claim.clone()],
     );
     let same_right = contract_applet_batch(
         &same_applet_id,
         contract_applet_event_group(namespace, &same_realm_id, "same-right", 4),
         Some(same_base),
         same_right_record.clone(),
-        vec![same_claim],
     );
     let same_left_ids = contract_event_ids(&same_left);
     let same_right_ids = contract_event_ids(&same_right);
@@ -1574,20 +1561,12 @@ pub async fn assert_applet_formal_commit_transaction_contract(
         contract_applet_event_group(namespace, &different_realm_id, "different-left", 4),
         Some(different_base.clone()),
         different_left_record.clone(),
-        vec![ManagedAuthorityClaim {
-            actor_id: different_left_actor_id,
-            principal_server_id: authority_server.to_owned(),
-        }],
     );
     let different_right = contract_applet_batch(
         &different_applet_id,
         contract_applet_event_group(namespace, &different_realm_id, "different-right", 4),
         Some(different_base),
         different_right_record.clone(),
-        vec![ManagedAuthorityClaim {
-            actor_id: different_right_actor_id,
-            principal_server_id: authority_server.to_owned(),
-        }],
     );
     let different_left_ids = contract_event_ids(&different_left);
     let different_right_ids = contract_event_ids(&different_right);
@@ -3153,6 +3132,17 @@ pub async fn assert_mls_keypackage_retirement_contract(
             .is_none(),
         "a consume at 20.900s must not pass a 20.500s deadline"
     );
+    let late = store
+        .get(&late.id)
+        .await
+        .expect("reload late KeyPackage")
+        .expect("late KeyPackage remains as terminal audit state");
+    assert_eq!(
+        late.lifecycle()
+            .expect("valid late KeyPackage lifecycle")
+            .claim_state,
+        super::PersistedKeyPackageClaimState::Revoked
+    );
     assert!(
         store
             .try_claim(mls_claim(&consumed.id, MlsKeyPackageClaimTarget::Retire,))
@@ -3178,7 +3168,13 @@ pub async fn assert_mls_keypackage_retirement_contract(
         .list_claimed_by_group(&group_id)
         .await
         .expect("query claimed KeyPackages");
-    assert_eq!(group_rows.len(), 2);
+    assert_eq!(
+        group_rows
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([claimed.id.as_str(), consumed.id.as_str()])
+    );
     assert!(
         store
             .list_claimed_by_group("retired")
@@ -3205,6 +3201,18 @@ pub async fn assert_mls_keypackage_retirement_contract(
             .expect("valid retired lifecycle")
             .claim_state,
         super::PersistedKeyPackageClaimState::Retired
+    );
+    let revoked = store
+        .get(&revoked.id)
+        .await
+        .expect("reload explicitly revoked KeyPackage")
+        .expect("revoked KeyPackage remains durable");
+    assert_eq!(
+        revoked
+            .lifecycle()
+            .expect("valid revoked lifecycle")
+            .claim_state,
+        super::PersistedKeyPackageClaimState::Revoked
     );
 }
 
@@ -4528,7 +4536,7 @@ pub async fn assert_consent_projection_commit_contract(
     stores: ConsentCommitContractStores<'_>,
     namespace: &str,
 ) {
-    let now = database_timestamp_now();
+    let now = arkret_canonical::normalize_timestamp_canonical(database_timestamp_now());
     let realm_id = contract_realm_id(&format!("consent-commit:{namespace}"));
     let holder = format!("did:web:{namespace}-holder.example");
     let peer = format!("did:web:{namespace}-peer.example");

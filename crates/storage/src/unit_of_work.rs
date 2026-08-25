@@ -3,7 +3,8 @@ use async_trait::async_trait;
 use crate::{
     AccountDataRecord, CanonicalEventRecord, ConsentCellRecord, ContactRecord,
     ContactVerifiedMirrorRecord, DevicePairingAuthorizationCommit, DeviceRevocationGateSelector,
-    DeviceRevocationTransition, FederationOutboxRecord, IdempotencyRecord, PersistenceResult,
+    FederationOutboxRecord, IdempotencyRecord, PersistenceError, PersistenceResult,
+    DeviceRevocationTransition,
     ProjectionEventRecord,
 };
 
@@ -271,13 +272,91 @@ pub struct AppletRecordCommit {
     /// means the Applet must not exist and this mutation is an insert.
     pub expected_record: Option<serde_json::Value>,
     pub record: serde_json::Value,
-    /// Complete namespace set claimed by a new install. Empty for an update.
-    pub namespace_claims: arkret_models_integration::AppletWireNamespaces,
-    /// Managed authority pairs acquired by this aggregate.
-    pub managed_authority_claims: Vec<ManagedAuthorityClaim>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Decode the canonical namespace source from a strict durable Applet record.
+///
+/// The namespace claim table is a transaction-local conflict index, not a
+/// second protocol carrier. Every adapter derives it from
+/// `record.package.namespaces`; callers cannot supply an independently
+/// drifting mirror.
+pub fn applet_namespaces_from_record(
+    record: &serde_json::Value,
+) -> PersistenceResult<arkret_models_integration::AppletWireNamespaces> {
+    let namespaces = record
+        .pointer("/package/namespaces")
+        .cloned()
+        .ok_or_else(|| {
+            PersistenceError::Conflict(
+                "schema_violation: durable Applet record omits package.namespaces".to_owned(),
+            )
+        })?;
+    serde_json::from_value(namespaces).map_err(|error| {
+        PersistenceError::Conflict(format!(
+            "schema_violation: durable Applet package.namespaces are invalid: {error}"
+        ))
+    })
+}
+
+/// Derive every immutable managed authority pair from the canonical Applet
+/// record. The uniqueness table is a transaction index of this set; it never
+/// accepts a separately supplied claim list.
+pub fn applet_managed_authorities_from_record(
+    record: &serde_json::Value,
+) -> PersistenceResult<std::collections::BTreeSet<ManagedAuthorityClaim>> {
+    let required = |field: &str| {
+        record
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                PersistenceError::Conflict(format!(
+                    "schema_violation: durable Applet record omits {field}"
+                ))
+            })
+    };
+    let mut authorities = std::collections::BTreeSet::from([ManagedAuthorityClaim {
+        actor_id: required("bot_actor_id")?.to_owned(),
+        principal_server_id: required("bot_actor_principal_server_id")?.to_owned(),
+    }]);
+    let ghosts = record
+        .get("ghosts")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            PersistenceError::Conflict(
+                "schema_violation: durable Applet record omits ghosts".to_owned(),
+            )
+        })?;
+    for ghost in ghosts {
+        let actor_id = ghost
+            .get("ghost_actor_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                PersistenceError::Conflict(
+                    "schema_violation: durable Applet Ghost omits ghost_actor_id".to_owned(),
+                )
+            })?;
+        let principal_server_id = ghost
+            .get("actor_principal_server_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                PersistenceError::Conflict(
+                    "schema_violation: durable Applet Ghost omits actor_principal_server_id"
+                        .to_owned(),
+                )
+            })?;
+        if !authorities.insert(ManagedAuthorityClaim {
+            actor_id: actor_id.to_owned(),
+            principal_server_id: principal_server_id.to_owned(),
+        }) {
+            return Err(PersistenceError::Conflict(
+                "applet_managed_authority_conflict".to_owned(),
+            ));
+        }
+    }
+    Ok(authorities)
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ManagedAuthorityClaim {
     pub actor_id: String,
     pub principal_server_id: String,

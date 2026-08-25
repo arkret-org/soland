@@ -245,6 +245,40 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                 .optional()
                 .map_err(PersistenceError::database)?;
             let Some(row) = row else {
+                let revoked = sql_query(
+                    "UPDATE mls_key_packages \
+                     SET claimed_by_mls_group_id = 'revoked', claimed_at = NULL, \
+                         claim_expires_at_unix_ms = NULL, consumed_at = NULL \
+                     WHERE id = $1 AND NOT last_resort \
+                       AND claimed_by_mls_group_id = $2 \
+                       AND consumed_at IS NULL \
+                       AND claim_expires_at_unix_ms <= $3",
+                )
+                .bind::<Text, _>(id)
+                .bind::<Text, _>(mls_group_id)
+                .bind::<BigInt, _>(now_unix_ms)
+                .execute(conn)
+                .await
+                .map_err(PersistenceError::database)?;
+                if revoked == 1 {
+                    let updated = sql_query(
+                        "UPDATE peer_keypackage_claims \
+                         SET state = 'revoked', updated_at = $2 / 1000 \
+                         WHERE key_package_use = 'single_use' AND keypackage_id = $1 \
+                           AND state = 'claimed'",
+                    )
+                    .bind::<Text, _>(id)
+                    .bind::<BigInt, _>(now_unix_ms)
+                    .execute(conn)
+                    .await
+                    .map_err(PersistenceError::database)?;
+                    if updated > 1 {
+                        return Err(PersistenceError::Internal(
+                            "multiple peer claim ledgers reference one KeyPackage".to_owned(),
+                        )
+                        .into());
+                    }
+                }
                 return Ok(None);
             };
             if let Some(receipt) = peer_consume_receipt {

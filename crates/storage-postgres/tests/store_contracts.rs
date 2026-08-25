@@ -69,6 +69,483 @@ fn event_derived_realm_id(seed: &[u8]) -> String {
     arkret_identifiers::RealmId::from_event_id(&event_id).to_string()
 }
 
+fn seal_dependency_contract_event(
+    realm_id: &arkret_identifiers::RealmId,
+    marker: &str,
+) -> (arkret_wire::Event, arkret_identifiers::Hash) {
+    let actor = arkret_wire::project_full_id_to_core_id(
+        &arkret_wire::DidFullId::new("did:web:seal-dependency-holder.example".to_owned()).unwrap(),
+    )
+    .unwrap();
+    let event = arkret_wire::test_support::raw_event_at(
+        "ak.test.control",
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        actor.clone(),
+        actor,
+        0,
+        arkret_wire::Hlc::new("019f00000000-0000-00000001").unwrap(),
+        serde_json::json!({"marker": marker}),
+        arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
+    )
+    .unwrap();
+    let digest =
+        arkret_state::state::control_event_digest(&event, arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+    (event, digest)
+}
+
+fn seal_dependency_contract_availability(
+    event: &arkret_wire::Event,
+    marker: &str,
+) -> arkret_models_collaboration::governance_dependencies::GovernanceDependency {
+    use arkret_models_collaboration::governance_dependencies::{
+        GovernanceDependency, GovernanceDependencySelector,
+    };
+
+    let created_at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+    let evidence_digest = arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(format!(
+        "seal-dependency-evidence:{marker}"
+    )))
+    .unwrap();
+    let mut receipt = arkret_wire::AvailabilityReceipt {
+        realm_id: event.realm_id.clone(),
+        event_id: event.event_id.clone(),
+        bytes_digest: arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(format!(
+            "seal-dependency-event-bytes:{marker}"
+        )))
+        .unwrap(),
+        holder_id: event.actor_id.clone(),
+        retention_expires_at: created_at + chrono::Duration::days(1),
+        holder_signer_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
+            "ak:signer_evidence:{}",
+            evidence_digest.as_str()
+        ))
+        .unwrap(),
+        holder_signer_evidence_digest: evidence_digest,
+        signature: arkret_wire::PayloadProof {
+            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+            verification_method: arkret_wire::DidUrl::new(
+                "did:web:seal-dependency-holder.example#key-1".to_owned(),
+            )
+            .unwrap(),
+            payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                .unwrap(),
+            created_at,
+            domain: None,
+            audience: None,
+            proof_purpose: None,
+            jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
+        },
+    };
+    receipt.signature.payload_digest = arkret_identifiers::Hash::new(arkret_canonical::digest(
+        arkret_canonical::DigestSuite::Sha256,
+        &receipt.canonical_signature_payload_bytes().unwrap(),
+    ))
+    .unwrap();
+    let content_digest = receipt
+        .full_receipt_digest(|bytes| {
+            Ok(arkret_identifiers::Hash::new(arkret_canonical::digest(
+                arkret_canonical::DigestSuite::Sha256,
+                bytes,
+            ))?)
+        })
+        .unwrap();
+    GovernanceDependency::AvailabilityReceipt {
+        selector: GovernanceDependencySelector::AvailabilityReceipt { content_digest },
+        availability_receipt: receipt,
+    }
+}
+
+fn seal_dependency_contract_digest(
+    dependency: &arkret_models_collaboration::governance_dependencies::GovernanceDependency,
+) -> arkret_identifiers::Hash {
+    let arkret_models_collaboration::governance_dependencies::GovernanceDependency::AvailabilityReceipt {
+        selector:
+            arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AvailabilityReceipt {
+                content_digest,
+            },
+        ..
+    } = dependency
+    else {
+        panic!("contract dependency is an AvailabilityReceipt");
+    };
+    content_digest.clone()
+}
+
+fn seal_dependency_contract_seal(
+    realm_id: &arkret_identifiers::RealmId,
+    predecessor_refs: Vec<arkret_identifiers::SealId>,
+    delta: arkret_identifiers::Hash,
+    covered: &std::collections::BTreeSet<arkret_identifiers::Hash>,
+    availability_digest: arkret_identifiers::Hash,
+) -> arkret_wire::Seal {
+    let root =
+        arkret_state::state::control_event_set_root(covered, arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+    let state_root =
+        arkret_state::state::compute_state_root(
+            &std::collections::BTreeMap::<
+                arkret_identifiers::CellRef,
+                arkret_state::lattice::CellState,
+            >::new(),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+    let mut seal = arkret_wire::Seal {
+        id: arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap(),
+        realm_id: realm_id.clone(),
+        predecessor_refs,
+        delta: vec![delta],
+        control_event_set_root: root.clone(),
+        state_root,
+        completeness_root: root,
+        notary_seq: 0,
+        data_view_root: None,
+        data_event_set_root: None,
+        availability_receipt_digests: vec![availability_digest],
+        covered_event_digests: Vec::new(),
+        previous_state_root: None,
+        previous_digest_algorithm: None,
+        notary_signature: arkret_wire::NotarySig::Single(arkret_wire::SealSignature {
+            verification_method: arkret_wire::DidUrl::new(
+                "did:web:seal-dependency-holder.example#notary-key".to_owned(),
+            )
+            .unwrap(),
+            payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                .unwrap(),
+            jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
+        }),
+        sealed_at: arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
+        hlc: arkret_wire::Hlc::new("019f00000000-0000-00000002").unwrap(),
+    };
+    seal.id = seal
+        .derive_id(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    seal
+}
+
+#[derive(diesel::QueryableByName)]
+struct SealDependencyAtomicCounts {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    seals: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    cell_ops: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    sealed_markers: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    dependency_objects: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    dependency_edges: i64,
+}
+
+async fn seal_dependency_atomic_counts(
+    pool: &PgPool,
+    seal_id: &arkret_identifiers::SealId,
+    object_digest: &arkret_identifiers::Hash,
+) -> SealDependencyAtomicCounts {
+    use diesel::sql_types::Text;
+    use diesel_async::RunQueryDsl;
+
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT \
+           (SELECT COUNT(*) FROM state_seals WHERE id = $1) AS seals, \
+           (SELECT COUNT(*) FROM state_cell_ops WHERE seal_id = $1) AS cell_ops, \
+           (SELECT COUNT(*) FROM state_seal_control_events WHERE seal_id = $1) AS sealed_markers, \
+           (SELECT COUNT(*) FROM governance_dependency_objects WHERE object_digest = $2) AS dependency_objects, \
+           (SELECT COUNT(*) FROM governance_dependency_edges WHERE seal_id = $1) AS dependency_edges",
+    )
+    .bind::<Text, _>(seal_id.as_str())
+    .bind::<Text, _>(object_digest.as_str())
+    .get_result(&mut conn)
+    .await
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_boundary_when_configured()
+ {
+    use arkret_models_collaboration::governance_dependencies::{
+        GovernanceDependency, GovernanceDependencySelector,
+    };
+    use arkret_state::state::store::{AcklessSelfPrincipalIngress, ControlProposalIngress};
+    use soland_storage::{
+        GovernanceDependencySource, GovernanceDependencyStore, GovernanceDependencyWrite,
+    };
+
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let registry: std::sync::Arc<dyn arkret_state::state::CellRegistry> = std::sync::Arc::new(
+        soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry()
+            .expect("validated SDK cell registry"),
+    );
+    let stores =
+        soland_storage_postgres::build_state_resolution_stores(Some(pool.clone()), registry);
+    let dependency_store = PgGovernanceDependencyStore { pool: pool.clone() };
+    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(
+        format!("seal-dependency-atomic:{}", uuid::Uuid::now_v7()).as_bytes(),
+    ))
+    .unwrap();
+    let ingress = ControlProposalIngress::AcklessSelfPrincipal(AcklessSelfPrincipalIngress {
+        device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+        device_authorize_event_id: format!("ak:event:{}", "b".repeat(43)),
+        device_generation_ref: 1,
+        seal_basis_digest: format!("sha256:{}", "c".repeat(64)),
+    });
+
+    let (genesis_event, genesis_digest) =
+        seal_dependency_contract_event(&realm_id, "genesis-success");
+    stores
+        .control_event_store
+        .put_pending_with_ingress(
+            &genesis_event,
+            &ingress,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+    let genesis_dependency =
+        seal_dependency_contract_availability(&genesis_event, "genesis-success");
+    let genesis_object_digest = seal_dependency_contract_digest(&genesis_dependency);
+    let genesis_covered = [genesis_digest.clone()]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let genesis_seal = seal_dependency_contract_seal(
+        &realm_id,
+        Vec::new(),
+        genesis_digest.clone(),
+        &genesis_covered,
+        genesis_object_digest.clone(),
+    );
+    let genesis_write = GovernanceDependencyWrite {
+        realm_id: realm_id.clone(),
+        source: GovernanceDependencySource::Seal(genesis_seal.id.clone()),
+        edge_index: 0,
+        item: genesis_dependency.clone(),
+    };
+    assert!(
+        stores
+            .event_seal_committer
+            .commit_if_frontier(
+                &genesis_seal,
+                arkret_canonical::DigestSuite::Sha256,
+                &[],
+                &[],
+                &genesis_covered,
+                std::slice::from_ref(&genesis_write),
+            )
+            .unwrap()
+    );
+    let committed =
+        seal_dependency_atomic_counts(&pool, &genesis_seal.id, &genesis_object_digest).await;
+    assert_eq!(committed.seals, 1);
+    assert_eq!(committed.cell_ops, 0);
+    assert_eq!(committed.sealed_markers, 1);
+    assert_eq!(committed.dependency_objects, 1);
+    assert_eq!(committed.dependency_edges, 1);
+    assert_eq!(
+        stores
+            .control_event_store
+            .covering_seals(&genesis_digest)
+            .unwrap(),
+        vec![genesis_seal.id.clone()]
+    );
+    assert_eq!(
+        dependency_store
+            .list_for_source(
+                &realm_id,
+                &GovernanceDependencySource::Seal(genesis_seal.id.clone()),
+            )
+            .await
+            .unwrap(),
+        vec![soland_storage::GovernanceDependencyEdgeRecord {
+            edge_index: 0,
+            item: genesis_dependency.clone(),
+        }]
+    );
+
+    assert!(
+        stores
+            .event_seal_committer
+            .commit_if_frontier(
+                &genesis_seal,
+                arkret_canonical::DigestSuite::Sha256,
+                &[],
+                &[],
+                &genesis_covered,
+                std::slice::from_ref(&genesis_write),
+            )
+            .unwrap(),
+        "an exact retry must observe the same complete dependency set"
+    );
+    let replay_mismatch =
+        seal_dependency_contract_availability(&genesis_event, "exact-retry-mismatch");
+    let replay_mismatch_digest = seal_dependency_contract_digest(&replay_mismatch);
+    let replay_error = stores
+        .event_seal_committer
+        .commit_if_frontier(
+            &genesis_seal,
+            arkret_canonical::DigestSuite::Sha256,
+            &[],
+            &[],
+            &genesis_covered,
+            &[GovernanceDependencyWrite {
+                realm_id: realm_id.clone(),
+                source: GovernanceDependencySource::Seal(genesis_seal.id.clone()),
+                edge_index: 0,
+                item: replay_mismatch,
+            }],
+        )
+        .unwrap_err();
+    assert!(
+        replay_error
+            .to_string()
+            .contains("different governance dependencies")
+    );
+    let replay_counts =
+        seal_dependency_atomic_counts(&pool, &genesis_seal.id, &replay_mismatch_digest).await;
+    assert_eq!(replay_counts.dependency_objects, 0);
+    assert_eq!(replay_counts.dependency_edges, 1);
+
+    for failure in ["realm", "source", "index", "object"] {
+        let marker = format!("binding-failure-{failure}");
+        let (event, event_digest) = seal_dependency_contract_event(&realm_id, &marker);
+        stores
+            .control_event_store
+            .put_pending_with_ingress(&event, &ingress, arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        let mut dependency = seal_dependency_contract_availability(&event, &marker);
+        if failure == "object" {
+            let GovernanceDependency::AvailabilityReceipt { selector, .. } = &mut dependency else {
+                unreachable!();
+            };
+            *selector = GovernanceDependencySelector::AvailabilityReceipt {
+                content_digest: arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
+                    format!("invalid-object:{marker}"),
+                ))
+                .unwrap(),
+            };
+        }
+        let object_digest = seal_dependency_contract_digest(&dependency);
+        let covered = [genesis_digest.clone(), event_digest.clone()]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        let seal = seal_dependency_contract_seal(
+            &realm_id,
+            vec![genesis_seal.id.clone()],
+            event_digest.clone(),
+            &covered,
+            object_digest.clone(),
+        );
+        let mut write = GovernanceDependencyWrite {
+            realm_id: realm_id.clone(),
+            source: GovernanceDependencySource::Seal(seal.id.clone()),
+            edge_index: 0,
+            item: dependency,
+        };
+        match failure {
+            "realm" => {
+                write.realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(
+                    format!("wrong-realm:{marker}").as_bytes(),
+                ))
+                .unwrap();
+            }
+            "source" => {
+                write.source = GovernanceDependencySource::ControlEvent(event_digest.clone());
+            }
+            "index" => write.edge_index = 1,
+            "object" => {}
+            _ => unreachable!(),
+        }
+        stores
+            .event_seal_committer
+            .commit_if_frontier(
+                &seal,
+                arkret_canonical::DigestSuite::Sha256,
+                std::slice::from_ref(&genesis_seal.id),
+                &[],
+                &covered,
+                &[write],
+            )
+            .unwrap_err();
+        let counts = seal_dependency_atomic_counts(&pool, &seal.id, &object_digest).await;
+        assert_eq!(counts.seals, 0, "{failure} failure leaked a Seal");
+        assert_eq!(counts.cell_ops, 0, "{failure} failure leaked cell ops");
+        assert_eq!(
+            counts.sealed_markers, 0,
+            "{failure} failure leaked a sealed marker"
+        );
+        assert_eq!(
+            counts.dependency_objects, 0,
+            "{failure} failure leaked a dependency object"
+        );
+        assert_eq!(
+            counts.dependency_edges, 0,
+            "{failure} failure leaked a dependency edge"
+        );
+        assert!(
+            stores
+                .control_event_store
+                .covering_seals(&event_digest)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    let (cas_event, cas_digest) = seal_dependency_contract_event(&realm_id, "cas-loss");
+    stores
+        .control_event_store
+        .put_pending_with_ingress(&cas_event, &ingress, arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    let cas_dependency = seal_dependency_contract_availability(&cas_event, "cas-loss");
+    let cas_object_digest = seal_dependency_contract_digest(&cas_dependency);
+    let cas_covered = [genesis_digest, cas_digest.clone()]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let cas_seal = seal_dependency_contract_seal(
+        &realm_id,
+        vec![genesis_seal.id],
+        cas_digest.clone(),
+        &cas_covered,
+        cas_object_digest.clone(),
+    );
+    let cas_write = GovernanceDependencyWrite {
+        realm_id,
+        source: GovernanceDependencySource::Seal(cas_seal.id.clone()),
+        edge_index: 0,
+        item: cas_dependency,
+    };
+    assert!(
+        !stores
+            .event_seal_committer
+            .commit_if_frontier(
+                &cas_seal,
+                arkret_canonical::DigestSuite::Sha256,
+                &[],
+                &[],
+                &cas_covered,
+                &[cas_write],
+            )
+            .unwrap()
+    );
+    let cas_counts = seal_dependency_atomic_counts(&pool, &cas_seal.id, &cas_object_digest).await;
+    assert_eq!(cas_counts.seals, 0);
+    assert_eq!(cas_counts.cell_ops, 0);
+    assert_eq!(cas_counts.sealed_markers, 0);
+    assert_eq!(cas_counts.dependency_objects, 0);
+    assert_eq!(cas_counts.dependency_edges, 0);
+    assert!(
+        stores
+            .control_event_store
+            .covering_seals(&cas_digest)
+            .unwrap()
+            .is_empty()
+    );
+}
+
 #[tokio::test]
 async fn postgres_adapter_satisfies_shared_idempotency_contract_when_configured() {
     let Some(pool) = test_pool().await else {
@@ -240,7 +717,7 @@ async fn postgres_adapter_satisfies_shared_consent_projection_commit_contract_wh
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn postgres_adapter_settles_sealed_device_revocations_when_configured() {
     let Some(pool) = test_pool().await else {
         return;
@@ -618,7 +1095,8 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
         .await
         .unwrap_err();
     assert!(
-        matches!(batch_error, PersistenceError::Conflict(reason) if reason == "event_hash_collision")
+        matches!(batch_error, PersistenceError::Conflict(ref reason) if reason == "event_hash_collision"),
+        "unexpected collision batch rejection: {batch_error:?}"
     );
     assert!(!store.contains(&prefix_id).await.unwrap());
 
@@ -1110,10 +1588,11 @@ mod control_move_ingress_negatives {
             let mut conn = pool.get().await.unwrap();
             sql_query(
                 "INSERT INTO state_control_events \
-                 (event_digest, realm_id, event_json, control_proposal_ack, ingress_class) \
-                 VALUES ($1, $2, $3, NULL, $4)",
+                 (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class) \
+                 VALUES ($1, $2, $3, $4, NULL, $5)",
             )
             .bind::<Text, _>(fixture.proposal_digest.as_str())
+            .bind::<Text, _>(arkret_canonical::DigestSuite::Sha256.as_str())
             .bind::<Text, _>(fixture.realm_id.as_str())
             .bind::<Jsonb, _>(serde_json::json!({"variant": "conflicting-canonical-bytes"}))
             .bind::<Jsonb, _>(serde_json::json!({"class": "ack_required"}))

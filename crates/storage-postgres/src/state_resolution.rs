@@ -39,6 +39,7 @@ pub trait EventSealCommitStore: Send + Sync {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
+        governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool>;
 }
 
@@ -475,6 +476,18 @@ fn diesel_to_store(error: diesel::result::Error) -> StoreError {
     StoreError::Backend(format!("database error: {error}"))
 }
 
+fn persistence_to_store(error: soland_storage::PersistenceError) -> StoreError {
+    match error {
+        soland_storage::PersistenceError::NotFound(detail) => StoreError::NotFound(detail),
+        soland_storage::PersistenceError::Conflict(detail) => StoreError::Conflict(detail),
+        soland_storage::PersistenceError::SchemaViolation(detail) => {
+            StoreError::Conflict(format!("schema_violation: {detail}"))
+        }
+        soland_storage::PersistenceError::Database(detail)
+        | soland_storage::PersistenceError::Internal(detail) => StoreError::Backend(detail),
+    }
+}
+
 async fn lock_seal_realm(
     conn: &mut AsyncPgConnection,
     realm_id: &str,
@@ -882,8 +895,20 @@ impl ControlEventStore for PgControlEventStore {
     fn mark_sealed(&self, event_digest: &Hash, seal: &Seal) -> StoreResult<()> {
         let pool = self.pool.clone();
         let digest = event_digest.as_str().to_owned();
+        let seal_json = serde_json::to_value(seal).map_err(serde_to_store)?;
+        let seal_id_preimage_bytes = seal.canonical_bytes_for_id().map_err(|error| {
+            StoreError::Backend(format!("Seal ID canonical encoding failed: {error}"))
+        })?;
+        let accepted_seal_bytes =
+            arkret_canonical::canonical_json_bytes(seal).map_err(|error| {
+                StoreError::Backend(format!("accepted Seal canonical encoding failed: {error}"))
+            })?;
+        let seal_for_validation = seal.clone();
+        let predecessor_refs = seal_predecessor_refs_json(seal);
         let seal_id = seal.id.as_str().to_owned();
+        let error_seal_id = seal_id.clone();
         let realm_id = seal.realm_id.as_str().to_owned();
+        let is_genesis = seal.predecessor_refs.is_empty();
         let delta_index = seal
             .delta
             .iter()
@@ -894,16 +919,50 @@ impl ControlEventStore for PgControlEventStore {
                 ))
             })? as i64;
         let sealed_at = seal.sealed_at;
-        run_blocking(async move {
+        let outcome = run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
                 lock_seal_identity(conn, &seal_id).await?;
+                let digest_suite = sql_query(
+                    "SELECT digest_suite AS value FROM state_control_events \
+                     WHERE event_digest = $1",
+                )
+                .bind::<Text, _>(&digest)
+                .get_result::<TextRow>(&mut *conn)
+                .await
+                .optional()?
+                .ok_or_else(|| {
+                    StoreError::NotFound(format!("control Event {digest} not in store"))
+                })?
+                .value;
+                let digest_suite = arkret_canonical::digest_suite(&digest_suite)
+                    .map_err(|error| StoreError::Backend(error.to_string()))?;
+                seal_for_validation
+                    .validate_id(digest_suite)
+                    .map_err(|error| StoreError::Conflict(error.to_string()))?;
+                let insert = StateSealInsert {
+                    id: &seal_id,
+                    digest_suite,
+                    realm_id: &realm_id,
+                    seal_id_preimage_bytes: &seal_id_preimage_bytes,
+                    accepted_seal_bytes: &accepted_seal_bytes,
+                    seal_json: &seal_json,
+                    predecessor_refs: &predecessor_refs,
+                    is_genesis,
+                };
+                let outcome = preflight_state_seal(conn, &insert).await?;
+                if outcome == SealInsertOutcome::Collision {
+                    return Ok(outcome);
+                }
                 lock_seal_realm(conn, &realm_id).await?;
                 if realm_has_seal_collision(conn, &realm_id).await? {
                     return Err(StoreError::Conflict(format!(
                         "seal_collision_quarantine: Realm {realm_id} is blocked"
                     ))
                     .into());
+                }
+                if outcome == SealInsertOutcome::Inserted {
+                    insert_new_state_seal(conn, &insert).await?;
                 }
                 mark_control_event_sealed_in_transaction(
                     conn,
@@ -914,11 +973,17 @@ impl ControlEventStore for PgControlEventStore {
                     sealed_at,
                 )
                 .await?;
-                Ok(())
+                Ok(outcome)
             })
             .await
             .map_err(EventSealCommitError::into_store)
-        })
+        })?;
+        if outcome == SealInsertOutcome::Collision {
+            return Err(StoreError::Conflict(format!(
+                "seal_hash_collision: Seal {error_seal_id} is quarantined"
+            )));
+        }
+        Ok(())
     }
 
     fn get(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
@@ -1758,9 +1823,27 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
+        governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         seal.validate_id(digest_suite)
             .map_err(|error| StoreError::Conflict(error.to_string()))?;
+        for (edge_index, dependency) in governance_dependencies.iter().enumerate() {
+            if dependency.realm_id != seal.realm_id
+                || dependency.source
+                    != soland_storage::GovernanceDependencySource::Seal(seal.id.clone())
+                || dependency.edge_index
+                    != u64::try_from(edge_index).map_err(|error| {
+                        StoreError::Backend(format!(
+                            "Seal governance dependency edge index overflow: {error}"
+                        ))
+                    })?
+            {
+                return Err(StoreError::Conflict(
+                    "schema_violation: Seal governance dependency does not bind its exact Realm, Seal id and edge index"
+                        .to_owned(),
+                ));
+            }
+        }
         let pool = self.pool.clone();
         let cell_registry = self.cell_registry.clone();
         let seal_json = serde_json::to_value(seal).map_err(serde_to_store)?;
@@ -1775,6 +1858,8 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         let seal_id = seal.id.as_str().to_owned();
         let error_seal_id = seal_id.clone();
         let realm_id = seal.realm_id.as_str().to_owned();
+        let dependency_realm_id = seal.realm_id.clone();
+        let dependency_source = soland_storage::GovernanceDependencySource::Seal(seal.id.clone());
         let delta = seal
             .delta
             .iter()
@@ -1791,6 +1876,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
             .iter()
             .map(|digest| digest.as_str().to_owned())
             .collect::<BTreeSet<_>>();
+        let governance_dependencies = governance_dependencies.to_vec();
         let new_rows = new_ops
             .iter()
             .enumerate()
@@ -1818,6 +1904,25 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     is_genesis,
                 };
                 let outcome = preflight_state_seal(conn, &insert).await?;
+                if outcome == SealInsertOutcome::ExactRetry {
+                    let exact_dependencies =
+                        crate::governance_dependencies_match_in_transaction(
+                            conn,
+                            &dependency_realm_id,
+                            &dependency_source,
+                            &governance_dependencies,
+                        )
+                        .await
+                        .map_err(persistence_to_store)?;
+                    if !exact_dependencies {
+                        return Err(StoreError::Conflict(
+                            "duplicate_conflict: exact Seal replay has different governance dependencies"
+                                .to_owned(),
+                        )
+                        .into());
+                    }
+                    return Ok(outcome);
+                }
                 if outcome != SealInsertOutcome::Inserted {
                     return Ok(outcome);
                 }
@@ -1946,6 +2051,11 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 // covered Event remains visible in the pending queue and can
                 // be proposed repeatedly after a restart.
                 insert_new_state_seal(conn, &insert).await?;
+                for dependency in &governance_dependencies {
+                    crate::put_governance_dependency_exact_in_transaction(conn, dependency)
+                        .await
+                        .map_err(persistence_to_store)?;
+                }
                 for (delta_index, digest) in delta.iter().enumerate() {
                     mark_control_event_sealed_in_transaction(
                         conn,
@@ -1980,6 +2090,7 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
+        _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         let _guard = self.lock.lock();
         let actual = self
@@ -2577,6 +2688,7 @@ mod event_seal_commit_tests {
                         &[],
                         &candidate.1,
                         &candidate.2,
+                        &[],
                     )
                     .unwrap();
                 (candidate.0, candidate.1, accepted)

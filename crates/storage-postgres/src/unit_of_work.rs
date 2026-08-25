@@ -596,44 +596,11 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     .await
                     .map_err(PersistenceError::database)?;
             }
-            let mut admission_realms = std::collections::BTreeSet::new();
-            for item in &ordered {
-                let event = serde_json::from_value::<arkret_wire::Event>(
-                    item.event.envelope.clone(),
-                )
-                .map_err(|error| {
-                    PersistenceError::Conflict(format!(
-                        "schema_violation: accepted Event envelope is not canonical wire: {error}"
-                    ))
-                })?;
-                admission_realms.insert(event.realm_id.as_str().to_owned());
-            }
-            for realm_id in admission_realms {
-                sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-                    .bind::<Text, _>(&realm_id)
-                    .execute(&mut *conn)
-                    .await
-                    .map_err(PersistenceError::database)?;
-                let quarantined = sql_query(
-                    "SELECT EXISTS (SELECT 1 FROM state_seal_quarantine_realms \
-                     WHERE realm_id = $1) AS present",
-                )
-                .bind::<Text, _>(&realm_id)
-                .get_result::<ExistsRow>(&mut *conn)
-                .await
-                .map_err(PersistenceError::database)?;
-                if quarantined.present {
-                    return Err(PersistenceError::Conflict(format!(
-                        "seal_collision_quarantine: Realm {realm_id} is blocked"
-                    ))
-                    .into());
-                }
-            }
             let mut incoming = std::collections::BTreeMap::<
                 String,
                 &CanonicalEventRecord,
             >::new();
-            for item in ordered {
+            for item in &ordered {
                 let identity = ids::validated_event_identity_parts_for_suite(
                     &item.event.event_id,
                     &item.event.canonical_digest,
@@ -669,6 +636,42 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     }
                 } else {
                     incoming.insert(item.event.event_id.clone(), &item.event);
+                }
+            }
+            // Identity collision evidence takes precedence over parsing or
+            // admitting the incoming envelope. Only collision-free bytes may
+            // name Realms whose quarantine gates are then locked and checked.
+            let mut admission_realms = std::collections::BTreeSet::new();
+            for item in &ordered {
+                let event = serde_json::from_value::<arkret_wire::Event>(
+                    item.event.envelope.clone(),
+                )
+                .map_err(|error| {
+                    PersistenceError::Conflict(format!(
+                        "schema_violation: accepted Event envelope is not canonical wire: {error}"
+                    ))
+                })?;
+                admission_realms.insert(event.realm_id.as_str().to_owned());
+            }
+            for realm_id in admission_realms {
+                sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                    .bind::<Text, _>(&realm_id)
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(PersistenceError::database)?;
+                let quarantined = sql_query(
+                    "SELECT EXISTS (SELECT 1 FROM state_seal_quarantine_realms \
+                     WHERE realm_id = $1) AS present",
+                )
+                .bind::<Text, _>(&realm_id)
+                .get_result::<ExistsRow>(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+                if quarantined.present {
+                    return Err(PersistenceError::Conflict(format!(
+                        "seal_collision_quarantine: Realm {realm_id} is blocked"
+                    ))
+                    .into());
                 }
             }
             let mut event_inserted = false;
@@ -1135,6 +1138,37 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
 
             if let Some(mutation) = request.applet_record {
                 let replacing = mutation.expected_record.is_some();
+                let canonical_namespaces =
+                    soland_storage::applet_namespaces_from_record(&mutation.record)?;
+                if let Some(expected_record) = mutation.expected_record.as_ref() {
+                    let expected_namespaces =
+                        soland_storage::applet_namespaces_from_record(expected_record)?;
+                    if canonical_namespaces != expected_namespaces {
+                        return Err(PersistenceError::Conflict(
+                            "schema_violation: Applet package.namespaces are immutable".to_owned(),
+                        )
+                        .into());
+                    }
+                }
+                let managed_authorities =
+                    soland_storage::applet_managed_authorities_from_record(&mutation.record)?;
+                let previous_managed_authorities = mutation
+                    .expected_record
+                    .as_ref()
+                    .map(soland_storage::applet_managed_authorities_from_record)
+                    .transpose()?
+                    .unwrap_or_default();
+                if !previous_managed_authorities.is_subset(&managed_authorities) {
+                    return Err(PersistenceError::Conflict(
+                        "schema_violation: Applet managed authority anchors are immutable"
+                            .to_owned(),
+                    )
+                    .into());
+                }
+                let new_managed_authorities = managed_authorities
+                    .difference(&previous_managed_authorities)
+                    .cloned()
+                    .collect::<Vec<_>>();
                 let updated = if let Some(expected_record) = mutation.expected_record {
                     sql_query(
                         "UPDATE applet_registrations SET record = $3, updated_at = NOW() \
@@ -1171,20 +1205,20 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     (
                         arkret_models_integration::AppletNamespaceDomain::Actors,
                         "actors",
-                        mutation.namespace_claims.actors,
+                        canonical_namespaces.actors,
                     ),
                     (
                         arkret_models_integration::AppletNamespaceDomain::Realms,
                         "realms",
-                        mutation.namespace_claims.realms,
+                        canonical_namespaces.realms,
                     ),
                     (
                         arkret_models_integration::AppletNamespaceDomain::Handles,
                         "handles",
-                        mutation.namespace_claims.handles,
+                        canonical_namespaces.handles,
                     ),
                 ];
-                if namespace_claims.iter().any(|(_, _, claims)| !claims.is_empty()) {
+                if !replacing && namespace_claims.iter().any(|(_, _, claims)| !claims.is_empty()) {
                     sql_query(
                         "SELECT pg_advisory_xact_lock(hashtextextended('arkret.applet.namespace.claims', 0))",
                     )
@@ -1228,7 +1262,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     }
                 }
 
-                for claim in mutation.managed_authority_claims {
+                for claim in new_managed_authorities {
                     let inserted = sql_query(
                         "INSERT INTO managed_authority_claims (actor_id, principal_server_id, applet_id) VALUES ($1, $2, $3) ON CONFLICT (actor_id, principal_server_id) DO NOTHING",
                     )

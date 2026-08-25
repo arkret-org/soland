@@ -378,12 +378,9 @@ impl AppletRecord {
             "registration",
         )?;
         let registration: arkret_models_integration::AppletRegistrationPayload =
-            serde_json::from_value(
-                serde_json::to_value(&self.registration_event.payload).map_err(|error| {
-                    format!("stored registration Event payload cannot be encoded: {error}")
-                })?,
-            )
-            .map_err(|error| format!("stored registration Event payload is invalid: {error}"))?;
+            serde_json::from_value(event_payload_value(&self.registration_event)).map_err(
+                |error| format!("stored registration Event payload is invalid: {error}"),
+            )?;
         let evidence = registration_epoch_evidence_from_event(&self.registration_event)?;
         self.package
             .validate_with_epoch_evidence(&evidence)

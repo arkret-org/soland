@@ -190,10 +190,22 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         if row.last_resort
             || row.claimed_by_mls_group_id.as_deref() != Some(mls_group_id)
             || row.consumed_at.is_some()
-            || !row
-                .claim_expires_at_unix_ms
-                .is_some_and(|expires_at_unix_ms| now_unix_ms < expires_at_unix_ms)
         {
+            return Ok(None);
+        }
+        if !row
+            .claim_expires_at_unix_ms
+            .is_some_and(|expires_at_unix_ms| now_unix_ms < expires_at_unix_ms)
+        {
+            row.claimed_by_mls_group_id = Some("revoked".to_owned());
+            row.claimed_at = None;
+            row.claim_expires_at_unix_ms = None;
+            if let Some(ledger_key) = matching_ledger
+                && let Some(ledger) = state.peer_claims.get_mut(&ledger_key)
+            {
+                ledger.state = "revoked".to_owned();
+                ledger.updated_at = now_unix_ms.div_euclid(1000);
+            }
             return Ok(None);
         }
         let consumed_at = now_unix_ms.div_euclid(1000);
@@ -885,6 +897,7 @@ mod tests {
 
         let mut first = ledger("last-resort-audit");
         first.claim_request_id = "local-last-resort:fixture".to_owned();
+        first.key_package_use = "last_resort".to_owned();
         first.state = "last_resort_claimed".to_owned();
         first.claim_expires_at_unix_ms = Some(20_500);
         first.outcome = Some(serde_json::json!({
