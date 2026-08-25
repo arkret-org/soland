@@ -109,12 +109,19 @@ enum KeyPackageTrustSelector {
 fn trust_binding_from_parts(
     device_authorize_event_id: Option<String>,
     agent_key_authorize_event_id: Option<String>,
+    pairwise_actor_id: Option<String>,
+    pairwise_verification_method: Option<String>,
     message: &'static str,
 ) -> Result<KeyPackageTrustBinding, AppError> {
-    KeyPackageTrustBinding::from_parts(device_authorize_event_id, agent_key_authorize_event_id)
-        .map_err(|reason_code| {
-            AppError::new(ErrorCode::FailedPrecondition, message).with_wire_code(reason_code)
-        })
+    KeyPackageTrustBinding::from_parts(
+        device_authorize_event_id,
+        agent_key_authorize_event_id,
+        pairwise_actor_id,
+        pairwise_verification_method,
+    )
+    .map_err(|reason_code| {
+        AppError::new(ErrorCode::FailedPrecondition, message).with_wire_code(reason_code)
+    })
 }
 
 fn trust_binding_from_keypackage(
@@ -123,6 +130,9 @@ fn trust_binding_from_keypackage(
     trust_binding_from_parts(
         kp.device_authorize_event_id.clone(),
         kp.agent_key_authorize_event_id.clone(),
+        (kp.device_authorize_event_id.is_none() && kp.agent_key_authorize_event_id.is_none())
+            .then(|| kp.actor_id.clone()),
+        kp.endpoint_verification_method.clone(),
         "KeyPackage trust binding is invalid",
     )
 }
@@ -131,6 +141,9 @@ fn trust_binding_from_row(row: &MlsKeyPackageRow) -> Result<KeyPackageTrustBindi
     trust_binding_from_parts(
         row.device_authorize_event_id.clone(),
         row.agent_key_authorize_event_id.clone(),
+        (row.device_authorize_event_id.is_none() && row.agent_key_authorize_event_id.is_none())
+            .then(|| row.actor_id.clone()),
+        row.endpoint_verification_method.clone(),
         "KeyPackage claim is missing a valid trust binding",
     )
 }
@@ -141,6 +154,14 @@ fn trust_binding_matches_keypackage(
 ) -> bool {
     kp.device_authorize_event_id == binding.device_authorize_event_id
         && kp.agent_key_authorize_event_id == binding.agent_key_authorize_event_id
+        && binding
+            .pairwise_actor_id
+            .as_ref()
+            .is_none_or(|actor_id| actor_id == &kp.actor_id)
+        && binding
+            .pairwise_verification_method
+            .as_deref()
+            .is_none_or(|method| kp.endpoint_verification_method.as_deref() == Some(method))
 }
 
 impl KeyPackageTrustSelector {
@@ -806,19 +827,23 @@ async fn claim_keypackage_at_destination(
             expires_at: (body.expires_at + chrono::Duration::minutes(10)).timestamp(),
             updated_at: now_secs,
         };
-        let Some(predicted_device_id) = predicted.device_id.as_deref() else {
-            continue;
-        };
-        let device_revocation_gate = match keypackage_device_revocation_gate(
-            state,
-            &predicted.actor_id,
-            predicted_device_id,
-            binding.device_authorize_event_id.as_deref(),
-        )
-        .await
-        {
-            Ok(selector) => selector,
-            Err(_) => continue,
+        let device_revocation_gate = if binding.device_authorize_event_id.is_some() {
+            let Some(predicted_device_id) = predicted.device_id.as_deref() else {
+                continue;
+            };
+            match keypackage_device_revocation_gate(
+                state,
+                &predicted.actor_id,
+                predicted_device_id,
+                binding.device_authorize_event_id.as_deref(),
+            )
+            .await
+            {
+                Ok(selector) => selector,
+                Err(_) => continue,
+            }
+        } else {
+            None
         };
         match state
             .mls_key_packages()
@@ -1615,7 +1640,9 @@ async fn validate_welcome_peer_claim_ledger(
         .await
         .map_err(|_| "peer_claim_welcome_pending")?
         .ok_or("peer_claim_welcome_pending")?;
-    if ledger.state != "claimed" || ledger.request_digest != receipt.request_digest.as_str() {
+    if !peer_claim_state_allows_welcome(&ledger.state)
+        || ledger.request_digest != receipt.request_digest.as_str()
+    {
         return Err("peer_claim_welcome_invalid");
     }
     let outcome = ledger
@@ -1697,6 +1724,10 @@ async fn validate_welcome_peer_claim_ledger(
         _ => return Err("peer_claim_welcome_invalid"),
     }
     Ok(())
+}
+
+fn peer_claim_state_allows_welcome(state: &str) -> bool {
+    matches!(state, "claimed" | "last_resort_claimed")
 }
 
 async fn record_peer_claim_failed(
@@ -4723,16 +4754,20 @@ mod trust_binding_tests {
     #[test]
     fn native_agent_binding_is_an_exclusive_branch() {
         let event_id = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
-        let binding = trust_binding_from_parts(None, Some(event_id.to_owned()), "invalid").unwrap();
+        let binding =
+            trust_binding_from_parts(None, Some(event_id.to_owned()), None, None, "invalid")
+                .unwrap();
         assert_eq!(
             binding.agent_key_authorize_event_id.as_deref(),
             Some(event_id)
         );
-        assert!(trust_binding_from_parts(None, None, "invalid").is_err());
+        assert!(trust_binding_from_parts(None, None, None, None, "invalid").is_err());
         assert!(
             trust_binding_from_parts(
                 Some(event_id.to_owned()),
                 Some(event_id.to_owned()),
+                None,
+                None,
                 "invalid"
             )
             .is_err()
@@ -4934,6 +4969,15 @@ mod trust_binding_tests {
             "sha256:request",
             &receipt,
         ));
+    }
+
+    #[test]
+    fn welcome_accepts_active_single_use_and_last_resort_claim_audits_only() {
+        assert!(peer_claim_state_allows_welcome("claimed"));
+        assert!(peer_claim_state_allows_welcome("last_resort_claimed"));
+        assert!(!peer_claim_state_allows_welcome("consumed"));
+        assert!(!peer_claim_state_allows_welcome("expired"));
+        assert!(!peer_claim_state_allows_welcome("revoked"));
     }
 
     #[test]

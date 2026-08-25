@@ -1,9 +1,8 @@
+use arkret_models_collaboration::http_bodies::DevicePairingState;
 use chrono::{DateTime, Utc};
 use diesel::{AsChangeset, Insertable, Queryable, Selectable};
 use serde_json::Value;
 use soland_storage::{DevicePairingRecord, PersistenceError, PersistenceResult};
-
-use arkret_models_collaboration::http_bodies::DevicePairingState;
 
 use crate::schema::device_pairings;
 

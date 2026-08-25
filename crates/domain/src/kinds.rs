@@ -262,24 +262,28 @@ pub const AUDIT_COMPLIANCE_PROFILES: &[&str] = &[
     arkret_wire::ProfileId::DISCLOSED_AUDIT_E2EE_V1,
 ];
 
-/// SEC-08 — does this Realm-lifecycle payload (`ak.realm.create` /
-/// `ak.realm.policy_bundle`) declare the minimal-metadata profile
+/// SEC-08 — does this Realm schema carrier declare the minimal-metadata profile
 /// [`ProfileId::MLS_MINIMAL_METADATA_REALM_V1`]
 /// (`crypto-media/encryption-and-audit.md` §2.9)?
 ///
-/// The declaration is the `profiles[]` / `active_profiles[]` array the T09/T12
-/// path already reads off the same payloads.
+/// Current v1 has one carrier: `schema_refs[]`, directly on `ak.realm.schema`
+/// or nested in the closed Realm genesis `object` on `ak.realm.create`.
 pub fn payload_declares_minimal_metadata_realm(payload: &serde_json::Value) -> bool {
-    ["profiles", "active_profiles"].iter().any(|field| {
-        payload
-            .get(*field)
+    let declares = |value: Option<&serde_json::Value>| {
+        value
             .and_then(serde_json::Value::as_array)
-            .is_some_and(|profiles| {
-                profiles.iter().any(|profile| {
-                    profile.as_str() == Some(ProfileId::MLS_MINIMAL_METADATA_REALM_V1)
+            .is_some_and(|references| {
+                references.iter().any(|reference| {
+                    reference.as_str() == Some(ProfileId::MLS_MINIMAL_METADATA_REALM_V1)
                 })
             })
-    })
+    };
+    declares(payload.get("schema_refs"))
+        || declares(
+            payload
+                .get("object")
+                .and_then(|object| object.get("schema_refs")),
+        )
 }
 
 #[cfg(test)]
@@ -287,19 +291,24 @@ mod audit_profile_tests {
     use super::*;
 
     #[test]
-    fn minimal_metadata_realm_detected_from_profiles_arrays() {
+    fn minimal_metadata_realm_detected_from_schema_refs() {
         use serde_json::json;
 
-        // SEC-08 — declaration is recognised under `profiles[]` and
-        // `active_profiles[]`; absent / other profiles are not minimal.
+        // SEC-08 — both current schema carriers are recognised; removed
+        // profiles spellings are not compatibility inputs.
         assert!(payload_declares_minimal_metadata_realm(&json!({
-            "profiles": ["ak.profile.mls.minimal_metadata_realm.v1"]
+            "schema_refs": ["ak.profile.mls.minimal_metadata_realm.v1"]
         })));
         assert!(payload_declares_minimal_metadata_realm(&json!({
-            "active_profiles": ["ak.profile.core.v1", "ak.profile.mls.minimal_metadata_realm.v1"]
+            "object": {
+                "schema_refs": ["ak.schema.realm.v1", "ak.profile.mls.minimal_metadata_realm.v1"]
+            }
         })));
         assert!(!payload_declares_minimal_metadata_realm(&json!({
-            "profiles": ["ak.profile.core.v1"]
+            "profiles": ["ak.profile.mls.minimal_metadata_realm.v1"]
+        })));
+        assert!(!payload_declares_minimal_metadata_realm(&json!({
+            "schema_refs": ["ak.schema.realm.v1"]
         })));
         assert!(!payload_declares_minimal_metadata_realm(&json!({})));
     }

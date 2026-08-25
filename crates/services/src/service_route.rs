@@ -16,8 +16,6 @@ use crate::{ServiceError, ServiceResult};
 pub enum RouteSource {
     CurrentRecord,
     ScheduledNotice,
-    RealmPeerMirror,
-    ConfiguredMirror,
 }
 
 #[derive(Clone, Debug)]
@@ -90,18 +88,6 @@ pub trait ServiceRouteFetcher: Send + Sync {
     ) -> ServiceResult<Option<VerifiedRouteCandidate>>;
 
     async fn fetch_notice_candidate(
-        &self,
-        service_id: &DidCoreId,
-        service_kind: &str,
-    ) -> ServiceResult<Option<VerifiedRouteCandidate>>;
-
-    async fn fetch_realm_peer_mirror(
-        &self,
-        service_id: &DidCoreId,
-        service_kind: &str,
-    ) -> ServiceResult<Option<VerifiedRouteCandidate>>;
-
-    async fn fetch_configured_mirror(
         &self,
         service_id: &DidCoreId,
         service_kind: &str,
@@ -212,28 +198,6 @@ impl ServiceRouteResolver {
         if let Some(candidate) = self
             .fetcher
             .fetch_notice_candidate(service_id, service_kind)
-            .await?
-        {
-            match self.accept(service_id, service_kind, candidate, now).await {
-                Ok(entry) => return Ok(entry),
-                Err(ServiceError::SchemaViolation(_)) => {}
-                Err(error) => return Err(error),
-            }
-        }
-        if let Some(candidate) = self
-            .fetcher
-            .fetch_realm_peer_mirror(service_id, service_kind)
-            .await?
-        {
-            match self.accept(service_id, service_kind, candidate, now).await {
-                Ok(entry) => return Ok(entry),
-                Err(ServiceError::SchemaViolation(_)) => {}
-                Err(error) => return Err(error),
-            }
-        }
-        if let Some(candidate) = self
-            .fetcher
-            .fetch_configured_mirror(service_id, service_kind)
             .await?
         {
             match self.accept(service_id, service_kind, candidate, now).await {
@@ -429,8 +393,6 @@ mod tests {
     struct FakeFetcher {
         current: Option<ServiceResolutionRecord>,
         notice: Option<ServiceResolutionRecord>,
-        peer: Option<ServiceResolutionRecord>,
-        configured: Option<ServiceResolutionRecord>,
         calls: Mutex<Vec<RouteSource>>,
     }
 
@@ -464,20 +426,6 @@ mod tests {
             _: &str,
         ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
             Ok(self.candidate(RouteSource::ScheduledNotice, &self.notice))
-        }
-        async fn fetch_realm_peer_mirror(
-            &self,
-            _: &DidCoreId,
-            _: &str,
-        ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
-            Ok(self.candidate(RouteSource::RealmPeerMirror, &self.peer))
-        }
-        async fn fetch_configured_mirror(
-            &self,
-            _: &DidCoreId,
-            _: &str,
-        ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
-            Ok(self.candidate(RouteSource::ConfiguredMirror, &self.configured))
         }
     }
 
@@ -542,8 +490,6 @@ mod tests {
         let first_fetcher = Arc::new(FakeFetcher {
             current: Some(first.clone()),
             notice: None,
-            peer: None,
-            configured: None,
             calls: Mutex::new(Vec::new()),
         });
         let now = Utc.with_ymd_and_hms(2026, 8, 10, 0, 1, 0).unwrap();
@@ -564,8 +510,6 @@ mod tests {
         let successor_fetcher = Arc::new(FakeFetcher {
             current: Some(successor),
             notice: None,
-            peer: None,
-            configured: None,
             calls: Mutex::new(Vec::new()),
         });
         let entry = ServiceRouteResolver::new(store, successor_fetcher)
@@ -585,7 +529,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn new_core_is_rejected_and_ordered_fallback_remains_scoped() {
+    async fn new_core_is_rejected_without_an_authorized_route_source() {
         let store = Arc::new(MemoryServiceRouteStore::new());
         let accepted = record("did:webvh:z6mkexpected:route.example", 0, None);
         let expected = accepted.record.service_id.clone();
@@ -593,24 +537,17 @@ mod tests {
         let fetcher = Arc::new(FakeFetcher {
             current: Some(wrong),
             notice: None,
-            peer: None,
-            configured: Some(accepted),
             calls: Mutex::new(Vec::new()),
         });
         let now = Utc.with_ymd_and_hms(2026, 8, 10, 0, 1, 0).unwrap();
-        let entry = ServiceRouteResolver::new(store, fetcher.clone())
+        let error = ServiceRouteResolver::new(store, fetcher.clone())
             .resolve(&expected, "principal_server", now, true)
             .await
-            .unwrap();
-        assert_eq!(entry.service_id, expected);
+            .unwrap_err();
+        assert!(matches!(error, ServiceError::NotFound(_)));
         assert_eq!(
             *fetcher.calls.lock(),
-            vec![
-                RouteSource::CurrentRecord,
-                RouteSource::ScheduledNotice,
-                RouteSource::RealmPeerMirror,
-                RouteSource::ConfiguredMirror,
-            ]
+            vec![RouteSource::CurrentRecord, RouteSource::ScheduledNotice]
         );
     }
 
@@ -623,8 +560,6 @@ mod tests {
         let seed_fetcher = Arc::new(FakeFetcher {
             current: Some(accepted.clone()),
             notice: None,
-            peer: None,
-            configured: None,
             calls: Mutex::new(Vec::new()),
         });
         let resolver = ServiceRouteResolver::new(store.clone(), seed_fetcher.clone());
@@ -654,7 +589,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fork_fails_closed_without_trying_later_sources() {
+    async fn fork_fails_closed_without_trying_the_notice_source() {
         let store = Arc::new(MemoryServiceRouteStore::new());
         let accepted = record("did:webvh:z6mkforked:old.example", 0, None);
         let expected = accepted.record.service_id.clone();
@@ -662,8 +597,6 @@ mod tests {
         let seed_fetcher = Arc::new(FakeFetcher {
             current: Some(accepted.clone()),
             notice: None,
-            peer: None,
-            configured: None,
             calls: Mutex::new(Vec::new()),
         });
         ServiceRouteResolver::new(store.clone(), seed_fetcher)
@@ -675,8 +608,6 @@ mod tests {
         let fetcher = Arc::new(FakeFetcher {
             current: Some(fork),
             notice: None,
-            peer: None,
-            configured: Some(accepted),
             calls: Mutex::new(Vec::new()),
         });
         let error = ServiceRouteResolver::new(store.clone(), fetcher.clone())
@@ -754,8 +685,6 @@ mod tests {
         let fetcher = Arc::new(FakeFetcher {
             current: Some(accepted),
             notice: None,
-            peer: None,
-            configured: None,
             calls: Mutex::new(Vec::new()),
         });
         let resolver = ServiceRouteResolver::new(store, fetcher.clone());

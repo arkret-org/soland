@@ -1439,8 +1439,8 @@ fn parse_lifetime(v: Option<&Value>) -> Result<KeyPackageLifetime, &'static str>
 }
 
 /// Exactly-one-of trust binding carried by every KeyPackage publication and
-/// claim: either an `ak.device.authorize` Event id or an
-/// `ak.agent.key.authorize` Event id, never both and never neither.
+/// claim: device authorization, Agent key authorization, or a minimal-metadata
+/// pairwise actor/method pair.
 ///
 /// Owned here because the reducer validates it off the wire payload and the
 /// `/keys/keypackages/*` routing layer validates the same shape off the stored
@@ -1488,12 +1488,33 @@ impl KeyPackageTrustBinding {
     pub fn from_parts(
         device_authorize_event_id: Option<String>,
         agent_key_authorize_event_id: Option<String>,
+        pairwise_actor_id: Option<String>,
+        pairwise_verification_method: Option<String>,
     ) -> Result<Self, &'static str> {
         let device_authorize_event_id = non_empty_trimmed(device_authorize_event_id);
         let agent_key_authorize_event_id = non_empty_trimmed(agent_key_authorize_event_id);
-        match (device_authorize_event_id, agent_key_authorize_event_id) {
-            (Some(event_id), None) => Ok(Self::device_authorize(event_id)),
-            (None, Some(event_id)) => Ok(Self::agent_key_authorize(event_id)),
+        let pairwise_actor_id = non_empty_trimmed(pairwise_actor_id);
+        let pairwise_verification_method = non_empty_trimmed(pairwise_verification_method);
+        match (
+            device_authorize_event_id,
+            agent_key_authorize_event_id,
+            pairwise_actor_id,
+            pairwise_verification_method,
+        ) {
+            (Some(event_id), None, None, None) => Ok(Self::device_authorize(event_id)),
+            (None, Some(event_id), None, None) => Ok(Self::agent_key_authorize(event_id)),
+            (None, None, Some(actor_id), Some(method)) => {
+                let actor = actor_id
+                    .parse::<arkret_identifiers::DidCoreId>()
+                    .map_err(|_| arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
+                let method_id = arkret_wire::DidUrl::new(method.clone())
+                    .map_err(|_| arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
+                arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(
+                    actor, method_id,
+                )
+                .map_err(|_| arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
+                Ok(Self::minimal_metadata_pairwise(actor_id, method))
+            }
             _ => Err(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH),
         }
     }
@@ -1520,7 +1541,7 @@ fn keypackage_claim_trust_binding(payload: &Value) -> Result<KeyPackageTrustBind
 fn keypackage_claim_trust_binding_object(
     object: &Map<String, Value>,
 ) -> Result<KeyPackageTrustBinding, &'static str> {
-    let device_or_agent = KeyPackageTrustBinding::from_parts(
+    KeyPackageTrustBinding::from_parts(
         object
             .get("device_authorize_event_id")
             .and_then(Value::as_str)
@@ -1529,31 +1550,15 @@ fn keypackage_claim_trust_binding_object(
             .get("agent_key_authorize_event_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-    );
-    if device_or_agent.is_ok() {
-        return device_or_agent;
-    }
-    match (
-        object.get("pairwise_actor_id").and_then(Value::as_str),
+        object
+            .get("pairwise_actor_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         object
             .get("pairwise_verification_method")
-            .and_then(Value::as_str),
-    ) {
-        (Some(actor_id), Some(method)) if !actor_id.is_empty() && !method.is_empty() => {
-            let actor = actor_id
-                .parse::<arkret_identifiers::DidCoreId>()
-                .map_err(|_| arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
-            let method_id = arkret_wire::DidUrl::new(method.to_owned())
-                .map_err(|_| arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
-            arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(actor, method_id)
-                .map_err(|_| arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)?;
-            Ok(KeyPackageTrustBinding::minimal_metadata_pairwise(
-                actor_id.to_owned(),
-                method.to_owned(),
-            ))
-        }
-        _ => Err(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH),
-    }
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    )
 }
 
 fn welcome_requester_signature_binding(

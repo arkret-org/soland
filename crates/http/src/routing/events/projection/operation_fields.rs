@@ -1,7 +1,6 @@
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use serde_json::Value;
 use soland_services::operation_semantics as kinds;
-
 // Canonical home of these payload-field readers is `soland_storage::projection`
 // (re-exported at the storage crate root); the signatures and bodies were
 // identical, so this module re-exports them instead of keeping copies.

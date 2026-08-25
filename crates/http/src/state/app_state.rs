@@ -193,9 +193,6 @@ pub struct AppState {
     /// Lossy process-local acceleration signal. Durable pending rows remain
     /// the reconciliation source of truth after missed wakeups or restarts.
     control_seal_wakeup: Arc<tokio::sync::Notify>,
-    /// Lossy acceleration signal for owner-side route handover plan changes.
-    /// The worker also scans the durable active plan on a fixed interval.
-    service_route_handover_wakeup: Arc<tokio::sync::Notify>,
     /// Server-enforced reconnect windows advertised by subscribe control
     /// frames. This prevents a faulty or overloaded client from immediately
     /// re-opening the same subscribe scope after `dropped` /
@@ -1139,7 +1136,6 @@ impl AppState {
             event_broadcast,
             connection_drain: Arc::new(tokio::sync::watch::Sender::new(None)),
             control_seal_wakeup: Arc::new(tokio::sync::Notify::new()),
-            service_route_handover_wakeup: Arc::new(tokio::sync::Notify::new()),
             notary_signing_key,
             notary_signing_key_origin,
             // G4.T3 — load verified-profile descriptors at startup. An unset
@@ -2012,14 +2008,6 @@ impl AppState {
 
     pub(crate) async fn control_seal_wakeup_notified(&self) {
         self.control_seal_wakeup.notified().await;
-    }
-
-    pub(crate) fn wake_service_route_handover_reconcile(&self) {
-        self.service_route_handover_wakeup.notify_one();
-    }
-
-    pub(crate) fn service_route_handover_wakeup(&self) -> Arc<tokio::sync::Notify> {
-        self.service_route_handover_wakeup.clone()
     }
 
     #[cfg(any(test, feature = "test-support"))]

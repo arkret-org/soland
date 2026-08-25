@@ -13,10 +13,10 @@ use arkret_models_collaboration::governance::grant_constraint::{
     CapabilitySubject, GrantConstraintKind, GrantConstraintSubkind,
 };
 use arkret_models_integration::{
-    AppletApprovalRequest, AppletGhostActorMode, AppletInstallAuthoringRequestBasis,
-    AppletInstallEffectiveStatus, AppletInstallOutcome, AppletInstallPlan,
-    AppletInstallRequestBody, AppletManagedActorProvisionPayload, AppletManagedActorRole,
-    AppletPackage, AppletRegistrationEpochEvidence, AppletRejectedItem, AppletWireNamespaces,
+    AppletGhostActorMode, AppletInstallAuthoringRequestBasis, AppletInstallEffectiveStatus,
+    AppletInstallOutcome, AppletInstallPlan, AppletInstallRequestBody,
+    AppletManagedActorProvisionPayload, AppletManagedActorRole, AppletPackage,
+    AppletRegistrationEpochEvidence, AppletRejectedItem, AppletWireNamespaces,
     CapabilityConstraint, DeniedScope, E2eeEffect, E2eePolicy, EventSubmission, NamespaceConflict,
     ScopeGrant, WidgetEffect,
 };
@@ -1132,57 +1132,6 @@ fn validate_registration_epoch_evidence_for_document(
     Ok(())
 }
 
-pub(super) fn approved_scopes_from_approval_request(
-    package: &AppletPackage,
-    scope: &ScopeRef,
-    approval: &AppletApprovalRequest,
-) -> Result<Vec<ScopeGrant>, AppError> {
-    let approve_actions = approval_actions_for_install(approval);
-    let requested = package
-        .requested_scopes
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let approved = approve_actions
-        .iter()
-        .filter(|action| requested.contains(*action))
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    if approved.is_empty() {
-        return Ok(Vec::new());
-    }
-    let (realm_id, circle_ids) = match scope {
-        ScopeRef::Realm { realm_id } => (realm_id.clone(), None),
-        ScopeRef::Circle {
-            realm_id,
-            circle_id,
-        } => (realm_id.clone(), Some(vec![circle_id.clone()])),
-        _ => {
-            return Err(AppError::param_invalid(
-                "unsupported applet effective scope",
-            ));
-        }
-    };
-    Ok(vec![ScopeGrant {
-        actions: approved.into_iter().collect(),
-        realm_ids: vec![realm_id],
-        circle_ids,
-        constraints: Vec::new(),
-    }])
-}
-
-pub(super) fn approval_actions_for_install(approval: &AppletApprovalRequest) -> Vec<String> {
-    approval
-        .approve_actions
-        .iter()
-        .filter(|action| {
-            !matches!(approval.ghost_actor_mode, AppletGhostActorMode::Disallowed)
-                || action.as_str() != CapabilityActionId::APPLET_GHOST_PROVISION
-        })
-        .cloned()
-        .collect()
-}
-
 pub(super) async fn build_install_plan(
     state: &AppState,
     package: &AppletPackage,
@@ -1484,10 +1433,6 @@ pub(super) fn ghost_actors_allowed_for_install(
     package_allows && scope_approved && actor_policy_allows
 }
 
-pub(super) fn capability_allows_message_create(capability: &str) -> bool {
-    capability == arkret_wire::CapabilityActionId::MESSAGE_CREATE
-}
-
 #[cfg(test)]
 mod tests {
     use arkret_identifiers::{DidFullId, Hash};
@@ -1681,65 +1626,6 @@ mod tests {
                 handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
                 ..Default::default()
             },
-        )
-    }
-
-    fn sample_response(package: &AppletPackage) -> AppletInstallOutcome {
-        AppletInstallOutcome {
-            install_id: "ak:install:01974100-0000-7000-8000-000000000001".to_owned(),
-            applet_id: package.applet_id.clone(),
-            registration_event_ref: arkret_identifiers::EventId::new(
-                "ak:event:AWS4dRwcRmYFt2N8TnMoyv5iSK8KYchSW9mPumP7yBe3".to_owned(),
-            )
-            .unwrap(),
-            registration_epoch: package.registration_epoch.clone(),
-            bot_actor_id: package.bot_actor_id.clone(),
-            bot_actor_principal_server_id: DidCoreId::new(
-                "ak:did_core:web:principal.example".to_owned(),
-            )
-            .unwrap(),
-            bot_actor_provision_ref: arkret_identifiers::EventId::new(
-                "ak:event:AWS4dRwcRmYFt2N8TnMoyv5iSK8KYchSW9mPumP7yBe3".to_owned(),
-            )
-            .unwrap(),
-            bot_principal_control_realm_id: RealmId::new(
-                "ak:realm:AQK7pbzo4Evme1sP5EOcF51pF6dnP7NQRddexkTCf0Ov".to_owned(),
-            )
-            .unwrap(),
-            capability_grant_refs: vec![
-                arkret_identifiers::GrantId::new(
-                    "ak:grant:AdVQGBDDzQcOQ0Ixa5_MTVwfKs8bWMgdTnlqRiv6ZMTk".to_owned(),
-                )
-                .unwrap(),
-                arkret_identifiers::GrantId::new(
-                    "ak:grant:AV46wCk8jjhi6WSzU44ice0Vqf63WfoL-eRnkJ6w68Ni".to_owned(),
-                )
-                .unwrap(),
-            ],
-            e2ee_authorization_refs: Vec::new(),
-            widget_policy_ref: None,
-            effective_status:
-                arkret_models_integration::applet_models::AppletInstallEffectiveStatus::Installed,
-            rejected: Vec::new(),
-        }
-    }
-
-    fn sample_registration_epoch_evidence(
-        package: &AppletPackage,
-    ) -> AppletRegistrationEpochEvidence {
-        AppletRegistrationEpochEvidence::new(
-            DidFullId::new("did:web:test-applet.example".to_owned()).unwrap(),
-            Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap(),
-            arkret_models_integration::applet::AppletDidMethodVersionEvidence::unversioned(
-                "did:web",
-            )
-            .unwrap(),
-            vec![
-                arkret_models_integration::applet::AppletAcceptedSigningKeyEvidence {
-                    key_ref: package.webhook_auth.key_ref.to_string(),
-                    public_key_digest: Hash::new(format!("sha256:{}", "33".repeat(32))).unwrap(),
-                },
-            ],
         )
     }
 

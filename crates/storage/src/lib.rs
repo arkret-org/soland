@@ -67,7 +67,6 @@ mod realm_invites;
 mod recovery;
 mod service_identity;
 mod service_route;
-mod service_route_plan;
 mod sessions;
 mod sidecars;
 mod signal;
@@ -111,7 +110,6 @@ pub use realm_invites::*;
 pub use recovery::*;
 pub use service_identity::*;
 pub use service_route::*;
-pub use service_route_plan::*;
 pub use sessions::*;
 pub use sidecars::*;
 pub use signal::*;
@@ -409,8 +407,6 @@ pub trait SyncStoreRegistry: Send + Sync {
 pub trait ResolutionStoreRegistry: Send + Sync {
     fn principal_resolutions(&self) -> &dyn PrincipalResolutionStore;
     fn service_routes(&self) -> &dyn ServiceRouteStore;
-    /// Owner-side plan state for this deployment's own route handovers.
-    fn service_route_plans(&self) -> &dyn ServiceRouteHandoverPlanStore;
 }
 
 /// Complete persistence capability assembled by an infrastructure adapter.

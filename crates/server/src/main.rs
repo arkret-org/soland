@@ -260,14 +260,6 @@ async fn run() -> anyhow::Result<()> {
         "background worker configured"
     );
 
-    let _service_route_handover_audience_worker =
-        soland_http::service_route_handover_reconciler::spawn(state.clone());
-    tracing::info!(
-        worker = "service_route_handover_audience",
-        enabled = true,
-        "background worker configured"
-    );
-
     // TTL backstop for the durable sync-cursor handle table (forward-progress
     // pruning on cursor presentation handles the steady state; this clears
     // rows whose client never returned).

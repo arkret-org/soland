@@ -29,7 +29,6 @@ pub mod result;
 pub mod routing;
 pub mod runtime_settings;
 pub mod security;
-pub mod service_route_handover_reconciler;
 pub mod state;
 pub mod util;
 pub mod verified_profiles;

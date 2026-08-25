@@ -1109,7 +1109,6 @@ async fn register_native_agent_membership_context(
     if !with_claimable_keypackage {
         return;
     }
-    let device_id = "ak:device:01904100-0000-7000-8000-0000000007d1";
     let authorize_payload = json!({
         "agent_id": agent,
         "key_id": "ak:agent_key:01904100-0000-7000-8000-0000000007d2",

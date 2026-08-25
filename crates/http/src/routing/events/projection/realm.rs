@@ -186,9 +186,8 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                     changed = true;
                 }
             }
-            // SEC-08 — latch the minimal-metadata declaration. A subsequent
-            // `ak.realm.policy_bundle` that declares the profile flips the
-            // realm into minimal-metadata mode; soland never relaxes it back.
+            // SEC-08 — latch the minimal-metadata declaration from the
+            // create-locked genesis or a subsequent `ak.realm.schema` carrier.
             if !record.minimal_metadata_realm
                 && kinds::payload_declares_minimal_metadata_realm(&operation.payload)
             {

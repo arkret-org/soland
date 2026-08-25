@@ -950,28 +950,6 @@ fn active_grant_dots(cell: &ConsentCellRecord, at: DateTime<Utc>) -> Vec<String>
         .collect()
 }
 
-fn cell_is_active(cell: &ConsentCellRecord, at: DateTime<Utc>) -> bool {
-    !active_grant_dots(cell, at).is_empty()
-}
-
-/// Spec section 5 — a concrete scope is granted when any holder cell whose
-/// intent is `(peer, scope)` or `(peer, "any")` still has an active dot.
-pub(crate) fn has_active_consent_for_scope(
-    state: &AppState,
-    holder: &str,
-    peer: &str,
-    scope: &str,
-    at: DateTime<Utc>,
-) -> bool {
-    state
-        .consents()
-        .cells_for_pair(holder, peer)
-        .iter()
-        .any(|cell| {
-            (cell.consent_scope == scope || cell.consent_scope == "any") && cell_is_active(cell, at)
-        })
-}
-
 /// Spec `sync/invite-addressing.md` section 2 — verify a `consent_grant`
 /// introduction evidence. The `consent_grant_ref` (and optional `consent_id`)
 /// MUST resolve to an **active** grant dot in `subject`'s (the invitee's)

@@ -107,22 +107,6 @@ impl ServiceRouteFetcher for FixtureVerifiedRouteFetcher {
     ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
         Ok(None)
     }
-
-    async fn fetch_realm_peer_mirror(
-        &self,
-        _service_id: &DidCoreId,
-        _service_kind: &str,
-    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
-        Ok(None)
-    }
-
-    async fn fetch_configured_mirror(
-        &self,
-        _service_id: &DidCoreId,
-        _service_kind: &str,
-    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
-        Ok(None)
-    }
 }
 
 #[derive(Serialize)]

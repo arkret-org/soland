@@ -1,6 +1,5 @@
-use chrono::{DateTime, Utc};
-
 use arkret_models_collaboration::http_bodies::DevicePairingState;
+use chrono::{DateTime, Utc};
 
 use super::{PersistenceResult, Value, async_trait};
 
