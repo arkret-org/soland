@@ -2,8 +2,9 @@ use async_trait::async_trait;
 
 use crate::{
     AccountDataRecord, CanonicalEventRecord, ConsentCellRecord, ContactRecord,
-    DevicePairingAuthorizationCommit, DeviceRevocationGateSelector, DeviceRevocationTransition,
-    FederationOutboxRecord, IdempotencyRecord, PersistenceResult, ProjectionEventRecord,
+    ContactVerifiedMirrorRecord, DevicePairingAuthorizationCommit, DeviceRevocationGateSelector,
+    DeviceRevocationTransition, FederationOutboxRecord, IdempotencyRecord, PersistenceResult,
+    ProjectionEventRecord,
 };
 
 /// One Contact projection mutation committed with its canonical Event and
@@ -14,6 +15,7 @@ pub struct ContactProjectionCommit {
     pub record: ContactRecord,
     pub expected_updated_at: Option<chrono::DateTime<chrono::Utc>>,
     pub conflict_code: String,
+    pub verified_mirror: Option<ContactVerifiedMirrorRecord>,
     /// Optional holder-private policy mutation committed in the same unit as
     /// the Contact Event and lineage projection.
     pub invite_policy:

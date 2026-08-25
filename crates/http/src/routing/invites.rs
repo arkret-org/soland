@@ -511,7 +511,10 @@ async fn self_invites_dispatch(
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
 
     let accepted = require_dispatchable_invite_event(state, &session, &dispatch).await?;
-    let invite_event = serde_json::from_slice(&accepted.canonical_bytes)
+    // `canonical_bytes` is the Event digest preimage and deliberately omits
+    // identity/proof fields such as `event_id`.  Private delivery carries the
+    // complete accepted Event, which is stored separately as the envelope.
+    let invite_event = serde_json::from_value(accepted.envelope.clone())
         .map_err(|error| AppError::internal(format!("stored invite Event is invalid: {error}")))?;
     let delivery = InviteDeliveryRequestBody {
         schema: dispatch.schema,

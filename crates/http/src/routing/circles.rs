@@ -789,15 +789,53 @@ async fn submit_circle_lifecycle(
     // admission path's job now; this only binds the submitted Event to the path.
     caller_signed_circle_lifecycle_target(&session.actor, &circle_id, &kind, &submission.event)?;
     submit_caller_signed_circle_event(state, &session, submission).await?;
-    let projection = state.projections().snapshot();
-    // For tombstone the read-helper hides the row; fall back to direct
-    // map lookup so the response still surfaces the terminal state.
-    let circle = projection
-        .circle(&circle_id)
-        .or_else(|| projection.circles.get(&circle_id))
-        .ok_or_else(|| AppError::not_found("circle not found"))?;
-    let response = circle_view_from_projection(&projection, circle, &session.actor)?;
-    json_ok(response)
+    let expected_state = circle_lifecycle_target_state(&kind)?;
+
+    // Lifecycle operations are Control Moves. Admission durably queues the
+    // Move and wakes the Seal coordinator, but the Circle projection cannot
+    // change until that Move is covered by the resulting Seal. Do not return a
+    // successful response carrying the pre-transition state from that bounded
+    // convergence window.
+    const PROJECTION_ATTEMPTS: usize = 50;
+    for attempt in 0..PROJECTION_ATTEMPTS {
+        let projection = state.projections().snapshot();
+        // For tombstone the read-helper hides the row; use the direct map so
+        // the terminal state can still be returned by this command endpoint.
+        if let Some(circle) = projection.circles.get(&circle_id)
+            && circle.state == expected_state
+        {
+            let response = circle_view_from_projection(&projection, circle, &session.actor)?;
+            return json_ok(response);
+        }
+        drop(projection);
+        if attempt + 1 < PROJECTION_ATTEMPTS {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
+    Err(
+        AppError::new(
+            ErrorCode::FrontierUnavailable,
+            format!(
+                "accepted {kind} Event did not materialize Circle state `{}` before the projection deadline",
+                expected_state.as_str()
+            ),
+        )
+        .with_status(StatusCode::SERVICE_UNAVAILABLE),
+    )
+}
+
+fn circle_lifecycle_target_state(
+    kind: &arkret_wire::EventKind,
+) -> Result<CircleLifecycleState, AppError> {
+    match kind {
+        arkret_wire::EventKind::CircleArchive => Ok(CircleLifecycleState::Archived),
+        arkret_wire::EventKind::CircleRestore => Ok(CircleLifecycleState::Active),
+        arkret_wire::EventKind::CircleTombstone => Ok(CircleLifecycleState::Tombstoned),
+        _ => Err(AppError::internal(format!(
+            "unsupported Circle lifecycle Event kind {kind}"
+        ))),
+    }
 }
 
 /// Bind a caller-signed Circle lifecycle Event to the path it was submitted on.

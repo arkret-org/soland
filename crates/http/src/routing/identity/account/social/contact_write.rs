@@ -1199,14 +1199,30 @@ async fn plan_contact_commit(
             ..
         } => {
             let request_receipt = sign_request_receipt(state, reservation, event, digest_suite)?;
-            let peer_service_id = contact_request_delivery_address(
-                state,
-                reservation.holder.contact_actor_id(),
-                reservation.branch.peer().contact_actor_id(),
-                introduction_evidence,
-            )
-            .await?
-            .map(|address| address.recipient_service_id.to_string());
+            let same_service_target = state
+                .identities()
+                .account(&peer)
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("Contact target account lookup: {error}"))
+                })?
+                .is_some();
+            let peer_service_id = if same_service_target
+                || matches!(
+                    introduction_evidence.as_ref(),
+                    ContactIntroductionEvidence::SamePrincipalServer
+                ) {
+                Some(state.service_id().clone())
+            } else {
+                contact_request_delivery_address(
+                    state,
+                    reservation.holder.contact_actor_id(),
+                    reservation.branch.peer().contact_actor_id(),
+                    introduction_evidence,
+                )
+                .await?
+                .map(|address| address.recipient_service_id.to_string())
+            };
             let existing = contacts
                 .contact_any(&holder, &peer)
                 .await
@@ -1320,6 +1336,29 @@ async fn plan_contact_commit(
                     ));
                 }
             };
+            // Same-service delivery is a fact about the target account's
+            // current host, not about the requester's introduction-evidence
+            // trust tier. A bare DID legitimately uses `explicit_address`,
+            // but its local recipient still needs the exact privately
+            // resolvable request Event required to author a response.
+            let verified_mirror = same_service_target
+                .then(|| {
+                    Ok::<_, AppError>(soland_storage::ContactVerifiedMirrorRecord {
+                        target_holder_id: peer.clone(),
+                        request_event_id: event.event_id.to_string(),
+                        request_digest: request_receipt.core.request_digest().to_string(),
+                        canonical_event_bytes: arkret_canonical::canonical_json_bytes(event)
+                            .map_err(|error| {
+                                AppError::internal(format!(
+                                    "same-service Contact mirror canonical Event: {error}"
+                                ))
+                            })?,
+                        source_receipt: request_receipt.clone(),
+                        issuer_service_id: state.service_id().clone(),
+                        verified_at: now(),
+                    })
+                })
+                .transpose()?;
             projection = Some(soland_services::events::CommitContactProjection {
                 record: ContactRecord {
                     requester: holder.clone(),
@@ -1352,6 +1391,7 @@ async fn plan_contact_commit(
                 },
                 expected_updated_at,
                 conflict_code: "contact_round_conflict".to_owned(),
+                verified_mirror,
                 invite_policy: None,
             });
             ContactOperationOutcome::Accepted {
@@ -1460,6 +1500,7 @@ async fn plan_contact_commit(
                 record,
                 expected_updated_at: Some(expected_updated_at),
                 conflict_code: "contact_lineage_conflict".to_owned(),
+                verified_mirror: None,
                 invite_policy: None,
             });
             let lineage = signed_lineage(
@@ -1514,6 +1555,7 @@ async fn plan_contact_commit(
                 record,
                 expected_updated_at: Some(expected_updated_at),
                 conflict_code: "contact_lineage_conflict".to_owned(),
+                verified_mirror: None,
                 invite_policy: None,
             });
             let accepted_at = now();
@@ -1586,6 +1628,7 @@ async fn plan_contact_commit(
                 record,
                 expected_updated_at: Some(expected_updated_at),
                 conflict_code: "contact_lineage_conflict".to_owned(),
+                verified_mirror: None,
                 invite_policy: None,
             });
             let lineage = signed_lineage(
@@ -1648,6 +1691,7 @@ async fn plan_contact_commit(
                 record,
                 expected_updated_at: Some(expected_updated_at),
                 conflict_code: "contact_lineage_conflict".to_owned(),
+                verified_mirror: None,
                 invite_policy: None,
             });
             let lineage = signed_lineage(

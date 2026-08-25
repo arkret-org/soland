@@ -769,15 +769,28 @@ pub(crate) async fn event_visible_to_session(
     }
     match canonical_realm_id_for_record(record) {
         Some(realm_id) => {
-            realm_event_visible_to_session(
-                state,
-                &realm_id,
-                record.received_at,
-                Some(&record.actor_id),
-                Some(session),
-            )
-            .await
-                && circle_event_visible_to_session(state, record, session)
+            // Governance verification is not content-history backfill. A
+            // current member must be able to resolve every accepted Control
+            // Move named by the Realm Seal closure so a new member can perform
+            // the T1/T3 replay required by encryption-and-audit.md §2.5.4.
+            // `since_join` continues to crop DataEvents below.
+            let is_control_move = record
+                .kind
+                .parse::<arkret_wire::EventKind>()
+                .is_ok_and(|kind| kind.is_reducer_input());
+            let realm_visible = if is_control_move {
+                crate::routing::realm_has_member(state, &realm_id, &session.actor).await
+            } else {
+                realm_event_visible_to_session(
+                    state,
+                    &realm_id,
+                    record.received_at,
+                    Some(&record.actor_id),
+                    Some(session),
+                )
+                .await
+            };
+            realm_visible && circle_event_visible_to_session(state, record, session)
         }
         None => false,
     }

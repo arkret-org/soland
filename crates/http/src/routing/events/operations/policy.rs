@@ -115,6 +115,11 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::FORBIDDEN,
             "circle_member_manage_capability_required",
         )
+    } else if message == "circle_member_must_be_realm_member" {
+        (
+            salvo::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "circle_member_must_be_realm_member",
+        )
     } else if message == "realm_terminal_state" {
         (salvo::http::StatusCode::FORBIDDEN, "realm_terminal_state")
     } else if message == arkret_wire::ErrorCode::REALM_FROZEN {

@@ -30,6 +30,12 @@ struct DevicePairingCasRow {
 }
 
 #[derive(diesel::QueryableByName)]
+struct ContactMirrorCommitRow {
+    #[diesel(sql_type = Text)]
+    target_holder_id: String,
+}
+
+#[derive(diesel::QueryableByName)]
 struct AppletNamespaceClaimRow {
     #[diesel(sql_type = Text)]
     domain: String,
@@ -377,6 +383,7 @@ async fn commit_contact_projection(
 ) -> PersistenceResult<()> {
     let conflict_code = commit.conflict_code;
     let invite_policy = commit.invite_policy;
+    let verified_mirror = commit.verified_mirror;
     let record = commit.record;
     let request_receipts = serde_json::to_value(&record.request_receipts).map_err(|error| {
         PersistenceError::Internal(format!("cannot encode Contact request receipts: {error}"))
@@ -478,6 +485,44 @@ async fn commit_contact_projection(
     };
     if affected != 1 {
         return Err(PersistenceError::Conflict(conflict_code));
+    }
+    if let Some(mirror) = verified_mirror {
+        let source_receipt = serde_json::to_value(&mirror.source_receipt).map_err(|error| {
+            PersistenceError::SchemaViolation(format!(
+                "Contact request receipt encode failed: {error}"
+            ))
+        })?;
+        let committed = sql_query(
+            "INSERT INTO contact_verified_mirrors \
+             (target_holder_id, request_event_id, request_digest, canonical_event_bytes, source_receipt, issuer_service_id, verified_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (target_holder_id, request_event_id) DO UPDATE \
+             SET verified_at = contact_verified_mirrors.verified_at \
+             WHERE contact_verified_mirrors.request_digest = EXCLUDED.request_digest \
+               AND contact_verified_mirrors.canonical_event_bytes = EXCLUDED.canonical_event_bytes \
+               AND contact_verified_mirrors.source_receipt = EXCLUDED.source_receipt \
+               AND contact_verified_mirrors.issuer_service_id = EXCLUDED.issuer_service_id \
+             RETURNING target_holder_id",
+        )
+        .bind::<Text, _>(&mirror.target_holder_id)
+        .bind::<Text, _>(&mirror.request_event_id)
+        .bind::<Text, _>(&mirror.request_digest)
+        .bind::<Binary, _>(&mirror.canonical_event_bytes)
+        .bind::<Jsonb, _>(&source_receipt)
+        .bind::<Text, _>(&mirror.issuer_service_id)
+        .bind::<Timestamptz, _>(mirror.verified_at)
+        .get_result::<ContactMirrorCommitRow>(conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        if committed
+            .as_ref()
+            .is_none_or(|row| row.target_holder_id != mirror.target_holder_id)
+        {
+            return Err(PersistenceError::Conflict(
+                "contact_verified_mirror_conflict".to_owned(),
+            ));
+        }
     }
     if let Some(policy) = invite_policy {
         let subject_id = policy.subject_id.as_str().to_owned();

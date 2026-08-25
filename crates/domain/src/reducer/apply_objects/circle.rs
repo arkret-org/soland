@@ -327,6 +327,7 @@ impl ProjectionState {
         let Some(circle_id) = payload
             .get("circle_id")
             .and_then(Value::as_str)
+            .or_else(|| payload.get("target_ref").and_then(Value::as_str))
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {

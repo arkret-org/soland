@@ -129,6 +129,13 @@ pub(super) async fn validate_circle_management_policy(
     let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
         return Ok(());
     };
+    if kind == arkret_wire::EventKind::CircleMemberState
+        && operation.payload.get("membership").and_then(Value::as_str) == Some("join")
+        && let Some(target) = operation.payload.get("actor_id").and_then(Value::as_str)
+        && !policy_realm_member_joined(state, operation.realm_id.as_str(), target)
+    {
+        return Err("circle_member_must_be_realm_member");
+    }
     let (action, reason) = match kind {
         arkret_wire::EventKind::CircleUpdate
         | arkret_wire::EventKind::CircleArchive
@@ -214,6 +221,7 @@ pub(super) fn operation_circle_id(operation: &Operation) -> Option<&str> {
         .payload
         .get("circle_id")
         .and_then(Value::as_str)
+        .or_else(|| operation.payload.get("target_ref").and_then(Value::as_str))
         .or_else(|| {
             operation
                 .payload

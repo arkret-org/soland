@@ -829,6 +829,10 @@ pub struct CommitContactProjection {
     pub record: crate::identity::ContactRecord,
     pub expected_updated_at: Option<DateTime<Utc>>,
     pub conflict_code: String,
+    /// Exact recipient-private Contact request carrier retained for the
+    /// pending-incoming verification window. Same-service delivery has no
+    /// federation outbox hop, so this must commit with the shared slot.
+    pub verified_mirror: Option<soland_storage::ContactVerifiedMirrorRecord>,
     pub invite_policy:
         Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
 }

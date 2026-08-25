@@ -78,7 +78,7 @@ impl ContactStore for MemoryContactStore {
 }
 
 pub(crate) struct MemoryContactVerifiedMirrorStore {
-    data: Arc<Mutex<BTreeMap<(String, String), ContactVerifiedMirrorRecord>>>,
+    pub(crate) data: Arc<Mutex<BTreeMap<(String, String), ContactVerifiedMirrorRecord>>>,
 }
 
 impl MemoryContactVerifiedMirrorStore {

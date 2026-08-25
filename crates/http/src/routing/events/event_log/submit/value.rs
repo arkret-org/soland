@@ -1630,7 +1630,21 @@ pub(super) async fn submit_event_value_with_context(
         realm_bootstrap_contexts,
         context.internal_admission,
     )
-    .await?;
+    .await
+    .map_err(|mut error| {
+        let is_circle_pull = event_string_field_from_value(&envelope, "kind").as_deref()
+            == Some(arkret_wire::EventKind::CircleMemberState.as_str())
+            && envelope
+                .pointer("/payload/actor_id")
+                .and_then(Value::as_str)
+                .is_some_and(|target| target != session.actor);
+        if is_circle_pull && error.code == "capability_denied" {
+            error.code = "circle_member_manage_capability_required";
+            error.message =
+                "pulling another actor into a Circle requires ak.circle.member.manage".to_owned();
+        }
+        error
+    })?;
     // The shared validator already decoded the envelope as a typed Event; the
     // admission lane below keeps it typed instead of re-deriving fields
     // through JSON pointer reads.

@@ -470,6 +470,40 @@ fn stage_contact_projection(
     Ok(())
 }
 
+fn stage_contact_verified_mirror(
+    staged: &mut std::collections::BTreeMap<
+        (String, String),
+        soland_storage::ContactVerifiedMirrorRecord,
+    >,
+    commit: Option<&soland_storage::ContactProjectionCommit>,
+) -> PersistenceResult<()> {
+    let Some(mirror) = commit.and_then(|commit| commit.verified_mirror.as_ref()) else {
+        return Ok(());
+    };
+    let key = (
+        mirror.target_holder_id.clone(),
+        mirror.request_event_id.clone(),
+    );
+    if let Some(existing) = staged.get(&key) {
+        if existing == mirror {
+            return Ok(());
+        }
+        return Err(PersistenceError::Conflict(
+            "contact_verified_mirror_conflict".to_owned(),
+        ));
+    }
+    if staged.values().any(|existing| {
+        existing.target_holder_id == mirror.target_holder_id
+            && existing.request_digest == mirror.request_digest
+    }) {
+        return Err(PersistenceError::Conflict(
+            "contact_verified_mirror_conflict".to_owned(),
+        ));
+    }
+    staged.insert(key, mirror.clone());
+    Ok(())
+}
+
 fn stage_consent_projection(
     staged_cells: &mut std::collections::BTreeMap<
         soland_storage::ConsentCellKey,
@@ -536,6 +570,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut outbox = self.federation_outbox.data.lock();
         let mut pairings = self.device_pairings.data.lock();
         let mut contacts = self.contacts.data.lock();
+        let mut contact_verified_mirrors = self.contact_verified_mirrors.data.lock();
         let mut invite_policies = self.invite_receive_policies.data.lock();
         let mut device_revocations = self.device_revocations.state.lock();
         let mut consent_cells = self.consent_cells.data.lock();
@@ -550,6 +585,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_event_outbox_ids = event_outbox_ids.clone();
         let mut staged_pairings = pairings.clone();
         let mut staged_contacts = contacts.clone();
+        let mut staged_contact_verified_mirrors = contact_verified_mirrors.clone();
         let mut staged_invite_policies = invite_policies.clone();
         let mut staged_device_revocations = device_revocations.clone();
         let mut staged_consent_cells = consent_cells.clone();
@@ -638,6 +674,10 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         stage_control_proposal_ack(&mut staged_control_proposal_acks, &request)?;
         stage_event_governance_dependencies(&mut staged_governance_dependencies, &request)?;
         stage_contact_projection(&mut staged_contacts, request.contact_projection.as_ref())?;
+        stage_contact_verified_mirror(
+            &mut staged_contact_verified_mirrors,
+            request.contact_projection.as_ref(),
+        )?;
         stage_consent_projection(
             &mut staged_consent_cells,
             &mut staged_account_data,
@@ -719,6 +759,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *event_outbox_ids = staged_event_outbox_ids;
         *pairings = staged_pairings;
         *contacts = staged_contacts;
+        *contact_verified_mirrors = staged_contact_verified_mirrors;
         *invite_policies = staged_invite_policies;
         *device_revocations = staged_device_revocations;
         *consent_cells = staged_consent_cells;
@@ -761,6 +802,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut applets = self.applets.records.lock();
         let mut pairings = self.device_pairings.data.lock();
         let mut contacts = self.contacts.data.lock();
+        let mut contact_verified_mirrors = self.contact_verified_mirrors.data.lock();
         let mut invite_policies = self.invite_receive_policies.data.lock();
         let mut device_revocations = self.device_revocations.state.lock();
         let mut agent_membership_cascades = self.agent_membership_cascades.data.lock();
@@ -775,6 +817,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_applets = applets.clone();
         let mut staged_pairings = pairings.clone();
         let mut staged_contacts = contacts.clone();
+        let mut staged_contact_verified_mirrors = contact_verified_mirrors.clone();
         let mut staged_invite_policies = invite_policies.clone();
         let mut staged_device_revocations = device_revocations.clone();
         let mut staged_agent_membership_cascades = agent_membership_cascades.clone();
@@ -878,6 +921,10 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             let event_id = event_request.event.event_id.clone();
             stage_contact_projection(
                 &mut staged_contacts,
+                event_request.contact_projection.as_ref(),
+            )?;
+            stage_contact_verified_mirror(
+                &mut staged_contact_verified_mirrors,
                 event_request.contact_projection.as_ref(),
             )?;
             if let Some(policy) = event_request
@@ -1056,6 +1103,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *applets = staged_applets;
         *pairings = staged_pairings;
         *contacts = staged_contacts;
+        *contact_verified_mirrors = staged_contact_verified_mirrors;
         *invite_policies = staged_invite_policies;
         *device_revocations = staged_device_revocations;
         *agent_membership_cascades = staged_agent_membership_cascades;

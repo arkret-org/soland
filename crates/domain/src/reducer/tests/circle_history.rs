@@ -62,6 +62,25 @@ fn seed_state(history_access: &str) -> (ProjectionState, ServerHlc, chrono::Date
 }
 
 #[test]
+fn circle_lifecycle_reads_canonical_target_ref() {
+    let (mut state, hlc, _) = seed_state("since_join");
+    let archive = make_operation(
+        arkret_wire::EventKind::CircleArchive,
+        REALM,
+        serde_json::json!({"target_ref": CIRCLE}),
+    );
+
+    assert!(matches!(
+        state.apply(&archive, &hlc),
+        ProjectionEffect::CircleLifecycle {
+            new_state: CircleLifecycleState::Archived,
+            ..
+        }
+    ));
+    assert_eq!(state.circles[CIRCLE].state, CircleLifecycleState::Archived);
+}
+
+#[test]
 fn circle_history_uses_current_join_boundary() {
     let (mut state, hlc, base) = seed_state("since_join");
     let invite_at = base + Duration::minutes(10);

@@ -293,7 +293,8 @@ impl NotificationStore for PgNotificationStore {
               notification_kind, event_kind, source_actor_id, priority, state, preview, \
               created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
-             ON CONFLICT (recipient_id, source_event_id, notification_kind) DO UPDATE SET \
+             ON CONFLICT (recipient_id, source_event_id, notification_kind) \
+              WHERE source_event_id IS NOT NULL DO UPDATE SET \
               source_ref = EXCLUDED.source_ref, \
               strand_id = EXCLUDED.strand_id, \
               track_name = EXCLUDED.track_name, \

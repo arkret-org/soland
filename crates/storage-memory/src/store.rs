@@ -62,7 +62,7 @@ pub struct SolandMemoryPersistenceStore {
     sessions: MemorySessionStore,
     pub(crate) account_data: MemoryAccountDataStore,
     pub(crate) contacts: MemoryContactStore,
-    contact_verified_mirrors: MemoryContactVerifiedMirrorStore,
+    pub(crate) contact_verified_mirrors: MemoryContactVerifiedMirrorStore,
     pub(crate) invite_receive_policies: MemoryInviteReceivePolicyStore,
     invite_locators: MemoryInviteLocatorStore,
     pub(crate) consent_cells: MemoryConsentCellStore,

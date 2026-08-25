@@ -904,6 +904,23 @@ pub(in crate::routing) fn submit_one_error_to_app_error(
     detail: &str,
 ) -> AppError {
     let message = format!("{context}: {detail}");
+    // These Circle operation contracts expose their semantic discriminator as
+    // the top-level wire code, not merely as a nested reducer reason. Ordinary
+    // admission already chose the required HTTP class; preserve that exact
+    // code when a convenience endpoint translates SubmitOneError to AppError.
+    if matches!(
+        code.as_str(),
+        "circle_member_must_be_realm_member" | "circle_member_manage_capability_required"
+    ) {
+        let mapped = if status == StatusCode::FORBIDDEN {
+            ErrorCode::CapabilityDenied
+        } else {
+            ErrorCode::SchemaViolation
+        };
+        return AppError::new(mapped, message)
+            .with_status(status)
+            .with_wire_code(code);
+    }
     if let Some(mapped) = ErrorCode::from_wire(&code) {
         return AppError::new(mapped, message).with_status(status);
     }
