@@ -27,7 +27,7 @@ use arkret_wire::{
     HistoryEffectiveScope, Seal,
 };
 use chrono::{DateTime, Utc};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 use serde_json::Value;
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{
@@ -225,7 +225,8 @@ pub enum ProjectionEffectView {
 }
 
 pub struct StagedRealmBootstrap {
-    state: ProjectionState,
+    operations: Vec<ProjectedOperation>,
+    direct_conversation_founding: bool,
 }
 
 /// One reducer Operation paired with the registry-derived cell writes of the
@@ -369,6 +370,25 @@ impl From<ProjectionEffect> for ProjectionEffectView {
 }
 
 impl ProjectionService {
+    /// Acquire the process-wide history-authority CAS guard without parking a
+    /// Tokio worker thread.
+    ///
+    /// Several guarded operations bridge the synchronous Arkret state-store
+    /// traits to async PostgreSQL I/O. Under concurrent Realm sealing, a plain
+    /// `parking_lot::Mutex::lock` can park the last replacement worker while
+    /// the current guard holder is in `block_in_place(...block_on(...))`, so
+    /// the runtime can no longer drive the holder's I/O future. Marking lock
+    /// contention as blocking lets Tokio provision another worker and breaks
+    /// that starvation cycle without weakening the global CAS boundary.
+    fn history_authority_view_cas_guard(&self) -> MutexGuard<'_, ()> {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| self.history_authority_view_cas_lock.lock())
+            }
+            _ => self.history_authority_view_cas_lock.lock(),
+        }
+    }
+
     #[must_use]
     pub fn new(
         control_event_store: Arc<dyn ControlEventStore>,
@@ -1311,7 +1331,7 @@ impl ProjectionService {
     where
         F: Fn(&Event) -> Result<(), String> + Copy,
     {
-        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let _authority_guard = self.history_authority_view_cas_guard();
         let digest_suites = self.seal_digest_suites(seal)?;
         arkret_state::apply_seal_in_context(
             seal,
@@ -1339,7 +1359,7 @@ impl ProjectionService {
     where
         F: Fn(&Event) -> Result<(), String> + Copy,
     {
-        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let _authority_guard = self.history_authority_view_cas_guard();
         let digest_suites = self.seal_digest_suites(seal)?;
         arkret_state::apply_accepted_seal_in_context(
             seal,
@@ -1453,7 +1473,7 @@ impl ProjectionService {
         new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<Hash>,
     ) -> StoreResult<bool> {
-        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let _authority_guard = self.history_authority_view_cas_guard();
         self.event_seal_committer().commit_if_frontier(
             seal,
             digest_suite,
@@ -1469,7 +1489,7 @@ impl ProjectionService {
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
     ) -> StoreResult<()> {
-        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let _authority_guard = self.history_authority_view_cas_guard();
         self.seal_store().put(seal, digest_suite)
     }
 
@@ -1495,7 +1515,7 @@ impl ProjectionService {
         genesis: Value,
         reducer_profile: Value,
     ) {
-        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let _authority_guard = self.history_authority_view_cas_guard();
         let mut state = self.state.lock();
         for (cell, value) in [
             (arkret_wire::REALM_GENESIS_CELL, genesis),
@@ -1717,25 +1737,43 @@ impl ProjectionService {
         direct_conversation_founding: bool,
     ) -> Result<StagedRealmBootstrap, RealmBootstrapProjectionError> {
         let mut staged = self.state.lock().clone();
+        Self::apply_realm_bootstrap_to_state(
+            &mut staged,
+            operations,
+            direct_conversation_founding,
+            self.clock(),
+        )?;
+        Ok(StagedRealmBootstrap {
+            operations: operations.to_vec(),
+            direct_conversation_founding,
+        })
+    }
+
+    fn apply_realm_bootstrap_to_state(
+        state: &mut ProjectionState,
+        operations: &[ProjectedOperation],
+        direct_conversation_founding: bool,
+        clock: &ServerHlc,
+    ) -> Result<(), RealmBootstrapProjectionError> {
         for (index, projected) in operations.iter().enumerate() {
             let operation = &projected.operation;
             let effect =
                 if uses_validated_realm_bootstrap_facet_reducer(operation.event_kind.as_str()) {
-                    staged.apply_validated_realm_bootstrap_facet(operation, &projected.cell_writes)
+                    state.apply_validated_realm_bootstrap_facet(operation, &projected.cell_writes)
                 } else if operation.event_kind == arkret_wire::EventKind::MemberState {
                     if direct_conversation_founding {
-                        staged.apply_validated_direct_conversation_bootstrap_membership(
+                        state.apply_validated_direct_conversation_bootstrap_membership(
                             operation,
                             &projected.cell_writes,
                         )
                     } else {
-                        staged.apply_validated_realm_bootstrap_membership(
+                        state.apply_validated_realm_bootstrap_membership(
                             operation,
                             &projected.cell_writes,
                         )
                     }
                 } else {
-                    staged.apply_projected(operation, &projected.cell_writes, self.clock())
+                    state.apply_projected(operation, &projected.cell_writes, clock)
                 };
             match effect {
                 ProjectionEffect::Rejected { reason } => {
@@ -1755,11 +1793,24 @@ impl ProjectionService {
                 _ => {}
             }
         }
-        Ok(StagedRealmBootstrap { state: staged })
+        Ok(())
     }
 
-    pub fn install_staged_realm_bootstrap(&self, staged: StagedRealmBootstrap) {
-        self.install_snapshot(staged.state);
+    pub fn install_staged_realm_bootstrap(
+        &self,
+        staged: StagedRealmBootstrap,
+    ) -> Result<(), RealmBootstrapProjectionError> {
+        let _authority_guard = self.history_authority_view_cas_guard();
+        let mut live = self.state.lock();
+        let mut merged = live.clone();
+        Self::apply_realm_bootstrap_to_state(
+            &mut merged,
+            &staged.operations,
+            staged.direct_conversation_founding,
+            self.clock(),
+        )?;
+        *live = merged;
+        Ok(())
     }
 
     pub fn effective_engine_grant(
@@ -2041,7 +2092,7 @@ impl ProjectionService {
     }
 
     pub fn install_snapshot(&self, state: ProjectionState) {
-        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let _authority_guard = self.history_authority_view_cas_guard();
         *self.state.lock() = state;
     }
 
@@ -2065,7 +2116,7 @@ impl ProjectionService {
         cell_writes: &[ProjectedCellWrite],
         hlc: &ServerHlc,
     ) -> ProjectionEffectView {
-        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let _authority_guard = self.history_authority_view_cas_guard();
         self.state
             .lock()
             .apply_projected(operation, cell_writes, hlc)
@@ -2078,7 +2129,7 @@ impl ProjectionService {
         cell_writes: &[ProjectedCellWrite],
         hlc: &ServerHlc,
     ) -> ProjectionEffectView {
-        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let _authority_guard = self.history_authority_view_cas_guard();
         let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
         self.state
             .lock()
@@ -2109,7 +2160,7 @@ impl ProjectionService {
         operations: &[(&Operation, &[ProjectedCellWrite])],
         hlc: &ServerHlc,
     ) -> Result<(), String> {
-        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let _authority_guard = self.history_authority_view_cas_guard();
         let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
         let mut state = self.state.lock();
         let mut staged = state.clone();
@@ -2398,7 +2449,7 @@ impl ProjectionService {
     }
 
     pub fn cache_cell(&self, cell_id: CellRef, value: Value) {
-        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let _authority_guard = self.history_authority_view_cas_guard();
         self.state
             .lock()
             .cells
@@ -2420,7 +2471,7 @@ impl ProjectionService {
         &self,
         realm_id: &RealmId,
     ) -> Result<(), arkret_state::StoreError> {
-        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let _authority_guard = self.history_authority_view_cas_guard();
         let mut resolved_cells = Vec::new();
         for cell in self.cell_store().list_cells(realm_id)? {
             let ops = self.cell_store().sealed_ops_for_cell(realm_id, &cell)?;
@@ -2635,7 +2686,7 @@ impl ProjectionService {
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
     ) -> bool {
-        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let _authority_guard = self.history_authority_view_cas_guard();
         let mut state = self.state.lock();
         match state.realm_states.get_mut(realm_id) {
             Some(realm) => match realm.owner.as_deref() {
@@ -2679,7 +2730,7 @@ impl ProjectionService {
         recipient_service_id: Option<String>,
         operation: &Operation,
     ) {
-        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let _authority_guard = self.history_authority_view_cas_guard();
         let delivery_status = recipient_service_id
             .as_ref()
             .map(|_| "routable".to_owned())
@@ -2753,7 +2804,7 @@ impl ProjectionService {
     }
 
     pub fn project_invite_creation(&self, operation: &Operation, invitee: &str) {
-        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let _authority_guard = self.history_authority_view_cas_guard();
         let event_ref = projection_event_ref(operation);
         let mut state = self.state.lock();
         let key = (operation.realm_id.as_str().to_owned(), invitee.to_owned());
@@ -2803,7 +2854,7 @@ impl ProjectionService {
         invitee: &str,
         reason: Option<String>,
     ) -> bool {
-        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let _authority_guard = self.history_authority_view_cas_guard();
         let mut state = self.state.lock();
         let key = (operation.realm_id.to_string(), invitee.to_owned());
         let Some(previous) = state.members.get(&key).cloned() else {
@@ -2979,7 +3030,7 @@ impl HistoryAuthorityViewCas for ProjectionService {
         attestation
             .validate()
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-        let _authority_guard = self.history_authority_view_cas_lock.lock();
+        let _authority_guard = self.history_authority_view_cas_guard();
         let views = &attestation.accepted_authority_views;
         let mut expected_bases = BTreeMap::<String, Vec<SealId>>::new();
         let mut insert_basis = |realm_id: &RealmId, leaves: &[SealId]| -> PersistenceResult<()> {
@@ -3208,6 +3259,78 @@ mod control_governance_health_tests {
             Arc::new(UnusedEventSealCommitter),
             "governance-health-test",
         )
+    }
+
+    #[test]
+    fn contended_history_authority_guard_does_not_starve_tokio_worker() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let service = Arc::new(service());
+        let held_lock = Arc::clone(&service.history_authority_view_cas_lock);
+        let (held_tx, held_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = held_lock.lock();
+            held_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        held_rx.recv().unwrap();
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let contending_service = Arc::clone(&service);
+        let (contending_tx, contending_rx) = mpsc::channel();
+        let contender = runtime.spawn(async move {
+            contending_tx.send(()).unwrap();
+            let _guard = contending_service.history_authority_view_cas_guard();
+        });
+        contending_rx.recv().unwrap();
+
+        let (progress_tx, progress_rx) = mpsc::channel();
+        let progress = runtime.spawn(async move {
+            progress_tx.send(()).unwrap();
+        });
+        let unrelated_task_progressed = progress_rx.recv_timeout(Duration::from_millis(500));
+
+        release_tx.send(()).unwrap();
+        runtime.block_on(async {
+            contender.await.unwrap();
+            progress.await.unwrap();
+        });
+        holder.join().unwrap();
+
+        assert!(
+            unrelated_task_progressed.is_ok(),
+            "CAS lock contention parked the runtime's only worker"
+        );
+    }
+
+    #[test]
+    fn staged_bootstrap_install_preserves_concurrent_projection_updates() {
+        let service = service();
+        let staged = service.stage_realm_bootstrap(&[], false).unwrap();
+        let now = Utc::now();
+        assert!(service.reconcile_realm_owner(
+            "ak:realm:concurrent-update",
+            "ak:did_core:webvh:concurrent-owner",
+            false,
+            now,
+            now,
+        ));
+
+        service.install_staged_realm_bootstrap(staged).unwrap();
+
+        assert!(
+            service
+                .snapshot()
+                .realm_states
+                .contains_key("ak:realm:concurrent-update"),
+            "installing a staged bootstrap discarded a concurrent Realm projection"
+        );
     }
 
     fn ackless_event(seed: &str) -> Event {

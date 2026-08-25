@@ -165,7 +165,15 @@ pub async fn install(
                     error.reason
                 ))
             })?;
-        state.projections().install_staged_realm_bootstrap(staged);
+        state
+            .projections()
+            .install_staged_realm_bootstrap(staged)
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "Realm fixture bootstrap projection merge failed: {}",
+                    error.reason
+                ))
+            })?;
     }
 
     json_ok(RealmFixtureInstallOutcome {

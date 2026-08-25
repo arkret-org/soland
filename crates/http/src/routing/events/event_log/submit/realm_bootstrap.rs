@@ -447,7 +447,17 @@ pub(super) async fn submit_realm_bootstrap_batch(
 
     state
         .projections()
-        .install_staged_realm_bootstrap(staged_projection);
+        .install_staged_realm_bootstrap(staged_projection)
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!(
+                    "committed Realm bootstrap could not merge into the live projection: {}",
+                    error.reason
+                ),
+            )
+        })?;
     for operation in &operations {
         crate::routing::events::projection::ensure_projected_realm(
             state,
