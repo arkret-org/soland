@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use arkret_identifiers::RealmId;
-use futures_util::stream::{self, StreamExt};
+use tokio::task::JoinSet;
 
 use crate::notary::NotaryWorker;
 use crate::state::AppState;
@@ -50,18 +50,37 @@ async fn run_reconciliation_pass(state: &AppState, holder: &str) {
             Vec::new()
         }
     };
-    let worker = NotaryWorker::for_service(state.service_id().clone());
     tracing::debug!(
         pending_realm_count = realms.len(),
         "control-seal reconciliation scanned durable pending index"
     );
-    let worker = &worker;
-    stream::iter(realms)
-        .for_each_concurrent(MAX_CONCURRENT_REALM_PASSES, |realm_id| async move {
-            run_realm_pass(state, worker, &realm_id, holder).await;
-        })
-        .await;
+    let mut passes = JoinSet::new();
+    for realm_id in realms {
+        while passes.len() >= MAX_CONCURRENT_REALM_PASSES {
+            join_next_realm_pass(&mut passes).await;
+        }
+        // Keep the signing state machine behind a Tokio task boundary. Polling
+        // it inline under the reconciliation loop and a concurrent stream
+        // driver retained the full Event/Seal admission chain on one worker
+        // stack and overflowed the default Windows worker stack after a Realm
+        // bootstrap Seal completed.
+        let state = state.clone();
+        let holder = holder.to_owned();
+        passes.spawn(async move {
+            let worker = NotaryWorker::for_service(state.service_id().clone());
+            run_realm_pass(&state, &worker, &realm_id, &holder).await;
+        });
+    }
+    while !passes.is_empty() {
+        join_next_realm_pass(&mut passes).await;
+    }
     run_device_revocation_cleanup_pass(state).await;
+}
+
+async fn join_next_realm_pass(passes: &mut JoinSet<()>) {
+    if let Some(Err(error)) = passes.join_next().await {
+        tracing::error!(%error, "isolated control-seal Realm pass failed");
+    }
 }
 
 async fn run_device_revocation_cleanup_pass(state: &AppState) {

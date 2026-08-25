@@ -96,6 +96,17 @@ async fn prepare_alice(state: &AppState) -> String {
 /// Move under `ScopeRef::Realm` — three ways of asserting a Realm the receiver
 /// derives for itself.
 async fn bootstrap_realm(state: &AppState, token: &str, title: &str) -> String {
+    let realm_id = submit_realm_bootstrap(state, token, title).await;
+    // Admin Control Moves need an accepted Seal to cite; wait for the
+    // coordinator to materialize the bootstrap Seal.
+    accepted_seal_frontier(state, token, &realm_id).await;
+    realm_id
+}
+
+/// Submit a complete Realm bootstrap without waiting for its first Seal. This
+/// lets concurrency tests accumulate multiple durable pending Realms before
+/// starting the coordinator.
+async fn submit_realm_bootstrap(state: &AppState, token: &str, title: &str) -> String {
     let genesis = CallerSignedEvent::realm_genesis(
         ALICE,
         ALICE_DEVICE,
@@ -185,9 +196,6 @@ async fn bootstrap_realm(state: &AppState, token: &str, title: &str) -> String {
         panic!("Realm create failed with {create_status:?}: {error}");
     }
     grant_policy_manage(state, &realm_id);
-    // Admin Control Moves need an accepted Seal to cite; wait for the
-    // coordinator to materialize the bootstrap Seal.
-    accepted_seal_frontier(state, token, &realm_id).await;
     realm_id
 }
 
@@ -565,6 +573,52 @@ async fn link_governed_by(state: &AppState, token: &str, realm_id: &str, target:
     .await
     .unwrap();
     assert_eq!(body["status"], "active", "governed_by link: {body}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn control_seal_coordinator_drains_multiple_bounded_concurrency_waves() {
+    const REALM_COUNT: usize = 32;
+
+    let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
+    let state = soland_test_support::app_state_with_persistence(test_config(), persistence).await;
+    let token = prepare_alice(&state).await;
+    let mut realms = Vec::with_capacity(REALM_COUNT);
+    for index in 0..REALM_COUNT {
+        realms.push(
+            submit_realm_bootstrap(
+                &state,
+                &token,
+                &format!("bounded control-seal Realm {index}"),
+            )
+            .await,
+        );
+    }
+    for realm_id in &realms {
+        let response = TestClient::query("http://server/_arkret/self/seals/frontier")
+            .json(
+                &arkret_models_collaboration::event_query::SealFrontierRequestBody {
+                    realm_id: RealmId::new(realm_id.clone()).expect("fixture pending Realm id"),
+                },
+            )
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await;
+        assert_eq!(
+            response.status_code,
+            Some(StatusCode::SERVICE_UNAVAILABLE),
+            "every Realm must remain pending before the coordinator starts"
+        );
+    }
+
+    let control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
+    for realm_id in &realms {
+        accepted_seal_frontier(&state, &token, realm_id).await;
+    }
+    assert!(
+        !control_seal_coordinator.is_finished(),
+        "the coordinator must survive every bounded concurrency wave"
+    );
+    control_seal_coordinator.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]
