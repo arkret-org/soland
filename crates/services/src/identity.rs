@@ -118,6 +118,26 @@ impl arkret_wire::PayloadSigner for FrozenEd25519NotarySigner {
             jws,
         })
     }
+
+    fn sign_notary_payload_with_digest_suite(
+        &self,
+        canonical_bytes: &[u8],
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> arkret_wire::Result<arkret_wire::PayloadSignature> {
+        let payload_digest = Hash::new(arkret_canonical::digest(digest_suite, canonical_bytes))?;
+        let jws = sign_ed25519_frozen_notary_jws(
+            canonical_bytes,
+            &self.verification_method,
+            &self.signing_key,
+        )
+        .map_err(arkret_wire::WireError::Protocol)?;
+        Ok(arkret_wire::PayloadSignature {
+            verification_method: self.verification_method.clone(),
+            payload_digest,
+            created_at: Utc::now(),
+            jws,
+        })
+    }
 }
 
 /// A consent cell is addressed by its subject: `consent_id` is the cell

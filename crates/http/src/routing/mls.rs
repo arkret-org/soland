@@ -52,7 +52,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::Signer as _;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
-use serde_json::{Value, json};
+use serde_json::Value;
 use soland_domain::reducer::mls::KeyPackageTrustBinding;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
@@ -3742,14 +3742,8 @@ async fn verify_agent_keypackage_batch(
         .as_slice()
         .try_into()
         .map_err(|_| "claim_generation_mismatch".to_owned())?;
-    let public_key_value = json!({
-        "kty": "OKP",
-        "kid": verification_method,
-        "algorithm": "Ed25519",
-        "key": URL_SAFE_NO_PAD.encode(public_key),
-    });
     let actual_public_key_digest =
-        arkret_signatures::agent::agent_runtime_public_key_digest(&public_key_value)
+        arkret_signatures::agent_evidence::agent_signing_public_key_digest(&binding.public_key)
             .map_err(|_| "claim_generation_mismatch".to_owned())?;
     if actual_public_key_digest.as_str() != expected_public_key_digest
         || signature.kid.as_str() != verification_method
@@ -4647,6 +4641,7 @@ fn unix_millis_datetime(timestamp_millis: i64) -> Result<DateTime<Utc>, AppError
 #[cfg(test)]
 mod trust_binding_tests {
     use super::*;
+    use serde_json::json;
 
     fn pairwise_endpoint(seed: [u8; 32]) -> (arkret_wire::DidCoreId, arkret_wire::DidUrl) {
         let key = ed25519_dalek::SigningKey::from_bytes(&seed)
@@ -4743,21 +4738,13 @@ mod trust_binding_tests {
         let principal =
             arkret_identifiers::DidFullId::new("did:web:agent.example".to_owned()).unwrap();
         let principal_core = arkret_wire::project_full_id_to_core_id(&principal).unwrap();
-        let device = arkret_identifiers::DeviceId::new(
-            "ak:device:01904100-0000-7000-8000-00000000000f".to_owned(),
-        )
-        .unwrap();
         let verification_method = "did:web:agent.example#runtime-1";
         let signing_seed = [17_u8; 32];
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&signing_seed);
-        let public_key_value = json!({
-            "kty": "OKP",
-            "kid": verification_method,
-            "algorithm": "Ed25519",
-            "key": URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
-        });
-        let public_key_digest =
-            arkret_signatures::agent::agent_runtime_public_key_digest(&public_key_value).unwrap();
+        let public_key_digest = arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
+            signing_key.verifying_key().to_bytes(),
+        ))
+        .unwrap();
         let realm_id = arkret_identifiers::RealmId::new(
             "ak:realm:AYKC0LicsGtFBq78orvaQecIZl8Bxv9zAaV4Eg66tdIr".to_owned(),
         )
@@ -4816,8 +4803,31 @@ mod trust_binding_tests {
             AgentLifecycleState::Active,
             now(),
         );
+        let signing_key_binding = serde_json::from_value(json!({
+            "schema": "ak.schema.agent_signing_key_binding.v1",
+            "agent_id": principal_core.as_str(),
+            "agent_key_id": "ak:agent_key:01904100-0000-7000-8000-00000000000f",
+            "verification_method": verification_method,
+            "public_key": {
+                "kty": "OKP",
+                "algorithm": "Ed25519",
+                "key": URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes())
+            },
+            "public_key_digest": public_key_digest.as_str(),
+            "agent_key_authorize_event_id": authorize_event_id,
+            "issued_at": "2026-01-01T00:00:00.000Z",
+            "controller_id": "ak:did_core:web:alice.example",
+            "controller_proof": {
+                "kind": "controller_signature",
+                "verification_method": "did:web:alice.example#managed-controller",
+                "jws": "proof"
+            }
+        }))
+        .unwrap();
         agent.authorized_event_ref = Some(authorize_event_id.clone());
         agent.authorized_verification_method = Some(verification_method.to_owned());
+        agent.authorized_public_key_digest = Some(public_key_digest.to_string());
+        agent.authorized_signing_key_binding = Some(signing_key_binding);
         state.agent_pairings().save_agent(agent).await.unwrap();
 
         let mut authorize_projection = arkret_event_draft::test_support::raw_projected_operation(
@@ -4846,12 +4856,13 @@ mod trust_binding_tests {
             soland_domain::reducer::ProjectionEffect::AgentKeyAuthorizeProjected { .. }
         ));
 
-        let identity = arkret_mls::ArkretMlsIdentity::from_native_agent_signing_seed(
+        let identity = arkret_mls::ArkretMlsIdentity::new_native_agent(
             principal_core.clone(),
-            device.clone(),
             arkret_wire::DidUrl::new(verification_method.to_owned()).unwrap(),
             arkret_wire::EventId::new(authorize_event_id.clone()).unwrap(),
-            signing_seed,
+            arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
+                ed25519_dalek::SigningKey::from_bytes(&signing_seed),
+            ),
         )
         .unwrap();
         let record = identity.key_package_record().unwrap();
@@ -4879,13 +4890,12 @@ mod trust_binding_tests {
     fn pairwise_keypackage_upload_binds_outer_signature_leaf_actor_and_leaf_key() {
         let seed = [19_u8; 32];
         let (pairwise_actor, method) = pairwise_endpoint(seed);
-        let identity = arkret_mls::ArkretMlsIdentity::from_minimal_metadata_ed25519_signing_seed(
-            arkret_wire::DidCoreId::new("ak:did_core:webvh:z6mkprivateowner".to_owned()).unwrap(),
-            arkret_wire::DeviceId::new("ak:device:01964137-0000-7000-8000-000000000001".to_owned())
-                .unwrap(),
+        let identity = arkret_mls::ArkretMlsIdentity::new_minimal_metadata_pairwise(
             pairwise_actor.clone(),
             method.clone(),
-            seed,
+            arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
+                ed25519_dalek::SigningKey::from_bytes(&seed),
+            ),
         )
         .unwrap();
         let record = identity.key_package_record().unwrap();
@@ -4916,19 +4926,14 @@ mod trust_binding_tests {
 
         let other_seed = [23_u8; 32];
         let (other_actor, other_method) = pairwise_endpoint(other_seed);
-        let other_identity =
-            arkret_mls::ArkretMlsIdentity::from_minimal_metadata_ed25519_signing_seed(
-                arkret_wire::DidCoreId::new("ak:did_core:webvh:z6mkprivateowner".to_owned())
-                    .unwrap(),
-                arkret_wire::DeviceId::new(
-                    "ak:device:01964137-0000-7000-8000-000000000002".to_owned(),
-                )
-                .unwrap(),
-                other_actor,
-                other_method,
-                other_seed,
-            )
-            .unwrap();
+        let other_identity = arkret_mls::ArkretMlsIdentity::new_minimal_metadata_pairwise(
+            other_actor,
+            other_method,
+            arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
+                ed25519_dalek::SigningKey::from_bytes(&other_seed),
+            ),
+        )
+        .unwrap();
         let other_record = other_identity.key_package_record().unwrap();
         let other_bytes = URL_SAFE_NO_PAD
             .decode(other_record.keypackage.as_str())
