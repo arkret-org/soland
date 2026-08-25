@@ -22,17 +22,6 @@ const DEFAULT_APPLICATION_TTL: &str = "PT168H";
 const DEFAULT_COOLDOWN_AFTER_REJECT: &str = "PT72H";
 
 #[derive(Clone, Debug)]
-pub struct MemberApplicationView {
-    pub applicant_actor_id: String,
-    pub application_receipt_digest: String,
-    pub status: String,
-    pub submitted_at: String,
-    pub private_body: Option<Value>,
-    pub application_pending: Option<bool>,
-    pub latest_review_ref: Option<String>,
-}
-
-#[derive(Clone, Debug)]
 pub struct MemberApplicationState {
     pub realm_id: String,
     pub applicant: String,

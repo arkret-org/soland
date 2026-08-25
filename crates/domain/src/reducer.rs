@@ -88,7 +88,6 @@ pub const READ_CURSOR_CAUSAL_RELATION_CONTEXT: &str = "read_cursor_causal_relati
 // (which takes priority over the glob for that name).
 pub use apply_capability::{engine_grant_from_capability_cell_state, engine_grant_from_cell_body};
 pub(crate) use apply_member_application::MemberApplicationState;
-pub use apply_member_application::MemberApplicationView;
 pub use capability_derivation::inheritance_allowed_policies;
 pub(crate) use capability_derivation::*;
 pub(crate) use dispatch::{APPLY_REGISTRY, extract_event_ref_id, upsert_realm_link};
@@ -117,15 +116,16 @@ pub use projections::{
     AgentActionApprovalProjection, AgentActionRequestProjection, AgentActionRequestStatus,
     AppletProjection, CapabilityDerivedState, CircleLifecycleState, CircleMembershipState,
     CircleProjection, DocumentVersionProjection, ErasureReceiptRecord, InviteProjection,
-    KeyPackageLifetime, MessageState, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage,
-    MlsRemoveObligation, MlsRemoveProposal, MlsWelcome, MlsWelcomeQueueKey, MorphProjection,
-    ObjectLifecycleState, PendingReplayEntry, PinProjection, PollOptionState, PollState,
-    PollVoteState, ProjectedMessageView, PushRouteCellValue, PushRouteSubject, ReactionState,
-    RealmInheritancePolicyState, RealmLinkState, RealmOrganizationStatementState,
-    RealmPolicyServerConfig, RealmPolicyServerHead, RedactionCellValue, RsvpHead, RsvpProjection,
-    SidecarContextProjection, SidecarProjection, SolandKeyBackupActiveSeries,
-    SolandMembershipState, SolandRealmState, SolandRelationState, SpaceContainerLifecycleState,
-    SpaceContainerProjection, StrandProjection, StrandWatchProjection,
+    KeyPackageLifetimeProjection, MessageState, MlsCommitEpoch, MlsCommitEpochKey,
+    MlsKeyPackageProjection, MlsRemoveObligation, MlsRemoveProposal, MlsWelcome,
+    MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState, PendingReplayEntry, PinProjection,
+    PollOptionState, PollState, PollVoteState, ProjectedMessageView, PushRouteCellValue,
+    PushRouteSubject, ReactionState, RealmInheritancePolicyState, RealmLinkState,
+    RealmOrganizationStatementState, RealmPolicyServerConfig, RealmPolicyServerHead,
+    RedactionCellValue, RsvpHead, RsvpProjection, SidecarContextProjection, SidecarProjection,
+    SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState, SolandRelationState,
+    SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
+    StrandWatchProjection,
 };
 pub(crate) use projections::{
     CallFsmHead, operation_history_basis_seals, space_container_id_from_payload,

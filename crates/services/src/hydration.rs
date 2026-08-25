@@ -687,10 +687,10 @@ pub async fn hydrate_projections_from_persistence(
     projection_adapter: &dyn HydrationProjectionAdapter,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::{
-        CircleLifecycleState, CircleMembershipState, CircleProjection, KeyPackageLifetime,
-        MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage, MlsWelcome, MorphProjection,
-        ObjectLifecycleState, SpaceContainerLifecycleState, SpaceContainerProjection,
-        StrandProjection, StrandWatchProjection,
+        CircleLifecycleState, CircleMembershipState, CircleProjection,
+        KeyPackageLifetimeProjection, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackageProjection,
+        MlsWelcome, MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
+        SpaceContainerProjection, StrandProjection, StrandWatchProjection,
     };
 
     let hydration_hlc = soland_domain::hlc::ServerHlc::new("soland:projection-hydration");
@@ -1043,7 +1043,7 @@ pub async fn hydrate_projections_from_persistence(
         for row in rows {
             proj.mls_key_packages.insert(
                 row.id.clone(),
-                MlsKeyPackage {
+                MlsKeyPackageProjection {
                     id: row.id,
                     keypackage_ref: row.keypackage_ref,
                     keypackage_digest: row.keypackage_digest,
@@ -1051,7 +1051,7 @@ pub async fn hydrate_projections_from_persistence(
                     device_id: row.device_id,
                     endpoint_verification_method: row.endpoint_verification_method,
                     intended_realm_id: row.intended_realm_id,
-                    lifetime: KeyPackageLifetime {
+                    lifetime: KeyPackageLifetimeProjection {
                         not_before: row.lifetime_not_before,
                         not_after: row.lifetime_not_after,
                     },

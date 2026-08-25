@@ -912,10 +912,6 @@ impl ProjectionService {
         self.seal_store().predecessors_known(predecessor_refs)
     }
 
-    pub fn genesis_seal_id(&self, realm_id: &RealmId) -> StoreResult<Option<SealId>> {
-        self.seal_store().genesis(realm_id)
-    }
-
     pub fn seal_successors(
         &self,
         realm_id: &RealmId,

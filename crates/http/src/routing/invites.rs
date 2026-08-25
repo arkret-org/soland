@@ -273,7 +273,7 @@ async fn peer_invites_submit(
                 super::events::peer::schema_violation(violation.message())
                     .with_wire_code(violation.error_code())
             })?;
-    let request_hash = canonical_digest(&body)?;
+    let request_hash = crate::util::canonical_digest(&body)?;
     let session = SessionRecord {
         token_hash: format!(
             "peer-invite:{}:{request_hash}",
@@ -459,7 +459,7 @@ async fn receive_private_invite_delivery(
             "introduction_kind": delivery.introduction_evidence.kind(),
             "effective_kind": decision.effective_kind,
             "trust_tier": decision.trust_tier.as_str(),
-            "request_canonical_digest": canonical_digest(body)?,
+            "request_canonical_digest": crate::util::canonical_digest(body)?,
             "event_canonical_digest": event_canonical_digest,
             "projection": "holder_private_invite",
             "credential_delivered": credential_delivered,
@@ -1146,8 +1146,9 @@ async fn persist_invite_quarantine_entry(
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned);
-    let invite_event_digest = canonical_digest(body.get("invite_event").unwrap_or(&Value::Null))?;
-    let request_digest = canonical_digest(body)?;
+    let invite_event_digest =
+        crate::util::canonical_digest(body.get("invite_event").unwrap_or(&Value::Null))?;
+    let request_digest = crate::util::canonical_digest(body)?;
     let idempotency_key_digest =
         format!("sha256:{}", sha256_hex(delivery.idempotency_key.as_bytes()));
     let entry_digest = format!(
@@ -1259,11 +1260,6 @@ async fn persist_invite_quarantine_entry(
     )
     .await;
     Ok(true)
-}
-
-fn canonical_digest(value: &Value) -> Result<String, AppError> {
-    canonical::canonical_sha256(value)
-        .map_err(|error| AppError::internal(format!("canonical invite digest failed: {error}")))
 }
 
 fn invite_quarantine_entry_active(entry: &Value, at: chrono::DateTime<chrono::Utc>) -> bool {

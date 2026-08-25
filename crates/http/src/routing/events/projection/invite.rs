@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{DidCoreId, RealmId};
+use arkret_models_collaboration::governance::membership_invite::InviteClaimPayload;
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 use arkret_wire::PlaintextDataClassKind;
@@ -538,21 +539,16 @@ pub(super) async fn project_invite_claim_operation(state: &AppState, operation: 
     if !kinds::operation_is_invite_claim(operation) {
         return;
     }
-    let Some(payload) = operation.payload.as_object() else {
+    let Ok(claim) = serde_json::from_value::<InviteClaimPayload>(operation.payload.clone()) else {
         return;
     };
-    let Some(invite_id) = string_field(payload, "invite_id") else {
+    if claim.validate().is_err() {
         return;
-    };
-    let Some(subject_id) = string_field(payload, "subject_id") else {
-        return;
-    };
-    let Some(token_commitment) = string_field(payload, "token_commitment") else {
-        return;
-    };
-    let Some(claim_nonce) = string_field(payload, "claim_nonce") else {
-        return;
-    };
+    }
+    let invite_id = claim.invite_id.as_str().to_owned();
+    let subject_id = claim.subject_id.as_str().to_owned();
+    let token_commitment = claim.token_commitment.as_str().to_owned();
+    let claim_nonce = claim.claim_nonce.clone();
     let invites = state.realm_invites();
     let Ok(Some(mut record)) = invites.get(&invite_id).await else {
         return;
@@ -592,13 +588,7 @@ pub(super) async fn project_invite_claim_operation(state: &AppState, operation: 
         let _ = invites.put(record).await;
         return;
     }
-    if !claim_binding_matches(
-        &record,
-        payload,
-        &subject_id,
-        &claim_nonce,
-        operation.created_at,
-    ) {
+    if !claim_binding_matches(&record, &claim, operation.created_at) {
         let _ = invites.put(record).await;
         return;
     }
@@ -859,32 +849,11 @@ fn remove_third_party_active_material(
 
 fn claim_binding_matches(
     record: &RealmInviteRecord,
-    payload: &serde_json::Map<String, Value>,
-    subject_id: &str,
-    claim_nonce: &str,
+    claim: &InviteClaimPayload,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
-    let Some(binding) = payload.get("binding_proof").and_then(Value::as_object) else {
-        return false;
-    };
-    if binding.get("subject_id").and_then(Value::as_str) != Some(subject_id) {
-        return false;
-    }
-    if binding.get("realm_id").and_then(Value::as_str) != Some(record.realm_id.as_str()) {
-        return false;
-    }
-    if binding.get("audience").and_then(Value::as_str) != Some("arkret.invite.claim") {
-        return false;
-    }
-    if binding.get("claim_nonce").and_then(Value::as_str) != Some(claim_nonce) {
-        return false;
-    }
-    let Some(service_id) = binding
-        .get("verification_service_id")
-        .and_then(Value::as_str)
-    else {
-        return false;
-    };
+    let binding = &claim.binding_proof;
+    let service_id = binding.verification_service_id.as_str();
     if record
         .third_party_invite
         .as_ref()
@@ -893,15 +862,16 @@ fn claim_binding_matches(
     {
         return false;
     }
-    let Some(expires_at) = binding
-        .get("expires_at")
-        .and_then(Value::as_str)
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+    let Some(expires_at) = chrono::DateTime::parse_from_rfc3339(&binding.expires_at)
+        .ok()
         .map(|value| value.with_timezone(&chrono::Utc))
     else {
         return false;
     };
-    expires_at > now
+    binding.subject_id == claim.subject_id
+        && binding.realm_id.as_str() == record.realm_id
+        && binding.claim_nonce == claim.claim_nonce
+        && expires_at > now
         && record
             .expires_at
             .is_none_or(|invite_expiry| expires_at <= invite_expiry)

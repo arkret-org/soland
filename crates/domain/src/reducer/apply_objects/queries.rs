@@ -50,15 +50,6 @@ impl ProjectionState {
         })
     }
 
-    pub fn redaction_key_for_message_target(&self, target_ref: &str) -> String {
-        if target_ref.trim().is_empty() {
-            return String::new();
-        }
-        self.message_by_target_ref(target_ref)
-            .map(|message| message.event_id.clone())
-            .unwrap_or_else(|| target_ref.to_owned())
-    }
-
     pub fn redaction_cell_for_message(
         &self,
         message: &MessageState,

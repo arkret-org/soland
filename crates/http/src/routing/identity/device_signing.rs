@@ -10,6 +10,7 @@ use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::Value;
 use soland_services::identity::{FindDeviceQuery, RecoveryPolicyState};
 
+use super::device_signature_kid_points_to_device_key;
 use crate::state::AppState;
 
 pub(crate) fn device_quorum_method_matches(
@@ -276,35 +277,6 @@ fn verify_welcome_signature_with_key(
     Ok(())
 }
 
-fn verification_method_controller(verification_method: &str) -> &str {
-    let no_query = verification_method
-        .split_once('?')
-        .map(|(head, _)| head)
-        .unwrap_or(verification_method);
-    no_query
-        .split_once('#')
-        .map(|(head, _)| head)
-        .unwrap_or(no_query)
-}
-
-fn device_signature_kid_points_to_device_key(
-    kid: &str,
-    actor: &str,
-    device_public_key: &str,
-) -> bool {
-    let expected_principal_id_key = device_public_key
-        .strip_prefix("did:key:")
-        .map_or_else(|| format!("did:key:{device_public_key}"), str::to_owned);
-    kid == expected_principal_id_key
-        || kid
-            .strip_prefix(&expected_principal_id_key)
-            .is_some_and(|rest| rest.starts_with('#') || rest.starts_with('?'))
-        || verification_method_controller(kid) == actor
-        || arkret_wire::DidFullId::new(verification_method_controller(kid).to_owned())
-            .and_then(|controller| arkret_wire::project_full_id_to_core_id(&controller))
-            .is_ok_and(|controller| controller.as_str() == actor)
-}
-
 pub(crate) struct DeviceSigningDirectoryFacet {
     pub signing_key_did: Option<String>,
     pub hpke_key: Option<String>,
@@ -457,21 +429,7 @@ pub(crate) fn ed25519_verify(key: &VerifyingKey, message: &[u8], signature_b64: 
 
 #[cfg(test)]
 mod tests {
-    use super::{device_quorum_method_matches, device_signature_kid_points_to_device_key};
-
-    #[test]
-    fn device_signature_kid_projects_full_controller_to_core_actor() {
-        assert!(device_signature_kid_points_to_device_key(
-            "did:web:alice.example#ak:device:primary",
-            "ak:did_core:web:alice.example",
-            "z6MkAuthorizedDeviceKey",
-        ));
-        assert!(!device_signature_kid_points_to_device_key(
-            "did:web:mallory.example#ak:device:primary",
-            "ak:did_core:web:alice.example",
-            "z6MkAuthorizedDeviceKey",
-        ));
-    }
+    use super::device_quorum_method_matches;
 
     #[test]
     fn device_quorum_method_requires_a_concrete_verification_method() {

@@ -1697,45 +1697,10 @@ pub enum ClaimMlsKeyPackageTarget<'a> {
     Revoke,
 }
 
-pub use soland_storage::{PersistedKeyPackageClaimState, PersistedKeyPackageReusePolicy};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MlsKeyPackageState {
-    pub id: String,
-    pub keypackage_ref: String,
-    pub keypackage_digest: String,
-    pub actor_id: String,
-    pub device_id: Option<String>,
-    pub endpoint_verification_method: Option<String>,
-    pub intended_realm_id: Option<String>,
-    pub key_package_bytes: Vec<u8>,
-    pub capabilities: Vec<String>,
-    pub capabilities_digest: String,
-    pub last_resort: bool,
-    pub last_resort_realm_id: Option<String>,
-    pub lifetime_not_before: i64,
-    pub lifetime_not_after: i64,
-    pub claimed_by_mls_group_id: Option<String>,
-    pub device_authorize_event_id: Option<String>,
-    pub agent_key_authorize_event_id: Option<String>,
-    pub claimed_at: Option<i64>,
-    pub claim_expires_at_unix_ms: Option<i64>,
-    pub consumed_at: Option<i64>,
-    pub created_at: i64,
-}
-
-impl MlsKeyPackageState {
-    pub fn lifecycle(&self) -> Result<soland_storage::PersistedKeyPackageLifecycle, String> {
-        soland_storage::classify_key_package_lifecycle(
-            self.last_resort,
-            self.last_resort_realm_id.as_deref(),
-            self.claimed_by_mls_group_id.as_deref(),
-            self.claimed_at,
-            self.claim_expires_at_unix_ms,
-            self.consumed_at,
-        )
-    }
-}
+pub use soland_storage::{
+    MlsKeyPackageRow as MlsKeyPackageState, PersistedKeyPackageClaimState,
+    PersistedKeyPackageReusePolicy,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PeerKeyPackageClaimLedgerState {

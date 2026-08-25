@@ -290,11 +290,9 @@ fn canonical_document_digest(document: &DidDocument) -> Result<Hash, AppError> {
 }
 
 fn canonical_digest(value: &impl serde::Serialize) -> Result<Hash, AppError> {
-    Hash::new(
-        arkret_canonical::canonical_sha256(value)
-            .map_err(|error| AppError::internal(format!("canonical digest failed: {error}")))?,
-    )
-    .map_err(|error| AppError::internal(format!("canonical digest is invalid: {error}")))
+    let digest = crate::util::canonical_digest(value)?;
+    Hash::new(digest)
+        .map_err(|error| AppError::internal(format!("canonical digest is invalid: {error}")))
 }
 
 fn validate_did_web_coordinates(

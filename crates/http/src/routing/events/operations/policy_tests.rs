@@ -1200,7 +1200,7 @@ async fn register_native_agent_membership_context(
         .apply(&authorize_projection, state.hlc());
     state.test_projection().lock().mls_key_packages.insert(
         "keypackage-01904100-0000-7000-8000-0000000007d1".to_owned(),
-        soland_domain::reducer::MlsKeyPackage {
+        soland_domain::reducer::MlsKeyPackageProjection {
             id: "keypackage-01904100-0000-7000-8000-0000000007d1".to_owned(),
             keypackage_ref: "keypackage-01904100-0000-7000-8000-0000000007d1".to_owned(),
             keypackage_digest: format!("sha256:{}", "1".repeat(64)),
@@ -1208,7 +1208,7 @@ async fn register_native_agent_membership_context(
             device_id: None,
             endpoint_verification_method: Some(format!("{agent}#runtime-key")),
             intended_realm_id: None,
-            lifetime: soland_domain::reducer::KeyPackageLifetime {
+            lifetime: soland_domain::reducer::KeyPackageLifetimeProjection {
                 not_before: now.timestamp() - 60,
                 not_after: now.timestamp() + 3600,
             },

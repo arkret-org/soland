@@ -1805,10 +1805,8 @@ fn pcr_policy_parts(
 }
 
 fn canonical_digest(value: &impl Serialize) -> Result<Hash, AppError> {
-    let bytes = arkret_canonical::canonical_json_bytes(value)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    Hash::new(arkret_canonical::sha256_digest(&bytes))
-        .map_err(|error| AppError::internal(error.to_string()))
+    let digest = crate::util::canonical_digest(value)?;
+    Hash::new(digest).map_err(|error| AppError::internal(error.to_string()))
 }
 
 fn security_transaction_service_error(error: soland_services::ServiceError) -> AppError {

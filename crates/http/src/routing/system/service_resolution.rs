@@ -23,11 +23,9 @@ pub(super) fn open_router() -> Router {
 }
 
 fn canonical_digest(value: &impl serde::Serialize) -> Result<Hash, AppError> {
-    Hash::new(
-        arkret_canonical::canonical_sha256(value)
-            .map_err(|error| AppError::internal(format!("canonical digest failed: {error}")))?,
-    )
-    .map_err(|error| AppError::internal(format!("canonical digest is invalid: {error}")))
+    let digest = crate::util::canonical_digest(value)?;
+    Hash::new(digest)
+        .map_err(|error| AppError::internal(format!("canonical digest is invalid: {error}")))
 }
 
 pub(crate) fn service_ids(

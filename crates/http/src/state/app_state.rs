@@ -2022,15 +2022,6 @@ impl AppState {
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn test_publish_event_notification(
-        &self,
-        notification: EventNotification,
-    ) -> Result<usize, tokio::sync::broadcast::error::SendError<EventNotification>> {
-        self.publish_event_notification(notification)
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
     pub fn test_cache_resolved_webvh_record(
         &self,
         record: soland_services::identity::DidDocumentState,

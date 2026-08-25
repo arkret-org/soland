@@ -884,7 +884,7 @@ fn install_execution_steps(
         0,
         arkret_wire::EventKind::AppletRegistration.as_str(),
         event.event_id.as_str(),
-        canonical_digest(&serde_json::to_value(event).map_err(|error| {
+        crate::util::canonical_digest(&serde_json::to_value(event).map_err(|error| {
             AppError::internal(format!("registration Event serialization failed: {error}"))
         })?)?,
         accepted,
@@ -896,7 +896,7 @@ fn install_execution_steps(
             offset + 1,
             arkret_wire::EventKind::CapabilityGrant.as_str(),
             event.event_id.as_str(),
-            canonical_digest(&serde_json::to_value(event).map_err(|error| {
+            crate::util::canonical_digest(&serde_json::to_value(event).map_err(|error| {
                 AppError::internal(format!(
                     "capability grant Event serialization failed: {error}"
                 ))
@@ -924,7 +924,7 @@ fn install_execution_steps(
             base + offset,
             event.kind.as_str(),
             event.event_id.as_str(),
-            canonical_digest(&serde_json::to_value(event).map_err(|error| {
+            crate::util::canonical_digest(&serde_json::to_value(event).map_err(|error| {
                 AppError::internal(format!(
                     "Applet-managed actor Event serialization failed: {error}"
                 ))
@@ -1327,14 +1327,9 @@ pub(super) fn widget_effect_for_package(package: &AppletPackage) -> WidgetEffect
 }
 
 pub(super) fn deterministic_plan_id(plan_seed: &Value) -> Result<arkret_wire::PlanId, AppError> {
-    let digest = canonical_digest(plan_seed)?;
+    let digest = crate::util::canonical_digest(plan_seed)?;
     arkret_wire::PlanId::new(format!("ak:plan:{}", digest.trim_start_matches("sha256:")))
         .map_err(|error| AppError::internal(error.to_string()))
-}
-
-pub(super) fn canonical_digest(value: &Value) -> Result<String, AppError> {
-    arkret_canonical::canonical_sha256(value)
-        .map_err(|error| AppError::internal(format!("canonical digest failed: {error}")))
 }
 
 pub(super) fn actions_from_approved_scopes(scopes: &[ScopeGrant]) -> Vec<String> {

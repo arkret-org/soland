@@ -257,7 +257,7 @@ pub struct ProjectionState {
     /// G3.S1 — published MLS KeyPackages keyed by `keypackage_id`. Each
     /// row is per `(actor_id, device_id)`; the `claimed_by` / claim-window
     /// slots flip on a successful CAS claim.
-    pub mls_key_packages: BTreeMap<String, MlsKeyPackage>,
+    pub mls_key_packages: BTreeMap<String, MlsKeyPackageProjection>,
     /// G3.S1 — per-device Welcome binding projection. Standard durable
     /// device messages carry delivery; these rows support claim and consume
     /// validation without introducing a product-private transport.

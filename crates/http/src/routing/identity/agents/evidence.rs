@@ -1267,11 +1267,9 @@ fn empty_proof() -> Result<AgentDetachedJws, AgentSignerEvidenceQueryFailureReas
 fn canonical_digest(
     value: &impl serde::Serialize,
 ) -> Result<Hash, AgentSignerEvidenceQueryFailureReason> {
-    Hash::new(
-        arkret_canonical::canonical_sha256(value)
-            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?,
-    )
-    .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)
+    let digest = crate::util::canonical_digest(value)
+        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+    Hash::new(digest).map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)
 }
 
 async fn verify_current_evidence(

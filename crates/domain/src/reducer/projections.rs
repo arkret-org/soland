@@ -279,7 +279,7 @@ pub struct CapabilityDerivedState {
 /// publishes are rejected on intake; expired KeyPackages cannot be
 /// claimed and a follow-up `claim` returns `keypackage_expired`).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct KeyPackageLifetime {
+pub struct KeyPackageLifetimeProjection {
     pub not_before: i64,
     pub not_after: i64,
 }
@@ -291,7 +291,14 @@ pub struct KeyPackageLifetime {
 /// and sets its claim window; last-resort packages keep the row published and
 /// bind reuse to a single Realm.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MlsKeyPackage {
+/// Server-side reducer projection for KeyPackage claim and consumption.
+///
+/// This is deliberately distinct from the SDK's `MlsKeyPackageRecord`, which
+/// is a client/MLS behavior record. The server projection additionally owns
+/// authorization anchors, claim deadlines, consumption timestamps, and the
+/// last-resort Realm binding, so embedding the SDK record would create two
+/// competing lifecycle sources.
+pub struct MlsKeyPackageProjection {
     /// Canonical `keypackage-<uuid>` identifier.
     pub id: String,
     pub keypackage_ref: String,
@@ -302,7 +309,7 @@ pub struct MlsKeyPackage {
     pub endpoint_verification_method: Option<String>,
     /// Realm affinity is present only for the minimal-metadata pairwise branch.
     pub intended_realm_id: Option<String>,
-    pub lifetime: KeyPackageLifetime,
+    pub lifetime: KeyPackageLifetimeProjection,
     /// Opaque bytes of the MLS KeyPackage (`mls_key_package` per RFC 9420
     /// §11). Server treats this as a black box; only the recipient device
     /// can decrypt the Welcome it backs.
@@ -349,7 +356,7 @@ pub struct MlsWelcome {
     /// Opaque MLSMessage / Welcome bytes per RFC 9420 §12.4.3.
     pub welcome_bytes: Vec<u8>,
     /// References the KeyPackage that was claimed to produce this
-    /// Welcome (per `MlsKeyPackage::id`). Audit trail only — the
+    /// Welcome (per `MlsKeyPackageProjection::id`). Audit trail only — the
     /// reducer does not re-validate the claim at delivery time.
     pub key_package_id: String,
     /// Epoch established by the Add Commit referenced by this Welcome.

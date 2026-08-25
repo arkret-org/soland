@@ -1047,62 +1047,6 @@ fn decode_mls_contract<T: serde::de::DeserializeOwned>(
     })
 }
 
-fn application_mls_key_package(
-    row: soland_storage::MlsKeyPackageRow,
-) -> crate::events::MlsKeyPackageState {
-    crate::events::MlsKeyPackageState {
-        id: row.id,
-        keypackage_ref: row.keypackage_ref,
-        keypackage_digest: row.keypackage_digest,
-        actor_id: row.actor_id,
-        device_id: row.device_id,
-        endpoint_verification_method: row.endpoint_verification_method,
-        intended_realm_id: row.intended_realm_id,
-        key_package_bytes: row.key_package_bytes,
-        capabilities: row.capabilities,
-        capabilities_digest: row.capabilities_digest,
-        last_resort: row.last_resort,
-        last_resort_realm_id: row.last_resort_realm_id,
-        lifetime_not_before: row.lifetime_not_before,
-        lifetime_not_after: row.lifetime_not_after,
-        claimed_by_mls_group_id: row.claimed_by_mls_group_id,
-        device_authorize_event_id: row.device_authorize_event_id,
-        agent_key_authorize_event_id: row.agent_key_authorize_event_id,
-        claimed_at: row.claimed_at,
-        claim_expires_at_unix_ms: row.claim_expires_at_unix_ms,
-        consumed_at: row.consumed_at,
-        created_at: row.created_at,
-    }
-}
-
-fn persistence_mls_key_package(
-    row: &crate::events::MlsKeyPackageState,
-) -> soland_storage::MlsKeyPackageRow {
-    soland_storage::MlsKeyPackageRow {
-        id: row.id.clone(),
-        keypackage_ref: row.keypackage_ref.clone(),
-        keypackage_digest: row.keypackage_digest.clone(),
-        actor_id: row.actor_id.clone(),
-        device_id: row.device_id.clone(),
-        endpoint_verification_method: row.endpoint_verification_method.clone(),
-        intended_realm_id: row.intended_realm_id.clone(),
-        key_package_bytes: row.key_package_bytes.clone(),
-        capabilities: row.capabilities.clone(),
-        capabilities_digest: row.capabilities_digest.clone(),
-        last_resort: row.last_resort,
-        last_resort_realm_id: row.last_resort_realm_id.clone(),
-        lifetime_not_before: row.lifetime_not_before,
-        lifetime_not_after: row.lifetime_not_after,
-        claimed_by_mls_group_id: row.claimed_by_mls_group_id.clone(),
-        device_authorize_event_id: row.device_authorize_event_id.clone(),
-        agent_key_authorize_event_id: row.agent_key_authorize_event_id.clone(),
-        claimed_at: row.claimed_at,
-        claim_expires_at_unix_ms: row.claim_expires_at_unix_ms,
-        consumed_at: row.consumed_at,
-        created_at: row.created_at,
-    }
-}
-
 fn application_peer_claim(
     row: soland_storage::PeerKeyPackageClaimLedgerRecord,
 ) -> crate::events::PeerKeyPackageClaimLedgerState {
@@ -1147,33 +1091,19 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
         &self,
         record: &crate::events::MlsKeyPackageState,
     ) -> crate::ServiceResult<bool> {
-        Ok(self
-            .0
-            .mls_key_packages()
-            .put(&persistence_mls_key_package(record))
-            .await?)
+        Ok(self.0.mls_key_packages().put(record).await?)
     }
     async fn key_package(
         &self,
         id: &str,
     ) -> crate::ServiceResult<Option<crate::events::MlsKeyPackageState>> {
-        Ok(self
-            .0
-            .mls_key_packages()
-            .get(id)
-            .await?
-            .map(application_mls_key_package))
+        Ok(self.0.mls_key_packages().get(id).await?)
     }
     async fn key_package_by_ref(
         &self,
         keypackage_ref: &str,
     ) -> crate::ServiceResult<Option<crate::events::MlsKeyPackageState>> {
-        Ok(self
-            .0
-            .mls_key_packages()
-            .get_by_ref(keypackage_ref)
-            .await?
-            .map(application_mls_key_package))
+        Ok(self.0.mls_key_packages().get_by_ref(keypackage_ref).await?)
     }
     async fn claim_key_package(
         &self,
@@ -1202,8 +1132,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
                 claimed_at: command.claimed_at,
                 claim_expires_at_unix_ms: command.claim_expires_at_unix_ms,
             })
-            .await?
-            .map(application_mls_key_package))
+            .await?)
     }
     async fn consume_key_package_claim(
         &self,
@@ -1216,8 +1145,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
             .0
             .mls_key_packages()
             .consume_claim(id, mls_group_id, now_unix_ms, peer_consume_receipt)
-            .await?
-            .map(application_mls_key_package))
+            .await?)
     }
     async fn peer_claim(
         &self,
@@ -1264,9 +1192,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
                 .await?
             {
                 soland_storage::PeerKeyPackageClaimAttemptResult::Claimed(row) => {
-                    crate::events::PeerKeyPackageClaimResult::Claimed(Box::new(
-                        application_mls_key_package(*row),
-                    ))
+                    crate::events::PeerKeyPackageClaimResult::Claimed(row)
                 }
                 soland_storage::PeerKeyPackageClaimAttemptResult::Existing(row) => {
                     crate::events::PeerKeyPackageClaimResult::Existing(Box::new(
@@ -1402,14 +1328,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
             .await?)
     }
     async fn key_packages(&self) -> crate::ServiceResult<Vec<crate::events::MlsKeyPackageState>> {
-        Ok(self
-            .0
-            .mls_key_packages()
-            .snapshot_all()
-            .await?
-            .into_iter()
-            .map(application_mls_key_package)
-            .collect())
+        Ok(self.0.mls_key_packages().snapshot_all().await?)
     }
     async fn key_packages_claimed_by_group(
         &self,
@@ -1419,10 +1338,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
             .0
             .mls_key_packages()
             .list_claimed_by_group(mls_group_id)
-            .await?
-            .into_iter()
-            .map(application_mls_key_package)
-            .collect())
+            .await?)
     }
 
     async fn retire_actor_keypackages(

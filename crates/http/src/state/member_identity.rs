@@ -442,8 +442,8 @@ fn canonical_digest(
     actor_id: &str,
     label: &str,
 ) -> Option<String> {
-    match arkret_canonical::canonical_json_bytes(projection) {
-        Ok(bytes) => Some(arkret_canonical::sha256_digest(bytes)),
+    match crate::util::canonical_digest(projection) {
+        Ok(digest) => Some(digest),
         Err(err) => {
             tracing::warn!(%err, %realm_id, %actor_id, %label, "member identity digest canonicalization failed");
             None

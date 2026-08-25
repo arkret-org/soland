@@ -138,6 +138,17 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     arkret_canonical::sha256_hex(bytes)
 }
 
+/// Canonical JSON SHA-256 digest (`sha256:<hex>`) of any serializable value.
+///
+/// Single home for the canonicalize-then-digest step every handler module
+/// used to reimplement locally. Callers that need a typed `Hash` wrap the
+/// returned string themselves.
+pub fn canonical_digest(value: &impl serde::Serialize) -> Result<String, crate::error::AppError> {
+    arkret_canonical::canonical_sha256(value).map_err(|error| {
+        crate::error::AppError::internal(format!("canonical digest failed: {error}"))
+    })
+}
+
 // ── Token / digest validators ───────────────────────────────────────────────
 
 /// Validate a `ak:cursor:<base64url>` token.

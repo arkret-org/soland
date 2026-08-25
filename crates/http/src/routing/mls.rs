@@ -468,7 +468,7 @@ async fn upload_keypackage(
             keypackage_digest,
             actor_id: actor_id.clone(),
             device_id: device_id.clone(),
-            lifetime: soland_domain::reducer::KeyPackageLifetime {
+            lifetime: soland_domain::reducer::KeyPackageLifetimeProjection {
                 not_before: created_at,
                 not_after: expires_at,
             },
@@ -4640,8 +4640,9 @@ fn unix_millis_datetime(timestamp_millis: i64) -> Result<DateTime<Utc>, AppError
 
 #[cfg(test)]
 mod trust_binding_tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     fn pairwise_endpoint(seed: [u8; 32]) -> (arkret_wire::DidCoreId, arkret_wire::DidUrl) {
         let key = ed25519_dalek::SigningKey::from_bytes(&seed)

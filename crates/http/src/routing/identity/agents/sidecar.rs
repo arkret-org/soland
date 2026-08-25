@@ -1506,7 +1506,7 @@ mod tests {
         let mut projection = soland_domain::reducer::ProjectionState::default();
         projection.mls_key_packages.insert(
             "keypackage-controller-02".to_owned(),
-            soland_domain::reducer::MlsKeyPackage {
+            soland_domain::reducer::MlsKeyPackageProjection {
                 id: "keypackage-controller-02".to_owned(),
                 keypackage_ref: "ak:keypackage:controller-02".to_owned(),
                 keypackage_digest: format!("sha256:{}", "2".repeat(64)),
@@ -1514,7 +1514,7 @@ mod tests {
                 device_id: Some(device.to_owned()),
                 endpoint_verification_method: None,
                 intended_realm_id: None,
-                lifetime: soland_domain::reducer::KeyPackageLifetime {
+                lifetime: soland_domain::reducer::KeyPackageLifetimeProjection {
                     not_before: 0,
                     not_after: i64::MAX,
                 },

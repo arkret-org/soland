@@ -242,7 +242,7 @@ async fn install_endpoint(
     let commit = body.into_inner();
     let body = serde_json::to_value(&commit)
         .map_err(|error| AppError::internal(format!("install commit serialize: {error}")))?;
-    let body_digest = super::install::canonical_digest(&body)?;
+    let body_digest = crate::util::canonical_digest(&body)?;
     if let Some(existing) = applet_record(state, commit.applet_package.applet_id.as_str()).await? {
         if exact_successful_install_replay(
             &existing.idempotency_key,

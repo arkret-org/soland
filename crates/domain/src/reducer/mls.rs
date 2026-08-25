@@ -24,9 +24,9 @@ use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
 use serde_json::{Map, Value};
 
 use super::{
-    KeyPackageLifetime, MlsCommitEpoch, MlsCommitEpochKey, MlsEffect, MlsKeyPackage,
-    MlsRemoveObligation, MlsRemoveProposal, MlsWelcome, MlsWelcomeQueueKey, ProjectionEffect,
-    ProjectionState,
+    KeyPackageLifetimeProjection, MlsCommitEpoch, MlsCommitEpochKey, MlsEffect,
+    MlsKeyPackageProjection, MlsRemoveObligation, MlsRemoveProposal, MlsWelcome,
+    MlsWelcomeQueueKey, ProjectionEffect, ProjectionState,
 };
 
 /// Reason code emitted when a `ak.mls.keypackage` event with
@@ -82,7 +82,7 @@ pub struct MlsKeyPackagePublishProjection {
     pub keypackage_digest: String,
     pub actor_id: String,
     pub device_id: Option<String>,
-    pub lifetime: KeyPackageLifetime,
+    pub lifetime: KeyPackageLifetimeProjection,
     pub key_package_bytes: Vec<u8>,
     pub capabilities: Vec<String>,
     pub last_resort: bool,
@@ -146,7 +146,7 @@ pub fn apply_keypackage_upload_projection(
             Some(intended_realm_id.clone()),
         ),
     };
-    let row = MlsKeyPackage {
+    let row = MlsKeyPackageProjection {
         id: projection.keypackage_id.clone(),
         keypackage_ref: projection.keypackage_ref.clone(),
         keypackage_digest: projection.keypackage_digest.clone(),
@@ -295,7 +295,7 @@ pub fn apply_keypackage_publish(state: &mut ProjectionState, op: &Operation) -> 
     {
         return reject(reason);
     }
-    let row = MlsKeyPackage {
+    let row = MlsKeyPackageProjection {
         id: id.to_owned(),
         keypackage_ref,
         keypackage_digest,
@@ -1402,7 +1402,7 @@ fn validate_effective_scope(scope: &Value) -> Result<(), &'static str> {
     }
 }
 
-fn parse_lifetime(v: Option<&Value>) -> Result<KeyPackageLifetime, &'static str> {
+fn parse_lifetime(v: Option<&Value>) -> Result<KeyPackageLifetimeProjection, &'static str> {
     let obj = v.ok_or("mls_keypackage_lifetime_missing")?;
     let not_before = obj
         .get("not_before")
@@ -1412,7 +1412,7 @@ fn parse_lifetime(v: Option<&Value>) -> Result<KeyPackageLifetime, &'static str>
         .get("not_after")
         .and_then(Value::as_i64)
         .ok_or("mls_keypackage_lifetime_not_after_invalid")?;
-    Ok(KeyPackageLifetime {
+    Ok(KeyPackageLifetimeProjection {
         not_before,
         not_after,
     })
