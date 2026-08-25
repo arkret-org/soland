@@ -861,7 +861,7 @@ pub(crate) async fn accept_federated_event_seal_path(
     Ok(())
 }
 
-async fn materialize_governance_frontier(
+pub(in crate::routing) async fn materialize_governance_frontier(
     state: &AppState,
     request: &MlsGovernanceProofRequestBody,
 ) -> Result<MlsGovernanceProofBundle, AppError> {

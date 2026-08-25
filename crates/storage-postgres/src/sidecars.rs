@@ -53,9 +53,7 @@ impl TryFrom<SidecarRow> for AgentSidecarRecord {
             ids::format_event_token("sidecar", &token)
         };
         let state = serde_json::from_value(Value::String(row.state)).map_err(|error| {
-            PersistenceError::Internal(format!(
-                "Sidecar `{sidecar_id}` has invalid state: {error}"
-            ))
+            PersistenceError::Internal(format!("Sidecar `{sidecar_id}` has invalid state: {error}"))
         })?;
         Ok(Self {
             sidecar_id,

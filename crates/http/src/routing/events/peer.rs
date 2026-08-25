@@ -2015,6 +2015,68 @@ pub(in crate::routing) async fn peer_realm_visibility(
     Ok(authz.frontier_visible_for_realm(realm_id))
 }
 
+/// Apply the same accepted-Event history and current membership policy used by
+/// peer Event reads to one exact record. This keeps reference-based endpoints
+/// from turning an otherwise invisible Event into an object-disclosure oracle.
+pub(in crate::routing) async fn peer_event_visibility(
+    state: &AppState,
+    source_service_id: &str,
+    record: &AcceptedEvent,
+) -> Result<bool, AppError> {
+    let records = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| AppError::internal(format!("peer Event visibility: {error}")))?;
+    let authz = PeerReadAuthz::build(state, source_service_id, &records).await?;
+    Ok(authz.record_visible(record))
+}
+
+/// Authorize a near-current peer query for the exact MLS security scope.
+/// Sidecar and genesis scopes are deliberately not exposed through the
+/// federation surface, matching the self governance-proof visibility rules.
+pub(in crate::routing) async fn peer_mls_scope_visibility(
+    state: &AppState,
+    source_service_id: &str,
+    scope: &arkret_wire::ScopeRef,
+) -> Result<bool, AppError> {
+    let records = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| AppError::internal(format!("peer MLS scope visibility: {error}")))?;
+    let authz = PeerReadAuthz::build(state, source_service_id, &records).await?;
+    Ok(match scope {
+        arkret_wire::ScopeRef::Realm { realm_id } => {
+            authz.frontier_visible_for_realm(realm_id.as_str())
+        }
+        arkret_wire::ScopeRef::Circle {
+            realm_id,
+            circle_id,
+        } => {
+            authz.frontier_visible_for_realm(realm_id.as_str())
+                && authz
+                    .circles
+                    .get(circle_id.as_str())
+                    .is_some_and(|circle| circle.active && circle.realm_id == realm_id.as_str())
+                && authz
+                    .circle_members
+                    .get(circle_id.as_str())
+                    .is_some_and(|circle_members| {
+                        authz
+                            .realm_members
+                            .get(realm_id.as_str())
+                            .is_some_and(|realm_members| {
+                                circle_members
+                                    .keys()
+                                    .any(|actor| realm_members.contains_key(actor))
+                            })
+                    })
+        }
+        _ => false,
+    })
+}
+
 fn json_contains_string(value: &Value, expected: &str) -> bool {
     match value {
         Value::String(value) => value == expected,

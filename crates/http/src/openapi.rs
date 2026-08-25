@@ -119,13 +119,18 @@ fn install_event_read_query_bindings(doc: &mut Value) {
         );
         doc["paths"][path]["query"] = operation;
     }
-    let proof_path = "/_arkret/self/seals/mls-governance-proof";
-    let proof_operation = canonical["paths"][proof_path]["post"].clone();
-    assert!(
-        proof_operation.is_object(),
-        "canonical OpenAPI missing POST {proof_path}"
-    );
-    doc["paths"][proof_path]["post"] = proof_operation;
+    for path in [
+        "/_arkret/self/seals/mls-governance-proof",
+        "/_arkret/peer/seals/mls-governance-proof",
+        "/_arkret/peer/mls/group-state-material",
+    ] {
+        let operation = canonical["paths"][path]["post"].clone();
+        assert!(
+            operation.is_object(),
+            "canonical OpenAPI missing POST {path}"
+        );
+        doc["paths"][path]["post"] = operation;
+    }
 }
 
 type RegisteredRoutes = BTreeMap<String, BTreeSet<String>>;

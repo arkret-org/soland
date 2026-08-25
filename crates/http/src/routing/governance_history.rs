@@ -1,3 +1,4 @@
+use arkret_models_collaboration::events_payloads::mls::MlsGenesisPayload;
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencyResolveOutcome, GovernanceDependencySelector,
     PeerGovernanceDependencyResolveRequest, SelfGovernanceDependencyResolveRequest,
@@ -35,11 +36,16 @@ use arkret_models_collaboration::history_key::{
 use arkret_models_collaboration::http_bodies::{
     PeerSealResolveRequestBody, SealResolveOutcome, SelfSealResolveRequestBody,
 };
+use arkret_models_collaboration::mls_group_state_material::{
+    MLS_GROUP_STATE_MATERIAL_MAX_RESPONSE_BYTES, MlsGroupStateMaterialOutcome,
+    MlsGroupStateMaterialRequestBody,
+};
+use arkret_models_crypto::{MlsGovernanceProofBundle, MlsGovernanceProofRequestBody};
 use arkret_models_identity::agent_signer_evidence::{
     AgentSignerEvidence, AgentSignerEvidenceQuerySelector,
 };
 use arkret_state::mls_governance_proof::MlsGovernanceVerificationCheckpoint;
-use arkret_wire::HistoryEffectiveScope;
+use arkret_wire::{Base64UrlString, EventKind, HistoryEffectiveScope};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, KeyInit, Mac};
@@ -49,7 +55,8 @@ use salvo::prelude::*;
 use sha2::Sha256;
 
 use super::events::peer::{
-    peer_realm_visibility, source_service_id_from_request, validate_peer_request,
+    peer_event_visibility, peer_mls_scope_visibility, peer_realm_visibility,
+    source_service_id_from_request, validate_peer_request,
 };
 use super::system::extract::AuthArgs;
 use super::{now, realm_has_member};
@@ -143,7 +150,14 @@ pub(super) fn self_router() -> Router {
 pub(super) fn peer_router() -> Router {
     Router::new()
         .push(Router::with_path("seals/resolve").query(resolve_peer_seals))
+        .push(
+            Router::with_path("seals/mls-governance-proof").post(resolve_peer_mls_governance_proof),
+        )
         .push(Router::with_path("seals/governance-dependencies").post(resolve_peer_dependencies))
+        .push(
+            Router::with_path("mls/group-state-material")
+                .post(resolve_peer_mls_group_state_material),
+        )
         .push(
             Router::with_path("history-key-requests/replicate").post(replicate_history_key_request),
         )
@@ -152,6 +166,164 @@ pub(super) fn peer_router() -> Router {
             Router::with_path("organization-recovery-archives/replicate")
                 .post(replicate_organization_recovery_archive),
         )
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "ak.peer.seals.read.mls_governance_proof",
+    tags("governance")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.seals.read.mls_governance_proof"))]
+async fn resolve_peer_mls_governance_proof(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<MlsGovernanceProofBundle> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    validate_peer_request(state, req, true).await?;
+    let source_service_id = source_service_id_from_request(req)?;
+    let request = req
+        .parse_json::<MlsGovernanceProofRequestBody>()
+        .await
+        .map_err(|_| AppError::json_invalid("invalid peer MLS governance proof request"))?;
+    request
+        .validate()
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    if !peer_mls_scope_visibility(state, &source_service_id, &request.effective_scope).await? {
+        return Err(AppError::not_found("MLS governance scope not found"));
+    }
+    let outcome = super::events::event_log::governance_proof::materialize_governance_frontier(
+        state, &request,
+    )
+    .await?;
+    json_ok(outcome)
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "ak.peer.mls.read.group_state_material",
+    tags("governance")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.mls.read.group_state_material"))]
+async fn resolve_peer_mls_group_state_material(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<MlsGroupStateMaterialOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    validate_peer_request(state, req, true).await?;
+    let source_service_id = source_service_id_from_request(req)?;
+    let request = req
+        .parse_json::<MlsGroupStateMaterialRequestBody>()
+        .await
+        .map_err(|_| AppError::json_invalid("invalid peer MLS group-state material request"))?;
+    request
+        .validate()
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+
+    let event = state
+        .event_queries()
+        .accepted_event(request.group_state_event_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("accepted MLS genesis lookup: {error}")))?
+        .ok_or_else(|| AppError::not_found("MLS group-state material not found"))?;
+    if event.event_id != request.group_state_event_id.as_str()
+        || event.kind != EventKind::MlsGenesis.as_str()
+        || event.realm_id.as_deref() != Some(request.realm_id.as_str())
+        || !peer_event_visibility(state, &source_service_id, &event).await?
+    {
+        return Err(AppError::not_found("MLS group-state material not found"));
+    }
+    let payload = event
+        .envelope
+        .get("payload")
+        .cloned()
+        .ok_or_else(|| AppError::not_found("MLS group-state material not found"))?;
+    let payload: MlsGenesisPayload = serde_json::from_value(payload)
+        .map_err(|_| AppError::not_found("MLS group-state material not found"))?;
+    if payload.effective_scope != request.effective_scope
+        || payload.mls_group_id != request.mls_group_id
+        || payload.epoch != request.epoch
+        || payload.group_info_ref != request.group_info_ref
+        || payload.group_info_digest != request.group_info_digest
+        || payload.ratchet_tree_ref != request.ratchet_tree_ref
+        || payload.ratchet_tree_digest != request.ratchet_tree_digest
+    {
+        return Err(AppError::not_found("MLS group-state material not found"));
+    }
+
+    let limit = request
+        .max_response_bytes
+        .unwrap_or(MLS_GROUP_STATE_MATERIAL_MAX_RESPONSE_BYTES) as usize;
+    let group_info_bytes =
+        load_mls_public_blob(state, request.group_info_ref.as_str(), limit).await?;
+    let remaining = limit.checked_sub(group_info_bytes.len()).ok_or_else(|| {
+        AppError::new(
+            ErrorCode::LimitExceeded,
+            "MLS group-state material exceeds requested bound",
+        )
+    })?;
+    let ratchet_tree_bytes =
+        load_mls_public_blob(state, request.ratchet_tree_ref.as_str(), remaining).await?;
+    arkret_mls::validate_public_group_state_with_governance_binding(
+        &group_info_bytes,
+        &ratchet_tree_bytes,
+        request.mls_group_id.as_str(),
+        0,
+        &payload.governance_binding,
+    )
+    .map_err(|_| AppError::not_found("MLS group-state material not found"))?;
+
+    let outcome = MlsGroupStateMaterialOutcome {
+        realm_id: request.realm_id.clone(),
+        effective_scope: request.effective_scope.clone(),
+        mls_group_id: request.mls_group_id.clone(),
+        epoch: request.epoch,
+        group_state_event_id: request.group_state_event_id.clone(),
+        group_info_ref: request.group_info_ref.clone(),
+        group_info_digest: request.group_info_digest.clone(),
+        group_info_bytes_b64: Base64UrlString::new(arkret_canonical::base64url_encode(
+            &group_info_bytes,
+        ))
+        .map_err(|error| AppError::internal(error.to_string()))?,
+        ratchet_tree_ref: request.ratchet_tree_ref.clone(),
+        ratchet_tree_digest: request.ratchet_tree_digest.clone(),
+        ratchet_tree_bytes_b64: Base64UrlString::new(arkret_canonical::base64url_encode(
+            &ratchet_tree_bytes,
+        ))
+        .map_err(|error| AppError::internal(error.to_string()))?,
+    };
+    outcome
+        .validate_for_request(&request)
+        .map_err(|_| AppError::not_found("MLS group-state material not found"))?;
+    json_ok(outcome)
+}
+
+async fn load_mls_public_blob(
+    state: &AppState,
+    blob_ref: &str,
+    limit: usize,
+) -> Result<Vec<u8>, AppError> {
+    let blob = state
+        .deliveries()
+        .blob(blob_ref)
+        .await
+        .map_err(|error| AppError::internal(format!("MLS blob metadata lookup: {error}")))?
+        .filter(|blob| !blob.redacted && blob.size_bytes >= 0)
+        .ok_or_else(|| AppError::not_found("MLS group-state material not found"))?;
+    let declared_size = usize::try_from(blob.size_bytes)
+        .map_err(|_| AppError::not_found("MLS group-state material not found"))?;
+    if declared_size > limit {
+        return Err(AppError::new(
+            ErrorCode::LimitExceeded,
+            "MLS group-state material exceeds requested bound",
+        ));
+    }
+    let bytes = state
+        .deliveries()
+        .get_object(&blob.storage_key)
+        .await
+        .map_err(|_| AppError::not_found("MLS group-state material not found"))?;
+    if bytes.len() != declared_size || bytes.len() > limit {
+        return Err(AppError::not_found("MLS group-state material not found"));
+    }
+    Ok(bytes)
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.seals.read.resolve", tags("governance"))]

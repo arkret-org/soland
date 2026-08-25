@@ -497,6 +497,12 @@ fn canonical_event_read_operation(req: &Request) -> Option<&'static str> {
         ("POST", "/_arkret/self/seals/mls-governance-proof") => {
             Some(arkret_wire::ServiceOperationId::SELF_SEALS_READ_MLS_GOVERNANCE_PROOF)
         }
+        ("POST", "/_arkret/peer/seals/mls-governance-proof") => {
+            Some(arkret_wire::ServiceOperationId::PEER_SEALS_READ_MLS_GOVERNANCE_PROOF)
+        }
+        ("POST", "/_arkret/peer/mls/group-state-material") => {
+            Some(arkret_wire::ServiceOperationId::PEER_MLS_READ_GROUP_STATE_MATERIAL)
+        }
         ("QUERY", "/_arkret/peer/events/describe") => {
             Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_DESCRIBE)
         }
@@ -605,6 +611,13 @@ mod tests {
         assert_eq!(
             request_op_label(&peer_request),
             "ak.peer.events.read.resolve"
+        );
+
+        let peer_mls =
+            TestClient::post("http://localhost/_arkret/peer/mls/group-state-material").build();
+        assert_eq!(
+            request_op_label(&peer_mls),
+            "ak.peer.mls.read.group_state_material"
         );
     }
 

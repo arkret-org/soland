@@ -153,6 +153,23 @@ fn assert_event_read_query_bindings(root: &Value) {
         proof["requestBody"]["content"]["application/json"].is_object(),
         "canonical POST proof binding must expose JSON content"
     );
+    for (path, operation_id) in [
+        (
+            "/_arkret/peer/seals/mls-governance-proof",
+            "ak.peer.seals.read.mls_governance_proof",
+        ),
+        (
+            "/_arkret/peer/mls/group-state-material",
+            "ak.peer.mls.read.group_state_material",
+        ),
+    ] {
+        let operation = &root["paths"][path]["post"];
+        assert_eq!(operation["operationId"], operation_id);
+        assert!(
+            operation["requestBody"]["content"]["application/json"].is_object(),
+            "peer MLS POST binding {operation_id} must expose JSON content"
+        );
+    }
 }
 
 fn assert_operation_ids_are_unique(root: &Value) {
