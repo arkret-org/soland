@@ -737,7 +737,9 @@ fn body_max_authority_depth(body: &Value) -> Option<u32> {
         .into_iter()
         .filter_map(|constraint| {
             let constraint_kind = constraint.get("constraint_kind").and_then(Value::as_str);
-            if constraint_kind != Some("authority_control") {
+            if constraint_kind != Some("authority_control")
+                || constraint.get("constraint_subkind").is_some()
+            {
                 return None;
             }
             constraint
@@ -746,6 +748,27 @@ fn body_max_authority_depth(body: &Value) -> Option<u32> {
                 .and_then(|value| u32::try_from(value).ok())
         })
         .min()
+}
+
+fn body_has_terminal_authority_control(body: &Value) -> bool {
+    let ordinary_controls = value_array_field(body, "constraints")
+        .into_iter()
+        .filter(|constraint| {
+            constraint.get("constraint_kind").and_then(Value::as_str) == Some("authority_control")
+                && constraint.get("constraint_subkind").is_none()
+        })
+        .collect::<Vec<_>>();
+    !ordinary_controls.is_empty()
+        && ordinary_controls.iter().all(|constraint| {
+            constraint
+                .get("max_authority_depth")
+                .and_then(Value::as_u64)
+                == Some(0)
+                && !constraint
+                    .get("authority_regrant_allowed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+        })
 }
 
 /// Build the canonical or_set item value stored under a grant cell. We keep
@@ -1341,7 +1364,10 @@ impl ProjectionState {
         let has_authority_control = parent.constraints.iter().any(|constraint| {
             matches!(
                 constraint,
-                crate::capability::GrantConstraint::AuthorityControl { .. }
+                crate::capability::GrantConstraint::AuthorityControl {
+                    constraint_subkind: None,
+                    ..
+                }
             )
         });
         if !has_authority_control {
@@ -1349,7 +1375,7 @@ impl ProjectionState {
         }
         let child_depth = body_max_authority_depth(body);
         if !arkret_policy::authz::authority::authority_regrant_allowed(parent) {
-            if child_depth != Some(0) {
+            if !body_has_terminal_authority_control(body) {
                 return Err("authority_regrant_denied");
             }
         } else if let Some(parent_depth) = crate::capability::max_authority_depth(parent) {
@@ -3011,10 +3037,6 @@ mod authority_cycle_tests {
         )
     }
 
-    fn root_grant_op(grant_id: &str, issuer: &str, subject: &str) -> Operation {
-        root_grant_op_with_constraints(grant_id, issuer, subject, json!([]))
-    }
-
     fn root_grant_op_with_constraints(
         grant_id: &str,
         issuer: &str,
@@ -3117,36 +3139,48 @@ mod authority_cycle_tests {
 
     #[test]
     fn regrant_requires_explicit_parent_authority_control() {
-        let mut proj = ProjectionState::default();
-        seed_realm_owner(&mut proj);
-        assert!(matches!(
-            proj.apply_capability_grant(
-                &root_grant_op(
+        for parent_constraints in [
+            json!([]),
+            json!([{
+                "constraint_kind": "authority_control",
+                "constraint_subkind": "applet_authority",
+                "applet_id": "ak:applet:01970000-0000-7000-8000-0000000000aa",
+                "executed_by": "ak:did_core:web:alice.example",
+                "registration_epoch": format!("sha256:{}", "a".repeat(64))
+            }]),
+        ] {
+            let mut proj = ProjectionState::default();
+            seed_realm_owner(&mut proj);
+            assert!(matches!(
+                proj.apply_capability_grant(
+                    &root_grant_op_with_constraints(
+                        G_A,
+                        "ak:did_core:web:alice.example",
+                        "ak:did_core:web:alice.example",
+                        parent_constraints,
+                    ),
+                    chrono::Utc::now(),
+                ),
+                crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
+            ));
+            let rejected = proj.apply_capability_grant(
+                &regrant_op_with_constraints(
+                    G_B,
                     G_A,
-                    "ak:did_core:web:alice.example",
-                    "ak:did_core:web:alice.example",
+                    json!([{
+                        "constraint_kind": "authority_control",
+                        "max_authority_depth": 0,
+                        "authority_regrant_allowed": false
+                    }]),
                 ),
                 chrono::Utc::now(),
-            ),
-            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
-        ));
-        let rejected = proj.apply_capability_grant(
-            &regrant_op_with_constraints(
-                G_B,
-                G_A,
-                json!([{
-                    "constraint_kind": "authority_control",
-                    "max_authority_depth": 0,
-                    "authority_regrant_allowed": true
-                }]),
-            ),
-            chrono::Utc::now(),
-        );
-        assert!(matches!(
-            rejected,
-            crate::reducer::ProjectionEffect::Rejected { reason }
-                if reason == "authority_regrant_denied"
-        ));
+            );
+            assert!(matches!(
+                rejected,
+                crate::reducer::ProjectionEffect::Rejected { reason }
+                    if reason == "authority_regrant_denied"
+            ));
+        }
     }
 
     #[test]
@@ -3175,6 +3209,11 @@ mod authority_cycle_tests {
             json!([{
                 "constraint_kind": "authority_control",
                 "max_authority_depth": 1
+            }]),
+            json!([{
+                "constraint_kind": "authority_control",
+                "max_authority_depth": 0,
+                "authority_regrant_allowed": true
             }]),
         ] {
             let rejected = proj.apply_capability_grant(
