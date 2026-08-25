@@ -8,7 +8,8 @@
 //! - `GET  /_arkret/self/events/{event_id}` — fetch one envelope.
 //! - `QUERY /_arkret/self/events/resolve`  — resolve up to `MAX_EVENT_RESOLVE`.
 //! - `GET  /_arkret/self/events`            — paginated list (filtered by actor / realm).
-//! - `GET  /_arkret/self/events/frontier`   — per-actor / per-realm frontier.
+//! - `QUERY /_arkret/self/events/frontier`  — per-actor Event frontier.
+//! - `QUERY /_arkret/self/seals/frontier`   — per-Realm Seal frontier.
 //!
 //! The validator block (`validate_event_envelope` + helpers) lives in the
 //! `validation` submodule.
@@ -25,10 +26,10 @@ use arkret_models_collaboration::direct_conversation_ops::{
     DirectConversationFoundingUnitSubmission,
 };
 use arkret_models_collaboration::event_sync::{
-    ActorAggregateFrontierKind, ActorAggregateFrontierView, EventsFrontierAccountClientState,
+    ActorAggregateFrontierKind, ActorAggregateFrontierView, EventsFrontierState,
     EventsFrontierView, EventsSubmitFederationBatchRequestBody, FederationServiceBindingRef,
     ManagedAgentPcrSealHeadReceipt, ManagedAgentPcrSealHeadReceiptKind, RealmActorFrontierView,
-    RealmSealFrontierView,
+    RealmSealFrontierView, SealFrontierState,
 };
 use arkret_models_collaboration::events_payloads::contact::ContactRequestedPayload;
 use arkret_models_collaboration::http_bodies::{
@@ -60,7 +61,7 @@ use super::projection::{
     retention_tombstone_payload_value,
 };
 use super::{
-    append_audit_log, auth_or_render, is_valid_hash_digest, now, query_param,
+    append_audit_log, auth_or_render, is_valid_hash_digest, now,
     realm_allows_plaintext_service_for_data_class, realm_event_visible_to_session,
     realm_has_member, render_error, sha256_hex, validate_agent_participation_ceiling,
     validate_agent_reply_participation, validate_content_encryption_floor,

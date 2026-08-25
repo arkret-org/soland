@@ -718,7 +718,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
             .take_json()
             .await
             .expect("controller actor frontier response");
-    let actor_frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+    let actor_frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
         serde_json::from_value(actor_frontier_value.clone()).unwrap_or_else(|error| {
             panic!("controller actor frontier: {error}; {actor_frontier_value}")
         });
@@ -788,7 +788,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     .unwrap();
     let pcr_genesis = pcr_genesis.into_event();
     let principal_control_realm_id = pcr_genesis.realm_id.clone();
-    let mut frontier_response = TestClient::query("http://server/_arkret/self/events/frontier")
+    let mut frontier_response = TestClient::query("http://server/_arkret/self/seals/frontier")
         .json(&serde_json::json!({"realm_id": controller_realm_id}))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app)
@@ -800,16 +800,11 @@ async fn provision_agent_sdk_commit_attempt_inner(
             .expect("frontier error body");
         panic!("controller Realm Seal frontier failed: {body}");
     }
-    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
-        frontier_response
-            .take_json()
-            .await
-            .expect("typed controller Realm Seal frontier");
-    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmSeal(frontier) =
-        frontier.frontier
-    else {
-        panic!("controller Realm frontier must materialize a Seal view");
-    };
+    let frontier: arkret_models_collaboration::event_sync::SealFrontierState = frontier_response
+        .take_json()
+        .await
+        .expect("typed controller Realm Seal frontier");
+    let frontier = frontier.frontier;
     let event = arkret_bootstrap::build_agent_provision_intent(
         &controller_id,
         &controller_realm_id,

@@ -332,7 +332,7 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
 
 async fn accepted_seal_frontier(state: &AppState, token: &str, realm_id: &str) -> String {
     for attempt in 0..50 {
-        let mut response = TestClient::query("http://server/_arkret/self/events/frontier")
+        let mut response = TestClient::query("http://server/_arkret/self/seals/frontier")
             .json(&serde_json::json!({"realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
@@ -340,13 +340,9 @@ async fn accepted_seal_frontier(state: &AppState, token: &str, realm_id: &str) -
         let status = response.status_code;
         let body: Value = response.take_json().await.unwrap_or(Value::Null);
         if status == Some(StatusCode::OK) {
-            let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+            let frontier: arkret_models_collaboration::event_sync::SealFrontierState =
                 serde_json::from_value(body).expect("typed Realm Seal frontier");
-            let arkret_models_collaboration::event_sync::EventsFrontierView::RealmSeal(frontier) =
-                frontier.frontier
-            else {
-                panic!("Realm-only selector returned the wrong frontier variant");
-            };
+            let frontier = frontier.frontier;
             return frontier
                 .sole_leaf()
                 .expect("single-signer Realm frontier")
@@ -374,7 +370,7 @@ async fn actor_frontier(state: &AppState, token: &str, realm_id: &str) -> (u64, 
     let frontier_value: Value = TestClient::query("http://server/_arkret/self/events/frontier")
         .json(
             &arkret_models_collaboration::event_query::EventsFrontierRequestBody {
-                actor_id: Some(actor_core),
+                actor_id: actor_core,
                 realm_id: Some(
                     RealmId::new(realm_id.to_owned()).expect("fixture frontier Realm id"),
                 ),
@@ -386,7 +382,7 @@ async fn actor_frontier(state: &AppState, token: &str, realm_id: &str) -> (u64, 
         .take_json()
         .await
         .expect("typed actor Realm frontier");
-    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
         serde_json::from_value(frontier_value.clone()).unwrap_or_else(|error| {
             panic!("invalid typed actor Realm frontier: {error}; {frontier_value}")
         });

@@ -655,7 +655,7 @@ pub async fn realm_event_visible_to_session(
     state: &AppState,
     realm_or_internal_id: &str,
     event_created_at: DateTime<Utc>,
-    sender: Option<&str>,
+    _sender: Option<&str>,
     session: Option<&SessionRecord>,
 ) -> bool {
     let Some(session) = session else {
@@ -663,13 +663,6 @@ pub async fn realm_event_visible_to_session(
     };
     if !realm_active_member_at_read_time(state, realm_or_internal_id, &session.actor).await {
         return false;
-    }
-    // A current member must retain access to its own accepted history. This is
-    // especially important for a self Principal Control Realm: its genesis
-    // Event precedes the derived membership timestamp, yet successor-Seal
-    // construction must reproduce that complete actor chain.
-    if sender == Some(session.actor.as_str()) {
-        return true;
     }
     match realm_history_access(state, realm_or_internal_id)
         .await

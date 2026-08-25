@@ -1244,7 +1244,7 @@ pub(crate) async fn move_event_to_actor_realm_frontier(
     let frontier_value: Value = TestClient::query("http://server/_arkret/self/events/frontier")
         .json(
             &arkret_models_collaboration::event_query::EventsFrontierRequestBody {
-                actor_id: Some(actor_core),
+                actor_id: actor_core,
                 realm_id: Some(
                     RealmId::new(realm_id.to_owned()).expect("fixture frontier Realm id"),
                 ),
@@ -1256,7 +1256,7 @@ pub(crate) async fn move_event_to_actor_realm_frontier(
         .take_json()
         .await
         .expect("typed HTTP fixture actor Realm frontier");
-    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
         serde_json::from_value(frontier_value.clone()).unwrap_or_else(|error| {
             panic!("invalid typed HTTP fixture actor Realm frontier: {error}; {frontier_value}")
         });

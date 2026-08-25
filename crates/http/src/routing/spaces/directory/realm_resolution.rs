@@ -766,7 +766,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
     // Disclose the current accepted Realm Seal view to resolvers the Directory
     // has already authorized to resolve this Realm (this function is only
     // reached after `realm_resolvable_to`). An invitee who is not yet a member
-    // cannot read the membership-gated `events/frontier` Realm Seal view, so
+    // cannot read the membership-gated `seals/frontier` Realm Seal view, so
     // they stamp this as `seal_ref` for DataEvents or as full `seal_basis` for
     // Control Moves before signing (spec discovery-directory.md §9.1.1). When
     // this deployment holds no accepted Seal for the Realm (e.g. it does not

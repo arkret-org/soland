@@ -118,6 +118,10 @@ fn assert_event_read_query_bindings(root: &Value) {
             "/_arkret/self/events/frontier",
             "ak.self.events.read.frontier",
         ),
+        (
+            "/_arkret/self/seals/frontier",
+            "ak.self.seals.read.frontier",
+        ),
         ("/_arkret/self/events", "ak.self.events.read.scan"),
         (
             "/_arkret/self/events/resolve",

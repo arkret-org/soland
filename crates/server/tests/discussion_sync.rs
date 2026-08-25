@@ -594,7 +594,7 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
     let actor_full = DidFullId::new(actor_id.to_owned()).expect("fixture actor full DID");
     let actor = arkret_wire::project_full_id_to_core_id(&actor_full)
         .expect("fixture actor full DID projects to a core id");
-    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
         TestClient::query("http://server/_arkret/self/events/frontier")
             .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)

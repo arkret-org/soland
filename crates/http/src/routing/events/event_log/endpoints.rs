@@ -160,6 +160,7 @@ pub(in crate::routing::events) fn router() -> Router {
         )
         .push(Router::with_path("events/resolve").query(resolve_events))
         .push(Router::with_path("events/frontier").query(events_frontier))
+        .push(Router::with_path("seals/frontier").query(seals_frontier))
         .push(Router::with_path("seals").post(submit_event_seal))
         .push(
             Router::with_path("seals/mls-governance-proof")
@@ -1115,198 +1116,172 @@ async fn resolve_events(
     json_ok(outcome)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.frontier", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.frontier"))]
-async fn events_frontier(
+#[salvo::oapi::endpoint(operation_id = "ak.self.seals.read.frontier", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.seals.read.frontier"))]
+async fn seals_frontier(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> soland_http::result::JsonResult<EventsFrontierAccountClientState> {
+) -> soland_http::result::JsonResult<SealFrontierState> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
-    let query_body = if req.method().as_str() == "QUERY" {
-        Some(
-            req.parse_json::<arkret_models_collaboration::event_query::EventsFrontierRequestBody>()
-                .await
-                .map_err(|_| {
-                    AppError::json_invalid("invalid ak.self.events.read.frontier request body")
-                })?,
+    let query_body = req
+        .parse_json::<arkret_models_collaboration::event_query::SealFrontierRequestBody>()
+        .await
+        .map_err(|_| AppError::json_invalid("invalid ak.self.seals.read.frontier request body"))?;
+    let realm_id = query_body.realm_id;
+    let own_pcr = state
+        .projections()
+        .snapshot()
+        .realm_is_principal_control_for_actor(realm_id.as_str(), session_core_id.as_str());
+    let managed_agent_pcr =
+        crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
+            state,
+            &session.actor,
+            realm_id.as_str(),
         )
-    } else {
-        None
-    };
-    let actor_id = query_body
-        .as_ref()
-        .and_then(|body| body.actor_id.as_ref())
-        .map(|actor_id| actor_id.as_str().to_owned())
-        .or_else(|| query_param(req, "actor_id"))
-        .or_else(|| query_param(req, "actor"));
-    let realm_selector = query_body
-        .as_ref()
-        .and_then(|body| body.realm_id.as_ref())
-        .map(|realm_id| realm_id.as_str().to_owned())
-        .or_else(|| query_param(req, "realm_id"));
-    if actor_id.is_none() && realm_selector.is_none() {
-        return Err(AppError::param_invalid(
-            "events.frontier requires at least one of realm_id or actor_id",
-        ));
+        .await?;
+    let accessible = own_pcr
+        || managed_agent_pcr
+        || crate::routing::spaces::space::realm_id_accessible(
+            state,
+            realm_id.as_str(),
+            Some(&session),
+        )
+        .await;
+    if !accessible {
+        // Same code as invisible-event reads: existence must not leak.
+        return Err(AppError::not_found("realm not found"));
     }
-
-    // A combined actor + Realm selector is the realm-scoped actor frontier
-    // used for authoring. Realm-only remains the Seal frontier surface.
-    let actor_realm_selector = actor_id.as_ref().zip(realm_selector.as_ref());
-
-    // Realm selector → Realm Seal view `{realm_id, seal_id,
-    // control_event_set_root, state_root, hlc}`: the registered sourcing for
-    // single-leaf Control Move `seal_basis` (`leaves=[seal_id]`) and
-    // DataEvent `seal_ref`.
-    if actor_realm_selector.is_none()
-        && let Some(realm_value) = realm_selector.as_ref()
-    {
-        let realm_id = RealmId::new(realm_value.clone())
-            .map_err(|_| AppError::param_invalid("invalid realm_id"))?;
-        let own_pcr = state
-            .projections()
-            .snapshot()
-            .realm_is_principal_control_for_actor(realm_value, session_core_id.as_str());
-        let managed_agent_pcr =
-            crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
+    if managed_agent_pcr {
+        // Managed Agent PCR Seals are device-generation artifacts. When
+        // accepted Events are ahead of the accepted Seal, return the previous
+        // signed head so the delegated controller can author the successor;
+        // the service must not synthesize that Seal.
+        let Some(seal) =
+            crate::routing::identity::managed_agent_pcr::managed_agent_event_seal_head(
                 state,
-                &session.actor,
-                realm_value,
+                realm_id.as_str(),
             )
-            .await?;
-        let accessible = own_pcr
-            || managed_agent_pcr
-            || crate::routing::spaces::space::realm_id_accessible(
-                state,
-                realm_value,
-                Some(&session),
+            .await?
+        else {
+            return Err(AppError::new(
+                ErrorCode::FrontierUnavailable,
+                "managed Agent PCR has no accepted device-signed Seal",
             )
-            .await;
-        if !accessible {
-            // Same code as invisible-event reads: existence must not leak.
-            return Err(AppError::not_found("realm not found"));
-        }
-        if managed_agent_pcr {
-            // Managed Agent PCR Seals are device-generation artifacts. When
-            // accepted Events are ahead of the accepted Seal, return the
-            // previous signed head so the delegated controller can author the
-            // successor; the service must not try to synthesize that Seal.
-            let Some(seal) =
-                crate::routing::identity::managed_agent_pcr::managed_agent_event_seal_head(
-                    state,
-                    realm_id.as_str(),
-                )
-                .await?
-            else {
-                return Err(AppError::new(
-                    ErrorCode::FrontierUnavailable,
-                    "managed Agent PCR has no accepted device-signed Seal",
-                )
-                .with_status(StatusCode::SERVICE_UNAVAILABLE));
-            };
-            let governance_policy =
-                crate::control_proposal::control_proposal_policy(state, &realm_id, &[])
-                    .await
-                    .map_err(|error| {
-                        AppError::internal(format!(
-                            "control governance policy unavailable: {error}"
-                        ))
-                    })?;
-            let observation_coordinate =
-                realm_seal_frontier_observation_coordinate(state, &realm_id).await?;
-            let frontier = RealmSealFrontierView::new(
-                realm_id,
-                arkret_wire::SealBasis {
-                    leaves: vec![seal.id.clone()],
-                },
-                state
-                    .projections()
-                    .control_governance_health(
-                        &seal.realm_id,
-                        chrono::Utc::now(),
-                        governance_policy,
-                    )
-                    .map_err(|error| {
-                        AppError::internal(format!(
-                            "control governance health unavailable: {error}"
-                        ))
-                    })?,
-                observation_coordinate,
-            );
-            return soland_http::result::json_ok(EventsFrontierAccountClientState {
-                frontier: EventsFrontierView::RealmSeal(frontier),
-                receipts: vec![ManagedAgentPcrSealHeadReceipt {
-                    kind: ManagedAgentPcrSealHeadReceiptKind::ManagedAgentPcrSealHeadV1,
-                    seal,
-                }],
-            });
-        }
-        let head = crate::notary::ensure_realm_seal_head(state, &realm_id)
-            .map_err(|e| AppError::internal(format!("seal head unavailable: {e}")))?;
-        // The Realm frontier is the registered source for seal_basis/seal_ref.
-        // Re-materialize on every read so accepted Control Events advance a
-        // locally notarized Realm even after its bootstrap Seal already
-        // exists. Returning `head` unconditionally here left every later
-        // capability/policy Move permanently outside the authorization state.
-        let stats = state
-            .event_queries()
-            .realm_event_stats(realm_id.as_str())
-            .await
-            .map_err(|error| {
-                AppError::internal(format!(
-                    "canonical Realm Event preflight unavailable: {error}"
-                ))
-            })?;
-        if stats.count == 0 {
-            return Err(AppError::not_found(
-                "realm has no accepted Seal on this deployment",
-            ));
-        }
-        let seal =
-            match crate::routing::events::event_log::governance_proof::materialize_realm_event_seal(
-                state, &realm_id,
-            )
-            .await
-            {
-                Ok(view) => view.accepted_seal,
-                // A Realm notarized by another DID may legitimately have accepted
-                // Events ahead of the locally visible signed head. Preserve that
-                // authoritative head; only the designated notary may advance it.
-                Err(error) if error.code == ErrorCode::FrontierUnavailable && head.is_some() => {
-                    head.expect("checked existing Realm Seal head")
-                }
-                Err(error) => return Err(error),
-            };
+            .with_status(StatusCode::SERVICE_UNAVAILABLE));
+        };
         let governance_policy =
             crate::control_proposal::control_proposal_policy(state, &realm_id, &[])
                 .await
                 .map_err(|error| {
                     AppError::internal(format!("control governance policy unavailable: {error}"))
                 })?;
-        let governance_health =
-            frontier_control_governance_health(state, &realm_id, governance_policy).await?;
         let observation_coordinate =
             realm_seal_frontier_observation_coordinate(state, &realm_id).await?;
-        return soland_http::result::json_ok(EventsFrontierAccountClientState {
-            frontier: EventsFrontierView::RealmSeal(RealmSealFrontierView::new(
-                realm_id.clone(),
-                arkret_wire::SealBasis {
-                    leaves: vec![seal.id],
-                },
-                governance_health,
-                observation_coordinate,
-            )),
-            receipts: Vec::new(),
+        let frontier = RealmSealFrontierView::new(
+            realm_id,
+            arkret_wire::SealBasis {
+                leaves: vec![seal.id.clone()],
+            },
+            state
+                .projections()
+                .control_governance_health(&seal.realm_id, chrono::Utc::now(), governance_policy)
+                .map_err(|error| {
+                    AppError::internal(format!("control governance health unavailable: {error}"))
+                })?,
+            observation_coordinate,
+        );
+        return soland_http::result::json_ok(SealFrontierState {
+            frontier,
+            receipts: vec![ManagedAgentPcrSealHeadReceipt {
+                kind: ManagedAgentPcrSealHeadReceiptKind::ManagedAgentPcrSealHeadV1,
+                seal,
+            }],
         });
     }
 
+    let head = crate::notary::ensure_realm_seal_head(state, &realm_id)
+        .map_err(|error| AppError::internal(format!("seal head unavailable: {error}")))?;
+    // Re-materialize on every read so accepted Control Events advance a
+    // locally notarized Realm after its bootstrap Seal already exists.
+    let stats = state
+        .event_queries()
+        .realm_event_stats(realm_id.as_str())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "canonical Realm Event preflight unavailable: {error}"
+            ))
+        })?;
+    if stats.count == 0 {
+        return Err(AppError::not_found(
+            "realm has no accepted Seal on this deployment",
+        ));
+    }
+    let seal =
+        match crate::routing::events::event_log::governance_proof::materialize_realm_event_seal(
+            state, &realm_id,
+        )
+        .await
+        {
+            Ok(view) => view.accepted_seal,
+            // A Realm notarized by another DID may legitimately have accepted
+            // Events ahead of the locally visible signed head. Preserve that
+            // authoritative head; only the designated notary may advance it.
+            Err(error) if error.code == ErrorCode::FrontierUnavailable && head.is_some() => {
+                head.expect("checked existing Realm Seal head")
+            }
+            Err(error) => return Err(error),
+        };
+    let governance_policy = crate::control_proposal::control_proposal_policy(state, &realm_id, &[])
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("control governance policy unavailable: {error}"))
+        })?;
+    let governance_health =
+        frontier_control_governance_health(state, &realm_id, governance_policy).await?;
+    let observation_coordinate =
+        realm_seal_frontier_observation_coordinate(state, &realm_id).await?;
+    soland_http::result::json_ok(SealFrontierState {
+        frontier: RealmSealFrontierView::new(
+            realm_id,
+            arkret_wire::SealBasis {
+                leaves: vec![seal.id],
+            },
+            governance_health,
+            observation_coordinate,
+        ),
+        receipts: Vec::new(),
+    })
+}
+
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.frontier", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.frontier"))]
+async fn events_frontier(
+    aa: crate::routing::system::extract::AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> soland_http::result::JsonResult<EventsFrontierState> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone())
+        .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
+    let query_body = req
+        .parse_json::<arkret_models_collaboration::event_query::EventsFrontierRequestBody>()
+        .await
+        .map_err(|_| AppError::json_invalid("invalid ak.self.events.read.frontier request body"))?;
+    let actor_id = query_body.actor_id.as_str().to_owned();
+    let realm_selector = query_body
+        .realm_id
+        .as_ref()
+        .map(|realm_id| realm_id.as_str().to_owned());
+
     // Actor selectors are split deliberately: combined Realm+actor is the
     // only authoring surface; actor-only is a read-only per-Realm aggregate.
-    let actor = actor_id.expect("selector presence checked above");
+    let actor = actor_id;
     let actor_id = arkret_wire::DidCoreId::new(actor.clone())
         .map_err(|_| AppError::param_invalid("actor_id must be a valid core identity"))?;
     if let Some(realm_value) = realm_selector {
@@ -1380,9 +1355,8 @@ async fn events_frontier(
             return Err(AppError::not_found("realm not found"));
         }
         let frontier = load_realm_actor_frontier(state, realm_id, actor_id).await?;
-        return soland_http::result::json_ok(EventsFrontierAccountClientState {
+        return soland_http::result::json_ok(EventsFrontierState {
             frontier: EventsFrontierView::RealmActor(frontier),
-            receipts: Vec::new(),
         });
     }
 
@@ -1465,9 +1439,8 @@ async fn events_frontier(
     aggregate
         .validate()
         .map_err(|error| AppError::internal(format!("actor aggregate is invalid: {error}")))?;
-    soland_http::result::json_ok(EventsFrontierAccountClientState {
+    soland_http::result::json_ok(EventsFrontierState {
         frontier: EventsFrontierView::ActorAggregate(aggregate),
-        receipts: Vec::new(),
     })
 }
 

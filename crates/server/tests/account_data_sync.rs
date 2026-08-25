@@ -144,7 +144,7 @@ async fn signed_account_data_submission(
         &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
     )
     .expect("fixture actor full DID projects to a core id");
-    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
         TestClient::query("http://server/_arkret/self/events/frontier")
             .json(&serde_json::json!({"actor_id": actor_core, "realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)
@@ -349,7 +349,7 @@ async fn submit_actor_private_event(
         &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
     )
     .expect("fixture actor full DID projects to a core id");
-    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
         TestClient::query("http://server/_arkret/self/events/frontier")
             .json(&serde_json::json!({"actor_id": actor_core, "realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)

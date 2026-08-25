@@ -105,6 +105,7 @@ fn install_event_read_query_bindings(doc: &mut Value) {
     for path in [
         "/_arkret/self/events/describe",
         "/_arkret/self/events/frontier",
+        "/_arkret/self/seals/frontier",
         "/_arkret/self/events",
         "/_arkret/self/events/resolve",
         "/_arkret/peer/events/describe",

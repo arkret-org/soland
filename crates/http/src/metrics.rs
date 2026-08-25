@@ -488,6 +488,9 @@ fn canonical_event_read_operation(req: &Request) -> Option<&'static str> {
         ("QUERY", "/_arkret/self/events/frontier") => {
             Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_FRONTIER)
         }
+        ("QUERY", "/_arkret/self/seals/frontier") => {
+            Some(arkret_wire::ServiceOperationId::SELF_SEALS_READ_FRONTIER)
+        }
         ("QUERY", "/_arkret/self/events") => {
             Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN)
         }

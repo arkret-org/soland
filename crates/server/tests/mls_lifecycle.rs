@@ -193,7 +193,7 @@ async fn realm_seal_frontier(
     realm_id: &str,
 ) -> arkret_models_collaboration::event_sync::RealmSealFrontierView {
     for attempt in 0..50 {
-        let mut response = TestClient::query("http://server/_arkret/self/events/frontier")
+        let mut response = TestClient::query("http://server/_arkret/self/seals/frontier")
             .json(&serde_json::json!({"realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
@@ -201,14 +201,9 @@ async fn realm_seal_frontier(
         let status = response.status_code;
         let body: Value = response.take_json().await.unwrap_or(Value::Null);
         if status == Some(StatusCode::OK) {
-            let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+            let frontier: arkret_models_collaboration::event_sync::SealFrontierState =
                 serde_json::from_value(body).expect("typed Realm Seal frontier");
-            let arkret_models_collaboration::event_sync::EventsFrontierView::RealmSeal(frontier) =
-                frontier.frontier
-            else {
-                panic!("Realm-only selector returned the wrong frontier variant");
-            };
-            return frontier;
+            return frontier.frontier;
         }
         assert_eq!(
             status,

@@ -205,7 +205,15 @@ pub(super) async fn check_device_revocation_gate(
             state,
         )
         .await
-        .map_err(|_| schema_violation("accepted-device possession proof is invalid"))?;
+        .map_err(|error| {
+            tracing::warn!(
+                %error,
+                principal_id = %request.principal_authority.principal_id,
+                device_id = %request.device_id,
+                "accepted-device possession proof verification failed"
+            );
+            schema_violation("accepted-device possession proof is invalid")
+        })?;
         (
             Some(AcceptedDevicePossessionVerification {
                 proof_digest: proof

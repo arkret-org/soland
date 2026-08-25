@@ -1009,7 +1009,7 @@ async fn events_describe_and_single_event_submit_work_body() {
     );
 
     // Actor selector → spec actor frontier `{actor_id, actor_seq, event_id}`.
-    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
         TestClient::query("http://server/_arkret/self/events/frontier")
             .json(&serde_json::json!({
                 "actor_id": fixture_actor_core_id("did:web:alice.example")
@@ -1058,7 +1058,7 @@ async fn events_describe_and_single_event_submit_work_body() {
         arkret_identifiers::DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
     );
     state.test_realms().lock().upsert(projection_only_entry);
-    let mut seal_view_response = TestClient::query("http://server/_arkret/self/events/frontier")
+    let mut seal_view_response = TestClient::query("http://server/_arkret/self/seals/frontier")
         .json(&serde_json::json!({"realm_id": projection_only_realm}))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
@@ -1076,7 +1076,7 @@ async fn events_describe_and_single_event_submit_work_body() {
     );
 
     // Inaccessible realm must read as not_found (no existence leak).
-    let mut hidden = TestClient::query("http://server/_arkret/self/events/frontier")
+    let mut hidden = TestClient::query("http://server/_arkret/self/seals/frontier")
         .json(&serde_json::json!({
             "realm_id": "ak:realm:AeqRpQIZxaoTV-G0Cl9jzAJ6wSak3GJUvizlNJRsvSFY"
         }))

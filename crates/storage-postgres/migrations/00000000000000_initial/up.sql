@@ -1780,6 +1780,20 @@ CREATE TABLE public.moderation_queue_items (
 
 CREATE INDEX moderation_queue_items_realm_idx ON public.moderation_queue_items USING btree (realm_id);
 
+-- Append-only projection of the four moderation appeal Event variants. The
+-- source Event token makes reducer replay idempotent while the local identity
+-- column preserves canonical append order for audit reads.
+CREATE TABLE public.moderation_appeal_events (
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    appeal_id bytea NOT NULL CHECK (octet_length(appeal_id) = 33),
+    source_event_id bytea NOT NULL CHECK (octet_length(source_event_id) = 33),
+    payload jsonb NOT NULL,
+    projected_at timestamp with time zone NOT NULL,
+    CONSTRAINT moderation_appeal_events_source_event_id_key UNIQUE (source_event_id)
+);
+
+CREATE INDEX moderation_appeal_events_appeal_idx ON public.moderation_appeal_events USING btree (appeal_id, pk);
+
 CREATE TABLE public.organizations (
     organization_id text PRIMARY KEY,
     organization_principal_id text NOT NULL,
@@ -2143,7 +2157,7 @@ CREATE TABLE public.projection_circle_members (
     invited_at timestamp with time zone,
     joined_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT projection_circle_members_state_check CHECK ((state = ANY (ARRAY['invited'::text, 'active'::text, 'removed'::text, 'banned'::text, 'left'::text])))
+    CONSTRAINT projection_circle_members_state_check CHECK ((state = ANY (ARRAY['invite'::text, 'join'::text, 'leave'::text, 'ban'::text, 'knock'::text])))
 );
 
 ALTER TABLE ONLY public.projection_circle_members

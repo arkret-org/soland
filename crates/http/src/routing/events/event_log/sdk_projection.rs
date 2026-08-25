@@ -757,6 +757,17 @@ fn session_actor_core_id(session: &SessionRecord) -> Option<arkret_wire::DidCore
     arkret_wire::DidCoreId::new(session.actor.clone()).ok()
 }
 
+fn is_governance_replay_input(record: &AcceptedEvent) -> bool {
+    let is_anchor_unit = matches!(
+        record.kind.as_str(),
+        arkret_wire::event_kind_str::REALM_CREATE | arkret_wire::event_kind_str::DEVICE_REANCHOR
+    );
+    is_anchor_unit
+        || (record.envelope.get("seal_basis").is_some()
+            && record.envelope.get("seal_ref").is_none()
+            && record.envelope.get("auth_context").is_none())
+}
+
 pub(crate) async fn event_visible_to_session(
     state: &AppState,
     record: &AcceptedEvent,
@@ -774,11 +785,7 @@ pub(crate) async fn event_visible_to_session(
             // Move named by the Realm Seal closure so a new member can perform
             // the T1/T3 replay required by encryption-and-audit.md §2.5.4.
             // `since_join` continues to crop DataEvents below.
-            let is_control_move = record
-                .kind
-                .parse::<arkret_wire::EventKind>()
-                .is_ok_and(|kind| kind.is_reducer_input());
-            let realm_visible = if is_control_move {
+            let realm_visible = if is_governance_replay_input(record) {
                 crate::routing::realm_has_member(state, &realm_id, &session.actor).await
             } else {
                 realm_event_visible_to_session(
@@ -893,6 +900,40 @@ mod refs_limit_tests {
 
     fn refs_object(refs: serde_json::Value) -> serde_json::Map<String, Value> {
         json!({ "refs": refs }).as_object().unwrap().clone()
+    }
+
+    fn visibility_record(kind: &str, envelope: Value) -> AcceptedEvent {
+        AcceptedEvent {
+            event_id: "ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM".to_owned(),
+            actor_id: "ak:did_core:web:alice.example".to_owned(),
+            actor_seq: 0,
+            realm_id: None,
+            kind: kind.to_owned(),
+            schema_id: "ak.schema.test.v1".to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
+            canonical_digest:
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
+            canonical_bytes: Vec::new(),
+            envelope,
+            received_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn governance_replay_visibility_does_not_classify_data_events_as_control_moves() {
+        let message = visibility_record(
+            arkret_wire::event_kind_str::MESSAGE_CREATE,
+            json!({"seal_ref": "ak:seal:sha256:00", "auth_context": {}}),
+        );
+        let control = visibility_record(
+            arkret_wire::event_kind_str::MEMBER_STATE,
+            json!({"seal_basis": {"leaves": []}}),
+        );
+        let genesis = visibility_record(arkret_wire::event_kind_str::REALM_CREATE, json!({}));
+
+        assert!(!is_governance_replay_input(&message));
+        assert!(is_governance_replay_input(&control));
+        assert!(is_governance_replay_input(&genesis));
     }
 
     // scalability-constraints.md §2 — total refs[] across all roles ≤ 128.

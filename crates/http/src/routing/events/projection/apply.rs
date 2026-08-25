@@ -771,6 +771,7 @@ pub(crate) async fn mirror_moderation_effect_to_persistence(
         #[serde(rename = "appeal_id", skip_serializing_if = "Option::is_none")]
         derived_appeal_id: Option<String>,
         event_kind: arkret_wire::EventKind,
+        source_event_id: arkret_wire::EventId,
         appeal_state: String,
         #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
         projected_at: chrono::DateTime<chrono::Utc>,
@@ -786,6 +787,7 @@ pub(crate) async fn mirror_moderation_effect_to_persistence(
             payload,
             derived_appeal_id,
             event_kind: operation.event_kind.clone(),
+            source_event_id: operation.context.event_id.clone(),
             appeal_state: appeal_state.to_owned(),
             projected_at: operation.created_at.to_owned(),
         })

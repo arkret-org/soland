@@ -144,7 +144,7 @@ async fn bootstrap_realm(state: &AppState, token: &str, title: &str) -> String {
 /// The accepted Seal a Control Move of `realm_id` cites in `seal_basis`.
 async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> SealId {
     for attempt in 0..50 {
-        let mut response = TestClient::query("http://server/_arkret/self/events/frontier")
+        let mut response = TestClient::query("http://server/_arkret/self/seals/frontier")
             .json(&serde_json::json!({"realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state))
@@ -152,13 +152,9 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
         let status = response.status_code;
         let body: Value = response.take_json().await.unwrap_or(Value::Null);
         if status == Some(StatusCode::OK) {
-            let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+            let frontier: arkret_models_collaboration::event_sync::SealFrontierState =
                 serde_json::from_value(body).expect("typed Realm Seal frontier");
-            let arkret_models_collaboration::event_sync::EventsFrontierView::RealmSeal(frontier) =
-                frontier.frontier
-            else {
-                panic!("Realm-only selector returned the wrong frontier variant");
-            };
+            let frontier = frontier.frontier;
             return frontier
                 .sole_leaf()
                 .expect("single-signer Realm frontier")
@@ -180,7 +176,7 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
 
 /// The next position on the caller's Realm-scoped actor chain.
 async fn actor_frontier(state: &AppState, token: &str, realm_id: &str) -> (u64, Vec<String>) {
-    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
         TestClient::query("http://server/_arkret/self/events/frontier")
             .json(&serde_json::json!({"actor_id": alice_core_id(), "realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)
