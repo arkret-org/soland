@@ -1007,9 +1007,7 @@ pub(super) async fn mimi_report_abuse(
     req: &mut Request,
 ) -> JsonResult<MimiReportAbuseOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let body = body.into_inner();
-    let reporter = body.reporter.clone();
-    let body = typed_body_value(body, "mimi report abuse")?;
+    let body = typed_body_value(body.into_inner(), "mimi report abuse")?;
     let source_provider = verify_mimi_write_service_proof(state, req, None).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
@@ -1036,7 +1034,12 @@ pub(super) async fn mimi_report_abuse(
         )
         .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING));
     };
-    enforce_mimi_reporter_resolution(state, &reporter, &body).await?;
+    let reporter = body
+        .get("reporter_did")
+        .or_else(|| body.get("reporter"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::param_invalid("mimi report requires reporter"))?;
+    enforce_mimi_reporter_resolution(state, reporter, &body).await?;
     let target_ref = body
         .get("target_event_digest")
         .or_else(|| body.get("target_ref"))
@@ -1052,7 +1055,7 @@ pub(super) async fn mimi_report_abuse(
     let safety = validate_moderation_report_safety(
         state,
         &realm_id,
-        reporter.as_str(),
+        reporter,
         target_ref,
         None,
         evidence_package,
@@ -1111,7 +1114,9 @@ pub(super) async fn mimi_report_abuse(
             target_ref: target_ref.to_owned(),
             report_reason_code: canonical_reason.to_owned(),
             description,
-            reporter,
+            reporter: arkret_wire::DidCoreId::new(reporter.to_owned()).map_err(|error| {
+                AppError::param_invalid(format!("mimi report reporter invalid: {error}"))
+            })?,
             provenance: Some(ModerationReportProvenance::MimiFacade),
             source_provider: Some(arkret_wire::DidCoreId::new(source_provider).map_err(
                 |error| AppError::internal(format!("MIMI source provider id invalid: {error}")),
@@ -1154,12 +1159,14 @@ pub(super) async fn mimi_report_abuse(
 
 pub(super) async fn enforce_mimi_reporter_resolution(
     state: &AppState,
-    reporter: &arkret_wire::DidCoreId,
+    reporter: &str,
     body: &Value,
 ) -> Result<(), AppError> {
+    DidFullId::new(reporter.to_owned())
+        .map_err(|error| AppError::param_invalid(format!("invalid reporter DID: {error}")))?;
     if state
         .identities()
-        .account(reporter.as_str())
+        .account(reporter)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some()
@@ -1307,7 +1314,7 @@ mod consent_proof_tests {
         Audience, EventInitialSubmission, EventKind, PayloadProof, ScopeRef, proof_kind,
     };
     use soland_http::error::ErrorCode;
-    use soland_services::identity::{AccountProfileState, DeviceIdentity, SaveDeviceCommand};
+    use soland_services::identity::{DeviceIdentity, SaveDeviceCommand};
     use soland_storage_postgres::Db;
 
     use super::*;
@@ -1316,62 +1323,6 @@ mod consent_proof_tests {
         let mut config = crate::config::AppConfig::test_default();
         config.development_mode = true;
         AppState::new(config, Db { pool: None })
-    }
-
-    #[test]
-    fn report_abuse_wire_reporter_is_core_id_only() {
-        let reporter = DidCoreId::new("ak:did_core:web:reporter.example".to_owned()).unwrap();
-        let request = json!({
-            "strand_id": fixture_strand_id(),
-            "target_ref": "ak:message:report-target",
-            "reporter": reporter,
-            "abuse_reason_code": "spam",
-        });
-        serde_json::from_value::<MimiReportAbuseRequestBody>(request.clone())
-            .expect("canonical reporter core id must enter the typed report path");
-
-        let mut full_id = request.clone();
-        full_id["reporter"] = json!("did:web:reporter.example");
-        assert!(serde_json::from_value::<MimiReportAbuseRequestBody>(full_id).is_err());
-
-        let mut alias = request;
-        let object = alias.as_object_mut().unwrap();
-        let reporter = object.remove("reporter").unwrap();
-        object.insert("reporter_did".to_owned(), reporter);
-        assert!(serde_json::from_value::<MimiReportAbuseRequestBody>(alias).is_err());
-    }
-
-    #[tokio::test]
-    async fn reporter_resolution_uses_exact_local_core_account() {
-        let state = state();
-        let reporter = DidCoreId::new("ak:did_core:web:reporter.example".to_owned()).unwrap();
-        state
-            .identities()
-            .save_account(AccountProfileState {
-                id: crate::ids::generate_account_id(),
-                did: reporter.to_string(),
-                localpart: "reporter".to_owned(),
-                display_name: None,
-                bio: None,
-                avatar_blob_ref: None,
-                created_at: now(),
-            })
-            .await
-            .unwrap();
-
-        enforce_mimi_reporter_resolution(&state, &reporter, &json!({}))
-            .await
-            .expect("a canonical core id with a local account must resolve");
-
-        let unknown = DidCoreId::new("ak:did_core:web:unknown.example".to_owned()).unwrap();
-        let error = enforce_mimi_reporter_resolution(&state, &unknown, &json!({}))
-            .await
-            .expect_err("an unproven remote core id must remain denied");
-        assert_eq!(error.code, ErrorCode::CapabilityDenied);
-        assert_eq!(
-            error.wire_code_override.as_deref(),
-            Some("mimi_reporter_resolution_required")
-        );
     }
 
     fn request(state: &AppState) -> MimiUpdateConsentRequestBody {

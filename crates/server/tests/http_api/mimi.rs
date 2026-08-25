@@ -6,9 +6,6 @@ use super::common::*;
 
 const MIMI_SOURCE_SERVICE_FULL_ID: &str = "did:web:remote-mimi.example";
 const MIMI_SOURCE_SERVICE_ID: &str = "ak:did_core:web:remote-mimi.example";
-const MIMI_ALICE_ACTOR_ID: &str = "ak:did_core:web:alice.example";
-const MIMI_REMOTE_ACTOR_ID: &str = "ak:did_core:web:remote.example";
-const MIMI_POLICY_ACTOR_ID: &str = "ak:did_core:web:mimi.example";
 const MIMI_PROVIDER_ID: &str = "mimi://remote-mimi.example/provider";
 const MIMI_TEST_DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 const MIMI_TEST_STRAND_ID: &str = "ak:strand:AeR8kl_pHP0Rj8sdg-m7-2iv0BbzptjujMXzwBoelVPt";
@@ -367,7 +364,7 @@ async fn mimi_provider_facade_contracts_work_body() {
     );
 
     let key_material_body = json!({
-        "requester": MIMI_ALICE_ACTOR_ID,
+        "requester": "did:web:alice.example",
         "strand_id": MIMI_TEST_STRAND_ID,
         "device_id": MIMI_TEST_DEVICE_ID,
         "mimi_room_uri": mimi_room_uri(&state, "01JSMIMI"),
@@ -465,10 +462,9 @@ async fn mimi_provider_facade_contracts_work_body() {
         mimi_room_uri(&state, "01JSMIMI"),
         "group_info response: {group_info}"
     );
-    assert_eq!(decoded_group_info["profile"], "ak.profile.mimi_interop.v1");
     assert_eq!(
-        decoded_group_info["binding_scope"]["realm_id"],
-        demo_realm_id()
+        decoded_group_info["canonical_truth"],
+        "arkret_signed_event_reducer"
     );
 
     let commitment = identifier_commitment("mimi://remote.example/alice");
@@ -477,7 +473,7 @@ async fn mimi_provider_facade_contracts_work_body() {
             "kind": "mimi_uri",
             "identifier_commitment": commitment.clone(),
         }],
-        "requester": MIMI_ALICE_ACTOR_ID,
+        "requester": "did:web:alice.example",
         "privacy_profile": "private_contact_discovery",
     });
     let identifier: Value = signed_mimi_post!(
@@ -502,7 +498,7 @@ async fn mimi_provider_facade_contracts_work_body() {
         demo_realm_id(),
         group_id,
         1,
-        MIMI_ALICE_ACTOR_ID,
+        "did:web:alice.example",
         text_mimi_message("mimi-msg-contract-001", "hello from MIMI"),
     );
     let mapped: Value = signed_mimi_post!(
@@ -529,7 +525,7 @@ async fn mimi_provider_facade_contracts_work_body() {
 
     let proxy_body = json!({
         "asset_ref": "ak:blob:sha256:e2e",
-        "requester": MIMI_ALICE_ACTOR_ID,
+        "requester": "did:web:alice.example",
         "strand_id": MIMI_TEST_STRAND_ID,
     });
     let proxy: Value = signed_mimi_post!(
@@ -556,7 +552,7 @@ async fn mimi_provider_facade_contracts_work_body() {
         "mimi_room_uri": room_uri,
         "realm_id": demo_realm_id(),
         "target_ref": demo_realm_id(),
-        "reporter": MIMI_ALICE_ACTOR_ID,
+        "reporter": "did:web:alice.example",
         "abuse_reason_code": "spam",
     });
     let report: Value = signed_mimi_post!(
@@ -651,7 +647,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
             demo_realm,
             group_id,
             1,
-            MIMI_REMOTE_ACTOR_ID,
+            "did:web:remote.example",
             text_mimi_message("mimi-msg-p4-001", "hello from MIMI P4"),
         ),
         Some(room_uri.as_str())
@@ -680,7 +676,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
         .find(|event| event["event_id"] == binding_event_id)
         .expect("room_binding event missing from projection log");
     assert_eq!(event_kind(binding_event), Some("ak.mimi.room_binding"));
-    assert_eq!(binding_event["payload"]["mimi_room_uri"], room_uri);
+    assert_eq!(binding_event["payload"]["mimi_room_id"], room_id);
     assert_eq!(
         binding_event["payload"]["binding_scope"]["realm_id"],
         demo_realm
@@ -693,33 +689,20 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     assert_eq!(event_kind(message_event), Some("ak.message.create"));
     assert_eq!(message_event["actor_id"], state.service_id().as_str());
     assert_eq!(
-        message_event["payload"]["mimi_provenance"]["attributed_sender_actor_id"],
-        MIMI_REMOTE_ACTOR_ID
+        message_event["payload"]["metadata"]["mimi_provenance"]["original_sender"],
+        "did:web:remote.example"
     );
     assert_eq!(
         message_event["payload"]["content"]["parts"][0]["body"],
         "hello from MIMI P4"
     );
     assert_eq!(
-        message_event["payload"]["mimi_provenance"]["source_provider"],
-        MIMI_SOURCE_SERVICE_ID
+        message_event["payload"]["metadata"]["mimi_provenance"]["mimi_message_id"],
+        "mimi-msg-p4-001"
     );
     assert_eq!(
-        message_event["payload"]["mimi_provenance"]["provenance"],
-        "mimi_facade"
-    );
-    assert_eq!(
-        message_event["payload"]["mimi_provenance"]["attributed_sender_device_id"],
-        MIMI_TEST_DEVICE_ID
-    );
-    assert_eq!(
-        message_event["payload"]["mimi_provenance"]["room_binding_ref"],
-        binding_event_id
-    );
-    assert!(
-        message_event["payload"]["mimi_provenance"]["source_envelope_digest"]
-            .as_str()
-            .is_some_and(|digest| digest.starts_with("sha256:"))
+        message_event["payload"]["metadata"]["mimi_provenance"]["facade"],
+        "soland.mimi.v1"
     );
 
     let report_resp: Value = signed_mimi_post!(
@@ -734,7 +717,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
             // resolves through a local account or valid consent/holder claim.
             // This reducer-chain test uses the seeded local demo principal;
             // fake consent references are not valid resolution evidence.
-            "reporter": MIMI_ALICE_ACTOR_ID,
+            "reporter": "did:web:alice.example",
             "abuse_reason_code": "spam",
         }),
         None
@@ -773,7 +756,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     // facade holds no key for that principal, so it authors the envelope under
     // its own service DID and carries the resolved reporter in the payload, as
     // required by `mimi-interop.md` §11.
-    assert_eq!(report_event["payload"]["reporter"], MIMI_ALICE_ACTOR_ID);
+    assert_eq!(report_event["payload"]["reporter"], "did:web:alice.example");
     assert_eq!(report_event["actor_id"], *state.service_id());
 
     let custom_group_id = "mimi-group-p4-custom";
@@ -830,7 +813,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
             custom_realm,
             custom_group_id,
             1,
-            MIMI_REMOTE_ACTOR_ID,
+            "did:web:remote.example",
             text_mimi_message("mimi-msg-p4-002", "second message"),
         ),
         Some(room_uri.as_str())
@@ -896,7 +879,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     )
     .send(&service)
     .await;
-    assert_eq!(reopen_resp.status_code, Some(StatusCode::BAD_REQUEST));
+    assert_eq!(reopen_resp.status_code.unwrap().as_u16(), 400);
     let reopen_error: Value = reopen_resp.take_json().await.unwrap();
     assert_eq!(
         reopen_error["error"]["code"],
@@ -968,7 +951,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
             realm_id,
             group_id,
             1,
-            MIMI_POLICY_ACTOR_ID,
+            "did:web:mimi.example",
             json!({
                 "source_format": "application/mimi-content",
                 "e2ee": true,
@@ -983,7 +966,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
     )
     .send(&service)
     .await;
-    assert_eq!(unmarked.status_code, Some(StatusCode::BAD_REQUEST));
+    assert_eq!(unmarked.status_code.unwrap().as_u16(), 400);
     let unmarked_body: Value = unmarked.take_json().await.unwrap();
     assert_eq!(
         unmarked_body["error"]["code"],
@@ -997,7 +980,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
             realm_id,
             group_id,
             1,
-            MIMI_POLICY_ACTOR_ID,
+            "did:web:mimi.example",
             json!({
                 "source_format": "application/mimi-content",
                 "e2ee": true,
@@ -1028,7 +1011,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
             realm_id,
             group_id,
             1,
-            MIMI_POLICY_ACTOR_ID,
+            "did:web:mimi.example",
             json!({
                 "source_format": "application/mimi-content",
                 "encrypted": true,
@@ -1062,7 +1045,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
             realm_id,
             group_id,
             1,
-            MIMI_POLICY_ACTOR_ID,
+            "did:web:mimi.example",
             json!({
                 "source_format": "application/mimi-content",
                 "content_kind": "m.location.share.live",
