@@ -359,11 +359,15 @@ async fn open_service_resolution_serves_byte_canonical_record_body() {
     // Trust preflights pin and hash the exact wire bytes (service-surface.md),
     // so the body must already be byte-for-byte canonical — a declaration-order
     // `Json` rendering of the record is not a valid encoding here.
-    let record: arkret_models_identity::ServiceResolutionRecord =
+    let resolution: arkret_models_identity::AuthenticatedServiceResolution =
         arkret_canonical::canonical::from_canonical_json_slice(body.as_bytes())
             .expect("current-record response body must be byte-for-byte canonical JSON");
     assert_eq!(
-        record.record.service_id.as_str(),
+        resolution
+            .service_resolution_record
+            .record
+            .service_id
+            .as_str(),
         state.service_id().as_str()
     );
 }
@@ -512,7 +516,7 @@ async fn describe_returns_development_mode_field_body() {
     // shape sodmin must NOT render a red banner for.
     let prod_config = AppConfig {
         development_mode: false,
-        public_base_url: "https://server".to_owned(),
+        public_base_url: "https://server.example.com".to_owned(),
         admin_principal_dids: vec!["did:web:ops.example".to_owned()],
         to_device_queue_capacity: 10_000,
         ..test_config()
@@ -601,7 +605,7 @@ async fn healthz_exposes_hardening_status_body() {
     // should rise materially.
     let prod_config = AppConfig {
         development_mode: false,
-        public_base_url: "https://server".to_owned(),
+        public_base_url: "https://server.example.com".to_owned(),
         admin_principal_dids: vec!["did:web:ops.example".to_owned()],
         to_device_queue_capacity: 10_000,
         tls_cert_path: Some(std::path::PathBuf::from("/etc/soland/tls.crt")),

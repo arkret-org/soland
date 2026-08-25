@@ -62,12 +62,18 @@ struct AgentGrantPresentation {
 /// as the server's verifier reconstructs it. The grant rides the RFC 9449
 /// `DPoP` authorization scheme; `Bearer` is reserved for local dev sessions.
 fn agent_grant_headers(
+    state: &AppState,
     presentation: &AgentGrantPresentation,
     method: &str,
     path: &str,
 ) -> (String, String) {
+    let htu = format!(
+        "{}{}",
+        state.config().public_base_url.trim_end_matches('/'),
+        path
+    );
     let proof = arkret_signatures::dpop::build_dpop_proof(
-        &arkret_signatures::dpop::DpopProofRequest::new(method, format!("http://server{path}"))
+        &arkret_signatures::dpop::DpopProofRequest::new(method, htu)
             .access_token(presentation.grant_jwt.clone()),
         &presentation.holder_key,
     )
@@ -553,16 +559,21 @@ async fn agent_session_without_stream_scope_cannot_subscribe_events_body() {
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
 
-    let (authorization, dpop) =
-        agent_grant_headers(&presentation, "GET", "/_arkret/self/events/subscribe");
+    let (authorization, dpop) = agent_grant_headers(
+        &state,
+        &presentation,
+        "GET",
+        "/_arkret/self/events/subscribe",
+    );
     let mut response = TestClient::get(subscribe_url)
         .add_header("authorization", authorization, true)
         .add_header("dpop", dpop, true)
         .send(&app_from_state(state))
         .await;
 
-    assert_eq!(response.status_code.unwrap(), StatusCode::FORBIDDEN);
+    let status = response.status_code.unwrap();
     let body: Value = response.take_json().await.unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN, "response body: {body}");
     assert_agent_scope_denied(&body, "ak.self.events.stream.subscribe");
 }
 
@@ -590,7 +601,8 @@ async fn agent_session_without_query_scope_cannot_scan_events_body() {
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
 
-    let (authorization, dpop) = agent_grant_headers(&presentation, "QUERY", "/_arkret/self/events");
+    let (authorization, dpop) =
+        agent_grant_headers(&state, &presentation, "QUERY", "/_arkret/self/events");
     let mut response = TestClient::query("http://server/_arkret/self/events")
         .json(&serde_json::json!({"realms": [demo_realm_id()]}))
         .add_header("authorization", authorization, true)
@@ -598,8 +610,9 @@ async fn agent_session_without_query_scope_cannot_scan_events_body() {
         .send(&app_from_state(state))
         .await;
 
-    assert_eq!(response.status_code.unwrap(), StatusCode::FORBIDDEN);
+    let status = response.status_code.unwrap();
     let body: Value = response.take_json().await.unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN, "response body: {body}");
     assert_agent_scope_denied(&body, "ak.self.events.read.scan");
 }
 
@@ -632,7 +645,8 @@ async fn agent_session_without_submit_scope_cannot_submit_events_body() {
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
 
-    let (authorization, dpop) = agent_grant_headers(&presentation, "POST", "/_arkret/self/events");
+    let (authorization, dpop) =
+        agent_grant_headers(&state, &presentation, "POST", "/_arkret/self/events");
     let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", authorization, true)
         .add_header("dpop", dpop, true)
@@ -640,8 +654,9 @@ async fn agent_session_without_submit_scope_cannot_submit_events_body() {
         .send(&app_from_state(state))
         .await;
 
-    assert_eq!(response.status_code.unwrap(), StatusCode::FORBIDDEN);
+    let status = response.status_code.unwrap();
     let body: Value = response.take_json().await.unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN, "response body: {body}");
     assert_agent_scope_denied(&body, "ak.self.events.command.submit");
 }
 
@@ -1098,7 +1113,6 @@ fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
 
 async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body() {
     let state = soland_test_support::app_state(test_config());
-    let control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let actor = test_event_signer_did().to_owned();
     let actor_core = fixture_actor_core_id(&actor);
     let token = verified_dev_token_for_device(
@@ -1332,7 +1346,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
             ),
             (
                 arkret_wire::CellFamilyId::REALM_DISCOVERY_V1,
-                serde_json::json!({"value": "invite_only"}),
+                serde_json::json!({"value": {"discoverability": "invite_only"}}),
             ),
         ] {
             assert_eq!(
@@ -1382,38 +1396,30 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
         .await
         .expect("service description response");
 
-    let candidate_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    let resolve_body = loop {
-        let mut resolve_response =
-            TestClient::post("http://server/_arkret/find/directory/resolve-realm")
-                .add_header("authorization", format!("Bearer {token}"), true)
-                .json(&serde_json::json!({"realm_id": realm_id}))
-                .send(&app_from_state(state.clone()))
-                .await;
-        let resolve_status = resolve_response.status_code.expect("resolve status");
-        let resolve_body: Value = resolve_response
-            .take_json()
-            .await
-            .expect("resolve json body");
-        assert_eq!(
-            resolve_status,
-            StatusCode::OK,
-            "Realm resolution failed: {resolve_body}"
-        );
-        if resolve_body["join_candidates"].as_array().map(Vec::len) == Some(1) {
-            break resolve_body;
-        }
-        assert!(
-            tokio::time::Instant::now() < candidate_deadline,
-            "the configured Realm notary did not finalize a join candidate: {resolve_body}"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    };
+    let mut resolve_response =
+        TestClient::post("http://server/_arkret/find/directory/resolve-realm")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&serde_json::json!({"realm_id": realm_id}))
+            .send(&app_from_state(state.clone()))
+            .await;
+    let resolve_status = resolve_response.status_code.expect("resolve status");
+    let resolve_body: Value = resolve_response
+        .take_json()
+        .await
+        .expect("resolve json body");
+    assert_eq!(
+        resolve_status,
+        StatusCode::OK,
+        "Realm resolution failed: {resolve_body}"
+    );
+    assert!(
+        resolve_body.get("join_candidates").is_none(),
+        "an unroutable bootstrap member has no delivery-binding source and must not be advertised as a join candidate: {resolve_body}"
+    );
     assert_eq!(
         resolve_body["realm_preview"]["title"], "Bootstrap effects realm",
         "Directory/sidebar projection must expose the title, not the Realm id: {resolve_body}"
     );
-    control_seal_coordinator.abort();
 
     let restarted = soland_test_support::app_state_with_persistence(
         test_config(),
@@ -1458,7 +1464,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
             ),
             (
                 arkret_wire::CellFamilyId::REALM_DISCOVERY_V1,
-                serde_json::json!({"value": "invite_only"}),
+                serde_json::json!({"value": {"discoverability": "invite_only"}}),
             ),
         ] {
             assert_eq!(
@@ -1935,13 +1941,21 @@ async fn incremental_sync_emits_realm_with_new_timeline_event_body() {
     let baseline = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
     let cursor = baseline["cursor"].as_str().unwrap().to_owned();
 
-    let message = persist_test_message(
-        &state,
-        demo_realm_id(),
+    let message = submit_message_event(
+        state.clone(),
+        &alice,
         "did:web:alice.example",
-        "incremental wake-up",
+        demo_realm_id(),
+        &expected_strand_id_for_scope(demo_realm_id()),
+        serde_json::json!({
+            "kind": "ak.content.text",
+            "body": "incremental wake-up",
+            "format": "plain"
+        }),
+        false,
     )
     .await;
+    assert_eq!(message["status"], "accepted", "message submit: {message}");
 
     let delta = account_subscribe_frame(
         state.clone(),
@@ -1955,8 +1969,8 @@ async fn incremental_sync_emits_realm_with_new_timeline_event_body() {
     assert!(
         timeline
             .iter()
-            .any(|event| event["event_id"] == message.event_id),
-        "delta MUST include the freshly persisted message: {delta}"
+            .any(|event| event["event_id"] == message["event_id"]),
+        "delta MUST include the freshly persisted message: {delta}; submit={message}"
     );
 }
 
@@ -1976,26 +1990,24 @@ async fn account_subscribe_waits_for_broadcast_before_returning_incremental_batc
     let cursor = baseline["cursor"].as_str().unwrap().to_owned();
 
     let waker_state = state.clone();
+    let waker_token = alice.clone();
     let waker = tokio::spawn(async move {
         // Give the stream a beat to subscribe before we fire.
         tokio::time::sleep(Duration::from_millis(150)).await;
-        let message = persist_test_message(
-            &waker_state,
-            demo_realm_id(),
+        submit_message_event(
+            waker_state,
+            &waker_token,
             "did:web:alice.example",
-            "wake up the stream",
-        )
-        .await;
-        let _ = waker_state.test_publish_event_notification(EventNotification::event(
-            demo_realm_id().to_owned(),
-            message.event_id.clone(),
+            demo_realm_id(),
+            &expected_strand_id_for_scope(demo_realm_id()),
             serde_json::json!({
-                "kind": "ak.message.create",
-                "event_id": message.event_id,
-                "realm_id": demo_realm_id(),
+                "kind": "ak.content.text",
+                "body": "wake up the stream",
+                "format": "plain"
             }),
-        ));
-        message
+            false,
+        )
+        .await
     });
 
     let start = tokio::time::Instant::now();
@@ -2028,45 +2040,88 @@ async fn account_subscribe_waits_for_broadcast_before_returning_incremental_batc
     assert!(
         timeline
             .iter()
-            .any(|event| event["event_id"] == message.event_id),
+            .any(|event| event["event_id"] == message["event_id"]),
         "woken delta MUST include the wake-up event: {woken}"
     );
 }
 
 #[test]
-fn account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnostic() {
+fn account_subscribe_preserves_ordered_log_siblings_and_exposes_conflict_diagnostic() {
     run_on_deep_stack(
-        "account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnostic",
-        account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnostic_body,
+        "account_subscribe_preserves_ordered_log_siblings_and_exposes_conflict_diagnostic",
+        account_subscribe_preserves_ordered_log_siblings_and_exposes_conflict_diagnostic_body,
     );
 }
 
-async fn account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnostic_body() {
+async fn account_subscribe_preserves_ordered_log_siblings_and_exposes_conflict_diagnostic_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
-    let actor_seq = 900_000;
-    let left = persist_test_message_with_actor_seq(
-        &state,
-        demo_realm_id(),
+    authorize_test_plaintext_message_service(&state, "did:web:alice.example", demo_realm_id())
+        .await;
+    let content = |body: &str| {
+        serde_json::json!({
+            "kind": "ak.content.text",
+            "body": body,
+            "format": "plain"
+        })
+    };
+    let mut left = signed_message_event_envelope(
         "did:web:alice.example",
-        "ordered-log left",
-        actor_seq,
+        demo_realm_id(),
+        &expected_strand_id_for_scope(demo_realm_id()),
+        content("ordered-log left"),
+        false,
+    );
+    let mut right = signed_message_event_envelope(
+        "did:web:alice.example",
+        demo_realm_id(),
+        &expected_strand_id_for_scope(demo_realm_id()),
+        content("ordered-log right"),
+        false,
+    );
+    // Resolve both candidates before submitting either one. They therefore
+    // cite the same accepted frontier and are formal actor-sequence siblings.
+    move_event_to_actor_realm_frontier(
+        &state,
+        &alice,
+        "did:web:alice.example",
+        demo_realm_id(),
+        &mut left,
     )
     .await;
-    let right = persist_test_message_with_actor_seq(
+    move_event_to_actor_realm_frontier(
         &state,
-        demo_realm_id(),
+        &alice,
         "did:web:alice.example",
-        "ordered-log right",
-        actor_seq,
+        demo_realm_id(),
+        &mut right,
     )
     .await;
-    let normal = persist_test_message_with_actor_seq(
-        &state,
-        demo_realm_id(),
+    let actor_seq = left["actor_seq"].as_u64().expect("left actor sequence");
+    assert_eq!(right["actor_seq"], actor_seq);
+    assert_eq!(right["prev_refs"], left["prev_refs"]);
+    let left_event_id = authored_event_id(&left).to_owned();
+    let right_event_id = authored_event_id(&right).to_owned();
+    for sibling in [&left, &right] {
+        let outcome: Value = TestClient::post("http://server/_arkret/self/events")
+            .add_header("authorization", format!("Bearer {alice}"), true)
+            .json(sibling)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .expect("sibling submission outcome");
+        assert_eq!(outcome["status"], "accepted", "sibling submit: {outcome}");
+    }
+
+    let normal = submit_message_event(
+        state.clone(),
+        &alice,
         "did:web:alice.example",
-        "ordered-log normal",
-        actor_seq + 1,
+        demo_realm_id(),
+        &expected_strand_id_for_scope(demo_realm_id()),
+        content("ordered-log normal"),
+        false,
     )
     .await;
 
@@ -2078,9 +2133,12 @@ async fn account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnost
         .iter()
         .filter_map(|event| event["event_id"].as_str())
         .collect::<Vec<_>>();
-    assert!(event_ids.contains(&left.event_id.as_str()), "{frame}");
-    assert!(event_ids.contains(&right.event_id.as_str()), "{frame}");
-    assert!(event_ids.contains(&normal.event_id.as_str()), "{frame}");
+    assert!(event_ids.contains(&left_event_id.as_str()), "{frame}");
+    assert!(event_ids.contains(&right_event_id.as_str()), "{frame}");
+    assert!(
+        event_ids.contains(&normal["event_id"].as_str().unwrap()),
+        "{frame}"
+    );
 
     let siblings = timeline["ordered_log_siblings"].as_array().unwrap();
     let diagnostic = siblings
@@ -2088,7 +2146,7 @@ async fn account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnost
         .find(|diagnostic| diagnostic["issuer_seq"] == actor_seq)
         .unwrap_or_else(|| panic!("sibling diagnostic missing: {frame}"));
     let sibling_ids = diagnostic["event_ids"].as_array().unwrap();
-    assert!(sibling_ids.contains(&serde_json::json!(left.event_id)));
-    assert!(sibling_ids.contains(&serde_json::json!(right.event_id)));
+    assert!(sibling_ids.contains(&serde_json::json!(left_event_id)));
+    assert!(sibling_ids.contains(&serde_json::json!(right_event_id)));
     assert_eq!(diagnostic["reason"], "actor_seq_siblings");
 }

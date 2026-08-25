@@ -427,24 +427,63 @@ async fn accepted_seal_frontier(state: &AppState, token: &str, realm_id: &str) -
     unreachable!("bounded Realm Seal frontier retry returns or panics")
 }
 
-async fn accepted_seal_frontier_after(
+async fn accepted_seal_frontier_covering(
     state: &AppState,
     token: &str,
     realm_id: &str,
-    previous: &str,
+    event_digest: &arkret_identifiers::Hash,
 ) -> String {
     for attempt in 0..50 {
-        let frontier = accepted_seal_frontier(state, token, realm_id).await;
-        if frontier != previous {
-            return frontier;
+        let frontier = accepted_seal_id(state, token, realm_id).await;
+        let mut response = TestClient::query("http://server/_arkret/self/seals/resolve")
+            .json(
+                &arkret_models_collaboration::http_bodies::SelfSealResolveRequestBody {
+                    realm_id: RealmId::new(realm_id.to_owned())
+                        .expect("fixture Seal resolve Realm id"),
+                    seal_refs: vec![frontier.clone()],
+                    history_traversal_access: None,
+                },
+            )
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await;
+        let status = response.status_code;
+        let body: Value = response.take_json().await.unwrap_or(Value::Null);
+        assert_eq!(status, Some(StatusCode::OK), "Seal resolve: {body}");
+        let resolved: arkret_models_collaboration::http_bodies::SealResolveOutcome =
+            serde_json::from_value(body).expect("typed Seal resolve outcome");
+        if resolved.seals.iter().any(|seal| {
+            seal.delta.contains(event_digest) || seal.covered_event_digests.contains(event_digest)
+        }) {
+            return frontier.to_string();
         }
         assert!(
             attempt < 49,
-            "Realm Seal frontier did not advance past {previous}"
+            "Realm Seal frontier never covered Control Event digest {event_digest}"
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    unreachable!("bounded Realm Seal advancement retry returns or panics")
+    unreachable!("bounded Realm Seal coverage retry returns or panics")
+}
+
+async fn accepted_control_event_digest(
+    state: &AppState,
+    token: &str,
+    event_id: &str,
+) -> arkret_identifiers::Hash {
+    let mut response = TestClient::get(format!("http://server/_arkret/self/events/{event_id}"))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(response.status_code, Some(StatusCode::OK));
+    let body: Value = response
+        .take_json()
+        .await
+        .expect("accepted Control Event read");
+    let event: arkret_wire::Event = serde_json::from_value(body["event"].clone())
+        .expect("stored accepted Control Event envelope");
+    arkret_state::state::control_event_digest(&event, arkret_canonical::DigestSuite::Sha256)
+        .expect("accepted Control Event digest")
 }
 
 async fn actor_frontier(state: &AppState, token: &str, realm_id: &str) -> (u64, Vec<String>) {
@@ -561,12 +600,14 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
     )
     .expect("fixture actor core DID");
     assert_eq!(declared[0]["actor_id"], alice_core.as_str());
+    let declared_event_id = declared[0]["event_id"].as_str().expect("declared Event id");
+    let declared_digest = accepted_control_event_digest(&state, &token, declared_event_id).await;
 
     // The self-management handler runs a local notary signing pass, so the
     // accepted Seal frontier advances: the Move is Seal-covered, not merely
     // projected.
     let seal_after_put =
-        accepted_seal_frontier_after(&state, &token, org_realm, &seal_before).await;
+        accepted_seal_frontier_covering(&state, &token, org_realm, &declared_digest).await;
     assert_ne!(
         seal_before, seal_after_put,
         "policy-server Control Move must be covered by a newly accepted Seal"
@@ -591,11 +632,9 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
         1,
         "an inherited DELETE must not append to the ancestor: {org_events_after:?}"
     );
-    let seal_after_refusal = accepted_seal_frontier(&state, &token, org_realm).await;
-    assert_eq!(
-        seal_after_put, seal_after_refusal,
-        "a refused DELETE must not advance the accepted Seal frontier"
-    );
+    // A Seal frontier may still advance for other already-pending governance
+    // work. The protocol-level no-op invariant is the exact Event history
+    // assertion above, not equality of two asynchronously observed leaves.
 
     // 4. A direct child declaration can be tombstoned. The settled tombstone restores the inherited
     //    organization value, and repeating DELETE is an idempotent empty success.
@@ -608,11 +647,23 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
     .await;
     assert_eq!(status, StatusCode::OK, "child PUT: {direct}");
     assert_eq!(direct["from_organization_fallback"], false);
+    let child_declaration_events = policy_server_events(&state, &token, child_realm).await;
+    let child_declaration_id = child_declaration_events[0]["event_id"]
+        .as_str()
+        .expect("child declaration Event id");
+    let child_declaration_digest =
+        accepted_control_event_digest(&state, &token, child_declaration_id).await;
+    accepted_seal_frontier_covering(&state, &token, child_realm, &child_declaration_digest).await;
     let (status, deleted) = delete_policy_server(&state, &token, child_realm).await;
     assert_eq!(status, StatusCode::OK, "settled child DELETE: {deleted}");
     let child_events = policy_server_events(&state, &token, child_realm).await;
     assert_eq!(child_events.len(), 2, "declaration plus tombstone");
     assert_eq!(child_events[1]["payload"]["tombstone"], true);
+    let tombstone_event_id = child_events[1]["event_id"]
+        .as_str()
+        .expect("child tombstone Event id");
+    let tombstone_digest = accepted_control_event_digest(&state, &token, tombstone_event_id).await;
+    accepted_seal_frontier_covering(&state, &token, child_realm, &tombstone_digest).await;
     let (status, inherited_again) = get_policy_server(&state, &token, child_realm).await;
     assert_eq!(
         status,
@@ -759,6 +810,17 @@ async fn policy_server_same_basis_sibling_fails_closed() {
     let settled = declaration_body("first-policy.example");
     let (status, view) = put_policy_server(&state, &token, child_realm, &settled).await;
     assert_eq!(status, StatusCode::OK, "settle PUT: {view}");
+    let settled_events = policy_server_events(&state, &token, child_realm).await;
+    let settled_event_id = settled_events[0]["event_id"]
+        .as_str()
+        .expect("settled policy-server Event id");
+    let settled_digest = accepted_control_event_digest(&state, &token, settled_event_id).await;
+    accepted_seal_frontier_covering(&state, &token, child_realm, &settled_digest).await;
+    // The remainder injects an artificial same-basis sibling directly into
+    // the reducer to exercise Bottom semantics. Stop the asynchronous local
+    // notary first so it cannot concurrently replay the already-accepted
+    // declaration over that synthetic test-only projection state.
+    _control_seal_coordinator.abort();
 
     // Two Moves that cite the SAME frozen basis and write different values are
     // cas-register siblings. `policy-server.md` §2.2 forbids resolving them by

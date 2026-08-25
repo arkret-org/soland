@@ -2,10 +2,126 @@
 //!
 //! Helpers live in [`super::common`]; pull them in via `use`.
 
+use arkret_models_collaboration::governance::invite_addressing::{
+    IntroductionEvidence, InviteAddress, InviteReceivePolicy, SelfInviteDispatchRequestBody,
+};
+use arkret_models_identity::ServiceResolutionCarrier;
+
 use super::common::*;
 
 fn canonical_body(value: &impl serde::Serialize) -> Vec<u8> {
     arkret_canonical::canonical_json_bytes(value).expect("canonical account workflow body")
+}
+
+async fn create_and_dispatch_local_realm_invite(
+    state: &AppState,
+    alice_token: &str,
+    bob_token: &str,
+    realm_id: &str,
+    seal_basis: Value,
+) {
+    let bob_core = fixture_actor_core_id("did:web:bob.example");
+    let mut receive_policy = InviteReceivePolicy::spec_default(bob_core.clone());
+    receive_policy
+        .holder_allowed_introduction_kinds
+        .push("same_principal_server".to_owned());
+    let receive_policy_response =
+        TestClient::put("http://server/_arkret/self/invite-receive-policy")
+            .add_header("authorization", format!("Bearer {bob_token}"), true)
+            .add_header("content-type", "application/json", true)
+            .body(canonical_body(&receive_policy))
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(
+        receive_policy_response.status_code,
+        Some(StatusCode::OK),
+        "bind Bob's invite receive policy"
+    );
+
+    let recipient_service_id =
+        DidCoreId::new(state.service_id().to_owned()).expect("configured service core DID");
+    let service_resolution = ServiceResolutionCarrier::CurrentRecordUrl {
+        current_record_url: format!(
+            "https://soland.local{}",
+            arkret_models_identity::canonical_service_current_record_path(&recipient_service_id)
+        ),
+        pinned_record_digest: None,
+    };
+    let introduction_evidence = IntroductionEvidence::SamePrincipalServer;
+    let introduction_evidence_digest = arkret_canonical::canonical_sha256(&introduction_evidence)
+        .expect("same-principal-server evidence digest");
+    let mut invite_event = signed_canonical_event(
+        "account-workflow-invite",
+        arkret_wire::EventKind::InviteCreate.as_str(),
+        "did:web:alice.example",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+        realm_id,
+        0,
+        Vec::new(),
+        serde_json::json!({
+            "invitee": bob_core.clone(),
+            "invite_delivery_target": {
+                "recipient_service_id": recipient_service_id.clone(),
+                "service_resolution": service_resolution.clone(),
+                "recipient_service_kind": "principal_server"
+            },
+            "introduction_evidence_digest": introduction_evidence_digest,
+            "expires_at": "2099-01-01T00:00:00.000Z"
+        }),
+    );
+    move_event_to_actor_realm_frontier(
+        state,
+        alice_token,
+        "did:web:alice.example",
+        realm_id,
+        &mut invite_event,
+    )
+    .await;
+    invite_event["seal_basis"] = seal_basis;
+    resign_canonical_event(&mut invite_event);
+    let invite_event_id =
+        arkret_identifiers::EventId::new(authored_event_id(&invite_event).to_owned())
+            .expect("authored invite Event id");
+    let submitted: Value = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {alice_token}"), true)
+        .json(&invite_event)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .expect("invite create submit body");
+    assert_eq!(
+        submitted["status"], "accepted",
+        "invite create: {submitted}"
+    );
+
+    let dispatch = SelfInviteDispatchRequestBody {
+        schema: arkret_wire::SchemaId::INVITE_DELIVERY_REQUEST_V1.to_owned(),
+        invite_event_id,
+        invite_address: InviteAddress::principal_server(
+            bob_core,
+            recipient_service_id,
+            service_resolution,
+        ),
+        introduction_evidence,
+        idempotency_key: "ak:idempotency:account-workflow-invite".to_owned(),
+    };
+    let mut dispatch_response = TestClient::post("http://server/_arkret/self/invites/dispatch")
+        .add_header("authorization", format!("Bearer {alice_token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(&dispatch))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(
+        dispatch_response.status_code,
+        Some(StatusCode::OK),
+        "local invite dispatch status"
+    );
+    let outcome: Value = dispatch_response
+        .take_json()
+        .await
+        .expect("local invite dispatch outcome");
+    assert_eq!(outcome["status"], "accepted", "invite dispatch: {outcome}");
 }
 
 fn contact_operation_id() -> arkret_wire::ProtocolOperationId {
@@ -1015,10 +1131,18 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         None,
         "invite_only",
         &[],
-        &["did:web:bob.example"],
+        &[],
     )
     .await;
     let invite_realm_id = invite_realm["realm_id"].as_str().unwrap().to_owned();
+    create_and_dispatch_local_realm_invite(
+        &state,
+        &alice,
+        &bob,
+        &invite_realm_id,
+        invite_realm["seal_basis"].clone(),
+    )
+    .await;
     let bob_invites: Value = TestClient::get("http://server/_arkret/self/authz/invites")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
@@ -1044,18 +1168,29 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
     );
     assert_eq!(
         bob_invites["invites"][0]["introduction_evidence_digest"],
-        format!("sha256:{}", "1".repeat(64))
+        arkret_canonical::canonical_sha256(&IntroductionEvidence::SamePrincipalServer)
+            .expect("same-principal-server evidence digest")
     );
     // The private delivery token is transport material and MUST NOT be surfaced
-    // through the Invite read model (`governance-objects.md` §5.3), so the test
-    // takes it from the seeding helper that minted it.
+    // through the Invite read model (`governance-objects.md` §5.3). It is read
+    // from Bob's holder-private delivery cell, the normative §7 carrier.
     assert!(
         bob_invites["invites"][0].get("invite_token").is_none(),
         "invite read model must not surface the private delivery token: {bob_invites}"
     );
-    let invite_token = invite_realm["seeded_invite_tokens"][0]
+    let invite_delivery = state
+        .test_persistence()
+        .account_data()
+        .get(
+            bob_core.as_str(),
+            arkret_wire::AccountDataKey::ACCOUNT_INVITE_DELIVERY,
+        )
+        .await
+        .expect("Bob invite-delivery cell read")
+        .expect("Bob invite-delivery cell exists");
+    let invite_token = invite_delivery.payload["entries"][0]["invite_token"]
         .as_str()
-        .unwrap()
+        .expect("private invite token")
         .to_owned();
     let invalid_invite_resolve =
         TestClient::post("http://server/_arkret/find/directory/resolve-realm")
@@ -1177,17 +1312,31 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
     .await;
     assert_eq!(plaintext_without_service.as_u16(), 403);
 
-    let invalid_encrypted = post_message_event(
-        state.clone(),
-        &alice,
+    let mut invalid_encrypted_event = signed_message_event_envelope(
         "did:web:alice.example",
         locked_realm_id,
         locked_realm_id,
-        serde_json::json!({"ciphertext": "opaque"}),
+        serde_json::json!({"ciphertext": "b3BhcXVl"}),
         true,
+    );
+    invalid_encrypted_event["payload"]["encrypted_content"]
+        .as_object_mut()
+        .expect("encrypted content object")
+        .remove("version");
+    move_event_to_actor_realm_frontier(
+        &state,
+        &alice,
+        "did:web:alice.example",
+        locked_realm_id,
+        &mut invalid_encrypted_event,
     )
     .await;
-    assert_eq!(invalid_encrypted.as_u16(), 400);
+    let invalid_encrypted = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&invalid_encrypted_event)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(invalid_encrypted.status_code.unwrap().as_u16(), 400);
 
     let encrypted_message = submit_message_event(
         state.clone(),

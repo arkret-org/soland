@@ -553,7 +553,8 @@ async fn self_invites_dispatch(
 /// so they are evaluated before either dispatch branch does anything at all.
 ///
 /// This operation MUST NOT re-verify the signature of an Event this service
-/// already admitted. Delivery uses the raw canonical Event bytes stored at admission.
+/// already admitted. Delivery uses the accepted, validated Event envelope stored at admission;
+/// `canonical_bytes` is only the digest preimage and is never a wire Event carrier.
 async fn require_dispatchable_invite_event(
     state: &AppState,
     session: &SessionRecord,

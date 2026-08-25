@@ -137,7 +137,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
         users["users"][0]["principal_id"],
         fixture_actor_core_id("did:web:alice.example").as_str()
     );
-    assert_eq!(users["users"][0]["handle"], "alice:soland.local");
+    assert_eq!(users["users"][0]["handle"], "alice:server.test");
     assert!(users["users"][0].get("handle_uri").is_none());
     assert!(users["users"][0].get("presence").is_none());
     assert!(users["users"][0].get("organization_id").is_none());
@@ -187,12 +187,12 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
             .await
             .unwrap();
     assert_eq!(subject_handles["subject"], alice_core.as_str());
-    assert_eq!(subject_handles["primary_handle"], "alice:soland.local");
+    assert_eq!(subject_handles["primary_handle"], "alice:server.test");
     assert_eq!(subject_handles["has_more"], false);
     let claims = subject_handles["claims"].as_array().unwrap();
     assert_eq!(claims.len(), 1);
     assert_eq!(claims[0]["subject"], alice_core.as_str());
-    assert_eq!(claims[0]["handle"], "alice:soland.local");
+    assert_eq!(claims[0]["handle"], "alice:server.test");
 
     let invalid = TestClient::post("http://server/_arkret/find/directory/search-users")
         .json(&serde_json::json!({"limit": 0}))
@@ -435,7 +435,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     assert_eq!(body["audience"], realm_id);
     assert_eq!(
         body["member_delivery_binding"]["recipient_service_id"],
-        soland_test_support::fixture_principal_server_id().as_str()
+        state.service_id().as_str()
     );
 
     let drop_handle_policy = serde_json::json!({
@@ -833,11 +833,14 @@ async fn broader_protocol_surface_returns_contract_shapes_body() {
         .unwrap();
     assert_eq!(resolved["realm_preview"]["realm_id"], demo_realm_id());
 
+    let state = soland_test_support::app_state(test_config());
+    let token = dev_token(state.clone()).await;
     let backfill: Value = TestClient::query("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realms": [demo_realm_id()]
         }))
-        .send(&app())
+        .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
@@ -846,8 +849,6 @@ async fn broader_protocol_surface_returns_contract_shapes_body() {
     // profiles-presence.md §4.1 references it and does not define `limited`).
     assert_eq!(backfill["has_more"], false);
 
-    let state = soland_test_support::app_state(test_config());
-    let token = dev_token(state.clone()).await;
     // An authz check resolves the actor's effective grants from the accepted
     // governance basis, so a Realm with no sealed basis denies every action.
     seed_demo_realm_basis(&state).await;

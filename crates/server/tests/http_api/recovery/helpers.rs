@@ -4,7 +4,8 @@
 //! `use super::helpers::*;`. Shared common-module fixtures arrive through
 //! `use crate::common::*;`.
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, OnceLock, RwLock};
 
 use arkret_identifiers::Hash;
 use serde_json::Value;
@@ -16,6 +17,327 @@ use soland_storage::{
 use crate::common::*;
 
 pub(crate) const RECOVERY_TEST_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+const RECOVERY_INTROSPECTION_PATH: &str = "/_arkret/gate/account/session-grants/introspect";
+const RECOVERY_INTROSPECTION_BEARER: &str = "recovery-policy-introspection-bearer";
+
+type IntrospectionOutcome =
+    arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectOutcome;
+
+fn registered_recovery_policy_grants() -> &'static RwLock<BTreeMap<String, IntrospectionOutcome>> {
+    static GRANTS: OnceLock<RwLock<BTreeMap<String, IntrospectionOutcome>>> = OnceLock::new();
+    GRANTS.get_or_init(|| RwLock::new(BTreeMap::new()))
+}
+
+struct RecoveryPolicyGrantPresentation {
+    grant_jwt: String,
+    holder_key: SigningKey,
+}
+
+fn recovery_policy_holder_key(
+    subject: &str,
+    device_id: &str,
+    authorization_event_id: &str,
+    generation: u64,
+) -> SigningKey {
+    let mut hasher = Sha256::new();
+    hasher.update(b"soland:recovery-policy-session-grant-holder:");
+    hasher.update(subject.as_bytes());
+    hasher.update([0]);
+    hasher.update(device_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(authorization_event_id.as_bytes());
+    hasher.update(generation.to_be_bytes());
+    SigningKey::from_bytes(&hasher.finalize().into())
+}
+
+fn recovery_policy_grant_presentation(
+    subject: &str,
+    device_id: &str,
+    authorization_event_id: &str,
+    generation: u64,
+) -> RecoveryPolicyGrantPresentation {
+    let holder_key =
+        recovery_policy_holder_key(subject, device_id, authorization_event_id, generation);
+    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"Ed25519","typ":"JWT"}"#);
+    let payload = URL_SAFE_NO_PAD.encode(
+        arkret_canonical::canonical_json_bytes(&serde_json::json!({
+            "authorization_event_id": authorization_event_id,
+            "device_id": device_id,
+            "generation": generation,
+            "subject": subject,
+        }))
+        .unwrap(),
+    );
+    let signature = holder_key.sign(format!("{header}.{payload}").as_bytes());
+    RecoveryPolicyGrantPresentation {
+        grant_jwt: format!(
+            "{header}.{payload}.{}",
+            URL_SAFE_NO_PAD.encode(signature.to_bytes())
+        ),
+        holder_key,
+    }
+}
+
+fn register_recovery_policy_grant(
+    state: &AppState,
+    presentation: &RecoveryPolicyGrantPresentation,
+    subject: &str,
+    device_id: &str,
+    authorization_event_id: &str,
+    generation: u64,
+) {
+    let holder_jwk = arkret_signatures::JsonWebKey::from_ed25519_verifying_key(
+        &presentation.holder_key.verifying_key(),
+    );
+    let cnf_jkt = arkret_signatures::dpop::dpop_jwk_thumbprint(&holder_jwk)
+        .expect("recovery holder JWK thumbprint");
+    let session_public_key = format!(
+        "{{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"{}\"}}",
+        arkret_canonical::base64url_encode(presentation.holder_key.verifying_key().to_bytes())
+    );
+    let outcome = serde_json::from_value::<IntrospectionOutcome>(serde_json::json!({
+        "active": true,
+        "status": "active",
+        "proof_required": false,
+        "one_time_use_consumed": false,
+        "grant": {
+            "id": arkret_identifiers::SessionGrantId::from_issuance_digest(
+                Sha256::digest(presentation.grant_jwt.as_bytes()).into(),
+            ),
+            "issuer": "ak:did_core:web:coauth.example",
+            "subject": subject,
+            "service_account_id": "recovery-policy-fixture",
+            "device_id": device_id,
+            "audience": state.service_id(),
+            "scopes": [
+                arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_COMMAND_PUBLISH,
+                arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_RESOURCE_GET,
+            ],
+            "expires_at": canonical_timestamp(
+                chrono::Utc::now() + chrono::Duration::minutes(5)
+            ),
+            "revocation_ref": format!("ak:session:{}", uuid::Uuid::now_v7().simple()),
+            "session_public_key": session_public_key,
+            "cnf_jkt": cnf_jkt,
+            "credential_class": "standard",
+            "holder_binding": {
+                "kind": "human_device",
+                "device_binding": device_id,
+            },
+            "device_binding": {
+                "device_id": device_id,
+                "authorization_event_id": authorization_event_id,
+                "model_generation_ref": generation,
+            },
+        }
+    }))
+    .expect("registered recovery grant matches the SDK introspection DTO");
+    registered_recovery_policy_grants()
+        .write()
+        .expect("recovery grant registry write")
+        .insert(presentation.grant_jwt.clone(), outcome);
+}
+
+fn inactive_recovery_policy_grant() -> IntrospectionOutcome {
+    serde_json::from_value(serde_json::json!({
+        "active": false,
+        "status": "not_found",
+        "proof_required": false,
+        "one_time_use_consumed": false,
+    }))
+    .expect("inactive introspection outcome matches SDK DTO")
+}
+
+fn recovery_policy_grant_headers(
+    state: &AppState,
+    presentation: &RecoveryPolicyGrantPresentation,
+    method: &str,
+    path: &str,
+) -> (String, String) {
+    let htu = format!(
+        "{}{}",
+        state.config().public_base_url.trim_end_matches('/'),
+        path
+    );
+    let proof = arkret_signatures::dpop::build_dpop_proof(
+        &arkret_signatures::dpop::DpopProofRequest::new(method, htu)
+            .access_token(presentation.grant_jwt.clone()),
+        &presentation.holder_key,
+    )
+    .expect("recovery policy DPoP proof");
+    (
+        format!("DPoP {}", presentation.grant_jwt),
+        proof.header_value,
+    )
+}
+
+async fn read_introspection_request(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
+    use tokio::io::AsyncReadExt as _;
+
+    let mut request = Vec::new();
+    let mut header_end = None;
+    let mut content_length = 0;
+    loop {
+        let mut chunk = [0_u8; 2048];
+        let read = stream.read(&mut chunk).await.expect("read introspection");
+        assert!(read > 0, "introspection request ended early");
+        request.extend_from_slice(&chunk[..read]);
+        if header_end.is_none()
+            && let Some(index) = request.windows(4).position(|part| part == b"\r\n\r\n")
+        {
+            let end = index + 4;
+            let headers = String::from_utf8_lossy(&request[..end]);
+            content_length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            header_end = Some(end);
+        }
+        if header_end.is_some_and(|end| request.len() >= end + content_length) {
+            return request;
+        }
+    }
+}
+
+async fn install_recovery_policy_introspection(config: &mut soland_http::config::AppConfig) {
+    use tokio::io::AsyncWriteExt as _;
+
+    // This integration-test binary uses a loopback Account Authority. Install
+    // an explicit process test policy so production-mode AppConfig values can
+    // exercise the real egress/introspection path without enabling any
+    // development-mode authentication branch.
+    soland_http::security::install_egress_policy(soland_http::security::EgressPolicy {
+        allow_private_networks: Some(true),
+        ..Default::default()
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("recovery introspection mock binds");
+    config.session_grant_introspection_url = Some(format!(
+        "http://{}{RECOVERY_INTROSPECTION_PATH}",
+        listener.local_addr().expect("recovery mock address")
+    ));
+    config.session_grant_introspection_bearer = Some(RECOVERY_INTROSPECTION_BEARER.to_owned());
+    let audience = soland_test_support::fixture_service_identity(config)
+        .identity()
+        .expect("recovery fixture serving identity")
+        .service_id
+        .clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let audience = audience.clone();
+            tokio::spawn(async move {
+                let request = read_introspection_request(&mut stream).await;
+                let body_start = request
+                    .windows(4)
+                    .position(|part| part == b"\r\n\r\n")
+                    .map(|index| index + 4)
+                    .expect("introspection request headers");
+                let request_head = std::str::from_utf8(&request[..body_start - 4])
+                    .expect("introspection request head");
+                let mut request_lines = request_head.lines();
+                let expected_request_line = format!("POST {RECOVERY_INTROSPECTION_PATH} HTTP/1.1");
+                assert_eq!(
+                    request_lines.next(),
+                    Some(expected_request_line.as_str()),
+                    "introspection must use the canonical POST surface"
+                );
+                let headers = request_lines
+                    .filter_map(|line| line.split_once(':'))
+                    .map(|(name, value)| {
+                        (name.trim().to_ascii_lowercase(), value.trim().to_owned())
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                let expected_authorization = format!("Bearer {RECOVERY_INTROSPECTION_BEARER}");
+                assert_eq!(
+                    headers.get("authorization").map(String::as_str),
+                    Some(expected_authorization.as_str()),
+                    "introspection must authenticate as the configured Account Authority client"
+                );
+                assert!(
+                    headers
+                        .get("content-type")
+                        .is_some_and(|value| value.eq_ignore_ascii_case("application/json")),
+                    "introspection must carry the SDK JSON request"
+                );
+                let body: arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectRequestBody =
+                    serde_json::from_slice(&request[body_start..])
+                    .expect("introspection request JSON");
+                let grant_jwt = match body {
+                    arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectRequestBody::ByJwt(request) => {
+                        assert_eq!(request.audience.as_ref(), Some(&audience));
+                        assert!(request.proof.is_none());
+                        request.grant_jwt
+                    }
+                    arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectRequestBody::ById(_) => {
+                        panic!("recovery fixture requires exact JWT introspection")
+                    }
+                };
+                let outcome = registered_recovery_policy_grants()
+                    .read()
+                    .expect("recovery grant registry read")
+                    .get(&grant_jwt)
+                    .cloned()
+                    .unwrap_or_else(inactive_recovery_policy_grant);
+                let response_body = serde_json::to_vec(&outcome).unwrap();
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    response_body.len()
+                );
+                stream.write_all(headers.as_bytes()).await.unwrap();
+                stream.write_all(&response_body).await.unwrap();
+            });
+        }
+    });
+}
+
+async fn recovery_policy_grant_for_bearer(
+    state: &AppState,
+    token: &str,
+) -> RecoveryPolicyGrantPresentation {
+    let session = state
+        .test_persistence()
+        .sessions()
+        .get(&test_session_credential_hash(token, state.service_id()))
+        .await
+        .unwrap()
+        .expect("recovery fixture bearer session");
+    let device = state
+        .test_persistence()
+        .devices()
+        .get(&session.actor, &session.device_id)
+        .await
+        .unwrap()
+        .expect("recovery fixture device");
+    let authorization_event_id = device.payload["device_authorize_event_id"]
+        .as_str()
+        .expect("recovery fixture accepted device Event");
+    let generation = device.payload["authorized_generation_ref"]
+        .as_u64()
+        .expect("recovery fixture accepted device generation");
+    let presentation = recovery_policy_grant_presentation(
+        &session.actor,
+        &session.device_id,
+        authorization_event_id,
+        generation,
+    );
+    register_recovery_policy_grant(
+        state,
+        &presentation,
+        &session.actor,
+        &session.device_id,
+        authorization_event_id,
+        generation,
+    );
+    presentation
+}
 
 fn seed_local_notary_authority(state: &AppState, realm_id: &RealmId, seal: &arkret_wire::Seal) {
     let move_id = seal
@@ -64,14 +386,64 @@ pub(crate) async fn get_recovery(
     path: &str,
     expected_status: StatusCode,
 ) -> Value {
+    let presentation = recovery_policy_grant_for_bearer(&state, token).await;
+    let (authorization, dpop) = recovery_policy_grant_headers(&state, &presentation, "GET", path);
     let mut response = TestClient::get(format!("http://server{path}"))
-        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("authorization", authorization, true)
+        .add_header("dpop", dpop, true)
         .send(&app_from_state(state.clone()))
         .await;
     let status = response.status_code.unwrap();
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(status, expected_status, "response body: {body}");
     body
+}
+
+pub(crate) async fn assert_recovery_policy_grant_binding_rejections(state: AppState, token: &str) {
+    let path = "/_arkret/root/identity/recovery-policy";
+    let registered = recovery_policy_grant_for_bearer(&state, token).await;
+
+    // A holder may produce a valid DPoP proof over arbitrary bytes, but the
+    // Account Authority must still return inactive for an unregistered grant.
+    let unknown = RecoveryPolicyGrantPresentation {
+        grant_jwt: format!("{}.unregistered", registered.grant_jwt),
+        holder_key: registered.holder_key.clone(),
+    };
+    let (authorization, dpop) = recovery_policy_grant_headers(&state, &unknown, "GET", path);
+    let mut unknown_response = TestClient::get(format!("http://server{path}"))
+        .add_header("authorization", authorization, true)
+        .add_header("dpop", dpop, true)
+        .send(&app_from_state(state.clone()))
+        .await;
+    let unknown_status = unknown_response.status_code.unwrap();
+    let unknown_body: Value = unknown_response.take_json().await.unwrap();
+    assert_eq!(
+        unknown_status,
+        StatusCode::UNAUTHORIZED,
+        "unregistered grant response: {unknown_body}"
+    );
+    assert_eq!(unknown_body["error"]["code"], "unauthenticated");
+
+    // The exact registered grant is still rejected when DPoP is signed by a
+    // key whose thumbprint does not match the introspected cnf_jkt binding.
+    let mismatched = RecoveryPolicyGrantPresentation {
+        grant_jwt: registered.grant_jwt,
+        holder_key: SigningKey::from_bytes(&[0x5a; 32]),
+    };
+    let (authorization, dpop) = recovery_policy_grant_headers(&state, &mismatched, "GET", path);
+    let mut mismatch_response = TestClient::get(format!("http://server{path}"))
+        .add_header("authorization", authorization, true)
+        .add_header("dpop", dpop, true)
+        .send(&app_from_state(state))
+        .await;
+    let mismatch_status = mismatch_response.status_code.unwrap();
+    let mismatch_body: Value = mismatch_response.take_json().await.unwrap();
+    assert_eq!(
+        mismatch_status,
+        StatusCode::UNAUTHORIZED,
+        "mismatched holder response: {mismatch_body}"
+    );
+    assert_eq!(mismatch_body["error"]["code"], "unauthenticated");
 }
 
 pub(crate) async fn shared_recovery_state(persistence: Arc<dyn PersistenceStore>) -> AppState {
@@ -84,13 +456,15 @@ pub(crate) async fn shared_recovery_state(persistence: Arc<dyn PersistenceStore>
     {
         config.did_resolver_allow_methods.push("webvh".to_owned());
     }
+    install_recovery_policy_introspection(&mut config).await;
     soland_test_support::app_state_with_persistence(config, persistence).await
 }
 
 pub(crate) async fn shared_recovery_state_with_config(
     persistence: Arc<dyn PersistenceStore>,
-    config: soland_http::config::AppConfig,
+    mut config: soland_http::config::AppConfig,
 ) -> AppState {
+    install_recovery_policy_introspection(&mut config).await;
     soland_test_support::app_state_with_persistence(config, persistence).await
 }
 
@@ -373,6 +747,11 @@ pub(crate) async fn post_recovery_policy(
     let event_verification_method =
         arkret_wire::DidUrl::new(format!("{principal_full_id}#{RECOVERY_TEST_DEVICE}"))
             .expect("fixture Event verification method is a DID URL");
+    let principal_core = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new(principal_full_id.to_owned())
+            .expect("fixture recovery principal full DID"),
+    )
+    .expect("fixture recovery principal projection");
     project_test_authorized_device(
         &state,
         principal_full_id,
@@ -380,6 +759,7 @@ pub(crate) async fn post_recovery_policy(
         event_signing_key,
     )
     .await;
+    let policy_grant = recovery_policy_grant_for_bearer(&state, token).await;
     ingest_pinned_recovery_did_document(
         &state,
         principal_full_id,
@@ -388,8 +768,13 @@ pub(crate) async fn post_recovery_policy(
     )
     .await;
 
-    let realm_id = soland_test_support::fixture_principal_control_realm(principal_full_id);
-    let realm = RealmId::new(realm_id.clone()).unwrap();
+    let realm = soland_test_support::cba_basis::fixture_principal_control_realm_create_for_server(
+        principal_full_id,
+        arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap(),
+    )
+    .realm_id
+    .clone();
+    let realm_id = realm.to_string();
     let fixture_basis = soland_test_support::cba_basis::FixtureBasis::shared(&[]);
     soland_test_support::cba_basis::seed_realm_basis(
         &state,
@@ -398,11 +783,6 @@ pub(crate) async fn post_recovery_policy(
         fixture_basis,
     )
     .await;
-    let principal_core = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new(principal_full_id.to_owned())
-            .expect("fixture recovery principal full DID"),
-    )
-    .expect("fixture recovery principal projection");
     let basis = soland_test_support::cba_basis::realm_basis_seal(
         &state,
         &realm_id,
@@ -543,8 +923,12 @@ pub(crate) async fn post_recovery_policy(
         control_proposal_ack: Some(control_proposal_ack),
     };
     let request_bytes = arkret_canonical::canonical_json_bytes(&request).unwrap();
-    let mut response = TestClient::post("http://server/_arkret/root/identity/recovery-policy")
-        .add_header("authorization", format!("Bearer {token}"), true)
+    let recovery_policy_path = "/_arkret/root/identity/recovery-policy";
+    let (authorization, dpop) =
+        recovery_policy_grant_headers(&state, &policy_grant, "POST", recovery_policy_path);
+    let mut response = TestClient::post(format!("http://server{recovery_policy_path}"))
+        .add_header("authorization", authorization, true)
+        .add_header("dpop", dpop, true)
         .add_header("content-type", "application/json", true)
         .body(request_bytes.clone())
         .send(&app_from_state(state.clone()))
@@ -613,8 +997,11 @@ pub(crate) async fn post_recovery_policy(
             .test_put_seal(&successor, arkret_canonical::DigestSuite::Sha256)
             .unwrap();
 
-        let mut retry = TestClient::post("http://server/_arkret/root/identity/recovery-policy")
-            .add_header("authorization", format!("Bearer {token}"), true)
+        let (authorization, dpop) =
+            recovery_policy_grant_headers(&state, &policy_grant, "POST", recovery_policy_path);
+        let mut retry = TestClient::post(format!("http://server{recovery_policy_path}"))
+            .add_header("authorization", authorization, true)
+            .add_header("dpop", dpop, true)
             .add_header("content-type", "application/json", true)
             .body(request_bytes)
             .send(&app_from_state(state))

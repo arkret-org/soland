@@ -185,14 +185,14 @@ async fn configured_cors_allows_blob_upload_headers_body() {
 }
 
 #[test]
-fn invite_create_event_surfaces_via_authz_invites() {
+fn invite_delivery_read_model_projection_surfaces_via_authz_invites() {
     run_on_deep_stack(
-        "invite_create_event_surfaces_via_authz_invites",
-        invite_create_event_surfaces_via_authz_invites_body,
+        "invite_delivery_read_model_projection_surfaces_via_authz_invites",
+        invite_delivery_read_model_projection_surfaces_via_authz_invites_body,
     );
 }
 
-async fn invite_create_event_surfaces_via_authz_invites_body() {
+async fn invite_delivery_read_model_projection_surfaces_via_authz_invites_body() {
     // A directed `ak.invite.create` atomically creates the invite lifecycle
     // and the invitee's membership proposal. The invitee must then see the
     // pending invitation through `GET /authz/invites`.
@@ -263,7 +263,7 @@ async fn invite_create_event_surfaces_via_authz_invites_body() {
     event["seal_basis"] = created_realm["seal_basis"].clone();
     resign_canonical_event(&mut event);
     let invite_event_id = arkret_wire::EventId::new(authored_event_id(&event).to_owned()).unwrap();
-    let invite_id = arkret_identifiers::InviteId::from_event_id(&invite_event_id).to_string();
+    let invite_id = arkret_identifiers::InviteId::from_event_id(&invite_event_id);
 
     let mut submit = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -277,7 +277,59 @@ async fn invite_create_event_surfaces_via_authz_invites_body() {
         "ak.invite.create should be accepted: {submit_body}"
     );
 
-    // Bob should now see a pending invite for the space.
+    // This test isolates the holder-private read-model projection. The formal
+    // dispatch/delivery transport is covered by account_workflow; the accepted
+    // Realm Event here creates only the shared Invite lifecycle, so the list
+    // stays empty until the recipient PS commits ak.account.invite_delivery.
+    let before_delivery: Value = TestClient::get("http://server/_arkret/self/authz/invites")
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(before_delivery["invites"].as_array().unwrap().is_empty());
+
+    let projected = state
+        .test_persistence()
+        .realm_invites()
+        .get(invite_id.as_str())
+        .await
+        .unwrap()
+        .expect("accepted invite lifecycle projection");
+    let received_at = chrono::Utc::now();
+    let delivery = arkret_models_collaboration::governance::invite_addressing::InviteDelivery::new(
+        received_at,
+        vec![
+            arkret_models_collaboration::governance::invite_addressing::InviteDeliveryEntry {
+                invite_id: invite_id.clone(),
+                realm_id: RealmId::new(realm_id.clone()).unwrap(),
+                inviter: fixture_actor_core_id(alice_did),
+                invite_token: projected.invite_token,
+                received_at,
+                expires_at: projected
+                    .expires_at
+                    .expect("directed invite fixture has an expiry"),
+            },
+        ],
+    );
+    state
+        .test_persistence()
+        .account_data()
+        .compare_and_set(
+            &soland_storage::AccountDataRecord {
+                actor: fixture_actor_core_id(bob_did).to_string(),
+                account_data_key: arkret_wire::AccountDataKey::ACCOUNT_INVITE_DELIVERY.to_owned(),
+                revision: 1,
+                payload: serde_json::to_value(delivery).unwrap(),
+                tombstone: false,
+                updated_at: received_at,
+            },
+            0,
+        )
+        .await
+        .unwrap();
+
     let bob_invites: Value = TestClient::get("http://server/_arkret/self/authz/invites")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
@@ -493,7 +545,7 @@ async fn runtime_service_id_is_used_across_public_metadata_body() {
     let ice: Value = TestClient::post("http://server/_arkret/self/rtc/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "realm_id": demo_realm_id(),
+            "realm_id": state.development_demo_realm_id(),
             "call_id": "ak:call:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5",
             "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -506,41 +558,21 @@ async fn runtime_service_id_is_used_across_public_metadata_body() {
         .take_json()
         .await
         .unwrap();
-    // webrtc-signaling.md §4: the ICE config response is signed by the service
-    // notary key. kid = <service_id>#notary-key (see move_seal_wire/notary.rs);
-    // signature_input is the fixed domain label `ak.media.ice_config.v1`; sig is
-    // bare base64url; the signing input is
-    // label || 0x00 || canonical_json(response without `signature`).
+    // The SDK model owns the only canonical signature transcript. The wire
+    // container carries only the signer, algorithm and detached signature.
     assert_eq!(
         ice["signature"]["kid"],
         format!("{service_full_id}#notary-key")
     );
-    assert_eq!(
-        ice["signature"]["signature_input"],
-        "ak.media.ice_config.v1"
-    );
+    assert_eq!(ice["signature"]["signature_algorithm"], "Ed25519");
     assert_ne!(ice["signature"]["sig"], "placeholder");
-    assert!(
-        ice["signature"]["payload_digest"]
-            .as_str()
-            .is_some_and(|hash| hash.starts_with("sha256:"))
-    );
-    let mut signed_payload = ice.clone();
-    signed_payload.as_object_mut().unwrap().remove("signature");
-    let payload_bytes = arkret_canonical::canonical_json_bytes(&signed_payload).unwrap();
-    assert_eq!(
-        ice["signature"]["payload_digest"],
-        format!("sha256:{}", hex::encode(Sha256::digest(&payload_bytes)))
-    );
+    let typed: arkret_models_collaboration::objects::media::MediaIceConfigOutcome =
+        serde_json::from_value(ice.clone()).unwrap();
+    let signing_input = typed.signature_input().unwrap();
     let signature_bytes = URL_SAFE_NO_PAD
         .decode(ice["signature"]["sig"].as_str().unwrap())
         .unwrap();
     let signature = Signature::from_bytes(&signature_bytes.try_into().unwrap());
-    let mut signing_input =
-        Vec::with_capacity(b"ak.media.ice_config.v1".len() + payload_bytes.len() + 1);
-    signing_input.extend_from_slice(b"ak.media.ice_config.v1");
-    signing_input.push(0);
-    signing_input.extend_from_slice(&payload_bytes);
     state
         .notary_signing_key()
         .verifying_key()

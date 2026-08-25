@@ -500,7 +500,8 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
             &DidFullId::new(subject.to_owned()).expect("fixture genesis actor DID"),
         )
         .expect("fixture genesis actor projection"),
-        crate::fixture_principal_server_id(),
+        arkret_identifiers::DidCoreId::new(state.service_id().clone())
+            .expect("fixture service core DID"),
         0,
         Hlc::new(FIXTURE_BASIS_HLC).expect("fixture genesis HLC"),
         payload.clone(),

@@ -345,7 +345,7 @@ async fn describe_advertises_tus_binding_and_limits_body() {
         .expect("tus binding advertised");
     assert_eq!(
         tus_binding["base_url"],
-        "http://server/_arkret/self/blob/resumable"
+        "https://server.test/_arkret/self/blob/resumable"
     );
     assert_eq!(
         tus_binding["operations"],

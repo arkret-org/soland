@@ -109,9 +109,10 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
         upload["fallback_keys"]["signed_curve25519:fallback"]["key"],
         "fallback-key"
     );
-    assert_eq!(alice_desktop["device_status"], "active");
+    let alice_attestation = &alice_desktop["device_projection_attestation"]["attestation"];
+    assert_eq!(alice_attestation["device_status"], "active");
     assert_eq!(
-        alice_desktop["device_signing_key"],
+        alice_attestation["device_signing_key"],
         format!("did:key:{alice_device_public}")
     );
 
@@ -433,9 +434,27 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
         &[],
     )
     .await;
+    let shared_plaintext_realm_id = shared_plaintext_realm["realm_id"].as_str().unwrap();
+    let direct_download_policy = serde_json::json!({"direct_download_allowed": true});
+    let mut shared_plaintext_meta = state
+        .test_persistence()
+        .realm_meta()
+        .get(shared_plaintext_realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    shared_plaintext_meta.asset_privacy_policy_digest =
+        Some(arkret_canonical::canonical_sha256(&direct_download_policy).unwrap());
+    shared_plaintext_meta.asset_privacy_policy = Some(direct_download_policy);
+    state
+        .test_persistence()
+        .realm_meta()
+        .put(shared_plaintext_realm_id, &shared_plaintext_meta)
+        .await
+        .unwrap();
     add_test_realm_member(
         &state,
-        shared_plaintext_realm["realm_id"].as_str().unwrap(),
+        shared_plaintext_realm_id,
         "did:web:blob-bob.example",
     );
     let (plaintext_content_type, plaintext_body) =
@@ -500,7 +519,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
         .json(&serde_json::json!({
             "blob_ref": plaintext_blob["blob_ref"].as_str().unwrap(),
             "purpose": "message_attachment",
-            "realm_id": shared_plaintext_realm["realm_id"].as_str().unwrap()
+            "realm_id": shared_plaintext_realm_id
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -510,11 +529,13 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
     let mut presigned_plaintext = TestClient::get(plaintext_presign_url)
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(presigned_plaintext.status_code.unwrap().as_u16(), 200);
+    let presigned_plaintext_status = presigned_plaintext.status_code.unwrap().as_u16();
+    let presigned_plaintext_body = presigned_plaintext.take_string().await.unwrap();
     assert_eq!(
-        presigned_plaintext.take_string().await.unwrap(),
-        "shared plaintext"
+        presigned_plaintext_status, 200,
+        "presigned plaintext response: {presigned_plaintext_body}"
     );
+    assert_eq!(presigned_plaintext_body, "shared plaintext");
     let forged_presign_url = plaintext_presign_url.replace("presign=", "presign=forged");
     let forged_plaintext = TestClient::get(forged_presign_url)
         .send(&app_from_state(state.clone()))
@@ -798,11 +819,12 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke_body() {
         .await
         .unwrap();
     let entry = &query["device_keys"][alice_core.as_str()][alice_device];
+    let attestation = &entry["device_projection_attestation"]["attestation"];
     assert_eq!(
-        entry["device_signing_key"], expected_principal_id_key,
+        attestation["device_signing_key"], expected_principal_id_key,
         "expected authoritative did:key, got {entry}"
     );
-    assert_eq!(entry["device_status"], "active");
+    assert_eq!(attestation["device_status"], "active");
 
     // Revoke member A's device, then re-query: the whole entry disappears.
     // `device-lifecycle.md` §8.2 — a returned row is complete and attested, so a
@@ -906,8 +928,12 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban_body()
         .await
         .unwrap();
     let entry = &query["device_keys"][bob_core.as_str()][bob_device];
-    assert_eq!(entry["device_status"], "active", "query body: {query}");
-    assert_eq!(entry["device_signing_key"], expected_principal_id_key);
+    let attestation = &entry["device_projection_attestation"]["attestation"];
+    assert_eq!(
+        attestation["device_status"], "active",
+        "query body: {query}"
+    );
+    assert_eq!(attestation["device_signing_key"], expected_principal_id_key);
     assert!(
         query["device_keys"].get(carol_core.as_str()).is_none(),
         "never-member key material must remain hidden: {query}"
@@ -1090,23 +1116,21 @@ async fn keys_query_exposes_accepted_device_anchor_body() {
         .await
         .unwrap();
     let entry = &query["device_keys"][alice_core.as_str()][alice_device];
-    assert_eq!(entry["device_status"], "active", "entry: {query}");
-    assert_eq!(entry["device_signing_key"], format!("did:key:{multibase}"));
-    assert_eq!(
-        entry["device_authorize_event_id"],
-        expected_authorize_event_id
-    );
     // The row is complete and attested, and the attestation covers this exact
     // projection — that signature is the whole verification closure of this
     // cross-principal surface (§8.2).
     let attestation = &entry["device_projection_attestation"];
     assert_eq!(
-        attestation["attestation"]["device_authorize_event_id"],
-        expected_authorize_event_id
+        attestation["attestation"]["device_status"], "active",
+        "entry: {query}"
     );
     assert_eq!(
         attestation["attestation"]["device_signing_key"],
-        entry["device_signing_key"]
+        format!("did:key:{multibase}")
+    );
+    assert_eq!(
+        attestation["attestation"]["device_authorize_event_id"],
+        expected_authorize_event_id
     );
     assert_eq!(
         attestation["proof"]["created_at"],

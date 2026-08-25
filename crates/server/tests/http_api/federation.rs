@@ -318,7 +318,7 @@ async fn peer_events_query_and_frontier_use_peer_surface_body() {
         "filters": {"kind": "ak.message.create"},
         "realms": [test_realm_id()]
     });
-    let query_target = "http://server/_arkret/peer/events";
+    let query_target = "https://server.test/_arkret/peer/events";
     let mut query = TestClient::query(query_target).json(&read_body);
     for (name, value) in signed_federation_query_headers(
         PEER_SOURCE_DID,
@@ -353,7 +353,7 @@ async fn peer_events_query_and_frontier_use_peer_surface_body() {
     );
     assert!(!page["has_more"].as_bool().unwrap_or(false), "{page:?}");
 
-    let frontier_target = "http://server/_arkret/peer/events/frontier";
+    let frontier_target = "https://server.test/_arkret/peer/events/frontier";
     let frontier_body = serde_json::json!({"realm_id": test_realm_id()});
     let mut frontier = TestClient::query(frontier_target).json(&frontier_body);
     for (name, value) in signed_federation_query_headers(
@@ -415,7 +415,7 @@ async fn peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason_b
         "realms": [test_realm_id()],
         "after": "ak:cursor:!!!not-base64url"
     });
-    let query_target = "http://server/_arkret/peer/events";
+    let query_target = "https://server.test/_arkret/peer/events";
     let mut query = TestClient::query(query_target).json(&read_body);
     for (name, value) in signed_federation_query_headers(
         PEER_SOURCE_DID,
@@ -468,7 +468,7 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow_body() {
     );
     let overflow_id = authored_event_id(&overflow).to_owned();
     let body = peer_submit_body(&overflow);
-    let target = "http://server/_arkret/peer/events";
+    let target = "https://server.test/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
     for (name, value) in signed_federation_push_headers(
         PEER_SOURCE_DID,
@@ -526,7 +526,7 @@ async fn peer_events_submit_verifies_digest_against_the_received_wire_body_body(
     // Event's typed serializer intentionally omits an empty `unsigned` map.
     // The HTTP signature nevertheless binds the exact canonical wire body,
     // so verification must happen before any typed serde normalization.
-    let target = "http://server/_arkret/peer/events";
+    let target = "https://server.test/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
     for (name, value) in signed_federation_push_headers(
         PEER_SOURCE_DID,
@@ -575,7 +575,7 @@ async fn peer_events_submit_accepts_online_event_without_offline_evidence_body()
         .remove("authorization_lease");
     body["events"][0]["ingress_receipts"] = serde_json::json!([]);
 
-    let target = "http://server/_arkret/peer/events";
+    let target = "https://server.test/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
     for (name, value) in signed_federation_push_headers(
         PEER_SOURCE_DID,
@@ -622,7 +622,7 @@ async fn peer_events_frontier_exposes_current_sibling_heads_body() {
         put_event_record(&state, event, now + ChronoDuration::seconds(idx as i64)).await;
     }
 
-    let frontier_target = "http://server/_arkret/peer/events/frontier";
+    let frontier_target = "https://server.test/_arkret/peer/events/frontier";
     let frontier_body = serde_json::json!({"realm_id": test_realm_id()});
     let mut frontier = TestClient::query(frontier_target).json(&frontier_body);
     for (name, value) in signed_federation_query_headers(
@@ -653,6 +653,53 @@ async fn peer_events_frontier_exposes_current_sibling_heads_body() {
     );
 }
 
+#[test]
+fn peer_seal_frontier_returns_typed_frontier_with_service_proof() {
+    run_on_deep_stack(
+        "peer_seal_frontier_returns_typed_frontier_with_service_proof",
+        peer_seal_frontier_returns_typed_frontier_with_service_proof_body,
+    );
+}
+
+async fn peer_seal_frontier_returns_typed_frontier_with_service_proof_body() {
+    let state = soland_test_support::app_state(test_config());
+    seed_peer_read_authorization(&state, PEER_SOURCE_ID, "did:web:alice.example").await;
+    seed_test_realm_basis_seal(&state, test_realm_id(), "did:web:alice.example").await;
+
+    let target = "https://server.test/_arkret/peer/seals/frontier";
+    let body = serde_json::json!({"realm_id": test_realm_id()});
+    let mut request = TestClient::query(target).json(&body);
+    for (name, value) in signed_federation_query_headers(
+        PEER_SOURCE_DID,
+        service_id(),
+        DESTINATION_TRUST_DOMAIN,
+        target,
+        &body,
+    ) {
+        request = request.add_header(name, value, true);
+    }
+    let mut response = request.send(&app_from_state(state)).await;
+    assert_eq!(response.status_code, Some(StatusCode::OK));
+    let value: Value = response.take_json().await.unwrap();
+    let typed: arkret_models_collaboration::event_sync::PeerSealFrontierState =
+        serde_json::from_value(value.clone())
+            .unwrap_or_else(|error| panic!("typed peer Seal frontier: {error}; {value}"));
+    assert_eq!(typed.frontier.realm_id.as_str(), test_realm_id());
+    assert!(typed.frontier.sole_leaf().is_ok());
+    assert_eq!(
+        typed.service_proof.kind,
+        arkret_wire::proof_kind::DETACHED_JWS
+    );
+    assert!(
+        typed
+            .service_proof
+            .payload_digest
+            .as_str()
+            .starts_with("sha256:")
+    );
+    typed.service_proof.validate_production().unwrap();
+}
+
 /// SOL-02-007 - the federation submit path MUST bind the envelope actor to
 /// the authenticated source service authority. An actor hosted elsewhere and
 /// not known as a member of the binding Realm is rejected before any session
@@ -678,7 +725,7 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain_body() {
     event["actor_id"] = serde_json::json!(fixture_actor_core_id("did:web:intruder.evil").as_str());
     event = resign_federation_event_as(event, "did:web:intruder.evil");
     let body = peer_submit_body(&event);
-    let target = "http://server/_arkret/peer/events";
+    let target = "https://server.test/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
     for (name, value) in signed_federation_push_headers(
         PEER_SOURCE_DID,
@@ -736,7 +783,7 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain_body(
     )
     .await;
     let body = peer_submit_body(&event);
-    let target = "http://server/_arkret/peer/events";
+    let target = "https://server.test/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
     for (name, value) in signed_federation_push_headers(
         PEER_SOURCE_DID,
@@ -954,7 +1001,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope_bo
     event = resign_federation_event(event);
     put_event_record(&state, event, now - ChronoDuration::seconds(10)).await;
 
-    let query_target = "http://server/_arkret/peer/events";
+    let query_target = "https://server.test/_arkret/peer/events";
     let query_body = serde_json::json!({
         "filters": {"kind": "ak.message.create"},
         "realms": [test_realm_id()]
@@ -981,7 +1028,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope_bo
         "source service represents Bob only, so Alice's Circle event is outside its read scope: {page:?}"
     );
 
-    let resolve_target = "http://server/_arkret/peer/events/resolve";
+    let resolve_target = "https://server.test/_arkret/peer/events/resolve";
     // `PeerEventsResolveRequestBody` requires `realm_id`: every selector is
     // scoped to exactly one Realm, so a body without it is not a resolve
     // request at all.

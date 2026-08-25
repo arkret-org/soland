@@ -15,6 +15,7 @@ const REALM_A: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
 const REALM_PARENT: &str = "ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksgW";
 const BOB: &str = "ak:did_core:web:bob.example";
 const MALLORY: &str = "ak:did_core:web:mallory.example";
+const CAPTCHA_PROVIDER_DID: &str = "did:webvh:z6mkfixture:captcha.example";
 
 fn op(kind: impl AsRef<str>, realm_id: &str, payload: Value) -> Operation {
     arkret_event_draft::test_support::raw_projected_operation(
@@ -114,7 +115,7 @@ fn challenge_proof(gate_id: &str, issued_at: chrono::DateTime<Utc>) -> Value {
         "gate_id": gate_id,
         "challenge_proof": {
             "challenge_id": "chg_01HXY9PM0AB6Y7VN2C7M4WG5KQ",
-            "issued_by": "ak:did_core:web:captcha.example",
+            "issued_by": CAPTCHA_PROVIDER_DID,
             "challenge_kind": "captcha",
             "issued_at": arkret_canonical::format_timestamp_canonical(issued_at),
             "proof": "base64url:test-proof"
@@ -320,7 +321,7 @@ fn any_combinator_accepts_parent_membership_gate_without_challenge() {
                     "gate_id": "g-captcha",
                     "kind": "challenge_response",
                     "auto_resolve": true,
-                    "provider_did": "ak:did_core:web:captcha.example",
+                    "provider_did": CAPTCHA_PROVIDER_DID,
                     "challenge_kinds": ["captcha"],
                     "max_proof_age": "PT5M"
                 }
@@ -366,7 +367,7 @@ fn all_combinator_requires_parent_membership_and_challenge_proof() {
                     "gate_id": "g-captcha",
                     "kind": "challenge_response",
                     "auto_resolve": true,
-                    "provider_did": "ak:did_core:web:captcha.example",
+                    "provider_did": CAPTCHA_PROVIDER_DID,
                     "challenge_kinds": ["captcha"],
                     "max_proof_age": "PT5M"
                 }
@@ -425,7 +426,7 @@ fn cooldown_gate_denies_independently_of_any_combinator() {
                     "gate_id": "g-captcha",
                     "kind": "challenge_response",
                     "auto_resolve": true,
-                    "provider_did": "ak:did_core:web:captcha.example",
+                    "provider_did": CAPTCHA_PROVIDER_DID,
                     "challenge_kinds": ["captcha"],
                     "max_proof_age": "PT5M"
                 }

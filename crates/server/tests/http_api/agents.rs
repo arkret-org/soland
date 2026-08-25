@@ -898,7 +898,21 @@ async fn provision_agent_sdk_commit_attempt_inner(
         .await
         .unwrap()
         .into_iter()
-        .map(|record| serde_json::from_value::<arkret_wire::Event>(record.envelope).unwrap())
+        .filter_map(|record| {
+            let event = serde_json::from_value::<arkret_wire::Event>(record.envelope).unwrap();
+            let digest = arkret_wire::Hash::new(
+                event
+                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                    .unwrap(),
+            )
+            .unwrap();
+            let is_predecessor_control = predecessor.covered_event_digests.contains(&digest);
+            let is_new_control_move = event.kind.is_reducer_input()
+                && event.seal_basis.is_some()
+                && event.seal_ref.is_none()
+                && event.auth_context.is_none();
+            (is_predecessor_control || is_new_control_move).then_some(event)
+        })
         .collect::<Vec<_>>();
     controller_events.sort_by(|left, right| {
         left.actor_seq
@@ -925,10 +939,22 @@ async fn provision_agent_sdk_commit_attempt_inner(
         .take_string()
         .await
         .unwrap_or_default();
+    let controller_event_inventory = controller_events
+        .iter()
+        .map(|event| {
+            (
+                event.event_id.to_string(),
+                event.kind.as_str().to_owned(),
+                event
+                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                    .unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         controller_seal_status,
         Some(StatusCode::OK),
-        "{controller_seal_response_body}"
+        "{controller_seal_response_body}; controller Events: {controller_event_inventory:?}"
     );
 
     let genesis_authority =

@@ -112,7 +112,7 @@ fn account_device_pair_body(new_device_id: &str) -> Value {
     let proof = arkret_signatures::device_pairing::sign_to_device_pairing_challenge(
         &public_key,
         &pairing_code,
-        "http://server",
+        "https://server.test",
         &challenge,
         &pair_device_signing_key(new_device_id),
     )
@@ -173,8 +173,6 @@ fn account_device_pair_body(new_device_id: &str) -> Value {
     serde_json::json!({
         "pairing_code": pairing_code,
         "new_device_pubkey": public_key_value,
-        "hpke_key": hpke_key,
-        "device_signature": target_attestation.device_signature,
         "challenge_proof": proof,
         "challenge_transcript": challenge,
         "authorize_event": arkret_wire::EventInitialSubmission::online(authorize_event),
@@ -634,7 +632,7 @@ fn rtc_media_token_uses_projected_media_service_epoch() {
 
 async fn rtc_media_token_uses_projected_media_service_epoch_body() {
     let state = soland_test_support::app_state(test_config());
-    install_media_service_epoch(&state, good_media_service_epoch());
+    install_media_service_epoch(&state, good_media_service_epoch(&state));
     let token = dev_token(state.clone()).await;
     // Brand-new call: no durable call cells exist yet (the initiator redeems a
     // media token before writing its first `ak.call.state` event). With no
@@ -669,8 +667,8 @@ async fn rtc_media_token_uses_projected_media_service_epoch_body() {
         .unwrap();
 
     assert_eq!(
-        token_response["connect_url"],
-        "wss://media.example/arkret-native"
+        token_response["connect_url"], "wss://media.example/arkret-native",
+        "{token_response}"
     );
     // Spec `CallMediaTokenExchangeOutcome` required fields: focus_id + backend_kind
     // identify the chosen focus and its backend protocol; `todos` is not a
@@ -682,7 +680,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch_body() {
     // field; the cell only anchors it through `service_id`.
     assert_eq!(
         token_response["participant_binding"]["issuer_kid"],
-        test_media_issuer_kid()
+        test_media_issuer_kid(&state)
     );
     assert_eq!(
         token_response["participant_binding"]["realm_id"],
@@ -702,7 +700,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch_body() {
     // service_signature covering the same bytes.
     assert_eq!(
         token_response["participant_binding"]["issuer_kid"],
-        test_media_issuer_kid()
+        test_media_issuer_kid(&state)
     );
     assert!(
         token_response["participant_binding"]["sig"]
@@ -765,7 +763,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch_body() {
     // object, and its payload carries no long-term actor identity: the SFU sees
     // only the per-exchange `participant_identity` pseudonym.
     let backend_token = &token_response["backend_token"];
-    assert_eq!(backend_token["kid"], test_media_issuer_kid());
+    assert_eq!(backend_token["kid"], test_media_issuer_kid(&state));
     assert_eq!(backend_token["signature_algorithm"], "Ed25519");
     assert!(
         backend_token["sig"]
@@ -823,7 +821,7 @@ fn rtc_media_token_inkson_flow_no_session_issues_token() {
 
 async fn rtc_media_token_inkson_flow_no_session_issues_token_body() {
     let state = soland_test_support::app_state(livekit_test_config());
-    install_media_service_epoch(&state, good_media_service_epoch());
+    install_media_service_epoch(&state, good_media_service_epoch(&state));
     // Use a non-owner member so the pre-grant assertion actually isolates
     // `ak.call.join`; the seeded Alice account is the demo Realm owner and
     // owners receive ordinary Realm-level capabilities by default.
@@ -876,7 +874,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(issued["focus_id"], "livekit_green");
+    assert_eq!(issued["focus_id"], "livekit_green", "{issued}");
     assert_eq!(issued["connect_url"], "wss://media.example/livekit");
     assert!(
         issued["participant_identity"]
@@ -904,7 +902,7 @@ fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
 
 async fn rtc_media_token_rejects_epoch_and_focus_mismatches_body() {
     let state = soland_test_support::app_state(test_config());
-    install_media_service_epoch(&state, good_media_service_epoch());
+    install_media_service_epoch(&state, good_media_service_epoch(&state));
     let token = dev_token(state.clone()).await;
     let session_id = authored_call_id();
     // §6 — grant ak.call.join so the join gate passes and the focus/issuer
@@ -945,7 +943,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches_body() {
             "foci": [{
                 "focus_id": "arkret_native_blue",
                 "focus_kind": "arkret_native",
-                "token_endpoint": "http://server/_arkret/self/rtc/token",
+                "token_endpoint": "https://server.test/_arkret/self/rtc/token",
                 "connect_url": "wss://media.example/arkret-native"
             }]
         }),
@@ -979,7 +977,7 @@ fn rtc_media_token_rejects_non_member_actor() {
 
 async fn rtc_media_token_rejects_non_member_actor_body() {
     let state = soland_test_support::app_state(test_config());
-    install_media_service_epoch(&state, good_media_service_epoch());
+    install_media_service_epoch(&state, good_media_service_epoch(&state));
     let _token = dev_token(state.clone()).await;
     let session_id = authored_call_id();
     let bob_token = dev_token_for_device(
@@ -1022,7 +1020,7 @@ async fn rtc_media_token_requires_call_join_capability_body() {
     // Use the LiveKit-configured deployment so the oldest-membership default
     // focus (`livekit_green`) can mint a real token once join is held.
     let state = soland_test_support::app_state(livekit_test_config());
-    install_media_service_epoch(&state, good_media_service_epoch());
+    install_media_service_epoch(&state, good_media_service_epoch(&state));
     // Bootstrap alice (realm owner) so DEMO_REALM exists, then add bob as a
     // member.
     let _alice_token = dev_token(state.clone()).await;
@@ -1068,7 +1066,7 @@ async fn rtc_media_token_requires_call_join_capability_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(granted["focus_id"], "livekit_green");
+    assert_eq!(granted["focus_id"], "livekit_green", "{granted}");
     assert!(
         granted["participant_identity"]
             .as_str()
@@ -1134,7 +1132,7 @@ fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
 
 async fn rtc_media_token_livekit_backend_token_carries_livekit_claims_body() {
     let state = soland_test_support::app_state(livekit_test_config());
-    install_media_service_epoch(&state, good_media_service_epoch());
+    install_media_service_epoch(&state, good_media_service_epoch(&state));
     let token = dev_token(state.clone()).await;
     let session_id = authored_call_id();
     // §6 — token exchange requires ak.call.join.
@@ -1164,7 +1162,10 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(token_response["backend_kind"], "livekit");
+    assert_eq!(
+        token_response["backend_kind"], "livekit",
+        "{token_response}"
+    );
     assert_eq!(token_response["connect_url"], "wss://media.example/livekit");
 
     // `bindings/livekit.md` §2 — the backend_token is a real LiveKit JWT:
@@ -1228,7 +1229,7 @@ fn admin_realm_media_service_renders_projected_cell() {
 
 async fn admin_realm_media_service_renders_projected_cell_body() {
     let state = soland_test_support::app_state(test_config());
-    install_media_service_epoch(&state, good_media_service_epoch());
+    install_media_service_epoch(&state, good_media_service_epoch(&state));
     let token = dev_token(state.clone()).await;
 
     let media_service: Value = TestClient::get(format!(
@@ -1242,7 +1243,7 @@ async fn admin_realm_media_service_renders_projected_cell_body() {
     .await
     .unwrap();
     assert_eq!(media_service["realm_id"], demo_realm_id());
-    assert_eq!(media_service["service_id"], TEST_MEDIA_SERVICE_ID);
+    assert_eq!(media_service["service_id"], state.service_id().as_str());
     let foci = media_service["foci"].as_array().unwrap();
     assert_eq!(foci.len(), 2);
     let livekit = foci
@@ -1254,7 +1255,7 @@ async fn admin_realm_media_service_renders_projected_cell_body() {
     assert_eq!(livekit["focus_kind"], "livekit");
     assert_eq!(
         livekit["token_endpoint"],
-        "http://server/_arkret/self/rtc/token"
+        "https://server.test/_arkret/self/rtc/token"
     );
     assert_eq!(livekit["connect_url"], "wss://media.example/livekit");
 
@@ -1283,7 +1284,7 @@ fn webrtc_ban_blocks_removed_participant_token_reissue() {
 
 async fn webrtc_ban_blocks_removed_participant_token_reissue_body() {
     let state = soland_test_support::app_state(livekit_test_config());
-    install_media_service_epoch(&state, good_media_service_epoch());
+    install_media_service_epoch(&state, good_media_service_epoch(&state));
     let _alice_token = dev_token(state.clone()).await;
     let bob = "did:web:bob.example";
     let bob_core = fixture_actor_core_id(bob);
@@ -1317,7 +1318,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(pre_ban["focus_id"], "livekit_green");
+    assert_eq!(pre_ban["focus_id"], "livekit_green", "{pre_ban}");
 
     // A moderator actor-wide-bans bob: the durable call moderation OR-Set
     // carries a `ban` value with no `device_id`. Seed that effective cell
@@ -1433,21 +1434,14 @@ fn install_media_service_epoch(state: &AppState, media_service: Value) {
         .realm_null_subject_cells
         .insert(
             (demo_realm_id().to_owned(), cell_id.as_str().to_owned()),
-            CellState::Value(media_service),
+            CellState::Value(serde_json::json!({"value": media_service})),
         );
 }
 
-/// This deployment's own service DID, and the media `service_id` every issued
-/// `issuer_kid` is anchored against (`media-service-binding.md` §3).
-const TEST_SERVICE_FULL_ID: &str =
-    "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
-const TEST_MEDIA_SERVICE_ID: &str =
-    "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x";
-
 /// Default media signing key: `<service DID>#media-1`
 /// (`SOLAND_MEDIA_ISSUER_KID` overrides it).
-fn test_media_issuer_kid() -> String {
-    format!("{TEST_SERVICE_FULL_ID}#media-1")
+fn test_media_issuer_kid(state: &AppState) -> String {
+    format!("{}#media-1", state.service_full_id())
 }
 
 /// A spec-shaped `ak.realm.media_service` cell
@@ -1456,20 +1450,20 @@ fn test_media_issuer_kid() -> String {
 /// `token_endpoint` names this deployment, because a focus whose token endpoint
 /// is somebody else's service is one this server must refuse to mint for. The
 /// two backends are the only ones v1 gives a normative binding.
-fn good_media_service_epoch() -> Value {
+fn good_media_service_epoch(state: &AppState) -> Value {
     serde_json::json!({
-        "service_id": TEST_MEDIA_SERVICE_ID,
+        "service_id": state.service_id(),
         "foci": [
             {
                 "focus_id": "livekit_green",
                 "focus_kind": "livekit",
-                "token_endpoint": "http://server/_arkret/self/rtc/token",
+                "token_endpoint": "https://server.test/_arkret/self/rtc/token",
                 "connect_url": "wss://media.example/livekit"
             },
             {
                 "focus_id": "arkret_native_blue",
                 "focus_kind": "arkret_native",
-                "token_endpoint": "http://server/_arkret/self/rtc/token",
+                "token_endpoint": "https://server.test/_arkret/self/rtc/token",
                 "connect_url": "wss://media.example/arkret-native"
             }
         ]

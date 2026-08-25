@@ -5,10 +5,20 @@
 //! preconditions, then a local target replays the peer receive chain from
 //! step 4 while a remote target enters the durable exact-body outbox.
 
+use std::sync::Arc;
+
 use arkret_models_collaboration::governance::invite_addressing::{
     IntroductionEvidence, InviteAddress, InviteReceivePolicy, SelfInviteDispatchRequestBody,
 };
-use arkret_models_identity::ServiceResolutionCarrier;
+use arkret_models_identity::{
+    ResolutionCommitment, ServiceResolutionCarrier, ServiceResolutionRecord,
+    ServiceResolutionRecordCore,
+};
+use async_trait::async_trait;
+use soland_services::ServiceResult;
+use soland_services::service_route::{
+    RouteSource, ServiceRouteFetcher, VerifiedRouteCandidate, VerifiedServiceDescribeMetadata,
+};
 
 use super::common::*;
 
@@ -20,6 +30,8 @@ const ALICE: &str = "did:web:alice.example";
 const ALICE_DEVICE: &str = "01904100-0000-7000-8000-a11ce0000001";
 const BOB: &str = "did:web:bob.example";
 const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b000000001";
+const REMOTE_SERVICE_FULL_ID: &str = "did:web:remote.example";
+const REMOTE_SERVICE_ID: &str = "ak:did_core:web:remote.example";
 /// A syntactically valid Event id this service never accepted.
 const UNKNOWN_EVENT_ID: &str = "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E2";
 
@@ -30,6 +42,145 @@ struct DispatchFixture {
     invite_event: arkret_wire::Event,
     invite_address: InviteAddress,
     evidence: IntroductionEvidence,
+}
+
+#[derive(serde::Serialize)]
+struct RouteBindingProjection<'a> {
+    service_id: &'a DidCoreId,
+    service_kind: arkret_wire::ServiceKind,
+    service_resolution: &'a ResolutionCommitment,
+    http_json_base_url: &'a str,
+}
+
+struct RemoteCarrierFetcher {
+    service_id: DidCoreId,
+    candidate: VerifiedRouteCandidate,
+}
+
+#[async_trait]
+impl ServiceRouteFetcher for RemoteCarrierFetcher {
+    async fn fetch_carrier(
+        &self,
+        _carrier: &ServiceResolutionCarrier,
+        service_id: &DidCoreId,
+        service_kind: &str,
+    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+        Ok((service_id == &self.service_id
+            && service_kind == arkret_wire::ServiceKind::PrincipalServer.as_str())
+        .then(|| self.candidate.clone()))
+    }
+
+    async fn fetch_current(
+        &self,
+        _service_id: &DidCoreId,
+        _service_kind: &str,
+    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+        Ok(None)
+    }
+
+    async fn fetch_notice_candidate(
+        &self,
+        _service_id: &DidCoreId,
+        _service_kind: &str,
+    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+        Ok(None)
+    }
+
+    async fn fetch_realm_peer_mirror(
+        &self,
+        _service_id: &DidCoreId,
+        _service_kind: &str,
+    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+        Ok(None)
+    }
+
+    async fn fetch_configured_mirror(
+        &self,
+        _service_id: &DidCoreId,
+        _service_kind: &str,
+    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+        Ok(None)
+    }
+}
+
+fn remote_route_candidate() -> (DidCoreId, ServiceResolutionCarrier, VerifiedRouteCandidate) {
+    let full_id =
+        DidFullId::new(REMOTE_SERVICE_FULL_ID.to_owned()).expect("remote service full DID");
+    let service_id = arkret_wire::project_full_id_to_core_id(&full_id)
+        .expect("remote service core DID projection");
+    assert_eq!(service_id.as_str(), REMOTE_SERVICE_ID);
+    let service_kind = arkret_wire::ServiceKind::PrincipalServer;
+    let base_url = "https://remote.example/";
+    let issued_at = chrono::Utc::now();
+    let method_history_head = format!("sha256:{}", "1".repeat(64));
+    let version_id = "fixture-route-v1".to_owned();
+    let resolution = ResolutionCommitment {
+        full_id: full_id.clone(),
+        method_history_head: method_history_head.clone(),
+        version_id: version_id.clone(),
+    };
+    let describe_digest = arkret_identifiers::Hash::new(
+        arkret_canonical::canonical_sha256(&RouteBindingProjection {
+            service_id: &service_id,
+            service_kind,
+            service_resolution: &resolution,
+            http_json_base_url: base_url,
+        })
+        .expect("remote route binding digest"),
+    )
+    .expect("remote route binding hash");
+    let current_record_url = format!(
+        "{}{}",
+        base_url.trim_end_matches('/'),
+        arkret_models_identity::canonical_service_current_record_path(&service_id)
+    );
+    let candidate = VerifiedRouteCandidate {
+        source: RouteSource::CurrentRecord,
+        record: ServiceResolutionRecord {
+            record: ServiceResolutionRecordCore {
+                service_id: service_id.clone(),
+                service_kind: service_kind.as_str().to_owned(),
+                full_id: full_id.clone(),
+                method_history_head,
+                version_id,
+                resolution_event_ref: "fixture-verified-route".to_owned(),
+                record_sequence: 0,
+                previous_record_digest: None,
+                current_record_url: current_record_url.clone(),
+                base_url: base_url.to_owned(),
+                describe_digest: describe_digest.clone(),
+                issued_at,
+                refresh_after: issued_at + chrono::Duration::hours(1),
+                expires_at: issued_at + chrono::Duration::hours(2),
+            },
+            proof: arkret_wire::ProtocolSignature {
+                verification_method: arkret_wire::DidUrl::new(format!("{full_id}#assertion-1"))
+                    .expect("remote verification method"),
+                created_at: issued_at,
+                jws: arkret_wire::Base64UrlString::new("AA").expect("fixture proof bytes"),
+            },
+        },
+        description: VerifiedServiceDescribeMetadata {
+            service_id: service_id.clone(),
+            service_kind: service_kind.as_str().to_owned(),
+            service_resolution: resolution,
+            http_json_base_url: base_url.to_owned(),
+            route_binding_digest: describe_digest,
+            trust_domain: arkret_identifiers::TrustDomainId::new(
+                "ak:trust_domain:remote.example".to_owned(),
+            )
+            .expect("remote trust domain"),
+            protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
+        },
+    };
+    (
+        service_id,
+        ServiceResolutionCarrier::CurrentRecordUrl {
+            current_record_url,
+            pinned_record_digest: None,
+        },
+        candidate,
+    )
 }
 
 impl DispatchFixture {
@@ -117,6 +268,13 @@ fn shared_realm_evidence(realm_id: &str) -> IntroductionEvidence {
 async fn seed_dispatch_fixture(
     evidence_for_realm: impl FnOnce(&str) -> IntroductionEvidence,
 ) -> DispatchFixture {
+    seed_dispatch_fixture_for_target(evidence_for_realm, None).await
+}
+
+async fn seed_dispatch_fixture_for_target(
+    evidence_for_realm: impl FnOnce(&str) -> IntroductionEvidence,
+    target: Option<(DidCoreId, ServiceResolutionCarrier)>,
+) -> DispatchFixture {
     let state = soland_test_support::app_state(test_config());
     let alice_token = dev_token(state.clone()).await;
     let bob_token = register_account(state.clone(), BOB, "bob", BOB_DEVICE).await;
@@ -135,13 +293,18 @@ async fn seed_dispatch_fixture(
         .expect("seeded realm id")
         .to_owned();
     let evidence = evidence_for_realm(&realm_id);
-    let service_resolution = local_service_resolution(&state);
+    let (recipient_service_id, service_resolution) = target.unwrap_or_else(|| {
+        (
+            DidCoreId::new(state.service_id().to_owned()).expect("service id core DID"),
+            local_service_resolution(&state),
+        )
+    });
     let evidence_digest =
         arkret_canonical::canonical_sha256(&evidence).expect("introduction evidence digest");
     let payload = serde_json::json!({
         "invitee": fixture_actor_core_id(BOB),
         "invite_delivery_target": {
-            "recipient_service_id": state.service_id(),
+            "recipient_service_id": recipient_service_id.clone(),
             "service_resolution": serde_json::to_value(&service_resolution)
                 .expect("service resolution carrier serializes"),
             "recipient_service_kind": "principal_server"
@@ -204,7 +367,7 @@ async fn seed_dispatch_fixture(
 
     let invite_address = InviteAddress::principal_server(
         fixture_actor_core_id(BOB),
-        DidCoreId::new(state.service_id().to_owned()).expect("service id core DID"),
+        recipient_service_id,
         service_resolution,
     );
     DispatchFixture {
@@ -266,6 +429,109 @@ async fn self_invite_dispatch_to_a_local_target_runs_the_receive_chain_and_notif
     assert!(
         fixture.quarantine_entries().await.is_empty(),
         "a notified invite MUST NOT enter the holder quarantine inbox"
+    );
+}
+
+#[test]
+fn self_invite_dispatch_to_a_remote_target_enqueues_the_exact_accepted_envelope_once() {
+    run_on_deep_stack(
+        "self_invite_dispatch_to_a_remote_target_enqueues_the_exact_accepted_envelope_once",
+        self_invite_dispatch_to_a_remote_target_enqueues_the_exact_accepted_envelope_once_body,
+    );
+}
+
+async fn self_invite_dispatch_to_a_remote_target_enqueues_the_exact_accepted_envelope_once_body() {
+    let (remote_service_id, service_resolution, candidate) = remote_route_candidate();
+    let fixture = seed_dispatch_fixture_for_target(
+        explicit_address_evidence,
+        Some((remote_service_id.clone(), service_resolution)),
+    )
+    .await;
+    fixture
+        .state
+        .test_install_service_route_fetcher(Arc::new(RemoteCarrierFetcher {
+            service_id: remote_service_id,
+            candidate,
+        }));
+
+    let accepted = fixture
+        .state
+        .test_persistence()
+        .events()
+        .get(fixture.invite_event.event_id.as_str())
+        .await
+        .expect("accepted invite Event lookup")
+        .expect("accepted invite Event exists");
+    assert_eq!(
+        accepted.envelope["event_id"],
+        fixture.invite_event.event_id.as_str(),
+        "the durable accepted envelope must carry its content-bound Event id"
+    );
+    let digest_preimage: Value = serde_json::from_slice(&accepted.canonical_bytes)
+        .expect("accepted invite digest preimage is JSON");
+    assert!(
+        digest_preimage.get("event_id").is_none(),
+        "the digest preimage is deliberately not a wire Event carrier: {digest_preimage}"
+    );
+
+    let delivery = fixture.delivery("ak:idempotency:remote-exact-envelope");
+    let (status, outcome) = fixture.dispatch(&fixture.alice_token, &delivery).await;
+    assert_eq!(status, StatusCode::OK, "remote dispatch: {outcome}");
+    assert_eq!(outcome["status"], "accepted", "remote dispatch: {outcome}");
+
+    let rows = fixture
+        .state
+        .test_persistence()
+        .federation_outbox()
+        .snapshot_all()
+        .await
+        .expect("remote invite outbox snapshot");
+    assert_eq!(
+        rows.len(),
+        1,
+        "one dispatch produces one durable row: {rows:?}"
+    );
+    let first = &rows[0];
+    let payload: Value =
+        serde_json::from_str(&first.payload_json).expect("durable remote invite payload is JSON");
+    assert_eq!(
+        payload["invite_event"], accepted.envelope,
+        "the outbox must carry the complete accepted envelope, including event_id"
+    );
+    assert_eq!(payload["invite_event"]["event_id"], accepted.event_id);
+    assert_eq!(payload["idempotency_key"], delivery.idempotency_key);
+    let first_id = first.id.clone();
+    let first_idempotency_key = first.idempotency_key.clone();
+    let first_payload_bytes = first.payload_json.as_bytes().to_vec();
+
+    let (replay_status, replay_outcome) = fixture.dispatch(&fixture.alice_token, &delivery).await;
+    assert_eq!(
+        replay_status,
+        StatusCode::OK,
+        "remote replay: {replay_outcome}"
+    );
+    assert_eq!(
+        replay_outcome["status"], "duplicate",
+        "remote replay: {replay_outcome}"
+    );
+    let replay_rows = fixture
+        .state
+        .test_persistence()
+        .federation_outbox()
+        .snapshot_all()
+        .await
+        .expect("remote replay outbox snapshot");
+    assert_eq!(
+        replay_rows.len(),
+        1,
+        "an exact retry must reuse the existing durable outbox row"
+    );
+    assert_eq!(replay_rows[0].id, first_id);
+    assert_eq!(replay_rows[0].idempotency_key, first_idempotency_key);
+    assert_eq!(
+        replay_rows[0].payload_json.as_bytes(),
+        first_payload_bytes,
+        "an exact retry must retain byte-identical canonical request bytes"
     );
 }
 

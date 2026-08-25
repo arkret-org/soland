@@ -14,6 +14,7 @@ fn policy_check_and_validation_work() {
 
 async fn policy_check_and_validation_work_body() {
     let state = soland_test_support::app_state(test_config());
+    seed_realm_genesis_event(&state, demo_realm_id(), "did:web:alice.example").await;
     let token = dev_token(state.clone()).await;
     let actor_id = fixture_actor_core_id("did:web:alice.example");
     let source_service_id = state.service_id().to_owned();
@@ -41,7 +42,7 @@ async fn policy_check_and_validation_work_body() {
     // response carries a signed `bound_to` request transcript, not a
     // `decision_trace`. No owner policy document matches yet → fail-closed
     // default decision.
-    assert_eq!(policy["decision"], "require_review");
+    assert_eq!(policy["decision"], "require_review", "{policy}");
     assert_eq!(policy["request_id"], "req1");
     assert_eq!(policy["bound_to"]["actor_id"], actor_id.as_str());
     assert_eq!(policy["bound_to"]["action"], "message.send");

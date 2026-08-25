@@ -998,15 +998,9 @@ async fn pg_restart(routes: &[VerifiedPeerRoute]) -> Option<AppState> {
         soland_services::persistence::PersistenceHandle::from_shared(persistence_store.clone());
     let identity = soland_test_support::fixture_service_identity(&config);
     let signing_seed = soland_test_support::fixture_signing_seed(&config, &identity);
+    let fixture_identity = identity.identity().expect("fixture serving identity");
     let resolution_commitment = arkret_models_identity::ResolutionCommitment {
-        full_id: arkret_wire::DidFullId::new(
-            identity
-                .identity()
-                .expect("fixture serving identity")
-                .service_id
-                .to_string(),
-        )
-        .expect("fixture service DidFullId"),
+        full_id: fixture_identity.full_id.clone(),
         method_history_head: format!("sha256:{}", "0".repeat(64)),
         version_id: "fixture-v1".to_owned(),
     };
@@ -1125,13 +1119,13 @@ async fn postgres_crash_before_recording_resends_the_same_transport_identity() {
     let Some(state) = pg_restart(&[]).await else {
         return;
     };
-    // Two identical 2xx replies: the peer accepts the first, the local process
-    // "crashes" before recording it, and the restart re-sends. The receiver
-    // deduplicates on the *unchanged* Idempotency-Key (`federation.md` §8.5).
-    let (peer_url, request_rx) = spawn_mock_peer_responses(vec![
-        MockResponse::new("200 OK", br#"{"status":"accepted"}"#),
-        MockResponse::new("200 OK", br#"{"status":"duplicate"}"#),
-    ]);
+    // Model a peer that accepted the abandoned first transport: the restarted
+    // sender receives the formal duplicate outcome for the unchanged
+    // Idempotency-Key (`federation.md` §8.5).
+    let (peer_url, request_rx) = spawn_mock_peer_with_status(
+        "200 OK",
+        br#"{"pending_delivery_count":0,"status":"duplicate"}"#,
+    );
     let route = unique_peer_route("restart-inflight", &peer_url);
     let key = unique_key("restart-inflight");
     let row = enqueue_outbound(

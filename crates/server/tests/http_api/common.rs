@@ -23,13 +23,11 @@ pub(crate) use sha2::{Digest, Sha256};
 pub(crate) use soland_domain::artifacts;
 pub(crate) use soland_http::config::{AppConfig, IceServersConfig};
 pub(crate) use soland_http::ratelimit::RateLimiterConfig;
-pub(crate) use soland_http::state::{AppState, EventNotification, RealmDirectoryEntry};
+pub(crate) use soland_http::state::{AppState, RealmDirectoryEntry};
 pub(crate) use soland_http::{
     service, service_with_rate_limiter_config, service_with_request_size_limit,
 };
-pub(crate) use soland_storage::{
-    MessageRecord, RealmInviteRecord, RealmMetaRecord, WebvhDocumentRecord,
-};
+pub(crate) use soland_storage::{RealmInviteRecord, RealmMetaRecord, WebvhDocumentRecord};
 pub(crate) use soland_storage_postgres::Db;
 pub(crate) use soland_test_support::AppStateTestExt;
 
@@ -702,7 +700,7 @@ pub(crate) async fn seed_test_realm(
         .put(
             &realm_id,
             &RealmMetaRecord {
-                owner: owner.to_owned(),
+                owner: fixture_actor_core_id(owner).to_string(),
                 deleted: false,
                 discoverability: discoverability.to_owned(),
                 history_access: "since_join".to_owned(),
@@ -1376,7 +1374,7 @@ pub(crate) async fn authorize_test_plaintext_message_service(
         .await
         .unwrap()
         .unwrap_or_else(|| RealmMetaRecord {
-            owner: actor.to_owned(),
+            owner: fixture_actor_core_id(actor).to_string(),
             deleted: false,
             discoverability: "invite_only".to_owned(),
             history_access: "since_join".to_owned(),
@@ -1549,10 +1547,13 @@ pub(crate) async fn project_test_authorized_device(
         arkret_wire::project_full_id_to_core_id(&actor_full).expect("fixture actor core DID");
     let principal_server_id = arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
         .expect("fixture local principal server core DID");
-    let realm_id = arkret_identifiers::RealmId::new(
-        soland_test_support::fixture_principal_control_realm(actor),
-    )
-    .expect("fixture PCR realm");
+    let realm_id =
+        soland_test_support::cba_basis::fixture_principal_control_realm_create_for_server(
+            actor,
+            principal_server_id.clone(),
+        )
+        .realm_id
+        .clone();
     soland_test_support::cba_basis::seed_realm_genesis_event(state, realm_id.as_str(), actor).await;
     soland_test_support::cba_basis::seed_realm_basis(
         state,
@@ -2765,87 +2766,6 @@ fn fixture_prev_refs(prev_refs: Vec<&str>) -> Vec<&str> {
     }
 }
 
-// The following comment blocks are descriptive notes for tests that have
-// migrated to dedicated integration files. They are preserved here only
-// as breadcrumbs (round 14b ak.redaction terminal-flip; round 14d/14f/15a
-// projection_query endpoints; round 15b applet/agent registration; round
-// 15d include_terminal filter; round 15f multi-chunk snapshot; round 15h
-// projection write-through). See the corresponding `tests/*.rs` files for
-// the executable coverage.
-
-// ── account_subscribe long-poll + realms-incremental coverage ─────────────
-//
-// These tests pin the two behaviors that landed alongside the
-// `realms`-baseline cleanup: idle incremental syncs hold instead of
-// returning immediately, and quiet realms drop out of the delta until
-// they have new state.
-
-pub(crate) async fn persist_test_message(
-    state: &AppState,
-    realm_id: &str,
-    sender: &str,
-    body: &str,
-) -> MessageRecord {
-    let actor_seq = TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
-    persist_test_message_with_actor_seq(state, realm_id, sender, body, actor_seq).await
-}
-
-pub(crate) async fn persist_test_message_with_actor_seq(
-    state: &AppState,
-    realm_id: &str,
-    sender: &str,
-    body: &str,
-    actor_seq: u64,
-) -> MessageRecord {
-    let envelope = signed_canonical_event(
-        "persist-test-message",
-        "ak.message.create",
-        sender,
-        "01904100-0000-7000-8000-a11ce0000001",
-        realm_id,
-        actor_seq,
-        Vec::new(),
-        serde_json::json!({
-            "strand_id": expected_strand_id_for_scope(realm_id),
-            "track_name": "discussion",
-            "content": {
-                "kind": "ak.content.text",
-                "body": body,
-                "format": "plain"
-            }
-        }),
-    );
-    let event_id = authored_event_id(&envelope).to_owned();
-    let record = MessageRecord {
-        event_id: event_id.clone(),
-        message_id: event_id.replacen("ak:event:", "ak:message:", 1),
-        realm_id: realm_id.to_owned(),
-        sender: fixture_actor_core_id(sender).to_string(),
-        thread_id: expected_strand_id_for_scope(realm_id),
-        content: serde_json::json!({"body": body}),
-        encrypted: false,
-        created_at: chrono::Utc::now(),
-    };
-    state
-        .test_persistence()
-        .messages()
-        .put(&record)
-        .await
-        .unwrap();
-    let event: arkret_wire::Event =
-        serde_json::from_value(envelope).expect("persisted fixture is a typed Event");
-    state
-        .test_persistence()
-        .events()
-        .put(soland_test_support::signed_event::canonical_event_record(
-            &event,
-            Some(realm_id),
-            record.created_at,
-        ))
-        .await
-        .unwrap();
-    record
-}
 fn projected_operation_id(event_id: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"ak:operation:soland-event-projection:v1:");

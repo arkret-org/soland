@@ -75,6 +75,7 @@ async fn recovery_policy_production_accepts_verified_payload_body() {
     let state =
         shared_recovery_state_with_config(Arc::new(SolandMemoryPersistenceStore::new()), config)
             .await;
+    assert!(!state.config().development_mode);
     let token = "prod_recovery_token";
     let signing = SigningKey::from_bytes(&[77u8; 32]);
     let (principal_id, verification_method) = did_webvh_principal(&signing);
@@ -83,6 +84,29 @@ async fn recovery_policy_production_accepts_verified_payload_body() {
 
     let body = post_recovery_policy(state, token, &policy, &signing, StatusCode::CREATED).await;
     assert_eq!(body["ok"], true);
+}
+
+#[test]
+fn recovery_policy_rejects_unregistered_grant_and_mismatched_dpop_holder() {
+    run_on_deep_stack_multi_thread(
+        "recovery_policy_rejects_unregistered_grant_and_mismatched_dpop_holder",
+        recovery_policy_rejects_unregistered_grant_and_mismatched_dpop_holder_body,
+    );
+}
+
+async fn recovery_policy_rejects_unregistered_grant_and_mismatched_dpop_holder_body() {
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new())).await;
+    let signing = SigningKey::from_bytes(&[78u8; 32]);
+    let (principal_id, _verification_method) = did_key_principal(&signing);
+    let token = verified_dev_token_for_device(
+        state.clone(),
+        &principal_id,
+        RECOVERY_TEST_DEVICE,
+        "Recovery",
+    )
+    .await;
+
+    assert_recovery_policy_grant_binding_rejections(state, &token).await;
 }
 
 #[test]

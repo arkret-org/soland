@@ -908,6 +908,62 @@ async fn stored_control_proposal_ack(
     ))
 }
 
+async fn restore_exact_duplicate_control_event(
+    state: &AppState,
+    accepted: &soland_services::events::AcceptedEvent,
+    ackless_self_principal_ingress: Option<&AcklessSelfPrincipalIngress>,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<(), SubmitOneError> {
+    let event: Event = serde_json::from_value(accepted.envelope.clone()).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("stored accepted Control Move envelope is invalid: {error}"),
+        )
+    })?;
+    let digest =
+        arkret_state::state::control_event_digest(&event, digest_suite).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("stored Control Move digest is invalid: {error}"),
+            )
+        })?;
+    if state
+        .projections()
+        .control_event_by_digest(&digest)
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("stored Control Move lookup failed: {error}"),
+            )
+        })?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    let ingress = match ackless_self_principal_ingress {
+        Some(class) => ControlProposalIngress::AcklessSelfPrincipal(class.clone()),
+        None => {
+            ControlProposalIngress::AckRequired(stored_control_proposal_ack(state, &digest).await?)
+        }
+    };
+    state
+        .projections()
+        .put_pending_control_event(&event, &ingress, digest_suite)
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("stored Control Move pending state recovery failed: {error}"),
+            )
+        })?;
+    state.wake_control_seal_coordinator();
+    Ok(())
+}
+
 /// Whether this Control Move is authored directly by the current device of a
 /// self-principal Human PCR.
 ///
@@ -1806,6 +1862,15 @@ pub(super) async fn submit_event_value_with_context(
         if existing.canonical_bytes == parsed.canonical_bytes
             || exact_producer_retry(&existing.canonical_bytes, &submitted_event)
         {
+            if control_event_for_proposal.is_some() {
+                restore_exact_duplicate_control_event(
+                    state,
+                    &existing,
+                    ackless_self_principal_ingress.as_ref(),
+                    parsed.digest_suite,
+                )
+                .await?;
+            }
             let frontier = super::super::endpoints::load_realm_actor_frontier(
                 state,
                 parsed.realm_id.clone(),
