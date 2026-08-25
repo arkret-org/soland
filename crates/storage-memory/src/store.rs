@@ -1,5 +1,6 @@
 //! In-memory implementation of [`PersistenceStore`].
 
+use arkret_models_collaboration::http_bodies::DevicePairingState;
 use soland_storage::ControlProposalAuthorityAckStore;
 
 use super::{
@@ -429,7 +430,7 @@ impl DevicePairingCommitUnitOfWork for SolandMemoryPersistenceStore {
         let Some(pairing) = pairings.get_mut(&commit.device_pairing_request_id) else {
             return Ok(false);
         };
-        if pairing.state != "pending_authorization"
+        if pairing.state != DevicePairingState::PendingAuthorization
             || pairing.expires_at <= commit.changed_at
             || pairing.pairing_code != commit.pairing_code
             || pairing.new_device_pubkey != commit_new_device_pubkey
@@ -437,7 +438,7 @@ impl DevicePairingCommitUnitOfWork for SolandMemoryPersistenceStore {
             return Ok(false);
         }
 
-        pairing.state = "authorized".to_owned();
+        pairing.state = DevicePairingState::Authorized;
         pairing.device_id = Some(commit.device_id);
         pairing.authorized_by_actor_id = Some(commit.authorized_by_actor_id);
         pairing.authorized_event_ref = Some(commit.authorized_event_ref);
@@ -724,7 +725,7 @@ mod device_pairing_commit_tests {
                 "BBBBBBBBBBBBBBBBBBBBBB".to_owned(),
                 None,
                 None,
-                "pending_authorization".to_owned(),
+                DevicePairingState::PendingAuthorization,
                 now,
                 now + chrono::Duration::minutes(10),
             ))
@@ -764,7 +765,7 @@ mod device_pairing_commit_tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(pairing.state, "authorized");
+        assert_eq!(pairing.state, DevicePairingState::Authorized);
         assert_eq!(pairing.device_id.as_deref(), Some(device_id));
     }
 }

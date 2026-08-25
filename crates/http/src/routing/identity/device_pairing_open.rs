@@ -95,7 +95,7 @@ pub(super) async fn stage_device_pairing(
         server_nonce: server_nonce.as_str().to_owned(),
         display_name,
         device_metadata,
-        state: "pending_authorization".to_owned(),
+        state: DevicePairingState::PendingAuthorization,
         device_id: None,
         authorized_by_actor_id: None,
         authorized_event_ref: None,
@@ -164,7 +164,7 @@ pub(super) async fn resolve_device_pairing(
     // Uniform anti-enumeration masking: a wrong code, an expired window, or an
     // already-authorized/expired row is indistinguishable from an unknown id.
     if record.pairing_code != pairing_code.as_str()
-        || record.state != "pending_authorization"
+        || record.state != DevicePairingState::PendingAuthorization
         || record.expires_at <= chrono::Utc::now()
     {
         return Err(device_pairing_not_found());
@@ -248,15 +248,15 @@ fn device_pairing_status_outcome(
     record: &soland_services::identity::DevicePairingState,
     now: chrono::DateTime<chrono::Utc>,
 ) -> JsonResult<DevicePairingStatusOutcome> {
-    let (state, device_id, authorized_event_ref) = match record.state.as_str() {
-        "pending_authorization" => {
+    let (state, device_id, authorized_event_ref) = match record.state {
+        DevicePairingState::PendingAuthorization => {
             if record.expires_at <= now {
                 (DevicePairingState::Expired, None, None)
             } else {
                 (DevicePairingState::PendingAuthorization, None, None)
             }
         }
-        "authorized" => {
+        DevicePairingState::Authorized => {
             let device_id = DeviceId::new(
                 record
                     .device_id
@@ -280,8 +280,7 @@ fn device_pairing_status_outcome(
                 Some(authorized_event_ref),
             )
         }
-        "expired" => (DevicePairingState::Expired, None, None),
-        _ => return Err(device_pairing_not_found()),
+        DevicePairingState::Expired => (DevicePairingState::Expired, None, None),
     };
     json_ok(DevicePairingStatusOutcome {
         state,

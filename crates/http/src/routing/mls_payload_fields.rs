@@ -40,16 +40,6 @@ pub(crate) fn commit_base_epoch(payload: &Value) -> Option<u64> {
     payload.get("base_epoch").and_then(Value::as_u64)
 }
 
-/// `mls_welcome_payload.recipient_principal_id` — the principal the Welcome is
-/// addressed to.
-pub(crate) fn welcome_recipient_principal_id(payload: &Value) -> Option<&str> {
-    payload
-        .get("recipient_principal_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
 /// The scope an accepted genesis / commit event pins the group to.
 ///
 /// `mls_genesis_payload` carries `effective_scope` at the payload root;
@@ -90,16 +80,6 @@ mod tests {
     #[test]
     fn commit_base_epoch_reads_the_canonical_field() {
         assert_eq!(commit_base_epoch(&json!({"base_epoch": 7})), Some(7));
-    }
-
-    #[test]
-    fn welcome_recipient_reads_the_canonical_field() {
-        assert_eq!(
-            welcome_recipient_principal_id(
-                &json!({"recipient_principal_id": "ak:did_core:web:bob.example"})
-            ),
-            Some("ak:did_core:web:bob.example")
-        );
     }
 
     #[test]

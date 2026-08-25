@@ -1257,7 +1257,7 @@ async fn continue_issue_terminal_receipt(
         )
         .with_wire_code("security_transaction_failed_precondition"));
     }
-    if recovery_session.state != "verified"
+    if recovery_session.state != SessionState::Verified
         || recovery_session.transaction_id.as_deref()
             != Some(transaction.resource.transaction_id.as_str())
         || recovery_session.principal_id != transaction.resource.principal_id.as_str()

@@ -1542,7 +1542,7 @@ async fn validate_reanchor_recovery_session(
                 "replacement device authorization recovery session is unknown",
             )
         })?;
-    if session.state != "verified"
+    if session.state != arkret_models_crypto::SessionState::Verified
         || session.expires_at <= now()
         || session_id != &reanchor.recovery_session_id
         || session.principal_id != authorize.principal_id.as_str()

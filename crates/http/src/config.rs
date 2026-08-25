@@ -1648,27 +1648,6 @@ fn load_notary_signing_key_seed(
     Ok(Some(seed))
 }
 
-/// `sync/federation.md` §4.1 deployment gate for custom composition paths:
-/// outbound federation on a non-durable outbox is a silent data-loss
-/// configuration.
-///
-/// The standard Soland runtime independently requires PostgreSQL before it
-/// builds persistence. This helper remains available to callers assembling an
-/// [`AppConfig`] with their own persistence path.
-pub fn assert_durable_outbox_backend(
-    config: &AppConfig,
-    durable_persistence: bool,
-) -> anyhow::Result<()> {
-    if config.development_mode || !config.federation_outbound_enabled || durable_persistence {
-        return Ok(());
-    }
-    anyhow::bail!(
-        "outbound federation is enabled without durable persistence: the in-memory federation \
-         outbox drops every pending delivery on restart. Configure DATABASE_URL, or set \
-         SOLAND_FEDERATION_OUTBOUND=0 if this deployment must not federate."
-    )
-}
-
 fn load_receive_policy_constraints(
     values: &BTreeMap<String, String>,
 ) -> anyhow::Result<Option<arkret_wire::receive_policy::ReceivePolicyConstraints>> {

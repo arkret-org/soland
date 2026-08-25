@@ -1,3 +1,5 @@
+use arkret_models_collaboration::agent_operations::AgentSidecarState;
+
 use super::{PersistenceResult, Value, async_trait};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -5,7 +7,9 @@ pub struct AgentSidecarRecord {
     pub sidecar_id: String,
     pub realm_id: String,
     pub controller_id: String,
-    pub state: String,
+    /// Lifecycle state; canonical SDK enum, persisted as its snake_case wire
+    /// name (`active` | `suspended` | `tombstoned`).
+    pub state: AgentSidecarState,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,

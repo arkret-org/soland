@@ -372,6 +372,12 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
                 row.recovery_session_id
             ))
         })?;
+        let state = serde_json::from_value(Value::String(row.state)).map_err(|error| {
+            PersistenceError::Internal(format!(
+                "recovery session `{}` has invalid state: {error}",
+                row.recovery_session_id
+            ))
+        })?;
         Ok(Self {
             request_id: row.request_id,
             create_intent_digest: row.create_intent_digest,
@@ -396,7 +402,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             publication_authority_context,
             publication_authority_context_digest,
             challenge: row.challenge,
-            state: row.state,
+            state,
             proof_payload: row.proof_payload,
             transaction_id: row
                 .transaction_id
@@ -412,6 +418,18 @@ const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, request_id, c
      current_device_generation_ref, device_generation_status, registry_head, accepted_seal_frontier, \
      policy_payload, publication_authority_context, publication_authority_context_digest, \
      challenge, state, proof_payload, transaction_id, created_at, updated_at, expires_at";
+
+/// Snake_case wire name of the canonical SDK `SessionState`, matching the
+/// `identity_model` / `device_generation_status` text-column encoding above.
+fn session_state_label(state: arkret_models_crypto::SessionState) -> &'static str {
+    match state {
+        arkret_models_crypto::SessionState::Pending => "pending",
+        arkret_models_crypto::SessionState::Verified => "verified",
+        arkret_models_crypto::SessionState::Completed => "completed",
+        arkret_models_crypto::SessionState::Rejected => "rejected",
+        arkret_models_crypto::SessionState::Expired => "expired",
+    }
+}
 #[async_trait]
 impl RecoverySessionStore for PgRecoverySessionStore {
     async fn get(
@@ -537,7 +555,7 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         )
         .bind::<Text, _>(record.publication_authority_context_digest.as_str())
         .bind::<Text, _>(&record.challenge)
-        .bind::<Text, _>(&record.state)
+        .bind::<Text, _>(session_state_label(record.state))
         .bind::<Nullable<Jsonb>, _>(record.proof_payload.as_ref())
         .bind::<Nullable<sql_types::Uuid>, _>(
             record
@@ -566,7 +584,7 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
             &record.recovery_session_id,
         ))
-        .bind::<Text, _>(&record.state)
+        .bind::<Text, _>(session_state_label(record.state))
         .bind::<Nullable<Jsonb>, _>(record.proof_payload.as_ref())
         .bind::<Nullable<sql_types::Uuid>, _>(
             record

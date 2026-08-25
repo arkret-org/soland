@@ -210,7 +210,7 @@ async fn enforce_recovery_session_grant_operation(
             "capability_denied",
             "recovery proof has not been verified",
         ))?;
-    if recovery.state != "verified"
+    if recovery.state != arkret_models_crypto::SessionState::Verified
         || recovery.expires_at <= now()
         || recovery.principal_id != session.actor
         || recovery.principal_server_id != session.audience

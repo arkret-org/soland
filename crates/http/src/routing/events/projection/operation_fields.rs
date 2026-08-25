@@ -2,31 +2,10 @@ use arkret_event_draft::ProjectedEventOperation as Operation;
 use serde_json::Value;
 use soland_services::operation_semantics as kinds;
 
-pub(super) fn first_string_field<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
-    keys.iter()
-        .find_map(|key| value.get(*key).and_then(Value::as_str))
-}
-
-pub(super) fn object_string_field<'a>(operation: &'a Operation, keys: &[&str]) -> Option<&'a str> {
-    operation
-        .payload
-        .get("object")
-        .and_then(|object| first_string_field(object, keys))
-}
-
-pub(super) fn patch_string_field<'a>(operation: &'a Operation, field: &str) -> Option<&'a str> {
-    let patch_value = operation
-        .payload
-        .get("patch")
-        .and_then(|patch| patch.get(field))?;
-    match patch_value {
-        Value::String(value) => Some(value.as_str()),
-        Value::Object(op) if op.get("$op").and_then(Value::as_str) == Some("set") => {
-            op.get("value").and_then(Value::as_str)
-        }
-        _ => None,
-    }
-}
+// Canonical home of these payload-field readers is `soland_storage::projection`
+// (re-exported at the storage crate root); the signatures and bodies were
+// identical, so this module re-exports them instead of keeping copies.
+pub(super) use soland_storage::{first_string_field, object_string_field, patch_string_field};
 
 fn operation_updates_realm_metadata(operation: &Operation) -> bool {
     matches!(

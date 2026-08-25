@@ -42,8 +42,9 @@ impl DevicePairingStore for PgDevicePairingStore {
             .first::<DevicePairingRow>(&mut *conn)
             .await
             .optional()
-            .map_err(PersistenceError::database)
-            .map(|record| record.map(Into::into))
+            .map_err(PersistenceError::database)?
+            .map(DevicePairingRecord::try_from)
+            .transpose()
     }
 
     async fn delete_expired_before(&self, cutoff: DateTime<Utc>) -> PersistenceResult<u64> {

@@ -225,11 +225,6 @@ pub fn operation_is_message_create(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::MessageCreate)
 }
 
-pub fn operation_is_redaction(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation)
-        .is_some_and(|kind| arkret_wire::events::kinds::is_redaction_kind(&kind))
-}
-
 pub fn operation_is_membership(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation)
         .is_some_and(|kind| arkret_wire::events::kinds::is_membership_kind(&kind))
@@ -267,15 +262,6 @@ pub const AUDIT_COMPLIANCE_PROFILES: &[&str] = &[
     arkret_wire::ProfileId::DISCLOSED_AUDIT_E2EE_V1,
 ];
 
-/// Spec T23 — true when `ak.audit.ryw_receipt` may be accepted as a durable
-/// Event. Requires `ak.profile.attested_audit.e2ee.v1` to be in the Realm's
-/// active profile set.
-pub fn ryw_receipt_durable_event_allowed(active_profiles: &[String]) -> bool {
-    active_profiles
-        .iter()
-        .any(|p| p == arkret_wire::ProfileId::ATTESTED_AUDIT_E2EE_V1)
-}
-
 /// SEC-08 — does this Realm-lifecycle payload (`ak.realm.create` /
 /// `ak.realm.policy_bundle`) declare the minimal-metadata profile
 /// [`ProfileId::MLS_MINIMAL_METADATA_REALM_V1`]
@@ -299,14 +285,6 @@ pub fn payload_declares_minimal_metadata_realm(payload: &serde_json::Value) -> b
 #[cfg(test)]
 mod audit_profile_tests {
     use super::*;
-
-    #[test]
-    fn ryw_receipt_durable_only_under_attested_profile() {
-        assert!(!ryw_receipt_durable_event_allowed(&[]));
-        assert!(ryw_receipt_durable_event_allowed(&[
-            "ak.profile.attested_audit.e2ee.v1".to_owned()
-        ]));
-    }
 
     #[test]
     fn minimal_metadata_realm_detected_from_profiles_arrays() {

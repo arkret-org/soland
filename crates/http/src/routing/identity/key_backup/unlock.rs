@@ -290,7 +290,10 @@ pub(super) async fn enforce_recovery_session_binding_when_present(
             "key backup unlock proof recovery session does not match the presented recovery grant",
         ));
     }
-    if !matches!(record.state.as_str(), "verified" | "completed") {
+    if !matches!(
+        record.state,
+        arkret_models_crypto::SessionState::Verified | arkret_models_crypto::SessionState::Completed
+    ) {
         // Registry reason `recovery_evidence_unbound`: the unlock proof is
         // not backed by a verified/completed recovery session, so the
         // recovery evidence is not bound to the session it claims.

@@ -213,12 +213,6 @@ fn agent_record_is_desired_sidecar_member(
 }
 
 fn sidecar_from_record(record: &AgentSidecarRecord) -> Result<AgentSidecar, AppError> {
-    let state = match record.state.as_str() {
-        "active" => AgentSidecarState::Active,
-        "suspended" => AgentSidecarState::Suspended,
-        "tombstoned" => AgentSidecarState::Tombstoned,
-        _ => return Err(AppError::internal("stored Sidecar state is invalid")),
-    };
     Ok(AgentSidecar {
         id: SidecarId::new(record.sidecar_id.clone())
             .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?,
@@ -228,7 +222,7 @@ fn sidecar_from_record(record: &AgentSidecarRecord) -> Result<AgentSidecar, AppE
         controller_id: arkret_identifiers::DidCoreId::new(record.controller_id.clone())
             .map_err(|error| AppError::internal(format!("stored controller id: {error}")))?,
         encryption_profile: AgentSidecarEncryptionProfile::MlsRfc9420,
-        state,
+        state: record.state,
         state_changed_at: record.state_changed_at,
         created_at: record.created_at,
         updated_at: record.updated_at,
@@ -1060,7 +1054,7 @@ async fn finalize_sidecar_projection_records(
             sidecar_id: sidecar_id.to_string(),
             realm_id: context_attach_event.realm_id.to_string(),
             controller_id: session.actor.clone(),
-            state: "active".to_owned(),
+            state: AgentSidecarState::Active,
             state_changed_at: None,
             created_at,
             updated_at: None,

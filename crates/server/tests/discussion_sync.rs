@@ -1443,7 +1443,7 @@ async fn poll_content_projection_replaces_votes() {
             poll_state
                 .votes
                 .values()
-                .all(|choices| !choices.contains("now")),
+                .all(|choices| !choices.selections.contains("now")),
             "{poll_state:?}"
         );
         let mut expected_backup_voters = vec![bob_core.as_str(), carol_core.as_str()];
@@ -1452,7 +1452,7 @@ async fn poll_content_projection_replaces_votes() {
             poll_state
                 .votes
                 .iter()
-                .filter(|(_, choices)| choices.contains("backup"))
+                .filter(|(_, choices)| choices.selections.contains("backup"))
                 .map(|(actor, _)| actor.as_str())
                 .collect::<Vec<_>>(),
             expected_backup_voters

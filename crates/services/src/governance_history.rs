@@ -5,10 +5,9 @@ use arkret_models_collaboration::governance_dependencies::{
     PeerGovernanceDependencyResolveRequest, SelfGovernanceDependencyResolveRequest,
 };
 use arkret_models_collaboration::history_key::{
-    HistoryKeyResponseAckRequest, HistoryKeyResponseLostRecord, HistoryResponseId,
-    OrganizationRecoveryArchiveListQuery, OrganizationRecoveryArchiveReplica,
-    OrganizationRecoveryArchiveReplicaOutcome, PeerHistoryTraversalAccess,
-    SelfHistoryTraversalAccess,
+    HistoryKeyResponseAckRequest, HistoryResponseId, OrganizationRecoveryArchiveListQuery,
+    OrganizationRecoveryArchiveReplica, OrganizationRecoveryArchiveReplicaOutcome,
+    PeerHistoryTraversalAccess, SelfHistoryTraversalAccess,
 };
 use arkret_wire::{DidCoreId, Event, Hash, HistoryEffectiveScope, RealmId, Seal};
 use chrono::{DateTime, Utc};
@@ -687,27 +686,6 @@ impl GovernanceHistoryService {
             .persistence
             .history_response_streams()
             .get_accepted_manifest(request_digest, manifest_digest, manifest_admission_digest)
-            .await?)
-    }
-
-    pub async fn replace_history_response_with_lost(
-        &self,
-        response_id: &HistoryResponseId,
-        expected_record_digest: &Hash,
-        lost_record: HistoryKeyResponseLostRecord,
-        signer_dependencies: Vec<
-            arkret_models_collaboration::governance_dependencies::GovernanceDependency,
-        >,
-    ) -> ServiceResult<ExactWriteOutcome> {
-        Ok(self
-            .persistence
-            .history_response_streams()
-            .replace_response_with_lost_exact(
-                response_id,
-                expected_record_digest,
-                lost_record,
-                signer_dependencies,
-            )
             .await?)
     }
 

@@ -5,6 +5,7 @@ use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvit
 use arkret_models_collaboration::objects::blob::BlobVisibility;
 use arkret_models_crypto::{
     DeviceGenerationStatus, RecoveryIdentityModel, RecoveryPublicationAuthorityContext,
+    SessionState,
 };
 use arkret_wire::{
     DeviceReanchorPreFenceSealFrontier, DidCoreId, EventId, FreshnessState, LeaseBasisRef,
@@ -162,8 +163,9 @@ pub struct RecoverySessionRecord {
     pub publication_authority_context_digest: Hash,
     /// Server-issued anti-replay challenge the proof transcript MUST bind.
     pub challenge: String,
-    /// `pending` | `verified` | `completed` | `rejected` | `expired`.
-    pub state: String,
+    /// Lifecycle state; canonical SDK enum (recovery-session.schema.json
+    /// `#/$defs/session_state`), persisted as its snake_case wire name.
+    pub state: SessionState,
     /// The submitted proof payload (recorded on `/proofs`; verified in C-P3).
     pub proof_payload: Option<Value>,
     pub transaction_id: Option<String>,

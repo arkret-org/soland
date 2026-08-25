@@ -220,23 +220,6 @@ impl ProjectionState {
             .collect()
     }
 
-    /// SOL-ORG-05 — `true` iff some active, in-window `ak.realm.organization`
-    /// statement endorses `realm_id` with a `control_scope` covering `scope`.
-    /// This is the only basis on which organization policy inheritance for the
-    /// matching policy facet may apply; `owning_organizations` no longer
-    /// satisfies it.
-    pub fn realm_has_verified_control_scope(
-        &self,
-        realm_id: &str,
-        scope: RealmOrganizationControlScope,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> bool {
-        let scope = control_scope_str(scope);
-        self.verified_organization_relationships(realm_id, now)
-            .iter()
-            .any(|row| row.covers_scope(scope))
-    }
-
     /// SOL-ORG-05 — the verified organization DIDs whose active statement for
     /// `realm_id` covers `scope` at `now`. Drives scope-gated policy
     /// inheritance: only these organizations' policies may flow into the
@@ -403,7 +386,6 @@ mod tests {
         assert_eq!(verified.len(), 1);
         assert_eq!(verified[0].organization_id, ORG);
         assert_eq!(verified[0].relationship, "owner");
-        assert!(state.realm_has_verified_control_scope(REALM, Scope::RealmAdmin, now()));
         // Cell written under the composite subject.
         assert!(
             ProjectionState::realm_organization_cell_id(ORG, "owner")
@@ -463,7 +445,6 @@ mod tests {
                 .verified_organization_relationships(REALM, now())
                 .is_empty()
         );
-        assert!(!state.realm_has_verified_control_scope(REALM, Scope::RealmAdmin, now()));
         // Audit row retained with the revoking statement_id.
         let all = state.realm_organization_statements_for_realm(REALM);
         assert_eq!(all.len(), 1);

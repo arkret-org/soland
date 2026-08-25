@@ -92,23 +92,6 @@ pub(super) fn ensure_not_revoked(record: &AppletRecord) -> Result<(), AppError> 
     Ok(())
 }
 
-pub(super) fn safe_token(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-        } else if matches!(ch, '.' | '-' | '_' | ':') {
-            out.push('-');
-        }
-    }
-    let trimmed = out.trim_matches('-');
-    if trimmed.is_empty() {
-        "applet".to_owned()
-    } else {
-        trimmed.to_owned()
-    }
-}
-
 pub(super) fn query_value(req: &Request, key: &str) -> Option<String> {
     req.query::<String>(key)
         .map(|value| value.trim().to_owned())

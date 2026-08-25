@@ -18,6 +18,7 @@ arkret-canonical.workspace = true
 arkret-event-draft.workspace = true
 arkret-identity.workspace = true
 arkret-models-collaboration.workspace = true
+arkret-models-crypto.workspace = true
 arkret-models-identity.workspace = true
 arkret-models-integration.workspace = true
 arkret-state.workspace = true
@@ -30,7 +31,6 @@ soland-storage = {workspace = true}
 uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]
-arkret-models-crypto.workspace = true
 arkret-signatures = {workspace = true, features = ["collaboration"]}
 arkret-wire = {workspace = true,features = ["test-support"]}
 ed25519-dalek.workspace = true

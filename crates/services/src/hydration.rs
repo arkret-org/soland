@@ -198,23 +198,6 @@ pub async fn hydrate_sidecar_projections(
 
     let records = persistence.sidecars().snapshot_all().await?;
     for record in records {
-        let state = match record.state.as_str() {
-            "active" => arkret_models_collaboration::agent_operations::AgentSidecarState::Active,
-            "suspended" => {
-                arkret_models_collaboration::agent_operations::AgentSidecarState::Suspended
-            }
-            "tombstoned" => {
-                arkret_models_collaboration::agent_operations::AgentSidecarState::Tombstoned
-            }
-            unknown => {
-                tracing::warn!(
-                    sidecar_id = %record.sidecar_id,
-                    state = unknown,
-                    "skipping Sidecar row with unknown state during hydrate"
-                );
-                continue;
-            }
-        };
         proj.sidecars.insert(
             record.sidecar_id.clone(),
             SidecarProjection {
@@ -222,7 +205,7 @@ pub async fn hydrate_sidecar_projections(
                 realm_id: record.realm_id,
                 controller_id: record.controller_id,
                 encryption_profile: arkret_models_collaboration::agent_operations::AgentSidecarEncryptionProfile::MlsRfc9420,
-                state,
+                state: record.state,
                 state_changed_at: record.state_changed_at,
                 created_at: record.created_at,
                 updated_at: record.updated_at,

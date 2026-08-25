@@ -1,3 +1,4 @@
+use arkret_models_collaboration::http_bodies::DevicePairingState;
 use async_trait::async_trait;
 use soland_storage::{
     EventBatchCommitRequest, EventCommitOutcome, EventCommitRequest, EventCommitUnitOfWork,
@@ -418,7 +419,7 @@ fn stage_device_pairing_authorization(
     let pairing = staged
         .get_mut(&commit.device_pairing_request_id)
         .ok_or_else(|| PersistenceError::Conflict("device_pairing_not_found".to_owned()))?;
-    if pairing.state != "pending_authorization"
+    if pairing.state != DevicePairingState::PendingAuthorization
         || pairing.expires_at <= commit.changed_at
         || pairing.pairing_code != commit.pairing_code
         || pairing.new_device_pubkey != commit_new_device_pubkey
@@ -427,7 +428,7 @@ fn stage_device_pairing_authorization(
             "device_pairing_not_found".to_owned(),
         ));
     }
-    pairing.state = "authorized".to_owned();
+    pairing.state = DevicePairingState::Authorized;
     pairing.device_id = Some(commit.device_id.clone());
     pairing.authorized_by_actor_id = Some(commit.authorized_by_actor_id.clone());
     pairing.authorized_event_ref = Some(commit.authorized_event_ref.clone());

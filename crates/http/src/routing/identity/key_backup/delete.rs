@@ -51,13 +51,6 @@ pub(super) const KEY_BACKUP_DELETE_IDEMPOTENCY_TTL_SECONDS: i64 = 86_400;
 /// path so both agree on what a session reference looks like.
 const RECOVERY_SESSION_ID_PREFIX: &str = "ak:recovery_session:";
 
-/// The recovery-session states §7.8.1 accepts for the
-/// `trusted_recovery_service` branch: the session must have been *established*
-/// by principal signing, recovery unlock or device quorum, which in soland is
-/// exactly the `verified` terminal state — a `pending` session has not yet
-/// presented any of those factors.
-const VERIFIED_RECOVERY_SESSION_STATE: &str = "verified";
-
 /// The service origin a challenge is bound to.
 ///
 /// Shared with the device-pairing gate so one deployment cannot present two
@@ -612,7 +605,12 @@ async fn verify_trusted_recovery_service_delete(
             "key backup delete recovery session belongs to another principal",
         ));
     }
-    if session.state != VERIFIED_RECOVERY_SESSION_STATE {
+    // The recovery-session states §7.8.1 accepts for the
+    // `trusted_recovery_service` branch: the session must have been
+    // *established* by principal signing, recovery unlock or device quorum,
+    // which in soland is exactly the `verified` terminal state — a `pending`
+    // session has not yet presented any of those factors.
+    if session.state != arkret_models_crypto::SessionState::Verified {
         return Err(AppError::capability_denied(
             "key backup delete recovery session was not established by an accepted recovery factor",
         ));

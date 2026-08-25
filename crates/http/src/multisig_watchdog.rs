@@ -211,31 +211,6 @@ pub async fn run_watchdog_pass(
     report
 }
 
-/// Best-effort lease renewal helper. Pushes `claimed_until`
-/// out by `lease_duration` without bumping `claim_seq` so an in-flight
-/// aggregation that out-runs the original lease keeps its fencing
-/// token. Returns the renewal outcome:
-///   - `Ok(true)`  — renewal landed; lease is now `now + lease_duration`.
-///   - `Ok(false)` — the row was re-leased (claim_seq advanced) or deleted; the caller should abort
-///     and let the new leader publish.
-///   - `Err(_)`    — store-level error (treat as `false`).
-pub async fn renew_lease_during_aggregation(
-    state: &AppState,
-    config: &MultisigWatchdogConfig,
-    seal_id: &str,
-    fence_seq: i64,
-) -> Result<bool, String> {
-    let service = state.governance();
-    let now = Utc::now();
-    let new_until = now
-        + chrono::Duration::from_std(config.lease_duration)
-            .unwrap_or_else(|_| chrono::Duration::seconds(LEASE_DURATION_SECS as i64));
-    service
-        .renew_multisig_claim(seal_id, &config.node_id, fence_seq, new_until)
-        .await
-        .map_err(|e| e.to_string())
-}
-
 fn is_threshold_met(record: &MultisigPendingRecord) -> bool {
     record.partials.len() as u32 >= record.threshold_k
 }
@@ -715,84 +690,5 @@ mod tests {
         assert_eq!(row.claim_seq, 2);
 
         let _ = cfg_a;
-    }
-
-    /// Happy-path: a long aggregation runs against a row whose lease
-    /// would otherwise expire mid-flight. The watchdog calls
-    /// `renew_lease_during_aggregation` to push `claimed_until`
-    /// forward without bumping `claim_seq`. The post-aggregate
-    /// `delete_with_fence(original_seq)` still succeeds.
-    #[tokio::test]
-    async fn happy_path_lease_renewal_during_long_aggregation() {
-        let state = test_state();
-        let cfg = MultisigWatchdogConfig {
-            tick_interval: Duration::from_secs(30),
-            lease_duration: Duration::from_secs(60),
-            node_id: "node-A".to_owned(),
-        };
-
-        let persistence = state.test_persistence();
-        let store = persistence.multisig_pending();
-        let record = make_record("ak:seal:sha256:happy-renewal", 1, 1);
-        store.upsert(record).await.unwrap();
-
-        // Initial claim — fence_seq bumps to 1.
-        let t0 = Utc::now();
-        let (won, fence_seq) = store
-            .try_claim(
-                "ak:seal:sha256:happy-renewal",
-                "node-A",
-                t0,
-                t0 + chrono::Duration::seconds(60),
-            )
-            .await
-            .unwrap();
-        assert!(won);
-        assert_eq!(fence_seq, 1);
-
-        // The aggregation is still running 50s later. The watchdog
-        // proactively renews the lease — same fence_seq, claimed_until
-        // pushed out to t+110.
-        let renewed =
-            renew_lease_during_aggregation(&state, &cfg, "ak:seal:sha256:happy-renewal", fence_seq)
-                .await
-                .expect("renewal should not error");
-        assert!(renewed, "happy-path renewal must land");
-
-        let row_after_renew = store
-            .get("ak:seal:sha256:happy-renewal")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            row_after_renew.claimed_by_node_id.as_deref(),
-            Some("node-A")
-        );
-        assert_eq!(
-            row_after_renew.claim_seq, 1,
-            "renewal must NOT bump the fencing token"
-        );
-        assert!(
-            row_after_renew
-                .claimed_until
-                .map(|until| until > t0 + chrono::Duration::seconds(60))
-                .unwrap_or(false),
-            "renewal must push claimed_until forward"
-        );
-
-        // Aggregation finishes — fenced delete with the *original*
-        // fence_seq still works because the renewal didn't bump it.
-        let deleted = store
-            .delete_with_fence("ak:seal:sha256:happy-renewal", "node-A", fence_seq)
-            .await
-            .unwrap();
-        assert!(deleted);
-        assert!(
-            store
-                .get("ak:seal:sha256:happy-renewal")
-                .await
-                .unwrap()
-                .is_none()
-        );
     }
 }

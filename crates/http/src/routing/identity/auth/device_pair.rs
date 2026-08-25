@@ -108,7 +108,8 @@ async fn authorize_account_device_pair(
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(device_pairing_not_found)?;
-            if record.state != "pending_authorization"
+            if record.state
+                != arkret_models_collaboration::http_bodies::DevicePairingState::PendingAuthorization
                 || record.expires_at <= authorized_at
                 || record.pairing_code != pairing_code
                 || record.new_device_pubkey != staged_new_device_pubkey

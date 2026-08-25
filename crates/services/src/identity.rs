@@ -10,6 +10,7 @@ use arkret_models_collaboration::contact_operations::{
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 use arkret_models_crypto::{
     DeviceGenerationStatus, RecoveryIdentityModel, RecoveryPublicationAuthorityContext,
+    SessionState,
 };
 use arkret_models_identity::service_identity::{
     ServiceRegistrationKey, ServiceRegistrationOutcome,
@@ -1281,7 +1282,9 @@ pub struct DevicePairingState {
     pub server_nonce: String,
     pub display_name: Option<String>,
     pub device_metadata: Option<Value>,
-    pub state: String,
+    /// Lifecycle state; canonical SDK enum (device-pairing.schema.json
+    /// `#/$defs/device_pairing_state`).
+    pub state: arkret_models_collaboration::http_bodies::DevicePairingState,
     pub device_id: Option<String>,
     pub authorized_by_actor_id: Option<String>,
     pub authorized_event_ref: Option<String>,
@@ -1392,7 +1395,8 @@ pub struct AgentSidecarState {
     pub sidecar_id: String,
     pub realm_id: String,
     pub controller_id: String,
-    pub state: String,
+    /// Lifecycle state; canonical SDK enum (`active` | `suspended` | `tombstoned`).
+    pub state: arkret_models_collaboration::agent_operations::AgentSidecarState,
     pub state_changed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
@@ -1561,7 +1565,9 @@ pub struct RecoverySessionState {
     pub publication_authority_context: RecoveryPublicationAuthorityContext,
     pub publication_authority_context_digest: Hash,
     pub challenge: String,
-    pub state: String,
+    /// Lifecycle state; canonical SDK enum (recovery-session.schema.json
+    /// `#/$defs/session_state`).
+    pub state: SessionState,
     pub proof_payload: Option<Value>,
     pub transaction_id: Option<String>,
     pub created_at: DateTime<Utc>,

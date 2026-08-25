@@ -4,6 +4,7 @@ use arkret_models_collaboration::account_lifecycle::{
     AccountStatusPrincipalAuthority, AccountStatusReceipt, AccountStatusRecord,
     UnsignedAccountStatusReceipt, UnsignedAccountStatusRecord,
 };
+use arkret_models_collaboration::http_bodies::DevicePairingState;
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 use arkret_models_identity::{
     OrganizationControlProofKind, OrganizationRegistrationChallenge,
@@ -1843,7 +1844,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             "BBBBBBBBBBBBBBBBBBBBBB".to_owned(),
             None,
             None,
-            "pending_authorization".to_owned(),
+            DevicePairingState::PendingAuthorization,
             now,
             now + Duration::minutes(10),
         ))
@@ -1921,7 +1922,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         .await
         .expect("read consumed pairing")
         .expect("pairing row retained for status/audit");
-    assert_eq!(pairing.state, "authorized");
+    assert_eq!(pairing.state, DevicePairingState::Authorized);
     assert_eq!(
         pairing.authorized_event_ref.as_deref(),
         Some(pairing_event_id.as_str())

@@ -1,3 +1,5 @@
+use arkret_models_collaboration::agent_operations::AgentSidecarState;
+
 use super::{
     AgentSidecarContextRecord, AgentSidecarRecord, AsyncPgConnection, BigInt, Binary, Jsonb,
     Nullable, Object, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
@@ -38,24 +40,42 @@ struct SidecarRow {
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-impl From<SidecarRow> for AgentSidecarRecord {
-    fn from(row: SidecarRow) -> Self {
-        Self {
-            sidecar_id: {
-                let token: [u8; ids::EVENT_ID_BYTES] = row
-                    .id
-                    .as_slice()
-                    .try_into()
-                    .expect("agent_sidecars.id must be 33 bytes");
-                ids::format_event_token("sidecar", &token)
-            },
+impl TryFrom<SidecarRow> for AgentSidecarRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: SidecarRow) -> Result<Self, Self::Error> {
+        let sidecar_id = {
+            let token: [u8; ids::EVENT_ID_BYTES] = row
+                .id
+                .as_slice()
+                .try_into()
+                .expect("agent_sidecars.id must be 33 bytes");
+            ids::format_event_token("sidecar", &token)
+        };
+        let state = serde_json::from_value(Value::String(row.state)).map_err(|error| {
+            PersistenceError::Internal(format!(
+                "Sidecar `{sidecar_id}` has invalid state: {error}"
+            ))
+        })?;
+        Ok(Self {
+            sidecar_id,
             realm_id: row.realm_id,
             controller_id: row.controller_id,
-            state: row.state,
+            state,
             state_changed_at: row.state_changed_at,
             created_at: row.created_at,
             updated_at: row.updated_at,
-        }
+        })
+    }
+}
+
+/// Snake_case wire name of the canonical SDK [`AgentSidecarState`], matching
+/// the text-column encoding of `agent_sidecars.state`.
+fn sidecar_state_label(state: AgentSidecarState) -> &'static str {
+    match state {
+        AgentSidecarState::Active => "active",
+        AgentSidecarState::Suspended => "suspended",
+        AgentSidecarState::Tombstoned => "tombstoned",
     }
 }
 
@@ -146,14 +166,14 @@ impl SidecarStore for PgSidecarStore {
         .bind::<Binary, _>(id)
         .bind::<Text, _>(&record.realm_id)
         .bind::<Text, _>(&record.controller_id)
-        .bind::<Text, _>(&record.state)
+        .bind::<Text, _>(sidecar_state_label(record.state))
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
         .get_result::<SidecarRow>(&mut *conn)
         .await
-        .map(AgentSidecarRecord::from)
         .map_err(PersistenceError::database)
+        .and_then(AgentSidecarRecord::try_from)
     }
 
     async fn get(&self, sidecar_id: &str) -> PersistenceResult<Option<AgentSidecarRecord>> {
@@ -164,8 +184,9 @@ impl SidecarStore for PgSidecarStore {
             .get_result::<SidecarRow>(&mut *conn)
             .await
             .optional()
-            .map(|row| row.map(AgentSidecarRecord::from))
-            .map_err(PersistenceError::database)
+            .map_err(PersistenceError::database)?
+            .map(AgentSidecarRecord::try_from)
+            .transpose()
     }
 
     async fn get_for_realm_controller(
@@ -182,8 +203,9 @@ impl SidecarStore for PgSidecarStore {
         .get_result::<SidecarRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(AgentSidecarRecord::from))
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?
+        .map(AgentSidecarRecord::try_from)
+        .transpose()
     }
 
     async fn list_for_controller(
@@ -199,8 +221,10 @@ impl SidecarStore for PgSidecarStore {
             .bind::<Nullable<Text>, _>(realm_id)
         .load::<SidecarRow>(&mut *conn)
         .await
-        .map(|rows| rows.into_iter().map(AgentSidecarRecord::from).collect())
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?
+        .into_iter()
+        .map(AgentSidecarRecord::try_from)
+        .collect()
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<AgentSidecarRecord>> {
@@ -208,8 +232,10 @@ impl SidecarStore for PgSidecarStore {
         sql_query(format!("{SIDECAR_SELECT} ORDER BY created_at,pk"))
             .load::<SidecarRow>(&mut *conn)
             .await
-            .map(|rows| rows.into_iter().map(AgentSidecarRecord::from).collect())
-            .map_err(PersistenceError::database)
+            .map_err(PersistenceError::database)?
+            .into_iter()
+            .map(AgentSidecarRecord::try_from)
+            .collect()
     }
 
     async fn insert_or_get_context(

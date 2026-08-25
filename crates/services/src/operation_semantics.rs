@@ -22,10 +22,6 @@ pub fn operation_is_message_create(operation: &Operation) -> bool {
     soland_domain::kinds::operation_is_message_create(operation)
 }
 
-pub fn operation_is_redaction(operation: &Operation) -> bool {
-    soland_domain::kinds::operation_is_redaction(operation)
-}
-
 pub fn operation_is_membership(operation: &Operation) -> bool {
     soland_domain::kinds::operation_is_membership(operation)
 }

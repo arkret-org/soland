@@ -1,3 +1,4 @@
+use arkret_models_crypto::SessionState;
 use soland_storage::ConflictCode;
 
 use super::{
@@ -243,7 +244,7 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
                 PersistenceError::NotFound(format!("recovery_session_id `{session_id}` not found"))
             })?;
             if session.principal_id != record.resource.principal_id.as_str()
-                || session.state != "verified"
+                || session.state != SessionState::Verified
                 || session.expires_at <= chrono::Utc::now()
             {
                 return Err(PersistenceError::Conflict(
@@ -406,14 +407,14 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
                 PersistenceError::NotFound(format!("recovery_session_id `{session_id}` not found"))
             })?;
             if recovery_session.transaction_id.as_deref() != Some(transaction_id)
-                || recovery_session.state != "verified"
+                || recovery_session.state != SessionState::Verified
             {
                 return Err(PersistenceError::Conflict(
                     "terminal recovery transaction does not own a verified recovery session"
                         .to_owned(),
                 ));
             }
-            recovery_session.state = "completed".to_owned();
+            recovery_session.state = SessionState::Completed;
             recovery_session.updated_at = chrono::Utc::now();
         }
         by_id.insert(transaction_id.to_owned(), record);

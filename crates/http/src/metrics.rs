@@ -75,9 +75,7 @@ pub const DID_RESOLVE_SOURCE_BINDING_STORE: &str = "binding_store";
 /// only source that counts as an authority network call.
 pub const DID_RESOLVE_SOURCE_NETWORK: &str = "network";
 
-pub const SIGNATURE_SCHEME_ED25519_JWS: &str = "ed25519_detached_jws";
 pub const SIGNATURE_SCHEME_PINNED_DOCUMENT: &str = "ed25519_pinned_document";
-pub const SIGNATURE_SCHEME_ACCEPTED_BINDING: &str = "ed25519_accepted_binding";
 pub const SIGNATURE_SCHEME_MINIMAL_METADATA: &str = "ed25519_minimal_metadata";
 pub const SIGNATURE_SCHEME_AGENT_SESSION: &str = "ed25519_agent_session";
 pub const SIGNATURE_SCHEME_FEDERATED_SIGNER_EVIDENCE: &str = "ed25519_federated_signer_evidence";
@@ -658,7 +656,7 @@ mod tests {
         let verify_series = "soland_signature_verify_total{scheme=\"ed25519_accepted_binding\",outcome=\"success\"}";
 
         record_did_resolve("webvh", DID_RESOLVE_SOURCE_NETWORK);
-        record_signature_verify(SIGNATURE_SCHEME_ACCEPTED_BINDING, true);
+        record_signature_verify("ed25519_accepted_binding", true);
         let before = render();
         let resolve_before = sample(&before, resolve_series);
         let verify_before = sample(&before, verify_series);
@@ -676,7 +674,7 @@ mod tests {
         // Five ordinary verifications served from accepted bindings, zero
         // network resolutions: exactly the property the joint test asserts.
         for _ in 0..5 {
-            record_signature_verify(SIGNATURE_SCHEME_ACCEPTED_BINDING, true);
+            record_signature_verify("ed25519_accepted_binding", true);
             record_did_resolve("webvh", DID_RESOLVE_SOURCE_BINDING_STORE);
         }
         let after = render();
@@ -700,7 +698,7 @@ mod tests {
     async fn metrics_endpoint_serves_the_did_boundary_counters() {
         let _ = prometheus_handle();
         record_did_resolve("key", DID_RESOLVE_SOURCE_SDK_CACHE);
-        record_signature_verify(SIGNATURE_SCHEME_ED25519_JWS, true);
+        record_signature_verify("ed25519_detached_jws", true);
 
         let state = AppState::new(
             crate::config::AppConfig {

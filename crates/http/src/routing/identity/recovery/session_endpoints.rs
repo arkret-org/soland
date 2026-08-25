@@ -179,7 +179,7 @@ pub(super) fn typed_recovery_session_state(
         publication_authority_context_digest: record.publication_authority_context_digest.clone(),
         challenge: Challenge::new(record.challenge.clone())
             .map_err(|error| stored_recovery_type_error("challenge", error))?,
-        state: recovery_session_state_from_record(record)?,
+        state: record.state,
         proof_summary: recovery_proof_summary(record),
         transaction_id: record
             .transaction_id
@@ -198,19 +198,15 @@ pub(super) fn typed_recovery_session_state(
     Ok(state)
 }
 
-pub(super) fn recovery_session_state_from_record(
-    record: &RecoverySessionServiceState,
-) -> Result<SessionState, AppError> {
-    match record.state.as_str() {
-        "pending" => Ok(SessionState::Pending),
-        "verified" => Ok(SessionState::Verified),
-        "completed" => Ok(SessionState::Completed),
-        "rejected" => Ok(SessionState::Rejected),
-        "expired" => Ok(SessionState::Expired),
-        value => Err(stored_recovery_type_error(
-            "session state enum",
-            format_args!("unknown value `{value}`"),
-        )),
+/// Snake_case wire name of a session state for diagnostics; the canonical SDK
+/// [`SessionState`] enum has no `Display` impl.
+fn session_state_label(state: SessionState) -> &'static str {
+    match state {
+        SessionState::Pending => "pending",
+        SessionState::Verified => "verified",
+        SessionState::Completed => "completed",
+        SessionState::Rejected => "rejected",
+        SessionState::Expired => "expired",
     }
 }
 
@@ -701,7 +697,7 @@ pub(super) async fn recovery_session_create(
         publication_authority_context,
         publication_authority_context_digest,
         challenge: generate_recovery_challenge(),
-        state: "pending".to_owned(),
+        state: SessionState::Pending,
         proof_payload: None,
         transaction_id: None,
         created_at: now,
@@ -807,10 +803,10 @@ pub(super) async fn recovery_session_proof_submit(
     let session_id = recovery_session_id.into_inner();
     let record = load_owned_recovery_session(&aa, state, req, &session_id).await?;
     let record = expire_if_elapsed(state, record).await?;
-    if record.state != "pending" {
+    if record.state != SessionState::Pending {
         return Err(AppError::conflict(format!(
             "recovery session is `{}`, proofs accepted only while `pending`",
-            record.state
+            session_state_label(record.state)
         ))
         .with_wire_code("recovery_session_not_pending"));
     }
@@ -887,7 +883,7 @@ pub(super) async fn recovery_session_proof_submit(
     // server only reaches this point after a real cryptographic check.
     let now = chrono::Utc::now();
     let updated = RecoverySessionServiceState {
-        state: "verified".to_owned(),
+        state: SessionState::Verified,
         proof_payload: Some(payload_value.clone()),
         updated_at: now,
         ..record
@@ -926,7 +922,7 @@ pub(super) async fn recovery_session_proof_submit(
     json_ok(RecoverySessionProofSubmitOutcome {
         recovery_session_id: RecoverySessionId::new(updated.recovery_session_id.clone())
             .map_err(|error| stored_recovery_type_error("recovery_session_id", error))?,
-        state: recovery_session_state_from_record(&updated)?,
+        state: updated.state,
         verification: "verified".to_owned(),
         proof_summary: recovery_proof_summary(&updated),
     })
@@ -1515,10 +1511,10 @@ pub(super) async fn expire_if_elapsed(
     record: RecoverySessionServiceState,
 ) -> Result<RecoverySessionServiceState, AppError> {
     let now = chrono::Utc::now();
-    let is_open = matches!(record.state.as_str(), "pending" | "verified");
+    let is_open = matches!(record.state, SessionState::Pending | SessionState::Verified);
     if is_open && now > record.expires_at {
         let expired = RecoverySessionServiceState {
-            state: "expired".to_owned(),
+            state: SessionState::Expired,
             updated_at: now,
             ..record
         };

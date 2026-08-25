@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 use diesel::{AsChangeset, Insertable, Queryable, Selectable};
 use serde_json::Value;
-use soland_storage::DevicePairingRecord;
+use soland_storage::{DevicePairingRecord, PersistenceError, PersistenceResult};
+
+use arkret_models_collaboration::http_bodies::DevicePairingState;
 
 use crate::schema::device_pairings;
 
@@ -28,8 +30,18 @@ pub(crate) struct DevicePairingRow {
     pub created_at: DateTime<Utc>,
 }
 
+/// Snake_case wire name of the canonical SDK [`DevicePairingState`], matching
+/// the text-column encoding of `device_pairings.state`.
+fn device_pairing_state_label(state: DevicePairingState) -> &'static str {
+    match state {
+        DevicePairingState::PendingAuthorization => "pending_authorization",
+        DevicePairingState::Authorized => "authorized",
+        DevicePairingState::Expired => "expired",
+    }
+}
+
 macro_rules! convert_device_pairing {
-    ($source:expr, $target:ident) => {{
+    ($source:expr, $target:ident, $state:expr) => {{
         let source = $source;
         $target {
             device_pairing_request_id: source.device_pairing_request_id,
@@ -40,7 +52,7 @@ macro_rules! convert_device_pairing {
             server_nonce: source.server_nonce,
             display_name: source.display_name,
             device_metadata: source.device_metadata,
-            state: source.state,
+            state: $state,
             device_id: source.device_id,
             authorized_by_actor_id: source.authorized_by_actor_id,
             authorized_event_ref: source.authorized_event_ref,
@@ -52,12 +64,21 @@ macro_rules! convert_device_pairing {
 
 impl From<DevicePairingRecord> for DevicePairingRow {
     fn from(record: DevicePairingRecord) -> Self {
-        convert_device_pairing!(record, DevicePairingRow)
+        let state = device_pairing_state_label(record.state).to_owned();
+        convert_device_pairing!(record, DevicePairingRow, state)
     }
 }
 
-impl From<DevicePairingRow> for DevicePairingRecord {
-    fn from(row: DevicePairingRow) -> Self {
-        convert_device_pairing!(row, DevicePairingRecord)
+impl TryFrom<DevicePairingRow> for DevicePairingRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: DevicePairingRow) -> PersistenceResult<Self> {
+        let state = serde_json::from_value(Value::String(row.state.clone())).map_err(|error| {
+            PersistenceError::Internal(format!(
+                "device pairing `{}` has invalid state: {error}",
+                row.device_pairing_request_id
+            ))
+        })?;
+        Ok(convert_device_pairing!(row, DevicePairingRecord, state))
     }
 }

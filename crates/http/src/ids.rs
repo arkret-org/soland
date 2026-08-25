@@ -69,37 +69,13 @@ pub fn parse_typed_uuid(typed: &str, expected_kind: &str) -> Option<Uuid> {
     Uuid::parse_str(rest).ok()
 }
 
-/// Kind-agnostic helper: parse the trailing UUID part of any
-/// `ak:<kind>:<uuid>` typed ID. Returns `None` if the string has no
-/// `ak:<kind>:` prefix or the trailing segment is not a valid UUID.
-/// Use this at persistence boundaries where the column is `UUID` but the
-/// in-memory value carries the typed wire form.
-pub fn typed_uuid_part(typed: &str) -> Option<Uuid> {
-    let mut iter = typed.splitn(3, ':');
-    let scheme = iter.next()?;
-    if scheme != "ak" {
-        return None;
-    }
-    let _kind = iter.next()?;
-    let uuid_str = iter.next()?;
-    Uuid::parse_str(uuid_str).ok()
-}
-
-/// Same as `typed_uuid_part`, but panics with a descriptive message on
-/// malformed input.
-///
-/// SOL-COR-02: this variant is reserved for IDs the server **itself**
-/// generated (via the `generate_*` helpers above) or that arrived through an
-/// SDK strong-typed producer-allocated newtype (`OperationId`/`SealId::new`/...), where
-/// a malformed value would be an internal invariant violation rather than bad
-/// client input. The name documents that contract: callers MUST guarantee the
-/// value cannot be an unvalidated client string; request parsing must use SDK
-/// strong types and return a transport schema error before reaching this helper.
-pub fn typed_uuid_part_expect_internal(typed: &str) -> Uuid {
-    typed_uuid_part(typed).unwrap_or_else(|| {
-        panic!("malformed typed wire ID at internal persistence boundary: {typed:?}")
-    })
-}
+/// Kind-agnostic typed-ID → `Uuid` helpers. Canonical home is
+/// `soland_storage::ids` (the lower-level crate); re-exported here so existing
+/// `crate::ids::*` call sites are unchanged. SOL-COR-02: the `expect_internal`
+/// variant is reserved for IDs the server itself generated or that arrived
+/// through an SDK strong-typed producer-allocated newtype — see the storage
+/// copies' docs for the full contract.
+pub use soland_storage::ids::{typed_uuid_part, typed_uuid_part_expect_internal};
 
 /// Format a raw `Uuid` back to a typed wire ID `ak:<kind>:<uuid>`.
 pub fn format_typed_uuid(kind: &str, uuid: &Uuid) -> String {

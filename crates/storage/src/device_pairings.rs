@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
 
+use arkret_models_collaboration::http_bodies::DevicePairingState;
+
 use super::{PersistenceResult, Value, async_trait};
 
 /// Durable projection of a server-mediated device-pairing short-link request.
@@ -20,7 +22,9 @@ pub struct DevicePairingRecord {
     pub server_nonce: String,
     pub display_name: Option<String>,
     pub device_metadata: Option<Value>,
-    pub state: String,
+    /// Lifecycle state; canonical SDK enum (device-pairing.schema.json
+    /// `#/$defs/device_pairing_state`), persisted as its snake_case wire name.
+    pub state: DevicePairingState,
     pub device_id: Option<String>,
     pub authorized_by_actor_id: Option<String>,
     pub authorized_event_ref: Option<String>,
@@ -39,7 +43,7 @@ impl DevicePairingRecord {
         server_nonce: String,
         display_name: Option<String>,
         device_metadata: Option<Value>,
-        state: String,
+        state: DevicePairingState,
         created_at: DateTime<Utc>,
         expires_at: DateTime<Utc>,
     ) -> Self {
