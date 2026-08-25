@@ -547,7 +547,11 @@ async fn mls_lifecycle_end_to_end_body() {
     let alice_mls_identity = arkret_mls::ArkretMlsIdentity::from_ed25519_signing_seed(
         alice_core.clone(),
         arkret_wire::DeviceId::new(alice_device.to_owned()).unwrap(),
-        event_signing_key.to_bytes(),
+        // The human-device upload authorization key and the MLS LeafNode
+        // signature key are deliberately distinct. The former authorizes the
+        // typed upload transcript; unlike the Native Agent branch, the v1
+        // contract does not require it to also be the MLS leaf key.
+        [31_u8; 32],
     )
     .unwrap();
     let keypackage_record = alice_mls_identity.key_package_record().unwrap();

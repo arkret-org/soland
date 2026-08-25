@@ -441,8 +441,9 @@ async fn upload_keypackage(
                     rejected.push(keypackage_failure(
                         &entry,
                         endpoint_device_id,
-                        format!("endpoint_signature_invalid:{error}"),
+                        "endpoint_signature_invalid",
                     ));
+                    tracing::debug!(%error, "KeyPackage entry signing input rejected");
                     continue;
                 }
             }
@@ -466,21 +467,6 @@ async fn upload_keypackage(
             continue;
         }
         if let Some(endpoint_device_id) = endpoint_device_id {
-            if let Err(error) = validate_device_keypackage_leaf(
-                state,
-                &principal_id,
-                endpoint_device_id,
-                &key_package_bytes,
-            )
-            .await
-            {
-                rejected.push(keypackage_failure(
-                    &entry,
-                    Some(endpoint_device_id),
-                    error.to_string(),
-                ));
-                continue;
-            }
             if entry.endpoint_signature.is_some()
                 && let Err(error) = verify_device_keypackage_signature(
                     state,
@@ -491,10 +477,13 @@ async fn upload_keypackage(
                 )
                 .await
             {
+                if error.code == ErrorCode::InternalError {
+                    return Err(error);
+                }
                 rejected.push(keypackage_failure(
                     &entry,
                     Some(endpoint_device_id),
-                    error.to_string(),
+                    error.message,
                 ));
                 continue;
             }
@@ -3853,47 +3842,6 @@ async fn validate_agent_keypackage_upload(
     .map_err(|_| "device_signature_invalid".to_owned())
 }
 
-async fn validate_device_keypackage_leaf(
-    state: &AppState,
-    principal: &arkret_wire::DidCoreId,
-    device_id: &str,
-    key_package_bytes: &[u8],
-) -> Result<(), AppError> {
-    let device = state
-        .identities()
-        .find_device(soland_services::identity::FindDeviceQuery {
-            actor_id: principal.to_string(),
-            device_id: device_id.to_owned(),
-        })
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .filter(|device| device.verification_state == "verified" && device.revoked_at.is_none())
-        .ok_or_else(|| AppError::param_invalid("claim_generation_mismatch"))?;
-    let device_public_key = device
-        .payload
-        .get("device_public_key")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::param_invalid("claim_generation_mismatch"))?;
-    let verifying_key = crate::routing::identity::device_signing::decode_ed25519_key(
-        device_public_key,
-        "multibase",
-    )
-    .map_err(|_| AppError::param_invalid("claim_generation_mismatch"))?;
-    let leaf = arkret_mls::author_leaf_from_key_package_bytes(key_package_bytes, 0)
-        .map_err(|_| AppError::param_invalid("key_package_invalid"))?;
-    match leaf.credential {
-        arkret_mls::AuthorLeafCredential::Basic { identity }
-            if identity.as_slice() == format!("{}#{device_id}", principal.as_str()).as_bytes() => {}
-        _ => return Err(AppError::param_invalid("claim_generation_mismatch")),
-    }
-    if leaf.signature_key.as_slice() != verifying_key.as_bytes() {
-        return Err(AppError::param_invalid("claim_generation_mismatch"));
-    }
-    Ok(())
-}
-
 fn validate_pairwise_keypackage_upload(
     principal: &arkret_wire::DidCoreId,
     verification_method: &arkret_wire::DidUrl,
@@ -4407,7 +4355,7 @@ fn keypackage_failure(
     KeypackageFailure {
         keypackage_ref: (!keypackage_ref.is_empty()).then_some(keypackage_ref),
         device_id: device_id.map(str::to_owned),
-        reason_code: arkret_wire::ReasonCode::from_wire(reason_code.as_ref()),
+        reason_code: keypackage_reason_code(reason_code.as_ref()),
         retry_after_ms: None,
     }
 }
@@ -4419,8 +4367,19 @@ fn keypackage_ref_failure(
     KeypackageFailure {
         keypackage_ref: Some(keypackage_ref),
         device_id: None,
-        reason_code: arkret_wire::ReasonCode::from_wire(reason_code.as_ref()),
+        reason_code: keypackage_reason_code(reason_code.as_ref()),
         retry_after_ms: None,
+    }
+}
+
+fn keypackage_reason_code(reason_code: &str) -> arkret_wire::ReasonCode {
+    if arkret_wire::ReasonCode::is_valid_wire(reason_code) {
+        arkret_wire::ReasonCode::from_wire(reason_code)
+    } else {
+        // The failure DTO has a closed lexical profile. A diagnostic string
+        // must never make the whole batch outcome fail JSON serialization and
+        // turn a per-entry rejection into HTTP 500.
+        arkret_wire::ReasonCode::from_wire("key_package_invalid")
     }
 }
 
@@ -5068,5 +5027,17 @@ mod trust_binding_tests {
             &contradictory,
             &expected
         ));
+    }
+
+    #[test]
+    fn keypackage_failure_reason_never_breaks_the_typed_outcome() {
+        assert_eq!(
+            keypackage_reason_code("claim_generation_mismatch").as_str(),
+            "claim_generation_mismatch"
+        );
+        assert_eq!(
+            keypackage_reason_code("param_invalid: claim generation mismatch").as_str(),
+            "key_package_invalid"
+        );
     }
 }
