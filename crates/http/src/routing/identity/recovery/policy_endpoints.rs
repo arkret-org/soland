@@ -99,7 +99,11 @@ fn recovery_policy_publish_outcome(
 
 fn recovery_policy_frontier_unavailable(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::FrontierUnavailable, message.into())
-        .with_status(StatusCode::PRECONDITION_FAILED)
+        // `frontier_unavailable` has one canonical HTTP binding (503) in the
+        // error-code registry. This publication endpoint is retry-safe while
+        // it waits for Seal coverage, but that does not make the condition a
+        // resource-specific HTTP precondition failure.
+        .with_status(StatusCode::SERVICE_UNAVAILABLE)
 }
 
 pub(super) fn recovery_policy_acceptance_basis(

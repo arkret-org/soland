@@ -939,7 +939,7 @@ pub(crate) async fn post_recovery_policy(
     if expected_status == StatusCode::CREATED {
         assert_eq!(
             status,
-            StatusCode::PRECONDITION_FAILED,
+            StatusCode::SERVICE_UNAVAILABLE,
             "first publication must wait for Seal coverage: {response_body}"
         );
         assert_eq!(response_body["error"]["code"], "frontier_unavailable");
