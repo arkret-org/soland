@@ -400,7 +400,11 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "base_url": "https://applet.example/runtime",
                 "bot_actor_id": "ak:did_core:web:applet.bot.example",
                 "protocols": ["http_custom"],
-                "namespaces": {"realms": ["*"]},
+                "namespaces": {
+                    "actors": [],
+                    "realms": [{"exclusive": false, "pattern": "*"}],
+                    "handles": []
+                },
                 "receive_events": true,
                 "receive_signals": false,
                 "rate_limited": true,
@@ -417,7 +421,35 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                     "key_ref": "did:web:applet.example#server-key-1",
                     "accepted_signature_algorithms": ["ed25519"]
                 },
-                "proof": {"signature": "c2ln"},
+                "manifest": {
+                    "claimed_profiles": [
+                        "ak.profile.applet_bridge.v1",
+                        "ak.profile.applet_service.v1"
+                    ],
+                    "limits": {},
+                    "ghost_policy": {"enabled": false},
+                    "delegation_policy": {"enabled": false},
+                    "e2ee_policy": {"enabled": false},
+                    "registration_epoch_evidence": {
+                        "full_id": "did:web:applet.example",
+                        "did_document_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "method_version_evidence": {
+                            "method": "did:web",
+                            "unversioned_refetch": true
+                        },
+                        "accepted_signing_keys": [{
+                            "key_ref": "did:web:applet.example#server-key-1",
+                            "public_key_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                        }]
+                    }
+                },
+                "proof": {
+                    "kind": "detached_jws",
+                    "verification_method": "did:web:applet.example#server-key-1",
+                    "payload_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                    "created_at": "2026-05-20T00:00:00.000Z",
+                    "jws": "AAAA..BBBB"
+                },
                 "created_at": "2026-05-20T00:00:00.000Z",
             }),
             valid: true,
@@ -449,7 +481,35 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                     "key_ref": "did:web:applet.example#server-key-1",
                     "accepted_signature_algorithms": ["ed25519"]
                 },
-                "proof": {"signature": "c2ln"},
+                "manifest": {
+                    "claimed_profiles": [
+                        "ak.profile.applet_bridge.v1",
+                        "ak.profile.applet_service.v1"
+                    ],
+                    "limits": {},
+                    "ghost_policy": {"enabled": false},
+                    "delegation_policy": {"enabled": false},
+                    "e2ee_policy": {"enabled": false},
+                    "registration_epoch_evidence": {
+                        "full_id": "did:web:applet.example",
+                        "did_document_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "method_version_evidence": {
+                            "method": "did:web",
+                            "unversioned_refetch": true
+                        },
+                        "accepted_signing_keys": [{
+                            "key_ref": "did:web:applet.example#server-key-1",
+                            "public_key_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                        }]
+                    }
+                },
+                "proof": {
+                    "kind": "detached_jws",
+                    "verification_method": "did:web:applet.example#server-key-1",
+                    "payload_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                    "created_at": "2026-05-20T00:00:00.000Z",
+                    "jws": "AAAA..BBBB"
+                },
                 "created_at": "2026-05-20T00:00:00.000Z",
             }),
             valid: false,
@@ -459,9 +519,25 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             kind: arkret_wire::EventKind::AppletDiscovery,
             payload: json!({
                 "resource_id": "did:web:applet.example",
-                "value": {"manifest": {"version": 1}},
+                "value": {
+                    "resource_kind": "applet",
+                    "discoverability": "listed",
+                    "directory_services": ["ak:did_core:web:directory.example"]
+                },
             }),
             valid: true,
+        },
+        OperationVector {
+            name: "applet discovery missing directory services",
+            kind: arkret_wire::EventKind::AppletDiscovery,
+            payload: json!({
+                "resource_id": "did:web:applet.example",
+                "value": {
+                    "resource_kind": "applet",
+                    "discoverability": "listed"
+                },
+            }),
+            valid: false,
         },
         OperationVector {
             name: "applet bridge error",

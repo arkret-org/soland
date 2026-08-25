@@ -6,8 +6,6 @@ use super::common::*;
 
 const MIMI_SOURCE_SERVICE_FULL_ID: &str = "did:web:remote-mimi.example";
 const MIMI_SOURCE_SERVICE_ID: &str = "ak:did_core:web:remote-mimi.example";
-const MIMI_DESTINATION_SERVICE_ID: &str =
-    "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x";
 const MIMI_PROVIDER_ID: &str = "mimi://remote-mimi.example/provider";
 const MIMI_TEST_DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 const MIMI_TEST_STRAND_ID: &str = "ak:strand:AeR8kl_pHP0Rj8sdg-m7-2iv0BbzptjujMXzwBoelVPt";
@@ -15,11 +13,13 @@ const MIMI_TEST_POLICY_ROOT: &str =
     "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 
 macro_rules! signed_mimi_post {
-    ($url:expr, $body:expr, $room_uri:expr) => {{
+    ($state:expr, $url:expr, $body:expr, $room_uri:expr) => {{
         let target_uri: String = ($url).into();
         let request_body = &$body;
         let mut request = TestClient::post(target_uri.clone());
-        for (name, value) in signed_mimi_headers("POST", &target_uri, request_body, $room_uri) {
+        for (name, value) in
+            signed_mimi_headers(&$state, "POST", &target_uri, request_body, $room_uri)
+        {
             request = request.add_header(name, value, true);
         }
         request.json(request_body)
@@ -27,6 +27,7 @@ macro_rules! signed_mimi_post {
 }
 
 fn signed_mimi_headers(
+    state: &AppState,
     method: &str,
     target_uri: &str,
     body: &Value,
@@ -37,49 +38,83 @@ fn signed_mimi_headers(
     let created = chrono::Utc::now().timestamp();
     let expires = created + 300;
     let verification_method = format!("{MIMI_SOURCE_SERVICE_FULL_ID}#mimi-provider-test-key");
-    let components = if room_uri.is_some() {
-        "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"source-service-id\" \"destination-service-id\" \"provider-id\" \"mimi-room-uri\")"
-    } else {
-        "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"source-service-id\" \"destination-service-id\" \"provider-id\")"
-    };
-    let signature_params = format!(
-        "{components};created={created};expires={expires};keyid=\"{verification_method}\";alg=\"ed25519\"",
+    let destination_service_id = state.service_id().as_str();
+    let mut covered_components = vec![
+        arkret_signatures::http_signature::Component::Method,
+        arkret_signatures::http_signature::Component::TargetUri,
+        arkret_signatures::http_signature::Component::Authority,
+        arkret_signatures::http_signature::Component::Header("content-digest".to_owned()),
+        arkret_signatures::http_signature::Component::Header("source-service-id".to_owned()),
+        arkret_signatures::http_signature::Component::Header("destination-service-id".to_owned()),
+        arkret_signatures::http_signature::Component::Header("provider-id".to_owned()),
+    ];
+    if room_uri.is_some() {
+        covered_components.push(arkret_signatures::http_signature::Component::Header(
+            "mimi-room-uri".to_owned(),
+        ));
+    }
+    let signature_input = format!(
+        "{};created={created};expires={expires};keyid=\"{verification_method}\";alg=\"ed25519\"",
+        arkret_signatures::http_signature::format_signature_input_component_list(
+            "sig1",
+            &covered_components,
+        )
+        .expect("MIMI signature component profile must be valid")
     );
+    let parsed_signature_input =
+        arkret_signatures::http_signature::parse_signature_input(&signature_input)
+            .expect("generated MIMI Signature-Input must be valid");
     let authority = authority_from_target_uri(target_uri);
-    let room_component = room_uri
-        .map(|room_uri| format!("\"mimi-room-uri\": {room_uri}\n"))
-        .unwrap_or_default();
-    let signature_base = format!(
-        "\"@method\": {method}\n\
-         \"@target-uri\": {target_uri}\n\
-         \"@authority\": {authority}\n\
-         \"content-digest\": {content_digest}\n\
-         \"source-service-id\": {MIMI_SOURCE_SERVICE_ID}\n\
-         \"destination-service-id\": {MIMI_DESTINATION_SERVICE_ID}\n\
-         \"provider-id\": {MIMI_PROVIDER_ID}\n\
-         {room_component}\
-         \"@signature-params\": {signature_params}",
-    );
-    let signing = mimi_provider_signing_key(&verification_method);
-    let signature = signing.sign(signature_base.as_bytes());
     let mut headers = vec![
         ("content-digest", content_digest),
         ("source-service-id", MIMI_SOURCE_SERVICE_ID.to_owned()),
-        (
-            "destination-service-id",
-            MIMI_DESTINATION_SERVICE_ID.to_owned(),
-        ),
+        ("destination-service-id", destination_service_id.to_owned()),
         ("provider-id", MIMI_PROVIDER_ID.to_owned()),
     ];
     if let Some(room_uri) = room_uri {
         headers.push(("mimi-room-uri", room_uri.to_owned()));
     }
-    headers.push(("signature-input", format!("sig1={signature_params}")));
-    headers.push((
-        "signature",
-        format!("sig1=:{}:", STANDARD.encode(signature.to_bytes())),
-    ));
+    let signed_target_uri = mimi_signature_target_uri(state, target_uri);
+    let signature_base = arkret_signatures::http_signature::canonical_message(
+        &arkret_signatures::http_signature::SignedRequestParts {
+            method: method.to_owned(),
+            target_uri: signed_target_uri,
+            authority,
+            path: String::new(),
+            headers: headers
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), value.clone()))
+                .collect(),
+            body_digest: headers
+                .iter()
+                .find_map(|(name, value)| (*name == "content-digest").then(|| value.clone())),
+        },
+        &parsed_signature_input,
+    )
+    .expect("generated MIMI signature components must be present");
+    let signature = arkret_signatures::http_signature::sign_message(
+        &signature_base,
+        &mimi_provider_signing_key(&verification_method),
+    );
+    headers.push(("signature-input", signature_input));
+    headers.push(("signature", format!("sig1=:{signature}:")));
     headers
+}
+
+fn mimi_signature_target_uri(state: &AppState, target_uri: &str) -> String {
+    let request_url =
+        reqwest::Url::parse(target_uri).expect("MIMI test target URI must be absolute");
+    let scheme = reqwest::Url::parse(&state.config().public_base_url)
+        .ok()
+        .map(|url| url.scheme().to_owned())
+        .unwrap_or_else(|| request_url.scheme().to_owned());
+    let authority = authority_from_target_uri(target_uri);
+    let mut path_and_query = request_url.path().to_owned();
+    if let Some(query) = request_url.query() {
+        path_and_query.push('?');
+        path_and_query.push_str(query);
+    }
+    format!("{scheme}://{authority}{path_and_query}")
 }
 
 fn mimi_provider_signing_key(verification_method: &str) -> SigningKey {
@@ -90,8 +125,36 @@ fn mimi_provider_signing_key(verification_method: &str) -> SigningKey {
     SigningKey::from_bytes(&seed)
 }
 
-fn mimi_room_uri(room_id: &str) -> String {
-    format!("mimi://soland.local/webvh/service/rooms/{room_id}")
+fn mimi_room_uri(state: &AppState, room_id: &str) -> String {
+    let service_full_id = state.service_full_id();
+    let service_full_id = service_full_id.as_str();
+    let provider_id = if let Some(domain) = service_full_id.strip_prefix("did:web:") {
+        format!("mimi://{}", canonical_mimi_authority(domain))
+    } else if let Some(rest) = service_full_id.strip_prefix("did:webvh:") {
+        let (scid, authority_and_path) = rest
+            .split_once(':')
+            .expect("fixture WebVH service identity must carry an authority");
+        assert!(!scid.is_empty());
+        assert!(!authority_and_path.is_empty());
+        format!("mimi://{}", canonical_mimi_authority(authority_and_path))
+    } else {
+        format!(
+            "mimi://{}",
+            service_full_id.replace(':', ".").to_lowercase()
+        )
+    };
+    arkret_wire::MimiRoomUri::new(format!("{provider_id}/rooms/{room_id}"))
+        .expect("fixture service identity and room id must form a canonical MIMI room URI")
+        .as_str()
+        .to_owned()
+}
+
+fn canonical_mimi_authority(authority: &str) -> String {
+    authority
+        .replace(':', "/")
+        .replace("%3A", ":")
+        .replace("%3a", ":")
+        .to_lowercase()
 }
 
 fn mimi_opaque_payload(value: Value, digest_field: &str) -> Value {
@@ -124,7 +187,7 @@ async fn mimi_room_update_body(
 ) -> Value {
     let binding_payload = json!({
         "profile": "ak.profile.mimi_interop.v1",
-        "mimi_room_uri": mimi_room_uri(room_id),
+        "mimi_room_uri": mimi_room_uri(state, room_id),
         "binding_scope": {
             "realm_id": realm_id,
             "strand_id": MIMI_TEST_STRAND_ID,
@@ -248,7 +311,6 @@ fn identifier_commitment(identifier: &str) -> String {
 }
 
 #[test]
-#[ignore = "spec-open: 2026-08-14-1029-mimi-room-binding-cell-subject-encoding"]
 fn mimi_provider_facade_contracts_work() {
     run_on_deep_stack(
         "mimi_provider_facade_contracts_work",
@@ -304,12 +366,13 @@ async fn mimi_provider_facade_contracts_work_body() {
         "requester": "did:web:alice.example",
         "strand_id": MIMI_TEST_STRAND_ID,
         "device_id": MIMI_TEST_DEVICE_ID,
-        "mimi_room_uri": mimi_room_uri("01JSMIMI"),
+        "mimi_room_uri": mimi_room_uri(&state, "01JSMIMI"),
         "realm_id": demo_realm_id(),
         "mls_group_id": "mimi-group-01JSMIMI",
         "epoch": 1,
     });
     let key_material: Value = signed_mimi_post!(
+        state,
         "http://server/_arkret/open/mimi/key-material",
         key_material_body,
         None
@@ -329,7 +392,7 @@ async fn mimi_provider_facade_contracts_work_body() {
 
     let room_id = "01JSMIMI";
     let group_id = "mimi-group-01JSMIMI";
-    let room_uri = mimi_room_uri(room_id);
+    let room_uri = mimi_room_uri(&state, room_id);
     project_test_authorized_device(
         &state,
         MIMI_SOURCE_SERVICE_FULL_ID,
@@ -348,6 +411,7 @@ async fn mimi_provider_facade_contracts_work_body() {
     )
     .await;
     let mut room_binding_response = signed_mimi_post!(
+        state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         update_body,
         Some(room_uri.as_str())
@@ -394,7 +458,7 @@ async fn mimi_provider_facade_contracts_work_body() {
     .expect("group_info must contain JSON");
     assert_eq!(
         decoded_group_info["mimi_room_uri"],
-        mimi_room_uri("01JSMIMI"),
+        mimi_room_uri(&state, "01JSMIMI"),
         "group_info response: {group_info}"
     );
     assert_eq!(
@@ -412,6 +476,7 @@ async fn mimi_provider_facade_contracts_work_body() {
         "privacy_profile": "private_contact_discovery",
     });
     let identifier: Value = signed_mimi_post!(
+        state,
         "http://server/_arkret/open/mimi/identifiers/query",
         identifier_body,
         None
@@ -436,6 +501,7 @@ async fn mimi_provider_facade_contracts_work_body() {
         text_mimi_message("mimi-msg-contract-001", "hello from MIMI"),
     );
     let mapped: Value = signed_mimi_post!(
+        state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
         message_body,
         Some(room_uri.as_str())
@@ -462,6 +528,7 @@ async fn mimi_provider_facade_contracts_work_body() {
         "strand_id": MIMI_TEST_STRAND_ID,
     });
     let proxy: Value = signed_mimi_post!(
+        state,
         "http://server/_arkret/open/mimi/proxy-download",
         proxy_body,
         None
@@ -488,6 +555,7 @@ async fn mimi_provider_facade_contracts_work_body() {
         "abuse_reason_code": "spam",
     });
     let report: Value = signed_mimi_post!(
+        state,
         "http://server/_arkret/open/mimi/report-abuse",
         report_body,
         None
@@ -502,7 +570,6 @@ async fn mimi_provider_facade_contracts_work_body() {
 }
 
 #[test]
-#[ignore = "spec-open: 2026-08-14-1029-mimi-room-binding-cell-subject-encoding"]
 fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     run_on_deep_stack(
         "mimi_facade_writes_strand_into_canonical_reducer_chain",
@@ -528,7 +595,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     add_test_realm_member(&state, custom_realm, MIMI_SOURCE_SERVICE_FULL_ID);
     let room_id = "01JSMIMI-P4-E2E";
     let group_id = "mimi-group-p4-001";
-    let room_uri = mimi_room_uri(room_id);
+    let room_uri = mimi_room_uri(&state, room_id);
 
     project_test_authorized_device(
         &state,
@@ -542,6 +609,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     )
     .await;
     let mut update_response = signed_mimi_post!(
+        state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         update_body,
         Some(room_uri.as_str())
@@ -571,6 +639,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     assert!(binding_event_id.starts_with("ak:event:"));
 
     let msg_resp: Value = signed_mimi_post!(
+        state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
         mimi_submit_body(
             demo_realm,
@@ -635,6 +704,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     );
 
     let report_resp: Value = signed_mimi_post!(
+        state,
         "http://server/_arkret/open/mimi/report-abuse",
         json!({
             "strand_id": MIMI_TEST_STRAND_ID,
@@ -699,6 +769,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     )
     .await;
     let migrating_resp: Value = signed_mimi_post!(
+        state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         migrating_body,
         Some(room_uri.as_str())
@@ -721,6 +792,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     )
     .await;
     let rebound_resp: Value = signed_mimi_post!(
+        state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         rebound_body,
         Some(room_uri.as_str())
@@ -733,6 +805,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     assert_eq!(rebound_resp["accepted"], true);
 
     let msg_resp_2: Value = signed_mimi_post!(
+        state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
         mimi_submit_body(
             custom_realm,
@@ -774,6 +847,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     )
     .await;
     let revoked_resp: Value = signed_mimi_post!(
+        state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         revoked_body,
         Some(room_uri.as_str())
@@ -796,6 +870,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     )
     .await;
     let mut reopen_resp = signed_mimi_post!(
+        state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         reopen_body,
         Some(room_uri.as_str())
@@ -811,7 +886,6 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
 }
 
 #[test]
-#[ignore = "spec-open: 2026-08-14-1029-mimi-room-binding-cell-subject-encoding"]
 fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     run_on_deep_stack(
         "mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content",
@@ -828,7 +902,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
     add_test_realm_member(&state, realm_id, MIMI_SOURCE_SERVICE_FULL_ID);
     let room_id = "01JSMIMI-P75-POLICY";
     let group_id = "mimi-group-policy-001";
-    let room_uri = mimi_room_uri(room_id);
+    let room_uri = mimi_room_uri(&state, room_id);
 
     project_test_authorized_device(
         &state,
@@ -842,6 +916,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
     )
     .await;
     let mut update_response = signed_mimi_post!(
+        state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         update_body,
         Some(room_uri.as_str())
@@ -867,6 +942,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
     assert_eq!(update_resp["accepted"], true, "room update: {update_resp}");
 
     let mut unmarked = signed_mimi_post!(
+        state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
         mimi_submit_body(
             realm_id,
@@ -895,6 +971,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
     );
 
     let downgrade_resp: Value = signed_mimi_post!(
+        state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
         mimi_submit_body(
             realm_id,
@@ -925,6 +1002,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
         .to_owned();
 
     let transcript_resp: Value = signed_mimi_post!(
+        state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
         mimi_submit_body(
             realm_id,
@@ -958,6 +1036,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
         .to_owned();
 
     let quarantine_resp: Value = signed_mimi_post!(
+        state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
         mimi_submit_body(
             realm_id,

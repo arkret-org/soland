@@ -4795,7 +4795,7 @@ mod trust_binding_tests {
             1,
             arkret_identifiers::Hlc::new("019041000000-0001-0000000f").unwrap(),
             json!({
-                "agent_id": principal.as_str(),
+                "agent_id": principal_core.as_str(),
                 "key_id": "ak:agent_key:01904100-0000-7000-8000-00000000000f",
                 "verification_method": verification_method,
                 "public_key_digest": public_key_digest.as_str(),
@@ -4833,6 +4833,44 @@ mod trust_binding_tests {
             })
             .await
             .unwrap();
+
+        let mut agent = soland_services::identity::AgentPairingState::new(
+            principal_core.to_string(),
+            "ak:did_core:web:alice.example".to_owned(),
+            authorize_event.realm_id.to_string(),
+            arkret_wire::DidUrl::new("did:web:alice.example#managed-controller").unwrap(),
+            AgentLifecycleState::Active,
+            now(),
+        );
+        agent.authorized_event_ref = Some(authorize_event_id.clone());
+        agent.authorized_verification_method = Some(verification_method.to_owned());
+        state.agent_pairings().save_agent(agent).await.unwrap();
+
+        let mut authorize_projection = arkret_event_draft::test_support::raw_projected_operation(
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-00000000000f",
+            )
+            .unwrap(),
+            authorize_event.realm_id.clone(),
+            arkret_wire::EventKind::AgentKeyAuthorize,
+            json!({
+                "agent_id": principal_core.as_str(),
+                "key_id": "ak:agent_key:01904100-0000-7000-8000-00000000000f",
+                "verification_method": verification_method,
+            }),
+        );
+        let authorize_projection_event_id =
+            arkret_wire::EventId::new(authorize_event_id.clone()).unwrap();
+        authorize_projection.context.event_id = authorize_projection_event_id.clone();
+        authorize_projection.context.accepted_event_id = authorize_projection_event_id;
+        let effect = state
+            .test_projection()
+            .lock()
+            .apply(&authorize_projection, state.hlc());
+        assert!(matches!(
+            effect,
+            soland_domain::reducer::ProjectionEffect::AgentKeyAuthorizeProjected { .. }
+        ));
 
         let identity = arkret_mls::ArkretMlsIdentity::from_ed25519_signing_seed(
             principal_core.clone(),

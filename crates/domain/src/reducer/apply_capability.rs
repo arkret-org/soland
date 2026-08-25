@@ -1374,14 +1374,21 @@ impl ProjectionState {
             return Err("authority_regrant_denied");
         }
         let child_depth = body_max_authority_depth(body);
-        if !arkret_policy::authz::authority::authority_regrant_allowed(parent) {
+        let parent_allows_regrant =
+            arkret_policy::authz::authority::authority_regrant_allowed(parent);
+        let parent_depth = crate::capability::max_authority_depth(parent);
+        if parent_depth == Some(0) {
+            return Err(if parent_allows_regrant {
+                "authority_depth_exceeded"
+            } else {
+                "authority_regrant_denied"
+            });
+        }
+        if !parent_allows_regrant {
             if !body_has_terminal_authority_control(body) {
                 return Err("authority_regrant_denied");
             }
-        } else if let Some(parent_depth) = crate::capability::max_authority_depth(parent) {
-            if parent_depth == 0 {
-                return Err("authority_depth_exceeded");
-            }
+        } else if let Some(parent_depth) = parent_depth {
             match child_depth {
                 Some(child_depth) if child_depth <= parent_depth.saturating_sub(1) => {}
                 _ => return Err("authority_depth_exceeded"),
@@ -3204,33 +3211,59 @@ mod authority_cycle_tests {
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
         ));
 
-        for constraints in [
-            json!([]),
-            json!([{
-                "constraint_kind": "authority_control",
-                "max_authority_depth": 1
-            }]),
-            json!([{
-                "constraint_kind": "authority_control",
-                "max_authority_depth": 0,
-                "authority_regrant_allowed": true
-            }]),
+        for (case, constraints) in [
+            ("missing carrier", json!([])),
+            (
+                "positive depth",
+                json!([{
+                    "constraint_kind": "authority_control",
+                    "max_authority_depth": 1
+                }]),
+            ),
+            (
+                "reopened regrant",
+                json!([{
+                    "constraint_kind": "authority_control",
+                    "max_authority_depth": 0,
+                    "authority_regrant_allowed": true
+                }]),
+            ),
         ] {
             let rejected = proj.apply_capability_grant(
                 &regrant_op_with_constraints(G_B, G_A, constraints),
                 chrono::Utc::now(),
             );
-            assert!(matches!(
-                rejected,
-                crate::reducer::ProjectionEffect::Rejected { reason }
-                    if reason == "authority_regrant_denied"
-            ));
+            assert!(
+                matches!(
+                    rejected,
+                    crate::reducer::ProjectionEffect::Rejected { reason }
+                        if reason == "authority_regrant_denied"
+                ),
+                "{case}"
+            );
         }
 
-        let accepted = proj.apply_capability_grant(
+        let mut terminal_child = regrant_op_with_constraints(
+            G_B,
+            G_A,
+            json!([{
+                "constraint_kind": "authority_control",
+                "max_authority_depth": 0
+            }]),
+        );
+        terminal_child.payload["grant"]["subject"] = json!("ak:did_core:web:alice.example");
+        terminal_child.payload["grant"]["subject_principal_server_id"] =
+            json!("ak:did_core:web:alice.example");
+        let accepted = proj.apply_capability_grant(&terminal_child, chrono::Utc::now());
+        assert!(matches!(
+            accepted,
+            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
+        ));
+
+        let rejected_grandchild = proj.apply_capability_grant(
             &regrant_op_with_constraints(
+                G_C,
                 G_B,
-                G_A,
                 json!([{
                     "constraint_kind": "authority_control",
                     "max_authority_depth": 0
@@ -3239,8 +3272,9 @@ mod authority_cycle_tests {
             chrono::Utc::now(),
         );
         assert!(matches!(
-            accepted,
-            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
+            rejected_grandchild,
+            crate::reducer::ProjectionEffect::Rejected { reason }
+                if reason == "authority_regrant_denied"
         ));
     }
 

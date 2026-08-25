@@ -3991,7 +3991,6 @@ mod tests {
         peer: &str,
         issuer: &str,
         event_ref: &str,
-        digest_byte: char,
     ) -> RequestAcceptanceReceipt {
         serde_json::from_value(json!({
             "core": {
@@ -3999,7 +3998,6 @@ mod tests {
                 "peer": {"kind": "human", "principal_id": peer},
                 "slot_version": 1,
                 "request_event_ref": event_ref,
-                "request_digest": format!("sha256:{}", digest_byte.to_string().repeat(64)),
                 "source_checkpoint": format!("sha256:{}", "c".repeat(64)),
                 "accepted_at": "2026-08-09T00:00:00.000Z",
                 "issuer": issuer
@@ -4040,7 +4038,6 @@ mod tests {
                 "peer": {"kind": "human", "principal_id": target},
                 "slot_version": 1,
                 "request_event_ref": request_event_ref,
-                "request_digest": format!("sha256:{}", "b".repeat(64)),
                 "source_checkpoint": format!("sha256:{}", "c".repeat(64)),
                 "accepted_at": "2026-08-09T00:00:00.000Z",
                 "issuer": source_service_id
@@ -4103,14 +4100,12 @@ mod tests {
             BOB,
             ALICE_SERVICE,
             "ak:event:ARbUzETAsZ3suuQ0GSmBWTsNjmUnTEEl_ZnDOUWRPm-N",
-            'a',
         );
         let bob = request_receipt(
             BOB,
             ALICE,
             BOB_SERVICE,
             "ak:event:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5",
-            'b',
         );
         let mut first_arrival = [bob.clone(), alice.clone()];
         first_arrival.sort_by(|left, right| {
@@ -4200,14 +4195,12 @@ mod tests {
             BOB,
             ALICE_SERVICE,
             "ak:event:ARbUzETAsZ3suuQ0GSmBWTsNjmUnTEEl_ZnDOUWRPm-N",
-            'a',
         );
         let second = request_receipt(
             BOB,
             ALICE,
             BOB_SERVICE,
             "ak:event:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5",
-            'b',
         );
         let ordered = [first.clone(), second.clone()];
         let (historical_contact_round_id, historical_basis, _) =

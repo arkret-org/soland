@@ -4137,21 +4137,24 @@ mod internal_event_admission_tests {
     }
 
     #[test]
-    fn mimi_provider_admission_reads_provenance_from_canonical_metadata() {
+    fn mimi_provider_admission_reads_provenance_from_canonical_payload() {
         let admission = InternalEventAdmission::mimi_provider(
             "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             "did:web:mimi.example",
-            "ak:mimi-binding:01904100-0000-7000-8000-000000000001",
+            "ak:event:AVF6xfk5EJU6x8wIqKL3WPOsSROVxJPxOu8HiqfxQGD7",
         );
         let object = json!({
             "actor_id": "did:web:mimi.example",
             "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             "kind": "ak.message.create",
             "payload": {
-                "metadata": {
-                    "mimi_provenance": {
-                        "mimi_room_binding_ref": "ak:mimi-binding:01904100-0000-7000-8000-000000000001"
-                    }
+                "mimi_provenance": {
+                    "provenance": "mimi_facade",
+                    "source_provider": "ak:did_core:web:mimi-provider.example",
+                    "attributed_sender_actor_id": "ak:did_core:web:alice.example",
+                    "attributed_sender_device_id": "ak:device:01904100-0000-7000-8000-000000000001",
+                    "source_envelope_digest": format!("sha256:{}", "1".repeat(64)),
+                    "room_binding_ref": "ak:event:AVF6xfk5EJU6x8wIqKL3WPOsSROVxJPxOu8HiqfxQGD7"
                 }
             }
         });

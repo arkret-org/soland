@@ -456,19 +456,12 @@ mod tests {
             DidCoreId::new("ak:did_core:web:controller.example".to_owned()).unwrap();
         let requested_scope: AgentKeyScope =
             serde_json::from_value(requested_agent_scope()).unwrap();
-        let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
-            &agent_id,
-            &controller_id,
-            &requested_scope,
-        )
-        .unwrap();
         let requested_scope_disclosure = serde_json::from_value(json!({
             "schema": "ak.schema.agent_requested_scope_disclosure.v1",
             "request_id": "ak:request:01999999-0000-7000-8000-000000000099",
             "agent_id": agent_id.as_str(),
             "controller_id": controller_id.as_str(),
             "requested_scope": requested_scope,
-            "requested_scope_digest": requested_scope_digest.as_str(),
             "verifier_service_id": service_id,
             "audience": "ak.gate.account.command.pair_agent_key",
             "challenge": "pairing-challenge-0001",

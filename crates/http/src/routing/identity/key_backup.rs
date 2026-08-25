@@ -93,7 +93,7 @@ mod tests {
         })
     }
 
-    fn key_backup_body(backup_kind: &str, item_kind: &str, encryption: Value) -> Value {
+    fn key_backup_body(backup_kind: &str, encryption: Value) -> Value {
         let mut body = json!({
             "backup_id": BACKUP_ID,
             "actor_id": ACTOR,
@@ -105,7 +105,7 @@ mod tests {
             "series_seq": 0,
             "encryption": encryption,
             "contents": [{
-                "item_kind": item_kind,
+                "item_kind": "recovery_key_share",
                 "secret_id": "test-secret"
             }],
             "ciphertext": "AAAA",
@@ -125,23 +125,17 @@ mod tests {
             body["encryption"]["key_commitment"] =
                 json!("sha256:2222222222222222222222222222222222222222222222222222222222222222");
         }
-        if item_kind == "history_secret_segment" {
+        if backup_kind == "mls_history" {
             let scope = arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_wire::RealmId::new(
                     "ak:realm:Aa1JCF6pnQnSgl8DnT6vNtPcFGPCxLnEY130o2lmyDSh".to_owned(),
                 )
                 .unwrap(),
             };
-            let mls_group_id = scope.canonical_mls_group_id().unwrap();
             body["contents"][0] = json!({
-                "item_kind": "history_secret_segment",
+                "item_kind": "history_secret_ranges",
                 "effective_scope": scope,
-                "mls_group_id": mls_group_id,
-                "from_epoch": 0,
-                "to_epoch": 0,
-                "group_state_ref": "ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM",
-                "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-                "membership_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                "ranges": [{"from_epoch": 0, "to_epoch": 0}]
             });
         }
         if body["encryption"]["recipient_method"].as_str() == Some("recovery_public_key") {
@@ -203,11 +197,7 @@ mod tests {
 
     #[test]
     fn mls_history_accepts_secret_storage_key() {
-        let body = key_backup_body(
-            "mls_history",
-            "history_secret_segment",
-            secret_storage_key_encryption(),
-        );
+        let body = key_backup_body("mls_history", secret_storage_key_encryption());
 
         validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect("MLS history secret_storage_key backup should validate");
@@ -215,11 +205,7 @@ mod tests {
 
     #[test]
     fn mls_history_accepts_recovery_public_key() {
-        let body = key_backup_body(
-            "mls_history",
-            "history_secret_segment",
-            recovery_public_key_encryption(),
-        );
+        let body = key_backup_body("mls_history", recovery_public_key_encryption());
 
         validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect("MLS history recovery_public_key (HPKE) backup should validate");
@@ -229,7 +215,7 @@ mod tests {
     fn recovery_public_key_requires_enc() {
         let mut enc = recovery_public_key_encryption();
         enc["aead"].as_object_mut().unwrap().remove("enc");
-        let body = key_backup_body("secret_storage", "recovery_secret", enc);
+        let body = key_backup_body("secret_storage", enc);
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("recovery_public_key without aead.enc must be rejected");
         assert!(err.message.contains("enc"));
@@ -237,8 +223,7 @@ mod tests {
 
     #[test]
     fn auth_data_rejects_missing_device_trust_anchor() {
-        let mut body =
-            key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
+        let mut body = key_backup_body("secret_storage", passphrase_encryption());
         body["auth_data"]
             .as_object_mut()
             .unwrap()
@@ -255,14 +240,13 @@ mod tests {
         // Drop nonce_salt -> reject.
         let mut enc = passphrase_encryption();
         enc["aead"].as_object_mut().unwrap().remove("nonce_salt");
-        let body = key_backup_body("secret_storage", "recovery_secret", enc);
+        let body = key_backup_body("secret_storage", enc);
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("passphrase_kdf without nonce_salt must be rejected");
         assert!(err.message.contains("nonce_salt"));
 
         // Drop key_commitment -> reject.
-        let mut body2 =
-            key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
+        let mut body2 = key_backup_body("secret_storage", passphrase_encryption());
         body2["encryption"]
             .as_object_mut()
             .unwrap()
@@ -276,7 +260,7 @@ mod tests {
     fn unsupported_recipient_method_is_rejected() {
         let mut encryption = passphrase_encryption();
         encryption["recipient_method"] = json!("unknown_magic_key");
-        let body = key_backup_body("secret_storage", "recovery_secret", encryption);
+        let body = key_backup_body("secret_storage", encryption);
 
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("unknown recipient methods must not pass schema validation");
@@ -288,7 +272,7 @@ mod tests {
     fn passphrase_kdf_still_requires_kdf_metadata() {
         let mut encryption = passphrase_encryption();
         encryption.as_object_mut().unwrap().remove("kdf");
-        let body = key_backup_body("secret_storage", "recovery_secret", encryption);
+        let body = key_backup_body("secret_storage", encryption);
 
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("passphrase_kdf without kdf metadata is invalid");
@@ -300,25 +284,20 @@ mod tests {
 
     #[test]
     fn mls_history_rejects_passphrase_kdf() {
-        let body = key_backup_body(
-            "mls_history",
-            "history_secret_segment",
-            passphrase_encryption(),
-        );
+        let body = key_backup_body("mls_history", passphrase_encryption());
 
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("MLS history passphrase KDF backups are no longer supported");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
-        assert!(err.message.contains("secret_storage_key"));
+        assert!(
+            err.message
+                .contains("passphrase_kdf is valid only for secret_storage backups")
+        );
     }
 
     #[test]
     fn mls_history_rejects_plaintext_fields() {
-        let mut body = key_backup_body(
-            "mls_history",
-            "history_secret_segment",
-            secret_storage_key_encryption(),
-        );
+        let mut body = key_backup_body("mls_history", secret_storage_key_encryption());
         body["plaintext"] = json!("raw group state");
 
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
@@ -486,8 +465,7 @@ mod tests {
 
     #[test]
     fn genesis_envelope_rejects_supersedes() {
-        let mut body =
-            key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
+        let mut body = key_backup_body("secret_storage", passphrase_encryption());
         body["supersedes"] = json!("ak:backup:01964137-0000-7000-8000-0000000000ff");
 
         let backup = typed_key_backup_body(&body).expect("typed key backup");
@@ -506,8 +484,7 @@ mod tests {
     fn genesis_envelope_rejects_supersedes_digest() {
         // Spec key-management.md §7.6 — genesis MUST NOT carry
         // `supersedes_digest` even when `supersedes` itself is absent.
-        let mut body =
-            key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
+        let mut body = key_backup_body("secret_storage", passphrase_encryption());
         body["supersedes_digest"] =
             json!("sha256:3333333333333333333333333333333333333333333333333333333333333333");
 
@@ -528,8 +505,7 @@ mod tests {
     fn genesis_envelope_tolerates_null_predecessor_fields() {
         // Spec §7.6 phrases genesis as `supersedes == null`; an explicit
         // JSON null is equivalent to absence, not a chain claim.
-        let mut body =
-            key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
+        let mut body = key_backup_body("secret_storage", passphrase_encryption());
         body["supersedes"] = Value::Null;
         body["supersedes_digest"] = Value::Null;
 
@@ -572,15 +548,9 @@ mod tests {
 
     #[test]
     fn list_metadata_redacts_ciphertext_and_kdf_material() {
-        let metadata = serde_json::to_value(
-            key_backup_summary_for_list(key_backup_body(
-                "secret_storage",
-                "private_account_state",
-                passphrase_encryption(),
-            ))
-            .unwrap(),
-        )
-        .unwrap();
+        let mut body = key_backup_body("secret_storage", passphrase_encryption());
+        body["contents"][0]["item_kind"] = json!("private_account_state");
+        let metadata = serde_json::to_value(key_backup_summary_for_list(body).unwrap()).unwrap();
 
         assert!(metadata.get("ciphertext").is_none());
         assert!(metadata.pointer("/encryption/key_commitment").is_none());

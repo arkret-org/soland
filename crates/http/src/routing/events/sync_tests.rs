@@ -789,28 +789,35 @@ async fn native_sidecar_events_are_visible_only_to_the_controller() {
     config.seed_demo_data = false;
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     state.realm_directory().upsert(roster_realm(false, true));
-    insert_projected_membership(&state, ROSTER_ACTOR, "join");
-    insert_projected_membership(&state, ROSTER_CALLER, "join");
     let created_at = DateTime::parse_from_rfc3339("2026-07-29T10:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
+    insert_projected_membership_at(&state, ROSTER_ACTOR, "join", created_at);
+    insert_projected_membership_at(&state, ROSTER_CALLER, "join", created_at);
     let apply = |operation_id: &str, kind: arkret_wire::EventKind, payload: Value| {
         state.test_projection().lock().apply(
             &sync_test_operation_at(operation_id, kind, payload, created_at),
             state.hlc(),
         );
     };
+    let realm_create_event_id = ROSTER_REALM.replacen("ak:realm:", "ak:event:", 1);
     apply(
         "ak:operation:01904100-0000-7000-8000-00000000a001",
         arkret_wire::EventKind::RealmCreate,
         json!({
+            "event_id": realm_create_event_id,
             "object": {
-                "id": ROSTER_REALM,
-                "schema": "ak.schema.realm.v1",
-                "title": "Sidecar recovery",
-                "created_by": ROSTER_ACTOR,
-                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
-                "encryption_profile": "mls_rfc9420"
+                "schema": "ak.schema.realm_genesis.v1",
+                "purpose": "collaboration",
+                "genesis_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "trust_domain": state.config().trust_domain,
+                "schema_refs": ["ak.schema.realm.v1"],
+                "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
+                "digest_algorithm": "sha256",
+                "security_class": "standard",
+                "encryption_profile": "mls_rfc9420",
+                "notary": crate::test_single_signer_notary(ROSTER_ACTOR_FULL, 9),
+                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap()
             }
         }),
     );

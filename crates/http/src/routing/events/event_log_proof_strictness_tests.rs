@@ -1293,8 +1293,8 @@ const DATA_EVENT_ACTOR: &str = "ak:did_core:web:alice.example";
 const DATA_EVENT_PRINCIPAL_SERVER: &str = "ak:did_core:web:principal.example";
 const DATA_EVENT_STRAND: &str = "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
 /// The MLS group named by every E2EE fixture ciphertext.
-fn data_event_seal_id() -> arkret_identifiers::SealId {
-    arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap()
+fn data_event_placeholder_seal_id() -> arkret_identifiers::SealId {
+    arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap()
 }
 
 fn data_event_move_id(byte: u8) -> arkret_identifiers::Hash {
@@ -1313,24 +1313,23 @@ fn data_event_dummy_signature() -> arkret_wire::SealSignature {
     }
 }
 
-fn insert_data_event_seal(state: &AppState, covered: Vec<arkret_identifiers::Hash>) -> String {
-    insert_data_event_seal_with(state, data_event_seal_id(), Vec::new(), covered)
+fn insert_data_event_seal(state: &AppState, delta: Vec<arkret_identifiers::Hash>) -> String {
+    insert_data_event_seal_with(state, Vec::new(), delta)
 }
 
 fn insert_data_event_seal_with(
     state: &AppState,
-    seal_id: arkret_identifiers::SealId,
     predecessor_refs: Vec<arkret_identifiers::SealId>,
-    covered: Vec<arkret_identifiers::Hash>,
+    delta: Vec<arkret_identifiers::Hash>,
 ) -> String {
     use chrono::TimeZone;
 
     let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
-    let seal = arkret_wire::Seal {
-        id: seal_id.clone(),
+    let mut seal = arkret_wire::Seal {
+        id: data_event_placeholder_seal_id(),
         realm_id: realm,
         predecessor_refs,
-        delta: Vec::new(),
+        delta,
         control_event_set_root: data_event_hash(0x22),
         state_root: data_event_hash(0x77),
         completeness_root: data_event_hash(0x33),
@@ -1338,13 +1337,17 @@ fn insert_data_event_seal_with(
         data_view_root: None,
         data_event_set_root: None,
         availability_receipt_digests: Vec::new(),
-        covered_event_digests: covered,
+        covered_event_digests: Vec::new(),
         previous_state_root: None,
         previous_digest_algorithm: None,
         notary_signature: arkret_wire::seal::NotarySig::Single(data_event_dummy_signature()),
         sealed_at: chrono::Utc.with_ymd_and_hms(2026, 5, 8, 0, 0, 0).unwrap(),
         hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
     };
+    seal.id = seal
+        .derive_id(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    let seal_id = seal.id.clone();
     state
         .projections()
         .test_put_seal(&seal, arkret_canonical::DigestSuite::Sha256)
@@ -1437,8 +1440,9 @@ fn insert_historical_data_event_grant_for_subject(
     revoked: bool,
 ) -> String {
     let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
-    let seal_id = data_event_seal_id();
     let move_id = data_event_move_id(0xab);
+    let seal_ref = insert_data_event_seal(state, vec![move_id.clone()]);
+    let seal_id = arkret_identifiers::SealId::new(seal_ref.clone()).unwrap();
     let cell = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.capability.grant.v1:{grant_id}"
     ))
@@ -1472,11 +1476,12 @@ fn insert_historical_data_event_grant_for_subject(
             )],
         )
         .unwrap();
-    insert_data_event_seal(state, vec![move_id])
+    seal_ref
 }
 
 fn insert_data_event_revocation_successor(
     state: &AppState,
+    predecessor_ref: &str,
     grant_id: &str,
     action: &str,
     after_hours: i64,
@@ -1484,17 +1489,15 @@ fn insert_data_event_revocation_successor(
     use chrono::{Duration, TimeZone};
 
     let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
-    let predecessor = data_event_seal_id();
-    let successor_id =
-        arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "b".repeat(64))).unwrap();
+    let predecessor = arkret_identifiers::SealId::new(predecessor_ref.to_owned()).unwrap();
     let move_id = data_event_move_id(0xae);
     let sealed_at =
         chrono::Utc.with_ymd_and_hms(2026, 5, 8, 0, 0, 0).unwrap() + Duration::hours(after_hours);
-    let successor = arkret_wire::Seal {
-        id: successor_id.clone(),
+    let mut successor = arkret_wire::Seal {
+        id: data_event_placeholder_seal_id(),
         realm_id: realm.clone(),
         predecessor_refs: vec![predecessor],
-        delta: Vec::new(),
+        delta: vec![move_id.clone()],
         control_event_set_root: data_event_hash(0x23),
         state_root: data_event_hash(0x78),
         completeness_root: data_event_hash(0x34),
@@ -1502,13 +1505,17 @@ fn insert_data_event_revocation_successor(
         data_view_root: None,
         data_event_set_root: None,
         availability_receipt_digests: Vec::new(),
-        covered_event_digests: vec![move_id.clone()],
-        previous_state_root: Some(data_event_hash(0x77)),
+        covered_event_digests: Vec::new(),
+        previous_state_root: None,
         previous_digest_algorithm: None,
         notary_signature: arkret_wire::seal::NotarySig::Single(data_event_dummy_signature()),
         sealed_at,
         hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0001-aabbccdd".to_owned()).unwrap(),
     };
+    successor.id = successor
+        .derive_id(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    let successor_id = successor.id.clone();
     state
         .projections()
         .test_put_seal(&successor, arkret_canonical::DigestSuite::Sha256)
@@ -1553,9 +1560,11 @@ fn insert_historical_data_event_child_grant_with_revoked_authority(
     action: &str,
 ) -> String {
     let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
-    let seal_id = data_event_seal_id();
     let parent_move_id = data_event_move_id(0xac);
     let child_move_id = data_event_move_id(0xad);
+    let seal_ref =
+        insert_data_event_seal(state, vec![parent_move_id.clone(), child_move_id.clone()]);
+    let seal_id = arkret_identifiers::SealId::new(seal_ref.clone()).unwrap();
     let parent_cell = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.capability.grant.v1:{authority_grant_id}"
     ))
@@ -1621,7 +1630,7 @@ fn insert_historical_data_event_child_grant_with_revoked_authority(
             ],
         )
         .unwrap();
-    insert_data_event_seal(state, vec![parent_move_id, child_move_id])
+    seal_ref
 }
 
 /// The cell an `ak.message.create` in this Realm projects.
@@ -1819,7 +1828,7 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
         grant_id,
         "ak.message.create",
         APPLET_SERVICE,
-        APPLET_SERVICE,
+        DATA_EVENT_PRINCIPAL_SERVER,
         false,
     );
     let mut object = data_event_object_with_refs(&seal_ref, vec![]);
@@ -1941,7 +1950,7 @@ fn data_event_revocation_successor_within_window_is_accepted() {
     let state = make_state(true);
     let grant_id = "ak:grant:AYSBE0hegtYZwGZKvLpOxSBjVkkCzQx36JxTE3ExdEV5";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
-    insert_data_event_revocation_successor(&state, grant_id, "ak.message.create", 1);
+    insert_data_event_revocation_successor(&state, &seal_ref, grant_id, "ak.message.create", 1);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
     validate_data_event_capability_refs(
@@ -1962,7 +1971,7 @@ fn data_event_revocation_successor_at_window_boundary_is_accepted() {
     let state = make_state(true);
     let grant_id = "ak:grant:Adtfh7VczxqGjGKRiDCJlBwIw-G-GAX-uATlzwwXLQcQ";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
-    insert_data_event_revocation_successor(&state, grant_id, "ak.message.create", 24);
+    insert_data_event_revocation_successor(&state, &seal_ref, grant_id, "ak.message.create", 24);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
     validate_data_event_capability_refs(
@@ -1983,7 +1992,7 @@ fn data_event_revocation_successor_outside_window_is_excluded() {
     let state = make_state(true);
     let grant_id = "ak:grant:AXpDvFT5Ig3ReD8ssTjbXBgzMXgcnSVx4liP7nvihgRe";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
-    insert_data_event_revocation_successor(&state, grant_id, "ak.message.create", 25);
+    insert_data_event_revocation_successor(&state, &seal_ref, grant_id, "ak.message.create", 25);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
     let err = validate_data_event_capability_refs(
@@ -2006,7 +2015,7 @@ fn high_risk_data_event_revocation_has_no_grace_window() {
     let grant_id = "ak:grant:AbcriCdScRg5DEU1Lki7mHfAdOK609vnq1PWuZBQR-mS";
     let action = "ak.message.mention.broadcast";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, action, false);
-    insert_data_event_revocation_successor(&state, grant_id, action, 1);
+    insert_data_event_revocation_successor(&state, &seal_ref, grant_id, action, 1);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
     let err = validate_data_event_capability_refs(

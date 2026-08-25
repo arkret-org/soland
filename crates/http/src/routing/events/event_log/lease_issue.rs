@@ -810,13 +810,18 @@ mod tests {
             ),
             event(EventKind::RealmJoinRule, 3, json!({"value": "invite"})),
             event(
-                EventKind::RealmDiscovery,
+                EventKind::RealmHistoryAccess,
                 4,
+                json!({"from": null, "to": "since_join"}),
+            ),
+            event(
+                EventKind::RealmDiscovery,
+                5,
                 json!({"value": "invite_only"}),
             ),
             event(
                 EventKind::RealmDeliveryBindingPolicy,
-                5,
+                6,
                 json!({"allow_unroutable_members": true}),
             ),
             creator_member,

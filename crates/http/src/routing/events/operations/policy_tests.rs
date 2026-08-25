@@ -13,6 +13,7 @@ use super::*;
 
 const ALICE_FULL_ID: &str = "did:webvh:z6mkalice:alice.example";
 const ALICE_CORE_ID: &str = "ak:did_core:webvh:z6mkalice";
+const BOB_CORE_ID: &str = "ak:did_core:web:bob.example";
 const AGENT_CORE_ID: &str = "ak:did_core:webvh:z6mkfixtureagent";
 const AGENT_CONTROLLER_MEMBERSHIP_EVENT_ID: &str =
     "ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim";
@@ -542,6 +543,35 @@ fn grant_circle_action(
                 arkret_identifiers::CircleId::new(circle_id.to_owned()).expect("valid circle id"),
             ]),
         }],
+    );
+}
+
+fn insert_joined_realm_member(
+    state: &AppState,
+    realm_id: &arkret_identifiers::RealmId,
+    actor_id: &str,
+) {
+    let now = chrono::Utc::now();
+    state.test_projection().lock().members.insert(
+        (realm_id.to_string(), actor_id.to_owned()),
+        soland_domain::reducer::SolandMembershipState {
+            member: actor_id.to_owned(),
+            realm_id: realm_id.to_string(),
+            state: "join".to_owned(),
+            role: "member".to_owned(),
+            delivery_status: Some("unroutable".to_owned()),
+            recipient_service_id: None,
+            recipient_service_resolution: None,
+            membership_event_ref: Some(
+                "ak:event:AT41F_H8VlBMeU1YjfZKP1IwxWus1cykljb2DVv43LvY".to_owned(),
+            ),
+            delivery_binding_frontier: None,
+            delivery_binding_expires_at: None,
+            invited_at: None,
+            joined_at: now,
+            updated_at: now,
+            reason: None,
+        },
     );
 }
 
@@ -2297,12 +2327,13 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
 }
 
 #[tokio::test]
-async fn circle_member_manage_rejects_forged_verdict_without_grant() {
+async fn circle_member_manage_rejects_without_grant() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
         "ak:realm:ASzMBU92ndTUgCFayN1yKHiZ3dJ7Irh18ENIqLIELrIQ".to_owned(),
     )
     .unwrap();
+    insert_joined_realm_member(&state, &realm_id, BOB_CORE_ID);
     let member_add = op(
         realm_id,
         "000000000881",
@@ -2310,14 +2341,8 @@ async fn circle_member_manage_rejects_forged_verdict_without_grant() {
         json!({
             "sender": "ak:did_core:web:alice.example",
             "circle_id": "ak:circle:AQzkNesVRZE45KCCmROpUPRV8VQzC-oUQQK8ytMOq1yO",
-            "actor_id": "did:web:bob.example",
-            "membership": "join",
-            "manage_capability_verified": true,
-            "actor_capability": {
-                "action": "ak.circle.member.manage",
-                "circle_id": "ak:circle:AQzkNesVRZE45KCCmROpUPRV8VQzC-oUQQK8ytMOq1yO",
-                "allowed": true
-            }
+            "actor_id": BOB_CORE_ID,
+            "membership": "join"
         }),
     );
 
@@ -2337,6 +2362,7 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
     )
     .unwrap();
     let circle_id = "ak:circle:AbPMdhKXl6Pe1lcCeCC_k_V5tvHDt1LAFRB6g6WrpDLJ";
+    insert_joined_realm_member(&state, &realm_id, BOB_CORE_ID);
     grant_circle_action(
         &state,
         &realm_id,
@@ -2351,14 +2377,8 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
         json!({
             "sender": "ak:did_core:web:alice.example",
             "circle_id": circle_id,
-            "actor_id": "did:web:bob.example",
-            "membership": "join",
-            "manage_capability_verified": true,
-            "actor_capability": {
-                "action": "ak.circle.member.manage",
-                "circle_id": circle_id,
-                "allowed": true
-            }
+            "actor_id": BOB_CORE_ID,
+            "membership": "join"
         }),
     );
 

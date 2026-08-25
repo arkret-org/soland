@@ -269,9 +269,6 @@ fn recovery_operation_for_request(method: &str, path: &str) -> Option<&'static s
         ("QUERY", "/_arkret/self/events/frontier") => {
             Some(ServiceOperationId::SELF_EVENTS_READ_FRONTIER)
         }
-        ("QUERY", "/_arkret/self/seals/frontier") => {
-            Some(ServiceOperationId::SELF_SEALS_READ_FRONTIER)
-        }
         ("QUERY", "/_arkret/self/events") => Some(ServiceOperationId::SELF_EVENTS_READ_SCAN),
         ("GET", "/_arkret/self/keys/backups") => {
             Some(ServiceOperationId::SELF_KEYS_BACKUPS_READ_LIST)
@@ -610,7 +607,6 @@ mod tests {
                 "/_arkret/root/identity/recovery-sessions/ak:recovery_session:1",
             ),
             ("QUERY", "/_arkret/self/events/frontier"),
-            ("QUERY", "/_arkret/self/seals/frontier"),
             ("QUERY", "/_arkret/self/events"),
             ("POST", "/_arkret/self/keys/backups/ak:key_backup:1/unlock"),
             ("GET", "/_arkret/self/keys/backups"),
