@@ -52,6 +52,7 @@ fn demo_realm_id() -> &'static str {
 const SEEDED_METADATA_DEMO_REALM_ID: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
 const EXTENSION_TEST_SIGNING_SEED: [u8; 32] = [0x5a; 32];
 const ALICE_DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+const EXTENSION_ADMIN_GRANT_ID: &str = "ak:grant:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-";
 
 fn fixture_suffix() -> String {
     uuid::Uuid::now_v7().simple().to_string()[..12].to_owned()
@@ -204,7 +205,6 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
 /// admission, but Control Proposal Ack admission still resolves the accepted
 /// notary cell.
 async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
-    const ADMIN_GRANT_ID: &str = "ak:grant:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-";
     ingest_extension_admin_document(state).await;
     let realm = arkret_identifiers::RealmId::new(demo_realm_id()).unwrap();
     {
@@ -221,6 +221,15 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                 "digest_algorithm".to_owned(),
                 Value::String("sha256".to_owned()),
             );
+            let schema_refs = object
+                .entry("schema_refs".to_owned())
+                .or_insert_with(|| Value::Array(Vec::new()))
+                .as_array_mut()
+                .expect("fixture Realm schema_refs must be an array");
+            let applet_profile = Value::String(arkret_wire::ProfileId::APPLET_BRIDGE_V1.to_owned());
+            if !schema_refs.contains(&applet_profile) {
+                schema_refs.push(applet_profile);
+            }
         }
         projection.realm_null_subject_cells.insert(
             (
@@ -286,7 +295,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         ),
     };
     let admin_grant_cell = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.capability.grant.v1:{ADMIN_GRANT_ID}"
+        "ak:cell:ak.component.capability.grant.v1:{EXTENSION_ADMIN_GRANT_ID}"
     ))
     .unwrap();
     let admin_grant_op = arkret_state::lattice::ordered_log::IssuedOp {
@@ -300,7 +309,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                 op_type: arkret_wire::LatticeOpType::Add,
                 tag: Some(admin_grant_move_id.to_string()),
                 value: Some(json!({
-                    "grant_id": ADMIN_GRANT_ID,
+                    "grant_id": EXTENSION_ADMIN_GRANT_ID,
                     "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                     "realm_id": demo_realm_id(),
                     "issuer": "ak:did_core:web:alice.example",
@@ -383,7 +392,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
             &[(notary_cell, notary_op), (admin_grant_cell, admin_grant_op)],
         )
         .unwrap();
-    state.test_refresh_grant_from_sealed_cells(&realm, ADMIN_GRANT_ID);
+    state.test_refresh_grant_from_sealed_cells(&realm, EXTENSION_ADMIN_GRANT_ID);
     soland_test_support::cba_basis::seed_realm_genesis_event(
         state,
         demo_realm_id(),
@@ -447,8 +456,7 @@ struct ManagedActorFixture {
     actor_id: arkret_identifiers::DidCoreId,
     initial_resolution: arkret_models_identity::ResolutionCommitment,
     method_history_evidence: arkret_models_identity::ResolutionMethodHistoryEvidence,
-    root_signing_key: SigningKey,
-    root_verification_method: arkret_wire::DidUrl,
+    inception_log_entry: Value,
 }
 
 fn deterministic_managed_actor_seed(label: &str) -> [u8; 32] {
@@ -534,7 +542,7 @@ fn managed_actor_fixture(
                     witness_proofs_digest,
                 }],
             },
-            log_entries: vec![inception.log_entry],
+            log_entries: vec![inception.log_entry.clone()],
             witness_records,
         };
     ManagedActorFixture {
@@ -545,10 +553,54 @@ fn managed_actor_fixture(
             version_id: inception.version_id,
         },
         method_history_evidence,
-        root_signing_key: SigningKey::from_bytes(&root_seed),
-        root_verification_method: arkret_wire::DidUrl::new(inception.root_verification_method)
-            .expect("fixture managed-actor root verification method"),
+        inception_log_entry: inception.log_entry,
     }
+}
+
+async fn ingest_managed_actor_current_document(state: &AppState, actor: &ManagedActorFixture) {
+    let now = chrono::Utc::now();
+    let did = actor.initial_resolution.full_id.to_string();
+    let document = actor.inception_log_entry["state"].clone();
+    let record = soland_storage::WebvhDocumentRecord {
+        did: did.clone(),
+        did_document: document,
+        key_log_head: Some(actor.initial_resolution.method_history_head.clone()),
+        seq: 1,
+        method_evidence: serde_json::to_value(&actor.method_history_evidence).unwrap(),
+        fetched_at: now,
+        expires_at: now + chrono::Duration::minutes(15),
+        updated_at: now,
+    };
+    state
+        .test_persistence()
+        .webvh()
+        .append_log_event(soland_storage::WebvhLogRecord {
+            event_digest: actor.initial_resolution.method_history_head.clone(),
+            did,
+            seq: 1,
+            operation: actor.inception_log_entry.clone(),
+            created_at: now,
+        })
+        .await
+        .unwrap();
+    state
+        .test_persistence()
+        .webvh()
+        .put_document(record.clone())
+        .await
+        .unwrap();
+    state
+        .test_cache_resolved_webvh_record(soland_services::identity::DidDocumentState {
+            did: record.did,
+            did_document: record.did_document,
+            key_log_head: record.key_log_head,
+            seq: record.seq,
+            method_evidence: record.method_evidence,
+            fetched_at: record.fetched_at,
+            expires_at: record.expires_at,
+            updated_at: record.updated_at,
+        })
+        .unwrap();
 }
 
 fn finalize_and_sign_applet_event(
@@ -617,7 +669,7 @@ fn managed_actor_provision_event(
         "ak.applet.managed_actor.provision",
         ScopeRef::Realm { realm_id },
         package.service_id.clone(),
-        package.service_id.clone(),
+        actor_principal_server_id.clone(),
         actor_seq,
         Hlc::new(format!(
             "{:012x}-0100-a11ce001",
@@ -639,16 +691,11 @@ fn applet_managed_pcr_genesis_event(
     package: &AppletPackage,
     actor: &ManagedActorFixture,
     actor_principal_server_id: arkret_identifiers::DidCoreId,
+    target_principal_server_notary: arkret_wire::NotarySignerDescriptor,
     applet_authority_ref: arkret_identifiers::GrantId,
     provision_ref: EventId,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Event {
-    let notary_descriptor = soland_services::identity::ed25519_notary_signer_descriptor(
-        actor.actor_id.clone(),
-        actor.root_verification_method.clone(),
-        actor.root_signing_key.verifying_key().as_bytes(),
-    )
-    .expect("fixture managed-actor notary descriptor");
     let salt_seed =
         deterministic_managed_actor_seed(&format!("{}:{}:pcr", package.applet_id, actor.actor_id));
     let genesis = RealmGenesis::applet_managed_control(
@@ -663,7 +710,7 @@ fn applet_managed_pcr_genesis_event(
         arkret_canonical::DigestSuite::Sha256,
         arkret_wire::SecurityClass::HighAssurance,
         arkret_wire::EncryptionProfile::MlsRfc9420,
-        arkret_wire::NotaryValue::single_signer(notary_descriptor),
+        arkret_wire::NotaryValue::single_signer(target_principal_server_notary),
         arkret_policy::current_capability_action_registry_digest().unwrap(),
     )
     .expect("fixture Applet-managed PCR genesis");
@@ -671,7 +718,7 @@ fn applet_managed_pcr_genesis_event(
         arkret_wire::EventKind::RealmCreate.as_str(),
         ScopeRef::RealmGenesis,
         actor.actor_id.clone(),
-        actor_principal_server_id,
+        actor_principal_server_id.clone(),
         0,
         Hlc::new(format!(
             "{:012x}-0101-a11ce001",
@@ -695,6 +742,7 @@ fn applet_managed_pcr_genesis_event(
 // Each parameter is a separate signed field of the ghost provision body.
 #[allow(clippy::too_many_arguments)]
 fn signed_ghost_provision_body(
+    state: &AppState,
     package: &AppletPackage,
     install: &Value,
     ghost_actor: &ManagedActorFixture,
@@ -737,18 +785,6 @@ fn signed_ghost_provision_body(
     let applet_authority_ref = arkret_identifiers::GrantId::new(authorization_ref.clone()).unwrap();
     let verification_method = package.webhook_auth.key_ref.clone();
     let signing_key = applet_service_signing_key(&verification_method);
-    let signer = Ed25519PayloadSigner::new(
-        signing_key.clone(),
-        DidFullId::new(
-            verification_method
-                .as_str()
-                .split_once('#')
-                .expect("fixture verification method has a fragment")
-                .0,
-        )
-        .unwrap(),
-        verification_method.clone(),
-    );
     let now =
         chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis()).unwrap();
     let external_ref = arkret_models_integration::GhostExternalTuple {
@@ -782,6 +818,7 @@ fn signed_ghost_provision_body(
         package,
         ghost_actor,
         actor_principal_server_id.clone(),
+        state.service_notary_signer_descriptor().unwrap(),
         applet_authority_ref,
         managed_actor_provision_event.event_id.clone(),
         now,
@@ -808,45 +845,29 @@ fn signed_ghost_provision_body(
     let grant_binding = grant.canonical_proof_binding_bytes().unwrap();
     grant.proof.jws =
         arkret_signatures::jws::sign_jws_ed25519(&grant_binding, &signing_key).unwrap();
-    let accountability_intent = arkret_event_draft::accountability_grant_intent(
-        &grant,
+    let mut accountability_event = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::IdentityAccountabilityGrant.as_str(),
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
+        package.service_id.clone(),
+        actor_principal_server_id.clone(),
+        3,
+        arkret_identifiers::Hlc::new(format!(
+            "{:012x}-0102-a11ce001",
+            now.timestamp_millis().max(0) as u64
+        ))
+        .unwrap(),
+        serde_json::to_value(grant).unwrap(),
         now,
-        None,
-    )
-    .unwrap()
-    .with_applet_id(applet_id.clone())
-    .with_authorization_ref(arkret_wire::AuthorizationRef::new(authorization_ref.clone()).unwrap())
-    .with_prev_refs(vec![managed_actor_provision_event.event_id.clone()])
-    .with_seal_basis(seal_basis.clone());
-    let event_grant: AccountabilityGrantPayload =
-        serde_json::from_value(serde_json::to_value(accountability_intent.payload()).unwrap())
-            .unwrap();
-    assert_eq!(
-        event_grant.canonical_proof_binding_bytes().unwrap(),
-        grant_binding
-    );
-    let mut accountability_event = accountability_intent
-        .author_with_digest_suite(
-            3,
-            arkret_identifiers::Hlc::new(format!(
-                "{:012x}-0102-a11ce001",
-                now.timestamp_millis().max(0) as u64
-            ))
-            .unwrap(),
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .expect("the accountability intent finalizes");
-    arkret_signatures::sign_event(
-        &mut accountability_event,
-        &signer,
-        &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .unwrap();
-    let accountability_event = accountability_event.into_event();
+    accountability_event.applet_id = Some(applet_id.clone());
+    accountability_event.authorization_ref =
+        Some(arkret_wire::AuthorizationRef::new(authorization_ref.clone()).unwrap());
+    accountability_event.prev_refs = vec![managed_actor_provision_event.event_id.clone()];
+    accountability_event.seal_basis = Some(seal_basis.clone());
+    let accountability_event = finalize_and_sign_applet_event(accountability_event, package, now);
 
     let profile = arkret_event_draft::GhostActorProfileRequest::new(
         ghost_actor_id.clone(),
@@ -868,7 +889,7 @@ fn signed_ghost_provision_body(
     // separate, additive check — it never substitutes for the CBA basis. Both
     // are producer-signed content, so they ride the intent, and the reference
     // to the grant names its FINAL id.
-    let mut profile_event = profile
+    let profile_intent = profile
         .profile_create_intent(
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
@@ -876,30 +897,33 @@ fn signed_ghost_provision_body(
             now,
             Some(&delegation),
         )
-        .unwrap()
-        .with_ref(arkret_wire::EventRef::new(
-            accountability_event.event_id.as_str(),
-            "accountability",
+        .unwrap();
+    let mut profile_event = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::ProfileCreate.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        ghost_actor_id.clone(),
+        actor_principal_server_id.clone(),
+        0,
+        arkret_identifiers::Hlc::new(format!(
+            "{:012x}-0103-a11ce001",
+            now.timestamp_millis().max(0) as u64
         ))
-        .with_seal_basis(seal_basis.clone())
-        .author_with_digest_suite(
-            0,
-            arkret_identifiers::Hlc::new(format!(
-                "{:012x}-0103-a11ce001",
-                now.timestamp_millis().max(0) as u64
-            ))
-            .unwrap(),
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .expect("the profile intent finalizes");
-    arkret_signatures::sign_event(
-        &mut profile_event,
-        &signer,
-        &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(now),
+        .unwrap(),
+        serde_json::to_value(profile_intent.payload()).unwrap(),
+        now,
     )
     .unwrap();
-    let profile_event = profile_event.into_event();
+    profile_event.executed_by = Some(package.service_id.clone());
+    profile_event.applet_id = Some(applet_id.clone());
+    profile_event.authorization_ref = Some(delegation.authorization_ref.clone());
+    profile_event.refs = vec![arkret_wire::EventRef::new(
+        accountability_event.event_id.as_str(),
+        "accountability",
+    )];
+    profile_event.seal_basis = Some(seal_basis.clone());
+    let profile_event = finalize_and_sign_applet_event(profile_event, package, now);
     let request = arkret_models_integration::GhostActorProvisionRequestBody::new(
         applet_id,
         package.service_id.clone(),
@@ -932,25 +956,31 @@ async fn applet_protocol_describe_smoke() {
         .unwrap();
     assert_eq!(ping["ok"], json!(true));
 
-    let describe: Value = TestClient::get("http://server/_arkret/edge/applet/describe")
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(describe["contract"], json!("ak.applet.v1"));
-    assert_eq!(
-        describe["install"]["commit_path"],
-        json!("/_arkret/self/applets/install")
-    );
-    assert_eq!(
-        describe["install"]["ghost_actor_provision_path"],
-        json!("/_arkret/self/applets/{applet_id}/ghosts/provision")
-    );
-    assert_eq!(
-        describe["transaction_path"],
-        json!("/_arkret/edge/applet/transactions")
-    );
+    let describe: arkret_models_discovery::ServiceDescribe =
+        TestClient::get("http://server/_arkret/edge/applet/describe")
+            .send(&app)
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    describe
+        .validate()
+        .expect("Applet describe must be the canonical ServiceDescribe");
+    assert_eq!(describe.protocol_version, arkret_wire::PROTOCOL_VERSION);
+    for operation_id in [
+        arkret_wire::ServiceOperationId::EDGE_APPLET_READ_PING,
+        arkret_wire::ServiceOperationId::EDGE_APPLET_READ_DESCRIBE,
+        arkret_wire::ServiceOperationId::EDGE_APPLET_COMMAND_TRANSACTION,
+        arkret_wire::ServiceOperationId::SELF_APPLET_COMMAND_INSTALL,
+    ] {
+        assert!(
+            describe
+                .supported_operations
+                .iter()
+                .any(|candidate| candidate == operation_id),
+            "Applet describe must advertise {operation_id}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1074,6 +1104,43 @@ async fn applet_install_package_registers_bot_projection_smoke() {
             && event.envelope["payload"]["grant"]["constraints"][0]["constraint_subkind"]
                 == json!("applet_authority")
     }));
+    let pcr_genesis_record = install_events
+        .iter()
+        .find(|event| {
+            event.kind == arkret_wire::EventKind::RealmCreate.as_str()
+                && event.envelope["payload"]["object"]["purpose"] == json!("applet_managed_control")
+        })
+        .expect("formal install stores the Bot PCR genesis");
+    let pcr_genesis: Event = serde_json::from_value(pcr_genesis_record.envelope.clone()).unwrap();
+    let pcr_digest = arkret_identifiers::Hash::new(
+        pcr_genesis
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap(),
+    )
+    .unwrap();
+    let pcr_ack = state
+        .test_persistence()
+        .events()
+        .control_proposal_ack_for_digest(pcr_digest.as_ref())
+        .await
+        .unwrap()
+        .expect("formal Bot PCR genesis stores its AckRequired ingress proof");
+    assert_eq!(pcr_ack.realm_id, pcr_genesis.realm_id);
+    assert_eq!(pcr_ack.proposal_digest, pcr_digest);
+    assert_eq!(pcr_ack.authority_acks.len(), 1);
+    let authority_ack = &pcr_ack.authority_acks[0];
+    let host_notary = state.service_notary_signer_descriptor().unwrap();
+    assert_eq!(
+        authority_ack.signature.verification_method,
+        host_notary.verification_method
+    );
+    arkret_signatures::verify_frozen_notary_detached_jws(
+        &arkret_wire::SealSignature::from(authority_ack.signature.clone()),
+        &host_notary,
+        &authority_ack.canonical_bytes_for_signature().unwrap(),
+    )
+    .expect("stored PCR Ack is cryptographically bound to the exact host notary");
+
     let bot_view = extension_actor_view(&app, &bot_actor_id).await;
     assert_eq!(bot_view["exists"], json!(true));
     assert_eq!(bot_view["actor_id"], json!(bot_actor_id));
@@ -1103,8 +1170,10 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
     assert_eq!(install["effective_status"], json!("installed"));
 
     let ghost_actor = managed_actor_fixture(&namespace, "u123", &package.service_id);
+    ingest_managed_actor_current_document(&state, &ghost_actor).await;
     let ghost_actor_id = ghost_actor.actor_id.to_string();
     let mut rejected_body = signed_ghost_provision_body(
+        &state,
         &package,
         &install,
         &ghost_actor,
@@ -1198,6 +1267,7 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
     );
 
     let provision_body = signed_ghost_provision_body(
+        &state,
         &package,
         &install,
         &ghost_actor,
@@ -1407,7 +1477,9 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     assert_eq!(install["effective_status"], json!("partially_installed"));
 
     let ghost_actor = managed_actor_fixture(&namespace, "u-denied", &package.service_id);
+    ingest_managed_actor_current_document(&state, &ghost_actor).await;
     let body = signed_ghost_provision_body(
+        &state,
         &package,
         &install,
         &ghost_actor,
@@ -1455,8 +1527,10 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
     .await;
     assert_eq!(install["effective_status"], json!("installed"));
     let mismatched_ghost = managed_actor_fixture("other-namespace", "u123", &package.service_id);
+    ingest_managed_actor_current_document(&state, &mismatched_ghost).await;
 
     let body = signed_ghost_provision_body(
+        &state,
         &package,
         &install,
         &mismatched_ghost,
@@ -1505,6 +1579,7 @@ struct AppletMessageTransactionRequest<'a> {
     prev_ref: &'a str,
     text: &'a str,
     idempotency_key: &'a str,
+    seal_ref: Option<arkret_identifiers::SealId>,
 }
 
 async fn post_signed_applet_message_transaction(
@@ -1514,6 +1589,7 @@ async fn post_signed_applet_message_transaction(
 ) -> Value {
     let event = applet_message_event(package, &request).await;
     let body = json!({
+        "applet_id": request.applet_id,
         "source_service_id": package.service_id.to_string(),
         "events": [event],
     });
@@ -1692,8 +1768,10 @@ async fn applet_message_event(
     // issued to the executing service, while actor_id remains the accountable
     // ghost, so the frozen CBA view must cover the exact install
     // authorization_ref for the executing service.
-    let seal_id =
-        seed_applet_message_grant_basis(state, package, realm_id, authorization_ref).await;
+    let seal_id = match &request.seal_ref {
+        Some(seal_id) => seal_id.clone(),
+        None => seed_applet_message_grant_basis(state, package, realm_id, authorization_ref).await,
+    };
     event.seal_ref = Some(seal_id);
     event.auth_context = Some(arkret_wire::AuthContext {
         key_id: arkret_wire::OpaqueLocalId::new(
@@ -1782,11 +1860,19 @@ async fn seed_applet_message_grant_basis(
     realm_id: &str,
     grant_id: &str,
 ) -> arkret_identifiers::SealId {
+    let realm = arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap();
+    let predecessors = state
+        .test_seal_leaves(&realm)
+        .expect("fixture reads the current accepted Realm Seal frontier");
+    assert!(
+        !predecessors.is_empty(),
+        "the Applet grant Seal must extend the accepted Realm authority chain"
+    );
     soland_test_support::sealed_grant::seal_accepted_capability_grant(
         state,
         realm_id,
         grant_id,
-        Vec::new(),
+        predecessors,
     )
     .await
     .seal_id
@@ -1828,8 +1914,10 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         capability_grant_ref_for_action(&install, &package.requested_scopes, "ak.message.create");
 
     let ghost_actor = managed_actor_fixture(&namespace, "ext-user-x", &package.service_id);
+    ingest_managed_actor_current_document(&state, &ghost_actor).await;
     let ghost_actor_id = ghost_actor.actor_id.to_string();
     let body = signed_ghost_provision_body(
+        &state,
         &package,
         &install,
         &ghost_actor,
@@ -1872,13 +1960,19 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
             prev_ref: provision["profile_event_ref"].as_str().unwrap(),
             text: &transaction_text,
             idempotency_key: &transaction_idempotency_key,
+            seal_ref: None,
         },
     )
     .await;
     assert_eq!(
         transaction["ok"],
-        json!(true),
+        json!(false),
         "transaction response: {transaction}"
+    );
+    assert_eq!(
+        transaction["rejected"][0]["reason_code"],
+        json!("capability_denied"),
+        "an installed Ghost is not a Realm member until the ordinary invite/join FSM accepts it"
     );
     let messages = state
         .test_persistence()
@@ -1886,12 +1980,19 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         .list_for_realm(realm_id, 10)
         .await
         .unwrap();
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].sender, ghost_actor_id);
-    assert_eq!(
-        messages[0].content["body"],
-        json!(format!("hi from outside {suffix}"))
+    assert!(
+        messages.is_empty(),
+        "a pre-membership Applet-managed write must have no durable message effect"
     );
+    let pre_revoke_message_seals = state
+        .test_seal_leaves(&arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap())
+        .unwrap();
+    let [pre_revoke_message_seal] = pre_revoke_message_seals.as_slice() else {
+        panic!(
+            "the rejected write must retain exactly one frozen grant Seal, got {pre_revoke_message_seals:?}"
+        );
+    };
+    let pre_revoke_message_seal = pre_revoke_message_seal.clone();
 
     let ghost_view = extension_actor_view(&app, &ghost_actor_id).await;
     assert_eq!(ghost_view["exists"], json!(true));
@@ -1920,6 +2021,17 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     .take_json()
     .await
     .unwrap();
+    assert_eq!(
+        revoke_preview["revoke_plan"]["capability_revocations"]
+            .as_array()
+            .expect("revoke preview capability intents")
+            .len(),
+        install["capability_grant_refs"]
+            .as_array()
+            .expect("install outcome capability grants")
+            .len(),
+        "revoke preview must resolve every exact (service_id, target_principal_server_id) grant"
+    );
     let (capability_revoke_events, membership_state_events) =
         signed_revoke_events(&state, realm_id, &revoke_preview).await;
     let revoke_body = json!({
@@ -1988,6 +2100,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
             prev_ref: provision["profile_event_ref"].as_str().unwrap(),
             text: "after revoke",
             idempotency_key: &rejected_idempotency_key,
+            seal_ref: Some(pre_revoke_message_seal),
         },
     )
     .await;
@@ -2004,13 +2117,12 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         .unwrap()
         .expect("revoked applet record remains durable");
     assert!(revoked_applet["revoked_at"].is_string());
-    let revoked_ghost = revoked_applet["ghosts"]
+    revoked_applet["ghosts"]
         .as_array()
         .unwrap()
         .iter()
         .find(|ghost| ghost["ghost_actor_id"] == json!(ghost_actor_id))
         .expect("ghost remains in the revoked applet record");
-    assert!(revoked_ghost["revoked_at"].is_string());
     assert!(bot_actor_id.starts_with("ak:did_core:webvh:"));
 }
 
@@ -2073,7 +2185,7 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         vec!["arkret.portal".to_owned()],
         AppletWireNamespaces {
             actors: vec![AppletNamespaceEntry::exclusive(format!(
-                "ak:did_core:webvh:*:managed-{}.applet.example:*",
+                "did:webvh:*:managed-{}.applet.example:webvh:*",
                 safe_did_token(namespace)
             ))],
             handles: vec![AppletNamespaceEntry::exclusive(namespace.to_owned())],
@@ -2143,8 +2255,6 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
 }
 
 fn applet_service_id_document(package: &AppletPackage) -> arkret_identity::DidDocument {
-    let signing_key = SigningKey::from_bytes(&EXTENSION_TEST_SIGNING_SEED);
-    let notary_method = format!("{}#notary-key", package.service_id);
     let applet_signing_key = applet_service_signing_key(&package.webhook_auth.key_ref);
     arkret_identity::DidDocument {
         id: DidFullId::new(
@@ -2157,20 +2267,12 @@ fn applet_service_id_document(package: &AppletPackage) -> arkret_identity::DidDo
                 .0,
         )
         .unwrap(),
-        verification_methods: BTreeMap::from([
-            (
-                package.webhook_auth.key_ref.to_string(),
-                arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-                    applet_signing_key.verifying_key().as_bytes(),
-                ),
+        verification_methods: BTreeMap::from([(
+            package.webhook_auth.key_ref.to_string(),
+            arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+                applet_signing_key.verifying_key().as_bytes(),
             ),
-            (
-                notary_method,
-                arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-                    signing_key.verifying_key().as_bytes(),
-                ),
-            ),
-        ]),
+        )]),
         also_known_as: Vec::new(),
         updated_at: Some(package.created_at),
         raw_properties: BTreeMap::new(),
@@ -2400,6 +2502,7 @@ async fn signed_install_events(
         .as_str();
     let bot_actor = managed_actor_fixture(namespace, "bot", &package.service_id);
     assert_eq!(bot_actor.actor_id, package.bot_actor_id);
+    ingest_managed_actor_current_document(state, &bot_actor).await;
     let actor_principal_server_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .expect("extension test service core DID");
     let applet_authority_ref = arkret_identifiers::GrantId::from_event_id(
@@ -2426,6 +2529,7 @@ async fn signed_install_events(
         package,
         &bot_actor,
         actor_principal_server_id.clone(),
+        state.service_notary_signer_descriptor().unwrap(),
         applet_authority_ref.clone(),
         bot_actor_provision_event.event_id.clone(),
         now,
@@ -2467,7 +2571,7 @@ async fn signed_install_events(
             realm_id: realm_id.clone(),
         },
         package.service_id.clone(),
-        package.service_id.clone(),
+        actor_principal_server_id.clone(),
         1,
         Hlc::new(format!("{millis:012x}-0102-a11ce001")).unwrap(),
         serde_json::to_value(accountability_grant).unwrap(),
@@ -2506,7 +2610,7 @@ async fn signed_install_events(
         arkret_wire::EventKind::ProfileCreate.as_str(),
         ScopeRef::Realm { realm_id },
         package.bot_actor_id.clone(),
-        package.service_id.clone(),
+        actor_principal_server_id,
         0,
         Hlc::new(format!("{millis:012x}-0103-a11ce001")).unwrap(),
         serde_json::to_value(ActorProfileCreatePayload {
@@ -2757,7 +2861,8 @@ async fn install_applet_package_with_approved_actions(
         .take_json()
         .await
         .unwrap();
-    assert_eq!(commit["ok"], json!(true), "install commit: {commit}");
+    let _: arkret_models_integration::AppletInstallOutcome = serde_json::from_value(commit.clone())
+        .unwrap_or_else(|error| panic!("install commit is not a typed success: {error}: {commit}"));
     commit
         .as_object_mut()
         .expect("install outcome is an object")

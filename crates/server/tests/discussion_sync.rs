@@ -217,6 +217,7 @@ async fn admit_member(
         realm_id,
         kind: "ak.member.state",
         payload,
+        causal_refs: Vec::new(),
     })
     .await;
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
@@ -312,6 +313,7 @@ async fn accept_invite(
         realm_id,
         kind: "ak.invite.accept",
         payload,
+        causal_refs: Vec::new(),
     })
     .await;
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
@@ -348,6 +350,7 @@ async fn send_message(state: AppState, token: &str, realm_id: &str, body: &str) 
         realm_id,
         kind: "ak.message.create",
         payload,
+        causal_refs: Vec::new(),
     })
     .await;
     let sent: Value = TestClient::post("http://server/_arkret/self/events")
@@ -497,6 +500,7 @@ async fn send_circle_scoped_encrypted_message(
         realm_id,
         kind: "ak.message.create",
         payload,
+        causal_refs: Vec::new(),
     })
     .await;
     let sent: Value = TestClient::post("http://server/_arkret/self/events")
@@ -533,6 +537,34 @@ async fn submit_projection_event(
     accepted_event_id
 }
 
+async fn submit_projection_event_with_causal_refs(
+    state: AppState,
+    token: &str,
+    actor_id: &str,
+    device_id: &str,
+    realm_id: &str,
+    kind: &str,
+    payload: Value,
+    causal_refs: Vec<arkret_identifiers::Hash>,
+) -> String {
+    let (accepted_event_id, sent) = submit_projection_event_result_with_causal_refs(
+        state,
+        token,
+        actor_id,
+        device_id,
+        realm_id,
+        kind,
+        payload,
+        causal_refs,
+    )
+    .await;
+    assert!(
+        sent["accepted"][0].as_str() == Some(accepted_event_id.as_str()),
+        "{kind} causal submit failed: {sent:?}"
+    );
+    accepted_event_id
+}
+
 async fn submit_projection_event_result(
     state: AppState,
     token: &str,
@@ -541,6 +573,29 @@ async fn submit_projection_event_result(
     realm_id: &str,
     kind: &str,
     payload: Value,
+) -> (String, Value) {
+    submit_projection_event_result_with_causal_refs(
+        state,
+        token,
+        actor_id,
+        device_id,
+        realm_id,
+        kind,
+        payload,
+        Vec::new(),
+    )
+    .await
+}
+
+async fn submit_projection_event_result_with_causal_refs(
+    state: AppState,
+    token: &str,
+    actor_id: &str,
+    device_id: &str,
+    realm_id: &str,
+    kind: &str,
+    payload: Value,
+    causal_refs: Vec<arkret_identifiers::Hash>,
 ) -> (String, Value) {
     let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let event = signed_event(SignedEvent {
@@ -552,6 +607,7 @@ async fn submit_projection_event_result(
         realm_id,
         kind,
         payload,
+        causal_refs,
     })
     .await;
     let accepted_event_id = event["event_id"]
@@ -578,6 +634,7 @@ struct SignedEvent<'a> {
     realm_id: &'a str,
     kind: &'a str,
     payload: Value,
+    causal_refs: Vec<arkret_identifiers::Hash>,
 }
 
 async fn signed_event(input: SignedEvent<'_>) -> Value {
@@ -590,6 +647,7 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         realm_id,
         kind,
         payload,
+        causal_refs,
     } = input;
     let actor_full = DidFullId::new(actor_id.to_owned()).expect("fixture actor full DID");
     let actor = arkret_wire::project_full_id_to_core_id(&actor_full)
@@ -630,6 +688,7 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
     )
     .expect("SDK Event builder accepts discussion fixture");
     event.prev_refs = prev_refs;
+    event.causal_refs = causal_refs;
     // `seed_realm` writes the Realm straight into `AppState` instead of
     // bootstrapping it through `ak.realm.create`, so the Realm owns no sealed
     // governance state of its own. Every reducer-input Event still has to be a
@@ -740,8 +799,14 @@ fn event_query_bodies(events: &Value) -> Vec<String> {
         .collect()
 }
 
-#[tokio::test]
-async fn since_join_hides_pre_join_messages_from_sync_and_events_query() {
+#[test]
+fn since_join_hides_pre_join_messages_from_sync_and_events_query() {
+    run_discussion_sync_test_on_deep_stack(
+        since_join_hides_pre_join_messages_from_sync_and_events_query_body,
+    );
+}
+
+async fn since_join_hides_pre_join_messages_from_sync_and_events_query_body() {
     let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -795,8 +860,14 @@ async fn since_join_hides_pre_join_messages_from_sync_and_events_query() {
     );
 }
 
-#[tokio::test]
-async fn since_join_incremental_sync_includes_post_join_messages_after_cursor() {
+#[test]
+fn since_join_incremental_sync_includes_post_join_messages_after_cursor() {
+    run_discussion_sync_test_on_deep_stack(
+        since_join_incremental_sync_includes_post_join_messages_after_cursor_body,
+    );
+}
+
+async fn since_join_incremental_sync_includes_post_join_messages_after_cursor_body() {
     let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -846,8 +917,14 @@ async fn since_join_incremental_sync_includes_post_join_messages_after_cursor() 
     );
 }
 
-#[tokio::test]
-async fn invite_accept_member_receives_since_join_messages_after_accept() {
+#[test]
+fn invite_accept_member_receives_since_join_messages_after_accept() {
+    run_discussion_sync_test_on_deep_stack(
+        invite_accept_member_receives_since_join_messages_after_accept_body,
+    );
+}
+
+async fn invite_accept_member_receives_since_join_messages_after_accept_body() {
     let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
@@ -923,8 +1000,14 @@ async fn invite_accept_member_receives_since_join_messages_after_accept() {
     );
 }
 
-#[tokio::test]
-async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
+#[test]
+fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
+    run_discussion_sync_test_on_deep_stack(
+        shared_history_allows_late_joiner_to_backfill_prior_messages_body,
+    );
+}
+
+async fn shared_history_allows_late_joiner_to_backfill_prior_messages_body() {
     let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -971,8 +1054,14 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
     );
 }
 
-#[tokio::test]
-async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_circle() {
+#[test]
+fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_circle() {
+    run_discussion_sync_test_on_deep_stack(
+        circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_circle_body,
+    );
+}
+
+async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_circle_body() {
     let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000010";
@@ -1118,8 +1207,14 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
     assert_eq!(mallory_read.status_code.unwrap().as_u16(), 404);
 }
 
-#[tokio::test]
-async fn chat_projection_exposes_reactions_reply_and_mentions() {
+#[test]
+fn chat_projection_exposes_reactions_reply_and_mentions() {
+    run_discussion_sync_test_on_deep_stack(
+        chat_projection_exposes_reactions_reply_and_mentions_body,
+    );
+}
+
+async fn chat_projection_exposes_reactions_reply_and_mentions_body() {
     let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -1263,8 +1358,33 @@ async fn chat_projection_exposes_reactions_reply_and_mentions() {
     assert_eq!(reply["payload"]["reply_to"], root_message_ref);
 }
 
-#[tokio::test]
-async fn poll_content_projection_replaces_votes() {
+#[test]
+fn poll_content_projection_replaces_votes() {
+    run_discussion_sync_test_on_deep_stack(poll_content_projection_replaces_votes_body);
+}
+
+/// These deep Event admission/projection futures exceed libtest's default Windows thread stack.
+fn run_discussion_sync_test_on_deep_stack<F>(body: impl FnOnce() -> F + Send + 'static)
+where
+    F: std::future::Future<Output = ()>,
+{
+    let joined = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build discussion sync test runtime")
+                .block_on(body());
+        })
+        .expect("spawn discussion sync test thread")
+        .join();
+    if let Err(payload) = joined {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+async fn poll_content_projection_replaces_votes_body() {
     let state = soland_test_support::app_state(test_config());
     let alice_did = ALICE_DID.as_str();
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -1375,7 +1495,7 @@ async fn poll_content_projection_replaces_votes() {
         "invalid Poll response was durably written before semantic rejection"
     );
 
-    submit_projection_event(
+    let first_bob_response_event_id = submit_projection_event(
         state.clone(),
         &bob,
         bob_did,
@@ -1396,7 +1516,17 @@ async fn poll_content_projection_replaces_votes() {
         }),
     )
     .await;
-    submit_projection_event(
+    let first_bob_response_digest = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(&realm_id)
+        .await
+        .expect("canonical Realm Event log after first Poll response")
+        .into_iter()
+        .find(|record| record.event_id == first_bob_response_event_id)
+        .expect("first Poll response is durable")
+        .canonical_digest;
+    submit_projection_event_with_causal_refs(
         state.clone(),
         &bob,
         bob_did,
@@ -1415,6 +1545,10 @@ async fn poll_content_projection_replaces_votes() {
                 }
             }
         }),
+        vec![
+            arkret_identifiers::Hash::new(first_bob_response_digest)
+                .expect("first Poll response digest parses"),
+        ],
     )
     .await;
     submit_projection_event(

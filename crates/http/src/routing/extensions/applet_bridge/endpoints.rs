@@ -298,6 +298,12 @@ async fn install_endpoint(
     let registration_epoch_evidence =
         registration_epoch_evidence_from_event(&basis.registration_event)?;
     validate_applet_package(state, &commit.applet_package, &registration_epoch_evidence)?;
+    let producer_verification_method = commit.applet_package.webhook_auth.key_ref.clone();
+    let producer_signing_key = super::install::registration_epoch_producer_signing_key(
+        state,
+        &commit.applet_package,
+        &registration_epoch_evidence,
+    )?;
     if !registration_epoch_evidence.contains_signing_key(
         commit
             .managed_actor_bundle
@@ -355,9 +361,17 @@ async fn install_endpoint(
     // `state.authorization().check` is authoritative here. fail-closed.
     require_realm_admin(state, &session.actor, &basis.effective_scope).await?;
 
-    let response =
-        register_package_install(state, &session, commit, idempotency_key, body_digest, res)
-            .await?;
+    let response = register_package_install(
+        state,
+        &session,
+        commit,
+        producer_verification_method,
+        producer_signing_key,
+        idempotency_key,
+        body_digest,
+        res,
+    )
+    .await?;
     json_ok(response)
 }
 
@@ -765,7 +779,7 @@ fn build_revoke_plan(
             .authorization()
             .grants_for_subject(
                 package.service_id.as_str(),
-                Some(package.service_id.as_str()),
+                Some(record.bot_actor_principal_server_id.as_str()),
                 &scope_realm_id,
             )
             .into_iter()

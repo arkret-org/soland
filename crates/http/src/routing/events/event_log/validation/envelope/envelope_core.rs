@@ -844,7 +844,10 @@ async fn validate_event_envelope_with_ingress(
     });
     let cba_context = if is_direct_conversation_founding {
         arkret_schema::EventCellContractContext::DirectConversationFounding
-    } else if bootstrap_unit_member || sidecar_bootstrap {
+    } else if bootstrap_unit_member
+        || sidecar_bootstrap
+        || (is_applet_managed_pcr_genesis && is_verified_applet_formal_aggregate)
+    {
         arkret_schema::EventCellContractContext::OrdinaryRealmBootstrap
     } else {
         arkret_schema::EventCellContractContext::Standard

@@ -257,14 +257,14 @@ fn stage_control_proposal_ack(
             "schema_violation: Control Proposal Ack does not bind Control Move".to_owned(),
         ));
     }
-    if let Some(existing) = staged.get(&request.event.event_id)
+    if let Some(existing) = staged.get(&event_digest)
         && existing != ack
     {
         return Err(PersistenceError::Conflict(
             "duplicate_conflict: Control Move has a different Control Proposal Ack".to_owned(),
         ));
     }
-    staged.insert(request.event.event_id.clone(), ack.clone());
+    staged.insert(event_digest, ack.clone());
     Ok(())
 }
 
@@ -1544,6 +1544,32 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn non_reducer_event_rejects_ingress_and_stores_no_control_proposal_ack() {
+        let mut request = event_request(
+            typed_id("ak:event:"),
+            realm_id(),
+            "did:web:alice.example",
+            None,
+        );
+        let (control_request, _) = device_revoke_request();
+        request.control_proposal_ingress = control_request.control_proposal_ingress;
+        let mut staged = std::collections::BTreeMap::new();
+        assert!(matches!(
+            stage_control_proposal_ack(&mut staged, &request),
+            Err(PersistenceError::Conflict(reason))
+                if reason.contains("non-Control Event cannot carry Control Proposal authority")
+        ));
+
+        request.control_proposal_ingress = None;
+        stage_control_proposal_ack(&mut staged, &request)
+            .expect("a non-reducer Event requires no Control Proposal ingress classification");
+        assert!(
+            staged.is_empty(),
+            "a non-reducer Event must not gain a durable Control Proposal Ack"
+        );
+    }
+
     #[tokio::test]
     async fn exact_replay_is_noop_but_forged_preimage_is_rejected_before_lookup() {
         let store = SolandMemoryPersistenceStore::new();
@@ -1707,6 +1733,19 @@ mod tests {
 
         let accepted = store.commit_event(request.clone()).await.unwrap();
         assert!(accepted.event_inserted);
+        let stored_acks = store.events.control_proposal_acks.lock();
+        assert_eq!(
+            stored_acks
+                .get(&proposal_digest)
+                .map(|ack| ack.proposal_digest.as_str()),
+            Some(proposal_digest.as_str()),
+            "durable Ack must be indexed by the canonical proposal digest"
+        );
+        assert!(
+            !stored_acks.contains_key(&proposal_event_id),
+            "the EventId must never become the internal proposal-Ack key"
+        );
+        drop(stored_acks);
         assert!(matches!(
             store.device_revocations.gate_status(&selector).await.unwrap(),
             DeviceRevocationGateStatus::Pending { ref blocking_proposal_digest }
@@ -1861,6 +1900,7 @@ mod tests {
         let store = SolandMemoryPersistenceStore::new();
         let (mut request, selector) = device_revoke_request();
         let event_id = request.event.event_id.clone();
+        let proposal_digest = request.event.canonical_digest.clone();
         request.projections.push(ProjectionEventRecord {
             event_id: event_id.clone(),
             realm_id: "not-a-typed-realm".to_owned(),
@@ -1880,7 +1920,15 @@ mod tests {
                 .events
                 .control_proposal_acks
                 .lock()
-                .contains_key(&event_id)
+                .contains_key(&proposal_digest)
+        );
+        assert!(
+            !store
+                .events
+                .control_proposal_acks
+                .lock()
+                .contains_key(&event_id),
+            "the EventId must not be retained as a compatibility Ack key"
         );
         assert!(
             store

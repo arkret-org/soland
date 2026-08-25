@@ -202,8 +202,46 @@ async fn prepare_ghost_event(
     if let Some(operation) = operation.as_mut() {
         stamp_projection_operation_received_at(operation, received_at);
     }
-    let control_event_for_proposal = Some(typed.clone()).filter(|event| event.seal_basis.is_some());
-    let control_proposal_ack = if let Some(event) = control_event_for_proposal.as_ref() {
+    let is_applet_managed_pcr_genesis = parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
+        && typed
+            .payload
+            .get("object")
+            .and_then(Value::as_object)
+            .and_then(|genesis| genesis.get("purpose"))
+            .and_then(Value::as_str)
+            == Some("applet_managed_control")
+        && admission.is_applet_formal()
+        && envelope
+            .as_object()
+            .is_some_and(|object| admission.matches(session, object));
+    let control_event_for_proposal = Some(typed.clone())
+        .filter(|event| event.seal_basis.is_some() && !is_applet_managed_pcr_genesis);
+    let control_proposal_ack = if is_applet_managed_pcr_genesis {
+        let mut acks = crate::control_proposal::mint_control_proposal_acks(
+            state,
+            &typed.realm_id,
+            std::slice::from_ref(&typed),
+            std::slice::from_ref(&parsed.digest_suite),
+            received_at,
+            None,
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "quorum_unreachable",
+                format!("Applet-managed PCR genesis Control Proposal Ack unavailable: {error}"),
+            )
+        })?;
+        if acks.len() != 1 {
+            return Err(SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "Applet-managed PCR genesis must mint exactly one Control Proposal Ack",
+            ));
+        }
+        acks.pop()
+    } else if let Some(event) = control_event_for_proposal.as_ref() {
         let realm_id = parsed.realm_id.clone();
         let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
         let (_, authority_set_ref) = worker
@@ -349,6 +387,7 @@ async fn submit_applet_record_event_batch(
     state: &AppState,
     events: Vec<Event>,
     applet_id: arkret_wire::AppletId,
+    staged_producer_authority: Option<(arkret_wire::DidUrl, arkret_wire::DidKey)>,
     expected_applet_record: Option<Value>,
     applet_record: Value,
     idempotency: EventCommitIdempotency,
@@ -404,6 +443,8 @@ async fn submit_applet_record_event_batch(
             actor_id.as_str(),
             kind.as_str(),
             event_string_field_from_value(&envelope, "event_id").unwrap_or_default(),
+            applet_id.clone(),
+            staged_producer_authority.clone(),
         );
         let next = prepare_ghost_event(
             state,
@@ -544,6 +585,7 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
         state,
         vec![managed_provision, pcr_genesis, accountability, profile],
         applet_id,
+        None,
         Some(expected_applet_record),
         applet_record,
         idempotency,
@@ -557,6 +599,8 @@ pub(in crate::routing) async fn submit_applet_install_batch(
     state: &AppState,
     events: Vec<Event>,
     applet_id: arkret_wire::AppletId,
+    producer_verification_method: arkret_wire::DidUrl,
+    producer_signing_key: arkret_wire::DidKey,
     applet_record: Value,
     idempotency: EventCommitIdempotency,
     response_body: Value,
@@ -565,6 +609,7 @@ pub(in crate::routing) async fn submit_applet_install_batch(
         state,
         events,
         applet_id,
+        Some((producer_verification_method, producer_signing_key)),
         None,
         applet_record,
         idempotency,

@@ -966,9 +966,9 @@ pub trait EventReadPort: Send + Sync {
         &self,
         principal_id: &str,
     ) -> ServiceResult<Option<soland_storage::IdentityAnchorAccountSlot>>;
-    async fn control_proposal_ack_for_event(
+    async fn control_proposal_ack_for_digest(
         &self,
-        event_id: &str,
+        proposal_digest: &str,
     ) -> ServiceResult<Option<arkret_wire::ControlProposalAck>>;
     async fn realm_event_stats(&self, realm_id: &str) -> ServiceResult<RealmEventStats>;
     async fn peer_authz_state_records(&self) -> ServiceResult<Vec<AcceptedEvent>>;
@@ -1298,11 +1298,13 @@ impl EventQueryService {
     pub async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool> {
         self.events.has_canonical_event(event_id).await
     }
-    pub async fn control_proposal_ack_for_event(
+    pub async fn control_proposal_ack_for_digest(
         &self,
-        event_id: &str,
+        proposal_digest: &str,
     ) -> ServiceResult<Option<arkret_wire::ControlProposalAck>> {
-        self.events.control_proposal_ack_for_event(event_id).await
+        self.events
+            .control_proposal_ack_for_digest(proposal_digest)
+            .await
     }
     pub async fn canonical_events(&self) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events.canonical_events().await

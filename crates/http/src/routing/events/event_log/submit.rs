@@ -486,6 +486,8 @@ enum InternalEventBinding {
     },
     AppletFormal {
         event_id: String,
+        applet_id: arkret_wire::AppletId,
+        staged_producer_authority: Option<(arkret_wire::DidUrl, arkret_wire::DidKey)>,
     },
     SidecarEnsure {
         event_id: String,
@@ -578,6 +580,8 @@ impl InternalEventAdmission {
         actor_id: impl Into<String>,
         kind: impl Into<String>,
         event_id: impl Into<String>,
+        applet_id: arkret_wire::AppletId,
+        staged_producer_authority: Option<(arkret_wire::DidUrl, arkret_wire::DidKey)>,
     ) -> Self {
         let actor_id = actor_id.into();
         Self {
@@ -588,6 +592,8 @@ impl InternalEventAdmission {
             device_id: String::new(),
             binding: InternalEventBinding::AppletFormal {
                 event_id: event_id.into(),
+                applet_id,
+                staged_producer_authority,
             },
         }
     }
@@ -690,7 +696,7 @@ impl InternalEventAdmission {
         session.actor == self.session_actor_id
             && session.device_id == self.device_id
             && object.get("actor_id").and_then(Value::as_str) == Some(self.actor_id.as_str())
-            && object.get("realm_id").and_then(Value::as_str) == Some(self.realm_id.as_str())
+            && self.matches_realm_coordinate(object)
             && (self.kind.is_empty()
                 || object.get("kind").and_then(Value::as_str) == Some(self.kind.as_str()))
             && match &self.binding {
@@ -716,8 +722,16 @@ impl InternalEventAdmission {
                         && payload.get("target_ref").and_then(Value::as_str)
                             == Some(target_ref.as_str())
                 }),
-                InternalEventBinding::AppletFormal { event_id }
-                | InternalEventBinding::SidecarEnsure { event_id } => {
+                InternalEventBinding::AppletFormal {
+                    event_id,
+                    applet_id,
+                    ..
+                } => {
+                    object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
+                        && object.get("applet_id").and_then(Value::as_str)
+                            == Some(applet_id.as_str())
+                }
+                InternalEventBinding::SidecarEnsure { event_id } => {
                     object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
                 }
                 InternalEventBinding::AgentMembershipCascade {
@@ -749,6 +763,24 @@ impl InternalEventAdmission {
             }
     }
 
+    fn matches_realm_coordinate(&self, object: &serde_json::Map<String, Value>) -> bool {
+        if let Some(realm_id) = object.get("realm_id").and_then(Value::as_str) {
+            return realm_id == self.realm_id;
+        }
+        if object.get("kind").and_then(Value::as_str)
+            != Some(arkret_wire::EventKind::RealmCreate.as_str())
+        {
+            return false;
+        }
+        object
+            .get("event_id")
+            .and_then(Value::as_str)
+            .and_then(|event_id| arkret_wire::EventId::new(event_id.to_owned()).ok())
+            .is_some_and(|event_id| {
+                arkret_wire::RealmId::from_event_id(&event_id).as_str() == self.realm_id
+            })
+    }
+
     pub(in crate::routing::events::event_log) fn federated_producer_signing_key(
         &self,
         session: &SessionRecord,
@@ -769,6 +801,27 @@ impl InternalEventAdmission {
             InternalEventBinding::PeerAgentMembershipCascade {
                 producer_verification_method,
                 producer_signing_key,
+                ..
+            } if producer_verification_method.as_str() == verification_method => {
+                Some(producer_signing_key)
+            }
+            _ => None,
+        }
+    }
+
+    pub(in crate::routing::events::event_log) fn applet_formal_producer_signing_key(
+        &self,
+        session: &SessionRecord,
+        object: &serde_json::Map<String, Value>,
+        verification_method: &str,
+    ) -> Option<&arkret_wire::DidKey> {
+        if !self.matches(session, object) {
+            return None;
+        }
+        match &self.binding {
+            InternalEventBinding::AppletFormal {
+                staged_producer_authority:
+                    Some((producer_verification_method, producer_signing_key)),
                 ..
             } if producer_verification_method.as_str() == verification_method => {
                 Some(producer_signing_key)
@@ -805,6 +858,205 @@ impl InternalEventAdmission {
     ) -> bool {
         matches!(self.binding, InternalEventBinding::SidecarEnsure { .. })
             && self.matches(session, object)
+    }
+}
+
+#[cfg(test)]
+mod applet_formal_admission_tests {
+    use super::*;
+
+    fn session(actor_id: &str) -> SessionRecord {
+        let now = Utc::now();
+        SessionRecord {
+            token_hash: "fixture".to_owned(),
+            actor: actor_id.to_owned(),
+            device_id: String::new(),
+            audience: "ak:did_core:web:ps.example".to_owned(),
+            session_public_key: None,
+            agent_session: None,
+            session_grant: None,
+            expires_at: now + Duration::minutes(5),
+            created_at: now,
+            revoked_at: None,
+        }
+    }
+
+    #[test]
+    fn staged_applet_authority_is_exactly_bound_to_event_coordinates_and_method() {
+        let actor_id = "ak:did_core:web:applet.example";
+        let realm_id = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
+        let applet_id =
+            arkret_wire::AppletId::new("ak:applet:01974100-0000-7000-8000-000000000001".to_owned())
+                .unwrap();
+        let method =
+            arkret_wire::DidUrl::new("did:web:applet.example#event-key".to_owned()).unwrap();
+        let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&[7_u8; 32]);
+        let key = arkret_wire::DidKey::new(format!("did:key:{multibase}")).unwrap();
+        let admission = InternalEventAdmission::applet_formal(
+            realm_id,
+            actor_id,
+            arkret_wire::EventKind::ProfileCreate.as_str(),
+            "event-exact",
+            applet_id.clone(),
+            Some((method.clone(), key.clone())),
+        );
+        let session = session(actor_id);
+        let mut object = serde_json::json!({
+            "event_id": "event-exact",
+            "kind": arkret_wire::EventKind::ProfileCreate.as_str(),
+            "actor_id": actor_id,
+            "realm_id": realm_id,
+            "applet_id": applet_id,
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        assert_eq!(
+            admission.applet_formal_producer_signing_key(&session, &object, method.as_str(),),
+            Some(&key)
+        );
+        assert!(
+            admission
+                .applet_formal_producer_signing_key(
+                    &session,
+                    &object,
+                    "did:web:applet.example#other-key",
+                )
+                .is_none()
+        );
+
+        object.insert(
+            "event_id".to_owned(),
+            Value::String("event-other".to_owned()),
+        );
+        assert!(
+            admission
+                .applet_formal_producer_signing_key(&session, &object, method.as_str(),)
+                .is_none()
+        );
+        object.insert(
+            "event_id".to_owned(),
+            Value::String("event-exact".to_owned()),
+        );
+        object.insert(
+            "applet_id".to_owned(),
+            Value::String("ak:applet:01974100-0000-7000-8000-000000000002".to_owned()),
+        );
+        assert!(
+            admission
+                .applet_formal_producer_signing_key(&session, &object, method.as_str(),)
+                .is_none()
+        );
+        object.insert(
+            "applet_id".to_owned(),
+            Value::String(applet_id.as_str().to_owned()),
+        );
+
+        let mut wrong_session_actor = session.clone();
+        wrong_session_actor.actor = "ak:did_core:web:other.example".to_owned();
+        assert!(
+            admission
+                .applet_formal_producer_signing_key(&wrong_session_actor, &object, method.as_str(),)
+                .is_none()
+        );
+
+        let mut wrong_session_device = session.clone();
+        wrong_session_device.device_id = "device-other".to_owned();
+        assert!(
+            admission
+                .applet_formal_producer_signing_key(
+                    &wrong_session_device,
+                    &object,
+                    method.as_str(),
+                )
+                .is_none()
+        );
+
+        for (field, wrong_value) in [
+            ("realm_id", "ak:realm:Awrong"),
+            ("actor_id", "ak:did_core:web:other.example"),
+            ("kind", arkret_wire::EventKind::CircleCreate.as_str()),
+        ] {
+            let original = object
+                .insert(field.to_owned(), Value::String(wrong_value.to_owned()))
+                .unwrap();
+            assert!(
+                admission
+                    .applet_formal_producer_signing_key(&session, &object, method.as_str(),)
+                    .is_none(),
+                "staged authority must reject a mismatched {field}"
+            );
+            object.insert(field.to_owned(), original);
+        }
+
+        object.remove("realm_id");
+        assert!(
+            admission
+                .applet_formal_producer_signing_key(&session, &object, method.as_str(),)
+                .is_none(),
+            "a non-genesis Event cannot omit its Realm coordinate"
+        );
+
+        let genesis_event_id =
+            arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [9_u8; 32]);
+        let genesis_realm_id = arkret_wire::RealmId::from_event_id(&genesis_event_id);
+        let genesis_admission = InternalEventAdmission::applet_formal(
+            genesis_realm_id.as_str(),
+            actor_id,
+            arkret_wire::EventKind::RealmCreate.as_str(),
+            genesis_event_id.as_str(),
+            applet_id,
+            Some((method.clone(), key.clone())),
+        );
+        object.insert(
+            "event_id".to_owned(),
+            Value::String(genesis_event_id.to_string()),
+        );
+        object.insert(
+            "kind".to_owned(),
+            Value::String(arkret_wire::EventKind::RealmCreate.as_str().to_owned()),
+        );
+        assert_eq!(
+            genesis_admission.applet_formal_producer_signing_key(
+                &session,
+                &object,
+                method.as_str(),
+            ),
+            Some(&key)
+        );
+
+        object.insert(
+            "event_id".to_owned(),
+            Value::String(
+                arkret_wire::EventId::from_digest(
+                    arkret_canonical::DigestSuite::Sha256,
+                    [8_u8; 32],
+                )
+                .to_string(),
+            ),
+        );
+        assert!(
+            genesis_admission
+                .applet_formal_producer_signing_key(&session, &object, method.as_str(),)
+                .is_none(),
+            "a genesis Event with a different derived Realm coordinate is rejected"
+        );
+
+        object.insert(
+            "event_id".to_owned(),
+            Value::String(genesis_event_id.to_string()),
+        );
+        object.insert(
+            "realm_id".to_owned(),
+            Value::String("ak:realm:Awrong".to_owned()),
+        );
+        assert!(
+            genesis_admission
+                .applet_formal_producer_signing_key(&session, &object, method.as_str(),)
+                .is_none(),
+            "an explicitly wrong genesis Realm coordinate is never replaced by derivation"
+        );
     }
 }
 
@@ -2389,6 +2641,13 @@ mod federated_producer_event_proof_tests {
 
         verify_federated_producer_event_proof(&event, &producer, key.verifying_key().as_bytes())
             .expect("ordinary Event protected header verifies");
+        let wrong_key = SigningKey::from_bytes(&[22_u8; 32]);
+        verify_federated_producer_event_proof(
+            &event,
+            &producer,
+            wrong_key.verifying_key().as_bytes(),
+        )
+        .expect_err("an exact method binding cannot substitute different staged key bytes");
 
         let mut forbidden_kid = producer.clone();
         forbidden_kid.jws = sign_with_protected_header(

@@ -433,6 +433,15 @@ async fn validate_ghost_managed_actor_unit(
             AppError::param_invalid(format!("Ghost PCR genesis object is invalid: {error}"))
                 .with_wire_code("applet_managed_pcr_genesis_invalid")
         })?;
+    let expected_host_notary = arkret_wire::NotaryValue::single_signer(
+        state
+            .service_notary_signer_descriptor()
+            .map_err(AppError::internal)?,
+    );
+    super::install::validate_hosted_applet_pcr_notary(
+        &genesis_object.notary,
+        &expected_host_notary,
+    )?;
     let provision_ref_count = genesis
         .refs
         .iter()

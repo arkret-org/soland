@@ -401,14 +401,14 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     ) -> crate::ServiceResult<Vec<arkret_wire::EventBatchReceipt>> {
         Ok(self.0.events().batch_receipts_for_event(event_id).await?)
     }
-    async fn control_proposal_ack_for_event(
+    async fn control_proposal_ack_for_digest(
         &self,
-        event_id: &str,
+        proposal_digest: &str,
     ) -> crate::ServiceResult<Option<arkret_wire::ControlProposalAck>> {
         Ok(self
             .0
             .events()
-            .control_proposal_ack_for_event(event_id)
+            .control_proposal_ack_for_digest(proposal_digest)
             .await?)
     }
     async fn realm_event_stats(

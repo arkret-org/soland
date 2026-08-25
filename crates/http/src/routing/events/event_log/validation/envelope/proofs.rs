@@ -484,6 +484,27 @@ pub(crate) async fn validate_event_proofs(
                 })?;
                 return did_key_from_ed25519_bytes(public_key.as_bytes());
             }
+            if let Some(signing_key) = internal_admission.and_then(|admission| {
+                admission.applet_formal_producer_signing_key(session, object, &verification_method)
+            }) {
+                let material = root_anchor_event_public_key(signing_key.as_str())?;
+                arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+                    &typed_proof,
+                    envelope_bytes,
+                    &actor_did,
+                    &material,
+                    digest_suite,
+                )
+                .map_err(|error| {
+                    tracing::debug!(%error, "staged Applet formal Event proof verification failed");
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        "staged Applet formal Event proof is invalid",
+                    )
+                })?;
+                return Ok(signing_key.clone());
+            }
             if let Some(signing_key) = verify_with_installed_applet_registration_epoch(
                 state,
                 object,

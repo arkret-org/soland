@@ -363,14 +363,14 @@ fn stage_control_proposal_acks(
                 "schema_violation: Control Proposal Ack does not bind Control Move".to_owned(),
             ));
         }
-        if let Some(existing) = staged.get(&record.event_id)
+        if let Some(existing) = staged.get(&record.canonical_digest)
             && existing != ack
         {
             return Err(PersistenceError::Conflict(
                 "duplicate_conflict: Control Move has a different Control Proposal Ack".to_owned(),
             ));
         }
-        staged.insert(record.event_id.clone(), ack.clone());
+        staged.insert(record.canonical_digest.clone(), ack.clone());
     }
     Ok(())
 }
@@ -793,11 +793,18 @@ impl EventStore for MemoryEventStore {
         }
     }
 
-    async fn control_proposal_ack_for_event(
+    async fn control_proposal_ack_for_digest(
         &self,
-        event_id: &str,
+        proposal_digest: &str,
     ) -> PersistenceResult<Option<arkret_wire::ControlProposalAck>> {
-        Ok(self.control_proposal_acks.lock().get(event_id).cloned())
+        arkret_wire::Hash::new(proposal_digest.to_owned()).map_err(|error| {
+            PersistenceError::SchemaViolation(format!("malformed Control Proposal digest: {error}"))
+        })?;
+        Ok(self
+            .control_proposal_acks
+            .lock()
+            .get(proposal_digest)
+            .cloned())
     }
 
     async fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>> {
@@ -973,6 +980,72 @@ mod tests {
             envelope: serde_json::json!({"event_id": event_id}),
             received_at: Utc::now(),
         }
+    }
+
+    fn control_proposal_ack(record: &CanonicalEventRecord) -> arkret_wire::ControlProposalAck {
+        let created_at = record.received_at;
+        let policy = arkret_wire::ControlProposalDecisionPolicy::default();
+        let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
+            realm_id: arkret_wire::RealmId::new(record.realm_id.clone().unwrap()).unwrap(),
+            proposal_digest: arkret_wire::Hash::new(record.canonical_digest.clone()).unwrap(),
+            received_at: created_at,
+            decision_due_at: created_at + policy.decision_window,
+            absolute_due_at: created_at + policy.absolute_horizon,
+            authority_set_ref: arkret_wire::Hash::new(format!("sha256:{}", "a".repeat(64)))
+                .unwrap(),
+            signature: arkret_wire::PayloadSignature {
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:web:soland.example#authority-1".to_owned(),
+                )
+                .unwrap(),
+                payload_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                    .unwrap(),
+                created_at,
+                jws: "e30..c2ln".to_owned(),
+            },
+        };
+        authority_ack.signature.payload_digest = authority_ack.authority_ack_digest().unwrap();
+        arkret_wire::ControlProposalAck::from_authority_acks(vec![authority_ack], policy).unwrap()
+    }
+
+    #[tokio::test]
+    async fn batch_ack_storage_and_recovery_use_only_the_proposal_digest_key() {
+        let record = record(b"control-proposal");
+        let ack = control_proposal_ack(&record);
+        let mut staged = BTreeMap::new();
+        stage_control_proposal_acks(
+            &mut staged,
+            std::slice::from_ref(&record),
+            vec![ack.clone()],
+            true,
+        )
+        .unwrap();
+        assert_eq!(staged.get(&record.canonical_digest), Some(&ack));
+        assert!(!staged.contains_key(&record.event_id));
+
+        let store = MemoryEventStore::with_devices(
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(Vec::new())),
+            MemoryGovernanceDependencyStore::default(),
+        );
+        *store.control_proposal_acks.lock() = staged;
+        assert_eq!(
+            store
+                .control_proposal_ack_for_digest(&record.canonical_digest)
+                .await
+                .unwrap(),
+            Some(ack)
+        );
+        assert!(
+            store
+                .control_proposal_ack_for_digest(&record.event_id)
+                .await
+                .is_err(),
+            "EventId lookup is not a compatibility path for a proposal digest"
+        );
     }
 
     #[tokio::test]

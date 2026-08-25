@@ -147,11 +147,13 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     } else {
         actor_id
     };
-    let capability_subject_principal_server_id = if object.contains_key("applet_id") {
-        capability_subject
-    } else {
-        principal_server_id
-    };
+    // The complete capability authority is `(subject, subject_principal_server_id)`.
+    // Applet delegation changes only the subject to the executing service;
+    // the authority's Principal Server remains the exact PS carried by the
+    // canonical Event. Substituting the service DID here would make the
+    // formally installed `(service_id, target_principal_server_id)` grant
+    // permanently unreachable.
+    let capability_subject_principal_server_id = principal_server_id;
     let effective_by_id = effective_historical_grants_for_subject(
         &historical_grants,
         capability_subject,
@@ -1049,6 +1051,37 @@ mod constraint_tests {
             vec![arkret_wire::CapabilityActionId::STRAND_UPDATE.to_owned()],
             constraints,
         )
+    }
+
+    #[test]
+    fn applet_service_grant_requires_the_exact_target_principal_server() {
+        const SERVICE: &str = "ak:did_core:web:applet.example";
+        const TARGET_PS: &str = "ak:did_core:web:principal.example";
+        let mut applet_grant = grant(Vec::new());
+        applet_grant.subject = SERVICE.to_owned();
+        applet_grant.subject_principal_server_id = Some(TARGET_PS.to_owned());
+        let grant_id = applet_grant.grant_id.clone();
+        let grants = std::collections::BTreeMap::from([(grant_id.clone(), applet_grant)]);
+        let now = chrono::Utc::now();
+
+        assert!(
+            effective_historical_grants_for_subject(&grants, SERVICE, TARGET_PS, REALM, now,)
+                .contains_key(&grant_id)
+        );
+        assert!(
+            effective_historical_grants_for_subject(
+                &grants,
+                SERVICE,
+                "ak:did_core:web:wrong-principal.example",
+                REALM,
+                now,
+            )
+            .is_empty()
+        );
+        assert!(
+            effective_historical_grants_for_subject(&grants, SERVICE, "", REALM, now).is_empty(),
+            "a missing Principal Server coordinate cannot match an Applet grant"
+        );
     }
 
     fn field_access(fields: &[&str]) -> GrantConstraint {

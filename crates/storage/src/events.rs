@@ -99,15 +99,15 @@ pub trait EventStore: Send + Sync {
         &self,
         principal_id: &str,
     ) -> PersistenceResult<Option<IdentityAnchorAccountSlot>>;
-    /// Control Proposal Ack committed in the same durable unit as `event_id`.
+    /// Control Proposal Ack committed in the same durable unit as `proposal_digest`.
     ///
     /// This is the recovery source for adapters whose online control-event
     /// index is rebuilt after an ambiguous post-commit failure. PostgreSQL's
     /// control-event store is already the transactional source of truth, so
     /// adapters that do not maintain a separate index may use the default.
-    async fn control_proposal_ack_for_event(
+    async fn control_proposal_ack_for_digest(
         &self,
-        _event_id: &str,
+        _proposal_digest: &str,
     ) -> PersistenceResult<Option<arkret_wire::ControlProposalAck>> {
         Ok(None)
     }

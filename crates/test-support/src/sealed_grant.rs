@@ -26,6 +26,7 @@
 use std::collections::BTreeMap;
 
 use arkret_identifiers::{CellRef, EventId, GrantId, Hash, Hlc, RealmId, SealId};
+use arkret_state::lattice::CellState;
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::compute_state_root;
 use arkret_wire::{Seal, SealBasis};
@@ -115,7 +116,7 @@ pub async fn seal_accepted_capability_grant(
         issuer: event.actor_id.clone(),
         op: arkret_state::lattice::SealedOp::new(move_id.clone(), projected_op),
     };
-    let state_root = state_root_for(&realm, &expected_cell, &op);
+    let state_root = state_root_for(state, &realm, &predecessors, &expected_cell, &op);
 
     let signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
         state.notary_signing_key().to_bytes(),
@@ -150,17 +151,43 @@ pub async fn seal_accepted_capability_grant(
     }
 }
 
-fn state_root_for(realm: &RealmId, cell: &CellRef, op: &IssuedOp) -> Hash {
+fn state_root_for(
+    state: &AppState,
+    realm: &RealmId,
+    predecessors: &[SealId],
+    cell: &CellRef,
+    op: &IssuedOp,
+) -> Hash {
     let registry = ProjectionService::sdk_cell_registry();
     let binding = registry
         .resolve(realm, cell)
         .expect("capability grant cell family is registered");
-    let joined = arkret_state::join_cell(binding.lattice.as_ref(), cell, std::slice::from_ref(op));
-    compute_state_root(
-        &BTreeMap::from([(cell.clone(), joined)]),
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .expect("fixture grant state root")
+    let mut post_state = if predecessors.is_empty() {
+        BTreeMap::new()
+    } else {
+        state
+            .test_effective_state_at(predecessors, realm)
+            .expect("fixture predecessor Seal state is valid")
+    };
+    insert_new_grant_cell(
+        &mut post_state,
+        cell.clone(),
+        arkret_state::join_cell(binding.lattice.as_ref(), cell, std::slice::from_ref(op)),
+    );
+    compute_state_root(&post_state, arkret_canonical::DigestSuite::Sha256)
+        .expect("fixture grant post-state root")
+}
+
+fn insert_new_grant_cell(
+    post_state: &mut BTreeMap<CellRef, CellState>,
+    cell: CellRef,
+    joined: CellState,
+) {
+    assert!(
+        !post_state.contains_key(&cell),
+        "the event-derived grant cell is already present at the predecessor frontier"
+    );
+    post_state.insert(cell, joined);
 }
 
 /// A deterministic HLC whose physical component is strictly after an
@@ -175,4 +202,40 @@ fn fixture_hlc_after(created_at: chrono::DateTime<chrono::Utc>, seed: &str) -> H
         u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]),
     ))
     .expect("fixture post-Event HLC")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn grant_cell() -> CellRef {
+        CellRef::new(
+            "ak:cell:ak.component.capability.grant.v1:ak:grant:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-"
+                .to_owned(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn event_derived_grant_cell_is_inserted_once() {
+        let cell = grant_cell();
+        let joined = CellState::Value(serde_json::json!([{"value": "grant"}]));
+        let mut post_state = BTreeMap::new();
+
+        insert_new_grant_cell(&mut post_state, cell.clone(), joined.clone());
+
+        assert_eq!(post_state.get(&cell), Some(&joined));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "the event-derived grant cell is already present at the predecessor frontier"
+    )]
+    fn predecessor_cannot_replay_the_event_derived_grant_cell() {
+        let cell = grant_cell();
+        let joined = CellState::Value(serde_json::json!([{"value": "grant"}]));
+        let mut post_state = BTreeMap::from([(cell.clone(), joined.clone())]);
+
+        insert_new_grant_cell(&mut post_state, cell, joined);
+    }
 }

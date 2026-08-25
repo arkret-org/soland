@@ -256,7 +256,7 @@ async fn outcome_evidence_for_records(
     for record in records {
         let ack = state
             .event_queries()
-            .control_proposal_ack_for_event(&record.event_id)
+            .control_proposal_ack_for_digest(&record.canonical_digest)
             .await
             .map_err(|error| {
                 cascade_error(

@@ -1024,7 +1024,7 @@ pub(super) async fn identical_historical_retry(
             let durable_ack = if indexed_ack.is_none() {
                 state
                     .event_queries()
-                    .control_proposal_ack_for_event(&record.event_id)
+                    .control_proposal_ack_for_digest(&record.canonical_digest)
                     .await
                     .map_err(|error| {
                         SubmitOneError::new(

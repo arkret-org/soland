@@ -871,7 +871,6 @@ pub(super) async fn durable_pending_delivery_count(
 
 async fn stored_control_proposal_ack(
     state: &AppState,
-    existing: &soland_services::events::AcceptedEvent,
     digest: &Hash,
 ) -> Result<arkret_wire::ControlProposalAck, SubmitOneError> {
     if let Some(ack) = state
@@ -890,7 +889,7 @@ async fn stored_control_proposal_ack(
 
     let durable_ack = state
         .event_queries()
-        .control_proposal_ack_for_event(&existing.event_id)
+        .control_proposal_ack_for_digest(digest.as_str())
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -1841,7 +1840,7 @@ pub(super) async fn submit_event_value_with_context(
                         format!("stored Control Move digest is invalid: {error}"),
                     )
                 })?;
-                let ack = stored_control_proposal_ack(state, &existing, &digest).await?;
+                let ack = stored_control_proposal_ack(state, &digest).await?;
                 response.outcome.control_proposal_acks.push(ack);
             }
             apply_durable_delivery_summary(state, &mut response).await?;
@@ -3103,7 +3102,7 @@ pub(super) async fn submit_event_value_with_context(
                                     format!("stored Control Move digest is invalid: {error}"),
                                 )
                             })?;
-                        let ack = stored_control_proposal_ack(state, &existing, &digest).await?;
+                        let ack = stored_control_proposal_ack(state, &digest).await?;
                         response.outcome.control_proposal_acks.push(ack);
                     }
                     apply_durable_delivery_summary(state, &mut response).await?;

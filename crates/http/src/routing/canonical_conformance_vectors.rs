@@ -19,39 +19,21 @@ fn validator_accepts_sdk_canonical_encoding() {
 }
 
 #[test]
-fn validator_rejects_camel_case_keys() {
-    let value = json!({"actorId": "x"});
-    assert!(validate_canonical_json_value(&value).is_err());
+fn validator_preserves_raw_external_field_names() {
+    let value = json!({
+        "versionId": "1",
+        "didDocument": {
+            "@context": ["https://www.w3.org/ns/did/v1"],
+            "verificationMethod": [{"publicKeyMultibase": "z6Mktest"}],
+        },
+    });
+    assert!(validate_canonical_json_value(&value).is_ok());
 }
 
 #[test]
 fn validator_accepts_dollar_prefixed_json_schema_keys() {
     let value = json!({"$id": "schema-1", "$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object"});
     assert!(validate_canonical_json_value(&value).is_ok());
-}
-
-#[test]
-fn validator_rejects_empty_key() {
-    let value = json!({"": "value"});
-    assert!(validate_canonical_json_value(&value).is_err());
-}
-
-#[test]
-fn validator_rejects_leading_underscore() {
-    let value = json!({"_private": 1});
-    assert!(validate_canonical_json_value(&value).is_err());
-}
-
-#[test]
-fn validator_rejects_trailing_underscore() {
-    let value = json!({"bad_": 1});
-    assert!(validate_canonical_json_value(&value).is_err());
-}
-
-#[test]
-fn validator_rejects_double_underscore() {
-    let value = json!({"a__b": 1});
-    assert!(validate_canonical_json_value(&value).is_err());
 }
 
 #[test]
@@ -103,10 +85,18 @@ fn validator_accepts_dotted_patch_path_keys() {
 }
 
 #[test]
-fn validator_rejects_non_snake_case_patch_path_segment() {
-    // A camelCase segment is not a valid §4.2.1 identifier.
-    let value = json!({"patch": {"metadata.Title": "x"}});
-    assert!(validate_canonical_json_value(&value).is_err());
+fn event_schema_rejects_unknown_arkret_camel_case_property() {
+    let catalog = arkret_schema::event_payload_validator_catalog().unwrap();
+    let payload = json!({
+        "realm_id": "ak:realm:ARLbXJMwpJkX1X9nXmxj2Yv0DAzpbSmEiyQvmERDGGOt",
+        "strand_id": "ak:strand:AdkuCk9s9aVgrLhlJ7RStI9OuRZNs0l_4p5_NBH_a-SY",
+        "legacyField": true,
+    });
+    assert!(
+        catalog
+            .validate_payload("ak.realm.set_default_strand", &payload)
+            .is_err()
+    );
 }
 
 // ── DID service endpoint validation vectors ──────────────────────────

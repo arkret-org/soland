@@ -259,20 +259,6 @@ fn audience_mention_nodes(
         .map_err(|error| error.message())
 }
 
-/// Validate the keys of a `ak.patch.v1` map as patch *paths* per
-/// `event-and-patch.md` §4.2.1. Unlike canonical JSON field names, a patch path
-/// is a dot-separated sequence of snake_case identifier / quoted-identifier /
-/// selector segments (e.g. `metadata.title`, `metadata.fields.review_status`).
-/// Op values are validated separately by the canonical-JSON recursion.
-fn validate_patch_map_paths(
-    patch: &serde_json::Map<String, serde_json::Value>,
-) -> Result<(), &'static str> {
-    for path in patch.keys() {
-        validate_patch_path(path)?;
-    }
-    Ok(())
-}
-
 /// Which object kind an object-patch Event kind writes, when the kind names one.
 ///
 /// This is payload knowledge - which object family the Event patches - and
@@ -375,78 +361,6 @@ fn patch_op_removes_value(value: &Value) -> bool {
         .is_some_and(|op| matches!(op, "unset" | "remove"))
 }
 
-/// Validate a single patch path against the §4.2.1 ABNF. Returns the canonical
-/// `patch_path_invalid` family reason on any violation.
-fn validate_patch_path(path: &str) -> Result<(), &'static str> {
-    const PATCH_PATH_INVALID: &str = "patch path is invalid (patch_path_invalid)";
-    // §4.2.1 / §4.2.2: max 1024 bytes, max 16 segments.
-    if path.is_empty() {
-        return Err(PATCH_PATH_INVALID);
-    }
-    if path.len() > 1024 {
-        return Err(PATCH_PATH_INVALID);
-    }
-    let mut segments = 0usize;
-    for segment in path.split('.') {
-        segments += 1;
-        if segments > 16 {
-            return Err(PATCH_PATH_INVALID);
-        }
-        if !patch_path_segment_is_valid(segment) {
-            return Err(PATCH_PATH_INVALID);
-        }
-    }
-    Ok(())
-}
-
-/// A single patch path segment: a snake_case identifier, an identifier with a
-/// trailing stable-key selector (`field[key="..."]`), or a backtick-quoted
-/// literal for non-snake_case keys (`\`Weird Key\``).
-fn patch_path_segment_is_valid(segment: &str) -> bool {
-    if segment.is_empty() {
-        return false;
-    }
-    // Backtick-quoted identifier: `...` (literal backtick escaped as ``).
-    if let Some(inner) = segment
-        .strip_prefix('`')
-        .and_then(|rest| rest.strip_suffix('`'))
-    {
-        return !inner.is_empty() && inner.chars().all(|c| ('\u{20}'..='\u{7f}').contains(&c));
-    }
-    // Selector segment: identifier "[" key-name "=" selector-value "]".
-    if let Some(open) = segment.find('[') {
-        let Some(rest) = segment.strip_suffix(']') else {
-            return false;
-        };
-        let (head, selector) = (&segment[..open], &rest[open + 1..]);
-        let Some((key_name, value)) = selector.split_once('=') else {
-            return false;
-        };
-        return patch_path_identifier_is_valid(head)
-            && patch_path_identifier_is_valid(key_name)
-            // selector-value is a (JCS canonical) JSON string: quoted, non-empty.
-            && value.len() >= 2
-            && value.starts_with('"')
-            && value.ends_with('"');
-    }
-    patch_path_identifier_is_valid(segment)
-}
-
-/// `^[a-z][a-z0-9_]{0,63}$` — the §4.2.1 identifier production.
-fn patch_path_identifier_is_valid(identifier: &str) -> bool {
-    let mut chars = identifier.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_lowercase() {
-        return false;
-    }
-    if identifier.len() > 64 {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-}
-
 pub fn validate_canonical_json_value(value: &serde_json::Value) -> Result<(), &'static str> {
     validate_canonical_json_value_inner(value, true)
 }
@@ -467,53 +381,11 @@ pub fn validate_canonical_json_value_inner(
             }
         }
         serde_json::Value::Object(object) => {
-            for key in object.keys() {
-                // snake_case validation: lowercase alphanumeric and underscores,
-                // with an exception for $-prefixed JSON Schema fields ($id, $schema, $ref, etc.).
-                if key.is_empty() {
-                    return Err("canonical JSON field name must not be empty");
-                }
-                let name_part = if let Some(stripped) = key.strip_prefix('$') {
-                    if stripped.is_empty() {
-                        return Err("canonical JSON field name '$' alone is not valid");
-                    }
-                    stripped
-                } else {
-                    key.as_str()
-                };
-                if !name_part
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-                {
-                    return Err(
-                        "canonical JSON field name must be snake_case (lowercase alphanumeric and underscores)",
-                    );
-                }
-                if name_part.starts_with('_') || name_part.ends_with('_') {
-                    return Err("canonical JSON field name must not start or end with underscore");
-                }
-                if name_part.contains("__") {
-                    return Err(
-                        "canonical JSON field name must not contain consecutive underscores",
-                    );
-                }
-            }
-            for (key, value) in object {
-                // A `patch` map is a ak.schema.patch.v1 (`ak.patch.v1`) field
-                // delta: its keys are patch *paths* (dotted snake_case segments
-                // per event-and-patch.md §4.2.1), not canonical JSON field names,
-                // so they are validated as paths and their op values are recursed
-                // into directly, bypassing the structural snake_case/no-dot
-                // field-name rule that the generic object branch would impose.
-                if key == "patch"
-                    && let serde_json::Value::Object(patch) = value
-                {
-                    validate_patch_map_paths(patch)?;
-                    for patch_value in patch.values() {
-                        validate_canonical_json_value_inner(patch_value, false)?;
-                    }
-                    continue;
-                }
+            // Field-name constraints belong to JSON Schema declarations, not
+            // canonical JSON bytes. The kind-specific schema pass owns Arkret
+            // property names and map-key grammars; raw external documents must
+            // retain their native field names.
+            for value in object.values() {
                 validate_canonical_json_value_inner(value, false)?;
             }
             // Generic payload traversal accepts the two canonical timestamp

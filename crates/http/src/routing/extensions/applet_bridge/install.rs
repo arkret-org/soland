@@ -85,6 +85,19 @@ pub(super) fn approved_scope_grants(
     }])
 }
 
+pub(super) fn validate_hosted_applet_pcr_notary(
+    actual: &arkret_wire::NotaryValue,
+    expected: &arkret_wire::NotaryValue,
+) -> Result<(), AppError> {
+    if actual != expected {
+        return Err(AppError::param_invalid(
+            "Applet-managed PCR genesis notary must equal the exact hosting Principal Server notary",
+        )
+        .with_wire_code("applet_managed_pcr_genesis_invalid"));
+    }
+    Ok(())
+}
+
 fn validate_formal_install_events(
     state: &AppState,
     commit: &AppletInstallRequestBody,
@@ -312,6 +325,12 @@ fn validate_bot_managed_actor_unit(
             AppError::param_invalid(format!("Bot PCR genesis object is invalid: {error}"))
                 .with_wire_code("applet_managed_pcr_genesis_invalid")
         })?;
+    let expected_host_notary = arkret_wire::NotaryValue::single_signer(
+        state
+            .service_notary_signer_descriptor()
+            .map_err(AppError::internal)?,
+    );
+    validate_hosted_applet_pcr_notary(&genesis_object.notary, &expected_host_notary)?;
     let provision_ref_count = genesis
         .refs
         .iter()
@@ -618,6 +637,8 @@ pub(super) async fn register_package_install(
     state: &AppState,
     session: &SessionRecord,
     commit: AppletInstallRequestBody,
+    producer_verification_method: arkret_wire::DidUrl,
+    producer_signing_key: arkret_wire::DidKey,
     idempotency_key: String,
     body_digest: String,
     res: &mut Response,
@@ -756,6 +777,8 @@ pub(super) async fn register_package_install(
         state,
         formal_events,
         typed_applet_id,
+        producer_verification_method,
+        producer_signing_key,
         record_value,
         crate::routing::events::event_log::EventCommitIdempotency {
             principal_id: session.actor.clone(),
@@ -1004,6 +1027,35 @@ pub(super) fn validate_applet_package(
     // key cannot be resolved.
     validate_controller_proof(state, package, &unsigned_canonical_bytes)?;
     Ok(())
+}
+
+pub(super) fn registration_epoch_producer_signing_key(
+    state: &AppState,
+    package: &AppletPackage,
+    evidence: &AppletRegistrationEpochEvidence,
+) -> Result<arkret_wire::DidKey, AppError> {
+    let document =
+        crate::jws_verify::resolve_did_document(state, &evidence.full_id).map_err(|reason| {
+            AppError::param_invalid("applet service DID document could not be resolved")
+                .with_wire_code("applet_registration_epoch_evidence_mismatch")
+                .with_reason_detail(reason)
+        })?;
+    validate_registration_epoch_evidence_for_document(package, evidence, &document)?;
+    let public_key_multibase = document
+        .verification_methods
+        .get(package.webhook_auth.key_ref.as_str())
+        .ok_or_else(|| {
+            AppError::param_invalid(
+                "applet webhook_auth key_ref is absent from the current service DID document",
+            )
+            .with_wire_code("applet_registration_epoch_signing_key_mismatch")
+        })?;
+    arkret_wire::DidKey::new(format!("did:key:{public_key_multibase}")).map_err(|error| {
+        AppError::param_invalid(format!(
+            "applet registration-epoch producer key is invalid: {error}"
+        ))
+        .with_wire_code("applet_registration_epoch_signing_key_mismatch")
+    })
 }
 
 fn validate_requested_capability_actions(package: &AppletPackage) -> Result<(), AppError> {
@@ -1447,6 +1499,47 @@ mod tests {
             ..crate::config::AppConfig::test_default()
         };
         AppState::new(config, soland_storage_postgres::Db { pool: None })
+    }
+
+    #[test]
+    fn hosted_applet_pcr_notary_rejects_actor_and_self_reported_descriptors() {
+        let state = production_test_state();
+        let expected = arkret_wire::NotaryValue::single_signer(
+            state.service_notary_signer_descriptor().unwrap(),
+        );
+        validate_hosted_applet_pcr_notary(&expected, &expected).unwrap();
+
+        let actor_full_id = DidFullId::new("did:web:actor.example".to_owned()).unwrap();
+        let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id).unwrap();
+        let actor_descriptor = soland_services::identity::ed25519_notary_signer_descriptor(
+            actor_id,
+            arkret_wire::DidUrl::new("did:web:actor.example#notary-key".to_owned()).unwrap(),
+            &[7_u8; 32],
+        )
+        .unwrap();
+        assert!(
+            validate_hosted_applet_pcr_notary(
+                &arkret_wire::NotaryValue::single_signer(actor_descriptor),
+                &expected,
+            )
+            .is_err()
+        );
+
+        let self_reported_descriptor = soland_services::identity::ed25519_notary_signer_descriptor(
+            arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
+            state
+                .service_verification_method("self-reported-key")
+                .unwrap(),
+            &[8_u8; 32],
+        )
+        .unwrap();
+        assert!(
+            validate_hosted_applet_pcr_notary(
+                &arkret_wire::NotaryValue::single_signer(self_reported_descriptor),
+                &expected,
+            )
+            .is_err()
+        );
     }
 
     /// Derive a `did:key` DID + its `#`-fragment verification method for an

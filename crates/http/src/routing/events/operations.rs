@@ -6,8 +6,9 @@
 //!   ingest path.
 //! - `validate_operation_policy` — high-level policy gate (plaintext-Space gating + B-09 redact
 //!   constraints).
-//! - `validate_canonical_json_value` (+ `_inner`) — the canonical-JSON shape gate that operation
-//!   payloads MUST pass.
+//! - `validate_canonical_json_value` (+ `_inner`) — the canonical number, timestamp, and byte
+//!   encoding gate that operation payloads MUST pass. Field names and map-key grammars belong to
+//!   the kind-specific JSON Schema pass so raw external documents retain their native lexicon.
 //! - `validate_content_blocks` / `validate_mentions` / `validate_content_block` — message body
 //!   shape. Mention admission is canonical-only: the SDK mention models own the `mention` /
 //!   `audience_mention` AST node types.
