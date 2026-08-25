@@ -154,8 +154,8 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
         if status == Some(StatusCode::OK) {
             let frontier: arkret_models_collaboration::event_sync::SealFrontierState =
                 serde_json::from_value(body).expect("typed Realm Seal frontier");
-            let frontier = frontier.frontier;
             return frontier
+                .frontier
                 .sole_leaf()
                 .expect("single-signer Realm frontier")
                 .clone();

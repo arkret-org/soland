@@ -37,3 +37,4 @@ mod projection;
 mod push_keys;
 mod read_receipts;
 mod recovery;
+mod seal_frontier;

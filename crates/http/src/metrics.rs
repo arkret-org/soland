@@ -512,6 +512,9 @@ fn canonical_event_read_operation(req: &Request) -> Option<&'static str> {
         ("QUERY", "/_arkret/peer/events/frontier") => {
             Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_FRONTIER)
         }
+        ("QUERY", "/_arkret/peer/seals/frontier") => {
+            Some(arkret_wire::ServiceOperationId::PEER_SEALS_READ_FRONTIER)
+        }
         ("QUERY", "/_arkret/peer/events") => {
             Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_SCAN)
         }

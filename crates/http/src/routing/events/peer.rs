@@ -8,9 +8,11 @@ use arkret_models_collaboration::account_lifecycle::{
 };
 use arkret_models_collaboration::event_query::{
     EventsQueryPostRequestBody, PeerEventsDescribeRequestBody, PeerEventsFrontierRequestBody,
+    SealFrontierRequestBody,
 };
 use arkret_models_collaboration::event_sync::{
     EventsFrontierFederationPeerState, EventsSubmitFederationRequestBody, MAX_FEDERATED_EVENTS,
+    PeerSealFrontierState, RealmSealFrontierView,
 };
 use arkret_models_collaboration::http_bodies::{
     EventsQueryOutcome, PeerEventsResolveOutcome, PeerEventsResolveRequestBody,
@@ -31,7 +33,10 @@ use soland_services::events::{
     AcceptedEvent, PeerEventsPageQuery, RealmMetadata as RealmMetaRecord,
 };
 
-use super::{is_realm_deleted, is_valid_hash_digest, now, query_param, render_error, validate_did};
+use super::{
+    is_realm_deleted, is_valid_hash_digest, now, query_param, render_error, sha256_hex,
+    validate_did,
+};
 use crate::state::AppState;
 
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
@@ -70,6 +75,7 @@ pub(super) fn router() -> Router {
         )
         .push(Router::with_path("events/resolve").query(peer_events_resolve))
         .push(Router::with_path("events/frontier").query(peer_events_frontier))
+        .push(Router::with_path("seals/frontier").query(peer_seals_frontier))
         .push(Router::with_path("principal-genesis").post(peer_principal_genesis))
         .push(Router::with_path("account-status").post(peer_account_status_submit))
         .push(Router::with_path("snapshot/head").get(peer_snapshot_head))
@@ -1055,6 +1061,76 @@ async fn peer_events_frontier(
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
         max_hlc,
+    })
+}
+
+#[derive(Serialize)]
+struct PeerSealFrontierProofBinding<'a> {
+    context: &'static str,
+    frontier: &'a RealmSealFrontierView,
+    verification_method: &'a arkret_wire::DidUrl,
+    #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
+    created_at: DateTime<Utc>,
+}
+
+#[salvo::oapi::endpoint(operation_id = "ak.peer.seals.read.frontier", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.seals.read.frontier"))]
+async fn peer_seals_frontier(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<PeerSealFrontierState> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    validate_peer_request(state, req, true).await?;
+    let source_service_id = source_service_id_from_request(req)?;
+    let request = parse_json_body::<SealFrontierRequestBody>(
+        req,
+        "invalid ak.peer.seals.read.frontier request body",
+    )
+    .await?;
+    if is_realm_deleted(state, request.realm_id.as_str()).await
+        || !peer_realm_visibility(state, &source_service_id, request.realm_id.as_str()).await?
+    {
+        return Err(AppError::not_found("not found"));
+    }
+    let frontier =
+        super::event_log::endpoints::load_realm_seal_frontier(state, &request.realm_id).await?;
+    let created_at = frontier.observation_coordinate.observed_at;
+    let verification_method = state
+        .service_verification_method("notary-key")
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let frontier_bytes = arkret_canonical::canonical_json_bytes(&frontier)
+        .map_err(|error| AppError::internal(format!("peer Seal frontier: {error}")))?;
+    let payload_digest = arkret_wire::Hash::new(format!("sha256:{}", sha256_hex(&frontier_bytes)))
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let binding = PeerSealFrontierProofBinding {
+        context: arkret_wire::ProofContextId::PEER_SEAL_FRONTIER_PROOF_V1,
+        frontier: &frontier,
+        verification_method: &verification_method,
+        created_at,
+    };
+    let binding_bytes = arkret_canonical::canonical_json_bytes(&binding)
+        .map_err(|error| AppError::internal(format!("peer Seal frontier proof: {error}")))?;
+    let jws = arkret_signatures::jws::sign_jws_ed25519(
+        &binding_bytes,
+        state.notary_signing_key().as_ref(),
+    )
+    .map_err(|error| AppError::internal(format!("peer Seal frontier signing failed: {error}")))?;
+    let service_proof = arkret_wire::PayloadProof {
+        kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+        verification_method,
+        payload_digest,
+        created_at,
+        domain: None,
+        audience: None,
+        proof_purpose: None,
+        jws,
+    };
+    service_proof
+        .validate_production()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    json_ok(PeerSealFrontierState {
+        frontier,
+        service_proof,
     })
 }
 
