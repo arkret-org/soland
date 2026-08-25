@@ -1338,11 +1338,25 @@ impl ProjectionState {
         if realm_id != parent.realm_id {
             return Err("grant_exceeds_issuer_authority");
         }
-        if let Some(parent_depth) = crate::capability::max_authority_depth(parent) {
+        let has_authority_control = parent.constraints.iter().any(|constraint| {
+            matches!(
+                constraint,
+                crate::capability::GrantConstraint::AuthorityControl { .. }
+            )
+        });
+        if !has_authority_control {
+            return Err("authority_regrant_denied");
+        }
+        let child_depth = body_max_authority_depth(body);
+        if !arkret_policy::authz::authority::authority_regrant_allowed(parent) {
+            if child_depth != Some(0) {
+                return Err("authority_regrant_denied");
+            }
+        } else if let Some(parent_depth) = crate::capability::max_authority_depth(parent) {
             if parent_depth == 0 {
                 return Err("authority_depth_exceeded");
             }
-            match body_max_authority_depth(body) {
+            match child_depth {
                 Some(child_depth) if child_depth <= parent_depth.saturating_sub(1) => {}
                 _ => return Err("authority_depth_exceeded"),
             }
@@ -2411,19 +2425,20 @@ mod agent_key_tests {
     fn root_grant_is_limited_to_issuer_effective_authority() {
         let mut state = ProjectionState::default();
         seed_realm_authority(&mut state);
-        let effect = state.apply_capability_grant(
-            &op(
-                EventKind::CapabilityGrant,
-                grant_payload(
-                    GRANT,
-                    "ak:did_core:web:alice.example",
-                    "ak:did_core:web:bob.example",
-                    json!(["ak.message.create"]),
-                    json!([{ "kind": "realm", "realm_id": REALM }]),
-                ),
-            ),
-            chrono::Utc::now(),
+        let mut parent = grant_payload(
+            GRANT,
+            "ak:did_core:web:alice.example",
+            "ak:did_core:web:bob.example",
+            json!(["ak.message.create"]),
+            json!([{ "kind": "realm", "realm_id": REALM }]),
         );
+        parent["grant"]["constraints"] = json!([{
+            "constraint_kind": "authority_control",
+            "max_authority_depth": 1,
+            "authority_regrant_allowed": true
+        }]);
+        let effect = state
+            .apply_capability_grant(&op(EventKind::CapabilityGrant, parent), chrono::Utc::now());
         assert!(matches!(
             effect,
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
@@ -2440,6 +2455,10 @@ mod agent_key_tests {
         );
         allowed_operation.payload["grant"]["issuer_authority_refs"] =
             json!([{ "kind": "grant", "grant_id": GRANT }]);
+        allowed_operation.payload["grant"]["constraints"] = json!([{
+            "constraint_kind": "authority_control",
+            "max_authority_depth": 0
+        }]);
         let allowed = state.apply_capability_grant(&allowed_operation, chrono::Utc::now());
         assert!(matches!(
             allowed,
@@ -2457,6 +2476,10 @@ mod agent_key_tests {
         );
         denied_operation.payload["grant"]["issuer_authority_refs"] =
             json!([{ "kind": "grant", "grant_id": GRANT }]);
+        denied_operation.payload["grant"]["constraints"] = json!([{
+            "constraint_kind": "authority_control",
+            "max_authority_depth": 0
+        }]);
         let denied = state.apply_capability_grant(&denied_operation, chrono::Utc::now());
         assert!(matches!(
             denied,
@@ -2666,7 +2689,8 @@ mod agent_key_tests {
         }, {
             "constraint_kind": "authority_control",
             "effect": "allow",
-            "max_authority_depth": 1
+            "max_authority_depth": 1,
+            "authority_regrant_allowed": false
         }]);
         let parent_effect = state
             .apply_capability_grant(&op(EventKind::CapabilityGrant, parent), chrono::Utc::now());
@@ -2708,13 +2732,18 @@ mod agent_key_tests {
     fn regranted_grant_from_a_revoked_ref_is_rejected() {
         let mut state = ProjectionState::default();
         seed_realm_authority(&mut state);
-        let parent = grant_payload(
+        let mut parent = grant_payload(
             GRANT,
             "ak:did_core:web:alice.example",
             "ak:did_core:web:bob.example",
             json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
+        parent["grant"]["constraints"] = json!([{
+            "constraint_kind": "authority_control",
+            "max_authority_depth": 1,
+            "authority_regrant_allowed": true
+        }]);
         let parent_effect = state
             .apply_capability_grant(&op(EventKind::CapabilityGrant, parent), chrono::Utc::now());
         assert!(matches!(
@@ -2738,6 +2767,10 @@ mod agent_key_tests {
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
         child["grant"]["issuer_authority_refs"] = json!([{ "kind": "grant", "grant_id": GRANT }]);
+        child["grant"]["constraints"] = json!([{
+            "constraint_kind": "authority_control",
+            "max_authority_depth": 0
+        }]);
         child["grant"]["expires_at"] = json!(arkret_canonical::format_timestamp_canonical(
             chrono::Utc::now() + chrono::Duration::minutes(30)
         ));
@@ -2755,13 +2788,18 @@ mod agent_key_tests {
         let mut state = ProjectionState::default();
         seed_realm_authority(&mut state);
         let now = chrono::Utc::now();
-        let parent = grant_payload(
+        let mut parent = grant_payload(
             GRANT,
             REALM_OWNER,
             "ak:did_core:web:bob.example",
             json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
+        parent["grant"]["constraints"] = json!([{
+            "constraint_kind": "authority_control",
+            "max_authority_depth": 1,
+            "authority_regrant_allowed": true
+        }]);
         assert!(matches!(
             state.apply_capability_grant(&op(EventKind::CapabilityGrant, parent), now),
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
@@ -2774,6 +2812,10 @@ mod agent_key_tests {
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
         child["grant"]["issuer_authority_refs"] = json!([{ "kind": "grant", "grant_id": GRANT }]);
+        child["grant"]["constraints"] = json!([{
+            "constraint_kind": "authority_control",
+            "max_authority_depth": 0
+        }]);
         child["sender"] = json!("ak:did_core:web:bob.example");
         assert!(matches!(
             state.apply_capability_grant(&op(EventKind::CapabilityGrant, child), now),
@@ -3046,15 +3088,121 @@ mod authority_cycle_tests {
         let mut proj = ProjectionState::default();
         seed_realm_owner(&mut proj);
         proj.apply_capability_grant(
-            &root_grant_op(
+            &root_grant_op_with_constraints(
                 G_A,
                 "ak:did_core:web:alice.example",
                 "ak:did_core:web:alice.example",
+                json!([{
+                    "constraint_kind": "authority_control",
+                    "max_authority_depth": 3,
+                    "authority_regrant_allowed": true
+                }]),
             ),
             chrono::Utc::now(),
         );
-        proj.apply_capability_grant(&regrant_op(G_B, G_A), chrono::Utc::now());
+        proj.apply_capability_grant(
+            &regrant_op_with_constraints(
+                G_B,
+                G_A,
+                json!([{
+                    "constraint_kind": "authority_control",
+                    "max_authority_depth": 2,
+                    "authority_regrant_allowed": true
+                }]),
+            ),
+            chrono::Utc::now(),
+        );
         proj
+    }
+
+    #[test]
+    fn regrant_requires_explicit_parent_authority_control() {
+        let mut proj = ProjectionState::default();
+        seed_realm_owner(&mut proj);
+        assert!(matches!(
+            proj.apply_capability_grant(
+                &root_grant_op(
+                    G_A,
+                    "ak:did_core:web:alice.example",
+                    "ak:did_core:web:alice.example",
+                ),
+                chrono::Utc::now(),
+            ),
+            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
+        ));
+        let rejected = proj.apply_capability_grant(
+            &regrant_op_with_constraints(
+                G_B,
+                G_A,
+                json!([{
+                    "constraint_kind": "authority_control",
+                    "max_authority_depth": 0,
+                    "authority_regrant_allowed": true
+                }]),
+            ),
+            chrono::Utc::now(),
+        );
+        assert!(matches!(
+            rejected,
+            crate::reducer::ProjectionEffect::Rejected { reason }
+                if reason == "authority_regrant_denied"
+        ));
+    }
+
+    #[test]
+    fn false_regrant_parent_requires_explicit_terminal_child() {
+        let mut proj = ProjectionState::default();
+        seed_realm_owner(&mut proj);
+        assert!(matches!(
+            proj.apply_capability_grant(
+                &root_grant_op_with_constraints(
+                    G_A,
+                    "ak:did_core:web:alice.example",
+                    "ak:did_core:web:alice.example",
+                    json!([{
+                        "constraint_kind": "authority_control",
+                        "max_authority_depth": 2,
+                        "authority_regrant_allowed": false
+                    }]),
+                ),
+                chrono::Utc::now(),
+            ),
+            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
+        ));
+
+        for constraints in [
+            json!([]),
+            json!([{
+                "constraint_kind": "authority_control",
+                "max_authority_depth": 1
+            }]),
+        ] {
+            let rejected = proj.apply_capability_grant(
+                &regrant_op_with_constraints(G_B, G_A, constraints),
+                chrono::Utc::now(),
+            );
+            assert!(matches!(
+                rejected,
+                crate::reducer::ProjectionEffect::Rejected { reason }
+                    if reason == "authority_regrant_denied"
+            ));
+        }
+
+        let accepted = proj.apply_capability_grant(
+            &regrant_op_with_constraints(
+                G_B,
+                G_A,
+                json!([{
+                    "constraint_kind": "authority_control",
+                    "max_authority_depth": 0
+                }]),
+            ),
+            chrono::Utc::now(),
+        );
+        assert!(matches!(
+            accepted,
+            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
+        ));
     }
 
     #[test]
@@ -3092,7 +3240,11 @@ mod authority_cycle_tests {
                 G_A,
                 "ak:did_core:web:alice.example",
                 "ak:did_core:web:alice.example",
-                json!([{ "constraint_kind": "authority_control", "max_authority_depth": 1 }]),
+                json!([{
+                    "constraint_kind": "authority_control",
+                    "max_authority_depth": 1,
+                    "authority_regrant_allowed": true
+                }]),
             ),
             chrono::Utc::now(),
         );
@@ -3107,7 +3259,11 @@ mod authority_cycle_tests {
             &regrant_op_with_constraints(
                 G_C,
                 G_A,
-                json!([{ "constraint_kind": "authority_control", "max_authority_depth": 0 }]),
+                json!([{
+                    "constraint_kind": "authority_control",
+                    "max_authority_depth": 0,
+                    "authority_regrant_allowed": true
+                }]),
             ),
             chrono::Utc::now(),
         );
@@ -3127,7 +3283,11 @@ mod authority_cycle_tests {
                     G_A,
                     "ak:did_core:web:alice.example",
                     "ak:did_core:web:alice.example",
-                    json!([{ "constraint_kind": "authority_control", "max_authority_depth": 1 }]),
+                    json!([{
+                        "constraint_kind": "authority_control",
+                        "max_authority_depth": 1,
+                        "authority_regrant_allowed": true
+                    }]),
                 ),
                 chrono::Utc::now(),
             ),
@@ -3159,7 +3319,11 @@ mod authority_cycle_tests {
             &regrant_op_with_constraints(
                 G_C,
                 G_A,
-                json!([{ "constraint_kind": "authority_control", "max_authority_depth": 0 }]),
+                json!([{
+                    "constraint_kind": "authority_control",
+                    "max_authority_depth": 0,
+                    "authority_regrant_allowed": true
+                }]),
             ),
             chrono::Utc::now(),
         );
@@ -3181,7 +3345,11 @@ mod authority_cycle_tests {
                 G_A,
                 "ak:did_core:web:alice.example",
                 "ak:did_core:web:alice.example",
-                json!([{ "constraint_kind": "authority_control", "max_authority_depth": 0 }]),
+                json!([{
+                    "constraint_kind": "authority_control",
+                    "max_authority_depth": 0,
+                    "authority_regrant_allowed": true
+                }]),
             ),
             chrono::Utc::now(),
         );
@@ -3432,6 +3600,11 @@ mod realm_owner_authority_tests {
                         "match_scope": "realm_wide"
                     }],
                     "issued_at": "2026-01-01T00:00:00.000Z",
+                    "constraints": [{
+                        "constraint_kind": "authority_control",
+                        "max_authority_depth": 1,
+                        "authority_regrant_allowed": true
+                    }]
                 }
             }),
         )
@@ -3498,6 +3671,10 @@ mod realm_owner_authority_tests {
             operation.payload["grant"]["issuer_authority_refs"] = serde_json::json!([{
                 "kind": "grant",
                 "grant_id": parent.grant_id,
+            }]);
+            operation.payload["grant"]["constraints"] = serde_json::json!([{
+                "constraint_kind": "authority_control",
+                "max_authority_depth": 0
             }]);
         }
         state.apply_capability_grant(&operation, chrono::Utc::now())

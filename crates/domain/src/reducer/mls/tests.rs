@@ -93,10 +93,9 @@ fn welcome_payload(welcome_id: &str) -> Value {
         "epoch": 1,
         "commit_ref": "ak:event:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
         "recipient_principal_id": "ak:did_core:web:bob.example",
-        "recipient_device_id": "ak:device:bob-phone",
-        "welcome_bytes_b64": b64(b"opaque-welcome-bytes"),
+        "recipient_device_id": "ak:device:0196419b-0000-7000-8000-000000000002",
+        "ciphertext": b64(b"opaque-welcome-bytes"),
         "keypackage_ref": keypackage_ref,
-        "keypackage_digest": keypackage_digest,
         "claim_id": "claim-01",
         "claim_ref": {
             "claim_id": "claim-01",
@@ -122,7 +121,32 @@ fn welcome_payload(welcome_id: &str) -> Value {
                 "sig": b64(b"welcome-claim-envelope-signature")
             }
         },
-        "governance_binding": governance_binding(0)
+        "claim_receipt": {
+            "claim_request_id": b64(b"welcome-claim-nonce-01-128-bit"),
+            "request_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+            "claims_digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "source_service_id": "ak:did_core:web:server.example",
+            "destination_service_id": "ak:did_core:web:server.example",
+            "request": {
+                "claim_request_id": b64(b"welcome-claim-nonce-01-128-bit"),
+                "target_principal_id": "ak:did_core:web:bob.example",
+                "requester": "ak:did_core:web:alice.example",
+                "intended_realm_id": "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1",
+                "mls_group_id": "mls-group-abc",
+                "claim_purpose": "realm_membership",
+                "required_capabilities": ["ak.content.v1"],
+                "expires_at": "2026-05-25T00:05:00.000Z"
+            },
+            "claimed_at": "2026-05-25T00:00:30.000Z",
+            "expires_at": "2026-05-25T00:05:00.000Z",
+            "signature": {
+                "kid": "did:web:server.example#notary-key",
+                "signature_algorithm": "Ed25519",
+                "sig": b64(b"claim-receipt-signature")
+            }
+        },
+        "governance_binding": governance_binding(0),
+        "expires_at": "2026-05-25T00:05:00.000Z"
     })
 }
 
@@ -176,6 +200,14 @@ fn initialize_genesis(state: &mut ProjectionState) -> String {
         ProjectionEffect::Mls(MlsEffect::GroupGenesis { .. })
     ));
     genesis.context.event_id.to_string()
+}
+
+#[test]
+fn welcome_fixture_is_the_current_closed_wire_contract() {
+    serde_json::from_value::<arkret_models_collaboration::events_payloads::MlsWelcomePayload>(
+        welcome_payload("ak:mls_welcome:wire-contract"),
+    )
+    .expect("Welcome fixture must deserialize through the current closed SDK model");
 }
 
 fn publish_payload(id: &str, actor: &str, device: &str, not_after: i64) -> serde_json::Value {
@@ -521,7 +553,10 @@ fn welcome_enqueue_then_fetch_marks_delivered() {
         "unexpected effect: {effect:?}"
     );
 
-    let key = MlsWelcomeQueueKey::new("ak:did_core:web:bob.example", "ak:device:bob-phone");
+    let key = MlsWelcomeQueueKey::new(
+        "ak:did_core:web:bob.example",
+        "ak:device:0196419b-0000-7000-8000-000000000002",
+    );
     let queue = state.mls_welcomes.get(&key).unwrap();
     assert_eq!(queue.len(), 1);
     assert!(queue[0].delivered_at.is_none());
@@ -692,7 +727,7 @@ fn welcome_enqueue_decodes_schema_ciphertext_base64_to_raw_welcome_bytes() {
     let raw_welcome = b"real-openmls-welcome-bytes";
     let mut payload = welcome_payload("ak:mls_welcome:w-ciphertext");
     let object = payload.as_object_mut().unwrap();
-    object.remove("welcome_bytes_b64");
+    object.remove("ciphertext");
     object.insert("ciphertext".to_owned(), Value::String(b64(raw_welcome)));
     payload["claim_envelope"]["welcome_digest"] =
         Value::String(arkret_canonical::sha256_digest(raw_welcome));
@@ -707,7 +742,10 @@ fn welcome_enqueue_decodes_schema_ciphertext_base64_to_raw_welcome_bytes() {
         ),
         "unexpected effect: {effect:?}"
     );
-    let key = MlsWelcomeQueueKey::new("ak:did_core:web:bob.example", "ak:device:bob-phone");
+    let key = MlsWelcomeQueueKey::new(
+        "ak:did_core:web:bob.example",
+        "ak:device:0196419b-0000-7000-8000-000000000002",
+    );
     let queue = state.mls_welcomes.get(&key).unwrap();
     assert_eq!(queue[0].welcome_bytes, raw_welcome);
     assert_eq!(queue[0].key_package_id, "keypackage-01");

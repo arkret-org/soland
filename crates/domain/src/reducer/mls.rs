@@ -564,17 +564,8 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
     let Some(governance_binding) = payload.get("governance_binding").cloned() else {
         return reject("mls_welcome_governance_binding_missing");
     };
-    let welcome_bytes = match (
-        payload.get("welcome_bytes_b64").and_then(Value::as_str),
-        payload.get("ciphertext").and_then(Value::as_str),
-    ) {
-        (Some(encoded), _) => match decode_base64_loose(encoded) {
-            Ok(bytes) if !bytes.is_empty() => bytes,
-            Ok(_) => return reject("mls_welcome_bytes_empty"),
-            Err(_) => return reject("mls_welcome_bytes_invalid_b64"),
-        },
-        (None, Some(ciphertext)) if !ciphertext.is_empty() => match decode_base64_loose(ciphertext)
-        {
+    let welcome_bytes = match payload.get("ciphertext").and_then(Value::as_str) {
+        Some(ciphertext) if !ciphertext.is_empty() => match decode_base64_loose(ciphertext) {
             Ok(bytes) if !bytes.is_empty() => bytes,
             _ => ciphertext.as_bytes().to_vec(),
         },
