@@ -197,7 +197,10 @@ pub(super) async fn derive_submit_cell_writes(
             .map_err(|reason| {
                 SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason)
             })?;
-    let projected = if parsed.kind == arkret_wire::EventKind::InviteCancel.as_str() {
+    let projected = if matches!(
+        parsed.kind.as_str(),
+        arkret_wire::event_kind_str::INVITE_CANCEL | arkret_wire::event_kind_str::CAPABILITY_GRANT
+    ) {
         state
             .projections()
             .project_cell_writes_with_pre_state(event, &frozen_pre_state)
@@ -208,6 +211,11 @@ pub(super) async fn derive_submit_cell_writes(
                     arkret_schema::EventCellContractError::PreStateRequirement { .. }
                 ) {
                     StatusCode::PRECONDITION_FAILED
+                } else if matches!(
+                    error,
+                    arkret_schema::EventCellContractError::CapabilityAuthorityDependency { .. }
+                ) {
+                    StatusCode::SERVICE_UNAVAILABLE
                 } else {
                     StatusCode::BAD_REQUEST
                 };

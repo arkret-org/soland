@@ -89,7 +89,7 @@ pub fn complete_realm_bootstrap_unit(
         ),
         (
             arkret_wire::EventKind::RealmDiscovery,
-            serde_json::json!({"value": "invite_only"}),
+            serde_json::json!({"value": {"discoverability": "invite_only"}}),
         ),
         (
             arkret_wire::EventKind::RealmDeliveryBindingPolicy,

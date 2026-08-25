@@ -1040,7 +1040,9 @@ impl ProjectionService {
         event: &Event,
         digest_suite: arkret_canonical::DigestSuite,
     ) -> Result<Vec<ProjectedCellWrite>, String> {
-        arkret_schema::project_registered_cell_writes(event, digest_suite)
+        self.state
+            .lock()
+            .project_registered_cell_writes(event, digest_suite)
             .map_err(|error| error.to_string())
     }
 
@@ -1090,10 +1092,12 @@ impl ProjectionService {
             lifecycle_cell,
             serde_json::json!({"invitee": invitee}),
         )]);
-        arkret_schema::project_registered_cell_writes_with_pre_state(
+        let projection = self.state.lock();
+        arkret_schema::project_registered_cell_writes_with_pre_state_and_authority_resolver(
             event,
             digest_suite,
             &frozen_pre_state,
+            &|grant_id| projection.capability_authority_audit(grant_id),
         )
         .map_err(|error| error.to_string())
     }
@@ -1109,10 +1113,13 @@ impl ProjectionService {
         event: &Event,
         frozen_pre_state: &arkret_schema::FrozenPreState,
     ) -> Result<Vec<ProjectedCellWrite>, arkret_schema::EventCellContractError> {
-        arkret_schema::project_registered_cell_writes_with_pre_state(
+        let digest_suite = self.realm_digest_suite(event.realm_id.as_str());
+        let projection = self.state.lock();
+        arkret_schema::project_registered_cell_writes_with_pre_state_and_authority_resolver(
             event,
-            self.realm_digest_suite(event.realm_id.as_str()),
+            digest_suite,
             frozen_pre_state,
+            &|grant_id| projection.capability_authority_audit(grant_id),
         )
     }
 

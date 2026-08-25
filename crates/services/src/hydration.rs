@@ -410,16 +410,17 @@ async fn hydrate_canonical_realm_bootstraps(
             // The v1 Event wire carries no producer `effects[]`, so hydration
             // has to re-derive the receiver's own writes from the registered
             // reducer contract exactly as admission did.
-            let cell_writes = arkret_schema::project_registered_cell_writes(
-                &typed_events[index],
-                realm_digest_suite(&staged, typed_events[index].realm_id.as_str()),
-            )
-            .map_err(|error| {
-                soland_storage::PersistenceError::Internal(format!(
-                    "Realm bootstrap Event {} has no derivable cell contract: {error}",
-                    record.event_id
-                ))
-            })?;
+            let cell_writes = staged
+                .project_registered_cell_writes(
+                    &typed_events[index],
+                    realm_digest_suite(&staged, typed_events[index].realm_id.as_str()),
+                )
+                .map_err(|error| {
+                    soland_storage::PersistenceError::Internal(format!(
+                        "Realm bootstrap Event {} has no derivable cell contract: {error}",
+                        record.event_id
+                    ))
+                })?;
             let effect = if index > 0 {
                 if crate::projection::uses_validated_realm_bootstrap_facet_reducer(
                     operation.event_kind.as_str(),
@@ -529,16 +530,17 @@ async fn hydrate_applet_managed_pcr_identity(
                     record.event_id
                 ))
             })?;
-        let cell_writes = arkret_schema::project_registered_cell_writes(
-            &typed,
-            realm_digest_suite(proj, typed.realm_id.as_str()),
-        )
-        .map_err(|error| {
-            soland_storage::PersistenceError::Internal(format!(
-                "Applet PCR Event {} has no derivable cell contract: {error}",
-                record.event_id
-            ))
-        })?;
+        let cell_writes = proj
+            .project_registered_cell_writes(
+                &typed,
+                realm_digest_suite(proj, typed.realm_id.as_str()),
+            )
+            .map_err(|error| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "Applet PCR Event {} has no derivable cell contract: {error}",
+                    record.event_id
+                ))
+            })?;
         match proj.apply_projected(&operation, &cell_writes, hydration_hlc) {
             ProjectionEffect::Rejected { reason } => {
                 return Err(soland_storage::PersistenceError::Internal(format!(

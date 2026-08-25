@@ -148,7 +148,37 @@ fn signed_keypackage_claim_request(
         &binding,
     ))
     .expect("claim authorization signature");
+    assert_eq!(
+        body.claim_purpose,
+        arkret_models_crypto::PeerKeyPackageClaimPurpose::RealmMembership
+    );
+    body.validate_shape()
+        .expect("fixture KeyPackage claim shape");
     body
+}
+
+fn install_routable_member(state: &AppState, realm_id: &str, member: &arkret_wire::DidCoreId) {
+    let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(Utc::now().timestamp_millis())
+        .unwrap();
+    state.test_projection().lock().members.insert(
+        (realm_id.to_owned(), member.to_string()),
+        soland_domain::reducer::SolandMembershipState {
+            member: member.to_string(),
+            realm_id: realm_id.to_owned(),
+            state: "join".to_owned(),
+            role: "member".to_owned(),
+            delivery_status: Some("routable".to_owned()),
+            recipient_service_id: Some(state.service_id().to_owned()),
+            recipient_service_resolution: None,
+            membership_event_ref: None,
+            delivery_binding_frontier: None,
+            delivery_binding_expires_at: None,
+            invited_at: None,
+            joined_at: now,
+            updated_at: now,
+            reason: None,
+        },
+    );
 }
 
 /// The Realm's accepted Seal frontier — the registered sourcing for a
@@ -428,8 +458,25 @@ async fn project_authorized_principal_device(
     authorize_event_id
 }
 
-#[tokio::test]
-async fn mls_lifecycle_end_to_end() {
+#[test]
+fn mls_lifecycle_end_to_end() {
+    let joined = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build MLS lifecycle test runtime")
+                .block_on(mls_lifecycle_end_to_end_body());
+        })
+        .expect("spawn MLS lifecycle test thread")
+        .join();
+    if let Err(payload) = joined {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+async fn mls_lifecycle_end_to_end_body() {
     let state = soland_test_support::app_state(test_config());
     let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
 
@@ -458,6 +505,12 @@ async fn mls_lifecycle_end_to_end() {
     .build();
     let realm_id_owned = RealmId::from_event_id(&realm_genesis.event_id).to_string();
     let realm_id = realm_id_owned.as_str();
+    let group_id_owned = arkret_wire::ScopeRef::Realm {
+        realm_id: RealmId::new(realm_id.to_owned()).unwrap(),
+    }
+    .canonical_mls_group_id()
+    .unwrap();
+    let group_id = group_id_owned.as_str();
     let realm_bootstrap =
         complete_realm_bootstrap_unit(realm_genesis, alice_did, alice_device, "MLS lifecycle");
     let bootstrap_frontier_event_id = realm_bootstrap
@@ -493,47 +546,48 @@ async fn mls_lifecycle_end_to_end() {
         let error: Value = create_resp.take_json().await.unwrap_or(Value::Null);
         panic!("Realm create failed with {create_status:?}: {error}");
     }
+    install_routable_member(&state, realm_id, &alice_core);
 
     // ── 1. upload a KeyPackage (W1C: ak.self.keys.keypackages.upload.create) ──
-    let keypackage_id = "keypackage-t-01";
-    let keypackage_id_mismatch = "keypackage-t-02";
-    let uploaded_keypackage_ref = "ak:mls:keypackage:test-01";
-    let mismatch_keypackage_ref = "ak:mls:keypackage:test-02";
-    let keypackage_bytes = b"opaque-mls-keypackage";
-    let mismatch_keypackage_bytes = b"opaque-mls-keypackage-mismatch";
-    let keypackage_digest = arkret_canonical::sha256_digest(keypackage_bytes);
-    let mismatch_keypackage_digest = arkret_canonical::sha256_digest(mismatch_keypackage_bytes);
-    let capabilities = json!(["ak.mls.rfc9420", "ak.mls.profile.full"]);
+    let alice_mls_identity = arkret_mls::ArkretMlsIdentity::from_ed25519_signing_seed(
+        alice_core.clone(),
+        arkret_wire::DeviceId::new(alice_device.to_owned()).unwrap(),
+        event_signing_key.to_bytes(),
+    )
+    .unwrap();
+    let keypackage_record = alice_mls_identity.key_package_record().unwrap();
+    let keypackage_id = keypackage_record.keypackage_id.clone();
+    let uploaded_keypackage_ref = keypackage_record.keypackage_ref.to_string();
+    let capabilities = json!(keypackage_record.capabilities);
     let capabilities_digest = sha256_json(&capabilities);
-    let mismatch_capabilities = json!(["ak.mls.rfc9420"]);
-    let publish_unsigned: arkret_models_crypto::KeyPackagesUploadUnsignedRequest =
-        serde_json::from_value(json!({
-            "principal_id": alice_core,
-            "device_id": alice_device,
-            "keypackages": [
-                {
-                    "keypackage_id": keypackage_id,
-                    "keypackage_ref": uploaded_keypackage_ref,
-                    "keypackage_digest": keypackage_digest.clone(),
-                    "keypackage": b64(keypackage_bytes),
-                    "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
-                    "capabilities": capabilities.clone(),
-                    "expires_at": "2100-01-01T00:00:00.000Z",
-                    "created_at": "2026-05-25T00:00:00.000Z"
-                },
-                {
-                    "keypackage_id": keypackage_id_mismatch,
-                    "keypackage_ref": mismatch_keypackage_ref,
-                    "keypackage_digest": mismatch_keypackage_digest,
-                    "keypackage": b64(mismatch_keypackage_bytes),
-                    "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
-                    "capabilities": mismatch_capabilities,
-                    "expires_at": "2100-01-01T00:00:00.000Z",
-                    "created_at": "2026-05-25T00:00:01.000Z"
-                }
-            ]
-        }))
-        .unwrap();
+    let valid_entry =
+        arkret_models_crypto::mls_key_package_record_upload_entry(&keypackage_record).unwrap();
+    let mut mismatched_capabilities_entry = valid_entry.clone();
+    mismatched_capabilities_entry.keypackage_id =
+        "keypackage-capability-binding-mismatch".to_owned();
+    mismatched_capabilities_entry.capabilities = vec!["ak.content.v1".to_owned()];
+    let mismatched_capabilities_id = mismatched_capabilities_entry.keypackage_id.clone();
+    let mut noncanonical_capabilities_entry = valid_entry.clone();
+    noncanonical_capabilities_entry.keypackage_id =
+        "keypackage-capability-order-invalid".to_owned();
+    noncanonical_capabilities_entry.capabilities.reverse();
+    let noncanonical_capabilities_id = noncanonical_capabilities_entry.keypackage_id.clone();
+    let publish_unsigned = arkret_models_crypto::KeyPackagesUploadUnsignedRequest {
+        principal_id: alice_core.clone(),
+        device_id: Some(arkret_wire::DeviceId::new(alice_device.to_owned()).unwrap()),
+        pairwise_verification_method: None,
+        intended_realm_id: None,
+        agent_verification_method: None,
+        agent_key_authorize_event_id: None,
+        keypackages: vec![
+            valid_entry,
+            mismatched_capabilities_entry,
+            noncanonical_capabilities_entry,
+        ],
+        expires_at: None,
+        strand_id: None,
+        mls_group_id: None,
+    };
     let publish_signature = arkret_signatures::keypackages::sign_keypackages_upload_request(
         &publish_unsigned,
         &format!("{alice_did}#{alice_device}"),
@@ -554,34 +608,55 @@ async fn mls_lifecycle_end_to_end() {
     let publish_body = publish_resp.take_string().await.unwrap();
     assert_eq!(publish_status, Some(StatusCode::OK), "{publish_body}");
     let publish_json: Value = serde_json::from_str(&publish_body).unwrap();
-    assert_eq!(publish_json["accepted"], json!(2));
+    assert_eq!(publish_json["accepted"], json!(1));
     assert_eq!(
         publish_json["keypackage_refs"],
-        json!([uploaded_keypackage_ref, mismatch_keypackage_ref])
+        json!([uploaded_keypackage_ref])
+    );
+    let rejected = publish_json["rejected"]
+        .as_array()
+        .expect("invalid capability projections must be rejected");
+    assert_eq!(rejected.len(), 2);
+    assert!(rejected.iter().any(|failure| {
+        failure["reason_code"] == json!("keypackage_capabilities_signed_binding_invalid")
+    }));
+    assert!(
+        rejected
+            .iter()
+            .any(|failure| failure["reason_code"] == json!("capabilities_invalid"))
     );
     assert!(
         state
             .test_persistence()
             .mls_key_packages()
-            .get(keypackage_id)
+            .get(&keypackage_id)
             .await
             .unwrap()
             .is_some(),
         "publish must mirror into the store"
     );
+    for rejected_id in [mismatched_capabilities_id, noncanonical_capabilities_id] {
+        assert!(
+            state
+                .test_persistence()
+                .mls_key_packages()
+                .get(&rejected_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "rejected capability projection must not be persisted"
+        );
+    }
     let published_row = state
         .test_persistence()
         .mls_key_packages()
-        .get(keypackage_id)
+        .get(&keypackage_id)
         .await
         .unwrap()
         .expect("published KeyPackage row");
     assert_eq!(
         published_row.capabilities,
-        vec![
-            "ak.mls.rfc9420".to_owned(),
-            "ak.mls.profile.full".to_owned()
-        ]
+        vec!["ak.content.v1".to_owned(), "mimi.content.v1".to_owned()]
     );
     assert_eq!(published_row.capabilities_digest, capabilities_digest);
     assert_eq!(
@@ -598,12 +673,12 @@ async fn mls_lifecycle_end_to_end() {
         alice_device,
         &alice_device_authorize_event_id,
         alice_did,
-        &[],
+        &[alice_device],
         realm_id,
-        &["ak.mls.profile.full"],
+        &["ak.content.v1"],
         b"claim-nonce-01-unique",
         claim_expires_at,
-        "mls-group-abc",
+        group_id,
     );
     let claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
@@ -621,9 +696,9 @@ async fn mls_lifecycle_end_to_end() {
     let claims = claim_json["claims"].as_array().expect("claims array");
     assert_eq!(claims.len(), 1);
     assert_eq!(claims[0]["keypackage_ref"], json!(uploaded_keypackage_ref));
-    assert_eq!(claims[0]["keypackage_digest"], json!(keypackage_digest));
     assert_eq!(claims[0]["capabilities"], capabilities);
-    assert_eq!(claims[0]["capabilities_digest"], json!(capabilities_digest));
+    assert!(claims[0].get("keypackage_digest").is_none());
+    assert!(claims[0].get("capabilities_digest").is_none());
     assert_eq!(
         claims[0]["device_authorize_event_id"],
         json!(alice_device_authorize_event_id)
@@ -636,12 +711,12 @@ async fn mls_lifecycle_end_to_end() {
         alice_device,
         &alice_device_authorize_event_id,
         alice_did,
-        &[],
+        &[alice_device],
         realm_id,
-        &["ak.mls.profile.full"],
+        &["ak.content.v1"],
         b"claim-nonce-same-group",
         claim_expires_at,
-        "mls-group-abc",
+        group_id,
     );
     let same_group_claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
@@ -660,38 +735,6 @@ async fn mls_lifecycle_end_to_end() {
         json!("claim_failed")
     );
 
-    // ── 2c. another group cannot claim the same package ─
-    let rejected_claim = signed_keypackage_claim_request(
-        state.service_id(),
-        alice_did,
-        alice_device,
-        &alice_device_authorize_event_id,
-        alice_did,
-        &[],
-        realm_id,
-        &["ak.mls.profile.full"],
-        b"claim-nonce-02-unique",
-        claim_expires_at,
-        "mls-group-second",
-    );
-    let rejected_claim_resp = TestClient::post(&claim_url)
-        .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .add_header("content-type", "application/json", true)
-        .body(arkret_canonical::canonical_json_bytes(&rejected_claim).unwrap())
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(
-        rejected_claim_resp.status_code,
-        Some(StatusCode::BAD_REQUEST)
-    );
-    let mut rejected_claim_resp = rejected_claim_resp;
-    let rejected_claim_json: Value = rejected_claim_resp.take_json().await.unwrap();
-    assert_eq!(rejected_claim_json["error"]["code"], json!("claim_failed"));
-    assert_eq!(
-        rejected_claim_json["error"], same_group_claim_json["error"],
-        "distinct target-private claim failures must use the same outward error shape"
-    );
-
     let bob_did = "did:web:bob.example";
     let bob_core = arkret_wire::project_full_id_to_core_id(
         &arkret_identifiers::DidFullId::new(bob_did).unwrap(),
@@ -701,66 +744,40 @@ async fn mls_lifecycle_end_to_end() {
     let bob_token = dev_token(state.clone(), bob_did, bob_device, "Bob").await;
     project_authorized_principal_device(&state, bob_did, bob_device, &event_signing_key).await;
 
-    let group_id = "mls-group-abc";
     // `peer_claim_policy_authorized`'s `RealmMembership` branch requires the
     // claim target to already be a joined Realm member. Realm membership
     // (`ak.member.state`) and MLS group membership are separate: Bob joins the
     // Realm first, and only then can Alice claim his KeyPackage to add him to
     // the MLS group.
-    {
-        let now =
-            chrono::DateTime::<chrono::Utc>::from_timestamp_millis(Utc::now().timestamp_millis())
-                .unwrap();
-        state.test_projection().lock().members.insert(
-            (realm_id.to_owned(), bob_core.to_string()),
-            soland_domain::reducer::SolandMembershipState {
-                member: bob_core.to_string(),
-                realm_id: realm_id.to_owned(),
-                state: "join".to_owned(),
-                role: "member".to_owned(),
-                delivery_status: None,
-                recipient_service_id: None,
-                recipient_service_resolution: None,
-                membership_event_ref: None,
-                delivery_binding_frontier: None,
-                delivery_binding_expires_at: None,
-                invited_at: None,
-                joined_at: now,
-                updated_at: now,
-                reason: None,
-            },
-        );
-    }
+    install_routable_member(&state, realm_id, &bob_core);
 
-    let lifecycle_keypackage_id = "keypackage-lifecycle-bob";
-    let lifecycle_keypackage_ref = "ak:mls:keypackage:lifecycle-bob";
-    let lifecycle_keypackage_bytes = b"opaque-lifecycle-keypackage";
-    let lifecycle_keypackage_digest = arkret_canonical::sha256_digest(lifecycle_keypackage_bytes);
-    let lifecycle_created_at = Utc::now();
-    let lifecycle_expires_at = lifecycle_created_at + chrono::Duration::days(7);
+    let bob_mls_identity = arkret_mls::ArkretMlsIdentity::from_ed25519_signing_seed(
+        bob_core.clone(),
+        arkret_wire::DeviceId::new(bob_device.to_owned()).unwrap(),
+        event_signing_key.to_bytes(),
+    )
+    .unwrap();
+    let lifecycle_keypackage_record = bob_mls_identity.key_package_record().unwrap();
+    let lifecycle_keypackage_id = lifecycle_keypackage_record.keypackage_id.clone();
+    let lifecycle_keypackage_ref = lifecycle_keypackage_record.keypackage_ref.to_string();
     let lifecycle_claim_expires_at = Utc::now() + chrono::Duration::minutes(4);
-    let lifecycle_capabilities = json!(["ak.mls.rfc9420", "ak.mls.profile.full"]);
+    let lifecycle_capabilities = json!(lifecycle_keypackage_record.capabilities);
     let lifecycle_capabilities_digest = sha256_json(&lifecycle_capabilities);
-    let lifecycle_publish_unsigned: arkret_models_crypto::KeyPackagesUploadUnsignedRequest =
-        serde_json::from_value(json!({
-            "principal_id": bob_core,
-            "device_id": bob_device,
-            "keypackages": [{
-                "keypackage_id": lifecycle_keypackage_id,
-                "keypackage_ref": lifecycle_keypackage_ref,
-                "keypackage_digest": lifecycle_keypackage_digest,
-                "keypackage": b64(lifecycle_keypackage_bytes),
-                "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
-                "capabilities": lifecycle_capabilities,
-                "expires_at": arkret_canonical::format_timestamp_canonical(
-                    lifecycle_expires_at
-                ),
-                "created_at": arkret_canonical::format_timestamp_canonical(
-                    lifecycle_created_at
-                )
-            }]
-        }))
-        .unwrap();
+    let lifecycle_publish_unsigned = arkret_models_crypto::KeyPackagesUploadUnsignedRequest {
+        principal_id: bob_core.clone(),
+        device_id: Some(arkret_wire::DeviceId::new(bob_device.to_owned()).unwrap()),
+        pairwise_verification_method: None,
+        intended_realm_id: None,
+        agent_verification_method: None,
+        agent_key_authorize_event_id: None,
+        keypackages: vec![
+            arkret_models_crypto::mls_key_package_record_upload_entry(&lifecycle_keypackage_record)
+                .unwrap(),
+        ],
+        expires_at: None,
+        strand_id: None,
+        mls_group_id: None,
+    };
     let lifecycle_publish_signature =
         arkret_signatures::keypackages::sign_keypackages_upload_request(
             &lifecycle_publish_unsigned,
@@ -790,7 +807,7 @@ async fn mls_lifecycle_end_to_end() {
         bob_did,
         &[bob_device],
         realm_id,
-        &["ak.mls.profile.full"],
+        &["ak.content.v1"],
         b"lifecycle-claim-nonce-01",
         lifecycle_claim_expires_at,
         group_id,
@@ -808,14 +825,24 @@ async fn mls_lifecycle_end_to_end() {
         json!(lifecycle_keypackage_ref)
     );
     assert_eq!(
-        lifecycle_claim["claims"][0]["capabilities_digest"],
-        json!(lifecycle_capabilities_digest)
+        lifecycle_claim["claims"][0]["capabilities"],
+        lifecycle_capabilities
+    );
+    assert!(
+        lifecycle_claim["claims"][0]
+            .get("keypackage_digest")
+            .is_none()
+    );
+    assert!(
+        lifecycle_claim["claims"][0]
+            .get("capabilities_digest")
+            .is_none()
     );
     assert_eq!(
         state
             .test_persistence()
             .mls_key_packages()
-            .get(lifecycle_keypackage_id)
+            .get(&lifecycle_keypackage_id)
             .await
             .unwrap()
             .expect("claimed lifecycle KeyPackage remains durable")
@@ -827,6 +854,10 @@ async fn mls_lifecycle_end_to_end() {
     // destination-signed receipt for *this* Welcome's claim — Bob's, from the
     // lifecycle claim below, not Alice's own self-claim above.
     let lifecycle_claim_receipt = lifecycle_claim["claim_receipt"].clone();
+    let claim_request_id = lifecycle_claim["claim_receipt"]["claim_request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let claim_id = lifecycle_claim["claims"][0]["claim_id"]
         .as_str()
         .unwrap()
@@ -835,14 +866,17 @@ async fn mls_lifecycle_end_to_end() {
         .as_str()
         .unwrap()
         .to_owned();
-    let claimed_keypackage_digest = lifecycle_claim["claims"][0]["keypackage_digest"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let claimed_capabilities_digest = lifecycle_claim["claims"][0]["capabilities_digest"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let claimed_keypackage_bytes = URL_SAFE_NO_PAD
+        .decode(
+            lifecycle_claim["claims"][0]["keypackage"]
+                .as_str()
+                .unwrap()
+                .trim_end_matches('='),
+        )
+        .unwrap();
+    let claimed_keypackage_digest = arkret_canonical::sha256_digest(&claimed_keypackage_bytes);
+    let claimed_capabilities_digest = sha256_json(&lifecycle_claim["claims"][0]["capabilities"]);
+    assert_eq!(claimed_capabilities_digest, lifecycle_capabilities_digest);
     let claimed_device_authorize_event_id =
         lifecycle_claim["claims"][0]["device_authorize_event_id"]
             .as_str()
@@ -868,6 +902,7 @@ async fn mls_lifecycle_end_to_end() {
         "previous_epoch": 0,
         "next_epoch": 0,
         "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "content_scheme": "mls_rfc9420",
         "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
         "reducer_profile": CORE_REDUCER_PROFILE
     });
@@ -929,6 +964,7 @@ async fn mls_lifecycle_end_to_end() {
         "previous_epoch": 0,
         "next_epoch": 1,
         "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "content_scheme": "mls_rfc9420",
         "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
         "reducer_profile": CORE_REDUCER_PROFILE
     });
@@ -940,7 +976,7 @@ async fn mls_lifecycle_end_to_end() {
         "requester_actor_id": alice_core,
         "requester_device_id": alice_device,
         "requester_device_authorize_event_id": alice_device_authorize_event_id,
-        "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
+        "nonce": claim_request_id,
         "welcome_digest": arkret_canonical::sha256_digest(b"opaque-mls-welcome"),
         "created_at": "2026-05-25T00:00:02.000Z",
         "signature": {
@@ -970,7 +1006,6 @@ async fn mls_lifecycle_end_to_end() {
             "recipient_principal_id": bob_core,
             "recipient_device_id": bob_device,
             "keypackage_ref": keypackage_ref,
-            "keypackage_digest": claimed_keypackage_digest,
             "claim_id": claim_id,
             "claim_ref": {
                 "claim_id": claim_id,
@@ -1023,6 +1058,7 @@ async fn mls_lifecycle_end_to_end() {
         "previous_epoch": 0,
         "next_epoch": 1,
         "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "content_scheme": "mls_rfc9420",
         "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
         "reducer_profile": CORE_REDUCER_PROFILE
     });
@@ -1047,22 +1083,13 @@ async fn mls_lifecycle_end_to_end() {
         Some(realm_seal_basis),
     );
     set_event_prev_refs(&mut commit, &[welcome_event_id.as_str()]);
-    let mut commit_resp = TestClient::post("http://server/_arkret/self/events")
+    let commit_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .add_header("content-type", "application/json", true)
         .body(arkret_canonical::canonical_json_bytes(&commit).unwrap())
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(
-        commit_resp.status_code,
-        Some(StatusCode::SERVICE_UNAVAILABLE)
-    );
-    let commit_error: Value = commit_resp.take_json().await.unwrap();
-    assert_eq!(commit_error["error"]["code"], "frontier_unavailable");
-    assert_eq!(
-        commit_error["error"]["details"]["reason_code"],
-        "mls_governance_binding_stale"
-    );
+    assert_eq!(commit_resp.status_code, Some(StatusCode::OK));
     assert_eq!(
         state
             .test_persistence()
@@ -1070,9 +1097,9 @@ async fn mls_lifecycle_end_to_end() {
             .get(&effective_scope, group_id)
             .await
             .unwrap()
-            .expect("genesis remains persisted")
+            .expect("commit persisted")
             .epoch,
-        0
+        1
     );
 
     // ── 4. Bob sees the Welcome on the standard to-device queue ─

@@ -696,50 +696,16 @@ pub fn derive_authority_audit(
     body: &Value,
     resolve: &dyn Fn(&str) -> Option<(u64, Vec<Value>)>,
 ) -> Option<(u64, Vec<Value>)> {
-    let mut depth: u64 = 0;
-    let mut roots: Vec<Value> = Vec::new();
-    let refs = body
-        .get("issuer_authority_refs")
-        .and_then(Value::as_array)?;
-    for entry in refs {
-        match entry.get("kind").and_then(Value::as_str) {
-            Some("realm_root") => {
-                let realm_id = entry.get("realm_id")?.as_str()?;
-                let cell_ref = entry.get("cell_ref")?.as_str()?;
-                let authority_generation = entry.get("authority_generation")?.as_u64()?;
-                roots.push(serde_json::json!({
-                    "kind": "realm_root",
-                    "realm_id": realm_id,
-                    "cell_ref": cell_ref,
-                    "authority_generation": authority_generation,
-                }));
+    arkret_schema::derive_capability_authority_audit(body, &|grant_id| {
+        resolve(grant_id).map(|(authority_depth, authority_root_refs)| {
+            arkret_schema::CapabilityAuthorityAudit {
+                authority_depth,
+                authority_root_refs,
             }
-            Some("grant") => {
-                let grant_id = entry.get("grant_id").and_then(Value::as_str)?;
-                let (parent_depth, parent_roots) = resolve(grant_id)?;
-                depth = depth.max(parent_depth);
-                roots.extend(parent_roots);
-            }
-            _ => return None,
-        }
-    }
-    // Deduplicate on (realm_id, cell_ref, authority_generation) and sort
-    // canonically: controller_epoch_at_issuance is per-grant issuance audit and
-    // deliberately not part of root identity.
-    let identity = |root: &Value| {
-        Some(format!(
-            "{}\u{1f}{}\u{1f}{}",
-            root.get("realm_id")?.as_str()?,
-            root.get("cell_ref")?.as_str()?,
-            root.get("authority_generation")?.as_u64()?,
-        ))
-    };
-    if roots.iter().any(|root| identity(root).is_none()) {
-        return None;
-    }
-    roots.sort_by_key(&identity);
-    roots.dedup_by_key(|root| identity(root));
-    (!roots.is_empty()).then_some((depth + 1, roots))
+        })
+    })
+    .ok()
+    .map(|audit| (audit.authority_depth, audit.authority_root_refs))
 }
 
 fn grant_realm_id<'a>(body: &'a Value, operation: &'a Operation) -> &'a str {
@@ -1749,6 +1715,34 @@ impl ProjectionState {
     /// already in the projection, or `None` when it has not landed yet.
     fn projected_authority_audit(&self, grant_id: &str) -> Option<(u64, Vec<Value>)> {
         self.projected_authority_audit_inner(grant_id, &std::collections::BTreeSet::new())
+    }
+
+    /// Resolve the immutable authority audit used by the registry projector.
+    pub fn capability_authority_audit(
+        &self,
+        grant_id: &str,
+    ) -> Option<arkret_schema::CapabilityAuthorityAudit> {
+        self.projected_authority_audit(grant_id)
+            .map(
+                |(authority_depth, authority_root_refs)| arkret_schema::CapabilityAuthorityAudit {
+                    authority_depth,
+                    authority_root_refs,
+                },
+            )
+    }
+
+    /// Project one Event using this deterministic projection's authority basis.
+    pub fn project_registered_cell_writes(
+        &self,
+        event: &arkret_wire::Event,
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> Result<Vec<arkret_wire::cba::ProjectedCellWrite>, arkret_schema::EventCellContractError>
+    {
+        arkret_schema::project_registered_cell_writes_with_authority_resolver(
+            event,
+            digest_suite,
+            &|grant_id| self.capability_authority_audit(grant_id),
+        )
     }
 
     fn projected_authority_audit_inner(

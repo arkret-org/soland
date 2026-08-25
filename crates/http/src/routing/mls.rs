@@ -390,6 +390,16 @@ async fn upload_keypackage(
                 continue;
             }
         };
+        if arkret_mls::validate_keypackage_capability_binding(&key_package_bytes, &capabilities)
+            .is_err()
+        {
+            rejected.push(keypackage_failure(
+                &entry,
+                endpoint_label,
+                "keypackage_capabilities_signed_binding_invalid",
+            ));
+            continue;
+        }
         let endpoint_signature = match entry_signature(
             entry.endpoint_signature.as_ref(),
             &default_endpoint_signature,
@@ -3229,7 +3239,7 @@ mod direct_consume_tests {
     #[test]
     fn direct_consume_binds_the_wire_ref_without_assuming_claim_id_prefix() {
         let keypackage_ref = format!("sha256:{}", "a".repeat(64));
-        let claim_id = "ak:mls:kp:01904100-0000-7000-8000-000000000001:claim-nonce";
+        let claim_id = "keypackage-01904100-0000-7000-8000-000000000001-claim-nonce";
         assert!(welcome_claim_matches_consume(
             &keypackage_ref,
             claim_id,
@@ -3692,18 +3702,9 @@ async fn keypackage_device_revocation_gate(
 }
 
 fn validate_capabilities(capabilities: &[String]) -> Result<Vec<String>, String> {
-    if capabilities.is_empty() {
-        return Err("capabilities_missing".to_owned());
-    }
-    let mut seen = BTreeSet::new();
-    for capability in capabilities {
-        if capability.is_empty() {
-            return Err("capabilities_invalid".to_owned());
-        }
-        if !seen.insert(capability.clone()) {
-            return Err("capabilities_duplicate".to_owned());
-        }
-    }
+    let capabilities_ref = capabilities.iter().map(String::as_str).collect::<Vec<_>>();
+    arkret_models_crypto::validate_advertised_keypackage_capabilities(&capabilities_ref)
+        .map_err(|_| "capabilities_invalid".to_owned())?;
     Ok(capabilities.to_vec())
 }
 
@@ -4086,23 +4087,13 @@ async fn verify_session_keypackage_write_signature(
 }
 
 fn required_capability_set(capabilities: &[String]) -> Result<BTreeSet<String>, AppError> {
-    if capabilities.is_empty() {
-        return Err(AppError::param_missing("required_capabilities is required"));
-    }
-    let mut out = BTreeSet::new();
-    for capability in capabilities {
-        if capability.is_empty() {
-            return Err(AppError::param_invalid(
-                "required_capabilities entries must be non-empty",
-            ));
-        }
-        if !out.insert(capability.clone()) {
-            return Err(AppError::param_invalid(
-                "required_capabilities entries must be unique",
-            ));
-        }
-    }
-    Ok(out)
+    let capabilities_ref = capabilities.iter().map(String::as_str).collect::<Vec<_>>();
+    arkret_models_crypto::validate_required_keypackage_capabilities(
+        &capabilities_ref,
+        &capabilities_ref,
+    )
+    .map_err(|_| AppError::param_invalid("required_capabilities is invalid or unsupported"))?;
+    Ok(capabilities.iter().cloned().collect())
 }
 
 fn capabilities_satisfy(published: &[String], required: &BTreeSet<String>) -> bool {
@@ -4630,8 +4621,17 @@ async fn keypackage_claim_record(
         )
     };
     let keypackage = URL_SAFE_NO_PAD.encode(&record.key_package_bytes);
+    let mut claim_id_preimage = b"ak.keypackage.claim_id.v1".to_vec();
+    claim_id_preimage.push(0);
+    claim_id_preimage.extend(record.id.as_bytes());
+    claim_id_preimage.push(0);
+    claim_id_preimage.extend(claim_request_id.as_bytes());
+    let claim_id = format!(
+        "claim-{}",
+        URL_SAFE_NO_PAD.encode(arkret_canonical::sha256_digest(claim_id_preimage))
+    );
     Ok(KeyPackageClaimRecord {
-        claim_id: format!("{}:{claim_request_id}", record.id),
+        claim_id,
         keypackage_ref: record.keypackage_ref.clone(),
         principal_id,
         device_id,

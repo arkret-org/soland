@@ -208,36 +208,34 @@ async fn project_authorized_device(
     project_test_authorized_device(state, actor, device_id, signing_key).await
 }
 
-async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: &str) {
+async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, _suffix: &str) {
     let signing_key = test_ephemeral_device_signing_key(BOB_DID, BOB_DEVICE);
     let _authorize_event_id =
         project_authorized_device(&state, BOB_DID, BOB_DEVICE, &signing_key).await;
-    let keypackage_id = format!("keypackage-direct-{suffix}");
-    let keypackage_ref = format!("ak:mls:keypackage:direct-{suffix}");
-    let keypackage_bytes = format!("opaque-direct-keypackage-{suffix}");
-    // Canonical SDK KeyPackage capability set (ARKRET_MLS_KEY_PACKAGE_CAPABILITIES);
-    // the direct-conversation claim requires `ak.content.v1` from this set.
-    let capabilities = serde_json::json!(["mimi.content.v1", "ak.content.v1"]);
     let bob_core = arkret_wire::project_full_id_to_core_id(
         &arkret_wire::DidFullId::new(BOB_DID.to_owned()).unwrap(),
     )
     .unwrap();
-    let unsigned: arkret_models_crypto::KeyPackagesUploadUnsignedRequest =
-        serde_json::from_value(serde_json::json!({
-            "principal_id": bob_core,
-            "device_id": BOB_DEVICE,
-            "keypackages": [{
-                "keypackage_id": keypackage_id,
-                "keypackage_ref": keypackage_ref,
-                "keypackage_digest": arkret_canonical::sha256_digest(keypackage_bytes.as_bytes()),
-                "keypackage": URL_SAFE_NO_PAD.encode(keypackage_bytes.as_bytes()),
-                "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
-                "capabilities": capabilities,
-                "expires_at": "2100-01-01T00:00:00.000Z",
-                "created_at": "2026-05-25T00:00:00.000Z"
-            }]
-        }))
-        .unwrap();
+    let mls_identity = arkret_mls::ArkretMlsIdentity::from_ed25519_signing_seed(
+        bob_core.clone(),
+        arkret_wire::DeviceId::new(BOB_DEVICE.to_owned()).unwrap(),
+        signing_key.to_bytes(),
+    )
+    .unwrap();
+    let record = mls_identity.key_package_record().unwrap();
+    let entry = arkret_models_crypto::mls_key_package_record_upload_entry(&record).unwrap();
+    let unsigned = arkret_models_crypto::KeyPackagesUploadUnsignedRequest {
+        principal_id: bob_core,
+        device_id: Some(arkret_wire::DeviceId::new(BOB_DEVICE.to_owned()).unwrap()),
+        pairwise_verification_method: None,
+        intended_realm_id: None,
+        agent_verification_method: None,
+        agent_key_authorize_event_id: None,
+        keypackages: vec![entry],
+        expires_at: None,
+        strand_id: None,
+        mls_group_id: None,
+    };
     let signature = arkret_signatures::keypackages::sign_keypackages_upload_request(
         &unsigned,
         &format!("{BOB_DID}#{BOB_DEVICE}"),
@@ -350,6 +348,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
             "mls_group_id": "mls-group-0196419b-0000-7000-8000-000000000296",
             "claim_purpose": "direct_conversation",
             "required_capabilities": ["ak.content.v1"],
+            "target_device_ids": [BOB_DEVICE],
             "expires_at": arkret_canonical::format_timestamp_canonical(
                 Utc::now() + chrono::Duration::minutes(4)
             ),
@@ -399,6 +398,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
             "mls_group_id": unsigned.mls_group_id,
             "claim_purpose": unsigned.claim_purpose,
             "required_capabilities": unsigned.required_capabilities,
+            "target_device_ids": unsigned.target_device_ids,
             "expires_at": unsigned.expires_at,
             "timeout_ms": unsigned.timeout_ms,
             "strand_id": unsigned.strand_id,
@@ -409,16 +409,19 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
         }))
         .unwrap();
     let request_value = serde_json::to_value(&request).unwrap();
-    let target_uri = "http://server/_arkret/peer/keys/keypackages/claim";
+    let target_uri = format!(
+        "{}/_arkret/peer/keys/keypackages/claim",
+        state.config().public_base_url.trim_end_matches('/')
+    );
     let headers = signed_federation_push_headers_with_idempotency(
         source_service_full_id,
         &destination_service_id,
         state.config().trust_domain.as_str(),
-        target_uri,
+        &target_uri,
         &request_value,
         request.claim_request_id.as_str(),
     );
-    let mut builder = TestClient::post(target_uri)
+    let mut builder = TestClient::post(&target_uri)
         .add_header("content-type", "application/json", true)
         .body(canonical_request_body(&request_value));
     for (name, value) in headers {
@@ -446,11 +449,11 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
         source_service_full_id,
         &destination_service_id,
         state.config().trust_domain.as_str(),
-        target_uri,
+        &target_uri,
         &request_value,
         request.claim_request_id.as_str(),
     );
-    let mut replay = TestClient::post(target_uri)
+    let mut replay = TestClient::post(&target_uri)
         .add_header("content-type", "application/json", true)
         .body(canonical_request_body(&request_value));
     for (name, value) in replay_headers {
@@ -464,17 +467,35 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
         .unwrap();
     assert_eq!(replayed.claims[0].claim_id, outcome.claims[0].claim_id);
 
-    let mut conflicting_value = request_value.clone();
-    conflicting_value["required_capabilities"] = serde_json::json!(["ak.content.v1", "ak.mls.v1"]);
+    let mut conflicting_request = request.clone();
+    conflicting_request.timeout_ms = Some(4_000);
+    let conflicting_unsigned = conflicting_request.unsigned_request();
+    let conflicting_signing_bytes =
+        arkret_models_crypto::keypackage_claim_authorization_signing_bytes(
+            &conflicting_unsigned,
+            &conflicting_request.service_binding,
+            &conflicting_request.requester_authorization,
+        )
+        .unwrap();
+    let arkret_models_crypto::PeerKeyPackageRequesterAuthorization::Device { signature, .. } =
+        &mut conflicting_request.requester_authorization
+    else {
+        unreachable!("fixture constructs device authorization")
+    };
+    signature.sig = arkret_wire::Base64UrlString::new(
+        URL_SAFE_NO_PAD.encode(signing_key.sign(&conflicting_signing_bytes).to_bytes()),
+    )
+    .unwrap();
+    let conflicting_value = serde_json::to_value(&conflicting_request).unwrap();
     let conflict_headers = signed_federation_push_headers_with_idempotency(
         source_service_full_id,
         &destination_service_id,
         state.config().trust_domain.as_str(),
-        target_uri,
+        &target_uri,
         &conflicting_value,
         request.claim_request_id.as_str(),
     );
-    let mut conflict = TestClient::post(target_uri)
+    let mut conflict = TestClient::post(&target_uri)
         .add_header("content-type", "application/json", true)
         .body(canonical_request_body(&conflicting_value));
     for (name, value) in conflict_headers {
@@ -490,15 +511,18 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
         "claim_request_id": request.claim_request_id,
         "request_digest": arkret_canonical::canonical_sha256(&request_value).unwrap()
     });
-    let query_uri = "http://server/_arkret/peer/keys/keypackages/claims/query";
+    let query_uri = format!(
+        "{}/_arkret/peer/keys/keypackages/claims/query",
+        state.config().public_base_url.trim_end_matches('/')
+    );
     let query_headers = signed_federation_push_headers_same_trust(
         source_service_full_id,
         &destination_service_id,
         state.config().trust_domain.as_str(),
-        query_uri,
+        &query_uri,
         &query,
     );
-    let mut builder = TestClient::post(query_uri)
+    let mut builder = TestClient::post(&query_uri)
         .add_header("content-type", "application/json", true)
         .body(canonical_request_body(&query));
     for (name, value) in query_headers {

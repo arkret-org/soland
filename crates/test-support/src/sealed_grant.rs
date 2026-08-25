@@ -84,11 +84,11 @@ pub async fn seal_accepted_capability_grant(
         .expect("accepted capability grant Event digest");
     assert_eq!(canonical_digest, record.canonical_digest);
     let move_id = Hash::new(canonical_digest).expect("fixture Move digest");
-    let writes = arkret_schema::project_registered_cell_writes(
-        &event,
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .expect("accepted capability grant registered projection");
+    let writes = state
+        .test_projection()
+        .lock()
+        .project_registered_cell_writes(&event, record.digest_suite)
+        .expect("accepted capability grant registered projection");
     let [write] = writes.as_slice() else {
         panic!("capability grant must project exactly one cell write");
     };
