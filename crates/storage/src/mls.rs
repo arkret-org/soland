@@ -21,7 +21,6 @@ pub struct MlsKeyPackageRow {
     pub key_package_bytes: Vec<u8>,
     pub capabilities: Vec<String>,
     pub capabilities_digest: String,
-    pub endpoint_signature: Value,
     pub last_resort: bool,
     pub last_resort_realm_id: Option<String>,
     pub lifetime_not_before: i64,

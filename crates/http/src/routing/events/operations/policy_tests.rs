@@ -1215,7 +1215,6 @@ async fn register_native_agent_membership_context(
             key_package_bytes: vec![1, 2, 3],
             capabilities: vec!["ak.content.v1".to_owned(), "mimi.content.v1".to_owned()],
             capabilities_digest: format!("sha256:{}", "2".repeat(64)),
-            endpoint_signature: json!({"kid": "test", "sig": "test"}),
             last_resort: false,
             last_resort_realm_id: None,
             claimed_by: None,

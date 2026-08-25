@@ -2209,7 +2209,6 @@ impl ProjectionService {
                 key_package_bytes: row.key_package_bytes,
                 capabilities: row.capabilities,
                 capabilities_digest: row.capabilities_digest,
-                endpoint_signature: row.endpoint_signature,
                 last_resort: row.last_resort,
                 last_resort_realm_id: row.last_resort_realm_id,
                 lifetime_not_before: row.lifetime.not_before,

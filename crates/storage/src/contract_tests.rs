@@ -3016,7 +3016,6 @@ fn mls_keypackage_contract_row(namespace: &str, suffix: &str) -> MlsKeyPackageRo
         capabilities: vec!["ak.mls.rfc9420".to_owned()],
         capabilities_digest:
             "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
-        endpoint_signature: serde_json::json!({"kid": "contract", "sig": "AA"}),
         last_resort: false,
         last_resort_realm_id: None,
         lifetime_not_before: 1,

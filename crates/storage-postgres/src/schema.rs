@@ -806,7 +806,6 @@ diesel::table! {
         key_package_bytes -> Bytea,
         capabilities -> Jsonb,
         capabilities_digest -> Text,
-        endpoint_signature -> Jsonb,
         last_resort -> Bool,
         last_resort_realm_id -> Nullable<Text>,
         lifetime_not_before -> Int8,

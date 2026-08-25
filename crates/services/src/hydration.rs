@@ -1058,7 +1058,6 @@ pub async fn hydrate_projections_from_persistence(
                     key_package_bytes: row.key_package_bytes,
                     capabilities: row.capabilities,
                     capabilities_digest: row.capabilities_digest,
-                    endpoint_signature: row.endpoint_signature,
                     last_resort: row.last_resort,
                     last_resort_realm_id: row.last_resort_realm_id,
                     claimed_by: row.claimed_by_mls_group_id,

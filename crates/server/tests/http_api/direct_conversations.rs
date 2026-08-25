@@ -216,10 +216,10 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, _suffix:
         &arkret_wire::DidFullId::new(BOB_DID.to_owned()).unwrap(),
     )
     .unwrap();
-    let mls_identity = arkret_mls::ArkretMlsIdentity::from_ed25519_signing_seed(
+    let mls_identity = arkret_mls::ArkretMlsIdentity::from_authorized_device_signing_key(
         bob_core.clone(),
         arkret_wire::DeviceId::new(BOB_DEVICE.to_owned()).unwrap(),
-        signing_key.to_bytes(),
+        &signing_key,
     )
     .unwrap();
     let record = mls_identity.key_package_record().unwrap();

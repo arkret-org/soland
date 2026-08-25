@@ -309,7 +309,6 @@ pub struct MlsKeyPackage {
     pub key_package_bytes: Vec<u8>,
     pub capabilities: Vec<String>,
     pub capabilities_digest: String,
-    pub endpoint_signature: serde_json::Value,
     pub last_resort: bool,
     pub last_resort_realm_id: Option<String>,
     /// `None` while the KeyPackage is still claimable; `Some(group_id)`

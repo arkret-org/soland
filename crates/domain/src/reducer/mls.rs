@@ -85,7 +85,6 @@ pub struct MlsKeyPackagePublishProjection {
     pub lifetime: KeyPackageLifetime,
     pub key_package_bytes: Vec<u8>,
     pub capabilities: Vec<String>,
-    pub endpoint_signature: arkret_models_crypto::KeyOperationSignature,
     pub last_resort: bool,
     pub trust_anchor: MlsKeyPackagePublishTrustAnchor,
     pub created_at: i64,
@@ -115,10 +114,6 @@ pub fn apply_keypackage_upload_projection(
     {
         Ok(bytes) => arkret_canonical::sha256_digest(bytes),
         Err(_) => return reject("mls_keypackage_capabilities_digest_failed"),
-    };
-    let endpoint_signature = match serde_json::to_value(&projection.endpoint_signature) {
-        Ok(value) => value,
-        Err(_) => return reject("mls_keypackage_endpoint_signature_invalid"),
     };
     let (
         device_authorize_event_id,
@@ -163,7 +158,6 @@ pub fn apply_keypackage_upload_projection(
         key_package_bytes: projection.key_package_bytes.clone(),
         capabilities: projection.capabilities.clone(),
         capabilities_digest,
-        endpoint_signature,
         last_resort: projection.last_resort,
         last_resort_realm_id: None,
         claimed_by: None,
@@ -256,10 +250,6 @@ pub fn apply_keypackage_publish(state: &mut ProjectionState, op: &Operation) -> 
     {
         return reject("mls_keypackage_capabilities_digest_mismatch");
     }
-    let endpoint_signature = payload
-        .get("endpoint_signature")
-        .cloned()
-        .unwrap_or(Value::Null);
     let last_resort = payload
         .get("last_resort")
         .and_then(Value::as_bool)
@@ -317,7 +307,6 @@ pub fn apply_keypackage_publish(state: &mut ProjectionState, op: &Operation) -> 
         key_package_bytes,
         capabilities,
         capabilities_digest,
-        endpoint_signature,
         last_resort,
         last_resort_realm_id,
         claimed_by: None,

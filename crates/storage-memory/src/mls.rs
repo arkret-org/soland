@@ -709,7 +709,6 @@ mod tests {
             capabilities: vec!["ak.mls.rfc9420".to_owned()],
             capabilities_digest:
                 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
-            endpoint_signature: serde_json::json!({"kid":"did:web:bob.example#device","sig":"AA"}),
             last_resort,
             last_resort_realm_id: None,
             lifetime_not_before: 1,

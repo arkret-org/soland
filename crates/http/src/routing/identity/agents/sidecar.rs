@@ -1521,7 +1521,6 @@ mod tests {
                 key_package_bytes: vec![1, 2, 3],
                 capabilities: Vec::new(),
                 capabilities_digest: format!("sha256:{}", "3".repeat(64)),
-                endpoint_signature: json!({}),
                 last_resort: false,
                 last_resort_realm_id: None,
                 claimed_by: claimed_group_id.map(ToOwned::to_owned),

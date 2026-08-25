@@ -544,14 +544,12 @@ async fn mls_lifecycle_end_to_end_body() {
     install_routable_member(&state, realm_id, &alice_core);
 
     // ── 1. upload a KeyPackage (W1C: ak.self.keys.keypackages.upload.create) ──
-    let alice_mls_identity = arkret_mls::ArkretMlsIdentity::from_ed25519_signing_seed(
+    let alice_mls_identity = arkret_mls::ArkretMlsIdentity::from_authorized_device_signing_key(
         alice_core.clone(),
         arkret_wire::DeviceId::new(alice_device.to_owned()).unwrap(),
-        // The human-device upload authorization key and the MLS LeafNode
-        // signature key are deliberately distinct. The former authorizes the
-        // typed upload transcript; unlike the Native Agent branch, the v1
-        // contract does not require it to also be the MLS leaf key.
-        [31_u8; 32],
+        // The accepted human-device identity key signs the upload batch and
+        // the RFC 9420 LeafNode under the same v1 endpoint authority.
+        &event_signing_key,
     )
     .unwrap();
     let keypackage_record = alice_mls_identity.key_package_record().unwrap();
@@ -750,10 +748,10 @@ async fn mls_lifecycle_end_to_end_body() {
     // the MLS group.
     install_routable_member(&state, realm_id, &bob_core);
 
-    let bob_mls_identity = arkret_mls::ArkretMlsIdentity::from_ed25519_signing_seed(
+    let bob_mls_identity = arkret_mls::ArkretMlsIdentity::from_authorized_device_signing_key(
         bob_core.clone(),
         arkret_wire::DeviceId::new(bob_device.to_owned()).unwrap(),
-        event_signing_key.to_bytes(),
+        &event_signing_key,
     )
     .unwrap();
     let lifecycle_keypackage_record = bob_mls_identity.key_package_record().unwrap();

@@ -326,17 +326,10 @@ async fn upload_keypackage(
         .as_ref()
         .and_then(|binding| binding.agent_key_authorize_event_id.as_deref())
     {
-        let first_entry = body
-            .keypackages
-            .first()
-            .expect("non-empty KeyPackage upload checked above");
-        let first_key_package =
-            decode_key_package(first_entry.keypackage.as_str()).map_err(AppError::param_invalid)?;
-        validate_agent_keypackage_upload(
+        verify_agent_keypackage_batch(
             state,
             &principal_id,
             authorize_event_id,
-            &first_key_package,
             &body.endpoint_signature,
             &upload_signing_input,
         )
@@ -356,23 +349,15 @@ async fn upload_keypackage(
             .pairwise_verification_method
             .as_ref()
             .expect("validated pairwise method");
-        let first_entry = body
-            .keypackages
-            .first()
-            .expect("non-empty KeyPackage upload checked above");
-        let first_key_package =
-            decode_key_package(first_entry.keypackage.as_str()).map_err(AppError::param_invalid)?;
-        validate_pairwise_keypackage_upload(
+        verify_pairwise_keypackage_batch(
             &principal_id,
             method,
-            &first_key_package,
             &body.endpoint_signature,
             &upload_signing_input,
         )
         .map_err(AppError::param_invalid)?;
     }
 
-    let default_endpoint_signature = body.endpoint_signature.clone();
     let mut accepted = 0_u32;
     let mut key_package_refs = Vec::new();
     let mut rejected = Vec::new();
@@ -421,85 +406,40 @@ async fn upload_keypackage(
             ));
             continue;
         }
-        let endpoint_signature = match entry_signature(
-            entry.endpoint_signature.as_ref(),
-            &default_endpoint_signature,
-        ) {
-            Ok(signature) => signature,
-            Err(reason) => {
-                rejected.push(keypackage_failure(&entry, endpoint_device_id, reason));
-                continue;
-            }
-        };
-        let entry_signing_input = if entry.endpoint_signature.is_some() {
-            match arkret_models_crypto::http_bodies::keypackage_upload_endpoint_entry_signing_input(
-                &unsigned_upload,
-                &entry,
-            ) {
-                Ok(input) => input,
-                Err(error) => {
-                    rejected.push(keypackage_failure(
-                        &entry,
-                        endpoint_device_id,
-                        "endpoint_signature_invalid",
-                    ));
-                    tracing::debug!(%error, "KeyPackage entry signing input rejected");
-                    continue;
-                }
-            }
-        } else {
-            upload_signing_input.clone()
-        };
         if let Some(authorize_event_id) = trust_binding
             .as_ref()
             .and_then(|binding| binding.agent_key_authorize_event_id.as_deref())
-            && let Err(reason) = validate_agent_keypackage_upload(
+            && let Err(reason) = validate_agent_keypackage_leaf(
                 state,
                 &principal_id,
                 authorize_event_id,
                 &key_package_bytes,
-                &endpoint_signature,
-                &entry_signing_input,
             )
             .await
         {
             rejected.push(keypackage_failure(&entry, endpoint_device_id, reason));
             continue;
         }
-        if let Some(endpoint_device_id) = endpoint_device_id {
-            if entry.endpoint_signature.is_some()
-                && let Err(error) = verify_device_keypackage_signature(
-                    state,
-                    &principal_id,
-                    endpoint_device_id,
-                    &endpoint_signature,
-                    &entry_signing_input,
-                )
-                .await
-            {
-                if error.code == ErrorCode::InternalError {
-                    return Err(error);
-                }
-                rejected.push(keypackage_failure(
-                    &entry,
-                    Some(endpoint_device_id),
-                    error.message,
-                ));
-                continue;
-            }
+        if let Some(endpoint_device_id) = endpoint_device_id
+            && let Err(reason) = validate_device_keypackage_leaf(
+                state,
+                &principal_id,
+                endpoint_device_id,
+                &key_package_bytes,
+            )
+            .await
+        {
+            rejected.push(keypackage_failure(&entry, Some(endpoint_device_id), reason));
+            continue;
         }
         if device_id.is_none() && trust_binding.is_none() {
             let method = body
                 .pairwise_verification_method
                 .as_ref()
                 .expect("validated pairwise method");
-            if let Err(reason) = validate_pairwise_keypackage_upload(
-                &principal_id,
-                method,
-                &key_package_bytes,
-                &endpoint_signature,
-                &entry_signing_input,
-            ) {
+            if let Err(reason) =
+                validate_pairwise_keypackage_leaf(&principal_id, method, &key_package_bytes)
+            {
                 rejected.push(keypackage_failure(&entry, endpoint_device_id, reason));
                 continue;
             }
@@ -534,7 +474,6 @@ async fn upload_keypackage(
             },
             key_package_bytes,
             capabilities,
-            endpoint_signature,
             last_resort,
             trust_anchor,
             created_at,
@@ -571,21 +510,10 @@ async fn upload_keypackage(
         key_package_refs.push(keypackage_ref);
     }
 
-    let trust_selector = trust_binding
-        .as_ref()
-        .cloned()
-        .map(KeyPackageTrustSelector::Principal);
     json_ok(KeyPackagesUploadOutcome {
         accepted,
         rejected,
         key_package_refs,
-        available_count: Some(available_keypackage_count(
-            state,
-            &actor_id,
-            None,
-            trust_selector.as_ref(),
-            None,
-        )),
     })
 }
 
@@ -3741,29 +3669,29 @@ fn decode_key_package(encoded: &str) -> Result<Vec<u8>, String> {
         })
 }
 
-fn entry_signature(
-    entry_signature: Option<&KeyOperationSignature>,
-    default_signature: &KeyOperationSignature,
-) -> Result<KeyOperationSignature, String> {
-    let signature = entry_signature.unwrap_or(default_signature);
-    if signature.kid.is_empty() || signature.sig.is_empty() {
-        return Err("device_signature_invalid".to_owned());
-    }
-    if signature
-        .signature_algorithm
-        .as_deref()
-        .is_some_and(str::is_empty)
-    {
-        return Err("device_signature_invalid".to_owned());
-    }
-    Ok(signature.clone())
-}
-
 async fn validate_agent_keypackage_upload(
     state: &AppState,
     principal: &arkret_wire::DidCoreId,
     authorize_event_id: &str,
     key_package_bytes: &[u8],
+    signature: &KeyOperationSignature,
+    signing_input: &[u8],
+) -> Result<(), String> {
+    verify_agent_keypackage_batch(
+        state,
+        principal,
+        authorize_event_id,
+        signature,
+        signing_input,
+    )
+    .await?;
+    validate_agent_keypackage_leaf(state, principal, authorize_event_id, key_package_bytes).await
+}
+
+async fn verify_agent_keypackage_batch(
+    state: &AppState,
+    principal: &arkret_wire::DidCoreId,
+    authorize_event_id: &str,
     signature: &KeyOperationSignature,
     signing_input: &[u8],
 ) -> Result<(), String> {
@@ -3793,25 +3721,24 @@ async fn validate_agent_keypackage_upload(
         .get("public_key_digest")
         .and_then(Value::as_str)
         .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
-    let leaf = arkret_mls::author_leaf_from_key_package_bytes(key_package_bytes, 0)
-        .map_err(|_| "key_package_invalid".to_owned())?;
-    match leaf.credential {
-        arkret_mls::AuthorLeafCredential::Basic { identity } => {
-            let encoded = std::str::from_utf8(&identity)
-                .map_err(|_| "claim_generation_mismatch".to_owned())?;
-            let (leaf_principal, leaf_device) = encoded
-                .rsplit_once('#')
-                .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
-            if leaf_principal != principal.as_str()
-                || arkret_identifiers::DeviceId::new(leaf_device.to_owned()).is_err()
-            {
-                return Err("claim_generation_mismatch".to_owned());
-            }
-        }
-        _ => return Err("claim_generation_mismatch".to_owned()),
+    let agent = state
+        .agent_pairings()
+        .agent(principal.as_str())
+        .await
+        .map_err(|_| "claim_generation_mismatch".to_owned())?
+        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
+    let binding = agent
+        .authorized_signing_key_binding
+        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
+    if binding.agent_key_authorize_event_id.as_str() != authorize_event_id
+        || binding.core.verification_method.as_str() != verification_method
+        || binding.core.public_key_digest.as_str() != expected_public_key_digest
+    {
+        return Err("claim_generation_mismatch".to_owned());
     }
-    let public_key: [u8; 32] = leaf
-        .signature_key
+    let public_key: [u8; 32] = URL_SAFE_NO_PAD
+        .decode(binding.core.public_key.key.as_str())
+        .map_err(|_| "claim_generation_mismatch".to_owned())?
         .as_slice()
         .try_into()
         .map_err(|_| "claim_generation_mismatch".to_owned())?;
@@ -3842,6 +3769,31 @@ async fn validate_agent_keypackage_upload(
     .map_err(|_| "device_signature_invalid".to_owned())
 }
 
+async fn validate_agent_keypackage_leaf(
+    state: &AppState,
+    principal: &arkret_wire::DidCoreId,
+    authorize_event_id: &str,
+    key_package_bytes: &[u8],
+) -> Result<(), String> {
+    let agent = state
+        .agent_pairings()
+        .agent(principal.as_str())
+        .await
+        .map_err(|_| "claim_generation_mismatch".to_owned())?
+        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
+    let binding = agent
+        .authorized_signing_key_binding
+        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
+    if binding.agent_key_authorize_event_id.as_str() != authorize_event_id {
+        return Err("claim_generation_mismatch".to_owned());
+    }
+    let public_key = URL_SAFE_NO_PAD
+        .decode(binding.core.public_key.key.as_str())
+        .map_err(|_| "claim_generation_mismatch".to_owned())?;
+    validate_actor_keypackage_leaf(principal, &public_key, key_package_bytes)
+}
+
+#[cfg(test)]
 fn validate_pairwise_keypackage_upload(
     principal: &arkret_wire::DidCoreId,
     verification_method: &arkret_wire::DidUrl,
@@ -3849,6 +3801,14 @@ fn validate_pairwise_keypackage_upload(
     signature: &KeyOperationSignature,
     signing_input: &[u8],
 ) -> Result<(), String> {
+    verify_pairwise_keypackage_batch(principal, verification_method, signature, signing_input)?;
+    validate_pairwise_keypackage_leaf(principal, verification_method, key_package_bytes)
+}
+
+fn pairwise_keypackage_public_key(
+    principal: &arkret_wire::DidCoreId,
+    verification_method: &arkret_wire::DidUrl,
+) -> Result<[u8; 32], String> {
     arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(
         principal.clone(),
         verification_method.clone(),
@@ -3864,15 +3824,17 @@ fn validate_pairwise_keypackage_upload(
         .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
     let public_key = arkret_canonical::decode_ed25519_multibase(multibase)
         .map_err(|_| "claim_generation_mismatch".to_owned())?;
-    let leaf = arkret_mls::author_leaf_from_key_package_bytes(key_package_bytes, 0)
-        .map_err(|_| "key_package_invalid".to_owned())?;
-    match leaf.credential {
-        arkret_mls::AuthorLeafCredential::Basic { identity }
-            if identity.as_slice() == principal.as_str().as_bytes() => {}
-        _ => return Err("claim_generation_mismatch".to_owned()),
-    }
-    if leaf.signature_key.as_slice() != public_key
-        || signature.kid.as_str() != verification_method.as_str()
+    Ok(public_key)
+}
+
+fn verify_pairwise_keypackage_batch(
+    principal: &arkret_wire::DidCoreId,
+    verification_method: &arkret_wire::DidUrl,
+    signature: &KeyOperationSignature,
+    signing_input: &[u8],
+) -> Result<(), String> {
+    let public_key = pairwise_keypackage_public_key(principal, verification_method)?;
+    if signature.kid.as_str() != verification_method.as_str()
         || signature
             .signature_algorithm
             .as_ref()
@@ -3887,6 +3849,33 @@ fn validate_pairwise_keypackage_upload(
         signature,
     )
     .map_err(|_| "endpoint_signature_invalid".to_owned())
+}
+
+fn validate_pairwise_keypackage_leaf(
+    principal: &arkret_wire::DidCoreId,
+    verification_method: &arkret_wire::DidUrl,
+    key_package_bytes: &[u8],
+) -> Result<(), String> {
+    let public_key = pairwise_keypackage_public_key(principal, verification_method)?;
+    validate_actor_keypackage_leaf(principal, &public_key, key_package_bytes)
+}
+
+fn validate_actor_keypackage_leaf(
+    principal: &arkret_wire::DidCoreId,
+    public_key: &[u8],
+    key_package_bytes: &[u8],
+) -> Result<(), String> {
+    let leaf = arkret_mls::author_leaf_from_key_package_bytes(key_package_bytes, 0)
+        .map_err(|_| "key_package_invalid".to_owned())?;
+    match leaf.credential {
+        arkret_mls::AuthorLeafCredential::Basic { identity }
+            if identity.as_slice() == principal.as_str().as_bytes() => {}
+        _ => return Err("claim_generation_mismatch".to_owned()),
+    }
+    if leaf.signature_key.as_slice() != public_key {
+        return Err("claim_generation_mismatch".to_owned());
+    }
+    Ok(())
 }
 
 async fn ensure_pairwise_realm_affinity(
@@ -3927,6 +3916,49 @@ async fn ensure_pairwise_realm_affinity(
             "pairwise endpoint has no current Realm membership affinity",
         )
         .with_wire_code("claim_generation_mismatch"));
+    }
+    Ok(())
+}
+
+async fn validate_device_keypackage_leaf(
+    state: &AppState,
+    principal: &arkret_wire::DidCoreId,
+    device_id: &str,
+    key_package_bytes: &[u8],
+) -> Result<(), String> {
+    let device = state
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
+            actor_id: principal.to_string(),
+            device_id: device_id.to_owned(),
+        })
+        .await
+        .map_err(|_| "claim_generation_mismatch".to_owned())?
+        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
+    if device.verification_state != "verified" || device.revoked_at.is_some() {
+        return Err("claim_generation_mismatch".to_owned());
+    }
+    let device_public_key = device
+        .payload
+        .get("device_public_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
+    let verifying_key = crate::routing::identity::device_signing::decode_ed25519_key(
+        device_public_key,
+        "multibase",
+    )
+    .map_err(|_| "claim_generation_mismatch".to_owned())?;
+    let leaf = arkret_mls::author_leaf_from_key_package_bytes(key_package_bytes, 0)
+        .map_err(|_| "key_package_invalid".to_owned())?;
+    match leaf.credential {
+        arkret_mls::AuthorLeafCredential::Basic { identity }
+            if identity.as_slice() == device_id.as_bytes() => {}
+        _ => return Err("claim_generation_mismatch".to_owned()),
+    }
+    if leaf.signature_key.as_slice() != verifying_key.to_bytes() {
+        return Err("claim_generation_mismatch".to_owned());
     }
     Ok(())
 }
@@ -4394,63 +4426,6 @@ fn consume_group_ref(body: &KeyPackagesConsumeRequestBody) -> String {
     body.recipient_durable_receipt.mls_group_id.to_string()
 }
 
-fn available_keypackage_count(
-    state: &AppState,
-    actor_id: &str,
-    device_id: Option<&str>,
-    trust_selector: Option<&KeyPackageTrustSelector>,
-    intended_realm_id: Option<&str>,
-) -> u64 {
-    let keypackages = state.projections().mls_key_package_records();
-    available_keypackage_count_from_records(
-        &keypackages,
-        actor_id,
-        device_id,
-        trust_selector,
-        intended_realm_id,
-    )
-}
-
-fn available_keypackage_count_from_records(
-    keypackages: &[MlsKeyPackageRow],
-    actor_id: &str,
-    device_id: Option<&str>,
-    trust_selector: Option<&KeyPackageTrustSelector>,
-    intended_realm_id: Option<&str>,
-) -> u64 {
-    let now_secs = now().timestamp();
-    keypackages
-        .iter()
-        .filter(|kp| kp.actor_id == actor_id)
-        .filter(|kp| device_id.is_none_or(|device_id| kp.device_id.as_deref() == Some(device_id)))
-        .filter(|kp| trust_selector.is_none_or(|selector| selector.matches_keypackage(kp)))
-        .filter(|kp| {
-            let Ok(lifecycle) = kp.lifecycle() else {
-                return false;
-            };
-            match (&lifecycle.reuse_policy, &lifecycle.claim_state) {
-                (
-                    PersistedKeyPackageReusePolicy::LastResort { bound_realm_id },
-                    PersistedKeyPackageClaimState::Available,
-                ) => intended_realm_id
-                    .map(|realm_id| {
-                        bound_realm_id
-                            .as_ref()
-                            .map(RealmId::as_str)
-                            .is_none_or(|bound| bound == realm_id)
-                    })
-                    .unwrap_or_else(|| bound_realm_id.is_none()),
-                (
-                    PersistedKeyPackageReusePolicy::SingleUse,
-                    PersistedKeyPackageClaimState::Available,
-                ) => true,
-                _ => false,
-            }
-        })
-        .filter(|kp| kp.lifetime_not_after > now_secs)
-        .count() as u64
-}
-
 /// Whether `actor_id` currently has a KeyPackage that the canonical Realm
 /// membership admission path can actually claim.
 ///
@@ -4694,7 +4669,6 @@ mod trust_binding_tests {
             capabilities: vec!["ak.content.v1".to_owned()],
             expires_at: now() + chrono::Duration::minutes(5),
             created_at: now(),
-            endpoint_signature: None,
             last_resort: None,
         };
 
@@ -4872,9 +4846,11 @@ mod trust_binding_tests {
             soland_domain::reducer::ProjectionEffect::AgentKeyAuthorizeProjected { .. }
         ));
 
-        let identity = arkret_mls::ArkretMlsIdentity::from_ed25519_signing_seed(
+        let identity = arkret_mls::ArkretMlsIdentity::from_native_agent_signing_seed(
             principal_core.clone(),
             device.clone(),
+            arkret_wire::DidUrl::new(verification_method.to_owned()).unwrap(),
+            arkret_wire::EventId::new(authorize_event_id.clone()).unwrap(),
             signing_seed,
         )
         .unwrap();

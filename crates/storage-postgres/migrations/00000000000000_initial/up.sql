@@ -1665,7 +1665,6 @@ CREATE TABLE public.mls_key_packages (
     key_package_bytes bytea NOT NULL,
     capabilities jsonb DEFAULT '[]'::jsonb NOT NULL,
     capabilities_digest text NOT NULL,
-    endpoint_signature jsonb DEFAULT '{}'::jsonb NOT NULL,
     last_resort boolean DEFAULT false NOT NULL,
     last_resort_realm_id text,
     lifetime_not_before bigint NOT NULL,

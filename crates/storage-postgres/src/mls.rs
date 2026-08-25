@@ -51,11 +51,11 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         let inserted = sql_query(
             "INSERT INTO mls_key_packages \
              (id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, key_package_bytes, \
-              capabilities, capabilities_digest, endpoint_signature, last_resort, \
+              capabilities, capabilities_digest, last_resort, \
               last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
               claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
               claim_expires_at_unix_ms, consumed_at, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind::<Text, _>(&record.id)
@@ -68,7 +68,6 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<Binary, _>(&record.key_package_bytes)
         .bind::<Jsonb, _>(serde_json::json!(record.capabilities))
         .bind::<Text, _>(&record.capabilities_digest)
-        .bind::<Jsonb, _>(&record.endpoint_signature)
         .bind::<Bool, _>(record.last_resort)
         .bind::<Nullable<Text>, _>(&record.last_resort_realm_id)
         .bind::<BigInt, _>(record.lifetime_not_before)
@@ -95,7 +94,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .map_err(PersistenceError::database)?;
         sql_query(
              "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
-             key_package_bytes, capabilities, capabilities_digest, endpoint_signature, \
+             key_package_bytes, capabilities, capabilities_digest, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at \
@@ -119,7 +118,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .map_err(PersistenceError::database)?;
         sql_query(
              "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
-             key_package_bytes, capabilities, capabilities_digest, endpoint_signature, \
+             key_package_bytes, capabilities, capabilities_digest, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at \
@@ -189,7 +188,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                     AND ($7 IS NULL OR ($7 > $6 * 1000 AND $7 <= lifetime_not_after * 1000)))) \
                AND ((NOT last_resort) OR $2 = 'revoked' OR (last_resort_realm_id IS NULL AND $3 IS NOT NULL) OR last_resort_realm_id = $3) \
              RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
-             key_package_bytes, capabilities, capabilities_digest, endpoint_signature, \
+             key_package_bytes, capabilities, capabilities_digest, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at",
@@ -232,7 +231,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                AND consumed_at IS NULL \
                AND claim_expires_at_unix_ms > $3 \
              RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
-             key_package_bytes, capabilities, capabilities_digest, endpoint_signature, \
+             key_package_bytes, capabilities, capabilities_digest, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at",
@@ -382,7 +381,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                     }
                     let claimed = sql_query(
                         "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
-                         key_package_bytes, capabilities, capabilities_digest, endpoint_signature, \
+                         key_package_bytes, capabilities, capabilities_digest, \
                          last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
                          claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
                          claim_expires_at_unix_ms, consumed_at, created_at \
@@ -432,7 +431,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                    AND lifetime_not_after * 1000 > $5 \
                    AND $6 > $5 AND $6 <= lifetime_not_after * 1000 \
              RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
-             key_package_bytes, capabilities, capabilities_digest, endpoint_signature, \
+             key_package_bytes, capabilities, capabilities_digest, \
                  last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
                  claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
                  claim_expires_at_unix_ms, consumed_at, created_at",
@@ -712,7 +711,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .map_err(PersistenceError::database)?;
         sql_query(
              "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
-             key_package_bytes, capabilities, capabilities_digest, endpoint_signature, \
+             key_package_bytes, capabilities, capabilities_digest, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at \
@@ -738,7 +737,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .map_err(PersistenceError::database)?;
         sql_query(
              "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
-             key_package_bytes, capabilities, capabilities_digest, endpoint_signature, \
+             key_package_bytes, capabilities, capabilities_digest, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at \
@@ -1063,8 +1062,6 @@ struct MlsKeyPackagePgRow {
     capabilities: Value,
     #[diesel(sql_type = Text)]
     capabilities_digest: String,
-    #[diesel(sql_type = Jsonb)]
-    endpoint_signature: Value,
     #[diesel(sql_type = Bool)]
     last_resort: bool,
     #[diesel(sql_type = Nullable<Text>)]
@@ -1148,7 +1145,6 @@ impl From<MlsKeyPackagePgRow> for MlsKeyPackageRow {
             key_package_bytes: row.key_package_bytes,
             capabilities: json_string_array(row.capabilities),
             capabilities_digest: row.capabilities_digest,
-            endpoint_signature: row.endpoint_signature,
             last_resort: row.last_resort,
             last_resort_realm_id: row.last_resort_realm_id,
             lifetime_not_before: row.lifetime_not_before,
