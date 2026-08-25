@@ -32,7 +32,7 @@ pub(super) fn protocol_router() -> Router {
 pub(crate) async fn persist_mimi_facade_moderation_report_event(
     state: &AppState,
     payload: ModerationReportPayload,
-) -> Result<String, AppError> {
+) -> Result<EventId, AppError> {
     let service_event_lock = crate::routing::events::event_log::service_event_authoring_lock();
     let _service_event_guard = service_event_lock.lock().await;
     let service_actor = state.service_id().as_str();
@@ -146,14 +146,15 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
         service_did,
         verification_method.clone(),
     );
+    let canonical_created_at = event.created_at;
     arkret_signatures::sign_event(
         &mut event,
         &signer,
         &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+        arkret_signatures::SignEventOptions::new().with_created_at(canonical_created_at),
     )
     .map_err(|error| AppError::internal(format!("moderation Event signing failed: {error}")))?;
-    let event_id = event.event_id().to_string();
+    let event_id = event.event_id().clone();
     let session = soland_services::identity::SessionIdentityState {
         token_hash: "moderation-report-service".to_owned(),
         actor: state.service_id().clone(),
@@ -168,10 +169,13 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
         created_at,
         revoked_at: None,
     };
-    let envelope = serde_json::to_value(event).map_err(|error| {
+    // `AuthoredEvent` is a durable authoring record
+    // `{ digest_suite, event }`. Ordinary admission consumes only the complete
+    // canonical Event envelope nested in that record.
+    let envelope = serde_json::to_value(event.event()).map_err(|error| {
         AppError::internal(format!("moderation Event serialize failed: {error}"))
     })?;
-    crate::routing::events::event_log::submit_mimi_moderation_report_event_value(
+    let admitted = crate::routing::events::event_log::submit_mimi_moderation_report_event_value(
         state,
         &session,
         envelope,
@@ -188,6 +192,11 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
         .with_status(error.status)
         .with_wire_code(error.code)
     })?;
+    if admitted.event_id != event_id.as_str() {
+        return Err(AppError::internal(
+            "moderation admission returned a different Event identity",
+        ));
+    }
     Ok(event_id)
 }
 

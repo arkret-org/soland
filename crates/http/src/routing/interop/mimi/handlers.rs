@@ -1125,10 +1125,7 @@ pub(super) async fn mimi_report_abuse(
     // `report` is Event-derived: the id is the accepted
     // `ak.self.moderation.report` Event token retyped, so it exists only after
     // admission and never enters the Event payload.
-    let report_id = ReportId::from_event_id(
-        &arkret_identifiers::EventId::new(report_event_id.clone())
-            .map_err(|error| AppError::internal(format!("MIMI report Event id: {error}")))?,
-    );
+    let report_id = ReportId::from_event_id(&report_event_id);
     let routed_to = vec![
         arkret_wire::DidCoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(format!("service core id is invalid: {error}")))?,
