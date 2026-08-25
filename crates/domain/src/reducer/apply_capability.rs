@@ -2524,10 +2524,13 @@ mod agent_key_tests {
             &op(EventKind::CapabilityGrant, bridge_grant_payload()),
             chrono::Utc::now(),
         );
-        assert!(matches!(
-            exact_first,
-            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
-        ));
+        assert!(
+            matches!(
+                exact_first,
+                crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
+            ),
+            "unexpected effect: {exact_first:?}"
+        );
     }
 
     fn bridge_grant_payload() -> serde_json::Value {
@@ -2538,13 +2541,18 @@ mod agent_key_tests {
             json!(["ak.applet.ghost.provision"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
-        payload["grant"]["expires_at"] = json!("2099-01-01T00:00:00.000Z");
+        payload["grant"]["capability_action_registry_digest"] =
+            json!(arkret_policy::current_capability_action_registry_digest().unwrap());
         payload["grant"]["constraints"] = json!([{
             "constraint_kind": "authority_control",
             "constraint_subkind": "applet_authority",
             "applet_id": "ak:applet:01970000-0000-7000-8000-0000000000b0",
             "executed_by": "ak:did_core:web:bridge.example",
             "registration_epoch": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }, {
+            "constraint_kind": "temporal",
+            "effect": "allow",
+            "expires_at": "2099-01-01T00:00:00.000Z"
         }]);
         payload
     }
@@ -2558,10 +2566,13 @@ mod agent_key_tests {
             &op(EventKind::CapabilityGrant, bridge_grant_payload()),
             chrono::Utc::now(),
         );
-        assert!(matches!(
-            effect,
-            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
-        ));
+        assert!(
+            matches!(
+                effect,
+                crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
+            ),
+            "unexpected effect: {effect:?}"
+        );
     }
 
     #[test]
@@ -2590,11 +2601,14 @@ mod agent_key_tests {
         project_bridge_registration(&mut state);
         let effect = state
             .apply_capability_grant(&op(EventKind::CapabilityGrant, bridge_grant_payload()), now);
-        assert!(matches!(
-            effect,
-            crate::reducer::ProjectionEffect::Rejected { reason }
-                if reason == "realm_authority_controller_mismatch"
-        ));
+        assert!(
+            matches!(
+                effect,
+                crate::reducer::ProjectionEffect::Rejected { ref reason }
+                    if reason == "realm_authority_controller_mismatch"
+            ),
+            "unexpected effect: {effect:?}"
+        );
     }
 
     #[test]
@@ -2645,8 +2659,15 @@ mod agent_key_tests {
             json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
-        parent["grant"]["expires_at"] =
-            json!(arkret_canonical::format_timestamp_canonical(parent_expiry));
+        parent["grant"]["constraints"] = json!([{
+            "constraint_kind": "temporal",
+            "effect": "allow",
+            "expires_at": arkret_canonical::format_timestamp_canonical(parent_expiry)
+        }, {
+            "constraint_kind": "authority_control",
+            "effect": "allow",
+            "max_authority_depth": 1
+        }]);
         let parent_effect = state
             .apply_capability_grant(&op(EventKind::CapabilityGrant, parent), chrono::Utc::now());
         assert!(matches!(
@@ -2662,15 +2683,25 @@ mod agent_key_tests {
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
         child["grant"]["issuer_authority_refs"] = json!([{ "kind": "grant", "grant_id": GRANT }]);
-        child["grant"]["expires_at"] =
-            json!(arkret_canonical::format_timestamp_canonical(child_expiry));
+        child["grant"]["constraints"] = json!([{
+            "constraint_kind": "temporal",
+            "effect": "allow",
+            "expires_at": arkret_canonical::format_timestamp_canonical(child_expiry)
+        }, {
+            "constraint_kind": "authority_control",
+            "effect": "allow",
+            "max_authority_depth": 0
+        }]);
         let child_effect = state
             .apply_capability_grant(&op(EventKind::CapabilityGrant, child), chrono::Utc::now());
-        assert!(matches!(
-            child_effect,
-            crate::reducer::ProjectionEffect::Rejected { reason }
-                if reason == "authority_expiry_widening"
-        ));
+        assert!(
+            matches!(
+                child_effect,
+                crate::reducer::ProjectionEffect::Rejected { ref reason }
+                    if reason == "authority_expiry_widening"
+            ),
+            "unexpected effect: {child_effect:?}"
+        );
     }
 
     #[test]
