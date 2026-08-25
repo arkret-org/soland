@@ -1437,9 +1437,8 @@ impl ProjectionState {
             });
         // `morph.md` §4.1 S3 — merge any declared opt-in conformance profile
         // ids from canonical genesis `schema_refs[]` into the Realm's growing
-        // profile set. Later declarations have the dedicated `ak.realm.schema`
-        // carrier; this lifecycle path never infers them from the removed
-        // monolithic Realm update payload.
+        // profile set. This lifecycle path never infers them from removed or
+        // schema-invalid update payload spellings.
         for profile in realm_declared_profiles(operation) {
             if !realm.active_profiles.contains(&profile) {
                 realm.active_profiles.push(profile);

@@ -776,7 +776,6 @@ pub(crate) fn realm_declared_profiles(operation: &Operation) -> Vec<String> {
             }
         }
     };
-    push_array(operation.payload.get("schema_refs"));
     push_array(
         operation
             .payload

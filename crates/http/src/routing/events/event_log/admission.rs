@@ -259,10 +259,7 @@ pub fn realm_policy_bundle_check(
     }
 
     // (1) T09 — relaxed_window_max_ms ceiling.
-    if let Some(window) = payload
-        .pointer("/e2ee_relaxed/relaxed_window_max_ms")
-        .and_then(Value::as_u64)
-    {
+    if let Some(window) = payload.get("relaxed_window_max_ms").and_then(Value::as_u64) {
         let window_u32 = u32::try_from(window).unwrap_or(u32::MAX);
         if arkret_models_collaboration::governance::audit::validate_relaxed_window_ms(window_u32)
             .is_err()
@@ -270,7 +267,7 @@ pub fn realm_policy_bundle_check(
             return Err((
                 ErrorCode::FailedPrecondition,
                 format!(
-                    "e2ee_relaxed.relaxed_window_max_ms={window} exceeds absolute \
+                    "relaxed_window_max_ms={window} exceeds absolute \
                      hard ceiling of {}ms",
                     arkret_models_collaboration::governance::audit::ABSOLUTE_HARD_CEILING_MS
                 ),
@@ -281,11 +278,7 @@ pub fn realm_policy_bundle_check(
     // (2) T09 — e2ee_relaxed.v1 mutex against audit compliance.
     let relaxed_active = active_profiles
         .iter()
-        .any(|p| p == arkret_wire::ProfileId::E2EE_RELAXED_V1)
-        || payload
-            .pointer("/e2ee_relaxed/profile")
-            .and_then(Value::as_str)
-            == Some(arkret_wire::ProfileId::E2EE_RELAXED_V1);
+        .any(|p| p == arkret_wire::ProfileId::E2EE_RELAXED_V1);
     let compliance_active = active_profiles.iter().any(|p| {
         soland_services::operation_semantics::AUDIT_COMPLIANCE_PROFILES.contains(&p.as_str())
     });

@@ -187,7 +187,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                 }
             }
             // SEC-08 — latch the minimal-metadata declaration from the
-            // create-locked genesis or a subsequent `ak.realm.schema` carrier.
+            // create-locked genesis carrier.
             if !record.minimal_metadata_realm
                 && kinds::payload_declares_minimal_metadata_realm(&operation.payload)
             {

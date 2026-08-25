@@ -266,8 +266,8 @@ pub const AUDIT_COMPLIANCE_PROFILES: &[&str] = &[
 /// [`ProfileId::MLS_MINIMAL_METADATA_REALM_V1`]
 /// (`crypto-media/encryption-and-audit.md` §2.9)?
 ///
-/// Current v1 has one carrier: `schema_refs[]`, directly on `ak.realm.schema`
-/// or nested in the closed Realm genesis `object` on `ak.realm.create`.
+/// Current v1's constructible carrier is `schema_refs[]` nested in the closed
+/// Realm genesis `object` on `ak.realm.create`.
 pub fn payload_declares_minimal_metadata_realm(payload: &serde_json::Value) -> bool {
     let declares = |value: Option<&serde_json::Value>| {
         value
@@ -278,12 +278,11 @@ pub fn payload_declares_minimal_metadata_realm(payload: &serde_json::Value) -> b
                 })
             })
     };
-    declares(payload.get("schema_refs"))
-        || declares(
-            payload
-                .get("object")
-                .and_then(|object| object.get("schema_refs")),
-        )
+    declares(
+        payload
+            .get("object")
+            .and_then(|object| object.get("schema_refs")),
+    )
 }
 
 #[cfg(test)]
@@ -294,11 +293,8 @@ mod audit_profile_tests {
     fn minimal_metadata_realm_detected_from_schema_refs() {
         use serde_json::json;
 
-        // SEC-08 — both current schema carriers are recognised; removed
-        // profiles spellings are not compatibility inputs.
-        assert!(payload_declares_minimal_metadata_realm(&json!({
-            "schema_refs": ["ak.profile.mls.minimal_metadata_realm.v1"]
-        })));
+        // SEC-08 — only the constructible genesis carrier is recognised;
+        // removed or schema-invalid spellings are not compatibility inputs.
         assert!(payload_declares_minimal_metadata_realm(&json!({
             "object": {
                 "schema_refs": ["ak.schema.realm.v1", "ak.profile.mls.minimal_metadata_realm.v1"]
@@ -306,6 +302,9 @@ mod audit_profile_tests {
         })));
         assert!(!payload_declares_minimal_metadata_realm(&json!({
             "profiles": ["ak.profile.mls.minimal_metadata_realm.v1"]
+        })));
+        assert!(!payload_declares_minimal_metadata_realm(&json!({
+            "schema_refs": ["ak.profile.mls.minimal_metadata_realm.v1"]
         })));
         assert!(!payload_declares_minimal_metadata_realm(&json!({
             "schema_refs": ["ak.schema.realm.v1"]

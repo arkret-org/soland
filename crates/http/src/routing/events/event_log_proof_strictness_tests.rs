@@ -1624,99 +1624,6 @@ fn insert_historical_data_event_child_grant_with_revoked_authority(
     insert_data_event_seal(state, vec![parent_move_id, child_move_id])
 }
 
-/// A single-Seal E2EE fixture used by refusal cases.
-fn insert_historical_data_event_grant_with_e2ee_state(
-    state: &AppState,
-    grant_id: &str,
-    include_relaxed_policy: bool,
-) -> String {
-    insert_historical_data_event_grant_with_e2ee_state_covered_under(
-        state,
-        grant_id,
-        None,
-        include_relaxed_policy,
-    )
-}
-
-fn insert_historical_data_event_grant_with_e2ee_state_covered_under(
-    state: &AppState,
-    grant_id: &str,
-    _covered_cell_subject: Option<&str>,
-    include_relaxed_policy: bool,
-) -> String {
-    let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
-    let seal_id = data_event_seal_id();
-    let mut move_ids = Vec::new();
-    let mut ops = Vec::new();
-
-    let grant_move_id = data_event_move_id(0xb0);
-    let grant_cell = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.capability.grant.v1:{grant_id}"
-    ))
-    .unwrap();
-    let grant_op = arkret_wire::LatticeOp {
-        op_type: arkret_wire::LatticeOpType::Add,
-        tag: Some("ak:operation:01904100-0000-7000-8000-0000000009b0".to_owned()),
-        value: Some(historical_data_event_grant_value(
-            grant_id,
-            "ak.message.create",
-            DATA_EVENT_ACTOR,
-            "ak:did_core:web:owner.example",
-            false,
-            None,
-        )),
-        from: None,
-        to: None,
-        reason: None,
-        issuer_seq: None,
-    };
-    move_ids.push(grant_move_id.clone());
-    ops.push((
-        grant_cell,
-        strictness_issued(arkret_state::lattice::SealedOp::new(
-            grant_move_id,
-            grant_op,
-        )),
-    ));
-
-    if include_relaxed_policy {
-        let policy_move_id = data_event_move_id(0xb2);
-        let policy_cell = arkret_identifiers::CellRef::new(
-            "ak:cell:ak.component.realm.policy_bundle.v1:null".to_owned(),
-        )
-        .unwrap();
-        let policy_op = arkret_wire::LatticeOp {
-            op_type: arkret_wire::LatticeOpType::Set,
-            tag: None,
-            value: Some(json!({
-                "profiles": ["ak.profile.e2ee_relaxed.v1"],
-                "e2ee_relaxed": {
-                    "profile": "ak.profile.e2ee_relaxed.v1",
-                    "relaxed_window_max_ms": 30000
-                }
-            })),
-            from: None,
-            to: None,
-            reason: None,
-            issuer_seq: None,
-        };
-        move_ids.push(policy_move_id.clone());
-        ops.push((
-            policy_cell,
-            strictness_issued(arkret_state::lattice::SealedOp::new(
-                policy_move_id,
-                policy_op,
-            )),
-        ));
-    }
-
-    state
-        .projections()
-        .test_append_sealed_effects(&realm, &seal_id, &ops)
-        .unwrap();
-    insert_data_event_seal(state, move_ids)
-}
-
 /// The cell an `ak.message.create` in this Realm projects.
 ///
 /// v1 carries no producer `effects[]`; the receiver derives the write set from
@@ -1760,30 +1667,6 @@ fn data_event_object_with_refs(
     .as_object()
     .unwrap()
     .clone()
-}
-
-fn data_event_e2ee_object_with_refs(
-    seal_ref: &str,
-    refs: Vec<String>,
-) -> serde_json::Map<String, Value> {
-    let mut object = data_event_object_with_refs(seal_ref, refs);
-    object.insert(
-        "payload".to_owned(),
-        json!({
-            "strand_id": DATA_EVENT_STRAND,
-            "track_name": "main",
-            "encrypted_content": {
-                "version": "1.0",
-                "content_type": "application/json",
-                "encryption_context": {
-                    "epoch": 7,
-                    "group_state_ref": "ak:event:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml"
-                },
-                "ciphertext": "base64url",
-            }
-        }),
-    );
-    object
 }
 
 #[test]
@@ -2140,25 +2023,6 @@ fn high_risk_data_event_revocation_has_no_grace_window() {
     assert_eq!(err.code, "seal_ref_stale");
 }
 
-#[test]
-fn relaxed_e2ee_data_event_keeps_independent_capability_gate() {
-    let state = make_state(true);
-    let grant_id = "ak:grant:AaMjYWHMpy6u6Gi9YMy2ppf8RiR-qtp4TSKfr1ZrbbTz";
-    let seal_ref = insert_historical_data_event_grant_with_e2ee_state(&state, grant_id, true);
-    let object = data_event_e2ee_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
-
-    validate_data_event_capability_refs(
-        &state,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
-        DATA_EVENT_REALM,
-        "ak.message.create",
-        &object,
-        &data_event_derived_cells(),
-        false,
-    )
-    .expect("relaxed E2EE profile still uses ordinary capability admission");
-}
 /// Attach a fixed issuer to a strictness fixture op; these cells are not
 /// ordered-log keyed, so the issuer travels but does not select a slot.
 fn strictness_issued(

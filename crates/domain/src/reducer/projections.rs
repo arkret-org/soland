@@ -1117,7 +1117,7 @@ pub struct SolandRealmState {
     /// per-Strand column.
     pub default_strand_id: Option<String>,
     /// Opt-in conformance profile ids the Realm has declared through genesis
-    /// `schema_refs[]` or another registered profile carrier. Projected as a
-    /// monotonically-growing set: a profile once observed stays declared.
+    /// Realm-genesis `schema_refs[]`. Projected as a monotonically-growing set:
+    /// a profile once observed stays declared.
     pub active_profiles: Vec<String>,
 }

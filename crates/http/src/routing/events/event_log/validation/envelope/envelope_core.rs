@@ -734,33 +734,19 @@ async fn validate_event_envelope_with_ingress(
     validate_audit_accessed_payload(&kind, object)?;
     // Round R2/R3 (T09 + T12) — realm.policy_bundle hard ceiling,
     // e2ee_relaxed mutex, and media plaintext triple binding. Active
-    // profile set comes from the submitted policy-components payload;
-    // cross-policy bindings come from the materialized Realm metadata /
-    // MLS cells, with the current payload used only for same-event writes.
+    // profile set comes from accepted Realm schema refs; cross-policy bindings
+    // come from materialized Realm metadata / MLS cells, with the current
+    // payload used only for same-event policy-component writes.
     if kind == arkret_wire::EventKind::RealmPolicyBundle.as_str() {
         let payload = object.get("payload").cloned().unwrap_or(Value::Null);
         let policy_bundle = policy_bundle_value_from_state_payload(&payload);
-        // Best-effort: collect active profiles from the payload's own
-        // `profiles[]` field plus any payload-asserted "active_profiles".
-        let mut active_profiles: Vec<String> = policy_bundle
-            .get("profiles")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(ToOwned::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if let Some(extra) = policy_bundle
-            .get("active_profiles")
-            .and_then(Value::as_array)
-        {
-            for v in extra {
-                if let Some(s) = v.as_str() {
-                    active_profiles.push(s.to_owned());
-                }
-            }
-        }
+        let active_profiles: Vec<String> = state
+            .projections()
+            .snapshot()
+            .realm_schema_refs(realm_id.as_str())
+            .into_iter()
+            .filter(|reference| reference.starts_with("ak.profile."))
+            .collect();
         let media_plaintext_service_present =
             projected_media_plaintext_service_present(state, realm_id.as_str(), policy_bundle)
                 .await;
