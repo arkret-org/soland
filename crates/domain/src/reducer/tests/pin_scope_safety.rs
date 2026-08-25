@@ -62,7 +62,8 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
                     "created_by": "ak:did_core:web:alice.example",
                     "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "join_rule": "public",
-                    "encryption_profile": "mls_rfc9420"
+                    "encryption_profile": "mls_rfc9420",
+                    "content_scheme": "mls_rfc9420"
                 }
             }),
         ),

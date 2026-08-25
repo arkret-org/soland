@@ -852,7 +852,8 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
                     "created_by": "ak:did_core:web:alice.example",
                     "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "join_rule": "public",
-                    "encryption_profile": "mls_rfc9420"
+                    "encryption_profile": "mls_rfc9420",
+                    "content_scheme": "mls_rfc9420"
                 }
             }),
         ),
@@ -997,7 +998,8 @@ fn child_scope_policy_gates_space_parent_edges() {
                     "created_by": "ak:did_core:web:alice.example",
                     "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "join_rule": "public",
-                    "encryption_profile": "mls_rfc9420"
+                    "encryption_profile": "mls_rfc9420",
+                    "content_scheme": "mls_rfc9420"
                 }
             }),
         ),

@@ -713,7 +713,7 @@ impl ProjectionState {
             if self.pin_target_is_blocked_by_moderation(target_ref) {
                 return None;
             }
-            if self.redaction_cells.contains_key(&message.event_id) {
+            if message.redacted_at.is_some() {
                 return None;
             }
             return Some(PinEffectiveScope {

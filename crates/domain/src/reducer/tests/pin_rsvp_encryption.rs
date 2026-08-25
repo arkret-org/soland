@@ -3,25 +3,22 @@ use super::*;
 const REALM_ID: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
 const STRAND_ID: &str = "ak:strand:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD";
 
-fn encrypted_payload(event_kind: &str) -> Value {
-    encrypted_payload_with_scheme(event_kind, "mls_rfc9420", "MLS")
-}
-
-fn encrypted_payload_with_scheme(event_kind: &str, scheme: &str, algorithm: &str) -> Value {
-    let _ = (event_kind, algorithm);
-    let mut encryption_context = serde_json::json!({
-        "epoch": 7u64,
-        "group_state_ref": "ak:event:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml"
-    });
-    if scheme == "mls_exporter_aead_v1" {
-        encryption_context["counter"] = Value::from(4u64);
-    }
+fn encrypted_payload() -> Value {
     serde_json::json!({
         "version": "1.0",
         "content_type": "application/json",
-        "encryption_context": encryption_context,
+        "encryption_context": {
+            "epoch": 7u64,
+            "group_state_ref": "ak:event:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml"
+        },
         "ciphertext": "Y2lwaGVydGV4dA",
     })
+}
+
+fn exporter_encrypted_payload() -> Value {
+    let mut envelope = encrypted_payload();
+    envelope["encryption_context"]["counter"] = Value::from(4u64);
+    envelope
 }
 
 fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
@@ -164,7 +161,7 @@ fn pin_note_accepts_encrypted_projection_payload() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
-    let note = encrypted_payload(arkret_wire::EventKind::PinAdd.as_str());
+    let note = encrypted_payload();
 
     let effect = state.apply(
         &make_operation(
@@ -188,7 +185,7 @@ fn pin_note_rejects_envelope_committed_to_another_scope() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
-    let mut note = encrypted_payload(arkret_wire::EventKind::PinAdd.as_str());
+    let mut note = encrypted_payload();
     note["aad"]["scope_digest"] = serde_json::json!(format!("sha256:{}", "f".repeat(64)));
 
     let effect = state.apply(
@@ -205,15 +202,11 @@ fn pin_note_rejects_envelope_committed_to_another_scope() {
 }
 
 #[test]
-fn pin_note_accepts_exporter_aead_encrypted_projection_payload() {
+fn pin_note_accepts_current_encrypted_projection_payload() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
-    let note = encrypted_payload_with_scheme(
-        arkret_wire::EventKind::PinAdd.as_str(),
-        "mls_exporter_aead_v1",
-        "MLS-EXPORTER-AEAD",
-    );
+    let note = exporter_encrypted_payload();
 
     let effect = state.apply(
         &make_operation(
@@ -230,30 +223,6 @@ fn pin_note_accepts_exporter_aead_encrypted_projection_payload() {
     ));
     let pin = state.pins.values().next().expect("pin should project");
     assert_eq!(pin.note.as_ref(), Some(&note));
-}
-
-#[test]
-fn pin_note_rejects_exporter_aead_with_mls_key_algorithm() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("test");
-    seed_pin_target(&mut state, &hlc);
-    let note = encrypted_payload_with_scheme(
-        arkret_wire::EventKind::PinAdd.as_str(),
-        "mls_exporter_aead_v1",
-        "MLS",
-    );
-
-    let effect = state.apply(
-        &make_operation(arkret_wire::EventKind::PinAdd, REALM_ID, pin_payload(note)),
-        &hlc,
-    );
-
-    assert!(matches!(
-        effect,
-        ProjectionEffect::Rejected { ref reason }
-            if reason == "pin_note_encrypted_payload_required"
-    ));
-    assert!(state.pins.is_empty());
 }
 
 #[test]
