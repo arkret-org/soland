@@ -16,6 +16,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use arkret_event_draft::EventPayloadExt as _;
 use arkret_identifiers::{DidFullId, RealmId, SealId};
 use arkret_models_collaboration::governance::realm_governance::{
     RealmLinkCreateRequestBody, RealmPolicyServerDeleteRequestBody,
@@ -33,8 +34,8 @@ use soland_storage::PersistenceStore;
 use soland_storage_memory::SolandMemoryPersistenceStore;
 use soland_test_support::AppStateTestExt as _;
 use soland_test_support::signed_event::{
-    CallerSignedEvent, FIXTURE_EVENT_SIGNING_SEED, complete_realm_bootstrap_unit,
-    head_eq_precondition,
+    CallerSignedBasis, CallerSignedEvent, FIXTURE_EVENT_SIGNING_SEED,
+    complete_realm_bootstrap_unit, head_eq_precondition,
 };
 
 const ALICE: &str = "did:web:alice.example";
@@ -106,7 +107,66 @@ async fn bootstrap_realm(state: &AppState, token: &str, title: &str) -> String {
     )
     .build();
     let realm_id = RealmId::from_event_id(&genesis.event_id).to_string();
-    let bootstrap = complete_realm_bootstrap_unit(genesis, ALICE, ALICE_DEVICE, title);
+    let founder_actor_id = genesis.actor_id.clone();
+    let mut bootstrap = complete_realm_bootstrap_unit(genesis, ALICE, ALICE_DEVICE, title);
+    let prior_event_id = bootstrap
+        .get(bootstrap.len().saturating_sub(2))
+        .expect("bootstrap delivery policy precedes founder membership")
+        .event_id
+        .to_string();
+    bootstrap
+        .pop()
+        .expect("replace unroutable founder membership");
+    let recipient_service_id = arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
+        .expect("fixture Principal Server core id");
+    let current_record_url = format!(
+        "https://server.test{}",
+        arkret_models_identity::canonical_service_current_record_path(&recipient_service_id)
+    );
+    bootstrap.push(
+        CallerSignedEvent::new(
+            arkret_wire::EventKind::MemberState.as_str(),
+            ALICE,
+            ALICE_DEVICE,
+            &realm_id,
+            json!({
+                "realm_id": realm_id.as_str(),
+                "actor_id": founder_actor_id.as_str(),
+                "membership": "join",
+                "delivery_status": "routable",
+                "delivery_binding": {
+                    "recipient_service_id": recipient_service_id,
+                    "recipient_service_kind": "principal_server",
+                    "binding_scope": "realm",
+                    "binding_source": "explicit",
+                    "delivery_modes": ["events"],
+                    "service_resolution": {
+                        "current_record_url": current_record_url
+                    },
+                    "service_acceptance_ref": prior_event_id,
+                    "resolved_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                }
+            }),
+        )
+        .with_actor_seq(7)
+        .with_prev_refs(vec![prior_event_id.as_str()])
+        .with_preconditions(vec![head_eq_precondition(
+            &format!(
+                "ak:cell:ak.component.member.state.v1:{}",
+                founder_actor_id.as_str()
+            ),
+            Value::Null,
+        )])
+        .with_basis(CallerSignedBasis::AnchorUnit)
+        .build(),
+    );
+    bootstrap
+        .last()
+        .expect("fixture founder membership")
+        .typed_payload::<arkret_wire::event_spec::MemberState>()
+        .expect("typed routable founder membership payload");
+    arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&bootstrap)
+        .expect("routable fixture ordinary Realm bootstrap unit");
     let mut create_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
@@ -333,7 +393,12 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
 async fn accepted_seal_frontier(state: &AppState, token: &str, realm_id: &str) -> String {
     for attempt in 0..50 {
         let mut response = TestClient::query("http://server/_arkret/self/seals/frontier")
-            .json(&serde_json::json!({"realm_id": realm_id}))
+            .json(
+                &arkret_models_collaboration::event_query::SealFrontierRequestBody {
+                    realm_id: RealmId::new(realm_id.to_owned())
+                        .expect("fixture Seal frontier Realm id"),
+                },
+            )
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await;
@@ -342,8 +407,8 @@ async fn accepted_seal_frontier(state: &AppState, token: &str, realm_id: &str) -
         if status == Some(StatusCode::OK) {
             let frontier: arkret_models_collaboration::event_sync::SealFrontierState =
                 serde_json::from_value(body).expect("typed Realm Seal frontier");
-            let frontier = frontier.frontier;
             return frontier
+                .frontier
                 .sole_leaf()
                 .expect("single-signer Realm frontier")
                 .to_string();
@@ -360,6 +425,26 @@ async fn accepted_seal_frontier(state: &AppState, token: &str, realm_id: &str) -
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     unreachable!("bounded Realm Seal frontier retry returns or panics")
+}
+
+async fn accepted_seal_frontier_after(
+    state: &AppState,
+    token: &str,
+    realm_id: &str,
+    previous: &str,
+) -> String {
+    for attempt in 0..50 {
+        let frontier = accepted_seal_frontier(state, token, realm_id).await;
+        if frontier != previous {
+            return frontier;
+        }
+        assert!(
+            attempt < 49,
+            "Realm Seal frontier did not advance past {previous}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    unreachable!("bounded Realm Seal advancement retry returns or panics")
 }
 
 async fn actor_frontier(state: &AppState, token: &str, realm_id: &str) -> (u64, Vec<String>) {
@@ -480,7 +565,8 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
     // The self-management handler runs a local notary signing pass, so the
     // accepted Seal frontier advances: the Move is Seal-covered, not merely
     // projected.
-    let seal_after_put = accepted_seal_frontier(&state, &token, org_realm).await;
+    let seal_after_put =
+        accepted_seal_frontier_after(&state, &token, org_realm, &seal_before).await;
     assert_ne!(
         seal_before, seal_after_put,
         "policy-server Control Move must be covered by a newly accepted Seal"
@@ -815,18 +901,14 @@ async fn policy_server_replace_without_head_eq_is_refused() {
     );
 }
 
-/// `ak.self.events.read.resolve` returns the Seal covering each resolved Event.
+/// Event and Seal discovery remain separate closed surfaces.
 ///
-/// `service-http-binding.md` (`ak.self.events.read.resolve`) makes `seals[]` a
-/// closed derived set — for every returned Event, the accepted Seal whose
-/// `delta[]` carries that Event's `event_digest` — not merely the answer to
-/// `seal_refs[]`. A Realm creator bootstrapping its MLS governance anchor
-/// (`encryption-and-audit.md` section 2.5.4 T1) resolves the `ak.realm.create`
-/// it authored and cannot name the genesis Seal id in advance; while this
-/// endpoint filled `seals[]` from `seal_refs[]` alone the creator got an empty
-/// set, never pinned an anchor, and every encrypted write in the Realm failed.
+/// `service-http-binding.md` makes `ak.self.events.read.resolve` return Event
+/// bytes only. A caller discovers the current Seal leaf independently, then
+/// resolves that exact leaf through `ak.self.seals.read.resolve` and verifies
+/// its `delta[]` against the Event digest.
 #[tokio::test(flavor = "multi_thread")]
-async fn events_resolve_returns_the_seal_covering_each_resolved_event() {
+async fn events_resolve_excludes_seals_and_seal_resolve_returns_exact_leaf() {
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
     let state = soland_test_support::app_state_with_persistence(test_config(), persistence).await;
     let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
@@ -854,11 +936,31 @@ async fn events_resolve_returns_the_seal_covering_each_resolved_event() {
         .as_str()
         .expect("create Event carries its canonical digest");
 
-    let seals = resolved["seals"].as_array().expect("seals array");
+    assert!(
+        resolved.get("seals").is_none(),
+        "Event resolve must not attach a covering or activation Seal: {resolved}"
+    );
+    let seal_ref = accepted_seal_frontier(&state, &token, &realm).await;
+    let mut seal_response = TestClient::query("http://server/_arkret/self/seals/resolve")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(&json!({
+            "realm_id": realm,
+            "seal_refs": [seal_ref]
+        })))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(
+        seal_response.status_code,
+        Some(StatusCode::OK),
+        "Seal resolve status"
+    );
+    let seal_resolved: Value = seal_response.take_json().await.unwrap();
+    let seals = seal_resolved["seals"].as_array().expect("seals array");
     assert_eq!(
         seals.len(),
         1,
-        "the create Event's covering Seal must be derived without a seal_refs selector: {resolved}"
+        "the exact current Seal leaf must resolve independently: {seal_resolved}"
     );
     assert!(
         seals[0]["delta"]
@@ -866,20 +968,11 @@ async fn events_resolve_returns_the_seal_covering_each_resolved_event() {
             .expect("Seal delta")
             .iter()
             .any(|entry| entry.as_str() == Some(create_digest)),
-        "the returned Seal must be the one covering the create Event, not a descendant: {resolved}"
-    );
-    assert_eq!(
-        seals[0]["id"].as_str(),
-        Some(
-            accepted_seal_frontier(&state, &token, &realm)
-                .await
-                .as_str()
-        ),
-        "a freshly bootstrapped Realm's covering Seal is its accepted frontier: {resolved}"
+        "the resolved current Seal must cover the create Event: {seal_resolved}"
     );
 
-    // An Event id that does not exist stays in `missing[]` and contributes no
-    // Seal: the derived set never invents coverage for an unresolved selector.
+    // An Event id that does not exist stays in `missing[]`; Event resolve still
+    // cannot expose any Seal material.
     let unknown: Value = TestClient::query("http://server/_arkret/self/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
@@ -892,11 +985,5 @@ async fn events_resolve_returns_the_seal_covering_each_resolved_event() {
         .await
         .unwrap();
     assert!(unknown["events"].as_array().unwrap().is_empty());
-    assert!(
-        unknown["seals"]
-            .as_array()
-            .map(|seals| seals.is_empty())
-            .unwrap_or(true),
-        "unresolved selectors contribute no Seal: {unknown}"
-    );
+    assert!(unknown.get("seals").is_none());
 }
