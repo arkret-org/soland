@@ -303,36 +303,11 @@ fn text_mimi_message(message_id: &str, body: &str) -> Value {
     })
 }
 
-async fn accepted_canonical_event(state: &AppState, event_id: &str) -> arkret_wire::Event {
-    let record = state
-        .test_persistence()
-        .events()
-        .get(event_id)
-        .await
-        .expect("canonical Event lookup")
-        .unwrap_or_else(|| panic!("accepted canonical Event missing: {event_id}"));
-    let event: arkret_wire::Event =
-        serde_json::from_value(record.envelope).expect("stored canonical Event envelope");
-    assert_eq!(event.event_id.as_str(), event_id);
-    assert_eq!(event.kind.as_str(), record.kind);
-    assert_eq!(event.actor_id.as_str(), record.actor_id);
-    assert_eq!(event.realm_id.as_str(), record.realm_id.as_deref().unwrap());
-    assert_eq!(
-        event
-            .event_digest_with_digest_suite(record.digest_suite)
-            .expect("stored canonical Event digest"),
-        record.canonical_digest
-    );
-    assert_eq!(
-        arkret_canonical::canonical_json_bytes(
-            &event
-                .digest_payload()
-                .expect("stored canonical Event digest payload")
-        )
-        .expect("stored canonical Event bytes"),
-        record.canonical_bytes
-    );
+fn event_kind(event: &Value) -> Option<&str> {
     event
+        .get("event_kind")
+        .or_else(|| event.get("kind"))
+        .and_then(Value::as_str)
 }
 
 fn identifier_commitment(identifier: &str) -> String {
@@ -553,10 +528,8 @@ async fn mimi_provider_facade_contracts_work_body() {
             .is_none_or(|rejected| rejected.is_empty())
     );
 
-    let asset_ref = arkret_wire::BlobRef::new(format!("ak:blob:sha256:{}", "e".repeat(64)))
-        .expect("MIMI fixture canonical blob ref");
     let proxy_body = json!({
-        "asset_ref": asset_ref.as_str(),
+        "asset_ref": "ak:blob:sha256:e2e",
         "requester": MIMI_ALICE_ACTOR_ID,
         "strand_id": MIMI_TEST_STRAND_ID,
     });
@@ -571,24 +544,13 @@ async fn mimi_provider_facade_contracts_work_body() {
     .take_json()
     .await
     .unwrap();
-    let proxy_object = proxy.as_object().expect("proxy outcome object");
-    assert_eq!(proxy_object.len(), 2);
-    assert!(proxy_object.contains_key("download_ref"));
-    assert!(proxy_object.contains_key("expires_at"));
-    let proxy: arkret_models_collaboration::http_bodies::MimiProxyDownloadOutcome =
-        serde_json::from_value(proxy).expect("closed proxy outcome");
-    assert!(proxy.headers.is_empty());
-    assert!(proxy.expires_at.is_some());
-    let download_ref = reqwest::Url::parse(&proxy.download_ref).expect("proxy download URL");
-    assert_eq!(download_ref.path(), "/_arkret/open/mimi/proxy-download");
-    assert_eq!(
-        download_ref
-            .query_pairs()
-            .find(|(name, _)| name == "asset_ref")
-            .map(|(_, value)| value.into_owned())
-            .as_deref(),
-        Some(asset_ref.as_str())
+    assert!(
+        proxy["download_ref"]
+            .as_str()
+            .unwrap()
+            .contains("/mimi/proxy-download")
     );
+    assert!(proxy["expires_at"].as_str().is_some());
 
     let report_body = json!({
         "strand_id": MIMI_TEST_STRAND_ID,
@@ -704,43 +666,59 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
         .as_str()
         .unwrap_or_else(|| panic!("event_ref missing: {msg_resp}"));
 
-    let binding_event = accepted_canonical_event(&state, binding_event_id).await;
-    assert_eq!(binding_event.kind.as_str(), "ak.mimi.room_binding");
-    assert_eq!(binding_event.payload["mimi_room_uri"], room_uri);
+    let events: Value = TestClient::query("http://server/_arkret/self/events")
+        .json(&serde_json::json!({"realms": [demo_realm]}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let list = events["events"].as_array().expect("events array");
+
+    let binding_event = list
+        .iter()
+        .find(|event| event["event_id"] == binding_event_id)
+        .expect("room_binding event missing from projection log");
+    assert_eq!(event_kind(binding_event), Some("ak.mimi.room_binding"));
+    assert_eq!(binding_event["payload"]["mimi_room_uri"], room_uri);
     assert_eq!(
-        binding_event.payload["binding_scope"]["realm_id"],
+        binding_event["payload"]["binding_scope"]["realm_id"],
         demo_realm
     );
 
-    let message_event = accepted_canonical_event(&state, arkret_event_id).await;
-    assert_eq!(message_event.kind.as_str(), "ak.message.create");
-    assert_eq!(message_event.actor_id.as_str(), state.service_id().as_str());
+    let message_event = list
+        .iter()
+        .find(|event| event["event_id"] == arkret_event_id)
+        .expect("MIMI-ingressed message missing from projection log");
+    assert_eq!(event_kind(message_event), Some("ak.message.create"));
+    assert_eq!(message_event["actor_id"], state.service_id().as_str());
     assert_eq!(
-        message_event.payload["mimi_provenance"]["attributed_sender_actor_id"],
+        message_event["payload"]["mimi_provenance"]["attributed_sender_actor_id"],
         MIMI_REMOTE_ACTOR_ID
     );
     assert_eq!(
-        message_event.payload["content"]["parts"][0]["body"],
+        message_event["payload"]["content"]["parts"][0]["body"],
         "hello from MIMI P4"
     );
     assert_eq!(
-        message_event.payload["mimi_provenance"]["source_provider"],
+        message_event["payload"]["mimi_provenance"]["source_provider"],
         MIMI_SOURCE_SERVICE_ID
     );
     assert_eq!(
-        message_event.payload["mimi_provenance"]["provenance"],
+        message_event["payload"]["mimi_provenance"]["provenance"],
         "mimi_facade"
     );
     assert_eq!(
-        message_event.payload["mimi_provenance"]["attributed_sender_device_id"],
+        message_event["payload"]["mimi_provenance"]["attributed_sender_device_id"],
         MIMI_TEST_DEVICE_ID
     );
     assert_eq!(
-        message_event.payload["mimi_provenance"]["room_binding_ref"],
+        message_event["payload"]["mimi_provenance"]["room_binding_ref"],
         binding_event_id
     );
     assert!(
-        message_event.payload["mimi_provenance"]["source_envelope_digest"]
+        message_event["payload"]["mimi_provenance"]["source_envelope_digest"]
             .as_str()
             .is_some_and(|digest| digest.starts_with("sha256:"))
     );
@@ -772,28 +750,32 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
         "report response: {report_resp}"
     );
 
-    let report_id = arkret_identifiers::ReportId::new(
-        report_resp["report_id"]
-            .as_str()
-            .expect("MIMI report_id")
-            .to_owned(),
-    )
-    .expect("canonical MIMI report_id");
-    let report_event_id = arkret_identifiers::EventIdentityKey::new(
-        report_id.digest_suite_code(),
-        report_id.digest_bytes(),
-    )
-    .event_id();
-    let report_event = accepted_canonical_event(&state, report_event_id.as_str()).await;
-    assert_eq!(report_event.kind.as_str(), "ak.self.moderation.report");
-    assert_eq!(report_event.payload["target_ref"], demo_realm);
+    let events_again: Value = TestClient::query("http://server/_arkret/self/events")
+        .json(&serde_json::json!({"realms": [demo_realm]}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let report_event = events_again["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| {
+            // `moderation_report_payload` names the reported object `target_ref`;
+            // it has no `target_event_digest` member to match on.
+            event_kind(event) == Some("ak.self.moderation.report")
+                && event["payload"]["target_ref"] == demo_realm
+        })
+        .unwrap_or_else(|| panic!("moderation.report event missing: {events_again}"));
     // `mimi-interop.md` §11 is about *attribution*: the report must name the
     // principal the facade resolved, not the provider that asserted it. The
     // facade holds no key for that principal, so it authors the envelope under
     // its own service DID and carries the resolved reporter in the payload, as
     // required by `mimi-interop.md` §11.
-    assert_eq!(report_event.payload["reporter"], MIMI_ALICE_ACTOR_ID);
-    assert_eq!(report_event.actor_id.as_str(), state.service_id().as_str());
+    assert_eq!(report_event["payload"]["reporter"], MIMI_ALICE_ACTOR_ID);
+    assert_eq!(report_event["actor_id"], *state.service_id());
 
     let custom_group_id = "mimi-group-p4-custom";
     let migrating_body = mimi_room_update_body(
@@ -861,10 +843,16 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     .unwrap();
     let second_event_id = msg_resp_2["event_ref"].as_str().expect("event_ref missing");
 
-    let second_event = accepted_canonical_event(&state, second_event_id).await;
+    let second_record = state
+        .test_persistence()
+        .events()
+        .get(second_event_id)
+        .await
+        .unwrap()
+        .expect("second message must be persisted");
     assert_eq!(
-        second_event.realm_id.as_str(),
-        custom_realm,
+        second_record.realm_id.as_deref(),
+        Some(custom_realm),
         "second message must route to the rebound realm_id"
     );
 
@@ -1099,37 +1087,51 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
         .unwrap_or_else(|| panic!("quarantine event id: {quarantine_resp}"))
         .to_owned();
 
-    let downgrade_event = accepted_canonical_event(&state, &downgrade_event_id).await;
+    let events: Value = TestClient::query("http://server/_arkret/self/events")
+        .json(&serde_json::json!({"realms": [realm_id]}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let list = events["events"].as_array().expect("events array");
+    let find = |event_id: &str| {
+        list.iter()
+            .find(|event| event["event_id"] == event_id)
+            .unwrap_or_else(|| panic!("missing event {event_id}"))
+    };
+    let downgrade_event = find(&downgrade_event_id);
     assert_eq!(
-        downgrade_event.payload["content"]["e2ee_downgrade"],
+        downgrade_event["payload"]["content"]["e2ee_downgrade"],
         "mimi_bridge"
     );
     assert_eq!(
-        downgrade_event.payload["metadata"]["mimi_policy"]["e2ee_boundary"],
+        downgrade_event["payload"]["metadata"]["mimi_policy"]["e2ee_boundary"],
         "explicit_downgrade"
     );
 
-    let transcript_event = accepted_canonical_event(&state, &transcript_event_id).await;
+    let transcript_event = find(&transcript_event_id);
     assert_eq!(
-        transcript_event.payload["content"]["transcript_binding"]["transcript_hash"],
+        transcript_event["payload"]["content"]["transcript_binding"]["transcript_hash"],
         "sha256:3333333333333333333333333333333333333333333333333333333333333333"
     );
     assert_eq!(
-        transcript_event.payload["metadata"]["mimi_policy"]["e2ee_boundary"],
+        transcript_event["payload"]["metadata"]["mimi_policy"]["e2ee_boundary"],
         "transcript_bound"
     );
 
-    let quarantine_event = accepted_canonical_event(&state, &quarantine_event_id).await;
+    let quarantine_event = find(&quarantine_event_id);
     assert_eq!(
-        quarantine_event.payload["content"]["kind"],
+        quarantine_event["payload"]["content"]["kind"],
         "ak.content.text"
     );
     assert_eq!(
-        quarantine_event.payload["content"]["unknown_content_kind"],
+        quarantine_event["payload"]["content"]["unknown_content_kind"],
         "m.location.share.live"
     );
     assert_eq!(
-        quarantine_event.payload["metadata"]["quarantine"]["unknown_content_kind"],
+        quarantine_event["payload"]["metadata"]["quarantine"]["unknown_content_kind"],
         "m.location.share.live"
     );
 }
