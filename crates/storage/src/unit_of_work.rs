@@ -3,9 +3,8 @@ use async_trait::async_trait;
 use crate::{
     AccountDataRecord, CanonicalEventRecord, ConsentCellRecord, ContactRecord,
     ContactVerifiedMirrorRecord, DevicePairingAuthorizationCommit, DeviceRevocationGateSelector,
-    FederationOutboxRecord, IdempotencyRecord, PersistenceError, PersistenceResult,
-    DeviceRevocationTransition,
-    ProjectionEventRecord,
+    DeviceRevocationTransition, FederationOutboxRecord, IdempotencyRecord, PersistenceError,
+    PersistenceResult, ProjectionEventRecord,
 };
 
 /// One Contact projection mutation committed with its canonical Event and
