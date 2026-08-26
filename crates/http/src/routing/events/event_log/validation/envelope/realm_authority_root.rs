@@ -62,19 +62,6 @@ pub(super) fn validate_realm_authority_root_authorization(
             "Event cites the Realm authority root but is not authored by its current controller",
         ));
     }
-    // The digest is the snapshot the authority root was established against.
-    // An unknown snapshot fails closed; the receiver never substitutes its own
-    // embedded registry, because that would silently re-interpret the owner
-    // aggregate under a different action set.
-    let basis = &root.capability_action_registry_digest;
-    arkret_policy::require_registry_basis(Some(basis)).map_err(|_| {
-        event_validation_error(
-            StatusCode::FORBIDDEN,
-            "capability_registry_basis_unavailable",
-            "the Realm authority root names a capability-action registry snapshot this service \
-             cannot evaluate",
-        )
-    })?;
     // Which kinds may appear at all inside the atomic genesis unit is already a
     // closed question, answered by
     // `arkret_policy::realm_bootstrap::is_realm_bootstrap_followup_kind` before
@@ -87,7 +74,7 @@ pub(super) fn validate_realm_authority_root_authorization(
     // be said.
     if !bootstrap_unit_member
         && !root_control_only
-        && !arkret_policy::owner_may_author_event_kind(kind, Some(basis)).unwrap_or(false)
+        && !arkret_policy::owner_may_author_event_kind(kind).unwrap_or(false)
     {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,

@@ -451,7 +451,6 @@ mod managed_agent_pcr_batch_tests {
                 arkret_wire::SecurityClass::HighAssurance,
                 arkret_wire::EncryptionProfile::MlsRfc9420,
                 crate::test_single_signer_notary("did:webvh:z6mkfixtureagent:agent.example", 43),
-                arkret_policy::current_capability_action_registry_digest().unwrap(),
             )
             .unwrap();
         let payload =

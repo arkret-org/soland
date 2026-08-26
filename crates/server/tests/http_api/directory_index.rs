@@ -20,11 +20,11 @@ async fn sync_and_directory_share_demo_realm_body() {
         .await
         .unwrap();
     assert!(
-        sync_describe["supported_operations"]
+        sync_describe["operation_bindings"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ak.self.account.stream.subscribe")
+            .any(|binding| binding["operation_id"] == "ak.self.account.stream.subscribe")
     );
 
     let invalid_profile =
@@ -159,18 +159,18 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
         .await
         .unwrap();
     assert!(
-        describe["supported_operations"]
+        describe["operation_bindings"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ak.find.directory.read.list_handles_for_subject")
+            .any(|binding| binding["operation_id"] == "ak.find.directory.read.list_handles_for_subject")
     );
     assert!(
-        describe["supported_operations"]
+        describe["operation_bindings"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ak.find.directory.read.private_contact_discovery")
+            .any(|binding| binding["operation_id"] == "ak.find.directory.read.private_contact_discovery")
     );
 
     let alice_core = fixture_actor_core_id("did:web:alice.example");

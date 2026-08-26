@@ -368,8 +368,8 @@ pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
     );
     // T6.1 — claim-level partition of the describe response.
     // See arkret-spec/spec/v1/zh/sync/service-surface.md §3.0 and
-    // `ak.schema.service_describe.v1`. `supported_operations` is
-    // wire-callable only; this helper separates implementation state,
+    // `ak.schema.service_describe.v1`. `operation_bindings` is the exact
+    // wire-callable carrier set; this helper separates implementation state,
     // self-claims, cotest-verified claims, and interop surfaces while the
     // response is still the SDK's typed `ServiceDescribe`.
     apply_claim_level_partition(
@@ -449,14 +449,16 @@ pub(crate) fn apply_claim_level_partition(
                 .push(ProfileId::CANDIDATE_JOIN_POLICY_V1.to_owned());
         }
         for operation in join_operations {
-            if !description
-                .supported_operations
-                .iter()
-                .any(|candidate| candidate == operation)
+            let operation_id = arkret_wire::ServiceOperationId::from_wire(operation)
+                .expect("profile operation requirements must be generated operation ids");
+            if !description.supports_operation(operation_id)
             {
                 description
-                    .supported_operations
-                    .push((*operation).to_owned());
+                    .operation_bindings
+                    .push(
+                        arkret_models_discovery::service_description::OperationBinding::current_http_json(operation_id)
+                            .expect("profile operation must have a current HTTP JSON carrier"),
+                    );
             }
         }
         for feature in join_features {
@@ -475,9 +477,9 @@ pub(crate) fn apply_claim_level_partition(
         description
             .supported_profiles
             .retain(|profile| profile != ProfileId::CANDIDATE_JOIN_POLICY_V1);
-        description
-            .supported_operations
-            .retain(|operation| !join_operations.contains(&operation.as_str()));
+        description.operation_bindings.retain(|binding| {
+            !join_operations.contains(&binding.operation_id.as_str())
+        });
         description
             .supported_features
             .retain(|feature| !join_features.contains(&feature.as_str()));
@@ -495,8 +497,8 @@ pub(crate) fn apply_claim_level_partition(
         .extend(profile_requirements.required_features);
     description.supported_profiles.sort();
     description.supported_profiles.dedup();
-    description.supported_operations.sort();
-    description.supported_operations.dedup();
+    description.operation_bindings.sort();
+    description.operation_bindings.dedup();
     description.supported_features.sort();
     description.supported_features.dedup();
 
@@ -871,10 +873,8 @@ mod tests {
             "ak.self.realm.join_application.audit.read.list",
         ] {
             assert!(
-                description
-                    .supported_operations
-                    .iter()
-                    .any(|candidate| candidate == operation)
+                arkret_wire::ServiceOperationId::from_wire(operation)
+                    .is_some_and(|operation| description.supports_operation(operation))
             );
         }
         assert!(description.validate().is_ok());
@@ -892,10 +892,10 @@ mod tests {
                 .contains_key(ProfileId::CANDIDATE_JOIN_POLICY_V1)
         );
         assert!(
-            !description
-                .supported_operations
-                .iter()
-                .any(|operation| operation.contains("join_application"))
+            !description.operation_bindings.iter().any(|binding| binding
+                .operation_id
+                .as_str()
+                .contains("join_application"))
         );
     }
 

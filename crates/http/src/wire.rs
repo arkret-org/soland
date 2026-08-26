@@ -530,7 +530,7 @@ const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
 const UNDECLARED_OPERATION_IDS: &[&str] =
     &[arkret_wire::ServiceOperationId::FIND_DIRECTORY_COMMAND_TAKEDOWN_APPEAL];
 
-fn canonical_supported_operations() -> Vec<String> {
+fn canonical_operation_ids() -> Vec<String> {
     let missing_surfaces =
         artifacts::missing_operation_surface_groups(SUPPORTED_OPERATION_SURFACES);
     debug_assert!(
@@ -553,7 +553,7 @@ fn canonical_supported_operations() -> Vec<String> {
         supported
             .iter()
             .all(|operation_id| artifacts::operation_ids().contains(operation_id)),
-        "canonical_supported_operations must only contain spec operation ids"
+        "canonical_operation_ids must only contain spec operation ids"
     );
     supported
 }
@@ -774,7 +774,21 @@ pub fn describe(
         read: None,
         extra: Default::default(),
     };
-    let supported_operations = canonical_supported_operations();
+    let supported_operation_ids = canonical_operation_ids();
+    let mut operation_bindings = supported_operation_ids
+        .iter()
+        .map(|operation| {
+            let operation_id = arkret_wire::ServiceOperationId::from_wire(operation)
+                .expect("canonical operation ids must be generated SDK ids");
+            arkret_models_discovery::service_description::OperationBinding::current_http_json(
+                operation_id,
+            )
+            .expect("current operation registry must map to a supported success shape")
+        })
+        .collect::<Vec<_>>();
+    operation_bindings.push(
+        arkret_models_discovery::service_description::OperationBinding::current_tus_blob_upload(),
+    );
     let local_extension_operations = local_extension_operations();
 
     // Round 4 (B1) — ServiceDescribe: 17 required top-level fields.
@@ -987,7 +1001,7 @@ pub fn describe(
             "org.arkret.soland.feature.registry.artifacts".to_owned(),
             "org.arkret.soland.feature.plaintext_visible_services".to_owned(),
         ],
-        supported_operations,
+        operation_bindings,
         // service-surface.md §3 documents `base_url` (typed `format: uri` in
         // service-describe.schema.json) as the connectable service base.
         // Emit the same public base URL used by the HTTP describe handler so
@@ -996,7 +1010,9 @@ pub fn describe(
             arkret_models_discovery::service_description::SupportedBinding::new(
                 arkret_wire::BindingKind::HttpJson,
             )
-                .with_base_url(format!("{}/", public_base_url.trim_end_matches('/'))),
+                .with_base_url(format!("{}/", public_base_url.trim_end_matches('/')))
+                .with_extra("operations", serde_json::json!(supported_operation_ids))
+                .with_extra("extension_profile_required", serde_json::Value::Null),
             // Per-operation HTTP companion binding (transport-bindings.md
             // §6.1): tus 1.0.0 resumable upload for ak.self.blob.upload.
             // Versions/extensions mirror the OPTIONS probe answers of
@@ -1062,7 +1078,7 @@ pub fn describe(
                 "operation_registry_source": "arkret-spec/spec/v1/artifacts/registry/operation-registry.json",
                 "error_mapping_source": "arkret-spec/spec/v1/artifacts/registry/operations-error-mapping.json",
                 "universal_error_codes_inherited": true,
-                "supported_operations": [
+                "operations": [
                     arkret_wire::ServiceOperationId::SELF_AUTHZ_READ_CHECK,
                     arkret_wire::ServiceOperationId::SELF_AUTHZ_GRANTS_READ_EFFECTIVE,
                     arkret_wire::ServiceOperationId::SELF_AUTHZ_INVITES_READ_LIST,
@@ -1260,7 +1276,7 @@ pub fn describe(
         frontier: Vec::new(),
         snapshot_frontier: Vec::new(),
         last_materialized_at: None,
-        extensions: std::collections::BTreeMap::new(),
+        extensions: Default::default(),
     };
     description
         .install_current_arkret_build_identity()
@@ -1424,7 +1440,7 @@ mod tests {
             json!("standard_self_supported")
         );
         assert_eq!(
-            value["limits"]["authz_policy"]["supported_operations"],
+            value["limits"]["authz_policy"]["operations"],
             json!([
                 "ak.self.authz.read.check",
                 "ak.self.authz.grants.read.effective",

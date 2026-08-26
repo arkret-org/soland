@@ -1601,7 +1601,6 @@ diesel::table! {
         trusted_history_base_basis -> Jsonb,
         trusted_current_basis -> Jsonb,
         target_basis -> Jsonb,
-        registry_snapshot_digest -> Text,
         expires_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
     }

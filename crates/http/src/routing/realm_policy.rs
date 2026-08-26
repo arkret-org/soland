@@ -89,6 +89,8 @@ async fn put_realm_policy_server(
 
     let realm_scope = RealmId::new(realm_id.clone())
         .map_err(|e| AppError::param_invalid(format!("realm_id: {e}")))?;
+    let cell_key = policy_server_cell_key(&realm_id);
+    let direct_policy_server = direct_policy_server_cell_value(state, &cell_key)?;
     require_policy_manage(state, &session.actor, realm_scope.as_str()).await?;
     let payload = caller_signed_policy_server_payload(
         "policy_server_event",
@@ -108,8 +110,7 @@ async fn put_realm_policy_server(
             "policy server timeout_ms must be greater than zero",
         ));
     }
-    let cell_key = policy_server_cell_key(&realm_id);
-    if direct_policy_server_cell_value(state, &cell_key)?.is_some() {
+    if direct_policy_server.is_some() {
         require_head_eq_precondition("policy_server_event", &submission.event)?;
     }
     submit_caller_signed_policy_server_event(state, &session, &realm_scope, submission).await?;
@@ -146,10 +147,11 @@ async fn delete_realm_policy_server(
     let submission = body.into_inner().policy_server_event;
     let realm_scope = RealmId::new(realm_id.clone())
         .map_err(|e| AppError::param_invalid(format!("realm_id: {e}")))?;
+    let cell_key = policy_server_cell_key(&realm_id);
+    let direct_policy_server = direct_policy_server_cell_value(state, &cell_key)?;
     require_policy_manage(state, &session.actor, realm_scope.as_str()).await?;
 
-    let cell_key = policy_server_cell_key(&realm_id);
-    match direct_policy_server_cell_value(state, &cell_key)? {
+    match direct_policy_server {
         // A settled tombstone is an idempotent empty success, and the submitted
         // Event is deliberately not admitted: writing it again would change the
         // cell's history for a request that promises not to.

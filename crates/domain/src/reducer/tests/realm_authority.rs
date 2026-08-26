@@ -68,10 +68,6 @@ fn transfer_changes_only_controller_and_epoch() {
     assert_eq!(after.controller_id.as_str(), SUCCESSOR);
     assert_eq!(after.controller_epoch, before.controller_epoch + 1);
     assert_eq!(after.authority_generation, before.authority_generation);
-    assert_eq!(
-        after.capability_action_registry_digest,
-        before.capability_action_registry_digest
-    );
 }
 
 #[test]
@@ -121,7 +117,7 @@ fn transfer_rejects_nonmember_and_stale_expected_state() {
 }
 
 #[test]
-fn reset_changes_only_generation_and_basis_update_fails_closed() {
+fn reset_changes_only_generation() {
     let mut state = state_with_successor();
     let before = state.realm_authority_root(REALM).unwrap();
     let reset = state.apply_realm_authority_transition(
@@ -141,31 +137,6 @@ fn reset_changes_only_generation_and_basis_update_fails_closed() {
     assert_eq!(after_reset.controller_id, before.controller_id);
     assert_eq!(after_reset.controller_epoch, before.controller_epoch);
     assert_eq!(after_reset.authority_generation, 1);
-    assert_eq!(
-        after_reset.capability_action_registry_digest,
-        before.capability_action_registry_digest
-    );
-
-    let rejected = state.apply_realm_authority_transition(
-        &operation(
-            arkret_wire::EventKind::RealmAuthorityBasisUpdate,
-            serde_json::json!({
-                "realm_id": REALM,
-                "expected_state_digest": root_digest(&state),
-                "patch": {
-                    "capability_action_registry_digest": format!("sha256:{}", "1".repeat(64))
-                },
-                "sender": OWNER
-            }),
-        ),
-        arkret_wire::EventKind::RealmAuthorityBasisUpdate,
-    );
-    assert!(matches!(
-        rejected,
-        ProjectionEffect::Rejected { reason }
-            if reason == "capability_registry_basis_unavailable"
-    ));
-    assert_eq!(state.realm_authority_root(REALM).unwrap(), after_reset);
 }
 
 #[test]

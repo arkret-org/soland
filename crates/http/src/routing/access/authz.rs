@@ -459,7 +459,6 @@ fn capability_grant_from_authz_grant(
             .map_err(|error| AppError::internal(error.to_string()))?,
         actions: grant.actions,
         resources: vec![resource_selector],
-        capability_action_registry_digest: grant.capability_action_registry_digest,
         constraints,
         issuer_authority_refs: grant
             .issuer_authority_refs

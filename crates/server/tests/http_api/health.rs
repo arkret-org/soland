@@ -4,6 +4,16 @@
 
 use super::common::*;
 
+fn advertises_operation(describe: &Value, operation_id: &str) -> bool {
+    describe["operation_bindings"]
+        .as_array()
+        .is_some_and(|bindings| {
+            bindings
+                .iter()
+                .any(|binding| binding["operation_id"] == operation_id)
+        })
+}
+
 #[test]
 fn health_and_describe_work() {
     run_on_deep_stack("health_and_describe_work", health_and_describe_work_body);
@@ -141,39 +151,19 @@ async fn health_and_describe_work_body() {
             .any(|profile| profile == "ak.profile.media_service_binding.v1")
     );
     assert!(
-        describe["supported_operations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|operation| operation == "ak.open.mimi.command.submit_message")
+        advertises_operation(&describe, "ak.open.mimi.command.submit_message")
     );
     assert!(
-        describe["supported_operations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|operation| operation == "ak.self.events.command.submit")
+        advertises_operation(&describe, "ak.self.events.command.submit")
     );
     assert!(
-        describe["supported_operations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|operation| operation == "ak.self.blob.upload.create")
+        advertises_operation(&describe, "ak.self.blob.upload.create")
     );
     assert!(
-        describe["supported_operations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|operation| operation == "ak.self.keys.backups.resource.replace")
+        advertises_operation(&describe, "ak.self.keys.backups.resource.replace")
     );
     assert!(
-        describe["supported_operations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|operation| operation == "ak.self.circle.command.restore")
+        advertises_operation(&describe, "ak.self.circle.command.restore")
     );
     for operation_id in [
         "ak.self.authz.read.check",
@@ -182,11 +172,7 @@ async fn health_and_describe_work_body() {
         "ak.self.policy.read.check",
     ] {
         assert!(
-            describe["supported_operations"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|operation| operation == operation_id),
+            advertises_operation(&describe, operation_id),
             "describe must advertise authz_policy operation {operation_id}"
         );
     }
@@ -214,11 +200,13 @@ async fn health_and_describe_work_body() {
         describe["limits"]["authz_policy"]["invites"]["response_schema_ref"],
         "schemas/authz-operations.schema.json#/$defs/authz_invite_list"
     );
-    for operation in describe["supported_operations"].as_array().unwrap() {
-        let operation = operation.as_str().expect("operation id string");
+    for binding in describe["operation_bindings"].as_array().unwrap() {
+        let operation = binding["operation_id"]
+            .as_str()
+            .expect("operation id string");
         assert!(
             artifacts::operation_ids().contains(operation),
-            "supported_operations must only advertise spec operation ids, got {operation}"
+            "operation_bindings must only advertise spec operation ids, got {operation}"
         );
     }
     assert_eq!(

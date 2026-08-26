@@ -99,7 +99,6 @@ fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) -> S
         arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
         arkret_identifiers::TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
         soland_test_support::cba_basis::test_single_signer_notary("did:web:alice.example"),
-        arkret_policy::current_capability_action_registry_digest().unwrap(),
         chrono::Utc::now(),
     )
     .unwrap();

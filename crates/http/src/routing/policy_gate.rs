@@ -123,10 +123,6 @@ pub(crate) async fn enforce_operation_policy_server(
     operation: &Operation,
 ) -> Result<(), PolicyGateRejection> {
     let realm_id = operation.realm_id.as_str();
-    let operation_kind = kinds::canonical_kind_for_operation(operation).map_or_else(
-        || operation.event_kind.as_str().to_owned(),
-        |kind| kind.as_str().to_owned(),
-    );
     // `authz/policy-server.md` §7 — the Policy Server grants nothing; it only
     // narrows what capability authorization already allows. The Move that
     // *declares or removes* the binding is therefore authorized by
@@ -136,9 +132,13 @@ pub(crate) async fn enforce_operation_policy_server(
     // clear the bad declaration is itself denied by the declaration. The spec
     // requires a break-glass path for exactly this, and keeping the binding's
     // own control surface on pure capability authorization is that path.
-    if operation_kind == arkret_wire::EventKind::RealmPolicyServer.as_str() {
+    if operation.event_kind == arkret_wire::EventKind::RealmPolicyServer {
         return Ok(());
     }
+    let operation_kind = kinds::canonical_kind_for_operation(operation).map_or_else(
+        || operation.event_kind.as_str().to_owned(),
+        |kind| kind.as_str().to_owned(),
+    );
     let realm_config = state
         .projections()
         .realm_policy_server_config(realm_id)

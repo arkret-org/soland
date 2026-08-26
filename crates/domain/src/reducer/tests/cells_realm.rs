@@ -388,7 +388,6 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
                 "security_class": "standard",
                 "encryption_profile": "mls_rfc9420",
                 "notary": notary,
-                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
             }
         }),
         &hlc,
@@ -729,7 +728,6 @@ fn realm_create_requires_explicit_creator_member_and_rejects_duplicate_create() 
             "schema": "ak.schema.realm_genesis.v1",
             "purpose": "collaboration",
             "genesis_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
             "trust_domain": "ak:trust_domain:example.net",
             "schema_refs": ["ak.schema.realm.v1"],
             "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
@@ -782,7 +780,6 @@ fn direct_conversation_role_survives_sealed_create_log_reload_via_genesis() {
         arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
         arkret_identifiers::TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
         test_single_signer_notary("did:web:alice.example"),
-        arkret_policy::current_capability_action_registry_digest().unwrap(),
         chrono::Utc::now(),
     )
     .unwrap();
@@ -839,8 +836,7 @@ fn direct_conversation_role_survives_sealed_create_log_reload_via_genesis() {
             "encryption_profile": "mls_rfc9420",
             "notary": serde_json::to_value(test_single_signer_notary(
                 "did:web:alice.example"
-            )).unwrap(),
-            "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap()
+            )).unwrap()
         })),
     );
     assert!(
@@ -1336,7 +1332,6 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
             arkret_wire::SecurityClass::HighAssurance,
             arkret_wire::EncryptionProfile::MlsRfc9420,
             test_single_signer_notary("did:webvh:z6mkreducertest:reducer-test.example"),
-            arkret_policy::current_capability_action_registry_digest().unwrap(),
         )
         .unwrap();
     let payload = arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
@@ -1413,7 +1408,6 @@ fn managed_agent_genesis_requires_the_registered_status_projection() {
             arkret_wire::SecurityClass::HighAssurance,
             arkret_wire::EncryptionProfile::MlsRfc9420,
             test_single_signer_notary("did:webvh:z6mkreducertest:reducer-test.example"),
-            arkret_policy::current_capability_action_registry_digest().unwrap(),
         )
         .unwrap();
     let payload = arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)

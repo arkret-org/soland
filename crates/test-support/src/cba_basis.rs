@@ -325,9 +325,6 @@ pub fn fixture_principal_control_realm_create_for_server(
             founding_device_descriptor: fixture_pcr_founding_device_descriptor(
                 &principal, created_at,
             ),
-            capability_action_registry_digest:
-                arkret_policy::current_capability_action_registry_digest()
-                    .expect("fixture capability action registry digest"),
             created_at,
             hlc: Hlc::new(FIXTURE_BASIS_HLC).expect("fixture PCR genesis HLC"),
         },

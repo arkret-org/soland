@@ -1,6 +1,5 @@
 use arkret_models_collaboration::governance_dependencies::{
-    GovernanceDependency, GovernanceDependencySelector, GovernanceRegistryArtifact,
-    GovernanceRegistrySnapshot,
+    GovernanceDependency, GovernanceDependencySelector,
 };
 use arkret_models_collaboration::history_key::{
     HistoryGovernanceTraversalIntent, HistoryGovernanceTraversalRetention,
@@ -282,31 +281,6 @@ fn decode_dependency(row: DependencyObjectRow) -> PersistenceResult<GovernanceDe
                     MinimalMetadataMlsLeafSignerEvidence,
                 >(object_json)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
-            }
-        }
-        "governance_registry_snapshot" => GovernanceDependency::GovernanceRegistrySnapshot {
-            selector: GovernanceDependencySelector::GovernanceRegistrySnapshot {
-                content_digest: digest,
-            },
-            governance_registry_snapshot: serde_json::from_value::<GovernanceRegistrySnapshot>(
-                object_json,
-            )
-            .map_err(|error| PersistenceError::Internal(error.to_string()))?,
-        },
-        "governance_registry_artifact" => {
-            let artifact = serde_json::from_value::<GovernanceRegistryArtifact>(object_json)
-                .map_err(|error| PersistenceError::Internal(error.to_string()))?;
-            if artifact.descriptor.content_digest() != &digest {
-                return Err(PersistenceError::Internal(
-                    "stored governance artifact descriptor digest differs from its row key"
-                        .to_owned(),
-                ));
-            }
-            GovernanceDependency::GovernanceRegistryArtifact {
-                selector: GovernanceDependencySelector::GovernanceRegistryArtifact {
-                    descriptor: artifact.descriptor.clone(),
-                },
-                governance_registry_artifact: artifact,
             }
         }
         kind => {
@@ -611,8 +585,6 @@ struct TraversalRetentionRow {
     trusted_current_basis: Value,
     #[diesel(sql_type = Jsonb)]
     target_basis: Value,
-    #[diesel(sql_type = Text)]
-    registry_snapshot_digest: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = Timestamptz)]
@@ -690,7 +662,7 @@ pub(crate) async fn load_retention(
     let Some(row) = sql_query(
         "SELECT retention_digest, realm_id, access_kind, retention_kind, access_digest, \
                 traversal_intent, trusted_history_base_basis, trusted_current_basis, \
-                target_basis, registry_snapshot_digest, expires_at, created_at \
+                target_basis, expires_at, created_at \
          FROM history_traversal_retentions WHERE retention_digest = $1",
     )
     .bind::<Text, _>(retention_digest.as_str())
@@ -770,7 +742,6 @@ pub(crate) async fn load_retention(
         || row.trusted_history_base_basis != canonical.trusted_history_base_basis
         || row.trusted_current_basis != canonical.trusted_current_basis
         || row.target_basis != canonical.target_basis
-        || row.registry_snapshot_digest != canonical.registry_snapshot_digest.as_str()
         || row.expires_at != canonical.expires_at
     {
         return Err(PersistenceError::Internal(
@@ -843,8 +814,8 @@ pub(crate) async fn persist_retention_in_transaction(
         "INSERT INTO history_traversal_retentions \
             (retention_digest, realm_id, access_kind, retention_kind, access_digest, \
              traversal_intent, trusted_history_base_basis, trusted_current_basis, \
-             target_basis, registry_snapshot_digest, expires_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             target_basis, expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
          ON CONFLICT DO NOTHING",
     )
     .bind::<Text, _>(write.retention.traversal_intent_digest.as_str())
@@ -856,7 +827,6 @@ pub(crate) async fn persist_retention_in_transaction(
     .bind::<Jsonb, _>(&canonical.trusted_history_base_basis)
     .bind::<Jsonb, _>(&canonical.trusted_current_basis)
     .bind::<Jsonb, _>(&canonical.target_basis)
-    .bind::<Text, _>(canonical.registry_snapshot_digest.as_str())
     .bind::<Nullable<Timestamptz>, _>(canonical.expires_at)
     .execute(&mut *conn)
     .await?;

@@ -2,9 +2,7 @@ use arkret_models_collaboration::events_payloads::mls::MlsGenesisPayload;
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencyResolveOutcome, GovernanceDependencySelector,
     PeerGovernanceDependencyResolveRequest, SelfGovernanceDependencyResolveRequest,
-    governance_artifact_selectors_for_artifact, governance_artifact_selectors_for_snapshot,
-    governance_attester_evidence_selectors, governance_dependency_selectors_for_replay,
-    validate_governance_replay_schema_closure,
+    governance_attester_evidence_selectors, governance_runtime_dependency_selectors_for_replay,
 };
 use arkret_models_collaboration::history_key::{
     AcceptedAuthorityViewVector, AccountStatusViewLocator, AgentEvidenceViewLocator, AuthorProfile,
@@ -2417,7 +2415,6 @@ async fn build_member_history_retention(
     }
     let mut pins = Vec::new();
     let mut pin_keys = std::collections::BTreeSet::new();
-    let mut registry_snapshot_digests = std::collections::BTreeMap::new();
     for seal_id in cut {
         let seal = state
             .projections()
@@ -2449,7 +2446,6 @@ async fn build_member_history_retention(
             None,
             &mut pins,
             &mut pin_keys,
-            &mut registry_snapshot_digests,
         )
         .await?;
         for event_digest in &seal.delta {
@@ -2470,7 +2466,6 @@ async fn build_member_history_retention(
                 Some(&event),
                 &mut pins,
                 &mut pin_keys,
-                &mut registry_snapshot_digests,
             )
             .await?
             .ok_or_else(|| {
@@ -2489,24 +2484,6 @@ async fn build_member_history_retention(
             )?;
         }
     }
-    let registry_snapshot_digest = match registry_snapshot_digests.len() {
-        1 => registry_snapshot_digests
-            .into_values()
-            .next()
-            .expect("one registry snapshot digest exists"),
-        0 => {
-            return Err(AppError::new(
-                ErrorCode::DependencyMissing,
-                "retained governance registry snapshot missing",
-            ));
-        }
-        _ => {
-            return Err(AppError::conflict(
-                "retained cut contains multiple governance registry snapshots",
-            ));
-        }
-    };
-    let traversal_admission_registry_digest = traversal_admission_registry_digest()?;
     let intent = HistoryGovernanceTraversalIntent::MemberHistoryDelivery {
         kind: HistoryGovernanceTraversalIntentKind::Value,
         effective_scope: request.effective_scope.clone(),
@@ -2520,8 +2497,6 @@ async fn build_member_history_retention(
         request_digest,
         requested_ranges: request.requested_ranges.clone(),
         authorization_incarnation: request.requester_authorization_incarnation.clone(),
-        registry_snapshot_digest,
-        traversal_admission_registry_digest,
         retention: RequestExpiringRetention {
             kind: RequestExpiringRetentionKind::Value,
             expires_at: request.expires_at,
@@ -2623,7 +2598,6 @@ async fn collect_history_dependencies(
     event: Option<&arkret_wire::Event>,
     pins: &mut Vec<soland_storage::HistoryTraversalPin>,
     pin_keys: &mut std::collections::BTreeSet<(String, String, String)>,
-    registry_snapshot_digests: &mut std::collections::BTreeMap<String, arkret_wire::Hash>,
 ) -> Result<Option<arkret_wire::Hash>, AppError> {
     let dependencies = state
         .persistence()
@@ -2654,16 +2628,6 @@ async fn collect_history_dependencies(
                 authenticated_signer_resolution_evidence,
             ))
             .map_err(|error| AppError::new(ErrorCode::DependencyMissing, error.to_string()))?,
-            GovernanceDependency::GovernanceRegistrySnapshot {
-                governance_registry_snapshot,
-                ..
-            } => governance_artifact_selectors_for_snapshot(governance_registry_snapshot)
-                .map_err(|error| AppError::new(ErrorCode::DependencyMissing, error.to_string()))?,
-            GovernanceDependency::GovernanceRegistryArtifact {
-                governance_registry_artifact,
-                ..
-            } => governance_artifact_selectors_for_artifact(governance_registry_artifact)
-                .map_err(|error| AppError::new(ErrorCode::DependencyMissing, error.to_string()))?,
             _ => Vec::new(),
         };
         cursor += 1;
@@ -2702,19 +2666,6 @@ async fn collect_history_dependencies(
         let selector = item.selector().clone();
         let (_, object_digest) = soland_storage::governance_dependency_selector_parts(&selector)
             .map_err(|error| AppError::internal(error.to_string()))?;
-        if let GovernanceDependency::GovernanceRegistrySnapshot {
-            governance_registry_snapshot,
-            ..
-        } = &item
-        {
-            registry_snapshot_digests.insert(
-                governance_registry_snapshot
-                    .snapshot_digest
-                    .as_str()
-                    .to_owned(),
-                governance_registry_snapshot.snapshot_digest.clone(),
-            );
-        }
         if let (
             Some(event),
             GovernanceDependency::AvailabilityReceipt {
@@ -2751,16 +2702,6 @@ async fn collect_history_dependencies(
         )?;
     }
     Ok(event_bytes_digest)
-}
-
-fn traversal_admission_registry_digest() -> Result<arkret_wire::Hash, AppError> {
-    let registry =
-        arkret_schema::embedded_json_artifact("registry/history-release-attestation-registry.json")
-            .map_err(|error| {
-                AppError::internal(format!("history T0 registry unavailable: {error}"))
-            })?;
-    arkret_models_collaboration::history_key::history_manifest_t0_registry_digest(&registry)
-        .map_err(|error| AppError::internal(error.to_string()))
 }
 
 async fn validate_history_response_request_binding(
@@ -2998,7 +2939,6 @@ async fn validate_retained_history_cut(
     let HistoryGovernanceTraversalIntent::MemberHistoryDelivery {
         trusted_history_base_basis,
         target_basis,
-        registry_snapshot_digest,
         ..
     } = &traversal.retention.traversal_intent
     else {
@@ -3214,43 +3154,19 @@ async fn validate_retained_history_cut(
             ));
         }
     }
-    let expected_first_round = governance_dependency_selectors_for_replay(
+    let expected_first_round = governance_runtime_dependency_selectors_for_replay(
         &replay_seals,
         &replay_events,
         &replay_event_digest_suites,
-        registry_snapshot_digest,
     )
     .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
-    let snapshot = replay_dependencies
-        .iter()
-        .find_map(|dependency| match dependency {
-            GovernanceDependency::GovernanceRegistrySnapshot {
-                governance_registry_snapshot,
-                ..
-            } if governance_registry_snapshot.snapshot_digest == *registry_snapshot_digest => {
-                Some(governance_registry_snapshot)
-            }
-            _ => None,
-        })
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
-                "retained governance registry snapshot is unavailable",
-            )
-        })?;
-    let expected_artifacts = governance_artifact_selectors_for_snapshot(snapshot)
-        .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
     let selector_key = |selector: &arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector| {
         selector
             .canonical_sort_key()
             .map(|(kind, bytes)| (kind.to_owned(), bytes))
             .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))
     };
-    let mut expected_selector_values = expected_first_round
-        .iter()
-        .chain(&expected_artifacts)
-        .cloned()
-        .collect::<Vec<_>>();
+    let mut expected_selector_values = expected_first_round.clone();
     let dependency_by_selector = replay_dependencies
         .iter()
         .map(|dependency| Ok((selector_key(dependency.selector())?, dependency)))
@@ -3282,16 +3198,6 @@ async fn validate_retained_history_cut(
                 .map_err(|error| {
                     AppError::new(ErrorCode::FrontierUnavailable, error.to_string())
                 })?,
-            );
-        } else if let GovernanceDependency::GovernanceRegistryArtifact {
-            governance_registry_artifact,
-            ..
-        } = dependency
-        {
-            expected_selector_values.extend(
-                governance_artifact_selectors_for_artifact(governance_registry_artifact).map_err(
-                    |error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()),
-                )?,
             );
         }
     }
@@ -3361,46 +3267,8 @@ async fn validate_retained_history_cut(
                 })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let registry_artifacts = checkpoint_dependencies
-        .iter()
-        .filter_map(|dependency| match dependency {
-            GovernanceDependency::GovernanceRegistryArtifact {
-                governance_registry_artifact,
-                ..
-            } => Some(governance_registry_artifact.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let historical_closure =
-        validate_governance_replay_schema_closure(snapshot, &registry_artifacts)
-            .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
-    let mut historical_schemas = arkret_schema::ProtocolSchemaRegistry::new();
-    for schema in historical_closure.schemas.into_values() {
-        let schema_id = schema
-            .get("$id")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
-                    "historical replay JSON Schema has no absolute $id",
-                )
-            })?
-            .to_owned();
-        historical_schemas
-            .register_reference_document(schema.clone())
-            .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
-        historical_schemas.register(schema_id, schema);
-    }
-    historical_schemas
-        .ensure_all_schemas_compile()
-        .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
     for event in &replay_events {
-        historical_schemas
-            .validate_value(
-                "https://arkret.org/v1/schemas/event-envelope.schema.json",
-                &serde_json::to_value(event)
-                    .map_err(|error| AppError::internal(error.to_string()))?,
-            )
+        arkret_schema::validate_event_wire_schema(event)
             .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
     }
     let checkpoint = arkret::verify_mls_governance_closure(
@@ -3833,7 +3701,6 @@ async fn build_history_release_attestation(
         .source_authority_locator
         .source_authority_digest()
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let predicate_registry_digest = history_release_predicate_registry_digest()?;
     let (recipient_account_status, recipient_pcr_device, recipient_agent_control_evidence) =
         build_history_recipient_authority_views(
             state,
@@ -3866,7 +3733,6 @@ async fn build_history_release_attestation(
     };
     let attestation = HistoryReleaseAttestation {
         kind: HistoryReleaseAttestationKind::Value,
-        predicate_registry_digest,
         source_record_digest: response
             .source_record_digest()
             .map_err(|error| AppError::internal(error.to_string()))?,
@@ -4240,14 +4106,6 @@ async fn build_history_recipient_authority_views(
         }),
         None,
     ))
-}
-
-fn history_release_predicate_registry_digest() -> Result<arkret_wire::Hash, AppError> {
-    let registry =
-        arkret_schema::embedded_json_artifact("registry/history-release-attestation-registry.json")
-            .map_err(|error| AppError::internal(error.to_string()))?;
-    arkret_models_collaboration::history_key::history_release_predicate_registry_digest(&registry)
-        .map_err(|error| AppError::internal(error.to_string()))
 }
 
 async fn validate_manifest_current_gate(

@@ -267,18 +267,22 @@ async fn peer_events_describe_advertises_formal_surface_body() {
         .await
         .unwrap();
 
-    assert_eq!(describe["primary_write_path"], "/_arkret/peer/events");
-    let operations = describe["supported_operations"].as_array().unwrap();
+    assert_eq!(describe["service_kind"], "principal_server");
+    let operations = describe["operation_bindings"].as_array().unwrap();
     assert!(
         operations
             .iter()
-            .any(|op| op == "ak.peer.events.command.submit")
+            .any(|binding| binding["operation_id"] == "ak.peer.events.command.submit")
     );
-    assert!(operations.iter().any(|op| op == "ak.peer.events.read.scan"));
     assert!(
         operations
             .iter()
-            .any(|op| op == "ak.peer.events.read.frontier")
+            .any(|binding| binding["operation_id"] == "ak.peer.events.read.scan")
+    );
+    assert!(
+        operations
+            .iter()
+            .any(|binding| binding["operation_id"] == "ak.peer.events.read.frontier")
     );
     // `ak.peer.snapshot.read.manifest_head` MUST NOT be declared while soland cannot
     // produce a signed ak.schema.snapshot.v1 manifest; the endpoint
@@ -286,7 +290,7 @@ async fn peer_events_describe_advertises_formal_surface_body() {
     assert!(
         !operations
             .iter()
-            .any(|op| op == "ak.peer.snapshot.read.manifest_head")
+            .any(|binding| binding["operation_id"] == "ak.peer.snapshot.read.manifest_head")
     );
 }
 

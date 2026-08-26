@@ -152,42 +152,6 @@ pub fn governance_dependency_canonical(
                 serde_json::to_value(minimal_metadata_mls_leaf_signer_evidence),
             )
         }
-        GovernanceDependency::GovernanceRegistrySnapshot {
-            selector: GovernanceDependencySelector::GovernanceRegistrySnapshot { content_digest },
-            governance_registry_snapshot,
-        } => {
-            governance_registry_snapshot
-                .validate()
-                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-            if content_digest != &governance_registry_snapshot.snapshot_digest {
-                return Err(PersistenceError::SchemaViolation(
-                    "governance registry snapshot selector digest mismatch".to_owned(),
-                ));
-            }
-            (
-                "governance_registry_snapshot",
-                content_digest.clone(),
-                serde_json::to_value(governance_registry_snapshot),
-            )
-        }
-        GovernanceDependency::GovernanceRegistryArtifact {
-            selector: GovernanceDependencySelector::GovernanceRegistryArtifact { descriptor },
-            governance_registry_artifact,
-        } => {
-            governance_registry_artifact
-                .validate()
-                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-            if descriptor != &governance_registry_artifact.descriptor {
-                return Err(PersistenceError::SchemaViolation(
-                    "governance registry artifact selector mismatch".to_owned(),
-                ));
-            }
-            (
-                "governance_registry_artifact",
-                descriptor.content_digest().clone(),
-                serde_json::to_value(governance_registry_artifact),
-            )
-        }
         _ => {
             return Err(PersistenceError::SchemaViolation(
                 "governance dependency item branch does not match its selector".to_owned(),
@@ -197,9 +161,7 @@ pub fn governance_dependency_canonical(
     let object_json = object_json.map_err(|error| PersistenceError::Internal(error.to_string()))?;
     let canonical_bytes = arkret_canonical::canonical_json_bytes(&object_json)
         .map_err(|error| PersistenceError::Internal(error.to_string()))?;
-    if canonical_bytes.len()
-        > arkret_models_collaboration::governance_dependencies::MAX_GOVERNANCE_ARTIFACT_BYTES
-    {
+    if canonical_bytes.len() > 1024 * 1024 {
         return Err(PersistenceError::SchemaViolation(
             "governance dependency object exceeds 1 MiB".to_owned(),
         ));
@@ -248,13 +210,6 @@ pub fn governance_dependency_selector_parts(
         GovernanceDependencySelector::MinimalMetadataMlsLeafSignerEvidence { content_digest } => (
             "minimal_metadata_mls_leaf_signer_evidence",
             content_digest.clone(),
-        ),
-        GovernanceDependencySelector::GovernanceRegistrySnapshot { content_digest } => {
-            ("governance_registry_snapshot", content_digest.clone())
-        }
-        GovernanceDependencySelector::GovernanceRegistryArtifact { descriptor } => (
-            "governance_registry_artifact",
-            descriptor.content_digest().clone(),
         ),
     })
 }
@@ -669,7 +624,6 @@ pub struct HistoryTraversalCanonical {
     pub trusted_history_base_basis: serde_json::Value,
     pub trusted_current_basis: serde_json::Value,
     pub target_basis: serde_json::Value,
-    pub registry_snapshot_digest: Hash,
     pub traversal_intent_json: serde_json::Value,
     pub retained_objects: Vec<HistoryTraversalRetainedObjectCanonical>,
 }
@@ -694,14 +648,12 @@ pub fn history_traversal_canonical(
         trusted_history_base_basis,
         trusted_current_basis,
         target_basis,
-        registry_snapshot_digest,
     ) = match &write.retention.traversal_intent {
         HistoryGovernanceTraversalIntent::MemberHistoryDelivery {
             effective_scope,
             trusted_history_base_basis,
             trusted_current_basis,
             target_basis,
-            registry_snapshot_digest,
             retention,
             ..
         } => {
@@ -722,7 +674,6 @@ pub fn history_traversal_canonical(
                 trusted_history_base_basis,
                 trusted_current_basis,
                 target_basis,
-                registry_snapshot_digest,
             )
         }
         HistoryGovernanceTraversalIntent::OrganizationRecoveryArchive {
@@ -730,7 +681,6 @@ pub fn history_traversal_canonical(
             trusted_history_base_basis,
             trusted_current_basis,
             target_basis,
-            registry_snapshot_digest,
             ..
         } => {
             if matches!(
@@ -750,7 +700,6 @@ pub fn history_traversal_canonical(
                 trusted_history_base_basis,
                 trusted_current_basis,
                 target_basis,
-                registry_snapshot_digest,
             )
         }
     };
@@ -804,7 +753,6 @@ pub fn history_traversal_canonical(
             .map_err(|error| PersistenceError::Internal(error.to_string()))?,
         target_basis: serde_json::to_value(target_basis)
             .map_err(|error| PersistenceError::Internal(error.to_string()))?,
-        registry_snapshot_digest: registry_snapshot_digest.clone(),
         traversal_intent_json: serde_json::to_value(&write.retention.traversal_intent)
             .map_err(|error| PersistenceError::Internal(error.to_string()))?,
         retained_objects,

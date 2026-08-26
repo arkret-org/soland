@@ -739,9 +739,6 @@ mod tests {
     const REALM: &str = "ak:realm:AdLYeSYbF1FJx56D-sYzJ--z1eUpXoCui7ZQTBhWJbKp";
     const ACTOR: &str = "did:web:alice.local.host";
     const ACTOR_CORE: &str = "ak:did_core:web:alice.local.host";
-    const REGISTRY_DIGEST: &str =
-        "sha256:9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a";
-
     fn event(kind: impl AsRef<str>, actor_seq: u64, payload: Value) -> Event {
         crate::test_event::raw_event_at(
             kind.as_ref(),
@@ -775,8 +772,7 @@ mod tests {
                 "notary": serde_json::to_value(crate::test_single_signer_notary(
                     ACTOR,
                     33,
-                )).unwrap(),
-                "capability_action_registry_digest": REGISTRY_DIGEST
+                )).unwrap()
             }}),
         );
         let mut creator_member = event(
@@ -841,10 +837,6 @@ mod tests {
             .expect("staged authority root must survive lease pre-admission");
 
         assert!(root.is_genesis_for(ACTOR_CORE));
-        assert_eq!(
-            root.capability_action_registry_digest.as_str(),
-            REGISTRY_DIGEST
-        );
     }
 
     #[test]

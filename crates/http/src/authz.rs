@@ -400,7 +400,6 @@ pub fn projected_grant_fixture(
         subject_principal_server_id: None,
         resource,
         actions,
-        capability_action_registry_digest: None,
         constraints,
         revoked: false,
         created_at: chrono::Utc::now(),

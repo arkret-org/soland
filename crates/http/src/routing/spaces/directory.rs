@@ -199,15 +199,23 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
         protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
         supported_profiles: supported_profiles.clone(),
         profile_bindings: Default::default(),
-        supported_operations: DIRECTORY_SUPPORTED_OPERATIONS
+        operation_bindings: DIRECTORY_SUPPORTED_OPERATIONS
             .iter()
-            .map(|operation| (*operation).to_owned())
+            .map(|operation| {
+                arkret_models_discovery::service_description::OperationBinding::current_http_json(
+                    arkret_wire::ServiceOperationId::from_wire(operation)
+                        .expect("directory operation ids must be generated SDK ids"),
+                )
+                .expect("directory operations must have current HTTP JSON carriers")
+            })
             .collect(),
         supported_bindings: vec![
             arkret_models_discovery::service_description::SupportedBinding::new(
                 arkret_wire::BindingKind::HttpJson,
             )
-                .with_base_url(state.config().public_base_url.trim_end_matches('/')),
+                .with_base_url(state.config().public_base_url.trim_end_matches('/'))
+                .with_extra("operations", serde_json::json!(DIRECTORY_SUPPORTED_OPERATIONS))
+                .with_extra("extension_profile_required", serde_json::Value::Null),
         ],
         supported_features: supported_features.clone(),
         calendar_tzdb_versions: Vec::new(),

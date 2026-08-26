@@ -65,8 +65,6 @@ fn grant_op(grant_id: &str) -> Operation {
 }
 
 fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> Operation {
-    let registry_digest = arkret_policy::current_capability_action_registry_digest()
-        .expect("embedded capability action registry");
     op(
         arkret_wire::EventKind::CapabilityGrant,
         REALM,
@@ -84,7 +82,6 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
                 }],
                 "subject": SUBJECT,
                 "actions": actions,
-                "capability_action_registry_digest": registry_digest,
                 "resources": resources,
             }
         }),
@@ -118,7 +115,6 @@ fn seed_realm_owner(state: &mut ProjectionState) {
             serde_json::to_value(
                 arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
                     arkret_identifiers::DidCoreId::new(ISSUER).unwrap(),
-                    arkret_policy::current_capability_action_registry_digest().unwrap(),
                 ),
             )
             .unwrap(),

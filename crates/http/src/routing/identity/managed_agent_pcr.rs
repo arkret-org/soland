@@ -716,10 +716,6 @@ pub(crate) fn validate_agent_pcr_genesis_object(
             trust_domain: arkret_wire::TrustDomainId::new(trust_domain.to_owned()).map_err(
                 |error| schema_error(format!("configured trust domain is invalid: {error}")),
             )?,
-            capability_action_registry_digest:
-                arkret_policy::current_capability_action_registry_digest().map_err(|error| {
-                    AppError::internal(format!("capability action registry digest failed: {error}"))
-                })?,
             created_at: Utc::now(),
         },
     )
@@ -921,8 +917,6 @@ mod tests {
                 )
                 .unwrap(),
                 trust_domain: arkret_wire::TrustDomainId::new(TRUST_DOMAIN).unwrap(),
-                capability_action_registry_digest:
-                    arkret_policy::current_capability_action_registry_digest().unwrap(),
                 created_at: Utc::now(),
             },
         )

@@ -6,8 +6,7 @@ use std::time::Duration;
 
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencyResolveOutcome, GovernanceDependencySelector,
-    PeerGovernanceDependencyResolveRequest, governance_artifact_selectors_for_artifact,
-    governance_artifact_selectors_for_snapshot, governance_attester_evidence_selectors,
+    PeerGovernanceDependencyResolveRequest, governance_attester_evidence_selectors,
     governance_runtime_dependency_selector_coordinates_for_acquisition,
 };
 use arkret_models_collaboration::history_key::{
@@ -219,7 +218,6 @@ impl RrkAcquisitionWorker {
             effective_scope,
             trusted_history_base_basis,
             target_basis,
-            registry_snapshot_digest,
             ..
         } = &replica.history_traversal_retention.traversal_intent
         else {
@@ -368,9 +366,6 @@ impl RrkAcquisitionWorker {
             &event_values,
         )
         .map_err(|error| format!("dependency_selectors:{error}"))?;
-        selectors.push(GovernanceDependencySelector::GovernanceRegistrySnapshot {
-            content_digest: registry_snapshot_digest.clone(),
-        });
         let mut dependencies = BTreeMap::<(String, Vec<u8>), GovernanceDependency>::new();
         loop {
             selectors.sort_by_key(|selector| {
@@ -599,29 +594,6 @@ fn next_dependency_selectors<'a>(
     items: impl Iterator<Item = &'a GovernanceDependency>,
 ) -> Result<Vec<GovernanceDependencySelector>, String> {
     let items = items.collect::<Vec<_>>();
-    let mut selectors = Vec::new();
-    for item in &items {
-        if let GovernanceDependency::GovernanceRegistrySnapshot {
-            governance_registry_snapshot,
-            ..
-        } = item
-        {
-            selectors.extend(
-                governance_artifact_selectors_for_snapshot(governance_registry_snapshot)
-                    .map_err(|error| format!("registry_artifact_selectors:{error}"))?,
-            );
-        }
-        if let GovernanceDependency::GovernanceRegistryArtifact {
-            governance_registry_artifact,
-            ..
-        } = item
-        {
-            selectors.extend(
-                governance_artifact_selectors_for_artifact(governance_registry_artifact)
-                    .map_err(|error| format!("registry_manifest_selectors:{error}"))?,
-            );
-        }
-    }
     let evidence = items
         .into_iter()
         .filter_map(|item| match item {
@@ -632,11 +604,8 @@ fn next_dependency_selectors<'a>(
             _ => None,
         })
         .collect::<Vec<_>>();
-    selectors.extend(
-        governance_attester_evidence_selectors(&evidence)
-            .map_err(|error| format!("attester_evidence_selectors:{error}"))?,
-    );
-    Ok(selectors)
+    governance_attester_evidence_selectors(&evidence)
+        .map_err(|error| format!("attester_evidence_selectors:{error}"))
 }
 
 fn validate_container_event<'a>(

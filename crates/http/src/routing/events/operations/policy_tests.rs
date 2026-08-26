@@ -62,7 +62,6 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
             arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
             state.config().trust_domain.clone(),
             alice_notary(),
-            arkret_policy::current_capability_action_registry_digest().unwrap(),
             now,
         ).unwrap())
         .unwrap(),

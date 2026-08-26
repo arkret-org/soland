@@ -248,7 +248,6 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                 &DidFullId::new("did:web:alice.example").unwrap(),
             )
             .unwrap(),
-            arkret_policy::current_capability_action_registry_digest().unwrap(),
         );
         projection.realm_null_subject_cells.insert(
             (
@@ -329,8 +328,6 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                         "realm_id": demo_realm_id(),
                         "match_scope": "realm_wide"
                     }],
-                    "capability_action_registry_digest":
-                        arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "issued_at": "2026-01-01T00:00:00.000Z"
                 })),
                 from: None,
@@ -711,7 +708,6 @@ fn applet_managed_pcr_genesis_event(
         arkret_wire::SecurityClass::HighAssurance,
         arkret_wire::EncryptionProfile::MlsRfc9420,
         arkret_wire::NotaryValue::single_signer(target_principal_server_notary),
-        arkret_policy::current_capability_action_registry_digest().unwrap(),
     )
     .expect("fixture Applet-managed PCR genesis");
     let mut event = arkret_wire::test_support::raw_event_at(
@@ -741,7 +737,8 @@ fn applet_managed_pcr_genesis_event(
 
 // Each parameter is a separate signed field of the ghost provision body.
 #[allow(clippy::too_many_arguments)]
-fn signed_ghost_provision_body(
+async fn signed_ghost_provision_body(
+    app: &salvo::Service,
     state: &AppState,
     package: &AppletPackage,
     install: &Value,
@@ -785,44 +782,36 @@ fn signed_ghost_provision_body(
     let applet_authority_ref = arkret_identifiers::GrantId::new(authorization_ref.clone()).unwrap();
     let verification_method = package.webhook_auth.key_ref.clone();
     let signing_key = applet_service_signing_key(&verification_method);
-    let now =
-        chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis()).unwrap();
     let external_ref = arkret_models_integration::GhostExternalTuple {
         protocol: protocol.to_owned(),
         instance_id: instance_id.to_owned(),
         external_id: external_id.to_owned(),
     };
-    let authoring_basis = arkret_models_integration::AppletGhostAuthoringRequestBasis {
-        schema: arkret_models_integration::AppletGhostAuthoringRequestBasis::SCHEMA.to_owned(),
-        purpose: arkret_models_integration::AppletManagedActorPurpose::ProvisionGhost,
-        target_principal_server_id: actor_principal_server_id.clone(),
-        applet_id: applet_id.clone(),
-        service_id: package.service_id.clone(),
-        realm_id: realm_id.clone(),
-        external_ref: external_ref.clone(),
-        display_name: display_name.map(str::to_owned),
-        registration_event_ref: registration_ref.clone(),
-        authorization_ref: applet_authority_ref.clone(),
-        registration_epoch_evidence: applet_registration_epoch_evidence(package),
-        package_digest: package
-            .package_digest
-            .clone()
-            .expect("fixture Applet package has digest"),
-    };
-    let principal_signer = arkret_signatures::Ed25519PayloadSigner::new(
-        state.notary_signing_key().as_ref().clone(),
-        state.service_full_id(),
-        state.service_verification_method("notary-key").unwrap(),
+    let preview_body = json!({
+        "realm_id": realm_id,
+        "external_ref": external_ref,
+        "display_name": display_name,
+    });
+    let mut preview_response = post_signed_ghost_preview(
+        app,
+        state,
+        package,
+        applet_id.as_str(),
+        &format!("preview-{external_id}"),
+        &preview_body,
+    )
+    .await;
+    let preview_status = preview_response.status_code;
+    let preview: Value = preview_response.take_json().await.unwrap();
+    assert_eq!(
+        preview_status,
+        Some(StatusCode::OK),
+        "Ghost preview must succeed before a provision request: {preview}"
     );
-    let authoring_request =
-        arkret_models_integration::AppletManagedActorAuthoringRequest::sign_ghost(
-            authoring_basis,
-            state.service_notary_signer_descriptor().unwrap(),
-            now,
-            now + chrono::Duration::minutes(5),
-            &principal_signer,
-        )
-        .unwrap();
+    let authoring_request: arkret_models_integration::AppletManagedActorAuthoringRequest =
+        serde_json::from_value(preview["authoring_request"].clone())
+            .expect("Ghost preview returns a typed authoring request");
+    let now = authoring_request.issued_at;
     let managed_actor_provision_event = managed_actor_provision_event(
         package,
         ghost_actor,
@@ -1017,9 +1006,9 @@ async fn applet_protocol_describe_smoke() {
     ] {
         assert!(
             describe
-                .supported_operations
+                .operation_bindings
                 .iter()
-                .any(|candidate| candidate == operation_id),
+                .any(|candidate| candidate.operation_id.as_str() == operation_id),
             "Applet describe must advertise {operation_id}"
         );
     }
@@ -1215,6 +1204,7 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
     ingest_managed_actor_current_document(&state, &ghost_actor).await;
     let ghost_actor_id = ghost_actor.actor_id.to_string();
     let mut rejected_body = signed_ghost_provision_body(
+        &app,
         &state,
         &package,
         &install,
@@ -1224,7 +1214,8 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
         "U123",
         Some("Alice on Slack"),
         &seal_basis,
-    );
+    )
+    .await;
     let rejected_profile_ref = rejected_body["managed_actor_bundle"]["profile_event"]["event_id"]
         .as_str()
         .unwrap()
@@ -1312,6 +1303,7 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
     );
 
     let provision_body = signed_ghost_provision_body(
+        &app,
         &state,
         &package,
         &install,
@@ -1321,7 +1313,8 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
         "U123",
         Some("Alice on Slack"),
         &seal_basis,
-    );
+    )
+    .await;
     let idempotency_key = format!("provision-{suffix}");
     let mut response = post_signed_ghost_provision(
         &app,
@@ -1482,6 +1475,7 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
     assert_eq!(replay, provision);
 
     let conflicting_body = signed_ghost_provision_body(
+        &app,
         &state,
         &package,
         &install,
@@ -1491,7 +1485,8 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
         "U123",
         Some("Changed on retry"),
         &seal_basis,
-    );
+    )
+    .await;
     let mut conflict_response = post_signed_ghost_provision(
         &app,
         &state,
@@ -1510,7 +1505,7 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
 async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    let seal_basis = seed_extension_test_seal(&state).await;
+    seed_extension_test_seal(&state).await;
     let app = service(state.clone());
     let suffix = fixture_suffix();
     let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
@@ -1530,31 +1525,24 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     .await;
     assert_eq!(install["effective_status"], json!("partially_installed"));
 
-    let ghost_actor = managed_actor_fixture(&namespace, "u-denied", &package.service_id);
-    ingest_managed_actor_current_document(&state, &ghost_actor).await;
-    let body = signed_ghost_provision_body(
-        &state,
-        &package,
-        &install,
-        &ghost_actor,
-        "slack",
-        "T123",
-        "U-denied",
-        None,
-        &seal_basis,
-    );
-    let rejected: Value = post_signed_ghost_provision(
+    let mut response = post_signed_ghost_preview(
         &app,
         &state,
         &package,
         &applet_id,
-        &format!("denied-{suffix}"),
-        &body,
+        &format!("preview-denied-{suffix}"),
+        &json!({
+            "realm_id": realm_id,
+            "external_ref": {
+                "protocol": "slack",
+                "instance_id": "T123",
+                "external_id": "U-denied",
+            },
+            "display_name": null,
+        }),
     )
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    .await;
+    let rejected: Value = response.take_json().await.unwrap();
     assert_eq!(rejected["error"]["code"], json!("capability_denied"));
 }
 
@@ -1584,6 +1572,7 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
     ingest_managed_actor_current_document(&state, &mismatched_ghost).await;
 
     let body = signed_ghost_provision_body(
+        &app,
         &state,
         &package,
         &install,
@@ -1593,7 +1582,8 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
         "U123",
         None,
         &seal_basis,
-    );
+    )
+    .await;
     let rejected: Value = post_signed_ghost_provision(
         &app,
         &state,
@@ -1749,6 +1739,60 @@ async fn post_signed_ghost_provision(
     );
     TestClient::post(format!(
         "http://server/_arkret/self/applets/{applet_id}/ghosts/provision"
+    ))
+    .add_header("Content-Digest", content_digest, true)
+    .add_header("Source-Service-ID", package.service_id.to_string(), true)
+    .add_header("Destination-Service-ID", state.service_id(), true)
+    .add_header("Idempotency-Key", idempotency_key.to_owned(), true)
+    .add_header("Signature-Input", format!("sig1={signature_params}"), true)
+    .add_header("Signature", signature_header, true)
+    .json(body)
+    .send(app)
+    .await
+}
+
+async fn post_signed_ghost_preview(
+    app: &salvo::Service,
+    state: &AppState,
+    package: &AppletPackage,
+    applet_id: &str,
+    idempotency_key: &str,
+    body: &Value,
+) -> salvo::Response {
+    let body_bytes = arkret_canonical::canonical_json_bytes(body).unwrap();
+    let content_digest = content_digest_header(&body_bytes);
+    let verification_method = package.webhook_auth.key_ref.clone();
+    let created = chrono::Utc::now().timestamp();
+    let signature_params = format!(
+        "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \
+         \"source-service-id\" \"destination-service-id\" \"idempotency-key\");\
+         created={created};expires={};keyid=\"{verification_method}\";alg=\"ed25519\"",
+        created + 60
+    );
+    let target_scheme = state
+        .config()
+        .public_base_url
+        .split_once("://")
+        .map_or("http", |(scheme, _)| scheme);
+    let target_uri = format!(
+        "{target_scheme}://server/_arkret/self/applets/{applet_id}/ghosts/provision/preview"
+    );
+    let signature_base = applet_signature_base(
+        &target_uri,
+        &content_digest,
+        package.service_id.as_str(),
+        state.service_id(),
+        idempotency_key,
+        &signature_params,
+    );
+    let signing_key = applet_service_signing_key(&verification_method);
+    let signature = signing_key.sign(signature_base.as_bytes());
+    let signature_header = format!(
+        "sig1=:{}:",
+        base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+    );
+    TestClient::post(format!(
+        "http://server/_arkret/self/applets/{applet_id}/ghosts/provision/preview"
     ))
     .add_header("Content-Digest", content_digest, true)
     .add_header("Source-Service-ID", package.service_id.to_string(), true)
@@ -1971,6 +2015,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     ingest_managed_actor_current_document(&state, &ghost_actor).await;
     let ghost_actor_id = ghost_actor.actor_id.to_string();
     let body = signed_ghost_provision_body(
+        &app,
         &state,
         &package,
         &install,
@@ -1980,7 +2025,8 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         "ext-user-x",
         Some("External X"),
         &seal_basis,
-    );
+    )
+    .await;
     let mut provision_response = post_signed_ghost_provision(
         &app,
         &state,
@@ -2493,9 +2539,6 @@ async fn signed_install_events(
                 }))
                 .unwrap(),
             ],
-            capability_action_registry_digest: Some(
-                arkret_policy::current_capability_action_registry_digest().unwrap(),
-            ),
             constraints: vec![
                 GrantConstraint::applet_authority(
                     package.applet_id.clone(),

@@ -187,10 +187,6 @@ pub fn engine_grant_from_cell_body(
         return None;
     }
     let resource = engine_resource_from_body(body, &realm_id);
-    let capability_action_registry_digest = body
-        .get("capability_action_registry_digest")
-        .and_then(Value::as_str)
-        .and_then(|value| arkret_identifiers::Hash::new(value.to_owned()).ok());
     let constraints = engine_constraints_from_body(body)?;
     let created_at = body
         .get("issued_at")
@@ -214,7 +210,6 @@ pub fn engine_grant_from_cell_body(
         subject_principal_server_id,
         resource,
         actions,
-        capability_action_registry_digest,
         constraints,
         revoked,
         created_at,
@@ -292,24 +287,7 @@ fn projected_grant_covers_action(
 fn validate_grant_body_scope(body: &Value) -> Result<(), &'static str> {
     let actions = validate_grant_actions(body)?;
     crate::capability::validate_capability_actions(&actions)?;
-    validate_capability_registry_binding(body, &actions)?;
     validate_grant_resources(body)
-}
-
-fn validate_capability_registry_binding(
-    body: &Value,
-    actions: &[String],
-) -> Result<(), &'static str> {
-    let digest = match body.get("capability_action_registry_digest") {
-        None => None,
-        Some(Value::String(value)) if value.starts_with("sha256:") => Some(
-            arkret_identifiers::Hash::new(value.clone())
-                .map_err(|_| "capability_grant_registry_digest_invalid")?,
-        ),
-        Some(_) => return Err("capability_grant_registry_digest_invalid"),
-    };
-    arkret_policy::validate_capability_action_registry_binding(actions, digest.as_ref())
-        .map_err(|_| "capability_registry_basis_unavailable")
 }
 
 /// capabilities.md §8 — grants whose subject is an agent/service principal
@@ -436,19 +414,11 @@ fn validate_resource_selector(selector: &Value) -> Result<(), &'static str> {
 ///
 /// `capabilities.md` section 3.2 answers Event admission over
 /// `target_event_kinds`. A verbatim action match is unconditional; an aggregate
-/// expansion is a re-reading of the issuer's signature under a
-/// capability-action registry snapshot, so it is anchored to the basis the
-/// grant itself names and fails closed as
-/// `capability_registry_basis_unavailable` when that snapshot is not the one
-/// this build embeds. The receiver never falls back to its own registry.
+/// expansion uses the immutable action coverage compiled into the Realm's
+/// supported profile.
 fn grant_action_covers(grant: &crate::capability::Grant, action: &str) -> bool {
     if grant.actions.iter().any(|candidate| candidate == action) {
         return true;
-    }
-    if arkret_policy::require_registry_basis(grant.capability_action_registry_digest.as_ref())
-        .is_err()
-    {
-        return false;
     }
     grant
         .actions
@@ -887,8 +857,8 @@ impl ProjectionState {
     }
 
     /// True when `actor` speaks for the Realm owner aggregate and that
-    /// aggregate operationally covers `action` in the registry snapshot bound
-    /// into the authority-root cell.
+    /// aggregate operationally covers `action` in the Realm reducer profile's
+    /// compiled action set.
     ///
     /// This is intentionally narrower than [`Self::actor_governs_realm`]: a
     /// generic authorization preflight must not turn owner grant authority
@@ -907,11 +877,7 @@ impl ProjectionState {
             actor,
             actor_principal_server_id,
             evaluation_basis,
-        ) && arkret_policy::owner_may_author_action(
-            action,
-            self.realm_authority_registry_basis(realm_id).as_ref(),
-        )
-        .unwrap_or(false)
+        ) && arkret_policy::owner_may_author_action(action).unwrap_or(false)
     }
 
     /// The shared Realm-governance predicate over projected capability state.
@@ -949,11 +915,12 @@ impl ProjectionState {
 
     /// Owner-aggregate leg of the section 3.2 issuer upper bound.
     ///
-    /// Matching is by action id against the registry's
+    /// Matching is by action id against the reducer profile's compiled
     /// `grant_authority_actions` (through `arkret_policy::owner_may_grant`),
     /// which additionally rejects `root_control_only` / `subject_only` /
-    /// `reducer_only` and profile-gated actions. Event-kind coverage is never
-    /// substituted here, and Realm schema refs cannot widen this ceiling.
+    /// `reducer_only`. A profile action is reachable only when that exact
+    /// action is compiled into the list; Realm schema refs and ServiceDescribe
+    /// cannot widen this ceiling. Event-kind coverage is never substituted.
     fn owner_may_issue_grant_for(
         &self,
         issuer: &str,
@@ -970,8 +937,7 @@ impl ProjectionState {
         ) {
             return false;
         }
-        let basis = self.realm_authority_registry_basis(realm_id);
-        arkret_policy::owner_may_grant(action, basis.as_ref()).unwrap_or(false)
+        arkret_policy::owner_may_grant(action).unwrap_or(false)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1147,12 +1113,6 @@ impl ProjectionState {
                             root.controller_id.as_str() == issuer
                                 && root.controller_epoch == *controller_epoch_at_issuance
                                 && root.authority_generation == *authority_generation
-                                && body
-                                    .get("capability_action_registry_digest")
-                                    .and_then(Value::as_str)
-                                    .is_none_or(|digest| {
-                                        digest == root.capability_action_registry_digest.as_str()
-                                    })
                         })
                 }
                 crate::capability::IssuerAuthorityRef::Grant { .. } => false,

@@ -770,11 +770,11 @@ async fn events_describe_and_single_event_submit_work_body() {
         .unwrap();
     assert_eq!(describe["protocol_version"], "1.0");
     assert!(
-        describe["supported_operations"]
+        describe["operation_bindings"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ak.self.events.command.submit")
+            .any(|binding| binding["operation_id"] == "ak.self.events.command.submit")
     );
     assert_eq!(describe["limits"]["max_event_bytes"], 1024 * 1024);
     assert_eq!(describe["limits"]["max_resolve"], 100);
@@ -1158,51 +1158,6 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
         ),
         "ak.realm.create must derive exactly the canonical registered genesis cells"
     );
-    // A create that cannot establish an authority root is not a Realm anybody
-    // could govern, so `realm-and-space.md` §2.5 makes the whole atomic unit
-    // roll back rather than materialize an ownerless Realm. The
-    // create-locked `capability_action_registry_digest` is the value
-    // projection's only non-literal input, so removing it is the minimal way
-    // to reach that state.
-    let mut rootless_payload = payload.clone();
-    rootless_payload["object"]
-        .as_object_mut()
-        .expect("create payload object")
-        .remove("capability_action_registry_digest");
-    let rootless_create = soland_test_support::signed_event::CallerSignedEvent::realm_genesis(
-        &actor,
-        "01904100-0000-7000-8000-a11ce0000001",
-        rootless_payload,
-    )
-    .build();
-    let rootless_realm_id = RealmId::from_event_id(&rootless_create.event_id).to_string();
-    let mut rootless_response = TestClient::post("http://server/_arkret/self/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "events": [arkret_wire::EventInitialSubmission::online(rootless_create)]
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    let rootless_status = rootless_response.status_code.expect("rootless status");
-    let rootless_body: Value = rootless_response.take_json().await.expect("rootless body");
-    assert_eq!(
-        rootless_status,
-        StatusCode::PRECONDITION_FAILED,
-        "unexpected rootless-create response: {rootless_body}"
-    );
-    assert_eq!(rootless_body["reason"], "realm_authority_root_missing");
-    assert!(
-        state
-            .test_persistence()
-            .events()
-            .snapshot_all()
-            .await
-            .unwrap()
-            .iter()
-            .all(|record| record.realm_id.as_deref() != Some(rootless_realm_id.as_str())),
-        "a genesis without an authority root must leave no canonical Event"
-    );
-
     let profile = serde_json::to_value(&bootstrap_unit[1]).unwrap();
     let policy = serde_json::to_value(&bootstrap_unit[2]).unwrap();
     let join_rule = serde_json::to_value(&bootstrap_unit[3]).unwrap();
@@ -1311,11 +1266,6 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
         assert!(
             authority_root.is_genesis_for(actor_core.as_str()),
             "the authority root's controller is the Realm creator at epoch/generation 0"
-        );
-        assert_eq!(
-            authority_root.capability_action_registry_digest,
-            arkret_policy::current_capability_action_registry_digest().unwrap(),
-            "the root copies the signed create payload's registry basis verbatim"
         );
         assert!(
             projection.actor_holds_effective_realm_owner(

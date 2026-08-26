@@ -2176,8 +2176,6 @@ mod tests {
                 founding_device_descriptor: fixture_founding_device_descriptor(
                     &principal, created_at,
                 ),
-                capability_action_registry_digest:
-                    arkret_policy::current_capability_action_registry_digest().unwrap(),
                 created_at,
                 hlc: arkret_identifiers::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
             },

@@ -282,13 +282,6 @@ fn apply_realm_authority_reset_dispatch(
 ) -> ProjectionEffect {
     s.apply_realm_authority_transition(op, arkret_wire::EventKind::RealmAuthorityReset)
 }
-fn apply_realm_authority_basis_update_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_realm_authority_transition(op, arkret_wire::EventKind::RealmAuthorityBasisUpdate)
-}
 fn apply_realm_set_default_strand_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -1040,10 +1033,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::RealmAuthorityReset,
         apply_realm_authority_reset_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmAuthorityBasisUpdate,
-        apply_realm_authority_basis_update_dispatch,
     );
     // COT-06-004 — Realm default-Strand pointer.
     m.insert(

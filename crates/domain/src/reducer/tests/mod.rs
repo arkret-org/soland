@@ -53,7 +53,6 @@ pub(super) fn install_realm_authority_root(
 ) {
     let value = arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
         arkret_identifiers::DidCoreId::new(controller_id).unwrap(),
-        arkret_policy::current_capability_action_registry_digest().unwrap(),
     );
     state.realm_null_subject_cells.insert(
         (

@@ -722,9 +722,7 @@ CREATE TABLE public.governance_dependency_objects (
     CONSTRAINT governance_dependency_objects_kind_check CHECK (dependency_kind IN (
         'availability_receipt',
         'authenticated_signer_resolution_evidence',
-        'minimal_metadata_mls_leaf_signer_evidence',
-        'governance_registry_snapshot',
-        'governance_registry_artifact'
+        'minimal_metadata_mls_leaf_signer_evidence'
     )),
     CONSTRAINT governance_dependency_objects_size_check CHECK (octet_length(canonical_bytes) <= 1048576)
 );
@@ -820,7 +818,6 @@ CREATE TABLE public.history_traversal_retentions (
     trusted_history_base_basis jsonb NOT NULL,
     trusted_current_basis jsonb NOT NULL,
     target_basis jsonb NOT NULL,
-    registry_snapshot_digest text NOT NULL,
     expires_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     UNIQUE (access_kind, access_digest),

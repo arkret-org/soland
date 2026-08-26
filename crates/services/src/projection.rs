@@ -2329,6 +2329,23 @@ impl ProjectionService {
         )
     }
 
+    /// Apply an ordered formal Event aggregate to a cloned projection and
+    /// return the first reducer rejection without mutating live state.
+    pub fn preflight_projected_batch_rejection<'a, I>(&self, operations: I) -> Option<String>
+    where
+        I: IntoIterator<Item = (&'a Operation, &'a [ProjectedCellWrite])>,
+    {
+        let mut state = self.state.lock().clone();
+        for (operation, cell_writes) in operations {
+            if let ProjectionEffect::Rejected { reason } =
+                state.apply_projected(operation, cell_writes, self.clock())
+            {
+                return Some(reason);
+            }
+        }
+        None
+    }
+
     pub fn preflight_calendar_rejection(
         &self,
         operation: &Operation,
@@ -2391,7 +2408,6 @@ impl ProjectionService {
                 arkret_wire::EventKind::RealmPolicyBundle,
                 arkret_wire::EventKind::RealmOwnerTransfer,
                 arkret_wire::EventKind::RealmAuthorityReset,
-                arkret_wire::EventKind::RealmAuthorityBasisUpdate,
             ],
         )
     }

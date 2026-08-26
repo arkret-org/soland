@@ -1137,18 +1137,23 @@ fn contract_realm_id(seed: &str) -> String {
 }
 
 fn canonical_wire_event_record(
-    _event_id: &str,
+    event_kind: &str,
     actor_id: &str,
     realm_id: &str,
     actor_seq: u64,
     now: chrono::DateTime<Utc>,
 ) -> CanonicalEventRecord {
+    let event_kind = if event_kind.is_empty() {
+        arkret_wire::EventKind::MessageCreate.as_str()
+    } else {
+        event_kind
+    };
     let actor_id = arkret_wire::project_full_id_to_core_id(
         &arkret_identifiers::DidFullId::new(actor_id.to_owned()).expect("contract actor full id"),
     )
     .expect("contract actor core id");
     let event = arkret_wire::test_support::raw_event_at(
-        "ak.message.create",
+        event_kind,
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
                 .expect("contract realm id"),
@@ -1178,8 +1183,12 @@ fn canonical_wire_event_record(
         actor_id: actor_id.to_string(),
         actor_seq,
         realm_id: Some(realm_id.to_owned()),
-        kind: "ak.message.create".to_owned(),
-        schema_id: "arkret://events/message/create/v1".to_owned(),
+        kind: event_kind.to_owned(),
+        schema_id: arkret_wire::EventKind::try_new(event_kind)
+            .and_then(|kind| kind.descriptor())
+            .and_then(|descriptor| descriptor.payload_schema_ref)
+            .unwrap_or(arkret_wire::SchemaId::EVENT_PAYLOAD_V1)
+            .to_owned(),
         digest_suite: arkret_canonical::DigestSuite::Sha256,
         canonical_digest,
         canonical_bytes,
@@ -1279,7 +1288,7 @@ fn contract_applet_event_group(
     (0..count)
         .map(|actor_seq| {
             contract_applet_event_request(canonical_wire_event_record(
-                "",
+                arkret_wire::EventKind::AppletRegistration.as_str(),
                 &actor_id,
                 realm_id,
                 actor_seq,
@@ -1696,14 +1705,13 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let outbox_id = format!("outbox:{namespace}:{event_uuid}");
     let event = canonical_wire_event_record("", &principal_id, &realm_id, 0, now);
     let event_id = event.event_id.clone();
-    let control_proposal_ack = contract_control_proposal_ack(&event, &realm_id, now);
     let request = EventCommitRequest {
         governance_dependencies: Vec::new(),
         device_pairing_authorization: None,
         contact_projection: None,
         consent_projection: None,
         event,
-        control_proposal_ingress: Some(ControlProposalIngress::AckRequired(control_proposal_ack)),
+        control_proposal_ingress: None,
         device_revocation_transition: None,
         device_revocation_gate: None,
         projections: vec![ProjectionEventRecord {
@@ -1826,7 +1834,13 @@ pub async fn assert_event_commit_unit_of_work_contract(
         ))
         .await
         .expect("stage contract pairing");
-    let pairing_event = canonical_wire_event_record("", &principal_id, &realm_id, 1, now);
+    let pairing_event = canonical_wire_event_record(
+        arkret_wire::EventKind::DeviceAuthorize.as_str(),
+        &principal_id,
+        &realm_id,
+        1,
+        now,
+    );
     let pairing_event_id = pairing_event.event_id.clone();
     let pairing_ack = contract_control_proposal_ack(&pairing_event, &realm_id, now);
     let pairing_commit = EventCommitRequest {
@@ -1907,7 +1921,13 @@ pub async fn assert_event_commit_unit_of_work_contract(
     // Contact acceptance must expose its canonical Event, holder projection,
     // and peer carrier together. Reading all three back only through durable
     // stores models a process restart with no in-memory planning state.
-    let contact_event = canonical_wire_event_record("", &principal_id, &realm_id, 2, now);
+    let contact_event = canonical_wire_event_record(
+        arkret_wire::EventKind::ContactRequested.as_str(),
+        &principal_id,
+        &realm_id,
+        2,
+        now,
+    );
     let contact_event_id = contact_event.event_id.clone();
     let contact_outbox_id = format!("contact-outbox:{namespace}:{event_uuid}");
     let contact_idempotency_key = format!("contact-commit:{namespace}:{event_uuid}");
@@ -2011,7 +2031,13 @@ pub async fn assert_event_commit_unit_of_work_contract(
         "Contact response-loss replay retains the first operation outcome"
     );
 
-    let failed_contact_event = canonical_wire_event_record("", &principal_id, &realm_id, 3, now);
+    let failed_contact_event = canonical_wire_event_record(
+        arkret_wire::EventKind::ContactRequested.as_str(),
+        &principal_id,
+        &realm_id,
+        3,
+        now,
+    );
     let failed_contact_event_id = failed_contact_event.event_id.clone();
     let failed_contact_outbox_id = format!("contact-outbox-failed:{namespace}:{event_uuid}");
     let mut conflicting_contact = contact_record.clone();
@@ -2071,14 +2097,13 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let rollback_outbox_id = format!("outbox-rollback:{namespace}:{rollback_uuid}");
     let rollback_event = canonical_wire_event_record("", &principal_id, &realm_id, 4, now);
     let rollback_event_id = rollback_event.event_id.clone();
-    let rollback_ack = contract_control_proposal_ack(&rollback_event, &realm_id, now);
     let failed = EventCommitRequest {
         governance_dependencies: Vec::new(),
         device_pairing_authorization: None,
         contact_projection: None,
         consent_projection: None,
         event: rollback_event,
-        control_proposal_ingress: Some(ControlProposalIngress::AckRequired(rollback_ack)),
+        control_proposal_ingress: None,
         device_revocation_transition: None,
         device_revocation_gate: None,
         projections: vec![ProjectionEventRecord {
@@ -2829,7 +2854,13 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
         ]
     };
 
-    let bootstrap_record = canonical_wire_event_record("", &principal_id, &realm_id, 0, now);
+    let bootstrap_record = canonical_wire_event_record(
+        arkret_wire::EventKind::RealmCreate.as_str(),
+        &principal_id,
+        &realm_id,
+        0,
+        now,
+    );
     let bootstrap_event_id = bootstrap_record.event_id.clone();
     assert!(
         events
@@ -2859,7 +2890,13 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
         "the partially-inserted delivery intent rolls back too"
     );
 
-    let anchor_record = canonical_wire_event_record("", &principal_id, &realm_id, 0, now);
+    let anchor_record = canonical_wire_event_record(
+        arkret_wire::EventKind::IdentityResolutionUpdate.as_str(),
+        &principal_id,
+        &realm_id,
+        0,
+        now,
+    );
     let anchor_event_id = anchor_record.event_id.clone();
     assert!(
         events
@@ -2896,7 +2933,13 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
 
     // The happy path still commits both halves together.
     let committed_outbox_id = format!("outbox:{namespace}:committed");
-    let committed_record = canonical_wire_event_record("", &principal_id, &realm_id, 0, now);
+    let committed_record = canonical_wire_event_record(
+        arkret_wire::EventKind::RealmCreate.as_str(),
+        &principal_id,
+        &realm_id,
+        0,
+        now,
+    );
     let committed_event_id = committed_record.event_id.clone();
     events
         .put_realm_bootstrap_batch_atomic(
@@ -2938,7 +2981,13 @@ pub async fn assert_atomic_control_event_governance_dependency_contract(
     let now = database_timestamp_now();
     let principal_id = format!("did:web:{namespace}.example");
     let realm_id = contract_realm_id(&format!("governance-edge:{namespace}"));
-    let record = canonical_wire_event_record("", &principal_id, &realm_id, 0, now);
+    let record = canonical_wire_event_record(
+        arkret_wire::EventKind::RealmCreate.as_str(),
+        &principal_id,
+        &realm_id,
+        0,
+        now,
+    );
     let source = GovernanceDependencySource::ControlEvent(
         Hash::new(record.canonical_digest.clone()).expect("typed Control Event digest"),
     );
@@ -2969,8 +3018,13 @@ pub async fn assert_atomic_control_event_governance_dependency_contract(
     assert_eq!(stored[0].item, item);
 
     let rollback_realm_id = contract_realm_id(&format!("governance-rollback:{namespace}"));
-    let rollback_record =
-        canonical_wire_event_record("", &principal_id, &rollback_realm_id, 0, now);
+    let rollback_record = canonical_wire_event_record(
+        arkret_wire::EventKind::RealmCreate.as_str(),
+        &principal_id,
+        &rollback_realm_id,
+        0,
+        now,
+    );
     let wrong_realm_id = contract_realm_id(&format!("governance-wrong:{namespace}"));
     let error = events
         .put_realm_bootstrap_batch_atomic(
@@ -4546,7 +4600,13 @@ pub async fn assert_consent_projection_commit_contract(
         namespace.len()
     );
 
-    let grant_event = canonical_wire_event_record("", &holder, &realm_id, 0, now);
+    let grant_event = canonical_wire_event_record(
+        arkret_wire::EventKind::ConsentGrant.as_str(),
+        &holder,
+        &realm_id,
+        0,
+        now,
+    );
     let grant_event_id = grant_event.event_id.clone();
     let grant_ack = contract_control_proposal_ack(&grant_event, &realm_id, now);
     let dot = format!("{grant_event_id}:0");
@@ -4590,7 +4650,13 @@ pub async fn assert_consent_projection_commit_contract(
     );
 
     // A second consent_id-identical grant that names another peer is a rebind.
-    let rebind_event = canonical_wire_event_record("", &holder, &realm_id, 1, now);
+    let rebind_event = canonical_wire_event_record(
+        arkret_wire::EventKind::ConsentGrant.as_str(),
+        &holder,
+        &realm_id,
+        1,
+        now,
+    );
     let rebind_event_id = rebind_event.event_id.clone();
     let rebind_ack = contract_control_proposal_ack(&rebind_event, &realm_id, now);
     let mut rebound = granted.clone();
@@ -4651,7 +4717,13 @@ pub async fn assert_consent_projection_commit_contract(
         "quarantine cell seeds at revision 1"
     );
 
-    let stale_event = canonical_wire_event_record("", &holder, &realm_id, 1, now);
+    let stale_event = canonical_wire_event_record(
+        arkret_wire::EventKind::ConsentRevoke.as_str(),
+        &holder,
+        &realm_id,
+        1,
+        now,
+    );
     let stale_event_id = stale_event.event_id.clone();
     let stale_ack = contract_control_proposal_ack(&stale_event, &realm_id, now);
     let mut revoked = granted.clone();
@@ -4701,7 +4773,13 @@ pub async fn assert_consent_projection_commit_contract(
         "a failed invalidation leaves no partial cell mutation"
     );
 
-    let revoke_event = canonical_wire_event_record("", &holder, &realm_id, 1, now);
+    let revoke_event = canonical_wire_event_record(
+        arkret_wire::EventKind::ConsentRevoke.as_str(),
+        &holder,
+        &realm_id,
+        1,
+        now,
+    );
     let revoke_ack = contract_control_proposal_ack(&revoke_event, &realm_id, now);
     let applied_cas = AccountDataCasCommit {
         record: AccountDataRecord {

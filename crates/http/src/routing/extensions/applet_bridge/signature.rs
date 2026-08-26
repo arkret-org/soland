@@ -12,7 +12,7 @@ use salvo::prelude::*;
 use soland_http::error::AppError;
 use soland_http::http_signature;
 
-use super::record::applet_records;
+use super::record::{applet_id_param, applet_records};
 use super::types::AppletRecord;
 use crate::state::AppState;
 
@@ -59,8 +59,8 @@ pub(super) async fn require_inbound_transaction_signature(
             req,
             &payload,
             &idempotency_key,
-            "/source_service_id",
-            "/applet_id",
+            Some("/source_service_id"),
+            Some("/applet_id"),
         )
         .await
     }
@@ -109,13 +109,14 @@ pub(super) async fn require_ghost_provision_signature(
                 AppError::json_invalid(format!("unable to read Ghost provisioning body: {error}"))
             })?
             .to_vec();
+        let is_preview = req.uri().path().ends_with("/ghosts/provision/preview");
         verify_inbound_applet_service_signature(
             &state,
             req,
             &payload,
             &idempotency_key,
-            "/authoring_request/basis/service_id",
-            "/authoring_request/basis/applet_id",
+            (!is_preview).then_some("/authoring_request/basis/service_id"),
+            (!is_preview).then_some("/authoring_request/basis/applet_id"),
         )
         .await
     }
@@ -149,8 +150,8 @@ async fn verify_inbound_applet_service_signature(
     req: &Request,
     body_bytes: &[u8],
     idempotency_key: &str,
-    source_service_json_pointer: &str,
-    applet_id_json_pointer: &str,
+    source_service_json_pointer: Option<&str>,
+    applet_id_json_pointer: Option<&str>,
 ) -> Result<VerifiedAppletServiceSignature, AppError> {
     // §7.3.1 ordering: a transaction push carrying only `Authorization: Bearer`
     // (no `Signature` / `Signature-Input`) MUST be rejected before any other
@@ -185,25 +186,37 @@ async fn verify_inbound_applet_service_signature(
         serde_json::from_slice::<serde_json::Value>(body_bytes).map_err(|error| {
             applet_signature_error_invalid(format!("invalid Applet service request JSON: {error}"))
         })?;
-    let source_service_id = request_body
-        .pointer(source_service_json_pointer)
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            applet_signature_error_invalid(format!(
-                "signed Applet service request body requires {source_service_json_pointer}"
-            ))
-        })?;
-    let applet_id = request_body
-        .pointer(applet_id_json_pointer)
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            applet_signature_error_invalid(format!(
-                "signed Applet service request body requires {applet_id_json_pointer}"
-            ))
-        })?;
+    let source_service_id = source_service_json_pointer
+        .map(|pointer| {
+            request_body
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    applet_signature_error_invalid(format!(
+                        "signed Applet service request body requires {pointer}"
+                    ))
+                })
+        })
+        .transpose()?
+        .unwrap_or_else(|| header_source.clone());
+    let applet_id = applet_id_json_pointer
+        .map(|pointer| {
+            request_body
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    applet_signature_error_invalid(format!(
+                        "signed Applet service request body requires {pointer}"
+                    ))
+                })
+        })
+        .transpose()?
+        .map_or_else(|| applet_id_param(req), Ok)?;
     if header_source != source_service_id {
         return Err(applet_signature_error_invalid(format!(
-            "Source-Service-ID header does not match body {source_service_json_pointer}"
+            "Source-Service-ID header does not match the signed body binding"
         )));
     }
 
@@ -211,7 +224,7 @@ async fn verify_inbound_applet_service_signature(
     // registration. Without one there is no authenticated key source to try;
     // reject at the registration gate instead of manufacturing a method URL
     // from the Core service id.
-    let install = active_install_for_service_id(state, &header_source, applet_id)
+    let install = active_install_for_service_id(state, &header_source, &applet_id)
         .await?
         .ok_or_else(|| {
             AppError::capability_denied(
@@ -260,7 +273,7 @@ async fn verify_inbound_applet_service_signature(
     let package = &install.package;
     let signature_header = applet_required_header(req, "signature")?;
     let delivery_authentication_record_digest = applet_delivery_authentication_record_digest(
-        source_service_id,
+        &source_service_id,
         &destination_service_id,
         idempotency_key,
         content_digest,

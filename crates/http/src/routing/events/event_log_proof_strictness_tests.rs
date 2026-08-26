@@ -693,9 +693,6 @@ async fn applet_registration_requires_realm_admin() {
             subject_principal_server_id: Some(owner.to_owned()),
             resource: realm_id.to_owned(),
             actions: vec!["ak.realm.admin".to_owned()],
-            capability_action_registry_digest: Some(
-                arkret_policy::current_capability_action_registry_digest().unwrap(),
-            ),
             constraints: Vec::new(),
             revoked: false,
             created_at: now,
@@ -1365,7 +1362,6 @@ fn data_event_grant(grant_id: &str, action: &str, revoked: bool) -> crate::authz
         subject_principal_server_id: Some(DATA_EVENT_PRINCIPAL_SERVER.to_owned()),
         resource: DATA_EVENT_STRAND.to_owned(),
         actions: vec![action.to_owned()],
-        capability_action_registry_digest: None,
         constraints: Vec::new(),
         revoked,
         created_at: chrono::Utc::now(),

@@ -45,17 +45,6 @@ const MAX_PEER_EVENTS_READ_LIMIT: usize = 100;
 const MAX_PEER_EVENTS_RESOLVE: usize = 1024;
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-struct PeerEventsDescribeOutcome {
-    service_id: DidCoreId,
-    protocol_version: String,
-    primary_write_path: String,
-    supported_operations: Vec<String>,
-    supported_profiles: Vec<String>,
-    supported_bindings: Vec<String>,
-    limits: PeerEventsDescribeLimits,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 struct PeerEventsDescribeLimits {
     max_batch_item_count: usize,
     max_query_limit: usize,
@@ -678,7 +667,7 @@ fn validate_signal_signature_window(req: &Request) -> Result<(), AppError> {
 async fn peer_events_describe(
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<PeerEventsDescribeOutcome> {
+) -> JsonResult<arkret_models_discovery::ServiceDescribe> {
     if req.method().as_str() == "QUERY" {
         parse_json_body::<PeerEventsDescribeRequestBody>(
             req,
@@ -687,38 +676,52 @@ async fn peer_events_describe(
         .await?;
     }
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let service_id = DidCoreId::new(state.service_id().clone())
-        .map_err(|_| AppError::internal("service_id is invalid"))?;
-    json_ok(PeerEventsDescribeOutcome {
-        service_id,
-        protocol_version: "1.0".to_owned(),
-        primary_write_path: "/_arkret/peer/events".to_owned(),
-        supported_operations: vec![
-            arkret_wire::ServiceOperationId::PEER_EVENTS_READ_DESCRIBE.to_owned(),
-            arkret_wire::ServiceOperationId::PEER_EVENTS_COMMAND_SUBMIT.to_owned(),
-            arkret_wire::ServiceOperationId::PEER_EVENTS_READ_SCAN.to_owned(),
-            arkret_wire::ServiceOperationId::PEER_EVENTS_READ_RESOLVE.to_owned(),
-            arkret_wire::ServiceOperationId::PEER_EVENTS_READ_FRONTIER.to_owned(),
-            arkret_wire::ServiceOperationId::PEER_INVITES_COMMAND_SUBMIT.to_owned(),
-            arkret_wire::ServiceOperationId::PEER_SIGNAL_COMMAND_RELAY.to_owned(),
-        ],
-        supported_profiles: vec![
+    let operation_ids = [
+        arkret_wire::ServiceOperationId::PeerEventsReadDescribe,
+        arkret_wire::ServiceOperationId::PeerEventsCommandSubmit,
+        arkret_wire::ServiceOperationId::PeerEventsReadScan,
+        arkret_wire::ServiceOperationId::PeerEventsReadResolve,
+        arkret_wire::ServiceOperationId::PeerEventsReadFrontier,
+        arkret_wire::ServiceOperationId::PeerInvitesCommandSubmit,
+        arkret_wire::ServiceOperationId::PeerSignalCommandRelay,
+    ];
+    let mut description = crate::routing::system::describe::build_server_description(state);
+    description.supported_profiles = vec![
             arkret_wire::ProfileId::FEDERATION_MINIMAL_V1.to_owned(),
             arkret_wire::ProfileId::SIGNAL_PEER_RELAY_V1.to_owned(),
-        ],
-        supported_bindings: vec![
-            "http-message-signature".to_owned(),
-            "source-service-id".to_owned(),
-            "destination-service-id".to_owned(),
-            "source-trust-domain".to_owned(),
-            "destination-trust-domain".to_owned(),
-        ],
-        limits: PeerEventsDescribeLimits {
+        ];
+    description.operation_bindings = operation_ids
+        .iter()
+        .copied()
+        .map(|operation_id| {
+            arkret_models_discovery::OperationBinding::current_http_json(operation_id)
+                .expect("peer operation must have a current HTTP JSON carrier")
+        })
+        .collect();
+    description.supported_bindings = vec![
+        arkret_models_discovery::SupportedBinding::new(arkret_wire::BindingKind::HttpJson)
+            .with_base_url(state.config().public_base_url.trim_end_matches('/'))
+            .with_extra("operations", json!(operation_ids))
+            .with_extra("extension_profile_required", Value::Null),
+    ];
+    description.limits.extensions.insert(
+        "peer_events".to_owned(),
+        serde_json::to_value(PeerEventsDescribeLimits {
             max_batch_item_count: MAX_FEDERATED_EVENTS,
             max_query_limit: MAX_PEER_EVENTS_READ_LIMIT,
             max_resolve: MAX_PEER_EVENTS_RESOLVE,
-        },
-    })
+        })
+        .expect("peer limits serialize"),
+    );
+    description.claimed_profiles = description
+        .supported_profiles
+        .iter()
+        .map(arkret_models_discovery::ClaimedProfileEntry::self_claimed)
+        .collect();
+    description.validate().map_err(|error| {
+        AppError::internal(format!("peer ServiceDescribe validation failed: {error}"))
+    })?;
+    json_ok(description)
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.peer.events.command.submit", tags("events"))]

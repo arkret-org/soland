@@ -23,7 +23,7 @@ async fn prepare_ghost_event(
     envelope: Value,
     admission: &InternalEventAdmission,
     preceding_events: &BTreeMap<String, (String, String, u64)>,
-    preceding_operations: &[arkret_event_draft::ProjectedEventOperation],
+    preceding_prepared: &[PreparedGhostEvent],
 ) -> Result<PreparedGhostEvent, SubmitOneError> {
     let raw_bytes = serde_json::to_vec(&envelope).map_err(|_| {
         SubmitOneError::new(
@@ -162,7 +162,10 @@ async fn prepare_ghost_event(
     // writes; v1 has no producer `effects[]` to take them from.
     let (projected_cell_writes, _) = derive_submit_cell_writes(state, &parsed, &typed).await?;
     if let Some(operation) = operation.as_ref() {
-        let mut aggregate_operations = preceding_operations.to_vec();
+        let mut aggregate_operations = preceding_prepared
+            .iter()
+            .filter_map(|event| event.operation.clone())
+            .collect::<Vec<_>>();
         aggregate_operations.push(operation.clone());
         validate_operation_semantics(state, &aggregate_operations)
             .map_err(SubmitOneError::semantic_schema_violation)?;
@@ -188,9 +191,16 @@ async fn prepare_ghost_event(
             .map_err(|reason| {
                 SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason)
             })?;
+        let preceding_operations = preceding_prepared.iter().filter_map(|event| {
+            event
+                .operation
+                .as_ref()
+                .map(|operation| (operation, event.projected_cell_writes.as_slice()))
+        });
+        let current_operation = std::iter::once((operation, projected_cell_writes.as_slice()));
         if let Some(reason) = state
             .projections()
-            .preflight_capability_rejection(operation, &projected_cell_writes)
+            .preflight_projected_batch_rejection(preceding_operations.chain(current_operation))
         {
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,
@@ -433,7 +443,6 @@ async fn submit_applet_record_event_batch(
         created_at: provision_time,
         revoked_at: None,
     };
-    let mut preceding_operations = Vec::new();
     let mut prepared = Vec::with_capacity(events.len());
     for event in events {
         let actor_id = event.actor_id.to_string();
@@ -454,14 +463,13 @@ async fn submit_applet_record_event_batch(
             envelope,
             &admission,
             &preceding_events,
-            &preceding_operations,
+            &prepared,
         )
         .await?;
         preceding_events.insert(
             next.event_id.clone(),
             (next.realm_id.clone(), next.actor_id.clone(), next.actor_seq),
         );
-        preceding_operations.extend(next.operation.iter().cloned());
         prepared.push(next);
     }
     let created_at = now();

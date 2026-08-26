@@ -160,7 +160,7 @@ fn mount_application_routes(router: Router, conformance_harness_enabled: bool) -
 /// API-URL trust-namespace migration: the historical `/api/v1/*` +
 /// `/arkret/v1/*` prefixes are gone. Every protocol path now lives under a
 /// single `/_arkret/` root with no version segment (version is negotiated
-/// via `*.describe` / `supported_operations`). The first path segment names
+/// via `*.describe` / exact `operation_bindings`). The first path segment names
 /// the trust concentric circle (self/gate/root/find/peer/open/edge); the
 /// deployment-local operator surface stays separate at `/_soland/admin/*`.
 ///

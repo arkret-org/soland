@@ -215,7 +215,6 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "purpose": "collaboration",
                 "genesis_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                 "trust_domain": "ak:trust_domain:local",
-                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "schema_refs": ["ak.schema.realm.v1"],
                 "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
                 "encryption_profile": "mls_rfc9420",

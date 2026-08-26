@@ -206,6 +206,18 @@ pub(crate) fn advertise_websocket_binding(
         return;
     };
     description.supported_bindings.push(binding);
+    for operation_id in [
+        arkret_wire::ServiceOperationId::SelfAccountStreamSubscribe,
+        arkret_wire::ServiceOperationId::SelfEventsStreamSubscribe,
+        arkret_wire::ServiceOperationId::SelfSignalStreamSubscribe,
+    ] {
+        description.operation_bindings.push(
+            arkret_models_discovery::service_description::OperationBinding::current_websocket(
+                operation_id,
+            )
+            .expect("WebSocket operation must have a current-v1 carrier"),
+        );
+    }
     if !description
         .supported_profiles
         .iter()

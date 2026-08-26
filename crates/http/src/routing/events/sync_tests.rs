@@ -816,8 +816,7 @@ async fn native_sidecar_events_are_visible_only_to_the_controller() {
                 "digest_algorithm": "sha256",
                 "security_class": "standard",
                 "encryption_profile": "mls_rfc9420",
-                "notary": crate::test_single_signer_notary(ROSTER_ACTOR_FULL, 9),
-                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap()
+                "notary": crate::test_single_signer_notary(ROSTER_ACTOR_FULL, 9)
             }
         }),
     );
@@ -1809,7 +1808,6 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
                 "id": ROSTER_REALM,
                 "title": "Pinned welcome space",
                 "created_by": ROSTER_ACTOR,
-                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "default_join_rule": "invite",
                 "history_access": "since_join",
                 "encryption_profile": "none"
@@ -1959,7 +1957,6 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
                 "id": ROSTER_REALM,
                 "title": "Redacted revision space",
                 "created_by": ROSTER_ACTOR,
-                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "default_join_rule": "invite",
                 "history_access": "since_join",
                 "encryption_profile": "none"

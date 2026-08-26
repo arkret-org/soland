@@ -284,9 +284,6 @@ pub fn realm_genesis_payload(
             "encryption_profile": "none",
             "security_class": "standard",
             "digest_algorithm": "sha256",
-            "capability_action_registry_digest":
-                arkret_policy::current_capability_action_registry_digest()
-                    .expect("capability action registry digest"),
             "notary": notary
         }
     })

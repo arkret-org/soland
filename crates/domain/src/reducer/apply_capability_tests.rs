@@ -26,7 +26,6 @@ mod cba_capability_cell_tests {
     fn engine_grant_reads_registry_projected_wrapper() {
         let grant_id = "ak:grant:AVrFZlvgUn-7TZ-JmuAqj5zeywh7lJ6SQmpb3MNF95Q7";
         let realm_id = "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic";
-        let registry_digest = arkret_policy::current_capability_action_registry_digest().unwrap();
         let state = CellState::Value(Value::Array(vec![json!({
             "tag": "ak:event:AY_KsmK6yLixEOrtHaJQKVPxqvToAwftLv3kDhf3WwDk:0",
             "value": {
@@ -46,7 +45,6 @@ mod cba_capability_cell_tests {
                     "subject": "ak:did_core:web:owner.example",
                     "subject_principal_server_id": "ak:did_core:web:owner.example",
                     "actions": ["ak.realm.admin"],
-                    "capability_action_registry_digest": registry_digest,
                     "resources": [{
                         "kind": "realm",
                         "realm_id": realm_id,
@@ -242,15 +240,13 @@ mod agent_key_tests {
         // Genesis authority is the authority-root cell, not a founding grant.
         // The owner's own bootstrap grant therefore goes through the ordinary
         // issuer-upper-bound path and is authorized by the owner aggregate.
-        let mut owner_grant = grant_payload(
+        let owner_grant = grant_payload(
             OWNER_GRANT,
             REALM_OWNER,
             REALM_OWNER,
             json!(["ak.realm.admin", "ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
-        owner_grant["grant"]["capability_action_registry_digest"] =
-            json!(arkret_policy::current_capability_action_registry_digest().unwrap());
         let effect =
             state.apply_capability_grant(&op(EventKind::CapabilityGrant, owner_grant), now);
         assert!(matches!(
@@ -260,24 +256,10 @@ mod agent_key_tests {
     }
 
     #[test]
-    fn aggregate_admin_grant_requires_registry_basis() {
+    fn aggregate_admin_grant_uses_compiled_profile() {
         let body = json!({
             "actions": ["ak.realm.admin"],
             "resources": [{ "kind": "realm", "realm_id": REALM }]
-        });
-        assert_eq!(
-            super::validate_grant_body_scope(&body),
-            Err("capability_registry_basis_unavailable")
-        );
-    }
-
-    #[test]
-    fn aggregate_admin_grant_accepts_current_registry_basis() {
-        let digest = arkret_policy::current_capability_action_registry_digest().unwrap();
-        let body = json!({
-            "actions": ["ak.realm.admin"],
-            "resources": [{ "kind": "realm", "realm_id": REALM }],
-            "capability_action_registry_digest": digest,
         });
         assert_eq!(super::validate_grant_body_scope(&body), Ok(()));
     }
@@ -571,8 +553,6 @@ mod agent_key_tests {
             json!(["ak.applet.ghost.provision"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
-        payload["grant"]["capability_action_registry_digest"] =
-            json!(arkret_policy::current_capability_action_registry_digest().unwrap());
         payload["grant"]["constraints"] = json!([{
             "constraint_kind": "authority_control",
             "constraint_subkind": "applet_authority",
@@ -1468,8 +1448,6 @@ mod federation_revoke_fanout_tests {
                 default_strand_id: None,
             },
         );
-        let registry_digest = arkret_policy::current_capability_action_registry_digest()
-            .expect("embedded capability action registry");
         let owner_grant = capability_op(
             "ak:operation:01970000-0000-7000-8000-0000000000a0",
             arkret_wire::EventKind::CapabilityGrant,
@@ -1488,7 +1466,6 @@ mod federation_revoke_fanout_tests {
                     }],
                     "subject": OWNER,
                     "actions": ["ak.realm.admin"],
-                    "capability_action_registry_digest": registry_digest,
                     "resources": [{ "kind": "realm", "realm_id": REALM }],
                 }
             }),
@@ -1500,8 +1477,6 @@ mod federation_revoke_fanout_tests {
     }
 
     fn delivery_binding_grant_payload() -> serde_json::Value {
-        let registry_digest = arkret_policy::current_capability_action_registry_digest()
-            .expect("embedded capability action registry");
         json!({
             "event_id": GRANT.replacen("ak:grant:", "ak:event:", 1),
             "grant": {
@@ -1521,7 +1496,6 @@ mod federation_revoke_fanout_tests {
                 // not a registered capability action, so the grant carries the
                 // registered `ak.realm.admin` action that authorizes it.
                 "actions": ["ak.realm.admin"],
-                "capability_action_registry_digest": registry_digest,
                 "resources": [{ "kind": "realm", "realm_id": REALM }],
             }
         })
@@ -1627,8 +1601,6 @@ mod realm_owner_authority_tests {
                     "subject": subject,
                     "subject_principal_server_id": subject,
                     "actions": actions,
-                    "capability_action_registry_digest":
-                        arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "resources": [{
                         "kind": "realm",
                         "realm_id": REALM,
@@ -1822,7 +1794,7 @@ mod realm_owner_authority_tests {
     }
 
     #[test]
-    fn owner_may_issue_calendar_rsvp_only_when_calendar_profile_is_declared() {
+    fn compiled_owner_grant_authority_does_not_depend_on_realm_schema_profiles() {
         let now = chrono::Utc::now();
         let mut calendar = realm(Some(OWNER), None);
         declare_profiles(
@@ -1842,7 +1814,7 @@ mod realm_owner_authority_tests {
             &mut unrelated,
             &["ak.profile.calendar_notification_dispatch.v1"],
         );
-        assert!(!unrelated.owner_may_issue_grant_for(
+        assert!(unrelated.owner_may_issue_grant_for(
             OWNER,
             OWNER,
             REALM,
@@ -1851,11 +1823,18 @@ mod realm_owner_authority_tests {
         ));
 
         let absent = realm(Some(OWNER), None);
-        assert!(!absent.owner_may_issue_grant_for(
+        assert!(absent.owner_may_issue_grant_for(
             OWNER,
             OWNER,
             REALM,
             CapabilityActionId::RSVP_SET,
+            now,
+        ));
+        assert!(!absent.owner_may_issue_grant_for(
+            OWNER,
+            OWNER,
+            REALM,
+            "ak.agent.sidecar.write",
             now,
         ));
     }
@@ -1895,11 +1874,9 @@ mod realm_owner_authority_tests {
 
     #[test]
     fn owner_never_reaches_the_two_root_control_only_actions() {
-        let state = realm(Some(OWNER), None);
-        let basis = state.realm_authority_registry_basis(REALM);
         for action in ["ak.realm.destroy", "ak.realm.tombstone"] {
             assert!(
-                !arkret_policy::owner_may_grant(action, basis.as_ref()).unwrap(),
+                !arkret_policy::owner_may_grant(action).unwrap(),
                 "{action} is root_control_only and is not owner-grantable"
             );
             assert!(
@@ -2044,32 +2021,5 @@ mod realm_owner_authority_tests {
             Some("grant_exceeds_issuer_authority"),
             "no active profile registers ak.agent.sidecar.write as owner-grantable"
         );
-    }
-
-    #[test]
-    fn aggregate_expansion_requires_the_grants_own_registry_basis() {
-        // A grant that names no registry snapshot cannot be re-read through
-        // the aggregate: the expansion fails closed rather than falling back
-        // to the receiver's embedded registry.
-        let mut state = realm(Some(OWNER), None);
-        let id = grant_id("9a");
-        let mut unanchored = grant_op("9a", &id, OWNER, CO_OWNER, json!(["ak.realm.owner"]));
-        unanchored
-            .payload
-            .get_mut("grant")
-            .and_then(serde_json::Value::as_object_mut)
-            .unwrap()
-            .remove("capability_action_registry_digest");
-        // The grant body itself is refused, so nothing enters the index.
-        assert_eq!(
-            rejected_reason(&issue(&mut state, &unanchored)),
-            Some("capability_registry_basis_unavailable")
-        );
-        assert!(!state.actor_holds_effective_realm_owner(
-            REALM,
-            CO_OWNER,
-            CO_OWNER,
-            chrono::Utc::now()
-        ));
     }
 }

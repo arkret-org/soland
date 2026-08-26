@@ -514,28 +514,29 @@ pub async fn probe_webvh_provider_describe(
 }
 
 /// Validate a canonical ServiceDescribe body for use as a webvh resolver trust
-/// root. The four `service-describe.schema.json` required fields are checked:
-/// `service_kind`, `service_id`, `trust_domain`, `supported_operations`.
+/// root. Decode and validate the complete current-v1 typed description before
+/// using any role or operation claim.
 fn validate_webvh_provider_describe(
     body: &Value,
     expected_service_id: Option<&str>,
     expected_trust_domain: Option<&str>,
 ) -> Result<(), String> {
-    let service_kind = body
-        .get("service_kind")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "webvh provider describe missing service_kind".to_owned())?;
-    if !matches!(service_kind, "identity_registry" | "principal_server") {
+    let description: arkret_models_discovery::ServiceDescribe =
+        serde_json::from_value(body.clone())
+            .map_err(|error| format!("webvh provider ServiceDescribe is invalid: {error}"))?;
+    description
+        .validate()
+        .map_err(|error| format!("webvh provider ServiceDescribe is invalid: {error}"))?;
+    if !matches!(
+        description.service_kind,
+        arkret_wire::ServiceKind::IdentityRegistry | arkret_wire::ServiceKind::PrincipalServer
+    ) {
         return Err(format!(
-            "webvh provider service_kind must be an identity registry, got {service_kind:?}"
+            "webvh provider service_kind must be an identity registry, got {:?}",
+            description.service_kind
         ));
     }
-    let service_id = body
-        .get("service_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "webvh provider describe missing service_id".to_owned())?;
-    arkret_identifiers::DidCoreId::new(service_id.to_owned())
-        .map_err(|error| format!("webvh provider service_id is invalid: {error}"))?;
+    let service_id = description.service_id.as_str();
     if let Some(expected) = expected_service_id
         && service_id != expected
     {
@@ -543,15 +544,7 @@ fn validate_webvh_provider_describe(
             "webvh provider service_id mismatch: expected {expected}, got {service_id}"
         ));
     }
-    let trust_domain = body
-        .get("trust_domain")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "webvh provider describe missing trust_domain".to_owned())?;
-    if !valid_trust_domain(trust_domain) {
-        return Err(format!(
-            "webvh provider trust_domain is invalid: {trust_domain}"
-        ));
-    }
+    let trust_domain = description.trust_domain.as_str();
     if let Some(expected) = expected_trust_domain
         && trust_domain != expected
     {
@@ -559,44 +552,21 @@ fn validate_webvh_provider_describe(
             "webvh provider trust_domain mismatch: expected {expected}, got {trust_domain}"
         ));
     }
-    if body
-        .get("development_mode")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
+    if description.development_mode {
         return Err("webvh provider is in development_mode".to_owned());
     }
-    if !string_array_contains(
-        body.get("supported_operations"),
-        arkret_wire::ServiceOperationId::SERVER_READ_DESCRIBE,
-    ) {
+    let operation_id = arkret_wire::ServiceOperationId::ServerReadDescribe;
+    let local = arkret_models_discovery::OperationBinding::current_http_json(operation_id)
+        .map_err(|error| error.to_string())?;
+    if description
+        .select_operation_binding(operation_id, &[local])
+        .is_none()
+    {
         return Err(
             "webvh provider describe does not advertise ak.server.read.describe".to_owned(),
         );
     }
     Ok(())
-}
-
-fn string_array_contains(value: Option<&Value>, needle: &str) -> bool {
-    value
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .any(|value| value.as_str() == Some(needle))
-}
-
-fn valid_trust_domain(value: &str) -> bool {
-    let Some(scope) = value.strip_prefix("ak:trust_domain:") else {
-        return false;
-    };
-    if scope.is_empty() || scope.len() > 128 {
-        return false;
-    }
-    let bytes = scope.as_bytes();
-    matches!(bytes[0], b'a'..=b'z' | b'0'..=b'9')
-        && scope
-            .bytes()
-            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-' | b':'))
 }
 
 #[cfg(test)]
@@ -919,15 +889,7 @@ mod tests {
 
     #[test]
     fn provider_describe_trust_handshake_accepts_canonical_identity_registry() {
-        // STA-07-002 — canonical ServiceDescribe shape: service_kind +
-        // service_id + trust_domain + supported_operations.
-        let describe = json!({
-            "service_kind": "identity_registry",
-            "service_id": "ak:did_core:web:webvh-provider.example",
-            "trust_domain": "ak:trust_domain:example.net",
-            "development_mode": false,
-            "supported_operations": ["ak.server.read.describe"]
-        });
+        let describe = provider_describe_fixture();
         validate_webvh_provider_describe(
             &describe,
             Some("ak:did_core:web:webvh-provider.example"),
@@ -938,13 +900,7 @@ mod tests {
 
     #[test]
     fn provider_describe_trust_handshake_rejects_mismatch_and_dev() {
-        let mut describe = json!({
-            "service_kind": "identity_registry",
-            "service_id": "ak:did_core:web:webvh-provider.example",
-            "trust_domain": "ak:trust_domain:example.net",
-            "development_mode": false,
-            "supported_operations": ["ak.server.read.describe"]
-        });
+        let mut describe = provider_describe_fixture();
         let err = validate_webvh_provider_describe(
             &describe,
             Some("ak:did_core:web:webvh-provider.example"),
@@ -961,5 +917,25 @@ mod tests {
         )
         .expect_err("development-mode provider must fail closed");
         assert!(err.contains("development_mode"), "{err}");
+    }
+
+    fn provider_describe_fixture() -> Value {
+        let operation_id = arkret_wire::ServiceOperationId::ServerReadDescribe;
+        let mut description = arkret_models_discovery::ServiceDescribe::development(
+            arkret_wire::DidFullId::new("did:web:webvh-provider.example").unwrap(),
+            arkret_wire::TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
+            arkret_wire::ServiceKind::IdentityRegistry,
+        );
+        description.development_mode = false;
+        description.operation_bindings = vec![
+            arkret_models_discovery::OperationBinding::current_http_json(operation_id).unwrap(),
+        ];
+        description.supported_bindings = vec![
+            arkret_models_discovery::SupportedBinding::new(arkret_wire::BindingKind::HttpJson)
+                .with_base_url("https://webvh-provider.example")
+                .with_extra("operations", json!([operation_id]))
+                .with_extra("extension_profile_required", Value::Null),
+        ];
+        serde_json::to_value(description).unwrap()
     }
 }

@@ -3,7 +3,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, MAX_GOVERNANCE_DEPENDENCY_SELECTORS,
-    governance_artifact_selectors_for_artifact, governance_artifact_selectors_for_snapshot,
     governance_attester_evidence_selectors,
 };
 use arkret_models_crypto::{MlsGovernanceProofBundle, MlsGovernanceProofRequestBody};
@@ -1121,14 +1120,6 @@ async fn load_checkpoint_dependencies(
             } => governance_attester_evidence_selectors(std::slice::from_ref(
                 authenticated_signer_resolution_evidence,
             )),
-            GovernanceDependency::GovernanceRegistrySnapshot {
-                governance_registry_snapshot,
-                ..
-            } => governance_artifact_selectors_for_snapshot(governance_registry_snapshot),
-            GovernanceDependency::GovernanceRegistryArtifact {
-                governance_registry_artifact,
-                ..
-            } => governance_artifact_selectors_for_artifact(governance_registry_artifact),
             _ => Ok(Vec::new()),
         }
         .map_err(|error| {
@@ -1948,7 +1939,6 @@ mod tests {
                 arkret_wire::SecurityClass::HighAssurance,
                 arkret_wire::EncryptionProfile::MlsRfc9420,
                 crate::test_single_signer_notary("did:web:agent.example", 42),
-                arkret_policy::current_capability_action_registry_digest().unwrap(),
             )
             .unwrap();
         let payload =

@@ -45,6 +45,7 @@ const ALICE: &str = "did:web:alice.example";
 const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 const POLICY_CELL: &str = "ak:cell:ak.component.realm.policy_server.v1:null";
 const TRUST_DOMAIN: &str = "ak:trust_domain:soland-policy-test.local";
+static CONTROL_SEAL_LOAD_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn test_config() -> AppConfig {
     AppConfig {
@@ -358,6 +359,15 @@ async fn delete_policy_server(
             prev_refs.iter().map(String::as_str).collect(),
         ),
     };
+    send_delete_policy_server(state, token, realm_id, &request).await
+}
+
+async fn send_delete_policy_server(
+    state: &AppState,
+    token: &str,
+    realm_id: &str,
+    request: &RealmPolicyServerDeleteRequestBody,
+) -> (StatusCode, Value) {
     let mut response = TestClient::delete(format!(
         "http://server/_arkret/self/realms/{realm_id}/policy-server"
     ))
@@ -402,7 +412,8 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
 }
 
 async fn accepted_seal_frontier(state: &AppState, token: &str, realm_id: &str) -> String {
-    for attempt in 0..50 {
+    const MAX_ATTEMPTS: usize = 400;
+    for attempt in 0..MAX_ATTEMPTS {
         let mut response = TestClient::query("http://server/_arkret/self/seals/frontier")
             .json(
                 &arkret_models_collaboration::event_query::SealFrontierRequestBody {
@@ -430,10 +441,10 @@ async fn accepted_seal_frontier(state: &AppState, token: &str, realm_id: &str) -
             "Realm Seal frontier failed with {status:?}: {body}"
         );
         assert!(
-            attempt < 49,
+            attempt + 1 < MAX_ATTEMPTS,
             "Realm Seal frontier remained unavailable: {body}"
         );
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
     unreachable!("bounded Realm Seal frontier retry returns or panics")
 }
@@ -445,7 +456,8 @@ fn accepted_seal_frontier_covering<'a>(
     event_digest: &'a arkret_identifiers::Hash,
 ) -> Pin<Box<dyn Future<Output = String> + 'a>> {
     Box::pin(async move {
-        for attempt in 0..50 {
+        const MAX_ATTEMPTS: usize = 400;
+        for attempt in 0..MAX_ATTEMPTS {
             let frontier = accepted_seal_id(state, token, realm_id).await;
             let mut response = TestClient::query("http://server/_arkret/self/seals/resolve")
                 .json(
@@ -471,10 +483,10 @@ fn accepted_seal_frontier_covering<'a>(
                 return frontier.to_string();
             }
             assert!(
-                attempt < 49,
+                attempt + 1 < MAX_ATTEMPTS,
                 "Realm Seal frontier never covered Control Event digest {event_digest}"
             );
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
         unreachable!("bounded Realm Seal coverage retry returns or panics")
     })
@@ -578,6 +590,7 @@ async fn link_governed_by(state: &AppState, token: &str, realm_id: &str, target:
 
 #[tokio::test(flavor = "multi_thread")]
 async fn control_seal_coordinator_drains_multiple_bounded_concurrency_waves() {
+    let _load_test_guard = CONTROL_SEAL_LOAD_TEST_LOCK.lock().await;
     const REALM_COUNT: usize = 32;
 
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
@@ -742,8 +755,30 @@ async fn control_seal_postgres_release_drains_1025_realms_with_bounded_claims() 
     control_seal_coordinator.abort();
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
+#[test]
+fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
+    // Workspace feature unification makes this broad async state machine large
+    // enough to overflow Rust's default Windows test-thread stack when sibling
+    // tests execute concurrently. Give this test-only executor an explicit
+    // bounded stack; production runtime configuration remains untouched.
+    std::thread::Builder::new()
+        .name("policy-server-lifecycle".to_owned())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .thread_stack_size(16 * 1024 * 1024)
+                .build()
+                .expect("policy-server lifecycle runtime")
+                .block_on(policy_server_declaration_is_sealed_and_resolves_org_fallback_scenario());
+        })
+        .expect("spawn policy-server lifecycle test thread")
+        .join()
+        .expect("policy-server lifecycle test thread panicked");
+}
+
+async fn policy_server_declaration_is_sealed_and_resolves_org_fallback_scenario() {
+    let _load_test_guard = CONTROL_SEAL_LOAD_TEST_LOCK.lock().await;
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
     let state = soland_test_support::app_state_with_persistence(test_config(), persistence).await;
     let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
@@ -1015,7 +1050,7 @@ async fn policy_server_declaration_survives_restart() {
 async fn policy_server_same_basis_sibling_fails_closed() {
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
     let state = soland_test_support::app_state_with_persistence(test_config(), persistence).await;
-    let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
+    let control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let token = prepare_alice(&state).await;
     let child_realm = bootstrap_realm(&state, &token, "policy server sibling child").await;
     let child_realm = child_realm.as_str();
@@ -1040,11 +1075,38 @@ async fn policy_server_same_basis_sibling_fails_closed() {
         &settled_digest,
     ))
     .await;
+    // Build the writes while the register is still settled. Their signed
+    // head_eq guards must name that last settled value, not the synthetic
+    // Bottom state introduced below.
+    let blocked_seal = accepted_seal_id(&state, &token, child_realm).await;
+    let (blocked_actor_seq, blocked_prev_refs) = actor_frontier(&state, &token, child_realm).await;
+    let blocked_put = RealmPolicyServerReplaceRequestBody {
+        policy_server_event: policy_server_move(
+            &state,
+            child_realm,
+            declaration_body("third-policy.example"),
+            &blocked_seal,
+            blocked_actor_seq,
+            blocked_prev_refs.iter().map(String::as_str).collect(),
+        ),
+    };
+    let blocked_delete = RealmPolicyServerDeleteRequestBody {
+        policy_server_event: policy_server_move(
+            &state,
+            child_realm,
+            json!({"tombstone": true}),
+            &blocked_seal,
+            blocked_actor_seq,
+            blocked_prev_refs.iter().map(String::as_str).collect(),
+        ),
+    };
+    let app = app_from_state(state.clone());
     // The remainder injects an artificial same-basis sibling directly into
     // the reducer to exercise Bottom semantics. Stop the asynchronous local
     // notary first so it cannot concurrently replay the already-accepted
     // declaration over that synthetic test-only projection state.
-    _control_seal_coordinator.abort();
+    control_seal_coordinator.abort();
+    let _ = control_seal_coordinator.await;
 
     // Two Moves that cite the SAME frozen basis and write different values are
     // cas-register siblings. `policy-server.md` §2.2 forbids resolving them by
@@ -1099,23 +1161,49 @@ async fn policy_server_same_basis_sibling_fails_closed() {
             "the same-basis sibling must join to ⊥, got {delete:?}"
         );
     }
+    let bottom_projection = state.test_projection().lock().clone();
 
     // Every dependent read and write now fails closed with the canonical
     // `failed_bottom` wire code.
-    let (status, body) = get_policy_server(&state, &token, child_realm).await;
+    let mut response = TestClient::get(format!(
+        "http://server/_arkret/self/realms/{child_realm}/policy-server"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app)
+    .await;
+    let status = response.status_code.expect("GET status");
+    let body = response.take_json().await.unwrap_or(Value::Null);
     assert_eq!(status, StatusCode::CONFLICT, "GET after ⊥: {body}");
     assert_eq!(body["error"]["code"], "failed_bottom", "GET body: {body}");
 
-    let (status, body) = put_policy_server(
-        &state,
-        &token,
-        child_realm,
-        &declaration_body("third-policy.example"),
-    )
+    // The conflict above exists only in this in-memory projection; it is not
+    // in the durable Event log. Restore that exact synthetic snapshot before
+    // each independent HTTP assertion because request teardown may reconcile
+    // the shared projection from durable state.
+    *state.test_projection().lock() = bottom_projection.clone();
+    let mut response = TestClient::put(format!(
+        "http://server/_arkret/self/realms/{child_realm}/policy-server"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .add_header("content-type", "application/json", true)
+    .body(canonical_body(&blocked_put))
+    .send(&app)
     .await;
+    let status = response.status_code.expect("PUT status");
+    let body = response.take_json().await.unwrap_or(Value::Null);
     assert_eq!(status, StatusCode::CONFLICT, "PUT after ⊥: {body}");
 
-    let (status, body) = delete_policy_server(&state, &token, child_realm).await;
+    *state.test_projection().lock() = bottom_projection;
+    let mut response = TestClient::delete(format!(
+        "http://server/_arkret/self/realms/{child_realm}/policy-server"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .add_header("content-type", "application/json", true)
+    .body(canonical_body(&blocked_delete))
+    .send(&app)
+    .await;
+    let status = response.status_code.expect("DELETE status");
+    let body = response.take_json().await.unwrap_or(Value::Null);
     assert_eq!(status, StatusCode::CONFLICT, "DELETE after ⊥: {body}");
 }
 

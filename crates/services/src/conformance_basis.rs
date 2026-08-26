@@ -313,8 +313,6 @@ pub fn build_realm_basis(
                     serde_json::to_value(
                         arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
                             issuer.clone(),
-                            arkret_policy::current_capability_action_registry_digest()
-                                .map_err(|error| error.to_string())?,
                         ),
                     )
                     .map_err(|error| error.to_string())?,
@@ -582,10 +580,6 @@ fn grant_body(
             "controller_epoch_at_issuance": 0,
             "authority_generation": 0
         }],
-        "capability_action_registry_digest":
-            arkret_policy::current_capability_action_registry_digest()
-                .map_err(|error| error.to_string())?
-                .to_string(),
         "resources": [{
             "kind": "realm",
             "realm_id": realm_id,
@@ -688,15 +682,6 @@ mod tests {
         assert_eq!(
             body.get("schema").and_then(Value::as_str),
             Some("ak.schema.capability.v1")
-        );
-        assert_eq!(
-            body.get("capability_action_registry_digest")
-                .and_then(Value::as_str),
-            Some(
-                arkret_policy::current_capability_action_registry_digest()
-                    .expect("embedded registry digest")
-                    .as_str()
-            )
         );
         assert_eq!(
             body["issuer_authority_refs"][0]["cell_ref"],

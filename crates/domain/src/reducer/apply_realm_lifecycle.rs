@@ -67,23 +67,16 @@ fn principal_genesis_resolution_value(
 /// authority a Realm has at genesis: there is no founding grant. The value is
 /// recomputed through the SDK's own projection type instead of being read off a
 /// producer field, so a receiver can never be talked into a different
-/// controller, epoch, generation, or registry basis than the signed create
-/// payload derives.
+/// controller, epoch, or generation than the signed create payload derives.
 fn genesis_authority_root_value(
     payload_object: Option<&serde_json::Map<String, Value>>,
     created_by: &str,
 ) -> Result<Value, &'static str> {
-    let object = payload_object.ok_or("realm_authority_root_missing")?;
-    let digest = object
-        .get("capability_action_registry_digest")
-        .and_then(Value::as_str)
-        .ok_or("realm_authority_root_missing")?;
-    let digest = arkret_identifiers::Hash::new(digest.to_owned())
-        .map_err(|_| "realm_authority_root_conflict")?;
+    let _object = payload_object.ok_or("realm_authority_root_missing")?;
     let controller = arkret_identifiers::DidCoreId::new(created_by)
         .map_err(|_| "realm_authority_root_conflict")?;
     serde_json::to_value(
-        arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(controller, digest),
+        arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(controller),
     )
     .map_err(|_| "realm_authority_root_conflict")
 }
@@ -166,13 +159,7 @@ impl ProjectionState {
         .ok()
     }
 
-    /// Registry snapshot the Realm's authority root was established against.
-    pub fn realm_authority_registry_basis(&self, realm_id: &str) -> Option<arkret_wire::Hash> {
-        self.realm_authority_root(realm_id)
-            .map(|root| root.capability_action_registry_digest)
-    }
-
-    /// Apply one of the three root-cell CAS transitions. The registry-derived
+    /// Apply one of the two root-cell CAS transitions. The registry-derived
     /// CBA write remains the canonical state transition; this method enforces
     /// the semantic guards and keeps the structured projection mirror in sync.
     pub(crate) fn apply_realm_authority_transition(
@@ -274,26 +261,6 @@ impl ProjectionState {
                     };
                 };
                 root.authority_generation = successor_generation;
-            }
-            arkret_wire::EventKind::RealmAuthorityBasisUpdate => {
-                let typed =
-                    operation.typed_payload::<arkret_wire::event_spec::RealmAuthorityBasisUpdate>();
-                let Ok(payload) = typed else {
-                    return ProjectionEffect::Rejected {
-                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                    };
-                };
-                if arkret_policy::require_registry_basis(Some(
-                    &payload.patch.capability_action_registry_digest,
-                ))
-                .is_err()
-                {
-                    return ProjectionEffect::Rejected {
-                        reason: "capability_registry_basis_unavailable".to_owned(),
-                    };
-                }
-                root.capability_action_registry_digest =
-                    payload.patch.capability_action_registry_digest;
             }
             _ => {
                 return ProjectionEffect::Rejected {

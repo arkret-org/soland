@@ -241,8 +241,6 @@ pub(crate) async fn seed_active_controller_device_generation(
                 arkret_bootstrap::DID_INCEPTION_REF_ROLE,
             ),
             founding_device_descriptor,
-            capability_action_registry_digest:
-                arkret_policy::current_capability_action_registry_digest().unwrap(),
             created_at,
             hlc: arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0001-a13f9c2e")).unwrap(),
         },
@@ -749,8 +747,6 @@ async fn provision_agent_sdk_commit_attempt_inner(
             controller_id: controller_id.clone(),
             genesis_salt: arkret_wire::GenesisSalt::generate().unwrap(),
             trust_domain: state.config().trust_domain.clone(),
-            capability_action_registry_digest:
-                arkret_policy::current_capability_action_registry_digest().unwrap(),
             created_at: now,
         },
     )
