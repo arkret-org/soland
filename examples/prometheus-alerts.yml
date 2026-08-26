@@ -117,6 +117,61 @@ groups:
             response latency.
           runbook: "docs/runbook.md#federation-outbox-operator-commands"
 
+      - alert: SolandControlSealEligibleWorkStalled
+        expr: soland_control_seal_oldest_eligible_age_seconds{job="soland"} > 60
+        for: 5m
+        labels:
+          severity: warning
+          component: control-seal
+        annotations:
+          summary: "eligible Control Seal work has not been claimed for five minutes"
+          description: |
+            Compare pending, eligible, claimed, expired-claim and in-flight
+            gauges. A growing eligible age with free execution slots means the
+            coordinator is not draining its durable schedule.
+          runbook: "docs/runbook.md#control-seal-scheduler"
+
+      - alert: SolandControlSealClaimsExpired
+        expr: soland_control_seal_expired_claims{job="soland"} > 0
+        for: 2m
+        labels:
+          severity: warning
+          component: control-seal
+        annotations:
+          summary: "Control Seal claims expired without prompt reclaim"
+          description: |
+            One or more Realm claims exceeded their 20 second ownership
+            window and remained reclaimable. Check process restarts, blocking
+            store latency and pass timeouts.
+          runbook: "docs/runbook.md#control-seal-scheduler"
+
+      - alert: SolandControlSealPassTimeout
+        expr: increase(soland_control_seal_attempt_total{job="soland",outcome="pass_timed_out"}[10m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          component: control-seal
+        annotations:
+          summary: "a Control Seal Realm pass exceeded its hard deadline"
+          description: |
+            Inspect the timeout log's Realm and stage, then confirm the claim
+            was released or expired and another Realm continued to progress.
+          runbook: "docs/runbook.md#control-seal-scheduler"
+
+      - alert: SolandControlSealRepairRestoredSchedule
+        expr: sum(increase(soland_control_seal_repair_total{job="soland",operation=~"inserted|generation_repaired"}[10m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+          component: control-seal
+        annotations:
+          summary: "Control Seal repair found a missed transactional schedule write"
+          description: |
+            Always-on repair inserted or generation-repaired schedule state.
+            Treat this as a write-path regression and audit all accepted
+            Control Event transaction entry points before rollout continues.
+          runbook: "docs/runbook.md#control-seal-scheduler"
+
       # Readiness flapping. /readyz returning 503 for > 5 minutes on a
       # replica that should be serving traffic typically means the
       # database probe is failing or the migration batch is wedged.

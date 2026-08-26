@@ -84,6 +84,15 @@ increase(soland_federation_outbox_lease_takeover_total[15m]) > 0
 
 # Durable audit append failure.
 increase(soland_audit_append_failures_total[5m]) > 0
+
+# Eligible Control Seal work is not being drained.
+soland_control_seal_oldest_eligible_age_seconds > 60
+
+# A bounded Realm pass timed out.
+increase(soland_control_seal_attempt_total{outcome="pass_timed_out"}[10m]) > 0
+
+# Repair had to restore a transactionally missed schedule update.
+sum(increase(soland_control_seal_repair_total{operation=~"inserted|generation_repaired"}[10m])) > 0
 ```
 
 Operator actions:
@@ -98,6 +107,19 @@ Operator actions:
 | `soland_federation_outbox_lease_takeover_total` | `increase(soland_federation_outbox_lease_takeover_total[30m])` | A replica's delivery outran its lease or the replica died. Correctness is preserved (the stale write is dropped), but sustained takeovers mean `LEASE_DURATION_SECS` is too short for this peer's latency. |
 | `soland_audit_append_failures_total` | `increase(soland_audit_append_failures_total[10m])` | Check Postgres availability and audit-table permissions first; stop admin rollout if audit durability is unavailable. |
 | `soland_federation_outbox_dead_letter_total` | `sum by (reason) (increase(soland_federation_outbox_dead_letter_total[30m]))` | Read the reasons, group by peer DID, coordinate with the peer, then replay explicitly (below). |
+| `soland_control_seal_oldest_eligible_age_seconds` | `soland_control_seal_oldest_eligible_age_seconds` | Compare pending, eligible, claimed, expired-claim and in-flight gauges. If execution slots are free, inspect coordinator/store errors and process health. |
+| `soland_control_seal_expired_claims` | `soland_control_seal_expired_claims` | Check process exits and pass/store deadline logs. Claims are safe to reclaim after expiry; a sustained non-zero value means reclaim is not keeping pace. |
+| `soland_control_seal_attempt_total{outcome="pass_timed_out"}` | `increase(soland_control_seal_attempt_total{outcome="pass_timed_out"}[30m])` | Inspect the timed-out Realm and confirm later Realms and device-revocation cleanup continued. Do not extend the claim TTL to hide a blocking stage. |
+| `soland_control_seal_repair_total` | `sum by (operation) (increase(soland_control_seal_repair_total[30m]))` | `inserted` or `generation_repaired` is a missed transactional write-path signal. Audit all three Control Event ingress paths before rollout. |
+
+## Control Seal scheduler
+
+The scheduler gauges are sampled directly from durable schedule state at scrape
+time. `pending` is total derived work, `eligible` is immediately claimable,
+`claimed` is owned under an unexpired fence, and `expired_claims` is reclaimable
+work left by a stopped or overdue worker. Oldest ages are zero when their bucket
+is empty. Repair insert/generation changes, pass timeouts, or a sustained oldest
+eligible age are release-blocking until their source is understood.
 
 ## Federation outbox operator commands
 

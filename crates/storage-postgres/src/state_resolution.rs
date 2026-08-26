@@ -1286,6 +1286,19 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
+    fn control_seal_schedule_stats(
+        &self,
+        now_ms: i64,
+    ) -> StoreResult<arkret_state::state::ControlSealScheduleStats> {
+        let pool = self.pool.clone();
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            control_seal_schedule::stats(&mut conn, now_ms)
+                .await
+                .map_err(diesel_to_store)
+        })
+    }
+
     fn list_pending_for_notary(
         &self,
         realm_id: &RealmId,

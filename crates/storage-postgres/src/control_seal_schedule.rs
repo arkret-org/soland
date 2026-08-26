@@ -1,7 +1,7 @@
 use arkret_identifiers::RealmId;
 use arkret_state::state::{
     ControlSealAttemptCompletion, ControlSealAttemptOutcome, ControlSealScheduleClaim,
-    ControlSealScheduleRepairStats,
+    ControlSealScheduleRepairStats, ControlSealScheduleStats,
 };
 use diesel::sql_types::{BigInt, Bool, Integer, Nullable, Text};
 use diesel::{OptionalExtension, QueryResult, QueryableByName, sql_query};
@@ -53,6 +53,22 @@ struct CursorRow {
 struct ExistsRow {
     #[diesel(sql_type = Bool)]
     present: bool,
+}
+
+#[derive(QueryableByName)]
+struct StatsRow {
+    #[diesel(sql_type = BigInt)]
+    pending: i64,
+    #[diesel(sql_type = BigInt)]
+    eligible: i64,
+    #[diesel(sql_type = BigInt)]
+    claimed: i64,
+    #[diesel(sql_type = BigInt)]
+    expired_claims: i64,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    oldest_pending_at_ms: Option<i64>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    oldest_eligible_at_ms: Option<i64>,
 }
 
 fn invalid_stored_realm(error: arkret_identifiers::IdentifierError) -> diesel::result::Error {
@@ -366,4 +382,44 @@ pub(crate) async fn repair(
         Ok(stats)
     })
     .await
+}
+
+pub(crate) async fn stats(
+    conn: &mut AsyncPgConnection,
+    now_ms: i64,
+) -> QueryResult<ControlSealScheduleStats> {
+    let row = sql_query(
+        "SELECT \
+           COUNT(*)::bigint AS pending, \
+           COUNT(*) FILTER (WHERE next_attempt_at_ms <= $1 \
+             AND (claim_holder IS NULL OR claim_until_ms <= $1))::bigint AS eligible, \
+           COUNT(*) FILTER (WHERE claim_holder IS NOT NULL \
+             AND claim_until_ms > $1)::bigint AS claimed, \
+           COUNT(*) FILTER (WHERE claim_holder IS NOT NULL \
+             AND claim_until_ms <= $1)::bigint AS expired_claims, \
+           MIN(first_pending_at_ms) AS oldest_pending_at_ms, \
+           MIN(next_attempt_at_ms) FILTER (WHERE next_attempt_at_ms <= $1 \
+             AND (claim_holder IS NULL OR claim_until_ms <= $1)) AS oldest_eligible_at_ms \
+         FROM state_control_seal_schedule schedule \
+         WHERE EXISTS ( \
+           SELECT 1 FROM state_control_events event \
+           WHERE event.realm_id = schedule.realm_id \
+             AND NOT EXISTS ( \
+               SELECT 1 FROM state_seal_control_events binding \
+               WHERE binding.event_digest = event.event_digest \
+             ) \
+             AND NOT (event.proposal_decisions @> '[{\"kind\":\"signed_reject\"}]'::jsonb) \
+         )",
+    )
+    .bind::<BigInt, _>(now_ms)
+    .get_result::<StatsRow>(conn)
+    .await?;
+    Ok(ControlSealScheduleStats {
+        pending: usize::try_from(row.pending).unwrap_or(usize::MAX),
+        eligible: usize::try_from(row.eligible).unwrap_or(usize::MAX),
+        claimed: usize::try_from(row.claimed).unwrap_or(usize::MAX),
+        expired_claims: usize::try_from(row.expired_claims).unwrap_or(usize::MAX),
+        oldest_pending_at_ms: row.oldest_pending_at_ms,
+        oldest_eligible_at_ms: row.oldest_eligible_at_ms,
+    })
 }

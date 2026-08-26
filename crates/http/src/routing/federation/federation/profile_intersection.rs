@@ -56,7 +56,7 @@ impl FederationProfileIntersection {
         // reducer profile (which carries the required/rejected kind sets),
         // not by intersecting ServiceDescribe `required_event_kinds`.
         for schema in &atoms.schemas {
-            self.require_schema(schema, atoms.kind.as_deref())?;
+            self.require_schema(schema)?;
         }
         for action in &atoms.capability_actions {
             self.require_capability_action(action)?;
@@ -68,7 +68,7 @@ impl FederationProfileIntersection {
             self.require_feature(feature)?;
         }
         if atoms.requires_capability_semantics {
-            self.require_schema(SchemaId::CAPABILITY_V1, atoms.kind.as_deref())?;
+            self.require_schema(SchemaId::CAPABILITY_V1)?;
         }
         if atoms.requires_mls_governance {
             self.require_profile_semantics(ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1)?;
@@ -76,14 +76,10 @@ impl FederationProfileIntersection {
         Ok(())
     }
 
-    fn require_schema(
-        &self,
-        schema: &str,
-        event_kind: Option<&str>,
-    ) -> Result<(), FederationProfileGateRejection> {
+    fn require_schema(&self, schema: &str) -> Result<(), FederationProfileGateRejection> {
         self.require(
-            self.local.covers_schema(schema, event_kind),
-            self.peer.covers_schema(schema, event_kind),
+            self.local.covers_schema(schema),
+            self.peer.covers_schema(schema),
             format!("schema {schema}"),
         )
     }
@@ -193,12 +189,15 @@ impl SemanticClaims {
         contains_str(&self.requirements.required_event_kinds, kind)
     }
 
-    fn covers_schema(&self, schema: &str, event_kind: Option<&str>) -> bool {
+    fn covers_schema(&self, schema: &str) -> bool {
         if contains_str(&self.requirements.required_schemas, schema) {
             return true;
         }
+        // Ordinary Event payload schemas are carried by the generic
+        // event-payload contract. Requiring the concrete Event kind here
+        // would turn a profile's required_event_kinds floor into an implicit
+        // receive allowlist, contradicting the federation contract above.
         if schema_can_fall_back_to_event_payload(schema)
-            && event_kind.is_some_and(|kind| self.covers_event_kind(kind))
             && contains_str(
                 &self.requirements.required_schemas,
                 SchemaId::EVENT_PAYLOAD_V1,
@@ -206,12 +205,11 @@ impl SemanticClaims {
         {
             return true;
         }
-        if schema == SchemaId::EVENT_PAYLOAD_V1
-            && event_kind.is_some_and(|kind| self.covers_event_kind(kind))
-        {
-            return true;
-        }
-        false
+        schema == SchemaId::EVENT_PAYLOAD_V1
+            && contains_str(
+                &self.requirements.required_schemas,
+                SchemaId::EVENT_PAYLOAD_V1,
+            )
     }
 
     fn covers_capability_action(&self, action: &str) -> bool {

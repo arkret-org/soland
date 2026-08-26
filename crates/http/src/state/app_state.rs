@@ -866,6 +866,42 @@ impl AppState {
         });
     }
 
+    /// Atomically replace the endpoint-discovered signing keys for one peer.
+    ///
+    /// Exact verification-method entries from an older WebVH version must be
+    /// removed when the peer rotates its full DID. Leaving them cached would
+    /// allow a transcript naming the retired key id to bypass the refreshed
+    /// endpoint document.
+    pub fn install_discovered_federation_peer_keys(
+        &self,
+        previous_service_id: Option<&str>,
+        service_id: &str,
+        federation_verification_method: &str,
+        federation_verifying_key: VerifyingKey,
+        receipt_verification_method: &str,
+        receipt_verifying_key: VerifyingKey,
+    ) {
+        self.federation_peer_verifying_keys.rcu(|current| {
+            let mut next = (**current).clone();
+            next.retain(|candidate, _| {
+                !verification_key_belongs_to_service(candidate, service_id)
+                    && !previous_service_id.is_some_and(|previous| {
+                        verification_key_belongs_to_service(candidate, previous)
+                    })
+            });
+            next.insert(service_id.to_owned(), federation_verifying_key);
+            next.insert(
+                federation_verification_method.to_owned(),
+                federation_verifying_key,
+            );
+            next.insert(
+                receipt_verification_method.to_owned(),
+                receipt_verifying_key,
+            );
+            Arc::new(next)
+        });
+    }
+
     pub fn apply_resolved_federation_peers(&self, resolved: &HashMap<String, String>) {
         self.settings.rcu(|current| {
             let mut next = (**current).clone();
@@ -1882,6 +1918,17 @@ impl AppState {
             expires_at,
         )
     }
+}
+
+fn verification_key_belongs_to_service(candidate: &str, service_id: &str) -> bool {
+    if candidate == service_id {
+        return true;
+    }
+    let Ok(controller) = arkret_identity::verification_method_did(candidate) else {
+        return false;
+    };
+    arkret_wire::project_full_id_to_core_id(&controller)
+        .is_ok_and(|controller| controller.as_str() == service_id)
 }
 
 impl AppState {

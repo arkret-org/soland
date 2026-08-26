@@ -2648,7 +2648,13 @@ pub(crate) async fn submit_federation_events(
             return;
         }
     }
-    match federation_service_binding_current_for_destination(state, &service_binding_ref).await {
+    match federation_service_binding_current_for_destination(
+        state,
+        &service_binding_ref,
+        Some(&submissions),
+    )
+    .await
+    {
         FederationServiceBindingCheck::Current => {}
         FederationServiceBindingCheck::Reject(reason) => {
             render_error(res, StatusCode::CONFLICT, reason, reason);

@@ -3,6 +3,7 @@ use super::*;
 pub(super) async fn federation_service_binding_current_for_destination(
     state: &AppState,
     binding: &FederationServiceBindingRef,
+    prospective_events: Option<&[arkret_wire::EventFederationSubmission]>,
 ) -> FederationServiceBindingCheck {
     // The delivery-binding gate validates an inbound push against the receiver's
     // existing local member bindings. A federation push that first establishes
@@ -20,6 +21,21 @@ pub(super) async fn federation_service_binding_current_for_destination(
             .filter_map(delivery_binding_member_view)
             .collect::<Vec<_>>()
     };
+    if !members
+        .iter()
+        .any(|member| member.recipient_service_id == state.service_id().as_str())
+        && prospective_events.is_some_and(|events| {
+            federation_batch_establishes_local_binding(state.service_id(), binding, events)
+        })
+    {
+        // The receiver evaluates the first local member binding prospectively:
+        // its frontier is carried by the signed join Event in this batch and
+        // therefore cannot already exist in the receiver's accepted view. The
+        // ordinary admission/reducer path below still has to accept that Event;
+        // this only prevents the stale-route preflight from making a first
+        // binding circularly impossible.
+        return FederationServiceBindingCheck::Current;
+    }
     let member_binding_diagnostics = members
         .iter()
         .map(|member| {
@@ -82,6 +98,56 @@ pub(super) async fn federation_service_binding_current_for_destination(
         }
         FederationServiceBindingCheck::Current => FederationServiceBindingCheck::Current,
     }
+}
+
+fn federation_batch_establishes_local_binding(
+    local_service_id: &str,
+    binding: &FederationServiceBindingRef,
+    submissions: &[arkret_wire::EventFederationSubmission],
+) -> bool {
+    if binding.delivery_binding_frontier.is_empty()
+        || binding.membership_frontier.is_empty()
+        || binding.destination_service_kind != "principal_server"
+        || submissions.len() != binding.delivery_binding_frontier.len()
+    {
+        return false;
+    }
+    let membership_frontier = binding
+        .membership_frontier
+        .iter()
+        .map(EventId::as_str)
+        .collect::<BTreeSet<_>>();
+    binding.delivery_binding_frontier.iter().all(|frontier| {
+        membership_frontier.contains(frontier.as_str())
+            && submissions.iter().any(|submission| {
+                let event = &submission.event;
+                if event.event_id != *frontier
+                    || event.realm_id != binding.realm_id
+                    || event.kind != arkret_wire::EventKind::MemberState
+                {
+                    return false;
+                }
+                let Ok(payload) = serde_json::to_value(&event.payload).and_then(
+                    serde_json::from_value::<arkret_models_collaboration::governance::membership_invite::MembershipPayload>,
+                ) else {
+                    return false;
+                };
+                payload.membership
+                    == arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Join
+                    && payload.realm_id.as_ref() == Some(&binding.realm_id)
+                    && payload.delivery_status
+                        == Some(arkret_models_identity::delivery_binding::DeliveryStatus::Routable)
+                    && payload.delivery_binding.as_ref().is_some_and(|member_binding| {
+                        member_binding.validate().is_ok()
+                            && member_binding.recipient_service_id.as_str() == local_service_id
+                            && member_binding.recipient_service_kind
+                                == arkret_models_identity::delivery_binding::RecipientServiceKind::PrincipalServer
+                            && member_binding.delivery_modes.contains(
+                                &arkret_models_identity::delivery_binding::DeliveryMode::Events,
+                            )
+                    })
+            })
+    })
 }
 
 pub(super) fn delivery_binding_member_view(

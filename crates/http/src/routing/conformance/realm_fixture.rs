@@ -5,7 +5,7 @@
 //! mutate the outbox, so live scenarios still exercise the production submit,
 //! fanout, retry, authority recheck, and delivery-status paths.
 
-use arkret_wire::{Event, EventKind, OperationId, OperationKind};
+use arkret_wire::{ControlProposalAck, Event, EventKind, OperationId, OperationKind};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,8 @@ const MAX_FIXTURE_EVENTS: usize = 64;
 pub struct RealmFixtureInstallRequest {
     #[salvo(schema(value_type = Vec<serde_json::Value>))]
     events: Vec<Event>,
+    #[salvo(schema(value_type = Vec<serde_json::Value>))]
+    control_proposal_acks: Vec<ControlProposalAck>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
@@ -64,6 +66,12 @@ pub async fn install(
         ));
     }
 
+    let ack_by_digest = body
+        .control_proposal_acks
+        .iter()
+        .map(|ack| (ack.proposal_digest.clone(), ack))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
     let received_at = chrono::Utc::now();
     let mut projected = 0;
     let mut staged_bootstrap = Vec::new();
@@ -84,6 +92,21 @@ pub async fn install(
         let event_digest = event
             .event_digest_with_digest_suite(digest_suite)
             .map_err(|error| AppError::param_invalid(error.to_string()))?;
+        if event.kind.is_reducer_input() && event.seal_ref.is_none() && event.auth_context.is_none()
+        {
+            let proposal_digest = arkret_wire::Hash::new(event_digest.clone())
+                .map_err(|error| AppError::param_invalid(error.to_string()))?;
+            let ack = ack_by_digest.get(&proposal_digest).ok_or_else(|| {
+                AppError::param_invalid(format!(
+                    "Realm fixture Control Event {} is missing its Control Proposal Ack",
+                    event.event_id
+                ))
+            })?;
+            state
+                .projections()
+                .put_pending_control_event_with_ack(event, ack, digest_suite)
+                .map_err(|error| AppError::param_invalid(error.to_string()))?;
+        }
         let envelope = serde_json::to_value(event)
             .map_err(|error| AppError::param_invalid(error.to_string()))?;
         let digest_payload = event
@@ -174,6 +197,14 @@ pub async fn install(
                     error.reason
                 ))
             })?;
+        for projected_operation in &staged_bootstrap {
+            crate::routing::events::projection::ensure_projected_realm(
+                state,
+                body.events[0].actor_id.as_str(),
+                &projected_operation.operation,
+            )
+            .await;
+        }
     }
 
     json_ok(RealmFixtureInstallOutcome {

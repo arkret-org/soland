@@ -852,6 +852,14 @@ impl ProjectionService {
             .repair_control_seal_schedule(now_ms, limit)
     }
 
+    pub fn control_seal_schedule_stats(
+        &self,
+        now_ms: i64,
+    ) -> StoreResult<arkret_state::state::ControlSealScheduleStats> {
+        self.control_event_store()
+            .control_seal_schedule_stats(now_ms)
+    }
+
     pub fn try_claim_control_signing_lease(
         &self,
         realm_id: &RealmId,

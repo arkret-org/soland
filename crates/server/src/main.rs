@@ -18,6 +18,12 @@ pub(crate) mod otel;
 pub(crate) mod runtime;
 
 fn main() -> anyhow::Result<()> {
+    // The dependency graph includes rustls consumers that enable different
+    // provider features. Select Soland's declared `ring` provider before any
+    // listener or outbound client can ask rustls for a process default.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .map_err(|_| anyhow::anyhow!("a different rustls CryptoProvider was already installed"))?;
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
@@ -685,15 +691,21 @@ fn spawn_federation_peer_discovery(state: AppState) {
 
             let mut resolved = std::collections::HashMap::new();
             for (configured, endpoint) in peers {
-                let base_url = match url::Url::parse(endpoint.as_str()) {
-                    Ok(base_url) => base_url,
-                    Err(error) => {
-                        tracing::warn!(%endpoint, %error, "invalid federation peer endpoint");
-                        continue;
-                    }
-                };
+                let (base_url, http) =
+                    match soland_http::security::validate_http_url_for_egress_with_pinned_client(
+                        endpoint.as_str(),
+                        "federation peer discovery",
+                        state.config().development_mode,
+                        std::time::Duration::from_secs(10),
+                    ) {
+                        Ok(validated) => validated,
+                        Err(error) => {
+                            tracing::warn!(%endpoint, %error, "invalid federation peer endpoint");
+                            continue;
+                        }
+                    };
                 let client = match arkret_http_client::ClientBuilder::new(base_url)
-                    .allow_insecure_localhost()
+                    .http_client(http)
                     .build()
                 {
                     Ok(client) => client,
@@ -862,16 +874,11 @@ fn spawn_federation_peer_discovery(state: AppState) {
                             .federation_peer_verifying_key(description.service_id.as_str())
                             .as_ref()
                             != Some(&verifying_key);
-                        state.install_federation_peer_verifying_key(
+                        state.install_discovered_federation_peer_keys(
                             previous_service_id.as_deref(),
                             description.service_id.as_str(),
+                            &expected_verification_method,
                             verifying_key,
-                        );
-                        let previous_receipt_verification_method = previous_service_id
-                            .as_ref()
-                            .map(|service_id| format!("{service_id}#notary-key"));
-                        state.install_federation_peer_verification_method_key(
-                            previous_receipt_verification_method.as_deref(),
                             &receipt_verification_method,
                             receipt_verifying_key,
                         );

@@ -1442,8 +1442,12 @@ pub(super) async fn submit_agent_membership_cascade_federation(
             return;
         }
     }
-    match federation_service_binding_current_for_destination(state, &submission.service_binding_ref)
-        .await
+    match federation_service_binding_current_for_destination(
+        state,
+        &submission.service_binding_ref,
+        None,
+    )
+    .await
     {
         FederationServiceBindingCheck::Current => {}
         FederationServiceBindingCheck::Reject(reason) => {

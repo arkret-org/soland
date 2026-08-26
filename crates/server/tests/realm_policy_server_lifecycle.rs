@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use arkret_event_draft::EventPayloadExt as _;
 use arkret_identifiers::{DidFullId, RealmId, SealId};
@@ -618,6 +619,126 @@ async fn control_seal_coordinator_drains_multiple_bounded_concurrency_waves() {
         !control_seal_coordinator.is_finished(),
         "the coordinator must survive every bounded concurrency wave"
     );
+    control_seal_coordinator.abort();
+}
+
+async fn postgres_release_state() -> AppState {
+    let database_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL is required for the Control Seal release gate");
+    let db = soland_storage_postgres::Db::connect(
+        Some(database_url.as_str()),
+        soland_storage_postgres::PoolTuning::default(),
+    )
+    .await
+    .expect("connect release-gate PostgreSQL");
+    let pool = db.pool.clone().expect("release gate requires PostgreSQL");
+    let persistence_store: Arc<dyn PersistenceStore> =
+        Arc::new(soland_storage_postgres::PgPersistenceStore::new(pool));
+    let persistence =
+        soland_services::persistence::PersistenceHandle::from_shared(persistence_store.clone());
+    let config = test_config();
+    let identity = soland_test_support::fixture_service_identity(&config);
+    let signing_seed = soland_test_support::fixture_signing_seed(&config, &identity);
+    let fixture_identity = identity.identity().expect("fixture serving identity");
+    let resolution_commitment = arkret_models_identity::ResolutionCommitment {
+        full_id: fixture_identity.full_id.clone(),
+        method_history_head: format!("sha256:{}", "0".repeat(64)),
+        version_id: "fixture-v1".to_owned(),
+    };
+    let state = soland::runtime::build_app_state(
+        config,
+        db,
+        persistence,
+        identity,
+        resolution_commitment,
+        signing_seed,
+    )
+    .expect("build PostgreSQL release-gate AppState");
+    soland_test_support::register_persistence(&state, persistence_store);
+    state
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "release-quality gate: requires a disposable PostgreSQL DATABASE_URL"]
+async fn control_seal_postgres_release_drains_1025_realms_with_bounded_claims() {
+    assert_eq!(
+        std::env::var("SOLAND_CONTROL_SEAL_RELEASE_GATE").as_deref(),
+        Ok("1"),
+        "set SOLAND_CONTROL_SEAL_RELEASE_GATE=1 only with a disposable release-gate database"
+    );
+    const REALM_COUNT: usize = 1_025;
+    const MAX_IN_FLIGHT: usize = 16;
+
+    let state = postgres_release_state().await;
+    let token = prepare_alice(&state).await;
+    let mut realms = Vec::with_capacity(REALM_COUNT);
+    for index in 0..REALM_COUNT {
+        realms.push(
+            submit_realm_bootstrap(
+                &state,
+                &token,
+                &format!("PostgreSQL Control Seal release Realm {index}"),
+            )
+            .await,
+        );
+    }
+
+    let sampling_done = Arc::new(AtomicBool::new(false));
+    let max_claimed = Arc::new(AtomicUsize::new(0));
+    let sampler = {
+        let state = state.clone();
+        let sampling_done = sampling_done.clone();
+        let max_claimed = max_claimed.clone();
+        tokio::spawn(async move {
+            while !sampling_done.load(Ordering::Relaxed) {
+                let sample_state = state.clone();
+                let stats = tokio::task::spawn_blocking(move || {
+                    sample_state
+                        .test_projections()
+                        .control_seal_schedule_stats(Utc::now().timestamp_millis())
+                })
+                .await
+                .expect("schedule sampler task")
+                .expect("schedule sampler store");
+                max_claimed.fetch_max(stats.claimed, Ordering::Relaxed);
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+    };
+
+    let control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
+    for realm_id in &realms {
+        accepted_seal_frontier(&state, &token, realm_id).await;
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let sample_state = state.clone();
+            let stats = tokio::task::spawn_blocking(move || {
+                sample_state
+                    .test_projections()
+                    .control_seal_schedule_stats(Utc::now().timestamp_millis())
+            })
+            .await
+            .expect("final schedule sampler task")
+            .expect("final schedule sampler store");
+            if stats.pending == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("all release-gate schedules must drain");
+    sampling_done.store(true, Ordering::Relaxed);
+    sampler.await.expect("schedule sampler");
+
+    let observed_max = max_claimed.load(Ordering::Relaxed);
+    assert!(observed_max > 0, "the sampler must observe active claims");
+    assert!(
+        observed_max <= MAX_IN_FLIGHT,
+        "claim high-water {observed_max} exceeded the {MAX_IN_FLIGHT}-slot execution bound"
+    );
+    assert!(!control_seal_coordinator.is_finished());
     control_seal_coordinator.abort();
 }
 

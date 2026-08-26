@@ -302,7 +302,11 @@ fn egress_http_client_builder() -> Result<reqwest::ClientBuilder, String> {
             path.display()
         )
     })?;
-    Ok(builder.tls_certs_merge(certificates))
+    // `SSL_CERT_FILE` is an explicit operator trust store.  Use rustls/webpki
+    // for that exact store instead of passing its roots through the platform
+    // verifier: Windows CryptoAPI rejects valid run-scoped rcgen authorities
+    // before webpki can evaluate them.  Hostname verification remains enabled.
+    Ok(builder.tls_backend_rustls().tls_certs_only(certificates))
 }
 
 pub fn validate_url_for_egress(

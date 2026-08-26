@@ -5298,6 +5298,7 @@ dependencies = [
  "proptest",
  "rand_chacha 0.3.1",
  "reqwest",
+ "rustls",
  "salvo",
  "serde",
  "serde_json",

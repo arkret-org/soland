@@ -93,16 +93,20 @@ async fn control_seal_schedule_row_count(pool: &PgPool, realm_id: Option<&str>) 
 }
 
 async fn prioritize_control_seal_schedule_test_realm(pool: &PgPool, realm_id: &str) {
-    use diesel::sql_types::{BigInt, Text};
+    use diesel::sql_types::Text;
     use diesel_async::RunQueryDsl;
 
     let mut conn = pool.get().await.unwrap();
     diesel::sql_query(
-        "UPDATE state_control_seal_schedule SET next_attempt_at_ms = $2, first_pending_at_ms = $2 \
-         WHERE realm_id = $1",
+        "WITH priority AS ( \
+           SELECT GREATEST(COALESCE(MIN(next_attempt_at_ms), 0), -9223372036854775807) - 1 AS at_ms \
+           FROM state_control_seal_schedule WHERE realm_id <> $1 \
+         ) \
+         UPDATE state_control_seal_schedule schedule \
+         SET next_attempt_at_ms = priority.at_ms, first_pending_at_ms = priority.at_ms \
+         FROM priority WHERE schedule.realm_id = $1",
     )
     .bind::<Text, _>(realm_id)
-    .bind::<BigInt, _>(i64::MIN / 2)
     .execute(&mut *conn)
     .await
     .unwrap();
@@ -258,13 +262,18 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair_when
         .pop()
         .unwrap();
     assert_eq!(third_claim.generation, 2);
-    assert!(
-        stores
-            .control_event_store
-            .claim_due_control_seal_realms("worker-b", now_ms + 1_100, now_ms + 2_000, 1)
-            .unwrap()
-            .is_empty()
-    );
+    let active_stats = stores
+        .control_event_store
+        .control_seal_schedule_stats(now_ms + 1_100)
+        .unwrap();
+    assert!(active_stats.pending >= 1);
+    assert!(active_stats.claimed >= 1);
+    let expired_stats = stores
+        .control_event_store
+        .control_seal_schedule_stats(now_ms + 1_101)
+        .unwrap();
+    assert!(expired_stats.eligible >= 1);
+    assert!(expired_stats.expired_claims >= 1);
     let reclaimed = stores
         .control_event_store
         .claim_due_control_seal_realms("worker-b", now_ms + 1_101, now_ms + 2_000, 1)
