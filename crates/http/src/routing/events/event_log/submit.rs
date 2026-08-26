@@ -449,6 +449,9 @@ enum InternalEventBinding {
         reporter: String,
         target_ref: String,
     },
+    ServiceFrankingProof {
+        target_event_id: String,
+    },
     AppletFormal {
         event_id: String,
         applet_id: arkret_wire::AppletId,
@@ -536,6 +539,26 @@ impl InternalEventAdmission {
             binding: InternalEventBinding::MimiModerationReport {
                 reporter: reporter.into(),
                 target_ref: target_ref.into(),
+            },
+        }
+    }
+
+    pub(in crate::routing) fn service_franking_proof(
+        realm_id: impl Into<String>,
+        actor_id: impl Into<String>,
+        target_event_id: impl Into<String>,
+    ) -> Self {
+        let actor_id = actor_id.into();
+        Self {
+            realm_id: realm_id.into(),
+            session_actor_id: actor_id.clone(),
+            actor_id,
+            kind: arkret_wire::EventKind::ModerationFrankingProof
+                .as_str()
+                .to_owned(),
+            device_id: String::new(),
+            binding: InternalEventBinding::ServiceFrankingProof {
+                target_event_id: target_event_id.into(),
             },
         }
     }
@@ -687,6 +710,13 @@ impl InternalEventAdmission {
                         && payload.get("target_ref").and_then(Value::as_str)
                             == Some(target_ref.as_str())
                 }),
+                InternalEventBinding::ServiceFrankingProof { target_event_id } => {
+                    object
+                        .get("payload")
+                        .and_then(|payload| payload.get("event_id"))
+                        .and_then(Value::as_str)
+                        == Some(target_event_id.as_str())
+                }
                 InternalEventBinding::AppletFormal {
                     event_id,
                     applet_id,
@@ -2409,8 +2439,8 @@ pub(crate) async fn submit_federation_events(
     // ingress receipts that authorized its first publication
     // (`offline-publication.md` §2.1). The receipts are transport evidence:
     // they never enter the Event digest and MUST NOT be re-stamped here. Keyed
-    // by Event id so the accept loop below can persist them verbatim once the
-    // Event itself is accepted.
+    // by Event id so the accept loop below can persist them verbatim before
+    // local acceptance and reject a changed-lease replay deterministically.
     let inbound_publication_evidence: BTreeMap<String, InboundPublicationEvidence> = submissions
         .iter()
         .zip(digest_suites.iter().copied())
@@ -3034,6 +3064,16 @@ pub(crate) async fn submit_federation_events(
             .find(|submission| submission.event.event_id.as_str() == id)
             .map(|submission| &submission.event)
             .expect("federation envelope came from the typed submission");
+        if let Some(evidence) = inbound_publication_evidence.get(&id)
+            && let Err(error) = store_inbound_publication_evidence(state, evidence).await
+        {
+            rejected.push(rejected_item(
+                id,
+                ReasonCode::from_wire(&error.code),
+                Some(error.message.to_string()),
+            ));
+            continue;
+        }
         let prepared_agent_receipt =
             match prepare_agent_event_admission_receipt(state, typed_event, created_at).await {
                 Ok(receipt) => receipt,
@@ -3075,9 +3115,6 @@ pub(crate) async fn submit_federation_events(
         .await
         {
             Ok(response) => {
-                if let Some(evidence) = inbound_publication_evidence.get(&response.event_id) {
-                    store_inbound_publication_evidence(state, evidence).await;
-                }
                 match load_agent_event_admission_receipt(state, typed_event).await {
                     Ok(Some(receipt)) => agent_event_admission_receipts.push(receipt),
                     Ok(None) if prepared_agent_receipt.is_none() => {}
@@ -3611,7 +3648,7 @@ pub(in crate::routing) use value::{
     DevicePairingAdmission, submit_account_data_event_value, submit_event_value,
     submit_initial_event_submission, submit_initial_event_submission_with_contact_projection,
     submit_initial_event_submission_with_device_pairing, submit_mimi_event_value,
-    submit_mimi_moderation_report_event_value,
+    submit_mimi_moderation_report_event_value, submit_service_franking_proof_event_value,
 };
 pub(in crate::routing::events::event_log) use value::{
     replay_ackless_self_principal_ingress, submit_event_value_with_idempotency,

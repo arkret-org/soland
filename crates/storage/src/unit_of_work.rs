@@ -366,7 +366,14 @@ pub struct ManagedAuthorityClaim {
 pub struct EventBatchCommitRequest {
     pub events: Vec<EventCommitRequest>,
     pub applet_record: Option<AppletRecordCommit>,
+    pub applet_authoring_preview: Option<AppletAuthoringPreviewCommit>,
     pub agent_membership_cascade: Option<crate::AgentMembershipCascadeCommit>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AppletAuthoringPreviewCommit {
+    pub subject_key: String,
+    pub request_digest: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

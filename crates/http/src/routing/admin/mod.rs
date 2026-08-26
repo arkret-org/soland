@@ -94,14 +94,6 @@ pub(super) fn require_admin_principal(
     }
 }
 
-/// Client audit ingest (`/_soland/self/audit/*`): user-action telemetry and
-/// franking-proof verification. Carries per-handler actor auth (plus the
-/// `self` session-PoP hoop at the mount point); operator audit queries live
-/// in the admin-gated branch below (see `admin_router`).
-pub fn audit_ingest_router() -> Router {
-    audit::ingest_router()
-}
-
 /// Deployment-local admin branch served at the bare `/admin/*`
 /// namespace (collection snapshot, cell inspection, control-frame
 /// triggers, retention), per arkret-spec `service-http-binding.md`

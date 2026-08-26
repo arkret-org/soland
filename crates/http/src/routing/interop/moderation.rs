@@ -12,6 +12,7 @@ use arkret_models_collaboration::events_payloads::moderation::{
     FrankingProof, FrankingProofEventTimeAnchor, ModerationReportPayload,
 };
 use arkret_wire::{EventKind, ScopeRef};
+use ed25519_dalek::Signer as _;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -184,6 +185,182 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
         AppError::new(
             ErrorCode::ParamInvalid,
             format!("moderation Event admission failed: {}", error.message),
+        )
+        .with_status(error.status)
+        .with_wire_code(error.code)
+    })?;
+    Ok(event_id)
+}
+
+/// Persist the receiving service's canonical delivery receipt for one accepted
+/// encrypted Event. The canonical Event store is the only durable identity and
+/// restart source; the old private audit digest is deliberately not written.
+pub(crate) async fn persist_franking_proof_event(
+    state: &AppState,
+    realm_id: &str,
+    target_event_id: &str,
+) -> Result<String, AppError> {
+    let service_event_lock = crate::routing::events::event_log::service_event_authoring_lock();
+    let _service_event_guard = service_event_lock.lock().await;
+    let target = state
+        .event_queries()
+        .canonical_event(target_event_id)
+        .await
+        .map_err(|error| AppError::internal(format!("franking target lookup failed: {error}")))?
+        .ok_or_else(|| AppError::not_found("franking target Event not found"))?;
+    if target.realm_id.as_deref() != Some(realm_id) {
+        return Err(AppError::not_found("franking target Event not found"));
+    }
+
+    let service_actor = state.service_id().as_str();
+    let records = state
+        .event_queries()
+        .canonical_events_for_realm_actor(realm_id, service_actor)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("franking Event frontier lookup failed: {error}"))
+        })?;
+    if let Some(existing) = records.iter().find(|record| {
+        record.kind == EventKind::ModerationFrankingProof.as_str()
+            && record
+                .envelope
+                .pointer("/payload/event_id")
+                .and_then(Value::as_str)
+                == Some(target_event_id)
+    }) {
+        return Ok(existing.event_id.clone());
+    }
+
+    let max_actor_seq = records.iter().map(|record| record.actor_seq).max();
+    let actor_seq = max_actor_seq
+        .map(|value| {
+            value.checked_add(1).ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::FrontierSequenceExhausted,
+                    "franking Event actor sequence is exhausted",
+                )
+                .with_status(StatusCode::CONFLICT)
+            })
+        })
+        .transpose()?
+        .unwrap_or(0);
+    let mut prev_refs = Vec::new();
+    if let Some(max_actor_seq) = max_actor_seq {
+        prev_refs = records
+            .iter()
+            .filter(|record| record.actor_seq == max_actor_seq)
+            .map(|record| {
+                EventId::new(record.event_id.clone()).map_err(|error| {
+                    AppError::internal(format!("franking predecessor invalid: {error}"))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        prev_refs.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        prev_refs.dedup();
+    }
+
+    let service_did = state.service_resolution_commitment().full_id.clone();
+    let service_actor_id = arkret_wire::project_full_id_to_core_id(&service_did)
+        .map_err(|error| AppError::internal(format!("service DID cannot be projected: {error}")))?;
+    let verification_method = arkret_wire::DidUrl::new(format!("{service_did}#notary-key"))
+        .map_err(|error| AppError::internal(format!("service notary method invalid: {error}")))?;
+    let signing_key = state.notary_signing_key();
+    let proof = FrankingProof::signed(
+        RealmId::new(realm_id.to_owned())
+            .map_err(|error| AppError::internal(format!("franking Realm id invalid: {error}")))?,
+        EventId::new(target_event_id.to_owned())
+            .map_err(|error| AppError::internal(format!("franking target id invalid: {error}")))?,
+        service_actor_id.clone(),
+        verification_method.clone(),
+        target.received_at,
+        uuid::Uuid::now_v7().simple().to_string(),
+        |bytes| {
+            Ok(arkret_canonical::base64url_encode(
+                signing_key.sign(bytes).to_bytes(),
+            ))
+        },
+    )
+    .map_err(|error| AppError::internal(format!("franking proof signing failed: {error}")))?;
+
+    let created_at = now();
+    let hlc = arkret_identifiers::Hlc::new(state.hlc().now())
+        .map_err(|error| AppError::internal(format!("franking HLC invalid: {error}")))?;
+    let seal = crate::notary::ensure_realm_seal_head(
+        state,
+        &RealmId::new(realm_id.to_owned())
+            .map_err(|error| AppError::internal(format!("franking Realm id invalid: {error}")))?,
+    )
+    .map_err(|error| AppError::internal(format!("franking Realm Seal lookup failed: {error}")))?
+    .ok_or_else(|| {
+        AppError::new(
+            ErrorCode::FrontierUnavailable,
+            "franking target Realm has no accepted Seal",
+        )
+        .with_status(StatusCode::SERVICE_UNAVAILABLE)
+    })?;
+    let auth_context = arkret_wire::AuthContext {
+        key_id: arkret_wire::OpaqueLocalId::new("notary-key").expect("notary key id is opaque"),
+        key_epoch: 0,
+        credential_epoch: None,
+    };
+    let digest_suite = state.projections().realm_digest_suite(realm_id);
+    let mut event = arkret_event_draft::TypedEventDraft::<
+        arkret_wire::event_spec::ModerationFrankingProof,
+    >::new(
+        ScopeRef::Realm {
+            realm_id: proof.realm_id.clone(),
+        },
+        service_actor_id.clone(),
+        service_actor_id,
+        proof,
+    )
+    .and_then(|draft| {
+        draft
+            .with_prev_refs(prev_refs)
+            .with_seal_ref(seal.id)
+            .with_auth_context(auth_context)
+            .author_with_digest_suite(actor_seq, hlc, created_at, digest_suite)
+    })
+    .map_err(|error| AppError::internal(format!("franking Event build failed: {error}")))?;
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
+        signing_key.as_ref().clone(),
+        service_did,
+        verification_method.clone(),
+    );
+    arkret_signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+    )
+    .map_err(|error| AppError::internal(format!("franking Event signing failed: {error}")))?;
+    let event_id = event.event_id().to_string();
+    let session = soland_services::identity::SessionIdentityState {
+        token_hash: "franking-proof-service".to_owned(),
+        actor: state.service_id().clone(),
+        device_id: String::new(),
+        audience: state.service_id().clone(),
+        session_public_key: None,
+        agent_session: None,
+        session_grant: None,
+        expires_at: created_at + chrono::Duration::minutes(5),
+        created_at,
+        revoked_at: None,
+    };
+    let envelope = serde_json::to_value(event)
+        .map_err(|error| AppError::internal(format!("franking Event serialize failed: {error}")))?;
+    crate::routing::events::event_log::submit_service_franking_proof_event_value(
+        state,
+        &session,
+        envelope,
+        realm_id,
+        target_event_id,
+    )
+    .await
+    .map_err(|error| {
+        AppError::new(
+            ErrorCode::ParamInvalid,
+            format!("franking Event admission failed: {}", error.message),
         )
         .with_status(error.status)
         .with_wire_code(error.code)
@@ -573,6 +750,26 @@ async fn validate_moderation_franking_proof(
         serde_json::from_value(franking_proof.clone()).map_err(|error| {
             franking_proof_invalid(format!("franking_proof typed validation failed: {error}"))
         })?;
+    let verification_key = crate::jws_verify::resolve_ed25519_pubkey_async(
+        state,
+        typed_proof.verification_method.as_str(),
+    )
+    .await
+    .map_err(|error| {
+        franking_proof_invalid(format!(
+            "franking_proof verification method is not currently resolvable: {error}"
+        ))
+    })?;
+    typed_proof
+        .verify_signature(|_, bytes, signature| {
+            crate::jws_verify::verify_ed25519_signature_with_public_key(
+                bytes,
+                signature,
+                verification_key.as_bytes(),
+            )
+            .map_err(arkret_wire::WireError::Protocol)
+        })
+        .map_err(|error| franking_proof_invalid(error.to_string()))?;
     validate_franking_event_time_anchor(state, realm_id, &typed_proof).await?;
     if consume_nonce
         && !state.remember_moderation_franking_nonce(realm_id, received_by, replay_nonce)
@@ -956,6 +1153,7 @@ async fn moderation_routing_visible_to_actor(
 
 #[cfg(test)]
 mod report_safety_tests {
+    use ed25519_dalek::Signer as _;
     use serde_json::{Value, json};
     use soland_storage_postgres::Db;
 
@@ -1058,18 +1256,25 @@ mod report_safety_tests {
         })
     }
 
-    fn valid_franking() -> Value {
+    fn valid_franking(state: &AppState) -> Value {
         let (event_id, ..) = franking_event_fixture();
-        let received_by = crate::test_event::principal_server_id();
-        json!({
-            "realm_id": REALM,
-            "event_id": event_id,
-            "received_by": received_by,
-            "verification_method": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#notary-key",
-            "received_at": FRANKING_RECEIVED_AT,
-            "replay_nonce": "nonce_0123456789",
-            "signature": "sig",
-        })
+        let proof = FrankingProof::signed(
+            RealmId::new(REALM.to_owned()).unwrap(),
+            EventId::new(event_id).unwrap(),
+            arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
+            state.service_verification_method("notary-key").unwrap(),
+            chrono::DateTime::parse_from_rfc3339(FRANKING_RECEIVED_AT)
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            "nonce_0123456789".to_owned(),
+            |bytes| {
+                Ok(arkret_canonical::base64url_encode(
+                    state.notary_signing_key().sign(bytes).to_bytes(),
+                ))
+            },
+        )
+        .unwrap();
+        serde_json::to_value(proof).unwrap()
     }
 
     #[test]
@@ -1133,25 +1338,17 @@ mod report_safety_tests {
     }
 
     #[tokio::test]
-    async fn franking_replay_nonce_is_rejected_within_window() {
+    async fn franking_replay_nonce_guard_rejects_the_second_use_within_window() {
         let state = test_state();
-        seed_franking_event_anchor(&state, FRANKING_RECEIVED_AT).await;
-        let proof = valid_franking();
-        assert!(
-            validate_moderation_franking_proof(&state, REALM, &proof, true)
-                .await
-                .is_ok()
-        );
-        let replay = validate_moderation_franking_proof(&state, REALM, &proof, true)
-            .await
-            .unwrap_err();
-        assert_eq!(replay.code, ErrorCode::DuplicateConflict);
+        let received_by = state.service_id().clone();
+        assert!(state.remember_moderation_franking_nonce(REALM, &received_by, "nonce_0123456789"));
+        assert!(!state.remember_moderation_franking_nonce(REALM, &received_by, "nonce_0123456789"));
     }
 
     #[tokio::test]
     async fn franking_without_event_time_anchor_is_rejected() {
         let state = test_state();
-        let proof = valid_franking();
+        let proof = valid_franking(&state);
         let error = validate_moderation_franking_proof(&state, REALM, &proof, true)
             .await
             .unwrap_err();
@@ -1162,7 +1359,7 @@ mod report_safety_tests {
     async fn franking_backdated_outside_event_anchor_is_rejected() {
         let state = test_state();
         seed_franking_event_anchor(&state, "2026-04-30T00:10:01.000Z").await;
-        let proof = valid_franking();
+        let proof = valid_franking(&state);
         let error = validate_moderation_franking_proof(&state, REALM, &proof, true)
             .await
             .unwrap_err();

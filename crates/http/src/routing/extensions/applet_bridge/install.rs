@@ -649,6 +649,8 @@ pub(super) async fn register_package_install(
     producer_signing_key: arkret_wire::DidKey,
     idempotency_key: String,
     body_digest: String,
+    authoring_preview_subject_key: String,
+    authoring_request_digest: String,
     res: &mut Response,
 ) -> Result<AppletInstallOutcome, AppError> {
     let owner_actor_id = session.actor.as_str();
@@ -803,6 +805,8 @@ pub(super) async fn register_package_install(
         producer_verification_method,
         producer_signing_key,
         record_value,
+        authoring_preview_subject_key,
+        authoring_request_digest,
         crate::routing::events::event_log::EventCommitIdempotency {
             principal_id: session.actor.clone(),
             key: record.idempotency_key.clone(),

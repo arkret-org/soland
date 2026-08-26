@@ -16,68 +16,34 @@ pub(crate) async fn append_encrypted_message_franking(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) {
-    let Some(proof) = encrypted_message_franking_proof(state.service_id(), parsed, envelope) else {
+    if !is_encrypted_message(parsed, envelope) {
         return;
-    };
-    append_audit_log(
-        state,
-        Some(parsed.actor_id.as_str()),
-        arkret_wire::EventKind::ModerationFrankingProof.as_str(),
-        proof,
-        "accepted",
+    }
+    if let Err(error) = Box::pin(
+        crate::routing::interop::moderation::persist_franking_proof_event(
+            state,
+            parsed.realm_id.as_str(),
+            parsed.event_id.as_str(),
+        ),
     )
-    .await;
-}
-
-fn encrypted_message_franking_proof(
-    service_id: &str,
-    parsed: &ValidatedEventEnvelope,
-    envelope: &Value,
-) -> Option<Value> {
-    if parsed.kind != arkret_wire::EventKind::MessageCreate.as_str() {
-        return None;
-    }
-    let ciphertext_digest = encrypted_message_ciphertext_digest(envelope)?;
-    let mut proof = json!({
-        "kind": arkret_wire::EventKind::ModerationFrankingProof,
-        "realm_id": parsed.realm_id,
-        "target_event_id": parsed.event_id,
-        "sender_did": parsed.actor_id,
-        "receiving_service_id": service_id,
-        "ciphertext_digest": ciphertext_digest,
-        "event_canonical_digest": parsed.canonical_digest,
-        "timestamp": now(),
-    });
-    let proof_digest = franking_proof_digest(&proof);
-    proof["proof_digest"] = json!(proof_digest);
-    Some(proof)
-}
-
-fn encrypted_message_ciphertext_digest(envelope: &Value) -> Option<String> {
-    if let Some(digest) = envelope
-        .pointer("/payload/encrypted_content/payload_digest")
-        .and_then(Value::as_str)
-        && is_valid_hash_digest(digest)
+    .await
     {
-        return Some(digest.to_owned());
+        tracing::error!(
+            %error,
+            event_id = %parsed.event_id,
+            realm_id = %parsed.realm_id,
+            "failed to persist canonical franking-proof Event"
+        );
     }
-    None
 }
 
-fn franking_proof_digest(proof: &Value) -> String {
-    let material = json!({
-        "kind": proof
-            .get("kind")
-            .and_then(Value::as_str)
-            .unwrap_or(arkret_wire::EventKind::ModerationFrankingProof.as_str()),
-        "target_event_id": proof.get("target_event_id").and_then(Value::as_str).unwrap_or_default(),
-        "sender_did": proof.get("sender_did").and_then(Value::as_str).unwrap_or_default(),
-        "receiving_service_id": proof.get("receiving_service_id").and_then(Value::as_str).unwrap_or_default(),
-        "ciphertext_digest": proof.get("ciphertext_digest").and_then(Value::as_str).unwrap_or_default(),
-        "event_canonical_digest": proof.get("event_canonical_digest").and_then(Value::as_str).unwrap_or_default(),
-    });
-    let bytes = serde_json::to_vec(&material).unwrap_or_default();
-    arkret_canonical::sha256_digest(&bytes)
+fn is_encrypted_message(parsed: &ValidatedEventEnvelope, envelope: &Value) -> bool {
+    if parsed.kind != arkret_wire::EventKind::MessageCreate.as_str() {
+        return false;
+    }
+    envelope
+        .pointer("/payload/encrypted_content")
+        .is_some_and(Value::is_object)
 }
 
 /// The one `ak.audit.accessed` rule that is not stateable in the payload
@@ -555,42 +521,27 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_message_franking_is_not_gated_by_audit_applet_policy() {
-        let proof = encrypted_message_franking_proof(
-            "did:web:soland.example",
+    fn encrypted_message_requires_canonical_franking_event() {
+        assert!(is_encrypted_message(
             &parsed(arkret_wire::EventKind::MessageCreate.as_str()),
             &json!({
                 "payload": {
                     "encrypted_content": {
-                        "payload_digest":
-                            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        "version": 1,
+                        "content_type": "application/octet-stream",
+                        "encryption_context": "message",
+                        "ciphertext": "ciphertext"
                     }
                 }
             }),
-        )
-        .expect("encrypted messages get a local moderation franking proof");
-
-        assert_eq!(
-            proof.get("kind").and_then(Value::as_str),
-            Some(arkret_wire::EventKind::ModerationFrankingProof.as_str())
-        );
-        assert_eq!(
-            proof.get("receiving_service_id").and_then(Value::as_str),
-            Some("did:web:soland.example")
-        );
-        assert!(proof.get("audit_disclosure_policy").is_none());
-        assert!(proof.get("proof_digest").is_some());
+        ));
     }
 
     #[test]
     fn plaintext_messages_do_not_get_a_franking_proof() {
-        assert!(
-            encrypted_message_franking_proof(
-                "did:web:soland.example",
-                &parsed(arkret_wire::EventKind::MessageCreate.as_str()),
-                &json!({"payload": {"content": {"body": "hello"}}}),
-            )
-            .is_none()
-        );
+        assert!(!is_encrypted_message(
+            &parsed(arkret_wire::EventKind::MessageCreate.as_str()),
+            &json!({"payload": {"content": {"body": "hello"}}}),
+        ));
     }
 }

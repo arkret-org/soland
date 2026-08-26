@@ -2,8 +2,6 @@
 //!
 //! Two disjoint mounts (no double-mounting; SOL-NAME-02):
 //!
-//! - Client ingest ([`ingest_router`], mounted at `/_soland/self/audit/*` under the session-PoP
-//!   hoop): `POST audit/franking/verify`.
 //! - Operator queries ([`ops_router`], mounted inside the `RequireAdmin` gated `/_soland/admin/*`
 //!   branch): `GET audit/events`, `GET audit/erasure-receipts`.
 //!
@@ -12,7 +10,7 @@
 //!
 //! All persistence access is mediated by `GovernanceService`.
 
-use salvo::oapi::extract::{JsonBody, QueryParam};
+use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -24,30 +22,6 @@ use super::{now, realm_has_member};
 use crate::ids;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct FrankingProofVerifyRequestBody {
-    #[serde(default)]
-    proof_digest: Option<String>,
-    #[serde(default)]
-    kind: Option<String>,
-    #[serde(default)]
-    target_event_id: Option<String>,
-    #[serde(default)]
-    sender_did: Option<String>,
-    #[serde(default)]
-    receiving_service_id: Option<String>,
-    #[serde(default)]
-    ciphertext_digest: Option<String>,
-    #[serde(default)]
-    event_canonical_digest: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct FrankingProofVerifyOutcome {
-    ok: bool,
-    proof_digest: String,
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct AuditErasureReceiptsOutcome {
@@ -74,11 +48,6 @@ struct AuditEventsOutcome {
     next_cursor: Option<String>,
 }
 
-/// Client-facing audit ingest, mounted at `/_soland/self/audit/*`.
-pub(super) fn ingest_router() -> Router {
-    Router::new().push(Router::with_path("audit/franking/verify").post(verify_franking_proof))
-}
-
 /// Operator audit queries, mounted inside the admin-gated
 /// `/_soland/admin/*` branch.
 pub(super) fn ops_router() -> Router {
@@ -87,37 +56,6 @@ pub(super) fn ops_router() -> Router {
         .push(Router::with_path("audit").get(super::queries::admin_query_audit))
         .push(Router::with_path("audit/events").get(audit_events))
         .push(Router::with_path("audit/erasure-receipts").get(audit_erasure_receipts))
-}
-
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.audit.franking.verify",
-    tags("soland_admin")
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.audit.franking.verify"))]
-async fn verify_franking_proof(
-    aa: AuthArgs,
-    body: JsonBody<FrankingProofVerifyRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<FrankingProofVerifyOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
-    let proof = body.into_inner();
-    let declared = proof
-        .proof_digest
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::param_invalid("proof_digest is required"))?;
-    let expected = franking_proof_digest(&proof);
-    if declared != expected {
-        return Err(AppError::conflict("franking proof digest mismatch")
-            .with_wire_code("franking_tampered"));
-    }
-    json_ok(FrankingProofVerifyOutcome {
-        ok: true,
-        proof_digest: expected,
-    })
 }
 
 /// Spec `realm-and-space.md` §2.5.2 — exposes the
@@ -265,19 +203,6 @@ fn audit_event_matches_kind(event: &Value, kind: &str) -> bool {
     .into_iter()
     .flatten()
     .any(|value| value.as_str() == Some(kind))
-}
-
-fn franking_proof_digest(proof: &FrankingProofVerifyRequestBody) -> String {
-    let material = json!({
-        "kind": proof.kind.as_deref().unwrap_or(arkret_wire::event_kind_str::MODERATION_FRANKING_PROOF),
-        "target_event_id": proof.target_event_id.as_deref().unwrap_or_default(),
-        "sender_did": proof.sender_did.as_deref().unwrap_or_default(),
-        "receiving_service_id": proof.receiving_service_id.as_deref().unwrap_or_default(),
-        "ciphertext_digest": proof.ciphertext_digest.as_deref().unwrap_or_default(),
-        "event_canonical_digest": proof.event_canonical_digest.as_deref().unwrap_or_default(),
-    });
-    let bytes = serde_json::to_vec(&material).unwrap_or_default();
-    arkret_canonical::sha256_digest(&bytes)
 }
 
 pub async fn append_audit_log(

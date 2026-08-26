@@ -281,11 +281,6 @@ fn soland_local_router() -> Router {
                 // (`/_soland/self/strands/{strand_id}`) + relation edge list
                 // (`/_soland/self/relations`). See `events::local_router`.
                 .push(events::local_router())
-                // Client telemetry/audit ingest (`/_soland/self/audit/*`)
-                // — per-handler actor auth plus the shared `self`
-                // session-PoP hoop above. Operator audit queries live under
-                // the admin-gated `/_soland/admin/audit/*` (SOL-NAME-02).
-                .push(admin::audit_ingest_router())
                 // Owner-scoped policy document storage CRUD
                 // (`/_soland/self/policies*`). Deployment-local management
                 // capability backing `ak.self.policy.read.check`; kept off

@@ -1302,6 +1302,7 @@ fn contract_applet_batch(
             expected_record,
             record,
         }),
+        applet_authoring_preview: None,
         agent_membership_cascade: None,
     }
 }

@@ -267,6 +267,7 @@ pub(crate) async fn submit_sidecar_ensure_batch(
         .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
             events: prepared.iter().map(|event| event.command.clone()).collect(),
             applet_record: None,
+            applet_authoring_preview: None,
             agent_membership_cascade: None,
         })
         .await

@@ -792,6 +792,31 @@ pub(in crate::routing) async fn submit_mimi_moderation_report_event_value(
     .await
 }
 
+pub(in crate::routing) async fn submit_service_franking_proof_event_value(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: Value,
+    realm_id: &str,
+    target_event_id: &str,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    let admission = InternalEventAdmission::service_franking_proof(
+        realm_id,
+        state.service_id().as_str(),
+        target_event_id,
+    );
+    submit_event_value_with_context(
+        state,
+        session,
+        envelope,
+        SubmitEventContext {
+            internal_admission: Some(&admission),
+            ..SubmitEventContext::empty()
+        },
+        SubmitMode::Commit(SubmitCommitOptions::none()),
+    )
+    .await
+}
+
 pub(in crate::routing) async fn submit_event_value_with_idempotency(
     state: &AppState,
     session: &SessionRecord,

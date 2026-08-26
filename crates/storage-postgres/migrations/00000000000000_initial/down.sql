@@ -18,6 +18,7 @@ DROP TABLE IF EXISTS agent_principals CASCADE;
 DROP TABLE IF EXISTS agent_membership_cleanup_intents CASCADE;
 DROP TABLE IF EXISTS applet_registrations CASCADE;
 DROP TABLE IF EXISTS applet_transactions CASCADE;
+DROP TABLE IF EXISTS applet_authoring_previews CASCADE;
 DROP TABLE IF EXISTS audit_logs CASCADE;
 DROP TABLE IF EXISTS blobs CASCADE;
 DROP TABLE IF EXISTS publication_evidence CASCADE;

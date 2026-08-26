@@ -338,6 +338,32 @@ CREATE TABLE public.applet_transactions (
 
 CREATE INDEX applet_transactions_received_idx ON public.applet_transactions USING btree (received_at);
 
+CREATE TABLE public.applet_authoring_previews (
+    subject_key text NOT NULL,
+    basis_digest text NOT NULL,
+    request_digest text NOT NULL,
+    signed_request jsonb NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    status text NOT NULL CHECK (status IN ('current', 'superseded', 'committed')),
+    superseded_at timestamp with time zone,
+    committed_at timestamp with time zone,
+    CHECK (
+        (status = 'current' AND superseded_at IS NULL AND committed_at IS NULL)
+        OR (status = 'superseded' AND superseded_at IS NOT NULL AND committed_at IS NULL)
+        OR (status = 'committed' AND superseded_at IS NULL AND committed_at IS NOT NULL)
+    ),
+    PRIMARY KEY (subject_key, request_digest)
+);
+
+CREATE UNIQUE INDEX applet_authoring_previews_one_current_idx
+    ON public.applet_authoring_previews (subject_key)
+    WHERE status = 'current';
+
+CREATE INDEX applet_authoring_previews_expiry_idx
+    ON public.applet_authoring_previews (expires_at)
+    WHERE status = 'current';
+
 CREATE TABLE public.audit_logs (
     id uuid PRIMARY KEY,
     actor_id text,

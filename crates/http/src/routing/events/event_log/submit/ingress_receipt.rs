@@ -383,21 +383,20 @@ pub(super) struct InboundPublicationEvidence {
 ///
 /// `EventFederationSubmission::validate_structural` has already bound every
 /// receipt to this lease and this exact digest, so the first one is a valid
-/// representative of the set.
+/// representative of the set. The durable ledger is first-writer-wins: an
+/// exact replay reuses the pair already stored, while a changed lease or
+/// changed receipt for the same Event digest is a protocol conflict.
 ///
-/// Best-effort: the Event is already accepted, and a failed evidence write only
-/// costs a later onward federation, so it degrades to a warning rather than
-/// unwinding an accepted commit.
+/// This runs before local Event acceptance. A receipt proves arrival at the
+/// origin ingress, not acceptance at this service, so retaining valid evidence
+/// for a subsequently rejected local Event is correct. Storing first also lets
+/// the ledger's unique digest key linearize concurrent changed-lease replays.
 pub(super) async fn store_inbound_publication_evidence(
     state: &AppState,
     evidence: &InboundPublicationEvidence,
-) {
+) -> Result<(), SubmitOneError> {
     let Some(receipt) = evidence.ingress_receipts.first() else {
-        tracing::warn!(
-            event_digest = %evidence.event_digest,
-            "federated Event carried no ingress receipt; it cannot be re-federated"
-        );
-        return;
+        return Ok(());
     };
     let record = soland_services::events::PublicationEvidenceRecord {
         event_digest: evidence.event_digest.clone(),
@@ -405,17 +404,28 @@ pub(super) async fn store_inbound_publication_evidence(
         authorization_lease: evidence.authorization_lease.clone(),
         ingress_receipt: receipt.clone(),
     };
-    if let Err(error) = state
+    let stored = state
         .event_queries()
         .store_publication_evidence(record)
         .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("publication evidence store unavailable: {error}"),
+            )
+        })?;
+    if stored.realm_id != evidence.realm_id
+        || stored.authorization_lease != evidence.authorization_lease
+        || stored.ingress_receipt != *receipt
     {
-        tracing::warn!(
-            %error,
-            event_digest = %evidence.event_digest,
-            "failed to store transported publication evidence"
-        );
+        return Err(SubmitOneError::new(
+            StatusCode::CONFLICT,
+            "duplicate_conflict",
+            "the Event digest is already paired with different publication evidence",
+        ));
     }
+    Ok(())
 }
 
 fn publication_reject(message: String) -> SubmitOneError {

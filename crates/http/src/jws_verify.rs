@@ -1052,7 +1052,7 @@ pub async fn resolve_ed25519_pubkey_async(
 ) -> Result<VerifyingKey, String> {
     let did = arkret_identity::verification_method_did(verification_method)
         .map_err(|error| error.to_string())?;
-    let document = resolve_did_document_async(state, &did).await?;
+    let document = document_for_verification(state, &did, verification_method).await?;
     arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
         .map_err(|error| error.to_string())
 }
@@ -1348,6 +1348,16 @@ mod did_binding_tests {
             },
             Db { pool: None },
         )
+    }
+
+    #[tokio::test]
+    async fn async_ed25519_resolver_uses_the_local_service_notary_document() {
+        let state = state_without_any_resolver();
+        let method = state.service_verification_method("notary-key").unwrap();
+        let resolved = resolve_ed25519_pubkey_async(&state, method.as_str())
+            .await
+            .expect("the local service notary must not depend on the external DID allowlist");
+        assert_eq!(resolved, state.notary_verifying_key());
     }
 
     fn document_for(did: &DidFullId, verification_method: &str, key: &SigningKey) -> DidDocument {

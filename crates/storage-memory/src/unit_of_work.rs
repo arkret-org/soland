@@ -798,6 +798,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut event_outbox_ids = self.events.event_outbox_ids.lock();
         let mut outbox = self.federation_outbox.data.lock();
         let mut applets = self.applets.records.lock();
+        let mut authoring_previews = self.applets.authoring_previews.lock();
         let mut pairings = self.device_pairings.data.lock();
         let mut contacts = self.contacts.data.lock();
         let mut contact_verified_mirrors = self.contact_verified_mirrors.data.lock();
@@ -813,6 +814,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_outbox = outbox.clone();
         let mut staged_event_outbox_ids = event_outbox_ids.clone();
         let mut staged_applets = applets.clone();
+        let mut staged_authoring_previews = authoring_previews.clone();
         let mut staged_pairings = pairings.clone();
         let mut staged_contacts = contacts.clone();
         let mut staged_contact_verified_mirrors = contact_verified_mirrors.clone();
@@ -987,6 +989,16 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             }
         }
 
+        if let Some(preview) = request.applet_authoring_preview {
+            let matches_current = staged_authoring_previews
+                .get(&preview.subject_key)
+                .is_some_and(|current| current.request_digest == preview.request_digest);
+            if !matches_current {
+                return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
+            }
+            staged_authoring_previews.remove(&preview.subject_key);
+        }
+
         if let Some(mutation) = request.applet_record {
             let namespace_claims = soland_storage::applet_namespaces_from_record(&mutation.record)?;
             if let Some(expected_record) = mutation.expected_record.as_ref() {
@@ -1077,6 +1089,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *outbox = staged_outbox;
         *event_outbox_ids = staged_event_outbox_ids;
         *applets = staged_applets;
+        *authoring_previews = staged_authoring_previews;
         *pairings = staged_pairings;
         *contacts = staged_contacts;
         *contact_verified_mirrors = staged_contact_verified_mirrors;
@@ -1100,12 +1113,13 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
 mod tests {
     use chrono::{Duration, Utc};
     use soland_storage::{
-        AgentMembershipCascadeCommit, AgentMembershipCascadeStore, AppletRecordCommit,
-        CanonicalEventRecord, DeviceMessageRecord, DeviceRevocationGateAction,
-        DeviceRevocationGateLinearizationRequest, DeviceRevocationGateSelector,
-        DeviceRevocationGateStatus, DeviceRevocationStore, DeviceRevocationTransition,
-        EventBatchCommitRequest, EventCommitRequest, EventCommitUnitOfWork,
-        EventProjectionStoreRegistry, IdempotencyRecord, PersistenceError, ProjectionEventRecord,
+        AgentMembershipCascadeCommit, AgentMembershipCascadeStore, AppletAuthoringPreviewCommit,
+        AppletAuthoringPreviewRecord, AppletRecordCommit, CanonicalEventRecord,
+        DeviceMessageRecord, DeviceRevocationGateAction, DeviceRevocationGateLinearizationRequest,
+        DeviceRevocationGateSelector, DeviceRevocationGateStatus, DeviceRevocationStore,
+        DeviceRevocationTransition, EventBatchCommitRequest, EventCommitRequest,
+        EventCommitUnitOfWork, EventProjectionStoreRegistry, IdempotencyRecord, PersistenceError,
+        ProjectionEventRecord,
     };
 
     use super::stage_control_proposal_ack;
@@ -1619,6 +1633,7 @@ mod tests {
         let mut incomplete = EventBatchCommitRequest {
             events: vec![controller.clone(), agent_a.clone()],
             applet_record: None,
+            applet_authoring_preview: None,
             agent_membership_cascade: Some(AgentMembershipCascadeCommit::AtomicSelfLeave {
                 controller_transition_event_id: controller_event_id.clone(),
                 agent_transition_event_ids: agent_event_ids.clone(),
@@ -1667,6 +1682,7 @@ mod tests {
             .commit_event_batch(EventBatchCommitRequest {
                 events: vec![terminal.clone()],
                 applet_record: None,
+                applet_authoring_preview: None,
                 agent_membership_cascade: Some(AgentMembershipCascadeCommit::EmergencyTerminal {
                     record: Box::new(record.clone()),
                 }),
@@ -1700,6 +1716,7 @@ mod tests {
             .commit_event_batch(EventBatchCommitRequest {
                 events: vec![cleanup_a, cleanup_b],
                 applet_record: None,
+                applet_authoring_preview: None,
                 agent_membership_cascade: Some(AgentMembershipCascadeCommit::EmergencyCleanup {
                     cleanup_intent_digest: cleanup_digest.clone(),
                     controller_terminal_event_id: terminal_event_id,
@@ -2017,6 +2034,7 @@ mod tests {
                     }],
                 }),
             }),
+            applet_authoring_preview: None,
             agent_membership_cascade: None,
         };
 
@@ -2032,6 +2050,20 @@ mod tests {
     async fn ghost_batch_appends_without_replacing_existing_ghosts() {
         let store = SolandMemoryPersistenceStore::new();
         let applet_id = typed_id("ak:applet:");
+        let preview_subject = "ghost-preview-subject".to_owned();
+        let preview_request = "sha256:ghost-preview-request".to_owned();
+        let now = Utc::now();
+        store.applets.authoring_previews.lock().insert(
+            preview_subject.clone(),
+            AppletAuthoringPreviewRecord {
+                subject_key: preview_subject.clone(),
+                basis_digest: "sha256:ghost-preview-basis".to_owned(),
+                request_digest: preview_request.clone(),
+                signed_request: serde_json::json!({"signed": true}),
+                issued_at: now,
+                expires_at: now + Duration::minutes(5),
+            },
+        );
         store.applets.records.lock().insert(
             applet_id.clone(),
             serde_json::json!({
@@ -2085,6 +2117,10 @@ mod tests {
                     }],
                 }),
             }),
+            applet_authoring_preview: Some(AppletAuthoringPreviewCommit {
+                subject_key: preview_subject.clone(),
+                request_digest: preview_request,
+            }),
             agent_membership_cascade: None,
         };
 
@@ -2096,7 +2132,28 @@ mod tests {
                 .len(),
             2
         );
+        assert!(
+            !store
+                .applets
+                .authoring_previews
+                .lock()
+                .contains_key(&preview_subject),
+            "Applet Event batch must atomically consume the current preview generation"
+        );
 
+        let stale_preview_subject = "stale-ghost-preview-subject".to_owned();
+        let stale_preview_request = "sha256:stale-ghost-preview-request".to_owned();
+        store.applets.authoring_previews.lock().insert(
+            stale_preview_subject.clone(),
+            AppletAuthoringPreviewRecord {
+                subject_key: stale_preview_subject.clone(),
+                basis_digest: "sha256:stale-ghost-preview-basis".to_owned(),
+                request_digest: stale_preview_request.clone(),
+                signed_request: serde_json::json!({"signed": "stale"}),
+                issued_at: now,
+                expires_at: now + Duration::minutes(5),
+            },
+        );
         let stale_event_id = typed_id("ak:event:");
         let stale = EventBatchCommitRequest {
             events: vec![event_request(
@@ -2136,6 +2193,10 @@ mod tests {
                     }],
                 }),
             }),
+            applet_authoring_preview: Some(AppletAuthoringPreviewCommit {
+                subject_key: stale_preview_subject.clone(),
+                request_digest: stale_preview_request,
+            }),
             agent_membership_cascade: None,
         };
 
@@ -2145,6 +2206,14 @@ mod tests {
             Some(soland_storage::ConflictCode::CasConflict)
         );
         assert!(!store.events.data.lock().contains_key(&stale_event_id));
+        assert!(
+            store
+                .applets
+                .authoring_previews
+                .lock()
+                .contains_key(&stale_preview_subject),
+            "failed Applet Event batch must roll preview consumption back"
+        );
         let applets = store.applets.records.lock();
         let ghosts = applets[&applet_id]["ghosts"].as_array().unwrap();
         assert_eq!(ghosts.len(), 2);
@@ -2195,6 +2264,7 @@ mod tests {
                         "ghosts": [],
                     }),
                 }),
+                applet_authoring_preview: None,
                 agent_membership_cascade: None,
             }
         };

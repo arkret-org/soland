@@ -786,6 +786,7 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
         .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
             events: commands,
             applet_record: None,
+            applet_authoring_preview: None,
             agent_membership_cascade: Some(cascade_commit),
         })
         .await
@@ -1253,11 +1254,17 @@ async fn submit_federated_cascade_after_transport_validation(
     };
 
     let contextual = preflight_reducer_batch(state, &prepared)?;
+    for event in &prepared {
+        if let Some(evidence) = inbound_publication_evidence.get(&event.command.event.event_id) {
+            store_inbound_publication_evidence(state, evidence).await?;
+        }
+    }
     if let Err(error) = state
         .events()
         .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
             events: prepared.iter().map(|event| event.command.clone()).collect(),
             applet_record: None,
+            applet_authoring_preview: None,
             agent_membership_cascade: Some(cascade_commit),
         })
         .await
@@ -1288,11 +1295,6 @@ async fn submit_federated_cascade_after_transport_validation(
         revoked_at: None,
     };
     finalize_prepared_batch(state, &audit_session, &prepared, &contextual).await?;
-    for event in &prepared {
-        if let Some(evidence) = inbound_publication_evidence.get(&event.command.event.event_id) {
-            store_inbound_publication_evidence(state, evidence).await;
-        }
-    }
     let acks = prepared
         .iter()
         .filter_map(|event| {

@@ -738,6 +738,16 @@ pub enum AppletTransactionReplayResult {
     Existing(AppletTransactionReplayState),
 }
 
+#[derive(Clone, Debug)]
+pub struct AppletAuthoringPreviewState {
+    pub subject_key: String,
+    pub basis_digest: String,
+    pub request_digest: String,
+    pub signed_request: Value,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
 #[async_trait::async_trait]
 pub trait AppletPort: Send + Sync {
     async fn applet(&self, applet_id: &str) -> ServiceResult<Option<Value>>;
@@ -759,6 +769,14 @@ pub trait AppletPort: Send + Sync {
         idempotency_key: &str,
         outcome: Value,
     ) -> ServiceResult<()>;
+    async fn issue_applet_authoring_preview(
+        &self,
+        candidate: AppletAuthoringPreviewState,
+    ) -> ServiceResult<AppletAuthoringPreviewState>;
+    async fn current_applet_authoring_preview(
+        &self,
+        subject_key: &str,
+    ) -> ServiceResult<Option<AppletAuthoringPreviewState>>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -859,7 +877,14 @@ pub struct CommitAppletRecord {
 pub struct CommitAcceptedEventBatchCommand {
     pub events: Vec<CommitAcceptedEventCommand>,
     pub applet_record: Option<CommitAppletRecord>,
+    pub applet_authoring_preview: Option<CommitAppletAuthoringPreview>,
     pub agent_membership_cascade: Option<soland_storage::AgentMembershipCascadeCommit>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CommitAppletAuthoringPreview {
+    pub subject_key: String,
+    pub request_digest: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1521,6 +1546,22 @@ impl EventQueryService {
     ) -> ServiceResult<()> {
         self.applets
             .complete_applet_transaction(applet_id, source_service_id, idempotency_key, outcome)
+            .await
+    }
+
+    pub async fn issue_applet_authoring_preview(
+        &self,
+        candidate: AppletAuthoringPreviewState,
+    ) -> ServiceResult<AppletAuthoringPreviewState> {
+        self.applets.issue_applet_authoring_preview(candidate).await
+    }
+
+    pub async fn current_applet_authoring_preview(
+        &self,
+        subject_key: &str,
+    ) -> ServiceResult<Option<AppletAuthoringPreviewState>> {
+        self.applets
+            .current_applet_authoring_preview(subject_key)
             .await
     }
 

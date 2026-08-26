@@ -1,16 +1,19 @@
 use super::{
-    AppletStore, AppletTransactionReplayBegin, AppletTransactionReplayRecord, BTreeMap, Mutex,
-    PersistenceError, PersistenceResult, Value, async_trait,
+    AppletAuthoringPreviewRecord, AppletStore, AppletTransactionReplayBegin,
+    AppletTransactionReplayRecord, BTreeMap, Mutex, PersistenceError, PersistenceResult, Value,
+    async_trait,
 };
 pub(crate) struct MemoryAppletStore {
     pub(crate) records: Mutex<BTreeMap<String, Value>>,
     transactions: Mutex<BTreeMap<(String, String, String), AppletTransactionReplayRecord>>,
+    pub(crate) authoring_previews: Mutex<BTreeMap<String, AppletAuthoringPreviewRecord>>,
 }
 impl MemoryAppletStore {
     pub(crate) fn new() -> Self {
         Self {
             records: Mutex::new(BTreeMap::new()),
             transactions: Mutex::new(BTreeMap::new()),
+            authoring_previews: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -77,11 +80,111 @@ impl AppletStore for MemoryAppletStore {
         record.completed_at = Some(chrono::Utc::now());
         Ok(())
     }
+
+    async fn issue_authoring_preview(
+        &self,
+        candidate: AppletAuthoringPreviewRecord,
+    ) -> PersistenceResult<AppletAuthoringPreviewRecord> {
+        let mut previews = self.authoring_previews.lock();
+        if let Some(current) = previews.get(&candidate.subject_key)
+            && current.basis_digest == candidate.basis_digest
+            && current.expires_at > candidate.issued_at
+        {
+            return Ok(current.clone());
+        }
+        previews.insert(candidate.subject_key.clone(), candidate.clone());
+        Ok(candidate)
+    }
+
+    async fn current_authoring_preview(
+        &self,
+        subject_key: &str,
+    ) -> PersistenceResult<Option<AppletAuthoringPreviewRecord>> {
+        Ok(self.authoring_previews.lock().get(subject_key).cloned())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn preview(
+        basis_digest: &str,
+        request_digest: &str,
+        issued_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppletAuthoringPreviewRecord {
+        AppletAuthoringPreviewRecord {
+            subject_key: "install-bot-subject".to_owned(),
+            basis_digest: basis_digest.to_owned(),
+            request_digest: request_digest.to_owned(),
+            signed_request: serde_json::json!({"request_digest": request_digest}),
+            issued_at,
+            expires_at: issued_at + chrono::Duration::minutes(5),
+        }
+    }
+
+    #[tokio::test]
+    async fn authoring_preview_keeps_exact_current_winner_and_supersedes_changed_or_expired_input()
+    {
+        let store = MemoryAppletStore::new();
+        let now = chrono::Utc::now();
+        let first = preview("basis-a", "request-a", now);
+        assert_eq!(
+            store
+                .issue_authoring_preview(first.clone())
+                .await
+                .unwrap()
+                .request_digest,
+            "request-a"
+        );
+
+        let same_basis_new_signature = preview(
+            "basis-a",
+            "request-a-new-signature",
+            now + chrono::Duration::seconds(1),
+        );
+        assert_eq!(
+            store
+                .issue_authoring_preview(same_basis_new_signature)
+                .await
+                .unwrap()
+                .signed_request,
+            first.signed_request
+        );
+
+        let changed = preview("basis-b", "request-b", now + chrono::Duration::seconds(2));
+        assert_eq!(
+            store
+                .issue_authoring_preview(changed)
+                .await
+                .unwrap()
+                .request_digest,
+            "request-b"
+        );
+        assert_eq!(
+            store
+                .current_authoring_preview("install-bot-subject")
+                .await
+                .unwrap()
+                .unwrap()
+                .request_digest,
+            "request-b"
+        );
+
+        let expired_reissue = preview(
+            "basis-b",
+            "request-b-reissued",
+            now + chrono::Duration::minutes(7),
+        );
+        assert_eq!(
+            store
+                .issue_authoring_preview(expired_reissue)
+                .await
+                .unwrap()
+                .request_digest,
+            "request-b-reissued"
+        );
+    }
 
     #[tokio::test]
     async fn stale_record_mutation_cannot_overwrite_a_concurrent_ghost_append() {

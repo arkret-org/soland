@@ -20,6 +20,24 @@ pub trait AppletStore: Send + Sync {
         idempotency_key: &str,
         outcome: Value,
     ) -> PersistenceResult<()>;
+    async fn issue_authoring_preview(
+        &self,
+        candidate: AppletAuthoringPreviewRecord,
+    ) -> PersistenceResult<AppletAuthoringPreviewRecord>;
+    async fn current_authoring_preview(
+        &self,
+        subject_key: &str,
+    ) -> PersistenceResult<Option<AppletAuthoringPreviewRecord>>;
+}
+
+#[derive(Clone, Debug)]
+pub struct AppletAuthoringPreviewRecord {
+    pub subject_key: String,
+    pub basis_digest: String,
+    pub request_digest: String,
+    pub signed_request: Value,
+    pub issued_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
 }
 #[derive(Clone, Debug)]
 pub struct AppletTransactionReplayRecord {

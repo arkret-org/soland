@@ -6,13 +6,14 @@ use arkret_models_discovery::ServiceDescribe;
 use arkret_models_integration::{
     AppletActorView, AppletCapabilityRevokeIntent, AppletGhostAuthoringRequestBasis,
     AppletInstallOutcome, AppletInstallPreviewOutcome, AppletInstallPreviewRequestBody,
-    AppletInstallRequestBody, AppletManagedActorPurpose, AppletManagedMembershipRemoval,
-    AppletMembershipRemoveIntent, AppletNamespaceDomain, AppletPingOutcome, AppletProtocolMetadata,
-    AppletRealmView, AppletRevokeEffectKind, AppletRevokeOutcome, AppletRevokePlan,
-    AppletRevokePreviewOutcome, AppletRevokePreviewRequestBody, AppletRevokeSagaStatus,
-    AppletRevokeStep, AppletRevokeStepStatus, AppletTransactionOutcome, ExternalRef,
-    FieldDefinition, GhostActorProvisionOutcome, GhostActorProvisionRequestBody,
-    GhostPreviewOutcome, GhostPreviewRequestBody, ProtocolInstance, namespace_pattern_matches,
+    AppletInstallRequestBody, AppletManagedActorAuthoringRequest, AppletManagedActorPurpose,
+    AppletManagedMembershipRemoval, AppletMembershipRemoveIntent, AppletNamespaceDomain,
+    AppletPingOutcome, AppletProtocolMetadata, AppletRealmView, AppletRevokeEffectKind,
+    AppletRevokeOutcome, AppletRevokePlan, AppletRevokePreviewOutcome,
+    AppletRevokePreviewRequestBody, AppletRevokeSagaStatus, AppletRevokeStep,
+    AppletRevokeStepStatus, AppletTransactionOutcome, ExternalRef, FieldDefinition,
+    GhostActorProvisionOutcome, GhostActorProvisionRequestBody, GhostPreviewOutcome,
+    GhostPreviewRequestBody, ProtocolInstance, namespace_pattern_matches,
 };
 use arkret_wire::{AppletRevokeMode, EventKind, Hash, ProtocolOperationId};
 use salvo::http::StatusCode;
@@ -201,7 +202,7 @@ async fn install_preview_endpoint(
             .service_verification_method("notary-key")
             .map_err(AppError::internal)?,
     );
-    let authoring_request = arkret_models_integration::AppletManagedActorAuthoringRequest::sign(
+    let authoring_request = AppletManagedActorAuthoringRequest::sign(
         preview.authoring_request_basis,
         plan.plan_digest.clone(),
         state
@@ -214,6 +215,7 @@ async fn install_preview_endpoint(
     .map_err(|error| {
         AppError::internal(format!("install authoring request sign failed: {error}"))
     })?;
+    let authoring_request = issue_applet_authoring_preview(state, authoring_request).await?;
     json_ok(AppletInstallPreviewOutcome {
         plan,
         authoring_request,
@@ -262,6 +264,14 @@ async fn install_endpoint(
     authoring_request.validate_bindings().map_err(|error| {
         AppError::param_invalid(format!("install authoring request is invalid: {error}"))
     })?;
+    require_current_applet_authoring_preview(state, authoring_request).await?;
+    let authoring_preview_subject_key = applet_authoring_preview_subject_key(authoring_request)?;
+    let authoring_request_digest = authoring_request
+        .canonical_digest()
+        .map_err(|error| {
+            AppError::param_invalid(format!("authoring request digest failed: {error}"))
+        })?
+        .to_string();
     require_first_install_commit_fresh(authoring_request.expires_at, chrono::Utc::now())?;
     let expected_ps_method = state
         .service_verification_method("notary-key")
@@ -364,6 +374,8 @@ async fn install_endpoint(
         producer_signing_key,
         idempotency_key,
         body_digest,
+        authoring_preview_subject_key,
+        authoring_request_digest,
         res,
     )
     .await?;
@@ -384,6 +396,129 @@ fn exact_successful_install_replay(
     }
     Err(
         AppError::conflict("Idempotency-Key was already used with a different applet install body")
+            .with_wire_code("duplicate_conflict"),
+    )
+}
+
+fn applet_authoring_preview_subject_key(
+    request: &AppletManagedActorAuthoringRequest,
+) -> Result<String, AppError> {
+    let subject = if let Some(basis) = request.basis.install() {
+        json!({
+            "purpose": "install_bot",
+            "applet_id": basis.applet_id,
+            "target_principal_server_id": basis.target_principal_server_id,
+        })
+    } else if let Some(basis) = request.basis.ghost() {
+        json!({
+            "purpose": "provision_ghost",
+            "applet_id": basis.applet_id,
+            "target_principal_server_id": basis.target_principal_server_id,
+            "external_ref": basis.external_ref,
+        })
+    } else {
+        return Err(AppError::internal(
+            "managed actor authoring request has no closed branch subject",
+        ));
+    };
+    crate::util::canonical_digest(&subject)
+}
+
+fn applet_authoring_preview_basis_digest(
+    request: &AppletManagedActorAuthoringRequest,
+) -> Result<String, AppError> {
+    crate::util::canonical_digest(&json!({
+        "schema": request.schema,
+        "purpose": request.purpose,
+        "basis": request.basis,
+        "plan_digest": request.plan_digest,
+        "hosting_notary": request.hosting_notary,
+    }))
+}
+
+async fn issue_applet_authoring_preview(
+    state: &AppState,
+    request: AppletManagedActorAuthoringRequest,
+) -> Result<AppletManagedActorAuthoringRequest, AppError> {
+    let subject_key = applet_authoring_preview_subject_key(&request)?;
+    let basis_digest = applet_authoring_preview_basis_digest(&request)?;
+    let request_digest = request
+        .canonical_digest()
+        .map_err(|error| AppError::internal(format!("authoring request digest failed: {error}")))?
+        .to_string();
+    let signed_request = serde_json::to_value(&request).map_err(|error| {
+        AppError::internal(format!("authoring request serialize failed: {error}"))
+    })?;
+    let stored = state
+        .event_queries()
+        .issue_applet_authoring_preview(soland_services::events::AppletAuthoringPreviewState {
+            subject_key,
+            basis_digest,
+            request_digest,
+            signed_request,
+            issued_at: request.issued_at,
+            expires_at: request.expires_at,
+        })
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "failed to persist Applet authoring preview winner");
+            AppError::internal("failed to persist Applet authoring preview winner")
+        })?;
+    let stored_request: AppletManagedActorAuthoringRequest =
+        serde_json::from_value(stored.signed_request.clone()).map_err(|error| {
+            AppError::internal(format!(
+                "stored Applet authoring preview winner is invalid: {error}"
+            ))
+        })?;
+    stored_request.validate_bindings().map_err(|error| {
+        AppError::internal(format!(
+            "stored Applet authoring preview winner bindings are invalid: {error}"
+        ))
+    })?;
+    let stored_request_digest = stored_request
+        .canonical_digest()
+        .map_err(|error| AppError::internal(format!("stored request digest failed: {error}")))?
+        .to_string();
+    if applet_authoring_preview_subject_key(&stored_request)? != stored.subject_key
+        || applet_authoring_preview_basis_digest(&stored_request)? != stored.basis_digest
+        || stored_request_digest != stored.request_digest
+    {
+        return Err(AppError::internal(
+            "stored Applet authoring preview winner metadata does not match its exact request",
+        ));
+    }
+    Ok(stored_request)
+}
+
+async fn require_current_applet_authoring_preview(
+    state: &AppState,
+    request: &AppletManagedActorAuthoringRequest,
+) -> Result<(), AppError> {
+    let subject_key = applet_authoring_preview_subject_key(request)?;
+    let request_digest = request
+        .canonical_digest()
+        .map_err(|error| {
+            AppError::param_invalid(format!("authoring request digest failed: {error}"))
+        })?
+        .to_string();
+    let request_value = serde_json::to_value(request).map_err(|error| {
+        AppError::param_invalid(format!("authoring request serialize failed: {error}"))
+    })?;
+    let current = state
+        .event_queries()
+        .current_applet_authoring_preview(&subject_key)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "failed to read Applet authoring preview winner");
+            AppError::internal("failed to read Applet authoring preview winner")
+        })?;
+    if current.is_some_and(|current| {
+        current.request_digest == request_digest && current.signed_request == request_value
+    }) {
+        return Ok(());
+    }
+    Err(
+        AppError::conflict("Applet authoring request is not the current preview generation")
             .with_wire_code("duplicate_conflict"),
     )
 }
@@ -1093,19 +1228,17 @@ async fn preview_ghost_actor_endpoint(
             .service_verification_method("notary-key")
             .map_err(AppError::internal)?,
     );
-    let authoring_request =
-        arkret_models_integration::AppletManagedActorAuthoringRequest::sign_ghost(
-            basis,
-            state
-                .service_notary_signer_descriptor()
-                .map_err(AppError::internal)?,
-            issued_at,
-            issued_at + chrono::Duration::minutes(5),
-            &signer,
-        )
-        .map_err(|error| {
-            AppError::internal(format!("Ghost authoring request sign failed: {error}"))
-        })?;
+    let authoring_request = AppletManagedActorAuthoringRequest::sign_ghost(
+        basis,
+        state
+            .service_notary_signer_descriptor()
+            .map_err(AppError::internal)?,
+        issued_at,
+        issued_at + chrono::Duration::minutes(5),
+        &signer,
+    )
+    .map_err(|error| AppError::internal(format!("Ghost authoring request sign failed: {error}")))?;
+    let authoring_request = issue_applet_authoring_preview(state, authoring_request).await?;
     json_ok(GhostPreviewOutcome { authoring_request })
 }
 
@@ -1133,6 +1266,46 @@ async fn provision_ghost_actor_endpoint(
         .authoring_basis()
         .ok_or_else(|| AppError::param_invalid("Ghost authoring basis is missing"))?
         .clone();
+    let idempotency_key = idempotency_key(req)
+        .ok_or_else(|| AppError::param_missing("Idempotency-Key header is required"))?;
+    if idempotency_key.len() > 128 {
+        return Err(AppError::param_invalid(
+            "Idempotency-Key length exceeds 128 bytes",
+        ));
+    }
+    let request_value = serde_json::to_value(&provision)
+        .map_err(|error| AppError::param_invalid(format!("provision request invalid: {error}")))?;
+    let request_digest = arkret_canonical::canonical_sha256(&request_value)
+        .map_err(|error| AppError::param_invalid(format!("provision request invalid: {error}")))?
+        .to_string();
+    if let Some(replay) = state
+        .jobs()
+        .idempotency_record(authoring_basis.service_id.as_str(), &idempotency_key)
+        .await
+        .map_err(|error| AppError::internal(format!("idempotency lookup failed: {error}")))?
+    {
+        if replay.request_hash != request_digest {
+            return Err(AppError::conflict(
+                "Idempotency-Key was already used with different Ghost provisioning Events",
+            )
+            .with_wire_code("duplicate_conflict"));
+        }
+        let outcome: GhostActorProvisionOutcome = serde_json::from_value(replay.response_body)
+            .map_err(|error| {
+                AppError::internal(format!("stored Ghost provision outcome invalid: {error}"))
+            })?;
+        res.status_code(StatusCode::OK);
+        return json_ok(outcome);
+    }
+    provision
+        .authoring_request
+        .validate_bindings()
+        .map_err(|error| {
+            AppError::param_invalid(format!("Ghost authoring request is invalid: {error}"))
+        })?;
+    require_current_applet_authoring_preview(state, &provision.authoring_request).await?;
+    // Only a first commit is freshness-bound. A successful exact replay above
+    // remains available after expiry without re-authoring a new request.
     require_first_install_commit_fresh(provision.authoring_request.expires_at, chrono::Utc::now())?;
     let expected_ps_method = state
         .service_verification_method("notary-key")
@@ -1222,38 +1395,6 @@ async fn provision_ghost_actor_endpoint(
         )
         .with_wire_code("applet_registration_unauthorized"));
     }
-    let idempotency_key = idempotency_key(req)
-        .ok_or_else(|| AppError::param_missing("Idempotency-Key header is required"))?;
-    if idempotency_key.len() > 128 {
-        return Err(AppError::param_invalid(
-            "Idempotency-Key length exceeds 128 bytes",
-        ));
-    }
-    let request_value = serde_json::to_value(&provision)
-        .map_err(|error| AppError::param_invalid(format!("provision request invalid: {error}")))?;
-    let request_digest = arkret_canonical::canonical_sha256(&request_value)
-        .map_err(|error| AppError::param_invalid(format!("provision request invalid: {error}")))?
-        .to_string();
-    if let Some(replay) = state
-        .jobs()
-        .idempotency_record(authoring_basis.service_id.as_str(), &idempotency_key)
-        .await
-        .map_err(|error| AppError::internal(format!("idempotency lookup failed: {error}")))?
-    {
-        if replay.request_hash != request_digest {
-            return Err(AppError::conflict(
-                "Idempotency-Key was already used with different Ghost provisioning Events",
-            )
-            .with_wire_code("duplicate_conflict"));
-        }
-        let outcome: GhostActorProvisionOutcome = serde_json::from_value(replay.response_body)
-            .map_err(|error| {
-                AppError::internal(format!("stored Ghost provision outcome invalid: {error}"))
-            })?;
-        res.status_code(StatusCode::OK);
-        return json_ok(outcome);
-    }
-
     // Wire ids are validated at deserialization (typed AppletId/DidFullId/RealmId).
     let service_id = authoring_basis.service_id.clone();
     let ghost_actor_id = submitted_provision.actor_id.clone();
@@ -1387,6 +1528,14 @@ async fn provision_ghost_actor_endpoint(
         typed_path_applet_id,
         expected_applet_record,
         applet_record_value,
+        applet_authoring_preview_subject_key(&provision.authoring_request)?,
+        provision
+            .authoring_request
+            .canonical_digest()
+            .map_err(|error| {
+                AppError::param_invalid(format!("authoring request digest failed: {error}"))
+            })?
+            .to_string(),
         crate::routing::events::event_log::EventCommitIdempotency {
             principal_id: authoring_basis.service_id.to_string(),
             key: idempotency_key.clone(),

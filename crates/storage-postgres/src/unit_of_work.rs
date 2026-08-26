@@ -562,6 +562,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
         self.commit_event_batch(EventBatchCommitRequest {
             events: vec![request],
             applet_record: None,
+            applet_authoring_preview: None,
             agent_membership_cascade: None,
         })
         .await
@@ -1138,6 +1139,21 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 outbox_inserted += inserted;
                 crate::events::bind_event_outbox_rows(conn, &[event_pk], &record).await?;
             }
+            }
+
+            if let Some(preview) = request.applet_authoring_preview {
+                let updated = sql_query(
+                    "UPDATE applet_authoring_previews SET status = 'committed', committed_at = NOW() \
+                     WHERE subject_key = $1 AND request_digest = $2 AND status = 'current'",
+                )
+                .bind::<Text, _>(&preview.subject_key)
+                .bind::<Text, _>(&preview.request_digest)
+                .execute(conn)
+                .await
+                .map_err(PersistenceError::database)?;
+                if updated != 1 {
+                    return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()).into());
+                }
             }
 
             if let Some(mutation) = request.applet_record {

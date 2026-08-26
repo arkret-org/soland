@@ -1,6 +1,7 @@
 use super::{
-    AppletStore, AppletTransactionReplayBegin, AppletTransactionReplayRecord, Jsonb, Nullable,
-    OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl,
+    AppletAuthoringPreviewRecord, AppletStore, AppletTransactionReplayBegin,
+    AppletTransactionReplayRecord, AsyncConnection, Jsonb, Nullable, OptionalExtension,
+    PersistenceError, PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl,
     Text, Timestamptz, Value, applet_registration_select_sql, applet_transaction_replay_select_sql,
     async_trait, pg_conn, sql_query,
 };
@@ -28,6 +29,21 @@ struct AppletTransactionReplayRow {
     #[diesel(sql_type = Nullable<Timestamptz>)]
     completed_at: Option<chrono::DateTime<chrono::Utc>>,
 }
+#[derive(QueryableByName)]
+struct AppletAuthoringPreviewRow {
+    #[diesel(sql_type = Text)]
+    subject_key: String,
+    #[diesel(sql_type = Text)]
+    basis_digest: String,
+    #[diesel(sql_type = Text)]
+    request_digest: String,
+    #[diesel(sql_type = Jsonb)]
+    signed_request: Value,
+    #[diesel(sql_type = Timestamptz)]
+    issued_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    expires_at: chrono::DateTime<chrono::Utc>,
+}
 impl From<AppletRegistrationRow> for Value {
     fn from(row: AppletRegistrationRow) -> Self {
         row.record
@@ -45,6 +61,18 @@ impl From<AppletTransactionReplayRow> for AppletTransactionReplayRecord {
             outcome: row.outcome,
             received_at: row.received_at,
             completed_at: row.completed_at,
+        }
+    }
+}
+impl From<AppletAuthoringPreviewRow> for AppletAuthoringPreviewRecord {
+    fn from(row: AppletAuthoringPreviewRow) -> Self {
+        Self {
+            subject_key: row.subject_key,
+            basis_digest: row.basis_digest,
+            request_digest: row.request_digest,
+            signed_request: row.signed_request,
+            issued_at: row.issued_at,
+            expires_at: row.expires_at,
         }
     }
 }
@@ -177,5 +205,80 @@ impl AppletStore for PgAppletStore {
                 Ok(())
             }
         })
+    }
+
+    async fn issue_authoring_preview(
+        &self,
+        candidate: AppletAuthoringPreviewRecord,
+    ) -> PersistenceResult<AppletAuthoringPreviewRecord> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 1634758768))")
+                .bind::<Text, _>(&candidate.subject_key)
+                .execute(&mut *conn)
+                .await?;
+            let current = sql_query(
+                "SELECT subject_key, basis_digest, request_digest, signed_request, issued_at, expires_at \
+                 FROM applet_authoring_previews WHERE subject_key = $1 AND status = 'current'",
+            )
+            .bind::<Text, _>(&candidate.subject_key)
+            .get_result::<AppletAuthoringPreviewRow>(&mut *conn)
+            .await
+            .optional()?;
+            if let Some(current) = current
+                && current.basis_digest == candidate.basis_digest
+                && current.expires_at > candidate.issued_at
+            {
+                return Ok(current.into());
+            }
+            sql_query(
+                "UPDATE applet_authoring_previews SET status = 'superseded', superseded_at = NOW() \
+                 WHERE subject_key = $1 AND status = 'current'",
+            )
+            .bind::<Text, _>(&candidate.subject_key)
+            .execute(&mut *conn)
+            .await?;
+            sql_query(
+                "INSERT INTO applet_authoring_previews \
+                 (subject_key, basis_digest, request_digest, signed_request, issued_at, expires_at, status) \
+                 VALUES ($1, $2, $3, $4, $5, $6, 'current') \
+                 ON CONFLICT (subject_key, request_digest) DO UPDATE SET \
+                 basis_digest = EXCLUDED.basis_digest, signed_request = EXCLUDED.signed_request, \
+                 issued_at = EXCLUDED.issued_at, expires_at = EXCLUDED.expires_at, \
+                 status = 'current', superseded_at = NULL, committed_at = NULL",
+            )
+            .bind::<Text, _>(&candidate.subject_key)
+            .bind::<Text, _>(&candidate.basis_digest)
+            .bind::<Text, _>(&candidate.request_digest)
+            .bind::<Jsonb, _>(&candidate.signed_request)
+            .bind::<Timestamptz, _>(candidate.issued_at)
+            .bind::<Timestamptz, _>(candidate.expires_at)
+            .execute(&mut *conn)
+            .await?;
+            Ok(candidate)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn current_authoring_preview(
+        &self,
+        subject_key: &str,
+    ) -> PersistenceResult<Option<AppletAuthoringPreviewRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT subject_key, basis_digest, request_digest, signed_request, issued_at, expires_at \
+             FROM applet_authoring_previews WHERE subject_key = $1 AND status = 'current'",
+        )
+        .bind::<Text, _>(subject_key)
+        .get_result::<AppletAuthoringPreviewRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(AppletAuthoringPreviewRecord::from))
+        .map_err(PersistenceError::database)
     }
 }

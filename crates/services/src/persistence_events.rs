@@ -722,6 +722,32 @@ fn persistence_applet_replay(
     }
 }
 
+fn persistence_applet_authoring_preview(
+    record: crate::events::AppletAuthoringPreviewState,
+) -> soland_storage::AppletAuthoringPreviewRecord {
+    soland_storage::AppletAuthoringPreviewRecord {
+        subject_key: record.subject_key,
+        basis_digest: record.basis_digest,
+        request_digest: record.request_digest,
+        signed_request: record.signed_request,
+        issued_at: record.issued_at,
+        expires_at: record.expires_at,
+    }
+}
+
+fn application_applet_authoring_preview(
+    record: soland_storage::AppletAuthoringPreviewRecord,
+) -> crate::events::AppletAuthoringPreviewState {
+    crate::events::AppletAuthoringPreviewState {
+        subject_key: record.subject_key,
+        basis_digest: record.basis_digest,
+        request_digest: record.request_digest,
+        signed_request: record.signed_request,
+        issued_at: record.issued_at,
+        expires_at: record.expires_at,
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::events::AppletPort for PersistenceEventReader {
     async fn applet(&self, applet_id: &str) -> crate::ServiceResult<Option<Value>> {
@@ -776,6 +802,30 @@ impl crate::events::AppletPort for PersistenceEventReader {
             .complete_transaction_replay(applet_id, source_service_id, idempotency_key, outcome)
             .await?;
         Ok(())
+    }
+
+    async fn issue_applet_authoring_preview(
+        &self,
+        candidate: crate::events::AppletAuthoringPreviewState,
+    ) -> crate::ServiceResult<crate::events::AppletAuthoringPreviewState> {
+        self.0
+            .applets()
+            .issue_authoring_preview(persistence_applet_authoring_preview(candidate))
+            .await
+            .map(application_applet_authoring_preview)
+            .map_err(Into::into)
+    }
+
+    async fn current_applet_authoring_preview(
+        &self,
+        subject_key: &str,
+    ) -> crate::ServiceResult<Option<crate::events::AppletAuthoringPreviewState>> {
+        self.0
+            .applets()
+            .current_authoring_preview(subject_key)
+            .await
+            .map(|record| record.map(application_applet_authoring_preview))
+            .map_err(Into::into)
     }
 }
 
@@ -1711,6 +1761,12 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
                         applet_id: mutation.applet_id,
                         expected_record: mutation.expected_record,
                         record: mutation.record,
+                    }
+                }),
+                applet_authoring_preview: command.applet_authoring_preview.map(|preview| {
+                    soland_storage::AppletAuthoringPreviewCommit {
+                        subject_key: preview.subject_key,
+                        request_digest: preview.request_digest,
                     }
                 }),
                 agent_membership_cascade: command.agent_membership_cascade,

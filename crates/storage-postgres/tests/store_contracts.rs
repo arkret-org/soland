@@ -14,9 +14,9 @@ use soland_storage::contract_tests::{
 };
 use soland_storage::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountNotificationDeltaWrite,
-    GovernanceDependencySource, GovernanceDependencyStore, GovernanceDependencyWrite,
-    MlsKeyPackageStore, NotificationStore, PeerKeyPackageClaimLedgerRecord,
-    PeerKeyPackageClaimLedgerWriteResult,
+    AppletAuthoringPreviewRecord, AppletStore, GovernanceDependencySource,
+    GovernanceDependencyStore, GovernanceDependencyWrite, MlsKeyPackageStore, NotificationStore,
+    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult,
 };
 use soland_storage_postgres::{
     Db, PgAccountDataStore, PgAppletStore, PgContactStore, PgControlProposalAuthorityAckStore,
@@ -1125,6 +1125,81 @@ async fn postgres_adapter_satisfies_formal_applet_commit_transaction_contract_wh
 }
 
 #[tokio::test]
+async fn postgres_applet_authoring_preview_has_one_durable_exact_winner_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let store = PgAppletStore { pool };
+    let subject_key = format!("applet-preview:{}", uuid::Uuid::now_v7());
+    let now = chrono::Utc::now();
+    let candidate = |basis: &str, request: &str, issued_at: chrono::DateTime<chrono::Utc>| {
+        AppletAuthoringPreviewRecord {
+            subject_key: subject_key.clone(),
+            basis_digest: basis.to_owned(),
+            request_digest: request.to_owned(),
+            signed_request: serde_json::json!({"request": request}),
+            issued_at,
+            expires_at: issued_at + chrono::Duration::minutes(5),
+        }
+    };
+    let first = candidate("basis-a", "request-a", now);
+    assert_eq!(
+        store
+            .issue_authoring_preview(first.clone())
+            .await
+            .unwrap()
+            .signed_request,
+        first.signed_request
+    );
+    assert_eq!(
+        store
+            .issue_authoring_preview(candidate(
+                "basis-a",
+                "request-a-new-signature",
+                now + chrono::Duration::seconds(1),
+            ))
+            .await
+            .unwrap()
+            .request_digest,
+        "request-a"
+    );
+    assert_eq!(
+        store
+            .issue_authoring_preview(candidate(
+                "basis-b",
+                "request-b",
+                now + chrono::Duration::seconds(2),
+            ))
+            .await
+            .unwrap()
+            .request_digest,
+        "request-b"
+    );
+    assert_eq!(
+        store
+            .issue_authoring_preview(candidate(
+                "basis-b",
+                "request-b-reissued",
+                now + chrono::Duration::minutes(7),
+            ))
+            .await
+            .unwrap()
+            .request_digest,
+        "request-b-reissued"
+    );
+    assert_eq!(
+        store
+            .current_authoring_preview(&subject_key)
+            .await
+            .unwrap()
+            .unwrap()
+            .request_digest,
+        "request-b-reissued"
+    );
+}
+
+#[tokio::test]
 async fn postgres_adapter_satisfies_shared_consent_projection_commit_contract_when_configured() {
     let Some(pool) = test_pool().await else {
         return;
@@ -1543,6 +1618,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
                 },
             ],
             applet_record: None,
+            applet_authoring_preview: None,
             agent_membership_cascade: None,
         })
         .await

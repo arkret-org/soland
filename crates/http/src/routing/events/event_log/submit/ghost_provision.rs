@@ -390,6 +390,8 @@ async fn submit_applet_record_event_batch(
     staged_producer_authority: Option<(arkret_wire::DidUrl, arkret_wire::DidKey)>,
     expected_applet_record: Option<Value>,
     applet_record: Value,
+    authoring_preview_subject_key: String,
+    authoring_request_digest: String,
     idempotency: EventCommitIdempotency,
     response_body: Value,
     response_status: StatusCode,
@@ -482,6 +484,10 @@ async fn submit_applet_record_event_batch(
                 expected_record: expected_applet_record,
                 record: applet_record,
             }),
+            applet_authoring_preview: Some(soland_services::events::CommitAppletAuthoringPreview {
+                subject_key: authoring_preview_subject_key,
+                request_digest: authoring_request_digest,
+            }),
             agent_membership_cascade: None,
         })
         .await
@@ -567,6 +573,8 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
     applet_id: arkret_wire::AppletId,
     expected_applet_record: Value,
     applet_record: Value,
+    authoring_preview_subject_key: String,
+    authoring_request_digest: String,
     idempotency: EventCommitIdempotency,
     response_body: Value,
 ) -> Result<(), SubmitOneError> {
@@ -588,6 +596,8 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
         None,
         Some(expected_applet_record),
         applet_record,
+        authoring_preview_subject_key,
+        authoring_request_digest,
         idempotency,
         response_body,
         StatusCode::CREATED,
@@ -602,6 +612,8 @@ pub(in crate::routing) async fn submit_applet_install_batch(
     producer_verification_method: arkret_wire::DidUrl,
     producer_signing_key: arkret_wire::DidKey,
     applet_record: Value,
+    authoring_preview_subject_key: String,
+    authoring_request_digest: String,
     idempotency: EventCommitIdempotency,
     response_body: Value,
 ) -> Result<(), SubmitOneError> {
@@ -612,6 +624,8 @@ pub(in crate::routing) async fn submit_applet_install_batch(
         Some((producer_verification_method, producer_signing_key)),
         None,
         applet_record,
+        authoring_preview_subject_key,
+        authoring_request_digest,
         idempotency,
         response_body,
         StatusCode::CREATED,
