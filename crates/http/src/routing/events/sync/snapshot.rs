@@ -573,7 +573,6 @@ async fn account_notification_delta(
         } else {
             match arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
                 delta.id,
-                delta.notification_kind,
                 arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Upsert,
                 delta.data,
             ) {
@@ -1687,19 +1686,17 @@ mod account_notification_tests {
     use super::*;
 
     #[test]
-    fn typed_agent_approval_uses_notification_delta_wire_field() {
+    fn typed_agent_approval_uses_discriminator_free_notification_delta() {
         let delta =
             arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
                 arkret_wire::NotificationId::new(
                     "ak:notification:019fa1ef-00ee-77e0-9f06-2f2d36bf2475".to_owned(),
                 )
                 .expect("test notification id"),
-                arkret_wire::NotificationKind::Agent,
                 arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Upsert,
                 Some(
                     arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApproval(
                         arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalNotificationData {
-                            kind: arkret_models_collaboration::sync_frames::account_sync::AccountNotificationDataKind::AgentRuntimeApproval,
                             approval_request_id: arkret_wire::OpaqueLocalId::new(
                                 "agent_runtime_approval:019fa1ef-00ee-77e0-9f06-2f1d9ed5e3fa",
                             )
@@ -1721,14 +1718,8 @@ mod account_notification_tests {
             .expect("typed Agent approval must be valid");
         let wire = serde_json::to_value(delta).expect("NotificationDelta must serialize");
 
-        assert_eq!(
-            wire.get("notification_kind").and_then(Value::as_str),
-            Some("agent")
-        );
+        assert!(wire.get("notification_kind").is_none());
+        assert!(wire["data"].get("kind").is_none());
         assert_eq!(wire.get("action").and_then(Value::as_str), Some("upsert"));
-        assert_eq!(
-            wire.pointer("/data/kind").and_then(Value::as_str),
-            Some("agent_runtime_approval")
-        );
     }
 }

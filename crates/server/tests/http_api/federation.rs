@@ -2,7 +2,6 @@
 
 use std::collections::BTreeSet;
 
-use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use soland_domain::reducer::{CircleLifecycleState, CircleProjection};
 use soland_storage::RealmMetaRecord;
@@ -929,7 +928,7 @@ async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration
         arkret_wire::EventKind::MlsWelcome.as_str(),
         "did:web:alice.example",
         1,
-        mls_welcome_payload("claim-peer-01", "opaque-peer-welcome"),
+        mls_welcome_payload(),
     );
     let outcome = submit_peer_event(state.clone(), &welcome_event).await;
     assert_eq!(outcome["status"], "partial", "{outcome:?}");
@@ -1461,70 +1460,10 @@ fn circle_member_event(event_id: &str, member_did: &str, sender: &str, seq: u64)
     event_envelope(event_id, "ak.circle.member.state", sender, seq, payload)
 }
 
-fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
-    let group_id = "mls-group-peer-dm";
-    let keypackage_ref = "sha256:5555555555555555555555555555555555555555555555555555555555555555";
-    let keypackage_digest =
-        "sha256:5555555555555555555555555555555555555555555555555555555555555555";
-    serde_json::json!({
-        "mls_group_id": group_id,
-        "epoch": 1,
-        "recipient_principal_id": "did:web:bob.example",
-        "recipient_device_id": "ak:device:01904100-0000-7000-8000-b0b0e0000001",
-        "keypackage_ref": keypackage_ref,
-        "keypackage_digest": keypackage_digest,
-        "claim_id": claim_id,
-        "claim_ref": {
-            "claim_id": claim_id,
-            "keypackage_ref": keypackage_ref,
-            "keypackage_digest": keypackage_digest,
-            "capabilities_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
-            "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
-        },
-        "claim_envelope": {
-            "keypackage_ref": keypackage_ref,
-            "keypackage_digest": keypackage_digest,
-            "intended_realm_id": test_realm_id(),
-            "claim_id": claim_id,
-            "requester_actor_id": "did:web:alice.example",
-            "requester_device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "nonce": b64(format!("{claim_id}-nonce-128-bit-material").as_bytes()),
-            "welcome_digest": arkret_canonical::sha256_digest(ciphertext.as_bytes()),
-            "created_at": "2026-05-25T00:00:02.000Z",
-            "signature": {
-                "kid": "did:web:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",
-                "signature_algorithm": "Ed25519",
-                "sig": b64(format!("{claim_id}-signature").as_bytes())
-            }
-        },
-        "welcome_ref": "ak:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888",
-        "ciphertext": ciphertext,
-        "expires_at": "2026-05-25T01:00:00.000Z",
-        "commit_ref": "ak:event:AQoLuWBs8_0g95m4Vyez3AlsoJWJCcnbZF9n-pHNFKWk",
-        "governance_binding": mls_governance_binding(group_id)
-    })
-}
-
-fn mls_governance_binding(group_id: &str) -> Value {
-    serde_json::json!({
-        "binding_version": 1,
-        "encoding_profile": "cbor-deterministic-rfc8949-v1",
-        "realm_id": test_realm_id(),
-        "effective_scope": {
-            "kind": "realm",
-            "realm_id": test_realm_id()
-        },
-        "mls_group_id": group_id,
-        "previous_epoch": 0,
-        "next_epoch": 0,
-        "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-        "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
-        "reducer_profile": CORE_REDUCER_PROFILE
-    })
-}
-
-fn b64(bytes: &[u8]) -> String {
-    URL_SAFE_NO_PAD.encode(bytes)
+fn mls_welcome_payload() -> Value {
+    arkret_schema::embedded_json_artifact("fixtures/keypackage-pairwise-welcome-fixture.json")
+        .expect("embedded pairwise Welcome fixture")["schema_validation_cases"][0]["instance"]
+        .clone()
 }
 
 fn event_envelope(

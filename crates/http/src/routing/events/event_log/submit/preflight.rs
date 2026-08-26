@@ -11,36 +11,24 @@ pub(super) async fn preflight_mls_welcome_claim_signature_reject(
     if kinds::canonical_kind(operation) != arkret_wire::EventKind::MlsWelcome {
         return None;
     }
-    let envelope_value = match operation.payload.get("claim_envelope") {
-        Some(value) => value.clone(),
-        None => {
-            return Some(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
-        }
-    };
-    let envelope = match serde_json::from_value::<
-        arkret_models_collaboration::events_payloads::MlsWelcomeClaimEnvelope,
-    >(envelope_value)
-    {
-        Ok(envelope) => envelope,
+    let welcome = match operation.typed_payload::<arkret_wire::event_spec::MlsWelcome>() {
+        Ok(welcome) => welcome,
         Err(_) => {
             return Some(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
         }
     };
+    let envelope = &welcome.claim_envelope;
     if envelope.requester_actor_id.as_str() != actor_id {
         return Some(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
     }
-    let sender_device_id = operation
-        .payload
-        .get("sender_device_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+    let sender_device_id = welcome.sender_device_id.as_ref().map(|id| id.as_str());
     let producer_signing_key = internal_admission.and_then(|admission| {
         admission.federated_producer_signing_key(session, object, envelope.signature.kid.as_str())
     });
     crate::routing::identity::device_signing::verify_mls_welcome_claim_envelope_signature(
         state,
-        &envelope,
+        envelope,
+        &welcome.claim_receipt,
         sender_device_id,
         producer_signing_key,
     )

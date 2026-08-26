@@ -2012,7 +2012,7 @@ CREATE TABLE public.notifications (
     source_ref text,
     strand_id text,
     track_name text,
-    notification_kind text NOT NULL,
+    notification_kind text,
     event_kind text,
     source_actor_id text,
     priority text DEFAULT 'normal'::text NOT NULL,
@@ -2024,8 +2024,8 @@ CREATE TABLE public.notifications (
     read_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
-    CONSTRAINT notifications_source_boundary_check CHECK (((source_event_id IS NOT NULL) AND (realm_id IS NOT NULL) AND (controller_account_id IS NULL) AND (recipient_service_id IS NULL) AND (source_account_artifact_kind IS NULL) AND (source_account_artifact_id IS NULL)) OR ((source_event_id IS NULL) AND (realm_id IS NULL) AND (controller_account_id IS NOT NULL) AND (recipient_service_id IS NOT NULL) AND (source_account_artifact_kind = 'agent_runtime_approval'::text) AND (source_account_artifact_id IS NOT NULL))),
-    CONSTRAINT notifications_projection_action_check CHECK ((projection_action IS NULL) OR (projection_action = ANY (ARRAY['add'::text, 'update'::text, 'remove'::text])))
+    CONSTRAINT notifications_source_boundary_check CHECK (((source_event_id IS NOT NULL) AND (realm_id IS NOT NULL) AND (controller_account_id IS NULL) AND (recipient_service_id IS NULL) AND (source_account_artifact_kind IS NULL) AND (source_account_artifact_id IS NULL) AND (notification_kind IS NOT NULL) AND (projection_action IS NULL) AND (projection_data IS NULL)) OR ((source_event_id IS NULL) AND (realm_id IS NULL) AND (controller_account_id IS NOT NULL) AND (recipient_service_id IS NOT NULL) AND (source_account_artifact_kind = 'agent_runtime_approval'::text) AND (source_account_artifact_id IS NOT NULL) AND (notification_kind IS NULL) AND (projection_action IS NOT NULL))),
+    CONSTRAINT notifications_projection_action_check CHECK ((projection_action IS NULL) OR (projection_action = ANY (ARRAY['upsert'::text, 'remove'::text])))
 );
 
 CREATE INDEX notifications_recipient_idx ON public.notifications USING btree (recipient_id, created_at DESC);
@@ -2057,17 +2057,13 @@ BEGIN
        AND NEW.approval_notification_id IS NOT NULL
        AND NEW.controller_account_id IS NOT NULL
        AND NEW.recipient_service_id IS NOT NULL THEN
-        delta_action := CASE
-            WHEN TG_OP = 'INSERT' OR OLD.approval_request_id IS NULL THEN 'add'
-            ELSE 'update'
-        END;
+        delta_action := 'upsert';
         notification_id := NEW.approval_notification_id;
         account_id := NEW.controller_account_id;
         service_id := NEW.recipient_service_id;
         recipient_id := NEW.controller_id;
         artifact_id := NEW.approval_request_id;
         notification_data := jsonb_build_object(
-            'kind', 'agent_runtime_approval',
             'approval_request_id', NEW.approval_request_id,
             'agent_id', NEW.id,
             'requested_at', to_char(NEW.approval_requested_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
@@ -2092,7 +2088,6 @@ BEGIN
         recipient_id := OLD.controller_id;
         artifact_id := OLD.approval_request_id;
         notification_data := jsonb_build_object(
-            'kind', 'agent_runtime_approval',
             'reason', terminal_reason
         );
     ELSE
@@ -2102,12 +2097,12 @@ BEGIN
     INSERT INTO public.notifications (
         id, recipient_id, controller_account_id, recipient_service_id,
         source_account_artifact_kind, source_account_artifact_id,
-        notification_kind, priority, state, projection_action,
+        priority, state, projection_action,
         projection_data, created_at, updated_at
     ) VALUES (
         notification_id, recipient_id, account_id, service_id,
         'agent_runtime_approval', artifact_id,
-        'agent', 'normal', 'unread', delta_action,
+        'normal', 'unread', delta_action,
         notification_data, now(), now()
     )
     ON CONFLICT (controller_account_id, recipient_service_id,

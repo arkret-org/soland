@@ -13,16 +13,17 @@ use soland_storage::contract_tests::{
     assert_organization_registration_store_contract, minimal_history_signer_evidence,
 };
 use soland_storage::{
-    AccountDataCasResult, AccountDataRecord, AccountDataStore, GovernanceDependencySource,
-    GovernanceDependencyStore, GovernanceDependencyWrite, MlsKeyPackageStore,
-    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult,
+    AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountNotificationDeltaWrite,
+    GovernanceDependencySource, GovernanceDependencyStore, GovernanceDependencyWrite,
+    MlsKeyPackageStore, NotificationStore, PeerKeyPackageClaimLedgerRecord,
+    PeerKeyPackageClaimLedgerWriteResult,
 };
 use soland_storage_postgres::{
     Db, PgAccountDataStore, PgAppletStore, PgContactStore, PgControlProposalAuthorityAckStore,
     PgDeviceInventoryStore, PgDeviceMessageStore, PgEventCommitUnitOfWork, PgEventStore,
     PgFederationOutboxStore, PgGovernanceDependencyStore, PgIdempotencyStore,
     PgInviteReceivePolicyStore, PgMimiConsentCorrelationStore, PgMlsKeyPackageStore,
-    PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
+    PgNotificationStore, PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
 };
 
 #[tokio::test]
@@ -555,6 +556,168 @@ async fn postgres_adapter_satisfies_shared_idempotency_contract_when_configured(
     let store = PgIdempotencyStore { pool };
     let namespace = format!("postgres-contract-{}", uuid::Uuid::now_v7());
     assert_idempotency_store_contract(&store, &namespace).await;
+}
+
+#[tokio::test]
+async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_when_configured() {
+    use diesel::{QueryableByName, sql_query};
+    use diesel_async::RunQueryDsl;
+
+    #[derive(QueryableByName)]
+    struct AccountNotificationStorageRow {
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        notification_kind: Option<String>,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        projection_action: String,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
+        projection_data: Option<serde_json::Value>,
+    }
+
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let store = PgNotificationStore { pool: pool.clone() };
+    let run_id = uuid::Uuid::now_v7();
+    let notification_uuid = uuid::Uuid::now_v7();
+    let notification_id =
+        arkret_wire::NotificationId::new(format!("ak:notification:{notification_uuid}")).unwrap();
+    let controller_account_id = format!("ak:account:{run_id}");
+    let recipient_service_id =
+        arkret_wire::DidCoreId::new(format!("ak:did_core:web:notification-{run_id}.example"))
+            .unwrap();
+    let recipient_id =
+        arkret_wire::DidCoreId::new(format!("ak:did_core:web:controller-{run_id}.example"))
+            .unwrap();
+    let artifact_id = format!("agent_runtime_approval:{run_id}");
+    let approval_request_id = arkret_wire::OpaqueLocalId::new(artifact_id.clone()).unwrap();
+    let agent_id =
+        arkret_wire::DidCoreId::new(format!("ak:did_core:web:agent-{run_id}.example")).unwrap();
+    let timestamp = |value: &str| {
+        chrono::DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    };
+
+    let upsert = |expires_at: &str| {
+        arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
+            notification_id.clone(),
+            arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Upsert,
+            Some(
+                arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApproval(
+                    arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalNotificationData {
+                        approval_request_id: approval_request_id.clone(),
+                        agent_id: agent_id.clone(),
+                        requested_at: timestamp("2026-08-26T10:00:00.000Z"),
+                        expires_at: timestamp(expires_at),
+                    },
+                ),
+            ),
+        )
+        .unwrap()
+    };
+    let write = |delta| AccountNotificationDeltaWrite {
+        delta,
+        recipient_id: recipient_id.clone(),
+        controller_account_id: controller_account_id.clone(),
+        recipient_service_id: recipient_service_id.clone(),
+        source_account_artifact_id: artifact_id.clone(),
+    };
+
+    store
+        .put_account_delta(write(upsert("2026-08-26T10:15:00.000Z")))
+        .await
+        .unwrap();
+    let inserted = store
+        .list_for_account(&controller_account_id, recipient_service_id.as_str(), None)
+        .await
+        .unwrap();
+    assert_eq!(inserted.len(), 1);
+    assert_eq!(
+        inserted[0].record.delta.action,
+        arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Upsert
+    );
+    assert!(
+        store
+            .list_for_recipient(recipient_id.as_str())
+            .await
+            .unwrap()
+            .is_empty(),
+        "account-private deltas must not enter the generic Event notification projection"
+    );
+    let mut conn = pool.get().await.unwrap();
+    let stored = sql_query(
+        "SELECT notification_kind, projection_action, projection_data \
+         FROM notifications WHERE id = $1",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(notification_uuid)
+    .get_result::<AccountNotificationStorageRow>(&mut *conn)
+    .await
+    .unwrap();
+    assert!(stored.notification_kind.is_none());
+    assert_eq!(stored.projection_action, "upsert");
+    assert!(
+        stored
+            .projection_data
+            .as_ref()
+            .is_some_and(|data| data.get("kind").is_none())
+    );
+    drop(conn);
+    let inserted_position = inserted[0].projection_position;
+
+    store
+        .put_account_delta(write(upsert("2026-08-26T10:20:00.000Z")))
+        .await
+        .unwrap();
+    let updated = store
+        .list_for_account(
+            &controller_account_id,
+            recipient_service_id.as_str(),
+            Some(inserted_position),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.len(), 1);
+    assert!(updated[0].projection_position > inserted_position);
+    assert_eq!(
+        updated[0]
+            .record
+            .delta
+            .agent_runtime_approval()
+            .unwrap()
+            .expires_at,
+        timestamp("2026-08-26T10:20:00.000Z")
+    );
+    let updated_position = updated[0].projection_position;
+
+    let removal =
+        arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
+            notification_id,
+            arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Remove,
+            Some(
+                arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApprovalRemoval(
+                    arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalNotificationRemovalData {
+                        reason: arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason::Approved,
+                    },
+                ),
+            ),
+        )
+        .unwrap();
+    store.put_account_delta(write(removal)).await.unwrap();
+    let removed = store
+        .list_for_account(
+            &controller_account_id,
+            recipient_service_id.as_str(),
+            Some(updated_position),
+        )
+        .await
+        .unwrap();
+    assert_eq!(removed.len(), 1);
+    assert_eq!(
+        removed[0].record.delta.action,
+        arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Remove
+    );
+    assert!(removed[0].record.delta.agent_runtime_approval().is_none());
 }
 
 #[tokio::test]

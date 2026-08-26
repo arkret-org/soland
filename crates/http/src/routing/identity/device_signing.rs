@@ -3,7 +3,7 @@
 use arkret_identifiers::EventId;
 use arkret_models_collaboration::events_payloads::MlsWelcomeClaimEnvelope;
 use arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload;
-use arkret_models_crypto::DeviceStatus;
+use arkret_models_crypto::{DeviceStatus, PeerKeyPackageClaimReceipt};
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
@@ -125,6 +125,7 @@ pub fn validate_device_authorize_binding(
 pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
     state: &AppState,
     envelope: &MlsWelcomeClaimEnvelope,
+    claim_receipt: &PeerKeyPackageClaimReceipt,
     sender_device_id: Option<&str>,
     producer_signing_key: Option<&arkret_wire::DidKey>,
 ) -> Result<(), &'static str> {
@@ -188,7 +189,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
             ) {
                 return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
             }
-            verify_welcome_signature(envelope, device_public_key)
+            verify_welcome_signature(envelope, claim_receipt, device_public_key)
         }
         arkret_models_collaboration::events_payloads::MlsRequesterTrustBinding::RequesterNativeAgent {
             requester_agent_id,
@@ -225,7 +226,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
                 .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?
                 .to_bytes()
             };
-            verify_welcome_signature_with_key(envelope, &public_key)
+            verify_welcome_signature_with_key(envelope, claim_receipt, &public_key)
         }
         arkret_models_collaboration::events_payloads::MlsRequesterTrustBinding::RequesterMinimalMetadataPairwise {
             requester_pairwise_verification_method,
@@ -248,26 +249,28 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
                 .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
             let public_key = arkret_canonical::decode_ed25519_multibase(multibase)
                 .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
-            verify_welcome_signature_with_key(envelope, &public_key)
+            verify_welcome_signature_with_key(envelope, claim_receipt, &public_key)
         }
     }
 }
 
 fn verify_welcome_signature(
     envelope: &MlsWelcomeClaimEnvelope,
+    claim_receipt: &PeerKeyPackageClaimReceipt,
     device_public_key: &str,
 ) -> Result<(), &'static str> {
     let device_key = decode_ed25519_key(device_public_key, "multibase")
         .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
-    verify_welcome_signature_with_key(envelope, &device_key.to_bytes())
+    verify_welcome_signature_with_key(envelope, claim_receipt, &device_key.to_bytes())
 }
 
 fn verify_welcome_signature_with_key(
     envelope: &MlsWelcomeClaimEnvelope,
+    claim_receipt: &PeerKeyPackageClaimReceipt,
     key: &[u8; 32],
 ) -> Result<(), &'static str> {
     let signing_bytes = envelope
-        .canonical_signing_bytes()
+        .canonical_signing_bytes(claim_receipt)
         .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let key = VerifyingKey::from_bytes(key)
         .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;

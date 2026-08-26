@@ -83,12 +83,11 @@ fn governance_binding(previous_epoch: u64) -> Value {
     governance_binding_for_scope(previous_epoch, "mls-group-abc", realm_scope())
 }
 
-fn welcome_payload(welcome_id: &str) -> Value {
+fn welcome_payload() -> Value {
     let keypackage_ref = "keypackage-01";
     let keypackage_digest =
         "sha256:5555555555555555555555555555555555555555555555555555555555555555";
     json!({
-        "welcome_ref": welcome_id,
         "mls_group_id": "mls-group-abc",
         "epoch": 1,
         "commit_ref": "ak:event:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
@@ -112,7 +111,6 @@ fn welcome_payload(welcome_id: &str) -> Value {
             "requester_actor_id": "ak:did_core:web:alice.example",
             "requester_device_id": "ak:device:0196419b-0000-7000-8000-000000000001",
             "requester_device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa",
-            "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
             "welcome_digest": arkret_canonical::sha256_digest(b"opaque-welcome-bytes"),
             "created_at": "2026-05-25T00:00:02.000Z",
             "signature": {
@@ -205,7 +203,7 @@ fn initialize_genesis(state: &mut ProjectionState) -> String {
 #[test]
 fn welcome_fixture_is_the_current_closed_wire_contract() {
     serde_json::from_value::<arkret_models_collaboration::events_payloads::MlsWelcomePayload>(
-        welcome_payload("ak:mls_welcome:wire-contract"),
+        welcome_payload(),
     )
     .expect("Welcome fixture must deserialize through the current closed SDK model");
 }
@@ -543,7 +541,7 @@ fn keypackage_claim_rejects_mismatched_device_authorization() {
 #[test]
 fn welcome_enqueue_then_fetch_marks_delivered() {
     let mut state = ProjectionState::default();
-    let enqueue = op_at(300, "ak.mls.welcome", welcome_payload("ak:mls_welcome:w1"));
+    let enqueue = op_at(300, "ak.mls.welcome", welcome_payload());
     let effect = apply_welcome_enqueue(&mut state, &enqueue);
     assert!(
         matches!(
@@ -589,8 +587,8 @@ fn welcome_enqueue_then_fetch_marks_delivered() {
     assert!(still_pending.is_empty());
 }
 
-fn agent_bound_welcome_payload(welcome_id: &str, authorize_event_id: &str) -> Value {
-    let mut payload = welcome_payload(welcome_id);
+fn agent_bound_welcome_payload(authorize_event_id: &str) -> Value {
+    let mut payload = welcome_payload();
     let claim_ref = payload
         .get_mut("claim_ref")
         .and_then(Value::as_object_mut)
@@ -606,10 +604,8 @@ fn agent_bound_welcome_payload(welcome_id: &str, authorize_event_id: &str) -> Va
 #[test]
 fn welcome_enqueue_rejects_inactive_agent_key_authorization() {
     let mut state = ProjectionState::default();
-    let payload = agent_bound_welcome_payload(
-        "ak:mls_welcome:w-agent-stale",
-        "ak:event:Af7kHhjQt9bXM9MVmV6uu7VNZY1P_sjoIUGS2rxLV8Qt",
-    );
+    let payload =
+        agent_bound_welcome_payload("ak:event:Af7kHhjQt9bXM9MVmV6uu7VNZY1P_sjoIUGS2rxLV8Qt");
     let effect = apply_welcome_enqueue(&mut state, &op_at(300, "ak.mls.welcome", payload));
     assert!(matches!(
         effect,
@@ -638,7 +634,7 @@ fn welcome_enqueue_accepts_current_agent_key_authorization() {
         ProjectionEffect::AgentKeyAuthorizeProjected { .. }
     ));
 
-    let payload = agent_bound_welcome_payload("ak:mls_welcome:w-agent-current", authorize_event_id);
+    let payload = agent_bound_welcome_payload(authorize_event_id);
     let effect = apply_welcome_enqueue(&mut state, &op_at(300, "ak.mls.welcome", payload));
     assert!(
         matches!(
@@ -652,7 +648,7 @@ fn welcome_enqueue_accepts_current_agent_key_authorization() {
 #[test]
 fn welcome_enqueue_accepts_requester_device_envelope_without_sender_device_id() {
     let mut state = ProjectionState::default();
-    let mut payload = welcome_payload("ak:mls_welcome:w-device");
+    let mut payload = welcome_payload();
     let claim_ref = payload
         .get_mut("claim_ref")
         .and_then(Value::as_object_mut)
@@ -691,7 +687,7 @@ fn welcome_enqueue_accepts_requester_device_envelope_without_sender_device_id() 
 #[test]
 fn welcome_enqueue_rejects_mismatched_sender_device_id_when_present() {
     let mut state = ProjectionState::default();
-    let mut payload = welcome_payload("ak:mls_welcome:w-device-mismatch");
+    let mut payload = welcome_payload();
     let claim_ref = payload
         .get_mut("claim_ref")
         .and_then(Value::as_object_mut)
@@ -706,10 +702,10 @@ fn welcome_enqueue_rejects_mismatched_sender_device_id_when_present() {
         .unwrap();
     claim_envelope.insert(
         "requester_device_id".to_owned(),
-        json!("ak:device:alice-desktop"),
+        json!("ak:device:0196419b-0000-7000-8000-000000000003"),
     );
     claim_envelope["signature"]["kid"] = json!("did:key:z6MkRequesterDevice#device");
-    payload["sender_device_id"] = json!("ak:device:other");
+    payload["sender_device_id"] = json!("ak:device:0196419b-0000-7000-8000-000000000004");
 
     let enqueue = op_at(300, "ak.mls.welcome", payload);
     let effect = apply_welcome_enqueue(&mut state, &enqueue);
@@ -725,7 +721,7 @@ fn welcome_enqueue_rejects_mismatched_sender_device_id_when_present() {
 fn welcome_enqueue_decodes_schema_ciphertext_base64_to_raw_welcome_bytes() {
     let mut state = ProjectionState::default();
     let raw_welcome = b"real-openmls-welcome-bytes";
-    let mut payload = welcome_payload("ak:mls_welcome:w-ciphertext");
+    let mut payload = welcome_payload();
     let object = payload.as_object_mut().unwrap();
     object.remove("ciphertext");
     object.insert("ciphertext".to_owned(), Value::String(b64(raw_welcome)));
@@ -752,9 +748,57 @@ fn welcome_enqueue_decodes_schema_ciphertext_base64_to_raw_welcome_bytes() {
 }
 
 #[test]
+fn welcome_enqueue_rejects_retired_reference_carriers() {
+    for retired_field in ["welcome_ref", "encrypted_welcome_ref"] {
+        let mut state = ProjectionState::default();
+        let mut payload = welcome_payload();
+        payload[retired_field] = json!(
+            "ak:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888"
+        );
+
+        let effect = apply_welcome_enqueue(&mut state, &op_at(300, "ak.mls.welcome", payload));
+        assert!(matches!(
+            effect,
+            ProjectionEffect::Rejected { reason } if reason == "mls_welcome_payload_invalid"
+        ));
+        assert!(state.mls_welcomes.is_empty());
+    }
+}
+
+#[test]
+fn welcome_enqueue_rejects_retired_claim_envelope_nonce() {
+    let mut state = ProjectionState::default();
+    let mut payload = welcome_payload();
+    payload["claim_envelope"]["nonce"] = json!("AAAAAAAAAAAAAAAAAAAAAA");
+
+    let effect = apply_welcome_enqueue(&mut state, &op_at(300, "ak.mls.welcome", payload));
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { reason } if reason == "mls_welcome_payload_invalid"
+    ));
+    assert!(state.mls_welcomes.is_empty());
+}
+
+#[test]
+fn welcome_enqueue_rejects_noncanonical_base64url_without_utf8_fallback() {
+    for invalid_ciphertext in ["AA==", "AB", "not base64url"] {
+        let mut state = ProjectionState::default();
+        let mut payload = welcome_payload();
+        payload["ciphertext"] = json!(invalid_ciphertext);
+
+        let effect = apply_welcome_enqueue(&mut state, &op_at(300, "ak.mls.welcome", payload));
+        assert!(matches!(
+            effect,
+            ProjectionEffect::Rejected { reason } if reason == "mls_welcome_payload_invalid"
+        ));
+        assert!(state.mls_welcomes.is_empty());
+    }
+}
+
+#[test]
 fn welcome_enqueue_rejects_plaintext_identity_metadata() {
     let mut state = ProjectionState::default();
-    let mut payload = welcome_payload("ak:mls_welcome:w-leaky");
+    let mut payload = welcome_payload();
     payload["metadata"] = json!({
         "sender_handle": "@alice",
         "routing_hint": "ok"
@@ -771,14 +815,13 @@ fn welcome_enqueue_rejects_plaintext_identity_metadata() {
 #[test]
 fn welcome_enqueue_rejects_missing_claim_envelope() {
     let mut state = ProjectionState::default();
-    let mut payload = welcome_payload("ak:mls_welcome:w-unbound");
+    let mut payload = welcome_payload();
     payload.as_object_mut().unwrap().remove("claim_envelope");
     let enqueue = op_at(300, "ak.mls.welcome", payload);
     let effect = apply_welcome_enqueue(&mut state, &enqueue);
     assert!(matches!(
         effect,
-        ProjectionEffect::Rejected { reason }
-            if reason == arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH
+        ProjectionEffect::Rejected { reason } if reason == "mls_welcome_payload_invalid"
     ));
     assert!(state.mls_welcomes.is_empty());
 }

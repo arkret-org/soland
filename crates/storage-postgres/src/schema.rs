@@ -892,7 +892,7 @@ diesel::table! {
         source_ref -> Nullable<Text>,
         strand_id -> Nullable<Text>,
         track_name -> Nullable<Text>,
-        notification_kind -> Text,
+        notification_kind -> Nullable<Text>,
         event_kind -> Nullable<Text>,
         source_actor_id -> Nullable<Text>,
         priority -> Text,

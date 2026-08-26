@@ -461,7 +461,6 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
 /// Payload shape:
 /// ```json
 /// {
-///   "welcome_ref":            "ak:mls_welcome:<uuid>",
 ///   "mls_group_id":           "mls-group-<uuid>",
 ///   "recipient_principal_id": "ak:did_core:web:bob.example",
 ///   "recipient_device_id":    "ak:device:<uuid>",
@@ -480,14 +479,14 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
     if welcome_payload_contains_forbidden_metadata(payload) {
         return reject(REASON_WELCOME_METADATA_LEAK);
     }
-    let Some(welcome_id) = payload
-        .get("welcome_ref")
-        .or_else(|| payload.get("encrypted_welcome_ref"))
-        .or_else(|| payload.get("claim_id"))
-        .and_then(Value::as_str)
-    else {
-        return reject("mls_welcome_id_missing");
+    let validated_welcome = match serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::MlsWelcomePayload,
+    >(payload.clone())
+    {
+        Ok(welcome) => welcome,
+        Err(_) => return reject("mls_welcome_payload_invalid"),
     };
+    let welcome_id = op.context.accepted_event_id.as_str();
     let Some(group_id) = payload.get("mls_group_id").and_then(Value::as_str) else {
         return reject("mls_welcome_group_missing");
     };
@@ -553,13 +552,7 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
     let Some(governance_binding) = payload.get("governance_binding").cloned() else {
         return reject("mls_welcome_governance_binding_missing");
     };
-    let welcome_bytes = match payload.get("ciphertext").and_then(Value::as_str) {
-        Some(ciphertext) if !ciphertext.is_empty() => match decode_base64_loose(ciphertext) {
-            Ok(bytes) if !bytes.is_empty() => bytes,
-            _ => ciphertext.as_bytes().to_vec(),
-        },
-        _ => return reject("mls_welcome_bytes_missing"),
-    };
+    let welcome_bytes = validated_welcome.carrier.welcome_bytes().to_vec();
     if let Err(reason) = validate_welcome_trust_binding(
         state,
         op,
@@ -1222,10 +1215,6 @@ fn validate_welcome_trust_binding(
         || envelope.get("intended_realm_id").and_then(Value::as_str) != Some(op.realm_id.as_str())
         || envelope.get("welcome_digest").and_then(Value::as_str)
             != Some(expected_welcome_digest.as_str())
-        || envelope
-            .get("nonce")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
         || envelope
             .get("created_at")
             .and_then(Value::as_str)

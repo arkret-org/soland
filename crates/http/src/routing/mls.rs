@@ -1507,7 +1507,6 @@ async fn validate_welcome_peer_claim_ledger(
         || &request.target_principal_id != recipient_actor_id
         || request.intended_realm_id.as_str() != realm_id
         || request.mls_group_id.as_str() != welcome.mls_group_id.as_str()
-        || request.claim_request_id.as_str() != welcome.claim_envelope.nonce.as_str()
         || request.expires_at != receipt.expires_at
         || receipt.expires_at <= now()
         || welcome.claim_envelope.intended_realm_id != request.intended_realm_id
@@ -2696,8 +2695,7 @@ async fn validate_recipient_durable_receipt(
         AppError::internal(format!("stored Welcome payload serialize: {error}"))
     })?)
     .map_err(|error| AppError::internal(format!("stored Welcome payload invalid: {error}")))?;
-    let welcome_digest = arkret_canonical::canonical_sha256(&stored.envelope)
-        .map_err(|error| AppError::internal(format!("Welcome digest failed: {error}")))?;
+    let welcome_digest = welcome_digest_from_inline_carrier(&welcome);
     let welcome_recipient_matches = match (&welcome.recipient, &receipt.recipient) {
         (
             arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Device {
@@ -3039,6 +3037,40 @@ fn validate_consume_receipt_replay(
         ));
     }
     Ok(())
+}
+
+fn welcome_digest_from_inline_carrier(
+    welcome: &arkret_models_collaboration::events_payloads::MlsWelcomePayload,
+) -> String {
+    arkret_canonical::sha256_digest(welcome.carrier.welcome_bytes())
+}
+
+#[cfg(test)]
+mod recipient_durable_receipt_tests {
+    use super::welcome_digest_from_inline_carrier;
+
+    #[test]
+    fn receipt_digest_uses_decoded_welcome_bytes_not_event_envelope() {
+        let fixture = arkret_schema::embedded_json_artifact(
+            "fixtures/keypackage-pairwise-welcome-fixture.json",
+        )
+        .expect("embedded pairwise Welcome fixture");
+        let instance = fixture["schema_validation_cases"][0]["instance"].clone();
+        let welcome: arkret_models_collaboration::events_payloads::MlsWelcomePayload =
+            serde_json::from_value(instance.clone()).expect("typed inline Welcome fixture");
+        let digest = welcome_digest_from_inline_carrier(&welcome);
+
+        assert_eq!(digest, welcome.claim_envelope.welcome_digest.as_str());
+        let event_envelope = serde_json::json!({
+            "kind": "ak.mls.welcome",
+            "payload": instance,
+        });
+        assert_ne!(
+            digest,
+            arkret_canonical::canonical_sha256(&event_envelope)
+                .expect("canonical Event-envelope digest")
+        );
+    }
 }
 
 async fn validate_direct_keypackage_consume(

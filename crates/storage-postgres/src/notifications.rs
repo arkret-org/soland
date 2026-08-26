@@ -38,8 +38,8 @@ struct NotificationRow {
     strand_id: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     track_name: Option<String>,
-    #[diesel(sql_type = Text)]
-    notification_kind: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    notification_kind: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     event_kind: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -63,7 +63,14 @@ struct NotificationRow {
 }
 impl NotificationRow {
     fn into_recipient_record(self) -> PersistenceResult<RecipientNotificationRecord> {
-        let notification_kind = decode_enum("notification_kind", self.notification_kind)?;
+        let notification_kind = self
+            .notification_kind
+            .ok_or_else(|| {
+                PersistenceError::Internal(
+                    "recipient notification is missing notification_kind".to_owned(),
+                )
+            })
+            .and_then(|value| decode_enum("notification_kind", value))?;
         let priority = decode_enum("priority", self.priority)?;
         let state = decode_enum("state", self.state)?;
         let source_event_id = self
@@ -202,7 +209,6 @@ impl NotificationRow {
             .map_err(|error| {
                 PersistenceError::Internal(format!("account notification id is invalid: {error}"))
             })?,
-            decode_enum("notification_kind", self.notification_kind)?,
             action,
             data,
         )
@@ -345,7 +351,6 @@ impl NotificationStore for PgNotificationStore {
             PersistenceError::Internal(format!("account notification delta is invalid: {error}"))
         })?;
         let action = encode_enum("projection_action", &record.delta.action)?;
-        let notification_kind = encode_enum("notification_kind", &record.delta.notification_kind)?;
         let data = record
             .delta
             .data
@@ -360,10 +365,10 @@ impl NotificationStore for PgNotificationStore {
         sql_query(
             "INSERT INTO notifications \
              (id, recipient_id, controller_account_id, recipient_service_id, \
-              source_account_artifact_kind, source_account_artifact_id, notification_kind, \
+              source_account_artifact_kind, source_account_artifact_id, \
               priority, state, projection_action, projection_data, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, 'agent_runtime_approval', $5, $6, \
-              'normal', 'unread', $7, $8, NOW(), NOW()) \
+             VALUES ($1, $2, $3, $4, 'agent_runtime_approval', $5, \
+              'normal', 'unread', $6, $7, NOW(), NOW()) \
              ON CONFLICT (controller_account_id, recipient_service_id, \
               source_account_artifact_kind, source_account_artifact_id) \
               WHERE controller_account_id IS NOT NULL DO UPDATE SET \
@@ -386,7 +391,6 @@ impl NotificationStore for PgNotificationStore {
         ))
         .bind::<Text, _>(record.recipient_service_id.as_str())
         .bind::<Text, _>(&record.source_account_artifact_id)
-        .bind::<Text, _>(&notification_kind)
         .bind::<Text, _>(&action)
         .bind::<Nullable<Jsonb>, _>(data.as_ref())
         .execute(&mut *conn)
@@ -409,7 +413,9 @@ impl NotificationStore for PgNotificationStore {
              strand_id, track_name, notification_kind, event_kind, source_actor_id, priority, \
              state, preview, projection_action, projection_data, projection_position, \
              created_at, updated_at \
-             FROM notifications WHERE recipient_id = $1 ORDER BY created_at DESC",
+             FROM notifications \
+             WHERE recipient_id = $1 AND source_event_id IS NOT NULL \
+             ORDER BY created_at DESC",
         )
         .bind::<Text, _>(recipient_id)
         .load::<NotificationRow>(&mut *conn)

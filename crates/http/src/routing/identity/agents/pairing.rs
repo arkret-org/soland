@@ -220,12 +220,10 @@ pub(super) async fn submit_agent_runtime_key_request(
             arkret_wire::NotificationId::new(notification_id.clone()).map_err(|error| {
                 AppError::internal(format!("approval notification id is invalid: {error}"))
             })?,
-            arkret_wire::NotificationKind::Agent,
             arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Upsert,
             Some(
                 arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApproval(
                     arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalNotificationData {
-                        kind: arkret_models_collaboration::sync_frames::account_sync::AccountNotificationDataKind::AgentRuntimeApproval,
                         approval_request_id: approval_request_id.clone(),
                         agent_id: body.agent_id.clone(),
                         requested_at,
@@ -1300,12 +1298,10 @@ pub(super) async fn persist_terminal_account_notification(
     let delta =
         arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
             context.notification_id,
-            arkret_wire::NotificationKind::Agent,
             arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Remove,
             Some(
                 arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApprovalRemoval(
                     arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalNotificationRemovalData {
-                        kind: arkret_models_collaboration::sync_frames::account_sync::AccountNotificationDataKind::AgentRuntimeApproval,
                         reason,
                     },
                 ),

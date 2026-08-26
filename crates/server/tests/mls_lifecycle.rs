@@ -851,10 +851,6 @@ async fn mls_lifecycle_end_to_end_body() {
     // destination-signed receipt for *this* Welcome's claim — Bob's, from the
     // lifecycle claim below, not Alice's own self-claim above.
     let lifecycle_claim_receipt = lifecycle_claim["claim_receipt"].clone();
-    let claim_request_id = lifecycle_claim["claim_receipt"]["claim_request_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
     let claim_id = lifecycle_claim["claims"][0]["claim_id"]
         .as_str()
         .unwrap()
@@ -882,9 +878,6 @@ async fn mls_lifecycle_end_to_end_body() {
 
     let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
     let keypackage_ref = claimed_keypackage_ref;
-    let welcome_ref =
-        "ak:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888";
-
     // The bootstrapped Realm now has an accepted governance Seal. Every MLS
     // Control Move below cites it as its independent Event-admission
     // `seal_basis`. The MLS binding carries only the unique security frontier.
@@ -973,7 +966,6 @@ async fn mls_lifecycle_end_to_end_body() {
         "requester_actor_id": alice_core,
         "requester_device_id": alice_device,
         "requester_device_authorize_event_id": alice_device_authorize_event_id,
-        "nonce": claim_request_id,
         "welcome_digest": arkret_canonical::sha256_digest(b"opaque-mls-welcome"),
         "created_at": "2026-05-25T00:00:02.000Z",
         "signature": {
@@ -984,9 +976,13 @@ async fn mls_lifecycle_end_to_end_body() {
     });
     let claim_envelope_model: MlsWelcomeClaimEnvelope =
         serde_json::from_value(claim_envelope.clone()).unwrap();
+    let claim_receipt_model: arkret_models_crypto::PeerKeyPackageClaimReceipt =
+        serde_json::from_value(lifecycle_claim_receipt.clone()).unwrap();
     let claim_envelope_signature = sign_b64(
         &event_signing_key,
-        &claim_envelope_model.canonical_signing_bytes().unwrap(),
+        &claim_envelope_model
+            .canonical_signing_bytes(&claim_receipt_model)
+            .unwrap(),
     );
     claim_envelope["signature"]["sig"] = json!(claim_envelope_signature);
 
@@ -1013,9 +1009,8 @@ async fn mls_lifecycle_end_to_end_body() {
             },
             "claim_envelope": claim_envelope,
             "claim_receipt": lifecycle_claim_receipt,
-            "welcome_ref": welcome_ref,
             "ciphertext": b64(b"opaque-mls-welcome"),
-            "expires_at": "2100-01-01T00:00:00.000Z",
+            "expires_at": lifecycle_claim_receipt["expires_at"].clone(),
             "commit_ref": "ak:event:AV7r9jE8uOCT8ZEtX3vuk67GOqlz6qBab2XgiJdgkfZr",
             "governance_binding": welcome_binding
         }),
@@ -1118,7 +1113,7 @@ async fn mls_lifecycle_end_to_end_body() {
     assert_eq!(device_message["recipient_device_id"], json!(bob_device));
     assert_eq!(
         device_message["expires_at"],
-        json!("2100-01-01T00:00:00.000Z")
+        lifecycle_claim_receipt["expires_at"]
     );
     assert_eq!(device_message["content"]["mls_group_id"], json!(group_id));
     assert_eq!(device_message["content"]["epoch"], json!(1));
@@ -1152,7 +1147,7 @@ async fn mls_lifecycle_end_to_end_body() {
     );
     assert_eq!(
         device_message["unsigned"]["mls_welcome_id"],
-        json!(welcome_ref)
+        json!(welcome_event_id)
     );
 
     // ── 5. MLS commits no longer have a dedicated REST surface ──
