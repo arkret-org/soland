@@ -1216,17 +1216,10 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
         )
         .unwrap(),
         event_digest: event_digest.clone(),
-        authorization_lease_id: lease.authorization_lease_id.clone(),
         qualified_ingress_id: arkret_identifiers::DidFullId::new(PEER_SOURCE_DID.to_owned())
             .unwrap(),
         received_at: issued_at,
-        ingress_basis: lease.basis_ref.clone(),
         ingress_frontier: vec![event.event_id.clone()],
-        service_id: arkret_wire::project_full_id_to_core_id(
-            &arkret_identifiers::DidFullId::new(PEER_SOURCE_DID.to_owned()).unwrap(),
-        )
-        .unwrap(),
-        authority_set_ref: authority_set_ref.clone(),
         proofs: Vec::new(),
     };
     receipt.proofs = vec![publication_proof(
@@ -1235,7 +1228,7 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
         issued_at,
     )];
     let receipt_binding = receipt
-        .proof_binding_bytes(&receipt.proofs[0])
+        .proof_binding_bytes(&lease, &receipt.proofs[0])
         .expect("fixture ingress receipt proof binding");
     receipt.proofs[0].jws = arkret_signatures::jws::sign_jws_ed25519(
         &receipt_binding,

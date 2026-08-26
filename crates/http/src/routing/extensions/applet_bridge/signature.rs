@@ -59,7 +59,8 @@ pub(super) async fn require_inbound_transaction_signature(
             req,
             &payload,
             &idempotency_key,
-            "source_service_id",
+            "/source_service_id",
+            "/applet_id",
         )
         .await
     }
@@ -113,7 +114,8 @@ pub(super) async fn require_ghost_provision_signature(
             req,
             &payload,
             &idempotency_key,
-            "service_id",
+            "/authoring_request/basis/service_id",
+            "/authoring_request/basis/applet_id",
         )
         .await
     }
@@ -147,7 +149,8 @@ async fn verify_inbound_applet_service_signature(
     req: &Request,
     body_bytes: &[u8],
     idempotency_key: &str,
-    source_service_body_field: &str,
+    source_service_json_pointer: &str,
+    applet_id_json_pointer: &str,
 ) -> Result<VerifiedAppletServiceSignature, AppError> {
     // §7.3.1 ordering: a transaction push carrying only `Authorization: Bearer`
     // (no `Signature` / `Signature-Input`) MUST be rejected before any other
@@ -183,22 +186,24 @@ async fn verify_inbound_applet_service_signature(
             applet_signature_error_invalid(format!("invalid Applet service request JSON: {error}"))
         })?;
     let source_service_id = request_body
-        .get(source_service_body_field)
+        .pointer(source_service_json_pointer)
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| {
             applet_signature_error_invalid(format!(
-                "signed Applet service request body requires {source_service_body_field}"
+                "signed Applet service request body requires {source_service_json_pointer}"
             ))
         })?;
     let applet_id = request_body
-        .get("applet_id")
+        .pointer(applet_id_json_pointer)
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| {
-            applet_signature_error_invalid("signed Applet service request body requires applet_id")
+            applet_signature_error_invalid(format!(
+                "signed Applet service request body requires {applet_id_json_pointer}"
+            ))
         })?;
     if header_source != source_service_id {
         return Err(applet_signature_error_invalid(format!(
-            "Source-Service-ID header does not match body {source_service_body_field}"
+            "Source-Service-ID header does not match body {source_service_json_pointer}"
         )));
     }
 

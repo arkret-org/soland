@@ -2392,7 +2392,6 @@ mod membership_hydration_tests {
                 terminal_state: None,
                 successor_realm_id: None,
                 default_strand_id: None,
-                active_profiles: Vec::new(),
             },
         );
         soland_services::hydration::hydrate_canonical_realm_memberships(

@@ -2503,11 +2503,17 @@ pub(crate) async fn submit_federation_events(
             render_error(res, error.status, &error.code, &error.message);
             return;
         }
-        if let Err(error) =
-            validate_ingress_receipt_proofs(state, &submission.ingress_receipts).await
-        {
-            render_error(res, error.status, &error.code, &error.message);
-            return;
+        if !submission.ingress_receipts.is_empty() {
+            let lease = submission
+                .authorization_lease
+                .as_ref()
+                .expect("structural validation requires a companion lease for ingress receipts");
+            if let Err(error) =
+                validate_ingress_receipt_proofs(state, &submission.ingress_receipts, lease).await
+            {
+                render_error(res, error.status, &error.code, &error.message);
+                return;
+            }
         }
     }
     let trust_headers =

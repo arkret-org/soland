@@ -793,7 +793,6 @@ pub async fn hydrate_projections_from_persistence(
                         terminal_state: None,
                         successor_realm_id: None,
                         default_strand_id: None,
-                        active_profiles: Vec::new(),
                     });
                 }
             }

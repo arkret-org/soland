@@ -528,27 +528,9 @@ async fn validate_moderation_franking_proof(
     let object = franking_proof
         .as_object()
         .ok_or_else(|| AppError::param_invalid("franking_proof must be an object"))?;
-    if object.get("kind").and_then(Value::as_str)
-        != Some(EventKind::ModerationFrankingProof.as_str())
-    {
-        return Err(AppError::param_invalid(
-            "franking_proof.kind must be ak.moderation.franking_proof",
-        ));
-    }
     if object.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
         return Err(AppError::param_invalid(
             "franking_proof.realm_id must match report realm_id",
-        ));
-    }
-    if arkret_identifiers::FrankingProofId::new(required_string_field(
-        object,
-        "franking_proof_id",
-        "franking_proof",
-    )?)
-    .is_err()
-    {
-        return Err(AppError::param_invalid(
-            "franking_proof.franking_proof_id must be a franking proof id",
         ));
     }
     if arkret_identifiers::EventId::new(required_string_field(
@@ -561,17 +543,6 @@ async fn validate_moderation_franking_proof(
         return Err(AppError::param_invalid(
             "franking_proof.event_id must be an event id",
         ));
-    }
-    for field in ["routing_metadata_digest", "ciphertext_digest", "aad_digest"] {
-        if !object
-            .get(field)
-            .and_then(Value::as_str)
-            .is_some_and(is_valid_report_hash)
-        {
-            return Err(AppError::param_invalid(format!(
-                "franking_proof.{field} must be a hash digest"
-            )));
-        }
     }
     let received_by = required_string_field(object, "received_by", "franking_proof")?;
     arkret_wire::DidCoreId::new(received_by.to_owned())
@@ -593,7 +564,6 @@ async fn validate_moderation_franking_proof(
             "franking_proof.received_at must be a canonical Arkret timestamp",
         ));
     }
-    validate_franking_sender_claim(object)?;
     if let Some(key) = contains_forbidden_key(franking_proof, FRANKING_PROOF_FORBIDDEN_KEYS) {
         return Err(AppError::param_invalid(format!(
             "franking_proof contains forbidden key `{key}`"
@@ -621,7 +591,7 @@ async fn validate_franking_event_time_anchor(
     realm_id: &str,
     proof: &FrankingProof,
 ) -> Result<(), AppError> {
-    let record = state
+    let target = state
         .event_queries()
         .canonical_event(proof.event_id.as_str())
         .await
@@ -635,45 +605,75 @@ async fn validate_franking_event_time_anchor(
                 "franking_proof.event_id does not reference an accepted local event anchor",
             )
         })?;
-    let record_realm_id = record
+    let target_realm_id = target
         .realm_id
         .as_deref()
         .ok_or_else(|| franking_proof_invalid("franking_proof event anchor is missing realm_id"))?;
-    if record_realm_id != realm_id {
+    if target_realm_id != realm_id {
         return Err(franking_proof_invalid(
             "franking_proof event anchor realm_id does not match report realm_id",
         ));
     }
-    let ciphertext_digest = encrypted_event_payload_digest(&record).ok_or_else(|| {
-        franking_proof_invalid(
-            "franking_proof event anchor is not an accepted encrypted v1 message event",
-        )
+    let proof_payload = serde_json::to_value(proof).map_err(|error| {
+        franking_proof_invalid(format!("franking_proof serialization failed: {error}"))
     })?;
+    let proof_event = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("franking proof Event lookup failed: {error}"))
+        })?
+        .into_iter()
+        .find(|candidate| {
+            candidate.kind == EventKind::ModerationFrankingProof.as_str()
+                && candidate.realm_id.as_deref() == Some(realm_id)
+                && candidate.actor_id == proof.received_by.as_str()
+                && candidate.envelope.get("payload") == Some(&proof_payload)
+        })
+        .ok_or_else(|| {
+            franking_proof_invalid(
+                "franking_proof has no byte-identical accepted durable proof Event",
+            )
+        })?;
+    let proof_event_digest = Hash::new(proof_event.canonical_digest.clone()).map_err(|error| {
+        franking_proof_invalid(format!("invalid franking proof Event digest: {error}"))
+    })?;
+    let covering_seal = state
+        .projections()
+        .seal_covering_event(&proof_event_digest)
+        .map_err(|error| {
+            AppError::internal(format!(
+                "franking proof covering Seal lookup failed: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            franking_proof_invalid("franking_proof durable Event has no accepted covering Seal")
+        })?;
+    let proof_event_created_at = proof_event
+        .envelope
+        .get("created_at")
+        .and_then(Value::as_str)
+        .ok_or_else(|| franking_proof_invalid("franking proof Event has no created_at"))?
+        .parse()
+        .map_err(|error| {
+            franking_proof_invalid(format!("invalid franking proof Event created_at: {error}"))
+        })?;
     let anchor = FrankingProofEventTimeAnchor::new(
-        EventId::new(record.event_id.clone())
+        EventId::new(target.event_id.clone())
             .map_err(|error| franking_proof_invalid(format!("invalid event anchor id: {error}")))?,
-        RealmId::new(record_realm_id.to_owned()).map_err(|error| {
+        RealmId::new(target_realm_id.to_owned()).map_err(|error| {
             franking_proof_invalid(format!("invalid event anchor realm_id: {error}"))
         })?,
         arkret_identifiers::DidCoreId::new(state.service_id().clone()).map_err(|error| {
             franking_proof_invalid(format!("invalid local franking service DID: {error}"))
         })?,
-        record.received_at,
-        Hash::new(ciphertext_digest.to_owned()).map_err(|error| {
-            franking_proof_invalid(format!("invalid event anchor ciphertext digest: {error}"))
-        })?,
+        proof_event_created_at,
+        covering_seal.sealed_at,
     );
     proof
         .validate_event_time_anchor(&anchor)
         .map_err(|error| franking_proof_invalid(error.to_string()))
-}
-
-fn encrypted_event_payload_digest(record: &soland_services::events::AcceptedEvent) -> Option<&str> {
-    record
-        .envelope
-        .pointer("/payload/encrypted_content/payload_digest")
-        .and_then(Value::as_str)
-        .filter(|value| is_valid_report_hash(value))
 }
 
 // Wire code for an invalid franking proof. `proof_invalid` is a registered
@@ -681,34 +681,6 @@ fn encrypted_event_payload_digest(record: &soland_services::events::AcceptedEven
 // rather than a local literal.
 fn franking_proof_invalid(message: impl Into<String>) -> AppError {
     AppError::param_invalid(message).with_wire_code(arkret_wire::ReasonCode::PROOF_INVALID)
-}
-
-fn validate_franking_sender_claim(object: &serde_json::Map<String, Value>) -> Result<(), AppError> {
-    let sender_claim = object
-        .get("sender_claim")
-        .and_then(Value::as_object)
-        .ok_or_else(|| AppError::param_invalid("franking_proof.sender_claim must be an object"))?;
-    let actor_id = required_string_field(sender_claim, "actor_id", "franking_proof.sender_claim")?;
-    arkret_wire::DidCoreId::new(actor_id.to_owned()).map_err(|_| {
-        AppError::param_invalid("franking_proof.sender_claim.actor_id must be a DID Core ID")
-    })?;
-    let device_id =
-        required_string_field(sender_claim, "device_id", "franking_proof.sender_claim")?;
-    if !device_id.starts_with("ak:device:") {
-        return Err(AppError::param_invalid(
-            "franking_proof.sender_claim.device_id must be a device id",
-        ));
-    }
-    if !sender_claim
-        .get("mls_group_id_digest")
-        .and_then(Value::as_str)
-        .is_some_and(is_valid_report_hash)
-    {
-        return Err(AppError::param_invalid(
-            "franking_proof.sender_claim.mls_group_id_digest must be a hash digest",
-        ));
-    }
-    Ok(())
 }
 
 fn required_string_field<'a>(
@@ -1090,18 +1062,8 @@ mod report_safety_tests {
         let (event_id, ..) = franking_event_fixture();
         let received_by = crate::test_event::principal_server_id();
         json!({
-            "kind": "ak.moderation.franking_proof",
-            "franking_proof_id": "ak:franking_proof:01904100-0000-7000-8000-000000000111",
             "realm_id": REALM,
             "event_id": event_id,
-            "routing_metadata_digest": hash('c'),
-            "ciphertext_digest": hash('d'),
-            "aad_digest": hash('e'),
-            "sender_claim": {
-                "actor_id": REPORTER,
-                "device_id": "ak:device:01904100-0000-7000-8000-000000000333",
-                "mls_group_id_digest": hash('f'),
-            },
             "received_by": received_by,
             "verification_method": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#notary-key",
             "received_at": FRANKING_RECEIVED_AT,

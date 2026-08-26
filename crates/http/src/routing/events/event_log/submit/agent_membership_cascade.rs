@@ -1570,11 +1570,17 @@ pub(super) async fn submit_agent_membership_cascade_federation(
             .iter()
             .find(|transition| transition.event.event_id == event.event_id)
             .expect("cascade transition list contains each Event");
-        if let Err(error) =
-            validate_ingress_receipt_proofs(state, &transition.ingress_receipts).await
-        {
-            render_error(res, error.status, &error.code, &error.message);
-            return;
+        if !transition.ingress_receipts.is_empty() {
+            let lease = transition
+                .authorization_lease
+                .as_ref()
+                .expect("structural validation requires a companion lease for ingress receipts");
+            if let Err(error) =
+                validate_ingress_receipt_proofs(state, &transition.ingress_receipts, lease).await
+            {
+                render_error(res, error.status, &error.code, &error.message);
+                return;
+            }
         }
     }
     let initiator = submission

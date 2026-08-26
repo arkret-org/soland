@@ -238,13 +238,13 @@ pub(super) fn policy_bundle_value_from_state_payload(payload: &Value) -> &Value 
 ///
 /// Checks (in order):
 /// 1. `relaxed_window_max_ms <= 300_000` (T09 hard ceiling)
-/// 2. `ak.profile.e2ee_relaxed.v1` not active with any audit compliance profile (T09 mutex)
+/// 2. advisory MLS pause is not active with an Audit Applet Binding (T09 mutex)
 /// 3. When `media_service_decrypts=true`, the service is explicitly authorized for the
 ///    `media_plaintext` data class (T12). The MLS security-frontier projector binds this accepted
 ///    policy state into the next Commit.
 pub fn realm_policy_bundle_check(
     payload: &Value,
-    active_profiles: &[String],
+    audit_binding_active: bool,
     media_plaintext_service_present: bool,
 ) -> Result<(), (ErrorCode, String)> {
     if let Some(join_policy) = payload.get("join_policy") {
@@ -275,19 +275,12 @@ pub fn realm_policy_bundle_check(
         }
     }
 
-    // (2) T09 — e2ee_relaxed.v1 mutex against audit compliance.
-    let relaxed_active = active_profiles
-        .iter()
-        .any(|p| p == arkret_wire::ProfileId::E2EE_RELAXED_V1);
-    let compliance_active = active_profiles.iter().any(|p| {
-        soland_services::operation_semantics::AUDIT_COMPLIANCE_PROFILES.contains(&p.as_str())
-    });
-    if relaxed_active && compliance_active {
+    // (2) T09 — policy-derived relaxed mode and active audit binding are mutually exclusive.
+    let relaxed_active = payload.get("mls_send_pause").and_then(Value::as_str) == Some("advisory");
+    if relaxed_active && audit_binding_active {
         return Err((
             ErrorCode::FailedPrecondition,
-            "ak.profile.e2ee_relaxed.v1 is mutually exclusive with audit \
-             compliance profiles (attested_audit.e2ee.v1 / \
-             disclosed_audit.e2ee.v1)"
+            "mls_send_pause=advisory is mutually exclusive with an active Audit Applet Binding"
                 .to_owned(),
         ));
     }

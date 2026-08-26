@@ -49,7 +49,9 @@ pub(super) fn approved_scopes_from_formal_install_events(
     install_actor: &str,
     principal_server_id: &str,
 ) -> Result<Vec<ScopeGrant>, AppError> {
-    let basis = &commit.authoring_request.basis;
+    let basis = commit.authoring_request().basis.install().ok_or_else(|| {
+        AppError::param_invalid("install commit basis purpose is not install_bot")
+    })?;
     let validated =
         validate_formal_install_events(state, commit, install_actor, principal_server_id)?;
     approved_scope_grants(&basis.effective_scope, validated.approved_actions)
@@ -104,8 +106,10 @@ fn validate_formal_install_events(
     install_actor: &str,
     principal_server_id: &str,
 ) -> Result<ValidatedInstallEvents, AppError> {
-    let package = &commit.applet_package;
-    let basis = &commit.authoring_request.basis;
+    let package = commit.applet_package();
+    let basis = commit.authoring_request().basis.install().ok_or_else(|| {
+        AppError::param_invalid("install commit basis purpose is not install_bot")
+    })?;
     let admin = validate_admin_install_events(package, basis, install_actor)?;
     let bot_provision =
         validate_bot_managed_actor_unit(state, commit, &admin.grant_ids, principal_server_id)?;
@@ -264,10 +268,14 @@ fn validate_bot_managed_actor_unit(
     grant_ids: &[GrantId],
     principal_server_id: &str,
 ) -> Result<AppletManagedActorProvisionPayload, AppError> {
-    let basis = &commit.authoring_request.basis;
-    let bundle = &commit.managed_actor_bundle;
-    let provision_event = &bundle.bot_actor_provision_event;
-    let package = &commit.applet_package;
+    let basis = commit.authoring_request().basis.install().ok_or_else(|| {
+        AppError::param_invalid("install commit basis purpose is not install_bot")
+    })?;
+    let bundle = commit
+        .managed_actor_bundle()
+        .ok_or_else(|| AppError::param_invalid("install create requires a managed actor bundle"))?;
+    let provision_event = &bundle.managed_actor_provision_event;
+    let package = commit.applet_package();
     let expected_applet_id = package.applet_id.clone();
     if provision_event.kind.as_str() != "ak.applet.managed_actor.provision"
         || provision_event.actor_id != package.service_id
@@ -311,7 +319,7 @@ fn validate_bot_managed_actor_unit(
     }
     validate_managed_actor_method_evidence(&provision)?;
 
-    let genesis = &bundle.bot_pcr_genesis_event;
+    let genesis = &bundle.pcr_genesis_event;
     let expected_realm_id = RealmId::from_event_id(&genesis.event_id);
     let genesis_object: arkret_models_collaboration::events_payloads::RealmGenesis =
         serde_json::from_value(
@@ -363,8 +371,8 @@ fn validate_bot_managed_actor_unit(
         )
         .with_wire_code("applet_managed_pcr_genesis_invalid"));
     }
-    let accountability = &bundle.bot_accountability_grant_event;
-    let profile = &bundle.bot_profile_event;
+    let accountability = &bundle.accountability_grant_event;
+    let profile = &bundle.profile_event;
     let registration_verification_method = package.webhook_auth.key_ref.as_str();
     let profile_accountability_ref_count = profile
         .refs
@@ -650,19 +658,34 @@ pub(super) async fn register_package_install(
     let approved_actions = validated_events.approved_actions;
     let capability_grant_refs = validated_events.grant_ids;
     let bot_provision = validated_events.bot_provision;
-    let basis = &commit.authoring_request.basis;
-    let bundle = &commit.managed_actor_bundle;
+    let create = match commit {
+        AppletInstallRequestBody::Create(create) => create,
+        AppletInstallRequestBody::Reuse(_) => {
+            return Err(AppError::param_invalid(
+                "install reuse must be resolved before package registration",
+            ));
+        }
+    };
+    let basis = create.authoring_request.basis.install().ok_or_else(|| {
+        AppError::param_invalid("install commit basis purpose is not install_bot")
+    })?;
+    let bundle = &create.managed_actor_bundle;
     let registration_event = basis.registration_event.clone();
     let capability_grant_events = basis.capability_grant_events.clone();
-    let bot_actor_provision_event = bundle.bot_actor_provision_event.clone();
-    let bot_pcr_genesis_event = bundle.bot_pcr_genesis_event.clone();
-    let bot_accountability_grant_event = bundle.bot_accountability_grant_event.clone();
-    let bot_profile_event = bundle.bot_profile_event.clone();
-    let submitted_plan_digest = commit.authoring_request.plan_digest.to_string();
+    let bot_actor_provision_event = bundle.managed_actor_provision_event.clone();
+    let bot_pcr_genesis_event = bundle.pcr_genesis_event.clone();
+    let bot_accountability_grant_event = bundle.accountability_grant_event.clone();
+    let bot_profile_event = bundle.profile_event.clone();
+    let submitted_plan_digest = create
+        .authoring_request
+        .plan_digest
+        .as_ref()
+        .ok_or_else(|| AppError::param_invalid("install authoring request has no plan_digest"))?
+        .to_string();
     let effective_scope = basis.effective_scope.clone();
     let actor_policy = basis.actor_policy.clone();
     let e2ee_policy = basis.e2ee_policy.clone();
-    let package = commit.applet_package;
+    let package = create.applet_package;
     let typed_applet_id = package.applet_id.clone();
     let applet_id = package.applet_id.to_string();
     let realm_id = effective_scope_realm_id(&effective_scope);

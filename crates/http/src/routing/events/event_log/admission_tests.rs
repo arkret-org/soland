@@ -51,31 +51,23 @@ fn frozen_realm_blocks_ordinary_write_but_allows_lifecycle_escape() {
 #[test]
 fn realm_policy_bundle_relaxed_window_ceiling() {
     let payload = json!({"relaxed_window_max_ms": 300_001});
-    let err = realm_policy_bundle_check(&payload, &[], false).unwrap_err();
+    let err = realm_policy_bundle_check(&payload, false, false).unwrap_err();
     assert_eq!(err.0, ErrorCode::FailedPrecondition);
 }
 
 #[test]
 fn realm_policy_bundle_e2ee_relaxed_compliance_mutex() {
     let payload = json!({"mls_send_pause": "advisory"});
-    let err = realm_policy_bundle_check(
-        &payload,
-        &[
-            "ak.profile.e2ee_relaxed.v1".to_owned(),
-            "ak.profile.attested_audit.e2ee.v1".to_owned(),
-        ],
-        false,
-    )
-    .unwrap_err();
+    let err = realm_policy_bundle_check(&payload, true, false).unwrap_err();
     assert_eq!(err.0, ErrorCode::FailedPrecondition);
 }
 
 #[test]
 fn realm_policy_bundle_media_plaintext_authorization() {
     let payload = json!({"media_service_decrypts": true});
-    let err = realm_policy_bundle_check(&payload, &[], false).unwrap_err();
+    let err = realm_policy_bundle_check(&payload, false, false).unwrap_err();
     assert_eq!(err.0, ErrorCode::FailedPrecondition);
-    realm_policy_bundle_check(&payload, &[], true).unwrap();
+    realm_policy_bundle_check(&payload, false, true).unwrap();
 }
 
 #[test]

@@ -87,35 +87,45 @@ pub(super) fn validate_ghost_actor_provision_request(
     path_applet_id: &str,
     provision: &GhostActorProvisionRequestBody,
 ) -> Result<(), AppError> {
-    if provision.schema != GhostActorProvisionRequestBody::SCHEMA {
+    let basis = provision.authoring_basis().ok_or_else(|| {
+        AppError::param_invalid("Ghost provision authoring purpose must be provision_ghost")
+    })?;
+    provision
+        .authoring_request
+        .validate_bindings()
+        .map_err(|error| {
+            AppError::param_invalid(format!("Ghost authoring request is invalid: {error}"))
+        })?;
+    provision
+        .managed_actor_bundle
+        .validate_bindings(&provision.authoring_request)
+        .map_err(|error| {
+            AppError::param_invalid(format!("Ghost managed actor bundle is invalid: {error}"))
+        })?;
+    if basis.applet_id.as_str() != path_applet_id {
         return Err(AppError::param_invalid(
-            "schema must be ak.applet.ghost_actor.provision_request.v1",
-        ));
-    }
-    if provision.applet_id.as_str() != path_applet_id {
-        return Err(AppError::param_invalid(
-            "body applet_id must match applet_id path segment",
+            "authoring basis applet_id must match applet_id path segment",
         ));
     }
     for (field, value) in [
         (
             "external_ref.protocol",
-            provision.external_ref.protocol.as_str(),
+            basis.external_ref.protocol.as_str(),
         ),
         (
             "external_ref.instance_id",
-            provision.external_ref.instance_id.as_str(),
+            basis.external_ref.instance_id.as_str(),
         ),
         (
             "external_ref.external_id",
-            provision.external_ref.external_id.as_str(),
+            basis.external_ref.external_id.as_str(),
         ),
     ] {
         if value.trim().is_empty() {
             return Err(AppError::param_missing(format!("{field} is required")));
         }
     }
-    if let Some(display_name) = provision.display_name.as_deref()
+    if let Some(display_name) = basis.display_name.as_deref()
         && display_name.trim().is_empty()
     {
         return Err(AppError::param_invalid(
@@ -130,12 +140,23 @@ pub(super) fn ensure_formal_ghost_provision_allowed(
     provision: &GhostActorProvisionRequestBody,
 ) -> Result<(), AppError> {
     let package = &record.package;
-    if package.service_id != provision.service_id {
+    let basis = provision.authoring_basis().ok_or_else(|| {
+        AppError::param_invalid("Ghost provision authoring purpose must be provision_ghost")
+    })?;
+    let expected_evidence = registration_epoch_evidence_from_event(&record.registration_event)?;
+    let expected_authorization_ref = ghost_provision_authorization_ref(record)?;
+    if package.service_id != basis.service_id
+        || record.applet_id != basis.applet_id
+        || record.registration_event.event_id != basis.registration_event_ref
+        || package.package_digest.as_ref() != Some(&basis.package_digest)
+        || expected_evidence != basis.registration_epoch_evidence
+        || expected_authorization_ref != basis.authorization_ref.as_str()
+    {
         return Err(AppError::capability_denied(
-            "service_id does not match installed applet package",
+            "Ghost authoring basis does not match the installed Applet authority",
         ));
     }
-    if record.portal_realm_id != provision.realm_id {
+    if record.portal_realm_id != basis.realm_id {
         return Err(
             AppError::conflict("realm_id does not match installed applet effective scope")
                 .with_wire_code("applet_effective_scope_mismatch"),
@@ -192,25 +213,28 @@ pub(super) async fn validate_signed_ghost_provision_events(
     record: &AppletRecord,
     provision: &GhostActorProvisionRequestBody,
 ) -> Result<(String, AppletManagedActorProvisionPayload), AppError> {
-    let accountability = &provision.accountability_grant_event;
-    let profile = &provision.profile_event;
-    let service_actor_id = provision.service_id.clone();
-    let ghost_actor_id = provision.ghost_actor_id.clone();
+    let basis = provision.authoring_basis().ok_or_else(|| {
+        AppError::param_invalid("Ghost provision authoring purpose must be provision_ghost")
+    })?;
+    let accountability = &provision.managed_actor_bundle.accountability_grant_event;
+    let profile = &provision.managed_actor_bundle.profile_event;
+    let service_actor_id = basis.service_id.clone();
     let authorization_ref = ghost_provision_authorization_ref(record)?;
     let managed_provision =
         validate_ghost_managed_actor_unit(state, record, provision, authorization_ref.as_str())
             .await?;
+    let ghost_actor_id = managed_provision.actor_id.clone();
     let registration_verification_method =
         super::signature::applet_registration_verification_method(
             record,
-            provision.service_id.as_str(),
+            basis.service_id.as_str(),
         )?;
     let applet_matches = |event: &Event| {
-        event.applet_id.as_ref() == Some(&provision.applet_id)
+        event.applet_id.as_ref() == Some(&basis.applet_id)
             && event.authorization_ref.as_deref() == Some(authorization_ref.as_str())
     };
     if accountability.kind != arkret_wire::EventKind::IdentityAccountabilityGrant
-        || accountability.realm_id != provision.realm_id
+        || accountability.realm_id != basis.realm_id
         || accountability.actor_id != service_actor_id
         || accountability.executed_by.is_some()
         || !applet_matches(accountability)
@@ -220,7 +244,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
         ));
     }
     if profile.kind != arkret_wire::EventKind::ProfileCreate
-        || profile.realm_id != provision.realm_id
+        || profile.realm_id != basis.realm_id
         || profile.actor_id != ghost_actor_id
         || profile.executed_by.as_ref() != Some(&service_actor_id)
         || !applet_matches(profile)
@@ -270,8 +294,8 @@ pub(super) async fn validate_signed_ghost_provision_events(
             "accountability_grant_event payload invalid: {error}"
         ))
     })?;
-    if grant.issuer != provision.service_id
-        || grant.subject != provision.ghost_actor_id
+    if grant.issuer != basis.service_id
+        || grant.subject != ghost_actor_id
         || grant.accountability_scope
             != AccountabilityScope::Single(AccountabilityScopeKind::ContractedService)
         || !matches!(
@@ -323,26 +347,26 @@ pub(super) async fn validate_signed_ghost_provision_events(
             AppError::param_invalid(format!("profile_event payload invalid: {error}"))
         })?;
     let actor_profile = profile_payload.object;
-    let expected_display_name = provision
+    let expected_display_name = basis
         .display_name
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or(provision.external_ref.external_id.as_str());
-    let expected_external_ref = serde_json::to_value(&provision.external_ref).map_err(|error| {
+        .unwrap_or(basis.external_ref.external_id.as_str());
+    let expected_external_ref = serde_json::to_value(&basis.external_ref).map_err(|error| {
         AppError::internal(format!("external_ref serialization failed: {error}"))
     })?;
     let has_exact_accountable_principal = actor_profile.accountable_principal_ids.len() == 1
         && actor_profile.accountable_principal_ids[0].as_str() == service_actor_id.as_str();
     if actor_profile.principal_id.as_str() != ghost_actor_id.as_str()
-        || actor_profile.realm_id.as_ref() != Some(&provision.realm_id)
+        || actor_profile.realm_id.as_ref() != Some(&basis.realm_id)
         || actor_profile.actor_kind != arkret_wire::ActorKind::Integration
         || actor_profile.display_name != expected_display_name
         || actor_profile
             .profile_fields
             .get("managed_by_applet")
             .and_then(Value::as_str)
-            != Some(provision.applet_id.as_str())
+            != Some(basis.applet_id.as_str())
         || actor_profile.profile_fields.get("external_ref") != Some(&expected_external_ref)
         || !has_exact_accountable_principal
     {
@@ -359,11 +383,14 @@ async fn validate_ghost_managed_actor_unit(
     request: &GhostActorProvisionRequestBody,
     authorization_ref: &str,
 ) -> Result<AppletManagedActorProvisionPayload, AppError> {
-    let event = &request.managed_actor_provision_event;
+    let basis = request.authoring_basis().ok_or_else(|| {
+        AppError::param_invalid("Ghost provision authoring purpose must be provision_ghost")
+    })?;
+    let event = &request.managed_actor_bundle.managed_actor_provision_event;
     if event.kind.as_str() != "ak.applet.managed_actor.provision"
-        || event.actor_id != request.service_id
-        || event.applet_id.as_ref() != Some(&request.applet_id)
-        || event.realm_id != request.realm_id
+        || event.actor_id != basis.service_id
+        || event.applet_id.as_ref() != Some(&basis.applet_id)
+        || event.realm_id != basis.realm_id
         || event.proofs.is_empty()
     {
         return Err(AppError::param_invalid(
@@ -386,16 +413,14 @@ async fn validate_ghost_managed_actor_unit(
             .with_wire_code("applet_managed_actor_provision_invalid")
     })?;
     if payload.actor_role != AppletManagedActorRole::Ghost
-        || payload.applet_id != request.applet_id
-        || payload.service_id != request.service_id
-        || payload.actor_id != request.ghost_actor_id
+        || payload.applet_id != basis.applet_id
+        || payload.service_id != basis.service_id
         || payload.actor_id == record.package.controller_id
         || payload.actor_id == record.package.bot_actor_id
-        || payload.actor_principal_server_id != request.actor_principal_server_id
         || payload.actor_principal_server_id.as_str() != state.service_id()
         || record.registration_event.event_id != payload.registration_ref
         || payload.applet_authority_ref.as_str() != authorization_ref
-        || payload.external_ref.as_ref() != Some(&request.external_ref)
+        || payload.external_ref.as_ref() != Some(&basis.external_ref)
     {
         return Err(AppError::param_invalid(
             "Ghost provision authority does not bind the exact authority pair, registration, grant, or external principal",
@@ -419,7 +444,7 @@ async fn validate_ghost_managed_actor_unit(
         .with_wire_code("applet_namespace_mismatch"));
     }
 
-    let genesis = &request.pcr_genesis_event;
+    let genesis = &request.managed_actor_bundle.pcr_genesis_event;
     let expected_realm_id = arkret_wire::RealmId::from_event_id(&genesis.event_id);
     let genesis_object: arkret_models_collaboration::events_payloads::RealmGenesis =
         serde_json::from_value(
@@ -457,10 +482,10 @@ async fn validate_ghost_managed_actor_unit(
         .filter(|reference| reference.role == "applet_managed_actor_provision")
         .count();
     if genesis.kind != arkret_wire::EventKind::RealmCreate
-        || genesis.actor_id != request.ghost_actor_id
-        || genesis.executed_by.as_ref() != Some(&request.service_id)
+        || genesis.actor_id != payload.actor_id
+        || genesis.executed_by.as_ref() != Some(&basis.service_id)
         || genesis.principal_server_id != payload.actor_principal_server_id
-        || genesis.applet_id.as_ref() != Some(&request.applet_id)
+        || genesis.applet_id.as_ref() != Some(&basis.applet_id)
         || genesis.realm_id != expected_realm_id
         || genesis.authorization_ref.as_deref() != Some(authorization_ref)
         || provision_role_count != 1

@@ -792,6 +792,37 @@ fn signed_ghost_provision_body(
         instance_id: instance_id.to_owned(),
         external_id: external_id.to_owned(),
     };
+    let authoring_basis = arkret_models_integration::AppletGhostAuthoringRequestBasis {
+        schema: arkret_models_integration::AppletGhostAuthoringRequestBasis::SCHEMA.to_owned(),
+        purpose: arkret_models_integration::AppletManagedActorPurpose::ProvisionGhost,
+        target_principal_server_id: actor_principal_server_id.clone(),
+        applet_id: applet_id.clone(),
+        service_id: package.service_id.clone(),
+        realm_id: realm_id.clone(),
+        external_ref: external_ref.clone(),
+        display_name: display_name.map(str::to_owned),
+        registration_event_ref: registration_ref.clone(),
+        authorization_ref: applet_authority_ref.clone(),
+        registration_epoch_evidence: applet_registration_epoch_evidence(package),
+        package_digest: package
+            .package_digest
+            .clone()
+            .expect("fixture Applet package has digest"),
+    };
+    let principal_signer = arkret_signatures::Ed25519PayloadSigner::new(
+        state.notary_signing_key().as_ref().clone(),
+        state.service_full_id(),
+        state.service_verification_method("notary-key").unwrap(),
+    );
+    let authoring_request =
+        arkret_models_integration::AppletManagedActorAuthoringRequest::sign_ghost(
+            authoring_basis,
+            state.service_notary_signer_descriptor().unwrap(),
+            now,
+            now + chrono::Duration::minutes(5),
+            &principal_signer,
+        )
+        .unwrap();
     let managed_actor_provision_event = managed_actor_provision_event(
         package,
         ghost_actor,
@@ -924,21 +955,32 @@ fn signed_ghost_provision_body(
     )];
     profile_event.seal_basis = Some(seal_basis.clone());
     let profile_event = finalize_and_sign_applet_event(profile_event, package, now);
-    let request = arkret_models_integration::GhostActorProvisionRequestBody::new(
-        applet_id,
-        package.service_id.clone(),
-        ghost_actor_id,
-        actor_principal_server_id,
-        realm_id,
-        external_ref,
+    let mut managed_actor_bundle = arkret_models_integration::AppletManagedActorAuthoringBundle {
+        schema: arkret_models_integration::AppletManagedActorAuthoringBundle::SCHEMA.to_owned(),
+        authoring_request_digest: authoring_request.canonical_digest().unwrap(),
         managed_actor_provision_event,
         pcr_genesis_event,
-        accountability_event,
+        accountability_grant_event: accountability_event,
         profile_event,
-    );
-    serde_json::to_value(match display_name {
-        Some(display_name) => request.with_display_name(display_name),
-        None => request,
+        proof: arkret_models_integration::AppletManagedActorProof {
+            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+            verification_method,
+            payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                .unwrap(),
+            created_at: now,
+            audience: actor_principal_server_id,
+            jws: String::new(),
+        },
+    };
+    managed_actor_bundle.proof.payload_digest = managed_actor_bundle.payload_digest().unwrap();
+    managed_actor_bundle.proof.jws = arkret_signatures::sign_ed25519_detached_jws(
+        &signing_key,
+        &managed_actor_bundle.proof_binding_bytes().unwrap(),
+    )
+    .unwrap();
+    serde_json::to_value(arkret_models_integration::GhostActorProvisionRequestBody {
+        authoring_request,
+        managed_actor_bundle,
     })
     .expect("fixture Ghost provision request serializes")
 }
@@ -1183,23 +1225,26 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
         Some("Alice on Slack"),
         &seal_basis,
     );
-    let rejected_profile_ref = rejected_body["profile_event"]["event_id"]
+    let rejected_profile_ref = rejected_body["managed_actor_bundle"]["profile_event"]["event_id"]
         .as_str()
         .unwrap()
         .to_owned();
-    let rejected_grant_ref = rejected_body["accountability_grant_event"]["event_id"]
+    let rejected_grant_ref =
+        rejected_body["managed_actor_bundle"]["accountability_grant_event"]["event_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    let rejected_provision_ref =
+        rejected_body["managed_actor_bundle"]["managed_actor_provision_event"]["event_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    let rejected_pcr_ref = rejected_body["managed_actor_bundle"]["pcr_genesis_event"]["event_id"]
         .as_str()
         .unwrap()
         .to_owned();
-    let rejected_provision_ref = rejected_body["managed_actor_provision_event"]["event_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let rejected_pcr_ref = rejected_body["pcr_genesis_event"]["event_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    rejected_body["accountability_grant_event"]["payload"]["proof"]["jws"] = json!("invalid-jws");
+    rejected_body["managed_actor_bundle"]["accountability_grant_event"]["payload"]["proof"]["jws"] =
+        json!("invalid-jws");
     let rejected: Value = post_signed_ghost_provision(
         &app,
         &state,
@@ -1214,7 +1259,7 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
     .unwrap();
     assert_eq!(
         rejected["error"]["code"],
-        json!("invalid_proof"),
+        json!("param_invalid"),
         "rejection: {rejected}"
     );
     assert!(
@@ -1389,7 +1434,7 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
         managed_provision_event.envelope["payload"]["actor_role"],
         json!("ghost")
     );
-    let pcr_event_ref = provision_body["pcr_genesis_event"]["event_id"]
+    let pcr_event_ref = provision_body["managed_actor_bundle"]["pcr_genesis_event"]["event_id"]
         .as_str()
         .unwrap();
     let pcr_event = state
@@ -1436,8 +1481,17 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
     let replay: Value = replay_response.take_json().await.unwrap();
     assert_eq!(replay, provision);
 
-    let mut conflicting_body = provision_body;
-    conflicting_body["display_name"] = json!("Changed on retry");
+    let conflicting_body = signed_ghost_provision_body(
+        &state,
+        &package,
+        &install,
+        &ghost_actor,
+        "slack",
+        "T123",
+        "U123",
+        Some("Changed on retry"),
+        &seal_basis,
+    );
     let mut conflict_response = post_signed_ghost_provision(
         &app,
         &state,
@@ -2343,7 +2397,10 @@ async fn signed_install_events(
     registration_epoch_evidence: &arkret_models_integration::AppletRegistrationEpochEvidence,
     approved_actions: &[String],
     authored_at: chrono::DateTime<chrono::Utc>,
+    managed_actor_authored_at: chrono::DateTime<chrono::Utc>,
+    accepted_admin_events: Option<(Event, Vec<Event>)>,
 ) -> (Event, Vec<Event>, Event, Event, Event, Event) {
+    let ingest_actor_document = accepted_admin_events.is_none();
     let actor_id = DidFullId::new("did:web:alice.example").unwrap();
     let actor_core_id = arkret_wire::project_full_id_to_core_id(&actor_id).unwrap();
     let realm_id = RealmId::new(realm_id.to_owned()).unwrap();
@@ -2497,6 +2554,12 @@ async fn signed_install_events(
         capability_grant_events.push(event);
     }
 
+    let (registration_event, capability_grant_events) =
+        accepted_admin_events.unwrap_or((registration_event, capability_grant_events));
+
+    let now = managed_actor_authored_at;
+    let millis = now.timestamp_millis().max(0) as u64;
+
     let namespace = package
         .namespaces
         .handles
@@ -2506,7 +2569,9 @@ async fn signed_install_events(
         .as_str();
     let bot_actor = managed_actor_fixture(namespace, "bot", &package.service_id);
     assert_eq!(bot_actor.actor_id, package.bot_actor_id);
-    ingest_managed_actor_current_document(state, &bot_actor).await;
+    if ingest_actor_document {
+        ingest_managed_actor_current_document(state, &bot_actor).await;
+    }
     let actor_principal_server_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .expect("extension test service core DID");
     let applet_authority_ref = arkret_identifiers::GrantId::from_event_id(
@@ -2764,30 +2829,25 @@ async fn install_applet_package_with_approved_actions(
         .any(|action| action == "ak.applet.ghost.provision");
     let requested_at =
         chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis()).unwrap();
-    let (
-        registration_event,
-        capability_grant_events,
-        bot_actor_provision_event,
-        bot_pcr_genesis_event,
-        bot_accountability_grant_event,
-        bot_profile_event,
-    ) = signed_install_events(
+    let (registration_event, capability_grant_events, ..) = signed_install_events(
         state,
         package,
         realm_id,
         &registration_epoch_evidence,
         &approve_actions,
         requested_at,
+        requested_at,
+        None,
     )
     .await;
     let target_principal_server_id = state.service_id().clone();
-    let requested_expires_at = requested_at + chrono::Duration::minutes(5);
     let preview: Value = TestClient::post("http://server/_arkret/self/applets/install/preview")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "applet_package": applet_package,
             "authoring_request_basis": {
                 "schema": "ak.schema.applet_install_authoring_request_basis.v1",
+                "purpose": "install_bot",
                 "target_principal_server_id": target_principal_server_id,
                 "install_actor_id": registration_event.actor_id,
                 "applet_id": package.applet_id,
@@ -2806,8 +2866,6 @@ async fn install_applet_package_with_approved_actions(
                 },
                 "e2ee_policy": {"mls_join_allowed": false},
                 "widget_policy": {"widget_allowed": false},
-                "requested_at": requested_at,
-                "requested_expires_at": requested_expires_at,
                 "registration_event": registration_event,
                 "capability_grant_events": capability_grant_events,
             },
@@ -2822,27 +2880,49 @@ async fn install_applet_package_with_approved_actions(
         json!("ak.schema.applet_install_plan.v1"),
         "install preview: {preview}"
     );
-    let bot_accountability_ref = bot_accountability_grant_event.event_id.to_string();
-    let authoring_request: arkret_models_integration::AppletInstallAuthoringRequest =
+    let authoring_request: arkret_models_integration::AppletManagedActorAuthoringRequest =
         serde_json::from_value(preview["authoring_request"].clone())
             .expect("preview returns a typed authoring request");
-    let now = authoring_request.basis.requested_at;
-    let mut managed_actor_bundle = arkret_models_integration::AppletManagedActorAuthoringBundle {
-        schema: arkret_models_integration::AppletManagedActorAuthoringBundle::SCHEMA.to_owned(),
-        authoring_request_digest: authoring_request.canonical_digest().unwrap(),
+    let now = authoring_request.issued_at;
+    let (
+        _,
+        _,
         bot_actor_provision_event,
         bot_pcr_genesis_event,
         bot_accountability_grant_event,
         bot_profile_event,
-        proof: arkret_models_integration::AppletInstallAuthoringProof {
+    ) = signed_install_events(
+        state,
+        package,
+        realm_id,
+        &registration_epoch_evidence,
+        &approve_actions,
+        requested_at,
+        now,
+        Some((registration_event.clone(), capability_grant_events.clone())),
+    )
+    .await;
+    let bot_accountability_ref = bot_accountability_grant_event.event_id.to_string();
+    let target_principal_server_id = authoring_request
+        .basis
+        .install()
+        .expect("install preview returns install_bot basis")
+        .target_principal_server_id
+        .clone();
+    let mut managed_actor_bundle = arkret_models_integration::AppletManagedActorAuthoringBundle {
+        schema: arkret_models_integration::AppletManagedActorAuthoringBundle::SCHEMA.to_owned(),
+        authoring_request_digest: authoring_request.canonical_digest().unwrap(),
+        managed_actor_provision_event: bot_actor_provision_event,
+        pcr_genesis_event: bot_pcr_genesis_event,
+        accountability_grant_event: bot_accountability_grant_event,
+        profile_event: bot_profile_event,
+        proof: arkret_models_integration::AppletManagedActorProof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             verification_method: package.webhook_auth.key_ref.clone(),
             payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .unwrap(),
             created_at: now,
-            domain: arkret_models_integration::AppletManagedActorAuthoringBundle::PROOF_DOMAIN
-                .to_owned(),
-            audience: authoring_request.basis.target_principal_server_id.clone(),
+            audience: target_principal_server_id,
             jws: String::new(),
         },
     };

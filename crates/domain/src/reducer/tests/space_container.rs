@@ -18,7 +18,6 @@ fn seed_realm_member(state: &mut ProjectionState, realm_id: &str, member: &str) 
             terminal_state: None,
             successor_realm_id: None,
             default_strand_id: None,
-            active_profiles: Vec::new(),
         },
     );
     state.members.insert(

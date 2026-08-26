@@ -141,6 +141,7 @@ pub(in crate::routing) async fn validate_authorization_lease_for_event(
 pub(super) async fn validate_ingress_receipt_proofs(
     state: &AppState,
     receipts: &[IngressReceipt],
+    lease: &AuthorizationLease,
 ) -> Result<(), SubmitOneError> {
     for receipt in receipts {
         receipt.validate_structural().map_err(|error| {
@@ -159,22 +160,14 @@ pub(super) async fn validate_ingress_receipt_proofs(
                         format!("ingress receipt issuer is invalid: {error}"),
                     )
                 })?;
-            let issuer_service_id =
-                arkret_wire::project_full_id_to_core_id(&issuer).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proof",
-                        format!("ingress receipt issuer cannot be projected: {error}"),
-                    )
-                })?;
-            if issuer != receipt.qualified_ingress_id || issuer_service_id != receipt.service_id {
+            if issuer != receipt.qualified_ingress_id {
                 return Err(SubmitOneError::new(
                     StatusCode::FORBIDDEN,
                     "invalid_proof",
-                    "ingress receipt signer does not match qualified_ingress_id and service_id",
+                    "ingress receipt signer does not match qualified_ingress_id",
                 ));
             }
-            let binding = receipt.proof_binding_bytes(proof).map_err(|error| {
+            let binding = receipt.proof_binding_bytes(lease, proof).map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::BAD_REQUEST,
                     "invalid_proof",
@@ -258,6 +251,13 @@ pub(super) async fn mint_and_store_ingress_receipt(
                 format!("publication evidence store unavailable: {error}"),
             )
         })?;
+    if stored.authorization_lease != *lease {
+        return Err(SubmitOneError::new(
+            StatusCode::CONFLICT,
+            "duplicate_conflict",
+            "Event digest was first receipted under a different companion authorization lease",
+        ));
+    }
     Ok(stored.ingress_receipt)
 }
 
@@ -308,8 +308,6 @@ fn sign_ingress_receipt(
 ) -> Result<IngressReceipt, SubmitOneError> {
     let receipt_id = arkret_identifiers::ReceiptId::new(crate::ids::generate("receipt"))
         .map_err(|error| publication_reject(format!("minted receipt_id is invalid: {error}")))?;
-    let service_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
-        .map_err(|error| publication_reject(format!("service_id is not a DID: {error}")))?;
     let verification_method = arkret_wire::DidUrl::new(format!(
         "{}#notary-key",
         state.service_resolution_commitment().full_id
@@ -322,18 +320,9 @@ fn sign_ingress_receipt(
     let mut receipt = IngressReceipt {
         receipt_id,
         event_digest: event_digest.clone(),
-        authorization_lease_id: lease.authorization_lease_id.clone(),
         qualified_ingress_id: state.service_resolution_commitment().full_id.clone(),
         received_at,
-        ingress_basis: lease.basis_ref.clone(),
         ingress_frontier: vec![event_id.clone()],
-        service_id,
-        // The receipt is checked against the same accepted authority-set policy
-        // the lease cited: `offline-publication.md` §1/§2 make
-        // `{authority_set_id, authority_set_digest}` one closed object shared by
-        // every CBA authority/quorum scenario, and inventing a second symbol
-        // here would leave a verifier no way to resolve it from the basis.
-        authority_set_ref: lease.authority_set_ref.clone(),
         proofs: Vec::new(),
     };
     // `receipt_digest` covers the receipt with `proofs` removed, so it has to be
@@ -354,7 +343,7 @@ fn sign_ingress_receipt(
         jws: String::new(),
     };
     let binding_bytes = receipt
-        .proof_binding_bytes(&proof)
+        .proof_binding_bytes(lease, &proof)
         .map_err(|error| publication_reject(format!("receipt proof binding failed: {error}")))?;
     proof.jws = arkret_signatures::jws::sign_jws_ed25519(
         &binding_bytes,

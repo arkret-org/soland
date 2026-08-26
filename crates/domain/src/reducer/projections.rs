@@ -1122,8 +1122,4 @@ pub struct SolandRealmState {
     /// `strand_id == realm.default_strand_id` — there is no separate stored
     /// per-Strand column.
     pub default_strand_id: Option<String>,
-    /// Opt-in conformance profile ids the Realm has declared through genesis
-    /// Realm-genesis `schema_refs[]`. Projected as a monotonically-growing set:
-    /// a profile once observed stays declared.
-    pub active_profiles: Vec<String>,
 }

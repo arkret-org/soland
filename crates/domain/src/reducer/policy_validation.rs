@@ -758,33 +758,6 @@ pub(crate) fn parse_iso8601_duration(value: &str) -> Option<Duration> {
     Some(Duration::seconds(total_seconds))
 }
 
-/// `morph.md` §4.1 S3 — collect the opt-in conformance profile ids a Realm
-/// lifecycle event declares. Only canonical `schema_refs[]` values are
-/// carriers; the removed `active_profiles[]` / `profiles[]` update spellings
-/// must not remain as hidden fallback inputs.
-pub(crate) fn realm_declared_profiles(operation: &Operation) -> Vec<String> {
-    let mut profiles = Vec::new();
-    let mut push_array = |value: Option<&Value>| {
-        if let Some(items) = value.and_then(Value::as_array) {
-            for item in items {
-                if let Some(id) = item.as_str().filter(|id| id.starts_with("ak.profile.")) {
-                    let owned = id.to_owned();
-                    if !profiles.contains(&owned) {
-                        profiles.push(owned);
-                    }
-                }
-            }
-        }
-    };
-    push_array(
-        operation
-            .payload
-            .get("object")
-            .and_then(|object| object.get("schema_refs")),
-    );
-    profiles
-}
-
 pub(crate) fn operation_touches_encryption_profile(operation: &Operation) -> bool {
     operation.payload.get("encryption_profile").is_some()
         || operation
@@ -901,30 +874,17 @@ pub(crate) fn validate_relaxed_window(value: &Value) -> Result<(), &'static str>
     Ok(())
 }
 
-/// `encryption-and-audit.md` §2.4.1 — `mls_send_pause="advisory"` is only
-/// accepted when the Realm declares `ak.profile.e2ee_relaxed.v1`.
-///
-/// The declaration lives in the Realm object's `schema_refs[]`. There is no
-/// Realm `supported_profiles` field, and the profile is deliberately not echoed
-/// into the bundle itself: a bundle that vouched for its own profile would be
-/// self-authorizing.
-pub(crate) fn validate_mls_send_pause(
-    value: &Value,
-    realm_schema_refs: &[String],
-) -> Result<(), &'static str> {
+/// Validate the closed `mls_send_pause` policy value. The effective relaxed
+/// mode is derived directly from `advisory`; no generic Realm profile carrier
+/// exists.
+pub(crate) fn validate_mls_send_pause(value: &Value) -> Result<(), &'static str> {
     let Some(pause) = value.get("mls_send_pause").and_then(Value::as_str) else {
         return Ok(());
     };
     if pause != "advisory" {
         return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
     }
-    if realm_schema_refs
-        .iter()
-        .any(|declared| declared == arkret_wire::ProfileId::E2EE_RELAXED_V1)
-    {
-        return Ok(());
-    }
-    Err(arkret_wire::ReasonCode::MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -970,14 +930,9 @@ mod policy_bundle_component_tests {
     }
 
     #[test]
-    fn advisory_send_pause_reads_the_realm_schema_refs() {
+    fn advisory_send_pause_is_the_policy_carrier() {
         let advisory = json!({"mls_send_pause": "advisory"});
-        let declared = vec![arkret_wire::ProfileId::E2EE_RELAXED_V1.to_owned()];
-        validate_mls_send_pause(&advisory, &declared).unwrap();
-        assert_eq!(
-            validate_mls_send_pause(&advisory, &["ak.profile.core.v1".to_owned()]),
-            Err(arkret_wire::ReasonCode::MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE)
-        );
-        validate_mls_send_pause(&json!({"policy_revision": 1}), &[]).unwrap();
+        validate_mls_send_pause(&advisory).unwrap();
+        validate_mls_send_pause(&json!({"policy_revision": 1})).unwrap();
     }
 }

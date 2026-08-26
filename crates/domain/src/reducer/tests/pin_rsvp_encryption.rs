@@ -39,7 +39,6 @@ fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
             terminal_state: None,
             successor_realm_id: None,
             default_strand_id: None,
-            active_profiles: Vec::new(),
         },
     );
     state.realm_null_subject_cells.insert(

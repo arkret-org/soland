@@ -1361,12 +1361,9 @@ impl ProjectionState {
     /// PCR and managed-Agent control Realms permanently pin history access to
     /// `since_join`.
     pub fn realm_is_principal_control(&self, realm_id: &str) -> bool {
-        self.realm_states.get(realm_id).is_some_and(|realm| {
-            realm
-                .active_profiles
-                .iter()
-                .any(|profile| profile == ProfileId::PRINCIPAL_CONTROL_REALM_V1)
-        })
+        self.realm_schema_refs(realm_id)
+            .iter()
+            .any(|profile| profile == ProfileId::PRINCIPAL_CONTROL_REALM_V1)
     }
 
     /// Whether this explicitly selected Realm is a principal-control Realm
@@ -1378,8 +1375,8 @@ impl ProjectionState {
     pub fn realm_is_principal_control_for_actor(&self, realm_id: &str, principal_id: &str) -> bool {
         self.realm_states.get(realm_id).is_some_and(|realm| {
             realm.owner.as_deref() == Some(principal_id)
-                && realm
-                    .active_profiles
+                && self
+                    .realm_schema_refs(realm_id)
                     .iter()
                     .any(|profile| profile == ProfileId::PRINCIPAL_CONTROL_REALM_V1)
         })

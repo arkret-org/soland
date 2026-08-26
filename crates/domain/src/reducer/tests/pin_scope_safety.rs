@@ -25,7 +25,6 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
             terminal_state: None,
             successor_realm_id: None,
             default_strand_id: None,
-            active_profiles: Vec::new(),
         },
     );
     state.members.insert(

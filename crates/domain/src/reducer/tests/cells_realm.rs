@@ -1726,47 +1726,6 @@ fn an_over_ceiling_relaxed_window_is_rejected_not_truncated() {
 }
 
 #[test]
-fn advisory_send_pause_is_gated_on_the_realm_schema_refs() {
-    let realm_id = "ak:realm:AdxEgvRaqkzAG9iN9YT9pxaGx7skfMnQEhVi79_pvlJs";
-    let mut state = ProjectionState::new();
-    // A Realm that declares no profile: `advisory` must not be accepted, and
-    // the check reads `schema_refs`, not a nonexistent `supported_profiles`.
-    realm_with_schema_refs(
-        &mut state,
-        realm_id,
-        serde_json::json!(["ak.profile.core.v1"]),
-    );
-    let undeclared = apply_bundle(
-        &mut state,
-        realm_id,
-        serde_json::json!({"policy_revision": 1, "mls_send_pause": "advisory"}),
-    );
-    assert!(
-        matches!(&undeclared, ProjectionEffect::Rejected { reason }
-            if reason
-                == arkret_wire::ReasonCode::MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE),
-        "{undeclared:?}"
-    );
-
-    realm_with_schema_refs(
-        &mut state,
-        realm_id,
-        serde_json::json!([
-            "ak.profile.core.v1",
-            arkret_wire::ProfileId::E2EE_RELAXED_V1
-        ]),
-    );
-    assert!(matches!(
-        apply_bundle(
-            &mut state,
-            realm_id,
-            serde_json::json!({"policy_revision": 1, "mls_send_pause": "advisory"}),
-        ),
-        ProjectionEffect::RealmPolicyBundleProjected { .. }
-    ));
-}
-
-#[test]
 fn the_policy_frontier_digest_is_a_filtered_state_root() {
     let realm_id = "ak:realm:AYzSDw0uyDZ0DpWUE57e1TNDnSVg-vp-MLwyB1Cp5Hdf";
     let other_realm = "ak:realm:AenNfapD8up-lhrrPnBwYQGpjDqNfH-xkShZCra70c3S";

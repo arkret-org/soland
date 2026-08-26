@@ -1065,7 +1065,6 @@ impl ProjectionState {
                 terminal_state: None,
                 successor_realm_id: None,
                 default_strand_id: None,
-                active_profiles: Vec::new(),
             });
         realm.default_strand_id = Some(strand_id.clone());
         realm.updated_at = now;
@@ -1433,17 +1432,7 @@ impl ProjectionState {
                 terminal_state: None,
                 successor_realm_id: None,
                 default_strand_id: None,
-                active_profiles: Vec::new(),
             });
-        // `morph.md` §4.1 S3 — merge any declared opt-in conformance profile
-        // ids from canonical genesis `schema_refs[]` into the Realm's growing
-        // profile set. This lifecycle path never infers them from removed or
-        // schema-invalid update payload spellings.
-        for profile in realm_declared_profiles(operation) {
-            if !realm.active_profiles.contains(&profile) {
-                realm.active_profiles.push(profile);
-            }
-        }
         // Lock trust_domain on first observation (ak.realm.create). The
         // mismatch case is already rejected above; here we only set the
         // value when it has not yet been captured.

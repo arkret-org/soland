@@ -236,7 +236,6 @@ mod agent_key_tests {
                 terminal_state: None,
                 successor_realm_id: None,
                 default_strand_id: None,
-                active_profiles: Vec::new(),
             },
         );
         crate::reducer::tests::install_realm_authority_root(state, REALM, REALM_OWNER);
@@ -626,7 +625,6 @@ mod agent_key_tests {
                 terminal_state: None,
                 successor_realm_id: None,
                 default_strand_id: None,
-                active_profiles: Vec::new(),
             },
         );
         project_bridge_registration(&mut state);
@@ -1081,7 +1079,6 @@ mod authority_cycle_tests {
                 terminal_state: None,
                 successor_realm_id: None,
                 default_strand_id: None,
-                active_profiles: Vec::new(),
             },
         );
     }
@@ -1469,7 +1466,6 @@ mod federation_revoke_fanout_tests {
                 terminal_state: None,
                 successor_realm_id: None,
                 default_strand_id: None,
-                active_profiles: Vec::new(),
             },
         );
         let registry_digest = arkret_policy::current_capability_action_registry_digest()
@@ -1678,7 +1674,6 @@ mod realm_owner_authority_tests {
                 terminal_state: None,
                 successor_realm_id: None,
                 default_strand_id: None,
-                active_profiles: Vec::new(),
             },
         );
         if let Some(controller) = controller {

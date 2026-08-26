@@ -733,26 +733,22 @@ async fn validate_event_envelope_with_ingress(
     }
     validate_audit_accessed_payload(&kind, object)?;
     // Round R2/R3 (T09 + T12) — realm.policy_bundle hard ceiling,
-    // e2ee_relaxed mutex, and media plaintext triple binding. Active
-    // profile set comes from accepted Realm schema refs; cross-policy bindings
-    // come from materialized Realm metadata / MLS cells, with the current
+    // policy-derived relaxed-mode mutex, and media plaintext triple binding.
+    // Cross-policy bindings come from materialized Realm metadata / MLS cells, with the current
     // payload used only for same-event policy-component writes.
     if kind == arkret_wire::EventKind::RealmPolicyBundle.as_str() {
         let payload = object.get("payload").cloned().unwrap_or(Value::Null);
         let policy_bundle = policy_bundle_value_from_state_payload(&payload);
-        let active_profiles: Vec<String> = state
+        let audit_binding_active = state
             .projections()
             .snapshot()
-            .realm_schema_refs(realm_id.as_str())
-            .into_iter()
-            .filter(|reference| reference.starts_with("ak.profile."))
-            .collect();
+            .realm_has_active_audit_binding(realm_id.as_str());
         let media_plaintext_service_present =
             projected_media_plaintext_service_present(state, realm_id.as_str(), policy_bundle)
                 .await;
         if let Err((code, reason)) = realm_policy_bundle_check(
             policy_bundle,
-            &active_profiles,
+            audit_binding_active,
             media_plaintext_service_present,
         ) {
             return Err(event_validation_error(

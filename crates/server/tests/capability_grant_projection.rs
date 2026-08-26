@@ -140,7 +140,6 @@ fn seed_realm_owner(state: &mut ProjectionState) {
             terminal_state: None,
             successor_realm_id: None,
             default_strand_id: None,
-            active_profiles: Vec::new(),
         },
     );
 }

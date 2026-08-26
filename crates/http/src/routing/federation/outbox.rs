@@ -2635,17 +2635,12 @@ mod tests {
                 ))
                 .unwrap(),
                 event_digest,
-                authorization_lease_id: lease.authorization_lease_id.clone(),
                 qualified_ingress_id: arkret_identifiers::DidFullId::new(
                     "did:web:authority.example",
                 )
                 .unwrap(),
                 received_at,
-                ingress_basis: lease.basis_ref.clone(),
                 ingress_frontier: vec![event.event_id.clone()],
-                service_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:authority.example")
-                    .unwrap(),
-                authority_set_ref: authority_set_ref.clone(),
                 proofs: Vec::new(),
             };
             let receipt_digest = receipt.receipt_digest().unwrap();

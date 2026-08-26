@@ -815,6 +815,33 @@ impl ProjectionState {
             .unwrap_or_default()
     }
 
+    /// Whether this Realm has at least one active Audit Applet Binding.
+    pub fn realm_has_active_audit_binding(&self, realm_id: &str) -> bool {
+        self.cells.iter().any(|(cell, state)| {
+            let Some(binding_id) = cell
+                .as_str()
+                .strip_prefix("ak:cell:ak.component.audit.binding.v1:")
+            else {
+                return false;
+            };
+            let CellState::Value(config) = state else {
+                return false;
+            };
+            if config.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
+                return false;
+            }
+            let Ok(state_cell) = arkret_identifiers::CellRef::new(format!(
+                "ak:cell:ak.component.audit.binding_state.v1:{binding_id}"
+            )) else {
+                return false;
+            };
+            matches!(
+                self.cells.get(&state_cell),
+                Some(CellState::Value(Value::String(value))) if value == "active"
+            )
+        })
+    }
+
     /// The Realm's non-`⊥` policy control cells.
     ///
     /// `authz/policy-server.md` §5 defines `policy_frontier_digest` as a

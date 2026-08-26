@@ -412,11 +412,7 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        // §2.4.1 — `advisory` is gated on the Realm declaring
-        // `ak.profile.e2ee_relaxed.v1` in its `schema_refs[]`. There is no Realm
-        // `supported_profiles` field to read, and the bundle MUST NOT vouch for
-        // its own profile.
-        if let Err(reason) = validate_mls_send_pause(&value, &self.realm_schema_refs(&realm_id)) {
+        if let Err(reason) = validate_mls_send_pause(&value) {
             return ProjectionEffect::Rejected {
                 reason: reason.to_owned(),
             };
