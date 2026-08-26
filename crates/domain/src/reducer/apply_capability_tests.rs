@@ -1899,7 +1899,7 @@ mod realm_owner_authority_tests {
         let basis = state.realm_authority_registry_basis(REALM);
         for action in ["ak.realm.destroy", "ak.realm.tombstone"] {
             assert!(
-                !arkret_policy::owner_may_grant(action, basis.as_ref(), &[]).unwrap(),
+                !arkret_policy::owner_may_grant(action, basis.as_ref()).unwrap(),
                 "{action} is root_control_only and is not owner-grantable"
             );
             assert!(

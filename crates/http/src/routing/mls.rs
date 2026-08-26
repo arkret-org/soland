@@ -1514,11 +1514,11 @@ async fn validate_welcome_peer_claim_ledger(
     {
         return Err("peer_claim_welcome_invalid");
     }
-    if receipt
+    if !receipt
         .signature
         .signature_algorithm
         .as_ref()
-        .is_some_and(|algorithm| algorithm.as_str() != "Ed25519")
+        .is_some_and(|algorithm| algorithm.as_str() == "Ed25519")
     {
         return Err("peer_claim_welcome_invalid");
     }
@@ -1532,7 +1532,23 @@ async fn validate_welcome_peer_claim_ledger(
         if receipt.signature.kid.as_str() != expected_method {
             return Err("peer_claim_welcome_invalid");
         }
-        state.notary_verifying_key()
+        let resolution =
+            crate::routing::system::service_resolution::current_authenticated_service_resolution(
+                state,
+            )
+            .await
+            .map_err(|_| "peer_claim_welcome_invalid")?;
+        let document = arkret_identity::authenticated_service_document_at(
+            &resolution,
+            &receipt.destination_service_id,
+            receipt.claimed_at,
+        )
+        .map_err(|_| "peer_claim_welcome_invalid")?;
+        arkret_identity::jws::resolve_ed25519_pubkey_from_document(
+            &document,
+            receipt.signature.kid.as_str(),
+        )
+        .map_err(|_| "peer_claim_welcome_invalid")?
     } else {
         crate::jws_verify::validate_verification_method_controller(
             receipt.destination_service_id.as_str(),
@@ -1972,6 +1988,14 @@ pub(crate) async fn capture_relayed_keypackage_claim_outcome(
         arkret_canonical::canonical_sha256(&request).map_err(|error| error.to_string())?;
     if receipt.request_digest.as_str() != request_digest {
         return Err("relayed KeyPackage claim request digest mismatch".to_owned());
+    }
+    if !receipt
+        .signature
+        .signature_algorithm
+        .as_ref()
+        .is_some_and(|algorithm| algorithm.as_str() == "Ed25519")
+    {
+        return Err("relayed KeyPackage claim receipt algorithm invalid".to_owned());
     }
     let signing_bytes =
         peer_keypackage_claim_receipt_signing_bytes(receipt).map_err(|error| error.to_string())?;

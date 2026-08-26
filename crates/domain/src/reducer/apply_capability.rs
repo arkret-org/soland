@@ -952,9 +952,8 @@ impl ProjectionState {
     /// Matching is by action id against the registry's
     /// `grant_authority_actions` (through `arkret_policy::owner_may_grant`),
     /// which additionally rejects `root_control_only` / `subject_only` /
-    /// `reducer_only` actions and requires a profile action to be registered as
-    /// owner-grantable by an active profile. Event-kind coverage is never
-    /// substituted here.
+    /// `reducer_only` and profile-gated actions. Event-kind coverage is never
+    /// substituted here, and Realm schema refs cannot widen this ceiling.
     fn owner_may_issue_grant_for(
         &self,
         issuer: &str,
@@ -972,34 +971,7 @@ impl ProjectionState {
             return false;
         }
         let basis = self.realm_authority_registry_basis(realm_id);
-        arkret_policy::owner_may_grant(
-            action,
-            basis.as_ref(),
-            &self.realm_declared_profiles(realm_id),
-        )
-        .unwrap_or(false)
-    }
-
-    /// Profile ids the Realm has declared in its `schema_refs`
-    /// (`capabilities.md` section 3.2).
-    ///
-    /// Read from the Realm's own metadata rather than a deployment-wide list:
-    /// owner grant authority over a profile action is a per-Realm question,
-    /// and a profile the Realm never claimed must not widen its owner
-    /// ceiling. The declaration is the whole condition — there is no second
-    /// per-action whitelist — and a grantable action still passes its
-    /// profile's own registration / constraint / evidence gates downstream.
-    fn realm_declared_profiles(&self, realm_id: &str) -> Vec<String> {
-        // `realm_create_log()` is an ordered-log audit projection whose entry
-        // is only the Realm id. Profile activation belongs to the authoritative
-        // create-locked realm-genesis cell, exposed through this shared query.
-        self.realm_schema_refs(realm_id)
-            .into_iter()
-            .filter(|reference| {
-                arkret_wire::generated::profile_requirements::PROFILE_REQUIREMENTS
-                    .contains_key(reference.as_str())
-            })
-            .collect()
+        arkret_policy::owner_may_grant(action, basis.as_ref()).unwrap_or(false)
     }
 
     #[allow(clippy::too_many_arguments)]
