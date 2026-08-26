@@ -104,8 +104,8 @@ pub use message_helpers::{
 };
 // Spec T07 fanout window const is `pub`.
 pub use patch_helpers::REALM_DESTROY_FANOUT_WINDOW_DAYS;
-pub use patch_helpers::morph_document_body;
 pub(crate) use patch_helpers::*;
+pub use patch_helpers::{morph_document_body, validate_patch_semantic_safety};
 // `validate_join_policy_payload` is `pub` (out-of-module reference).
 pub use policy_validation::validate_join_policy_payload;
 pub(crate) use policy_validation::*;

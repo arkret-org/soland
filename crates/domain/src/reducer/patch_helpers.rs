@@ -142,7 +142,7 @@ pub(crate) fn patch_string_value(
     }
 }
 
-pub(crate) fn validate_patch_semantic_safety(
+pub fn validate_patch_semantic_safety(
     patch: &serde_json::Map<String, Value>,
     object_kind: Option<&str>,
 ) -> Result<(), &'static str> {

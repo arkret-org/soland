@@ -75,14 +75,6 @@ fn percent_encode_path_segment(value: &str) -> String {
 }
 
 fn route_binding_digest(description: &ServiceDescribe) -> Result<Hash, AppError> {
-    #[derive(serde::Serialize)]
-    struct RouteBindingProjection<'a> {
-        service_id: &'a DidCoreId,
-        service_kind: &'a arkret_wire::ServiceKind,
-        service_resolution: &'a arkret_models_identity::ResolutionCommitment,
-        http_json_base_url: String,
-    }
-
     let binding_base = description
         .supported_bindings
         .iter()
@@ -102,12 +94,13 @@ fn route_binding_digest(description: &ServiceDescribe) -> Result<Hash, AppError>
             )
         })?
         .to_string();
-    canonical_digest(&RouteBindingProjection {
-        service_id: &description.service_id,
-        service_kind: &description.service_kind,
-        service_resolution: &description.service_resolution,
-        http_json_base_url,
-    })
+    arkret_models_identity::route_binding_describe_digest(
+        &description.service_id,
+        description.service_kind.as_str(),
+        &description.service_resolution,
+        &http_json_base_url,
+    )
+    .map_err(|error| AppError::new(ErrorCode::ServiceIdentityConflict, error.to_string()))
 }
 
 fn webvh_resolution_event_ref(log_head_digest: &str) -> Result<String, AppError> {

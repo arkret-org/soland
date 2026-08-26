@@ -323,21 +323,11 @@ fn validate_service_describe(
             "ServiceDescribe http_json base does not match the signed record target".to_owned(),
         ));
     }
-    #[derive(serde::Serialize)]
-    struct RouteBindingProjection<'a> {
-        service_id: &'a DidCoreId,
-        service_kind: ServiceKind,
-        service_resolution: &'a arkret_models_identity::ResolutionCommitment,
-        http_json_base_url: &'a str,
-    }
-    let route_binding_digest = Hash::new(
-        arkret_canonical::canonical_sha256(&RouteBindingProjection {
-            service_id: &description.service_id,
-            service_kind: description.service_kind,
-            service_resolution: &description.service_resolution,
-            http_json_base_url: advertised_base.as_str(),
-        })
-        .map_err(|error| ServiceError::Internal(error.to_string()))?,
+    let route_binding_digest = arkret_models_identity::route_binding_describe_digest(
+        &description.service_id,
+        description.service_kind.as_str(),
+        &description.service_resolution,
+        advertised_base.as_str(),
     )
     .map_err(|error| ServiceError::Internal(error.to_string()))?;
     if route_binding_digest != record.record.describe_digest {
@@ -393,25 +383,15 @@ fn validate_route_binding(
             "service resolution current_record_url is not derived from base_url".to_owned(),
         ));
     }
-    #[derive(serde::Serialize)]
-    struct RouteBindingProjection<'a> {
-        service_id: &'a DidCoreId,
-        service_kind: &'a str,
-        service_resolution: arkret_models_identity::ResolutionCommitment,
-        http_json_base_url: &'a str,
-    }
-    let digest = Hash::new(
-        arkret_canonical::canonical_sha256(&RouteBindingProjection {
-            service_id: &record.record.service_id,
-            service_kind: &record.record.service_kind,
-            service_resolution: arkret_models_identity::ResolutionCommitment {
-                full_id: record.record.full_id.clone(),
-                method_history_head: record.record.method_history_head.clone(),
-                version_id: record.record.version_id.clone(),
-            },
-            http_json_base_url: &record.record.base_url,
-        })
-        .map_err(|error| ServiceError::Internal(error.to_string()))?,
+    let digest = arkret_models_identity::route_binding_describe_digest(
+        &record.record.service_id,
+        &record.record.service_kind,
+        &arkret_models_identity::ResolutionCommitment {
+            full_id: record.record.full_id.clone(),
+            method_history_head: record.record.method_history_head.clone(),
+            version_id: record.record.version_id.clone(),
+        },
+        &record.record.base_url,
     )
     .map_err(|error| ServiceError::Internal(error.to_string()))?;
     if digest != record.record.describe_digest {

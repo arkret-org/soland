@@ -44,14 +44,6 @@ struct DispatchFixture {
     evidence: IntroductionEvidence,
 }
 
-#[derive(serde::Serialize)]
-struct RouteBindingProjection<'a> {
-    service_id: &'a DidCoreId,
-    service_kind: arkret_wire::ServiceKind,
-    service_resolution: &'a ResolutionCommitment,
-    http_json_base_url: &'a str,
-}
-
 struct RemoteCarrierFetcher {
     service_id: DidCoreId,
     candidate: VerifiedRouteCandidate,
@@ -103,16 +95,13 @@ fn remote_route_candidate() -> (DidCoreId, ServiceResolutionCarrier, VerifiedRou
         method_history_head: method_history_head.clone(),
         version_id: version_id.clone(),
     };
-    let describe_digest = arkret_identifiers::Hash::new(
-        arkret_canonical::canonical_sha256(&RouteBindingProjection {
-            service_id: &service_id,
-            service_kind,
-            service_resolution: &resolution,
-            http_json_base_url: base_url,
-        })
-        .expect("remote route binding digest"),
+    let describe_digest = arkret_models_identity::route_binding_describe_digest(
+        &service_id,
+        service_kind.as_str(),
+        &resolution,
+        base_url,
     )
-    .expect("remote route binding hash");
+    .expect("remote route binding digest");
     let current_record_url = format!(
         "{}{}",
         base_url.trim_end_matches('/'),

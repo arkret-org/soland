@@ -290,75 +290,7 @@ pub(crate) fn validate_operation_patch_semantics(
     let Some(patch) = operation.payload.get("patch").and_then(Value::as_object) else {
         return Ok(());
     };
-    validate_patch_semantic_safety(patch, patched_object_kind(kind))
-}
-
-pub(crate) fn validate_patch_semantic_safety(
-    patch: &serde_json::Map<String, Value>,
-    object_kind: Option<&str>,
-) -> Result<(), &'static str> {
-    for (path, value) in patch {
-        if patch_path_targets_reducer_managed(path, object_kind) {
-            return Err(arkret_wire::ReasonCode::PATCH_PATH_REDUCER_MANAGED);
-        }
-        if patch_op_removes_value(value) && patch_path_targets_redactable_unset(path) {
-            return Err(arkret_wire::ReasonCode::PATCH_UNSET_REDACTABLE_FIELD);
-        }
-    }
-    Ok(())
-}
-
-/// Whether a patch path addresses a field the generic update surface does not
-/// own, decided against the registered set of `object_kind` when it is known.
-///
-/// The path set is the canonical projection of
-/// `registry/reducer-managed-path-registry.json` and is owned by
-/// `arkret_wire::patch::reducer_managed_patch_reason`; this module never spells
-/// its own list. `None` means the object kind was not proven, so the
-/// conservative object-agnostic superset applies and no registered carve-out is
-/// honoured (`event-and-patch.md` 4.2.5).
-fn patch_path_targets_reducer_managed(path: &str, object_kind: Option<&str>) -> bool {
-    let root = patch_segment_head(path.split('.').next().unwrap_or_default());
-    let field = if root == Some("object") {
-        patch_segment_head(path.split('.').nth(1).unwrap_or_default())
-    } else {
-        root
-    };
-    let Some(field) = field else {
-        return false;
-    };
-    if let Some(object_kind) = object_kind {
-        return arkret_wire::patch::reducer_managed_patch_reason(object_kind, field).is_some();
-    }
-    arkret_wire::generated::REDUCER_MANAGED_ANY_OBJECT_PATCH_PATHS.contains(&field)
-}
-
-/// Whether a patch path addresses a registered redactable content-carrier slot.
-///
-/// The slot set is the canonical projection of
-/// `registry/redactable-field-registry.json`; this module never spells its own
-/// list. `metadata`, `metadata.summary`, `encrypted_metadata`, `body` and
-/// `attachments` are ordinary optional members, not content slots, so their
-/// `$op="unset"` MUST be accepted (`event-and-patch.md` §4.2.4).
-fn patch_path_targets_redactable_unset(path: &str) -> bool {
-    arkret_wire::generated::REDACTABLE_FIELD_PATHS
-        .iter()
-        .any(|slot| path == *slot || path.starts_with(&format!("{slot}.")))
-}
-
-fn patch_segment_head(segment: &str) -> Option<&str> {
-    if segment.starts_with('`') {
-        return None;
-    }
-    let head = segment.split_once('[').map_or(segment, |(head, _)| head);
-    (!head.is_empty()).then_some(head)
-}
-
-fn patch_op_removes_value(value: &Value) -> bool {
-    value
-        .as_object()
-        .and_then(|object| object.get("$op").and_then(Value::as_str))
-        .is_some_and(|op| matches!(op, "unset" | "remove"))
+    soland_domain::reducer::validate_patch_semantic_safety(patch, patched_object_kind(kind))
 }
 
 pub fn validate_canonical_json_value(value: &serde_json::Value) -> Result<(), &'static str> {

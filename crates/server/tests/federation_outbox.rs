@@ -23,14 +23,12 @@ use arkret_models_identity::{
     ResolutionCommitment, ServiceResolutionRecord, ServiceResolutionRecordCore,
 };
 use arkret_wire::{
-    Base64UrlString, DidCoreId, DidFullId, DidUrl, Hash, ProtocolSignature, ServiceKind,
-    TrustDomainId,
+    Base64UrlString, DidCoreId, DidFullId, DidUrl, ProtocolSignature, ServiceKind, TrustDomainId,
 };
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::{Signature, SigningKey, Verifier as _, VerifyingKey};
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 use soland_http::config::{AppConfig, ObjectStorageConfig};
 use soland_http::routing::federation::outbox::{FederationDispatcher, enqueue_outbound};
@@ -109,14 +107,6 @@ impl ServiceRouteFetcher for FixtureVerifiedRouteFetcher {
     }
 }
 
-#[derive(Serialize)]
-struct RouteBindingProjection<'a> {
-    service_id: &'a DidCoreId,
-    service_kind: ServiceKind,
-    service_resolution: &'a ResolutionCommitment,
-    http_json_base_url: &'a str,
-}
-
 fn verified_peer_route(
     full_id: &str,
     expected_core_id: &str,
@@ -135,16 +125,13 @@ fn verified_peer_route(
         method_history_head: method_history_head.clone(),
         version_id: version_id.clone(),
     };
-    let describe_digest = Hash::new(
-        arkret_canonical::canonical_sha256(&RouteBindingProjection {
-            service_id: &service_id,
-            service_kind: ServiceKind::PrincipalServer,
-            service_resolution: &commitment,
-            http_json_base_url: &base_url,
-        })
-        .expect("fixture route-binding digest"),
+    let describe_digest = arkret_models_identity::route_binding_describe_digest(
+        &service_id,
+        ServiceKind::PrincipalServer.as_str(),
+        &commitment,
+        &base_url,
     )
-    .expect("fixture route-binding hash");
+    .expect("fixture route-binding digest");
     let issued_at = chrono::Utc::now();
     let current_record_url = format!(
         "{}{}",

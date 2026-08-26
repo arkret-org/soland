@@ -456,7 +456,7 @@ fn canonical_hash(value: &Value) -> Result<Hash, AppError> {
 /// empty Vec when the realm is unknown or marked deleted; callers fold
 /// the result into the `membership_frontier_digest` so the unknown-realm
 /// case still produces a stable, distinct hash from the populated one.
-fn collect_realm_member_dids(state: &AppState, realm_id: &str) -> Vec<String> {
+pub(crate) fn collect_realm_member_dids(state: &AppState, realm_id: &str) -> Vec<String> {
     let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
         return Vec::new();
     };

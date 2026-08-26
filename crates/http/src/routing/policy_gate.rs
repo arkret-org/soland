@@ -333,7 +333,8 @@ fn policy_frontier_snapshot_for_operation(
         .realm_policy_frontier_digest(request.realm_id.as_str())
         .ok_or_else(|| PolicyGateRejection::internal("policy frontier state root".to_owned()))?;
 
-    let mut members = collect_realm_member_dids(state, request.realm_id.as_str());
+    let mut members =
+        crate::routing::access::policy::collect_realm_member_dids(state, request.realm_id.as_str());
     members.sort();
     let membership_frontier_digest = canonical_policy_hash(&json!({
         "realm_id": request.realm_id.as_str(),
@@ -351,19 +352,4 @@ fn canonical_policy_hash(value: &Value) -> Result<Hash, PolicyGateRejection> {
     let digest = arkret_canonical::canonical_sha256(value)
         .map_err(|error| PolicyGateRejection::internal(format!("canonical digest: {error}")))?;
     Hash::new(digest).map_err(|error| PolicyGateRejection::internal(format!("hash shape: {error}")))
-}
-
-fn collect_realm_member_dids(state: &AppState, realm_id: &str) -> Vec<String> {
-    let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
-        return Vec::new();
-    };
-    let realms = state.realm_directory().snapshot();
-    match realms.get(&realm_id_typed) {
-        Some(space) => space
-            .members
-            .iter()
-            .map(|did| did.as_str().to_owned())
-            .collect(),
-        None => Vec::new(),
-    }
 }
