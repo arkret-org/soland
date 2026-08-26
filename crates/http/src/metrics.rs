@@ -49,6 +49,10 @@ const FEDERATION_OUTBOX_DEPTH: &str = "soland_federation_outbox_depth";
 const FEDERATION_OUTBOX_STATE_DEPTH: &str = "soland_federation_outbox_state_depth";
 const FEDERATION_OUTBOX_OLDEST_PENDING_AGE: &str =
     "soland_federation_outbox_oldest_pending_age_seconds";
+const CONTROL_SEAL_ATTEMPT: &str = "soland_control_seal_attempt_total";
+const CONTROL_SEAL_REPAIR: &str = "soland_control_seal_repair_total";
+const CONTROL_SEAL_CLAIMED: &str = "soland_control_seal_claimed_total";
+const CONTROL_SEAL_IN_FLIGHT: &str = "soland_control_seal_in_flight";
 
 // ─────────────────────────────────────────────────────────────────────────
 // DID boundary counters (`did-usage-and-verification.md` §6, DID-P1-A03).
@@ -193,6 +197,22 @@ fn prometheus_handle() -> Result<&'static PrometheusHandle, String> {
         describe_gauge!(
             FEDERATION_OUTBOX_OLDEST_PENDING_AGE,
             "Age of the oldest federation outbox row still owed to a peer."
+        );
+        describe_counter!(
+            CONTROL_SEAL_ATTEMPT,
+            "Durable Control Seal schedule attempts by outcome."
+        );
+        describe_counter!(
+            CONTROL_SEAL_REPAIR,
+            "Rows observed or changed by the always-on Control Seal schedule repair."
+        );
+        describe_counter!(
+            CONTROL_SEAL_CLAIMED,
+            "Realm attempts claimed by the Control Seal coordinator."
+        );
+        describe_gauge!(
+            CONTROL_SEAL_IN_FLIGHT,
+            "Control Seal Realm passes currently executing."
         );
         Ok(handle)
     }) {
@@ -392,6 +412,41 @@ pub fn record_digest_mismatch(scope: &str) {
 
 pub fn record_federation_retry_state(state: &str) {
     counter!(FEDERATION_RETRY, "state" => normalize_label(state)).increment(1);
+}
+
+pub fn record_control_seal_claimed(count: usize) {
+    counter!(CONTROL_SEAL_CLAIMED).increment(count as u64);
+}
+
+pub fn record_control_seal_attempt(outcome: &'static str, completion: &'static str) {
+    counter!(
+        CONTROL_SEAL_ATTEMPT,
+        "outcome" => outcome,
+        "completion" => completion,
+    )
+    .increment(1);
+}
+
+pub fn record_control_seal_repair(
+    scanned: usize,
+    inserted: usize,
+    generation_repaired: usize,
+    stale_deleted: usize,
+    cursor_wrapped: bool,
+) {
+    for (operation, count) in [
+        ("scanned", scanned),
+        ("inserted", inserted),
+        ("generation_repaired", generation_repaired),
+        ("stale_deleted", stale_deleted),
+        ("cursor_wrapped", usize::from(cursor_wrapped)),
+    ] {
+        counter!(CONTROL_SEAL_REPAIR, "operation" => operation).increment(count as u64);
+    }
+}
+
+pub fn set_control_seal_in_flight(count: usize) {
+    gauge!(CONTROL_SEAL_IN_FLIGHT).set(count as f64);
 }
 
 /// Sample the outbox depth gauges from the aggregate the store computes.

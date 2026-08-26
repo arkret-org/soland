@@ -28,12 +28,12 @@ CREATE TABLE public.soland_schema_contract (
     contract_version text NOT NULL,
     CONSTRAINT soland_schema_contract_singleton_check CHECK (singleton),
     CONSTRAINT soland_schema_contract_version_check CHECK (
-        contract_version = 'event-realm-full-digest-v1'
+        contract_version = 'control-seal-scheduler-v1'
     )
 );
 
 INSERT INTO public.soland_schema_contract (singleton, contract_version)
-VALUES (true, 'event-realm-full-digest-v1');
+VALUES (true, 'control-seal-scheduler-v1');
 
 -- Realm wire identities are event-derived protocol values, not
 -- database primary keys.  Intern them once and use the monotonic `pk` for
@@ -564,6 +564,31 @@ CREATE TABLE public.state_control_events (
 );
 
 CREATE INDEX state_control_events_realm_idx ON public.state_control_events USING btree (realm_id, inserted_at, event_digest);
+
+-- Rebuildable per-Realm scheduling metadata. Pending Control Events remain
+-- authoritative; this table only provides fair, fenced attempt ownership.
+CREATE TABLE public.state_control_seal_schedule (
+    realm_id text PRIMARY KEY,
+    generation bigint NOT NULL CHECK (generation > 0),
+    first_pending_at_ms bigint NOT NULL,
+    next_attempt_at_ms bigint NOT NULL,
+    last_attempt_at_ms bigint,
+    claim_holder text,
+    claim_fence bigint DEFAULT 0 NOT NULL CHECK (claim_fence >= 0),
+    claim_until_ms bigint,
+    consecutive_failures integer DEFAULT 0 NOT NULL CHECK (consecutive_failures >= 0),
+    last_outcome text,
+    CHECK ((claim_holder IS NULL) = (claim_until_ms IS NULL))
+);
+
+CREATE INDEX state_control_seal_schedule_due_idx
+    ON public.state_control_seal_schedule USING btree (next_attempt_at_ms, first_pending_at_ms, realm_id);
+
+CREATE TABLE public.state_control_seal_repair_cursor (
+    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    after_realm_id text,
+    updated_at_ms bigint NOT NULL
+);
 
 CREATE TABLE public.state_seals (
     id text PRIMARY KEY,

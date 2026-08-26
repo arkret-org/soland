@@ -13,6 +13,7 @@ use super::{
     RealmEventStats, RunQueryDsl, Text, Timestamptz, Uuid, Value, async_trait,
     identity_anchor_slot_conflicts, ids, pg_conn, sql_query, sql_types,
 };
+use crate::control_seal_schedule;
 use crate::federation::{
     FederationOutboxRow, insert_federation_outbox_row, qualified_outbox_columns,
 };
@@ -562,7 +563,7 @@ async fn insert_pending_control_event(
                     "Control Move ingress class encoding failed: {error}"
                 ))
             })?;
-    sql_query(
+    let affected = sql_query(
         "INSERT INTO state_control_events \
          (event_digest, digest_suite, realm_id, event_json, control_proposal_ack, ingress_class) \
          VALUES ($1, $2, $3, $4, $5, $6) \
@@ -586,17 +587,17 @@ async fn insert_pending_control_event(
     .bind::<Jsonb, _>(&ingress_class)
     .execute(conn)
     .await
-    .map_err(PersistenceError::database)
-    .and_then(|affected| {
-        if affected == 0 {
-            Err(PersistenceError::Conflict(
-                "duplicate_conflict: pending Control Move has different canonical bytes, ingress class or Control Proposal Ack"
-                    .to_owned(),
-            ))
-        } else {
-            Ok(())
-        }
-    })
+    .map_err(PersistenceError::database)?;
+    if affected == 0 {
+        return Err(PersistenceError::Conflict(
+            "duplicate_conflict: pending Control Move has different canonical bytes, ingress class or Control Proposal Ack"
+                .to_owned(),
+        ));
+    }
+    control_seal_schedule::upsert_for_control_event(conn, event.realm_id.as_str())
+        .await
+        .map_err(PersistenceError::database)?;
+    Ok(())
 }
 
 async fn insert_control_event_governance_dependencies(

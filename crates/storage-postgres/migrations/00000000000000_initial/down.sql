@@ -39,6 +39,8 @@ DROP TABLE IF EXISTS state_seal_control_events CASCADE;
 DROP TABLE IF EXISTS state_seal_quarantine_realms CASCADE;
 DROP TABLE IF EXISTS state_seal_collision_variants CASCADE;
 DROP TABLE IF EXISTS state_seal_quarantine CASCADE;
+DROP TABLE IF EXISTS state_control_seal_repair_cursor CASCADE;
+DROP TABLE IF EXISTS state_control_seal_schedule CASCADE;
 DROP TABLE IF EXISTS state_control_events CASCADE;
 DROP TABLE IF EXISTS state_seals CASCADE;
 DROP TABLE IF EXISTS state_seal_signing_leases CASCADE;

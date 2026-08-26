@@ -70,6 +70,256 @@ fn event_derived_realm_id(seed: &[u8]) -> String {
     arkret_identifiers::RealmId::from_event_id(&event_id).to_string()
 }
 
+#[derive(diesel::QueryableByName)]
+struct ScheduleCountRow {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    value: i64,
+}
+
+async fn control_seal_schedule_row_count(pool: &PgPool, realm_id: Option<&str>) -> i64 {
+    use diesel::sql_types::{Nullable, Text};
+    use diesel_async::RunQueryDsl;
+
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT COUNT(*) AS value FROM state_control_seal_schedule \
+         WHERE ($1::text IS NULL OR realm_id = $1)",
+    )
+    .bind::<Nullable<Text>, _>(realm_id)
+    .get_result::<ScheduleCountRow>(&mut *conn)
+    .await
+    .unwrap()
+    .value
+}
+
+async fn prioritize_control_seal_schedule_test_realm(pool: &PgPool, realm_id: &str) {
+    use diesel::sql_types::{BigInt, Text};
+    use diesel_async::RunQueryDsl;
+
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE state_control_seal_schedule SET next_attempt_at_ms = $2, first_pending_at_ms = $2 \
+         WHERE realm_id = $1",
+    )
+    .bind::<Text, _>(realm_id)
+    .bind::<BigInt, _>(i64::MIN / 2)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+}
+
+async fn cleanup_control_schedule_test_actor(pool: &PgPool, actor_id: &str) {
+    use diesel::sql_types::Text;
+    use diesel_async::RunQueryDsl;
+
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "DELETE FROM governance_dependency_edges edge USING state_control_events event \
+         WHERE edge.event_digest = event.event_digest AND edge.realm_id = event.realm_id \
+           AND event.event_json->>'actor_id' = $1",
+    )
+    .bind::<Text, _>(actor_id)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    diesel::sql_query(
+        "DELETE FROM state_control_seal_schedule schedule USING state_control_events event \
+         WHERE schedule.realm_id = event.realm_id AND event.event_json->>'actor_id' = $1",
+    )
+    .bind::<Text, _>(actor_id)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    diesel::sql_query("DELETE FROM state_control_events WHERE event_json->>'actor_id' = $1")
+        .bind::<Text, _>(actor_id)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    diesel::sql_query("DELETE FROM canonical_events WHERE actor_id = $1")
+        .bind::<Text, _>(actor_id)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair_when_configured() {
+    use arkret_state::state::store::{AcklessSelfPrincipalIngress, ControlProposalIngress};
+    use arkret_state::state::{ControlSealAttemptCompletion, ControlSealAttemptOutcome};
+    use diesel::sql_types::Text;
+    use diesel_async::RunQueryDsl;
+
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(
+        format!("control-seal-schedule:{}", uuid::Uuid::now_v7()).as_bytes(),
+    ))
+    .unwrap();
+    let mut cleanup_conn = pool.get().await.unwrap();
+    diesel::sql_query("DELETE FROM state_control_seal_schedule WHERE realm_id = $1")
+        .bind::<Text, _>(realm_id.as_str())
+        .execute(&mut *cleanup_conn)
+        .await
+        .unwrap();
+    diesel::sql_query("DELETE FROM state_control_events WHERE realm_id = $1")
+        .bind::<Text, _>(realm_id.as_str())
+        .execute(&mut *cleanup_conn)
+        .await
+        .unwrap();
+    drop(cleanup_conn);
+    let stores = soland_storage_postgres::build_state_resolution_stores(
+        Some(pool.clone()),
+        std::sync::Arc::new(arkret_state::state::MemoryCellRegistry::default()),
+    );
+    let ingress = ControlProposalIngress::AcklessSelfPrincipal(AcklessSelfPrincipalIngress {
+        device_id: "ak:device:schedule-contract".to_owned(),
+        device_authorize_event_id: "ak:event:schedule-contract".to_owned(),
+        device_generation_ref: 1,
+        seal_basis_digest: format!("sha256:{}", "a".repeat(64)),
+    });
+    let (first_event, _) = seal_dependency_contract_event(&realm_id, "schedule-first");
+    stores
+        .control_event_store
+        .put_pending_with_ingress(
+            &first_event,
+            &ingress,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+    prioritize_control_seal_schedule_test_realm(&pool, realm_id.as_str()).await;
+    let now_ms = chrono::Utc::now().timestamp_millis().saturating_add(1_000);
+    let claim_store = stores.control_event_store.clone();
+    let first_claim = tokio::task::spawn_blocking(move || {
+        claim_store.claim_due_control_seal_realms("worker-a", now_ms, now_ms + 1_000, 1)
+    })
+    .await
+    .expect("coordinator-style blocking claim task")
+    .unwrap()
+    .pop()
+    .unwrap();
+    assert_eq!(first_claim.generation, 1);
+
+    stores
+        .control_event_store
+        .put_pending_with_ingress(
+            &first_event,
+            &ingress,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+    assert_eq!(
+        stores
+            .control_event_store
+            .complete_control_seal_attempt(
+                &first_claim,
+                &ControlSealAttemptOutcome::SigningFailed,
+                now_ms,
+            )
+            .unwrap(),
+        ControlSealAttemptCompletion::Applied,
+        "an idempotent Event replay must not bump generation"
+    );
+    prioritize_control_seal_schedule_test_realm(&pool, realm_id.as_str()).await;
+    let second_claim = stores
+        .control_event_store
+        .claim_due_control_seal_realms("worker-a", now_ms + 1_000, now_ms + 2_000, 1)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(second_claim.generation, 1);
+
+    let (second_event, _) = seal_dependency_contract_event(&realm_id, "schedule-second");
+    stores
+        .control_event_store
+        .put_pending_with_ingress(
+            &second_event,
+            &ingress,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+    prioritize_control_seal_schedule_test_realm(&pool, realm_id.as_str()).await;
+    assert_eq!(
+        stores
+            .control_event_store
+            .complete_control_seal_attempt(
+                &second_claim,
+                &ControlSealAttemptOutcome::SigningFailed,
+                now_ms + 1_001,
+            )
+            .unwrap(),
+        ControlSealAttemptCompletion::ReleasedNewGeneration
+    );
+    let third_claim = stores
+        .control_event_store
+        .claim_due_control_seal_realms("worker-a", now_ms + 1_001, now_ms + 1_101, 1)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(third_claim.generation, 2);
+    assert!(
+        stores
+            .control_event_store
+            .claim_due_control_seal_realms("worker-b", now_ms + 1_100, now_ms + 2_000, 1)
+            .unwrap()
+            .is_empty()
+    );
+    let reclaimed = stores
+        .control_event_store
+        .claim_due_control_seal_realms("worker-b", now_ms + 1_101, now_ms + 2_000, 1)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(reclaimed.fence, third_claim.fence + 1);
+    assert_eq!(
+        stores
+            .control_event_store
+            .complete_control_seal_attempt(
+                &third_claim,
+                &ControlSealAttemptOutcome::ProgressPublished,
+                now_ms + 1_102,
+            )
+            .unwrap(),
+        ControlSealAttemptCompletion::StaleClaim
+    );
+
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("DELETE FROM state_control_seal_schedule WHERE realm_id = $1")
+        .bind::<Text, _>(realm_id.as_str())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+    let mut repair_inserted = 0;
+    for repair_round in 0..2 {
+        repair_inserted += stores
+            .control_event_store
+            .repair_control_seal_schedule(now_ms + 1_200 + repair_round, 4_096)
+            .unwrap()
+            .inserted;
+        if control_seal_schedule_row_count(&pool, Some(realm_id.as_str())).await == 1 {
+            break;
+        }
+    }
+    assert!(repair_inserted >= 1);
+    assert_eq!(
+        control_seal_schedule_row_count(&pool, Some(realm_id.as_str())).await,
+        1
+    );
+    let mut cleanup_conn = pool.get().await.unwrap();
+    diesel::sql_query("DELETE FROM state_control_seal_schedule WHERE realm_id = $1")
+        .bind::<Text, _>(realm_id.as_str())
+        .execute(&mut *cleanup_conn)
+        .await
+        .unwrap();
+    diesel::sql_query("DELETE FROM state_control_events WHERE realm_id = $1")
+        .bind::<Text, _>(realm_id.as_str())
+        .execute(&mut *cleanup_conn)
+        .await
+        .unwrap();
+}
+
 fn seal_dependency_contract_event(
     realm_id: &arkret_identifiers::RealmId,
     marker: &str,
@@ -770,16 +1020,24 @@ async fn postgres_adapter_retains_seal_dependencies_before_seal_publication_when
 }
 
 #[tokio::test]
-async fn postgres_adapter_commits_control_event_governance_dependencies_atomically_when_configured()
-{
+async fn postgres_adapter_commits_control_event_governance_dependencies_and_control_seal_schedule_atomically_when_configured()
+ {
     let Some(pool) = test_pool().await else {
         return;
     };
     let _db_guard = DB_GUARD.lock().await;
     let events = PgEventStore { pool: pool.clone() };
-    let dependencies = PgGovernanceDependencyStore { pool };
+    let dependencies = PgGovernanceDependencyStore { pool: pool.clone() };
     let namespace = format!("postgres-control-event-governance-{}", uuid::Uuid::now_v7());
+    let before = control_seal_schedule_row_count(&pool, None).await;
     assert_atomic_control_event_governance_dependency_contract(&events, &dependencies, &namespace)
+        .await;
+    assert_eq!(
+        control_seal_schedule_row_count(&pool, None).await,
+        before + 1,
+        "the PgEventStore Control Event path must atomically create its schedule row"
+    );
+    cleanup_control_schedule_test_actor(&pool, &format!("ak:did_core:web:{namespace}.example"))
         .await;
 }
 
@@ -907,7 +1165,8 @@ async fn postgres_adapter_settles_sealed_device_revocations_when_configured() {
 }
 
 #[tokio::test]
-async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured() {
+async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_seal_schedule_when_configured()
+ {
     use diesel::sql_types::Text;
     use diesel::{QueryableByName, sql_query};
     use diesel_async::RunQueryDsl;
@@ -1014,6 +1273,28 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
         count, 1,
         "basis-free Control anchor must enter pending index"
     );
+    drop(conn);
+    assert_eq!(
+        control_seal_schedule_row_count(&pool, Some(realm_id.as_str())).await,
+        1,
+        "the event commit unit of work must atomically create its schedule row"
+    );
+    let mut cleanup_conn = pool.get().await.unwrap();
+    sql_query("DELETE FROM state_control_seal_schedule WHERE realm_id = $1")
+        .bind::<Text, _>(realm_id.as_str())
+        .execute(&mut *cleanup_conn)
+        .await
+        .unwrap();
+    sql_query("DELETE FROM state_control_events WHERE event_digest = $1")
+        .bind::<Text, _>(proposal_digest.as_str())
+        .execute(&mut *cleanup_conn)
+        .await
+        .unwrap();
+    sql_query("DELETE FROM canonical_events WHERE actor_id = $1")
+        .bind::<Text, _>(event.actor_id.as_str())
+        .execute(&mut *cleanup_conn)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1529,7 +1810,9 @@ mod control_move_ingress_negatives {
     use soland_storage::{CanonicalEventRecord, EventCommitRequest, EventCommitUnitOfWork, ids};
     use soland_storage_postgres::PgEventCommitUnitOfWork;
 
-    use super::{DB_GUARD, test_pool};
+    use super::{
+        DB_GUARD, cleanup_control_schedule_test_actor, control_seal_schedule_row_count, test_pool,
+    };
 
     #[derive(QueryableByName)]
     struct CountRow {
@@ -1799,7 +2082,8 @@ mod control_move_ingress_negatives {
     /// durable basis; replaying the same digest under the other class is a
     /// Conflict, while a byte-identical replay stays idempotent.
     #[tokio::test(flavor = "multi_thread")]
-    async fn postgres_control_move_ingress_class_mismatch_is_conflict_when_configured() {
+    async fn postgres_control_move_ingress_class_mismatch_and_control_seal_schedule_when_configured()
+     {
         use arkret_state::state::store::{
             AcklessSelfPrincipalIngress, ControlProposalIngress, StoreError,
         };
@@ -1810,7 +2094,7 @@ mod control_move_ingress_negatives {
         let _db_guard = DB_GUARD.lock().await;
         let fixture = control_anchor_fixture("class-mismatch");
         let stores = soland_storage_postgres::build_state_resolution_stores(
-            Some(pool),
+            Some(pool.clone()),
             std::sync::Arc::new(arkret_state::state::MemoryCellRegistry::default()),
         );
 
@@ -1822,6 +2106,11 @@ mod control_move_ingress_negatives {
                 arkret_canonical::DigestSuite::Sha256,
             )
             .unwrap();
+        assert_eq!(
+            control_seal_schedule_row_count(&pool, Some(fixture.realm_id.as_str())).await,
+            1,
+            "the state ControlEventStore path must atomically create its schedule row"
+        );
         let ackless = ControlProposalIngress::AcklessSelfPrincipal(AcklessSelfPrincipalIngress {
             device_id: "ak:device:fixture".to_owned(),
             device_authorize_event_id: "ak:event:fixture".to_owned(),
@@ -1847,5 +2136,6 @@ mod control_move_ingress_negatives {
                 arkret_canonical::DigestSuite::Sha256,
             )
             .expect("the byte-identical class and Ack remain idempotent");
+        cleanup_control_schedule_test_actor(&pool, fixture.event.actor_id.as_str()).await;
     }
 }

@@ -10,7 +10,7 @@ use diesel_async::pooled_connection::deadpool::Pool;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
-const SCHEMA_CONTRACT_VERSION: &str = "event-realm-full-digest-v1";
+const SCHEMA_CONTRACT_VERSION: &str = "control-seal-scheduler-v1";
 
 pub type PgPool = Pool<AsyncPgConnection>;
 

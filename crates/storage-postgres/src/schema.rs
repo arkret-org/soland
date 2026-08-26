@@ -1475,6 +1475,29 @@ diesel::table! {
 }
 
 diesel::table! {
+    state_control_seal_schedule (realm_id) {
+        realm_id -> Text,
+        generation -> Int8,
+        first_pending_at_ms -> Int8,
+        next_attempt_at_ms -> Int8,
+        last_attempt_at_ms -> Nullable<Int8>,
+        claim_holder -> Nullable<Text>,
+        claim_fence -> Int8,
+        claim_until_ms -> Nullable<Int8>,
+        consecutive_failures -> Int4,
+        last_outcome -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    state_control_seal_repair_cursor (singleton) {
+        singleton -> Bool,
+        after_realm_id -> Nullable<Text>,
+        updated_at_ms -> Int8,
+    }
+}
+
+diesel::table! {
     state_seals (id) {
         id -> Text,
         digest_suite -> Text,
@@ -1926,6 +1949,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     pending_rrk_acquisitions,
     state_cell_ops,
     state_control_events,
+    state_control_seal_repair_cursor,
+    state_control_seal_schedule,
     state_seal_collision_variants,
     state_seal_control_events,
     state_seal_quarantine,

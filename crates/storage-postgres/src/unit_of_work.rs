@@ -13,7 +13,7 @@ use crate::events::{
     CanonicalEventRow, CanonicalInsertOutcome, insert_canonical_event, realm_actor_lock_key,
 };
 use crate::governance_history::put_governance_dependency_exact_in_transaction;
-use crate::{ExistsRow, PgPool, PgTransactionError, pg_conn};
+use crate::{ExistsRow, PgPool, PgTransactionError, control_seal_schedule, pg_conn};
 
 #[derive(diesel::QueryableByName)]
 struct EventPreflightRow {
@@ -945,6 +945,12 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                         Ok(())
                     }
                 })?;
+                control_seal_schedule::upsert_for_control_event(
+                    conn,
+                    typed_event.realm_id.as_str(),
+                )
+                .await
+                .map_err(PersistenceError::database)?;
                 for dependency in &request.governance_dependencies {
                     let source_matches = matches!(
                         &dependency.source,

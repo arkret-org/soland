@@ -7,9 +7,10 @@ use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::store::ControlProposalIngress;
 use arkret_state::state::{
-    CellRegistry, CellStore, ControlEventStore, ControlProposalSnapshot, PendingControlEventRecord,
-    SealStore, SealedControlEventRecord, StoreError, StoreResult, compute_state_root,
-    control_event_digest,
+    CellRegistry, CellStore, ControlEventStore, ControlProposalSnapshot,
+    ControlSealAttemptCompletion, ControlSealAttemptOutcome, ControlSealScheduleClaim,
+    ControlSealScheduleRepairStats, PendingControlEventRecord, SealStore, SealedControlEventRecord,
+    StoreError, StoreResult, compute_state_root, control_event_digest,
 };
 use arkret_wire::{
     ControlProposalAck, ControlProposalDecision, ControlProposalDecisionPolicy, Event, LatticeOp,
@@ -21,7 +22,7 @@ use diesel_async::pooled_connection::deadpool::Object;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use serde_json::Value;
 
-use crate::PgPool;
+use crate::{PgPool, control_seal_schedule};
 
 pub struct StateResolutionStores {
     pub control_event_store: Arc<dyn ControlEventStore>,
@@ -885,6 +886,7 @@ impl ControlEventStore for PgControlEventStore {
                     )
                     .into());
                 }
+                control_seal_schedule::upsert_for_control_event(&mut *conn, &realm_id).await?;
                 Ok(())
             })
             .await
@@ -1231,31 +1233,56 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    fn list_pending_realms(&self, limit: usize) -> StoreResult<Vec<RealmId>> {
+    fn claim_due_control_seal_realms(
+        &self,
+        holder: &str,
+        now_ms: i64,
+        claim_until_ms: i64,
+        limit: usize,
+    ) -> StoreResult<Vec<ControlSealScheduleClaim>> {
+        if claim_until_ms <= now_ms {
+            return Err(StoreError::Conflict(
+                "Control Seal schedule claim must end after it starts".to_owned(),
+            ));
+        }
         let pool = self.pool.clone();
-        let limit = limit as i64;
+        let holder = holder.to_owned();
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
-            sql_query(
-                "SELECT DISTINCT realm_id AS value \
-                 FROM state_control_events c \
-                 WHERE NOT EXISTS (SELECT 1 FROM state_seal_control_events b \
-                                   WHERE b.event_digest = c.event_digest) \
-                   AND NOT (proposal_decisions @> '[{\"kind\":\"signed_reject\"}]'::jsonb) \
-                 ORDER BY realm_id \
-                 LIMIT $1",
-            )
-            .bind::<BigInt, _>(limit)
-            .load::<TextRow>(&mut *conn)
-            .await
-            .map_err(diesel_to_store)?
-            .into_iter()
-            .map(|row| {
-                RealmId::new(row.value).map_err(|error| {
-                    StoreError::Backend(format!("stored pending Realm id is invalid: {error}"))
-                })
-            })
-            .collect()
+            control_seal_schedule::claim_due(&mut conn, &holder, now_ms, claim_until_ms, limit)
+                .await
+                .map_err(diesel_to_store)
+        })
+    }
+
+    fn complete_control_seal_attempt(
+        &self,
+        claim: &ControlSealScheduleClaim,
+        outcome: &ControlSealAttemptOutcome,
+        observed_at_ms: i64,
+    ) -> StoreResult<ControlSealAttemptCompletion> {
+        let pool = self.pool.clone();
+        let claim = claim.clone();
+        let outcome = outcome.clone();
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            control_seal_schedule::complete_attempt(&mut conn, &claim, &outcome, observed_at_ms)
+                .await
+                .map_err(diesel_to_store)
+        })
+    }
+
+    fn repair_control_seal_schedule(
+        &self,
+        now_ms: i64,
+        limit: usize,
+    ) -> StoreResult<ControlSealScheduleRepairStats> {
+        let pool = self.pool.clone();
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            control_seal_schedule::repair(&mut conn, now_ms, limit)
+                .await
+                .map_err(diesel_to_store)
         })
     }
 

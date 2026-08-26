@@ -92,6 +92,17 @@ pub struct NotaryOutcome {
     pub post_state_root: Hash,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SigningLeaseSlotResolution {
+    Ready(String),
+    NoPendingMoves,
+    NotaryValueUnavailable,
+    LocalSignerNotMember,
+    ThresholdRequiresExternalCoordinator,
+    MixedRecoveryNotYetEligible { eligible_at_ms: i64 },
+    MixedRecoveryRequiresExternalCoordinator,
+}
+
 /// Why the coordinator rejected one Control Move.
 ///
 /// `reason` is what the signed `ControlProposalDecision` carries onto the wire
@@ -208,14 +219,14 @@ impl NotaryWorker {
         state: &AppState,
         realm_id: &RealmId,
         max_control_moves: usize,
-    ) -> Result<Option<String>, NotaryError> {
+    ) -> Result<SigningLeaseSlotResolution, NotaryError> {
         let pending = state.projections().pending_control_events_for_notary(
             realm_id,
             None,
             max_control_moves,
         )?;
         if pending.is_empty() {
-            return Ok(None);
+            return Ok(SigningLeaseSlotResolution::NoPendingMoves);
         }
         let leaves = state.projections().realm_seal_leaves(realm_id)?;
         let notary_cell = notary_cell_ref(realm_id)
@@ -263,33 +274,46 @@ impl NotaryWorker {
         let Some((profile, envelope)) =
             self.resolve_notary_value(state, realm_id, &notary_cell, &ops)?
         else {
-            return Ok(None);
+            return Ok(SigningLeaseSlotResolution::NotaryValueUnavailable);
         };
         let local = local_notary_signer_descriptor(state)?;
         match profile {
             arkret_wire::notary::NotaryValue::SingleSigner { signer, .. } if signer == local => {
-                Ok(Some("single_chain".to_owned()))
+                Ok(SigningLeaseSlotResolution::Ready("single_chain".to_owned()))
             }
             arkret_wire::notary::NotaryValue::OpenSet { members } if members.contains(&local) => {
-                Ok(Some(self.service_id.clone()))
+                Ok(SigningLeaseSlotResolution::Ready(self.service_id.clone()))
             }
             arkret_wire::notary::NotaryValue::Mixed { signer, .. } if signer == local => {
-                Ok(Some("single_chain".to_owned()))
+                Ok(SigningLeaseSlotResolution::Ready("single_chain".to_owned()))
             }
             arkret_wire::notary::NotaryValue::Mixed {
                 recovery_members, ..
-            } if recovery_members.contains(&local)
-                && envelope
+            } if recovery_members.contains(&local) => {
+                let recovery_window_ms = envelope
                     .get("revocation_freshness_window_ms")
-                    .and_then(serde_json::Value::as_u64)
-                    .is_some_and(|window| {
-                        self.frontier_is_stale(state, realm_id, window)
-                            .unwrap_or(false)
-                    }) =>
-            {
-                Ok(None)
+                    .and_then(serde_json::Value::as_u64);
+                let eligible_at_ms = match recovery_window_ms {
+                    Some(window) => {
+                        self.frontier_recovery_eligible_at_ms(state, realm_id, window)?
+                    }
+                    None => None,
+                };
+                match eligible_at_ms {
+                    Some(eligible_at_ms)
+                        if eligible_at_ms > chrono::Utc::now().timestamp_millis() =>
+                    {
+                        Ok(SigningLeaseSlotResolution::MixedRecoveryNotYetEligible {
+                            eligible_at_ms,
+                        })
+                    }
+                    _ => Ok(SigningLeaseSlotResolution::MixedRecoveryRequiresExternalCoordinator),
+                }
             }
-            _ => Ok(None),
+            arkret_wire::notary::NotaryValue::Threshold { .. } => {
+                Ok(SigningLeaseSlotResolution::ThresholdRequiresExternalCoordinator)
+            }
+            _ => Ok(SigningLeaseSlotResolution::LocalSignerNotMember),
         }
     }
 
@@ -1312,32 +1336,33 @@ impl NotaryWorker {
         Ok(())
     }
 
-    /// Mixed-profile recovery gate: did the latest leaf go stale beyond
-    /// `staleness_ms`? When there is no leaf at all (genesis), recovery
-    /// is NOT eligible (primary should sign the genesis Seal).
-    fn frontier_is_stale(
+    /// Earliest physical millisecond when a mixed recovery member could be
+    /// eligible. A missing frontier remains ineligible so the primary must
+    /// author the genesis Seal.
+    fn frontier_recovery_eligible_at_ms(
         &self,
         state: &AppState,
         realm_id: &RealmId,
         staleness_ms: u64,
-    ) -> Result<bool, NotaryError> {
+    ) -> Result<Option<i64>, NotaryError> {
         let leaves = state.projections().realm_seal_leaves(realm_id)?;
         let Some(leaf_id) = leaves.first() else {
-            return Ok(false);
+            return Ok(None);
         };
         let Some(seal) = state.projections().seal_by_id(leaf_id)? else {
-            return Ok(false);
+            return Ok(None);
         };
         // The Seal.hlc carries a 12-hex physical-millis prefix per the
         // HLC encoding. Reuse the same parser the replay-window checker
         // uses to compare against now.
         let signed_at = match crate::jws_verify::physical_millis_from_hlc(seal.hlc.as_str()) {
             Some(ms) => ms,
-            None => return Ok(false),
+            None => return Ok(None),
         };
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let delta_ms = (now_ms - signed_at).max(0) as u64;
-        Ok(delta_ms > staleness_ms)
+        let staleness_ms = i64::try_from(staleness_ms).unwrap_or(i64::MAX);
+        Ok(Some(
+            signed_at.saturating_add(staleness_ms).saturating_add(1),
+        ))
     }
 
     /// Read current effective state per cell from the cell_store, joining

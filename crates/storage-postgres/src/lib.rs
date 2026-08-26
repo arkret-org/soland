@@ -101,6 +101,7 @@ mod audit;
 mod blobs;
 mod contacts;
 mod control_proposal_acks;
+mod control_seal_schedule;
 mod device_pairing_row;
 mod device_pairings;
 mod device_revocations;

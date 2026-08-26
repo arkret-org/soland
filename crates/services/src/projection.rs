@@ -16,8 +16,9 @@ use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::store::{ControlProposalIngress, ControlProposalIngressClass};
 use arkret_state::state::{
     CellLatticeBinding, ControlEventStore, ControlMoveReject, ControlProposalSnapshot,
-    PendingControlEventRecord, SealDigestSuites, SealEffect, SealLeafUnionProof, SealReject,
-    SealStore, SealedControlEventRecord, StoreError, StoreResult,
+    ControlSealAttemptCompletion, ControlSealAttemptOutcome, ControlSealScheduleClaim,
+    ControlSealScheduleRepairStats, PendingControlEventRecord, SealDigestSuites, SealEffect,
+    SealLeafUnionProof, SealReject, SealStore, SealedControlEventRecord, StoreError, StoreResult,
 };
 use arkret_state::{CellRegistry, CellStore, EffectiveSealView};
 use arkret_wire::cba::ProjectedCellWrite;
@@ -817,8 +818,38 @@ impl ProjectionService {
         Ok(health)
     }
 
-    pub fn pending_control_realms(&self, limit: usize) -> StoreResult<Vec<RealmId>> {
-        self.control_event_store().list_pending_realms(limit)
+    pub fn claim_due_control_seal_realms(
+        &self,
+        holder: &str,
+        now_ms: i64,
+        claim_until_ms: i64,
+        limit: usize,
+    ) -> StoreResult<Vec<ControlSealScheduleClaim>> {
+        self.control_event_store().claim_due_control_seal_realms(
+            holder,
+            now_ms,
+            claim_until_ms,
+            limit,
+        )
+    }
+
+    pub fn complete_control_seal_attempt(
+        &self,
+        claim: &ControlSealScheduleClaim,
+        outcome: &ControlSealAttemptOutcome,
+        observed_at_ms: i64,
+    ) -> StoreResult<ControlSealAttemptCompletion> {
+        self.control_event_store()
+            .complete_control_seal_attempt(claim, outcome, observed_at_ms)
+    }
+
+    pub fn repair_control_seal_schedule(
+        &self,
+        now_ms: i64,
+        limit: usize,
+    ) -> StoreResult<ControlSealScheduleRepairStats> {
+        self.control_event_store()
+            .repair_control_seal_schedule(now_ms, limit)
     }
 
     pub fn try_claim_control_signing_lease(
