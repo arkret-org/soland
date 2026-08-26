@@ -1505,6 +1505,14 @@ impl AppState {
                 hydrated_realm_ids.clone(),
             )
             .await?;
+        let mut reconciled_realms = self.realm_directory.snapshot();
+        soland_services::hydration::reconcile_hydrated_agent_memberships(
+            &mut reconciled_realms,
+            &self.projections.snapshot(),
+        );
+        for (_, entry) in reconciled_realms.entries_iter() {
+            self.realm_directory.upsert(entry.clone());
+        }
         // Reconcile the durable consumed flag after a crash between Event
         // acceptance and the private-store mirror. The operation is
         // idempotent for records already marked consumed.

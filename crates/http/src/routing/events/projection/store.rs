@@ -27,16 +27,6 @@ pub async fn persist_and_publish_projection_event(
     Ok(outcome)
 }
 
-pub async fn projected_event_page(
-    state: &AppState,
-    realm_id: &str,
-    cursor: Option<&str>,
-    limit: usize,
-) -> anyhow::Result<Option<ProjectedEventPage>> {
-    let realm_ids = BTreeSet::from([realm_id.to_owned()]);
-    projected_event_page_for_realms(state, &realm_ids, cursor, limit).await
-}
-
 pub async fn projected_event_page_for_realms(
     state: &AppState,
     realm_ids: &BTreeSet<String>,
@@ -44,6 +34,71 @@ pub async fn projected_event_page_for_realms(
     limit: usize,
 ) -> anyhow::Result<Option<ProjectedEventPage>> {
     projected_event_page_for_realms_through(state, realm_ids, cursor, None, limit).await
+}
+
+pub async fn projected_event_page_for_realms_in_direction(
+    state: &AppState,
+    realm_ids: &BTreeSet<String>,
+    cursor: Option<&str>,
+    limit: usize,
+    backward: bool,
+) -> anyhow::Result<Option<ProjectedEventPage>> {
+    if !backward {
+        return projected_event_page_for_realms(state, realm_ids, cursor, limit).await;
+    }
+
+    let events = ordered_projected_events_for_realms(state, realm_ids).await?;
+    if events.is_empty() {
+        return Ok(None);
+    }
+    let durable_redactions = {
+        let projection = state.projections().snapshot();
+        message_redactions_from_events(&events, &projection)
+    };
+    let end = if let Some(cursor) = cursor {
+        events
+            .iter()
+            .position(|event| event.event_id == cursor)
+            .ok_or_else(|| anyhow::anyhow!("invalid_cursor: cursor not found"))?
+    } else {
+        events.len()
+    };
+    let mut page_items = events
+        .into_iter()
+        .take(end)
+        .rev()
+        .filter(|event| event_is_visible(event))
+        .take(limit.saturating_add(1))
+        .collect::<Vec<_>>();
+    {
+        let projection = state.projections().snapshot();
+        for event in &mut page_items {
+            tombstone_projection_event_for_erased_actor(&projection, event);
+            tombstone_projection_event_for_message_redaction(
+                &projection,
+                &durable_redactions,
+                event,
+            );
+            stub_pin_projection_event_for_invisible_target(&projection, event);
+        }
+    }
+    for event in &mut page_items {
+        if let Some(tombstone) = retention_tombstone_for_event(state, &event.event_id) {
+            tombstone_projection_event_for_retention(event, &tombstone);
+        }
+    }
+    let has_more = page_items.len() > limit;
+    if has_more {
+        page_items.truncate(limit);
+    }
+    let next_cursor = has_more
+        .then(|| page_items.last().map(|event| event.event_id.clone()))
+        .flatten();
+    Ok(Some(ProjectedEventPage {
+        items: page_items,
+        next_cursor,
+        has_more,
+    }))
 }
 
 pub async fn projected_event_replay_upper_bound(

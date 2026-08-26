@@ -857,7 +857,16 @@ async fn events_query_impl(
     if accessible_realms.len() == 1 {
         let realm_id = &accessible_realms[0];
         let managed_agent_control = managed_agent_control_realms.contains(realm_id);
-        match projected_event_page(state, realm_id, cursor.as_deref(), limit).await {
+        let realm_ids = std::collections::BTreeSet::from([realm_id.clone()]);
+        match projected_event_page_for_realms_in_direction(
+            state,
+            &realm_ids,
+            cursor.as_deref(),
+            limit,
+            backward,
+        )
+        .await
+        {
             Ok(Some(page)) => {
                 let mut events: Vec<Value> = Vec::new();
                 let mut last_visible_event_id = None;
@@ -873,9 +882,6 @@ async fn events_query_impl(
                         last_visible_event_id = Some(event.event_id.clone());
                         events.push(projection_event_json(event));
                     }
-                }
-                if backward {
-                    events.reverse();
                 }
                 let events = truncate_before_stop_cursor(events, stop_cursor.as_deref());
                 let next_event_id = page
@@ -925,62 +931,49 @@ async fn events_query_impl(
         });
     }
 
-    // Multi-Realm merge path: call `projected_event_page` per Realm, merge
-    // by `received_at`, then paginate.
-    let mut merged: Vec<serde_json::Value> = Vec::new();
-    let mut any_has_more = false;
-    for realm_id in &accessible_realms {
-        let managed_agent_control = managed_agent_control_realms.contains(realm_id);
-        match projected_event_page(state, realm_id, cursor.as_deref(), limit).await {
-            Ok(Some(page)) => {
-                if page.has_more {
-                    any_has_more = true;
-                }
-                for event in &page.items {
-                    if events_query_event_visible(
-                        state,
-                        event,
-                        session.as_ref(),
-                        managed_agent_control,
-                    )
-                    .await
-                    {
-                        merged.push(projection_event_json(event));
-                    }
-                }
-            }
-            Ok(None) => {}
-            Err(error) => {
-                if error.to_string().contains("invalid_cursor") {
-                    return Err(
-                        soland_http::error::AppError::param_invalid("cursor not found")
-                            .with_wire_code("invalid_cursor"),
-                    );
-                }
-                continue;
-            }
+    // The cursor names one position in the globally ordered union. Splitting
+    // this read per Realm would make that cursor absent from every other Realm.
+    let realm_ids = accessible_realms.iter().cloned().collect();
+    let page = projected_event_page_for_realms_in_direction(
+        state,
+        &realm_ids,
+        cursor.as_deref(),
+        limit,
+        backward,
+    )
+    .await
+    .map_err(|error| {
+        if error.to_string().contains("invalid_cursor") {
+            soland_http::error::AppError::param_invalid("cursor not found")
+                .with_wire_code("invalid_cursor")
+        } else {
+            soland_http::error::AppError::internal(error.to_string())
+        }
+    })?;
+    let Some(page) = page else {
+        return soland_http::result::json_ok(EventsQueryOutcome {
+            events: Vec::new(),
+            snapshot_bootstrap: None,
+            prev_cursor: cursor_token,
+            next_cursor: None,
+            has_more: false,
+            range_completeness,
+        });
+    };
+    let mut page_events = Vec::new();
+    for event in &page.items {
+        let managed_agent_control = managed_agent_control_realms.contains(&event.realm_id);
+        if events_query_event_visible(state, event, session.as_ref(), managed_agent_control).await {
+            page_events.push(projection_event_json(event));
         }
     }
-    merged.sort_by(|left, right| {
-        let left_ts = left["created_at"].as_str().unwrap_or("");
-        let right_ts = right["created_at"].as_str().unwrap_or("");
-        left_ts
-            .cmp(right_ts)
-            .then_with(|| left["event_id"].as_str().cmp(&right["event_id"].as_str()))
+    let page_events = truncate_before_stop_cursor(page_events, stop_cursor.as_deref());
+    let next_event_id = page.next_cursor.as_deref().or_else(|| {
+        page_events
+            .last()
+            .and_then(|event| event["event_id"].as_str())
     });
-    if backward {
-        merged.reverse();
-    }
-    let merged = truncate_before_stop_cursor(merged, stop_cursor.as_deref());
-    let mut page_events = merged.into_iter().take(limit + 1).collect::<Vec<_>>();
-    let limited = page_events.len() > limit || any_has_more;
-    if page_events.len() > limit {
-        page_events.truncate(limit);
-    }
-    let next_cursor = match page_events
-        .last()
-        .and_then(|event| event["event_id"].as_str())
-    {
+    let next_cursor = match next_event_id {
         Some(event_id) => Some(
             sync_token_for_events_query(state, session.as_ref(), &filter_digest, event_id).await,
         ),
@@ -992,7 +985,7 @@ async fn events_query_impl(
         snapshot_bootstrap: None,
         prev_cursor: cursor_token.clone(),
         next_cursor,
-        has_more: limited,
+        has_more: page.has_more,
         range_completeness,
     })
 }
@@ -1316,6 +1309,137 @@ mod tests {
         let mut config = crate::config::AppConfig::test_default();
         config.seed_demo_data = false;
         AppState::new(config, soland_storage_postgres::Db { pool: None })
+    }
+
+    async fn append_query_test_event(state: &AppState, realm_id: &str, second: u32) -> String {
+        let canonical_bytes = format!("{{\"second\":{second}}}").into_bytes();
+        let digest =
+            arkret_canonical::digest_bytes(arkret_canonical::DigestSuite::Sha256, &canonical_bytes);
+        let event_id =
+            arkret_identifiers::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, digest)
+                .to_string();
+        let received_at =
+            DateTime::parse_from_rfc3339(&format!("2026-08-26T01:00:{second:02}.000Z"))
+                .unwrap()
+                .with_timezone(&Utc);
+        state
+            .event_queries()
+            .store_canonical_event(AcceptedEvent {
+                event_id: event_id.clone(),
+                actor_id: TEST_ACTOR_CORE.to_owned(),
+                actor_seq: u64::from(second),
+                realm_id: Some(realm_id.to_owned()),
+                kind: arkret_wire::EventKind::MessageCreate.to_string(),
+                schema_id: "ak.schema.event.v1".to_owned(),
+                digest_suite: arkret_canonical::DigestSuite::Sha256,
+                canonical_digest: arkret_canonical::digest(
+                    arkret_canonical::DigestSuite::Sha256,
+                    &canonical_bytes,
+                ),
+                canonical_bytes,
+                envelope: json!({}),
+                received_at,
+            })
+            .await
+            .unwrap();
+        crate::routing::events::projection::append_projection_event(
+            state,
+            soland_services::events::ProjectedEvent {
+                event_id: event_id.clone(),
+                realm_id: realm_id.to_owned(),
+                event_kind: arkret_wire::EventKind::MessageCreate,
+                operation_kind: "event".to_owned(),
+                operation_id: None,
+                sender: Some(TEST_ACTOR_CORE.to_owned()),
+                payload: json!({}),
+                created_at: received_at,
+                received_at,
+            },
+        )
+        .await
+        .unwrap();
+        event_id
+    }
+
+    #[tokio::test]
+    async fn multi_realm_cursor_resumes_the_globally_ordered_union() {
+        let state = test_state();
+        let realms = BTreeSet::from(["realm-a".to_owned(), "realm-b".to_owned()]);
+        let mut event_ids = Vec::new();
+        for (realm, second) in [
+            ("realm-a", 1),
+            ("realm-b", 2),
+            ("realm-a", 3),
+            ("realm-b", 4),
+        ] {
+            event_ids.push(append_query_test_event(&state, realm, second).await);
+        }
+
+        let first = projected_event_page_for_realms_in_direction(&state, &realms, None, 2, false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            first
+                .items
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            [event_ids[0].as_str(), event_ids[1].as_str()]
+        );
+        let second = projected_event_page_for_realms_in_direction(
+            &state,
+            &realms,
+            first.next_cursor.as_deref(),
+            2,
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            second
+                .items
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            [event_ids[2].as_str(), event_ids[3].as_str()]
+        );
+    }
+
+    #[tokio::test]
+    async fn before_cursor_reads_older_events_in_descending_order() {
+        let state = test_state();
+        let realms = BTreeSet::from(["realm-a".to_owned(), "realm-b".to_owned()]);
+        let mut event_ids = Vec::new();
+        for (realm, second) in [
+            ("realm-a", 1),
+            ("realm-b", 2),
+            ("realm-a", 3),
+            ("realm-b", 4),
+        ] {
+            event_ids.push(append_query_test_event(&state, realm, second).await);
+        }
+
+        let page = projected_event_page_for_realms_in_direction(
+            &state,
+            &realms,
+            Some(event_ids[3].as_str()),
+            2,
+            true,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            [event_ids[2].as_str(), event_ids[1].as_str()]
+        );
+        assert!(page.has_more);
+        assert_eq!(page.next_cursor.as_deref(), Some(event_ids[1].as_str()));
     }
 
     #[test]
@@ -1654,10 +1778,16 @@ mod tests {
         )
         .await;
 
-        let page = projected_event_page(&state, TEST_REALM, None, 100)
-            .await
-            .expect("projected page")
-            .expect("projected events");
+        let page = projected_event_page_for_realms_in_direction(
+            &state,
+            &BTreeSet::from([TEST_REALM.to_owned()]),
+            None,
+            100,
+            false,
+        )
+        .await
+        .expect("projected page")
+        .expect("projected events");
         let rows = page
             .items
             .iter()

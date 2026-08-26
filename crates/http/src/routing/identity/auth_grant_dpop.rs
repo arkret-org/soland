@@ -596,6 +596,7 @@ pub(crate) fn verify_grant_dpop_request(
             now,
             max_age: Duration::seconds(DPOP_MAX_AGE_SECONDS),
             max_future_skew: Duration::seconds(DPOP_MAX_FUTURE_SKEW_SECONDS),
+            expected_nonce: None,
         },
     )
     .map_err(|_| unauthenticated("DPoP proof validation failed"))?;

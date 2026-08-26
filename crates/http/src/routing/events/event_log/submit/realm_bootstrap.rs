@@ -89,11 +89,11 @@ pub(super) async fn submit_realm_bootstrap_batch(
         }
     }
 
-    let actor_lock = actor_submit_lock(&unit.realm_id, &unit.actor_id);
+    let actor_lock = actor_submit_lock(unit.realm_id.as_str(), unit.actor_id.as_str());
     let _guard = actor_lock.lock().await;
     let context = RealmBootstrapBatchContext {
-        realm_id: unit.realm_id.clone(),
-        actor_id: unit.actor_id.clone(),
+        realm_id: unit.realm_id.to_string(),
+        actor_id: unit.actor_id.to_string(),
         digest_algorithm: Some(staged_realm_digest_algorithm(&envelopes[0])),
         identity_anchor_event_id: None,
         identity_anchor_candidate_device: None,
@@ -259,9 +259,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
             )
         })?;
 
-    let bootstrap_realm_id = RealmId::new(unit.realm_id.clone()).map_err(|error| {
-        SubmitOneError::new(StatusCode::BAD_REQUEST, "param_invalid", error.to_string())
-    })?;
+    let bootstrap_realm_id = unit.realm_id.clone();
     let control_proposal_acks = crate::control_proposal::mint_control_proposal_acks(
         state,
         &bootstrap_realm_id,
@@ -461,13 +459,13 @@ pub(super) async fn submit_realm_bootstrap_batch(
     for operation in &operations {
         crate::routing::events::projection::ensure_projected_realm(
             state,
-            &unit.actor_id,
+            unit.actor_id.as_str(),
             operation,
         )
         .await;
         let projected = crate::routing::events::projection::projection_event_from_operation(
             operation,
-            Some(&unit.actor_id),
+            Some(unit.actor_id.as_str()),
         );
         if let Err(error) =
             crate::routing::events::projection::persist_and_publish_projection_event(
@@ -482,8 +480,12 @@ pub(super) async fn submit_realm_bootstrap_batch(
             );
         }
     }
-    organizations::record_realm_organizations_from_event(state, &unit.realm_id, &envelopes[0])
-        .await;
+    organizations::record_realm_organizations_from_event(
+        state,
+        unit.realm_id.as_str(),
+        &envelopes[0],
+    )
+    .await;
     for parsed in &validated {
         append_audit_log(
             state,

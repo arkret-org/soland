@@ -24,7 +24,7 @@ use operations::{
     validate_operation_policy_with_plaintext_service_binding, validate_operation_semantics,
 };
 use projection::{
-    projected_event_page, projected_event_page_for_realms_through,
+    projected_event_page_for_realms_in_direction, projected_event_page_for_realms_through,
     projected_event_replay_upper_bound, projection_event_json,
 };
 use strand::{

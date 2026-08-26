@@ -362,8 +362,8 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
             },
         )?;
         (
-            unit.realm_id,
-            unit.actor_id,
+            unit.realm_id.to_string(),
+            unit.actor_id.to_string(),
             false,
             Some(unit.authority_root),
         )

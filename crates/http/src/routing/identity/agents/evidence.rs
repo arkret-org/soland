@@ -557,7 +557,7 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
         &mut historical,
         state.notary_signing_key().as_ref(),
     )
-    .map_err(|reason| AppError::internal(reason.as_str()))?;
+    .map_err(|error| AppError::internal(error.to_string()))?;
     let historical_root = arkret::build_native_agent_signer_resolution_evidence(
         historical,
         &authority_evidence,

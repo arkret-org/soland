@@ -51,7 +51,7 @@ use super::super::identity::device_messages::prune_device_messages_for_limits;
 pub(crate) use super::strand::strand_id_from_realm_id;
 use super::{
     TO_DEVICE_PAGE_LIMIT, authenticated_session, device_message_envelopes_after, is_realm_deleted,
-    now, projected_event_page, projected_event_page_for_realms_through,
+    now, projected_event_page_for_realms_in_direction, projected_event_page_for_realms_through,
     projected_event_replay_upper_bound, projection_event_json, query_param,
     realm_event_visible_to_session, realm_has_member, realm_id_accessible, realm_visible_to,
     render_error, sha256_hex, snapshot_manifest_for_realm,

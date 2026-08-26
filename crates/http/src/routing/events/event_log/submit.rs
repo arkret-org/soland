@@ -3239,7 +3239,7 @@ async fn prepare_agent_event_admission_receipt(
         &receiver_method,
         state.notary_signing_key().as_ref(),
     )
-    .map_err(|reason| reason.as_str().to_owned())?;
+    .map_err(|error| error.to_string())?;
     let body = serde_json::to_value(&receipt)
         .map_err(|error| format!("receipt encoding failed: {error}"))?;
     Ok(Some(PreparedAgentEventAdmissionReceipt {
