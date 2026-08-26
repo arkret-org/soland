@@ -298,9 +298,7 @@ async fn federation_submissions(
     let mut submissions = Vec::with_capacity(events.len());
     for (event, digest) in events.iter().zip(digests) {
         let record = by_digest.get(&digest);
-        let is_control_move = event.kind.is_reducer_input()
-            && event.seal_ref.is_none()
-            && event.auth_context.is_none();
+        let is_control_move = event.kind.is_control_plane();
         let control_proposal_ack = if is_control_move {
             // A current accepted device is the proposal authority in its own
             // Human PCR. This class is intentionally federated without an Ack;
@@ -751,16 +749,7 @@ pub(super) async fn peer_event_fanout_records(
                 )
             })?;
         peer_events.push(event.clone());
-        peer_events.sort_by_key(|event| {
-            match event
-                .kind
-                .descriptor()
-                .and_then(|descriptor| descriptor.plane)
-            {
-                Some("control") => 0_u8,
-                _ => 1_u8,
-            }
-        });
+        peer_events.sort_by_key(|event| u8::from(!event.kind.is_control_plane()));
         let cba_proof_bundles =
             federation_cba_proof_bundles(state, &peer_events).map_err(|error| {
                 format!(

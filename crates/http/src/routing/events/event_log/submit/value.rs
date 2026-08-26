@@ -401,16 +401,28 @@ pub(in crate::routing) async fn submit_initial_event_submission(
     session: &SessionRecord,
     submission: arkret_wire::EventInitialSubmission,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    // Keep the large admission state machine off the Tokio worker stack. This
-    // boundary is shared by HTTP submission and internal controller-authored
-    // Event admission, so nesting it inside another async workflow otherwise
-    // inlines the full future into its caller.
-    Box::pin(submit_initial_event_submission_with_commit_extensions(
-        state,
-        session,
+    // Box::pin only changes allocation; it does not establish a scheduler stack
+    // boundary. Run the owned admission future as a direct Tokio task root so
+    // its deep state machine cannot be inlined into an HTTP/controller caller.
+    join_initial_submission_task(tokio::spawn(submit_initial_event_submission_owned(
+        state.clone(),
+        session.clone(),
+        submission,
+    )))
+    .await
+}
+
+async fn submit_initial_event_submission_owned(
+    state: AppState,
+    session: SessionRecord,
+    submission: arkret_wire::EventInitialSubmission,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    submit_initial_event_submission_with_commit_extensions(
+        &state,
+        &session,
         submission,
         SubmitCommitOptions::none(),
-    ))
+    )
     .await
 }
 
@@ -420,17 +432,32 @@ pub(in crate::routing) async fn submit_initial_event_submission_with_device_pair
     submission: arkret_wire::EventInitialSubmission,
     device_pairing: DevicePairingAdmission,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    // Same Box::pin boundary as `submit_initial_event_submission`: the
-    // admission state machine future must not inline into its caller.
-    Box::pin(submit_initial_event_submission_with_commit_extensions(
-        state,
-        session,
+    join_initial_submission_task(tokio::spawn(
+        submit_initial_event_submission_with_device_pairing_owned(
+            state.clone(),
+            session.clone(),
+            submission,
+            device_pairing,
+        ),
+    ))
+    .await
+}
+
+async fn submit_initial_event_submission_with_device_pairing_owned(
+    state: AppState,
+    session: SessionRecord,
+    submission: arkret_wire::EventInitialSubmission,
+    device_pairing: DevicePairingAdmission,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    submit_initial_event_submission_with_commit_extensions(
+        &state,
+        &session,
         submission,
         SubmitCommitOptions {
             device_pairing: Some(&device_pairing),
             ..SubmitCommitOptions::none()
         },
-    ))
+    )
     .await
 }
 
@@ -442,11 +469,30 @@ pub(in crate::routing) async fn submit_initial_event_submission_with_contact_pro
     deliveries: Vec<soland_services::federation::FederationDeliveryRecord>,
     idempotency: soland_services::events::IdempotentResponse,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    // Same Box::pin boundary as `submit_initial_event_submission`: the
-    // admission state machine future must not inline into its caller.
-    Box::pin(submit_initial_event_submission_with_commit_extensions(
-        state,
-        session,
+    join_initial_submission_task(tokio::spawn(
+        submit_initial_event_submission_with_contact_projection_owned(
+            state.clone(),
+            session.clone(),
+            submission,
+            contact_projection,
+            deliveries,
+            idempotency,
+        ),
+    ))
+    .await
+}
+
+async fn submit_initial_event_submission_with_contact_projection_owned(
+    state: AppState,
+    session: SessionRecord,
+    submission: arkret_wire::EventInitialSubmission,
+    contact_projection: soland_services::events::CommitContactProjection,
+    deliveries: Vec<soland_services::federation::FederationDeliveryRecord>,
+    idempotency: soland_services::events::IdempotentResponse,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    submit_initial_event_submission_with_commit_extensions(
+        &state,
+        &session,
         submission,
         SubmitCommitOptions {
             idempotency: Some(SubmitCommitIdempotency::Prepared(idempotency)),
@@ -454,8 +500,20 @@ pub(in crate::routing) async fn submit_initial_event_submission_with_contact_pro
             contact_projection: Some(&contact_projection),
             additional_deliveries: &deliveries,
         },
-    ))
+    )
     .await
+}
+
+async fn join_initial_submission_task(
+    task: tokio::task::JoinHandle<Result<SubmittedEventOutcome, SubmitOneError>>,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    task.await.map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("isolated initial Event admission task failed: {error}"),
+        )
+    })?
 }
 
 async fn submit_initial_event_submission_with_commit_extensions(
@@ -1461,15 +1519,18 @@ pub(super) async fn accepted_event_envelope(
                 format!("Principal Server signer evidence retention failed: {error}"),
             )
         })?;
-    let governance_dependency = (event.kind.is_reducer_input()
-        && event.seal_ref.is_none()
-        && event.auth_context.is_none())
-    .then(|| soland_storage::GovernanceDependencyWrite {
-        realm_id: event.realm_id.clone(),
-        source: soland_storage::GovernanceDependencySource::ControlEvent(event_digest.clone()),
-        edge_index: 0,
-        item: dependency,
-    });
+    let governance_dependency =
+        event
+            .kind
+            .is_control_plane()
+            .then(|| soland_storage::GovernanceDependencyWrite {
+                realm_id: event.realm_id.clone(),
+                source: soland_storage::GovernanceDependencySource::ControlEvent(
+                    event_digest.clone(),
+                ),
+                edge_index: 0,
+                item: dependency,
+            });
     let mut admission = arkret_wire::PrincipalServerAdmissionProof {
         kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
         verification_method,
@@ -1798,9 +1859,8 @@ pub(super) async fn submit_event_value_with_context(
             None => None,
         };
     let received_at = now();
-    let control_event_for_proposal = Some(submitted_event.clone()).filter(|event| {
-        event.kind.is_reducer_input() && event.seal_ref.is_none() && event.auth_context.is_none()
-    });
+    let control_event_for_proposal =
+        Some(submitted_event.clone()).filter(|event| event.kind.is_control_plane());
     let ackless_self_principal_ingress = if let Some(event) = control_event_for_proposal
         .as_ref()
         .filter(|event| event.kind != arkret_wire::EventKind::DeviceRevoke)

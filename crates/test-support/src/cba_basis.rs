@@ -818,31 +818,23 @@ pub fn apply_registered_cba_plane_seal(
     if !carries_a_cba_basis(event) {
         return;
     }
-    let plane = event
-        .kind
-        .descriptor()
-        .and_then(|descriptor| descriptor.plane);
-    match plane {
-        Some("data") => {
-            event.seal_ref = Some(seal_id);
-            event.auth_context = Some(arkret_wire::AuthContext {
-                key_id: fixture_auth_context_key_id(verification_method),
-                key_epoch: 0,
-                credential_epoch: None,
-            });
-        }
-        Some("control") => {
-            event.seal_basis = Some(SealBasis {
-                leaves: vec![seal_id],
-            });
-        }
-        _ => {}
+    if event.kind.is_data_plane() {
+        event.seal_ref = Some(seal_id);
+        event.auth_context = Some(arkret_wire::AuthContext {
+            key_id: fixture_auth_context_key_id(verification_method),
+            key_epoch: 0,
+            credential_epoch: None,
+        });
+    } else if event.kind.is_control_plane() {
+        event.seal_basis = Some(SealBasis {
+            leaves: vec![seal_id],
+        });
     }
 }
 
 /// Whether `event`'s kind owes a CBA basis field at all.
 fn carries_a_cba_basis(event: &arkret_wire::Event) -> bool {
-    event.kind.descriptor().is_some_and(|row| row.reducer_input)
+    (event.kind.is_data_plane() || event.kind.is_control_plane())
         && !matches!(
             &event.kind,
             arkret_wire::EventKind::RealmCreate | arkret_wire::EventKind::DeviceReanchor

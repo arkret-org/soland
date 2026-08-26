@@ -201,8 +201,7 @@ fn stage_control_proposal_ack(
     // a closed genesis anchor is a basis-free Control Move, while a DataEvent
     // carries the data-plane seal/auth context. Do not infer the plane from
     // `seal_basis` or from the presence of a Control Proposal Ack.
-    let is_control_move =
-        event.kind.is_reducer_input() && event.seal_ref.is_none() && event.auth_context.is_none();
+    let is_control_move = event.kind.is_control_plane();
     if !is_control_move {
         if request.control_proposal_ingress.is_some() {
             return Err(PersistenceError::Conflict(
@@ -278,8 +277,7 @@ fn stage_event_governance_dependencies(
                 "schema_violation: accepted Event envelope is not canonical wire: {error}"
             ))
         })?;
-    let is_control_move =
-        event.kind.is_reducer_input() && event.seal_ref.is_none() && event.auth_context.is_none();
+    let is_control_move = event.kind.is_control_plane();
     if !is_control_move {
         return if request.governance_dependencies.is_empty() {
             Ok(())
