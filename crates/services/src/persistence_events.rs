@@ -385,6 +385,21 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .map(application_accepted_event)
             .collect())
     }
+    async fn franking_proofs_for_target(
+        &self,
+        realm_id: &str,
+        received_by: &str,
+        target_event_id: &str,
+    ) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
+        Ok(self
+            .0
+            .events()
+            .franking_proofs_for_target(realm_id, received_by, target_event_id)
+            .await?
+            .into_iter()
+            .map(application_accepted_event)
+            .collect())
+    }
     async fn identity_anchor_account_slot_for_principal(
         &self,
         principal_id: &str,
@@ -1761,6 +1776,7 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
                     .into_iter()
                     .map(persistence_event_commit_request)
                     .collect(),
+                franking_replay_nonce: command.franking_replay_nonce,
                 applet_record: command.applet_record.map(|mutation| {
                     soland_storage::AppletRecordCommit {
                         applet_id: mutation.applet_id,

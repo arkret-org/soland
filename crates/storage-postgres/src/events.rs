@@ -1557,6 +1557,33 @@ impl EventStore for PgEventStore {
         .map_err(PersistenceError::database)
     }
 
+    async fn franking_proofs_for_target(
+        &self,
+        realm_id: &str,
+        received_by: &str,
+        target_event_id: &str,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
+             FROM canonical_events WHERE state = 'accepted' \
+               AND realm_pk = (SELECT pk FROM canonical_realms WHERE wire_id = $1) \
+               AND actor_id = $2 AND kind = $3 \
+               AND envelope -> 'payload' ->> 'event_id' = $4 \
+             ORDER BY actor_seq ASC, id ASC",
+        )
+        .bind::<Text, _>(realm_id)
+        .bind::<Text, _>(received_by)
+        .bind::<Text, _>(arkret_wire::EventKind::ModerationFrankingProof.as_str())
+        .bind::<Text, _>(target_event_id)
+        .load::<CanonicalEventRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
+        .map_err(PersistenceError::database)
+    }
+
     async fn peer_authz_state_records(&self) -> PersistenceResult<Vec<CanonicalEventRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await

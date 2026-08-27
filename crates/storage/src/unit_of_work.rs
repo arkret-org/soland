@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use serde_json::Value;
 
 use crate::{
     AccountDataRecord, CanonicalEventRecord, ConsentCellRecord, ContactRecord,
@@ -408,9 +410,65 @@ pub struct ManagedAuthorityClaim {
 #[derive(Clone, Debug)]
 pub struct EventBatchCommitRequest {
     pub events: Vec<EventCommitRequest>,
+    /// One moderation franking nonce consumed by a report Event in this
+    /// batch. The ledger write is inseparable from the report Event: a failed
+    /// commit consumes nothing, and a concurrent replay can commit at most
+    /// once across processes.
+    pub franking_replay_nonce: Option<FrankingReplayNonceCommit>,
     pub applet_record: Option<AppletRecordCommit>,
     pub applet_authoring_preview: Option<AppletAuthoringPreviewCommit>,
     pub agent_membership_cascade: Option<crate::AgentMembershipCascadeCommit>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrankingReplayNonceCommit {
+    pub realm_id: String,
+    pub received_by: String,
+    pub replay_nonce: String,
+    pub report_event_id: String,
+    pub consumed_at: DateTime<Utc>,
+}
+
+/// Refuse a nonce ledger row unless the same batch contains the exact report
+/// Event and its signed franking payload. Persistence repeats this binding so
+/// a future caller cannot accidentally turn the ledger into an unscoped
+/// uniqueness service.
+pub fn validate_franking_replay_nonce_commit(
+    events: &[EventCommitRequest],
+    commit: Option<&FrankingReplayNonceCommit>,
+) -> PersistenceResult<()> {
+    let Some(commit) = commit else {
+        return Ok(());
+    };
+    let Some(report) = events
+        .iter()
+        .find(|request| request.event.event_id == commit.report_event_id)
+    else {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: franking nonce is not bound to a report Event in the batch"
+                .to_owned(),
+        ));
+    };
+    if report.event.kind != arkret_wire::EventKind::SelfModerationReport.as_str()
+        || report.event.realm_id.as_deref() != Some(commit.realm_id.as_str())
+        || report
+            .event
+            .envelope
+            .pointer("/payload/franking_proof/received_by")
+            .and_then(Value::as_str)
+            != Some(commit.received_by.as_str())
+        || report
+            .event
+            .envelope
+            .pointer("/payload/franking_proof/replay_nonce")
+            .and_then(Value::as_str)
+            != Some(commit.replay_nonce.as_str())
+    {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: franking nonce does not match its report Event payload".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]

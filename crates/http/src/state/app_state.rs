@@ -1885,18 +1885,6 @@ impl AppState {
         )
     }
 
-    /// Remember a franking replay nonce within a finite retention window.
-    /// Returns `true` for a fresh nonce and `false` for an in-window replay.
-    pub fn remember_moderation_franking_nonce(
-        &self,
-        realm_id: &str,
-        received_by: &str,
-        replay_nonce: &str,
-    ) -> bool {
-        self.runtime_guards
-            .remember_moderation_franking_nonce(realm_id, received_by, replay_nonce)
-    }
-
     /// Consume a native-agent act-on-behalf approval nonce until the approval
     /// expires. Returns false when the nonce was already consumed or expired.
     pub fn remember_agent_approval_nonce(

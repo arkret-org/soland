@@ -20,8 +20,6 @@ const MODERATION_REPORT_MAX_PER_REPORTER_REALM_WINDOW: u32 = 10;
 const MODERATION_REPORT_MAX_PER_SOURCE_IP_WINDOW: u32 = 80;
 const MODERATION_REPORT_MAX_PER_REPORTER_TARGET_WINDOW: u32 = 1;
 const MODERATION_REPORT_RATE_TRACKER_MAX_ENTRIES: usize = 32_768;
-const MODERATION_FRANKING_REPLAY_WINDOW: Duration = Duration::hours(24);
-const MODERATION_FRANKING_REPLAY_MAX_ENTRIES: usize = 4096;
 const AGENT_APPROVAL_NONCE_MAX_ENTRIES: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +47,6 @@ struct RuntimeGuards {
     peer_keypackage_claims: Mutex<BTreeMap<(String, String), WindowRecord>>,
     key_backup_downloads: Mutex<BTreeMap<String, WindowRecord>>,
     moderation_reports: Mutex<BTreeMap<String, WindowRecord>>,
-    moderation_franking_nonces: Mutex<BTreeMap<String, ReplayRecord>>,
     agent_approval_nonces: Mutex<BTreeMap<String, DateTime<Utc>>>,
 }
 
@@ -60,12 +57,6 @@ struct WindowRecord {
     last_seen_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Copy)]
-struct ReplayRecord {
-    first_seen_at: DateTime<Utc>,
-    last_seen_at: DateTime<Utc>,
-}
-
 impl Default for RuntimeGuardService {
     fn default() -> Self {
         Self {
@@ -73,7 +64,6 @@ impl Default for RuntimeGuardService {
                 peer_keypackage_claims: Mutex::new(BTreeMap::new()),
                 key_backup_downloads: Mutex::new(BTreeMap::new()),
                 moderation_reports: Mutex::new(BTreeMap::new()),
-                moderation_franking_nonces: Mutex::new(BTreeMap::new()),
                 agent_approval_nonces: Mutex::new(BTreeMap::new()),
             }),
         }
@@ -205,35 +195,6 @@ impl RuntimeGuardService {
             limit: 0,
             retry_after_ms: 0,
         })
-    }
-
-    pub fn remember_moderation_franking_nonce(
-        &self,
-        realm_id: &str,
-        received_by: &str,
-        replay_nonce: &str,
-    ) -> bool {
-        let mut records = self.inner.moderation_franking_nonces.lock();
-        let now = Utc::now();
-        records.retain(|_, record| record.last_seen_at >= now - MODERATION_FRANKING_REPLAY_WINDOW);
-        evict_oldest_entries(
-            &mut records,
-            MODERATION_FRANKING_REPLAY_MAX_ENTRIES,
-            |record| record.first_seen_at.timestamp_millis(),
-        );
-        let key = format!("{realm_id}:{received_by}:{replay_nonce}");
-        if let Some(record) = records.get_mut(&key) {
-            record.last_seen_at = now;
-            return false;
-        }
-        records.insert(
-            key,
-            ReplayRecord {
-                first_seen_at: now,
-                last_seen_at: now,
-            },
-        );
-        true
     }
 
     pub fn remember_agent_approval_nonce(

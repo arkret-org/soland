@@ -787,6 +787,10 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 "schema_violation: empty event batch".to_owned(),
             ));
         }
+        soland_storage::validate_franking_replay_nonce_commit(
+            &request.events,
+            request.franking_replay_nonce.as_ref(),
+        )?;
         // Same seal-derived settlement as `commit_event` above.
         self.device_revocations.settle_from_control_events();
         let mut events = self.events.data.lock();
@@ -795,6 +799,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut control_proposal_acks = self.events.control_proposal_acks.lock();
         let mut projections = self.projection_events.data.lock();
         let mut idempotency = self.idempotency_keys.data.lock();
+        let mut franking_replay_nonces = self.franking_replay_nonces.lock();
         let mut event_outbox_ids = self.events.event_outbox_ids.lock();
         let mut outbox = self.federation_outbox.data.lock();
         let mut applets = self.applets.records.lock();
@@ -811,6 +816,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_control_proposal_acks = control_proposal_acks.clone();
         let mut staged_projections = projections.clone();
         let mut staged_idempotency = idempotency.clone();
+        let mut staged_franking_replay_nonces = franking_replay_nonces.clone();
         let mut staged_outbox = outbox.clone();
         let mut staged_event_outbox_ids = event_outbox_ids.clone();
         let mut staged_applets = applets.clone();
@@ -989,6 +995,17 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             }
         }
 
+        if let Some(nonce) = request.franking_replay_nonce {
+            let key = (
+                nonce.realm_id.clone(),
+                nonce.received_by.clone(),
+                nonce.replay_nonce.clone(),
+            );
+            if staged_franking_replay_nonces.insert(key, nonce).is_some() {
+                return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
+            }
+        }
+
         if let Some(preview) = request.applet_authoring_preview {
             let matches_current = staged_authoring_previews
                 .get(&preview.subject_key)
@@ -1106,6 +1123,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *control_proposal_acks = staged_control_proposal_acks;
         *projections = staged_projections;
         *idempotency = staged_idempotency;
+        *franking_replay_nonces = staged_franking_replay_nonces;
         *outbox = staged_outbox;
         *event_outbox_ids = staged_event_outbox_ids;
         *applets = staged_applets;
@@ -1138,8 +1156,8 @@ mod tests {
         DeviceMessageRecord, DeviceRevocationGateAction, DeviceRevocationGateLinearizationRequest,
         DeviceRevocationGateSelector, DeviceRevocationGateStatus, DeviceRevocationStore,
         DeviceRevocationTransition, EventBatchCommitRequest, EventCommitRequest,
-        EventCommitUnitOfWork, EventProjectionStoreRegistry, IdempotencyRecord, PersistenceError,
-        ProjectionEventRecord,
+        EventCommitUnitOfWork, EventProjectionStoreRegistry, FrankingReplayNonceCommit,
+        IdempotencyRecord, PersistenceError, ProjectionEventRecord,
     };
 
     use super::stage_control_proposal_ack;
@@ -1667,6 +1685,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn franking_nonce_replay_rolls_back_the_competing_report_event() {
+        let store = SolandMemoryPersistenceStore::new();
+        let realm_id = realm_id();
+        let received_by = "ak:did_core:web:receiver.example";
+        let replay_nonce = "nonce_0123456789";
+        let mut first = event_request(
+            typed_id("ak:event:"),
+            realm_id.clone(),
+            "did:web:reporter-one.example",
+            None,
+        );
+        first.event.kind = arkret_wire::EventKind::SelfModerationReport.to_string();
+        first.event.envelope["payload"] = serde_json::json!({
+            "franking_proof": {
+                "received_by": received_by,
+                "replay_nonce": replay_nonce,
+            }
+        });
+        let first_id = first.event.event_id.clone();
+        store
+            .commit_event_batch(EventBatchCommitRequest {
+                events: vec![first],
+                franking_replay_nonce: Some(FrankingReplayNonceCommit {
+                    realm_id: realm_id.clone(),
+                    received_by: received_by.to_owned(),
+                    replay_nonce: replay_nonce.to_owned(),
+                    report_event_id: first_id.clone(),
+                    consumed_at: Utc::now(),
+                }),
+                applet_record: None,
+                applet_authoring_preview: None,
+                agent_membership_cascade: None,
+            })
+            .await
+            .unwrap();
+
+        let mut competing = event_request(
+            typed_id("ak:event:"),
+            realm_id.clone(),
+            "did:web:reporter-two.example",
+            None,
+        );
+        competing.event.kind = arkret_wire::EventKind::SelfModerationReport.to_string();
+        competing.event.envelope["payload"] = serde_json::json!({
+            "franking_proof": {
+                "received_by": received_by,
+                "replay_nonce": replay_nonce,
+            }
+        });
+        let competing_id = competing.event.event_id.clone();
+        let error = store
+            .commit_event_batch(EventBatchCommitRequest {
+                events: vec![competing],
+                franking_replay_nonce: Some(FrankingReplayNonceCommit {
+                    realm_id,
+                    received_by: received_by.to_owned(),
+                    replay_nonce: replay_nonce.to_owned(),
+                    report_event_id: competing_id.clone(),
+                    consumed_at: Utc::now(),
+                }),
+                applet_record: None,
+                applet_authoring_preview: None,
+                agent_membership_cascade: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, PersistenceError::Conflict(reason) if reason == "duplicate_conflict")
+        );
+        assert!(store.events.data.lock().contains_key(&first_id));
+        assert!(!store.events.data.lock().contains_key(&competing_id));
+        assert_eq!(store.franking_replay_nonces.lock().len(), 1);
+    }
+
+    #[tokio::test]
     async fn agent_membership_cascade_commits_exact_sets_and_durable_cleanup_atomically() {
         let store = SolandMemoryPersistenceStore::new();
         let realm_id = realm_id();
@@ -1686,6 +1779,7 @@ mod tests {
 
         let mut incomplete = EventBatchCommitRequest {
             events: vec![controller.clone(), agent_a.clone()],
+            franking_replay_nonce: None,
             applet_record: None,
             applet_authoring_preview: None,
             agent_membership_cascade: Some(AgentMembershipCascadeCommit::AtomicSelfLeave {
@@ -1735,6 +1829,7 @@ mod tests {
         store
             .commit_event_batch(EventBatchCommitRequest {
                 events: vec![terminal.clone()],
+                franking_replay_nonce: None,
                 applet_record: None,
                 applet_authoring_preview: None,
                 agent_membership_cascade: Some(AgentMembershipCascadeCommit::EmergencyTerminal {
@@ -1769,6 +1864,7 @@ mod tests {
         store
             .commit_event_batch(EventBatchCommitRequest {
                 events: vec![cleanup_a, cleanup_b],
+                franking_replay_nonce: None,
                 applet_record: None,
                 applet_authoring_preview: None,
                 agent_membership_cascade: Some(AgentMembershipCascadeCommit::EmergencyCleanup {
@@ -2070,6 +2166,7 @@ mod tests {
                     expires_at: now + Duration::hours(1),
                 }),
             )],
+            franking_replay_nonce: None,
             applet_record: Some(AppletRecordCommit {
                 applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
                 expected_record: Some(original_record),
@@ -2145,6 +2242,7 @@ mod tests {
                 "did:web:bridge.example:ghost:second",
                 None,
             )],
+            franking_replay_nonce: None,
             applet_record: Some(AppletRecordCommit {
                 applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
                 expected_record: Some(test_applet_record(
@@ -2227,6 +2325,7 @@ mod tests {
                 "did:web:bridge.example:ghost:third",
                 None,
             )],
+            franking_replay_nonce: None,
             applet_record: Some(AppletRecordCommit {
                 applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
                 expected_record: Some(test_applet_record(
@@ -2326,6 +2425,7 @@ mod tests {
                     &format!("did:web:{suffix}.example"),
                     None,
                 )],
+                franking_replay_nonce: None,
                 applet_record: Some(AppletRecordCommit {
                     applet_id: arkret_wire::AppletId::new(applet_id).unwrap(),
                     expected_record: None,
@@ -2382,6 +2482,7 @@ mod tests {
                     "did:web:applet-admin.example",
                     None,
                 )],
+                franking_replay_nonce: None,
                 applet_record: Some(AppletRecordCommit {
                     applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
                     expected_record: None,

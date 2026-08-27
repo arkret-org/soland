@@ -785,6 +785,7 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
         .events()
         .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
             events: commands,
+            franking_replay_nonce: None,
             applet_record: None,
             applet_authoring_preview: None,
             agent_membership_cascade: Some(cascade_commit),
@@ -1263,6 +1264,7 @@ async fn submit_federated_cascade_after_transport_validation(
         .events()
         .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
             events: prepared.iter().map(|event| event.command.clone()).collect(),
+            franking_replay_nonce: None,
             applet_record: None,
             applet_authoring_preview: None,
             agent_membership_cascade: Some(cascade_commit),

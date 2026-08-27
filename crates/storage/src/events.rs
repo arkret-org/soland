@@ -123,6 +123,14 @@ pub trait EventStore: Send + Sync {
         realm_id: &str,
         actor_id: &str,
     ) -> PersistenceResult<Vec<CanonicalEventRecord>>;
+    /// Indexed lookup for durable franking proof Events that bind one target.
+    /// Callers still compare the complete typed payload before trusting a row.
+    async fn franking_proofs_for_target(
+        &self,
+        realm_id: &str,
+        received_by: &str,
+        target_event_id: &str,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>>;
     /// Cheap Realm-local cardinality/byte preflight for bounded proof
     /// materialization. Implementations must not load Event envelopes.

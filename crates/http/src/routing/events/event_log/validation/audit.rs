@@ -11,33 +11,7 @@ use super::super::*;
 /// `.others` audit pairing edge.
 const AUDIT_PAIR_ROLE: &str = "audit_pair";
 
-pub(crate) async fn append_encrypted_message_franking(
-    state: &AppState,
-    parsed: &ValidatedEventEnvelope,
-    envelope: &Value,
-) {
-    if !is_encrypted_message(parsed, envelope) {
-        return;
-    }
-    if let Err(error) = Box::pin(
-        crate::routing::interop::moderation::persist_franking_proof_event(
-            state,
-            parsed.realm_id.as_str(),
-            parsed.event_id.as_str(),
-        ),
-    )
-    .await
-    {
-        tracing::error!(
-            %error,
-            event_id = %parsed.event_id,
-            realm_id = %parsed.realm_id,
-            "failed to persist canonical franking-proof Event"
-        );
-    }
-}
-
-fn is_encrypted_message(parsed: &ValidatedEventEnvelope, envelope: &Value) -> bool {
+pub(crate) fn is_encrypted_message(parsed: &ValidatedEventEnvelope, envelope: &Value) -> bool {
     if parsed.kind != arkret_wire::EventKind::MessageCreate.as_str() {
         return false;
     }

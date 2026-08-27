@@ -1321,6 +1321,7 @@ fn contract_applet_batch(
 ) -> EventBatchCommitRequest {
     EventBatchCommitRequest {
         events,
+        franking_replay_nonce: None,
         applet_record: Some(AppletRecordCommit {
             applet_id: applet_id.clone(),
             expected_record,

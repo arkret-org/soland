@@ -117,6 +117,8 @@ DROP TABLE IF EXISTS sync_cursor_handles CASCADE;
 DROP TABLE IF EXISTS sync_cursor_revocations CASCADE;
 DROP TABLE IF EXISTS websocket_auth_challenges CASCADE;
 DROP TABLE IF EXISTS websocket_auth_replay_ledger CASCADE;
+DROP TABLE IF EXISTS moderation_franking_replay_nonces CASCADE;
+DROP INDEX IF EXISTS canonical_events_franking_target_idx;
 DROP TABLE IF EXISTS idempotency_keys CASCADE;
 DROP TABLE IF EXISTS control_proposal_authority_acks CASCADE;
 DROP TABLE IF EXISTS service_identity_registrations CASCADE;

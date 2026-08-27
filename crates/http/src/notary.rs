@@ -42,7 +42,8 @@ use arkret_models_collaboration::objects::realm::{
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::{
-    ControlMoveReject, StoreError, compute_state_root, control_event_set_root, join_cell,
+    ControlMoveReject, StoreError, compute_state_root, control_event_set_root,
+    event_digest_set_root, join_cell,
 };
 use arkret_wire::cell::CellId;
 use arkret_wire::{
@@ -778,6 +779,15 @@ impl NotaryWorker {
         let hlc = Hlc::new(state.hlc().now())
             .map_err(|e| NotaryError::Construction(format!("invalid HLC: {e}")))?;
         let sealed_at = chrono::Utc::now();
+        let data_event_digests =
+            data_event_digests_for_window(state, realm_id, &predecessor_refs, sealed_at).await?;
+        let data_event_set_root = (!data_event_digests.is_empty())
+            .then(|| {
+                event_digest_set_root(&data_event_digests, digest_suites.seal_digest_suite).map_err(
+                    |error| NotaryError::Construction(format!("data_event_set_root: {error}")),
+                )
+            })
+            .transpose()?;
         let availability_dependencies = self
             .build_availability_dependencies(
                 state,
@@ -828,7 +838,7 @@ impl NotaryWorker {
             completeness_root,
             notary_seq,
             data_view_root: None,
-            data_event_set_root: None,
+            data_event_set_root,
             availability_receipt_digests,
             covered_event_digests: digest_suites
                 .previous_state_digest_suite
@@ -1689,6 +1699,66 @@ impl NotaryWorker {
             jws,
         })
     }
+}
+
+/// Reconstruct the deterministic DataEvent observation window used by a
+/// Seal. The lower bound is the newest predecessor commit time; the upper
+/// bound is the signed `sealed_at`. This makes the leaf manifest recoverable
+/// after restart without maintaining a second private observation ledger.
+pub(crate) async fn data_event_digests_for_seal(
+    state: &AppState,
+    seal: &Seal,
+) -> Result<BTreeSet<Hash>, NotaryError> {
+    data_event_digests_for_window(
+        state,
+        &seal.realm_id,
+        &seal.predecessor_refs,
+        seal.sealed_at,
+    )
+    .await
+}
+
+async fn data_event_digests_for_window(
+    state: &AppState,
+    realm_id: &RealmId,
+    predecessor_refs: &[SealId],
+    sealed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<BTreeSet<Hash>, NotaryError> {
+    let mut lower_bound: Option<chrono::DateTime<chrono::Utc>> = None;
+    for predecessor_ref in predecessor_refs {
+        let predecessor = state
+            .projections()
+            .seal_by_id(predecessor_ref)?
+            .ok_or_else(|| {
+                NotaryError::Store(format!(
+                    "data observation predecessor {predecessor_ref} is missing"
+                ))
+            })?;
+        lower_bound = Some(lower_bound.map_or(predecessor.sealed_at, |current| {
+            current.max(predecessor.sealed_at)
+        }));
+    }
+    let records = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| {
+            NotaryError::Store(format!("read DataEvent observation window: {error}"))
+        })?;
+    records
+        .into_iter()
+        .filter(|record| {
+            record.realm_id.as_deref() == Some(realm_id.as_str())
+                && arkret_wire::EventKind::from(record.kind.as_str()).is_data_plane()
+                && record.received_at <= sealed_at
+                && lower_bound.is_none_or(|lower_bound| record.received_at > lower_bound)
+        })
+        .map(|record| {
+            Hash::new(record.canonical_digest).map_err(|error| {
+                NotaryError::Store(format!("invalid canonical DataEvent digest: {error}"))
+            })
+        })
+        .collect()
 }
 
 fn availability_policy_from_predecessor(

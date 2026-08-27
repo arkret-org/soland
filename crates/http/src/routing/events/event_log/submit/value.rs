@@ -100,6 +100,9 @@ impl SubmitCommitOptions<'_> {
 pub(super) enum SubmitMode<'a> {
     Commit(SubmitCommitOptions<'a>),
     PrepareAgentMembership(&'a mut Option<PreparedAgentMembershipEvent>),
+    /// Admit an internally-authored Event through the ordinary canonical
+    /// lane, but return its commit command to a larger atomic aggregate.
+    PrepareInternal(&'a mut Option<soland_services::events::CommitAcceptedEventCommand>),
 }
 
 /// Classify a failed origin-selector derivation on the origin Principal
@@ -792,18 +795,19 @@ pub(in crate::routing) async fn submit_mimi_moderation_report_event_value(
     .await
 }
 
-pub(in crate::routing) async fn submit_service_franking_proof_event_value(
+pub(in crate::routing) async fn prepare_service_franking_proof_event_value(
     state: &AppState,
     session: &SessionRecord,
     envelope: Value,
     realm_id: &str,
     target_event_id: &str,
-) -> Result<SubmittedEventOutcome, SubmitOneError> {
+) -> Result<soland_services::events::CommitAcceptedEventCommand, SubmitOneError> {
     let admission = InternalEventAdmission::service_franking_proof(
         realm_id,
         state.service_id().as_str(),
         target_event_id,
     );
+    let mut prepared = None;
     submit_event_value_with_context(
         state,
         session,
@@ -812,9 +816,16 @@ pub(in crate::routing) async fn submit_service_franking_proof_event_value(
             internal_admission: Some(&admission),
             ..SubmitEventContext::empty()
         },
-        SubmitMode::Commit(SubmitCommitOptions::none()),
+        SubmitMode::PrepareInternal(&mut prepared),
     )
-    .await
+    .await?;
+    prepared.ok_or_else(|| {
+        SubmitOneError::new(
+            StatusCode::CONFLICT,
+            "duplicate_conflict",
+            "franking proof preparation encountered an already accepted Event",
+        )
+    })
 }
 
 pub(in crate::routing) async fn submit_event_value_with_idempotency(
@@ -1677,6 +1688,40 @@ pub(super) fn exact_producer_retry(existing_bytes: &[u8], submitted: &Event) -> 
     existing == *submitted
 }
 
+fn moderation_franking_replay_nonce(
+    parsed: &ValidatedEventEnvelope,
+    envelope: &Value,
+    consumed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Option<soland_storage::FrankingReplayNonceCommit>, SubmitOneError> {
+    if parsed.kind != arkret_wire::EventKind::SelfModerationReport.as_str() {
+        return Ok(None);
+    }
+    let payload = envelope.get("payload").cloned().ok_or_else(|| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "moderation report Event has no payload",
+        )
+    })?;
+    let payload: arkret_models_collaboration::events_payloads::moderation::ModerationReportPayload =
+        serde_json::from_value(payload).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("moderation report payload is invalid: {error}"),
+            )
+        })?;
+    Ok(payload
+        .franking_proof
+        .map(|proof| soland_storage::FrankingReplayNonceCommit {
+            realm_id: parsed.realm_id.to_string(),
+            received_by: proof.received_by.to_string(),
+            replay_nonce: proof.replay_nonce,
+            report_event_id: parsed.event_id.to_string(),
+            consumed_at,
+        }))
+}
+
 pub(super) async fn submit_event_value_with_context(
     state: &AppState,
     session: &SessionRecord,
@@ -1684,9 +1729,10 @@ pub(super) async fn submit_event_value_with_context(
     context: SubmitEventContext<'_>,
     mode: SubmitMode<'_>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    let (commit_options, deferred_agent_membership) = match mode {
-        SubmitMode::Commit(options) => (Some(options), None),
-        SubmitMode::PrepareAgentMembership(slot) => (None, Some(slot)),
+    let (commit_options, deferred_agent_membership, deferred_internal) = match mode {
+        SubmitMode::Commit(options) => (Some(options), None, None),
+        SubmitMode::PrepareAgentMembership(slot) => (None, Some(slot), None),
+        SubmitMode::PrepareInternal(slot) => (None, None, Some(slot)),
     };
     let preparing_agent_membership = deferred_agent_membership.is_some();
     if event_string_field_from_value(&envelope, "kind").as_deref()
@@ -3137,7 +3183,59 @@ pub(super) async fn submit_event_value_with_context(
         });
         return Ok(accepted_response);
     }
-    if let Err(error) = state.events().commit_accepted_event(command).await {
+    if let Some(slot) = deferred_internal {
+        *slot = Some(command);
+        return Ok(accepted_response);
+    }
+    let franking_replay_nonce =
+        moderation_franking_replay_nonce(&parsed, &envelope_for_bootstrap, received_at)?;
+    let encrypted_message = is_encrypted_message(&parsed, &envelope_for_bootstrap);
+    let commit_result = if encrypted_message {
+        // Service actor sequence allocation and the final transaction stay
+        // under one process-wide authoring lock. PostgreSQL's Realm/actor
+        // advisory lock supplies the cross-process CAS; this lock prevents
+        // avoidable sibling construction inside one instance.
+        let service_event_lock = service_event_authoring_lock();
+        let _service_event_guard = service_event_lock.lock().await;
+        let proof_command = Box::pin(
+            crate::routing::interop::moderation::prepare_franking_proof_event(
+                state,
+                &command.event,
+            ),
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                error.http_status(),
+                error.wire_code(),
+                format!("franking proof preparation failed: {error}"),
+            )
+        })?;
+        state
+            .events()
+            .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
+                events: vec![command, proof_command],
+                franking_replay_nonce,
+                applet_record: None,
+                applet_authoring_preview: None,
+                agent_membership_cascade: None,
+            })
+            .await
+    } else if franking_replay_nonce.is_some() {
+        state
+            .events()
+            .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
+                events: vec![command],
+                franking_replay_nonce,
+                applet_record: None,
+                applet_authoring_preview: None,
+                agent_membership_cascade: None,
+            })
+            .await
+    } else {
+        state.events().commit_accepted_event(command).await
+    };
+    if let Err(error) = commit_result {
         if parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
             && error.is_realm_already_exists()
         {
@@ -3386,7 +3484,6 @@ pub(super) async fn submit_event_value_with_context(
         )
         .await;
     }
-    append_encrypted_message_franking(state, &parsed, &envelope_for_bootstrap).await;
     append_audit_log(
         state,
         Some(&session.actor),

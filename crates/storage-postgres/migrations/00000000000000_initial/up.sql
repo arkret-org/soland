@@ -518,6 +518,12 @@ CREATE INDEX canonical_events_kind_idx ON public.canonical_events USING btree (k
 
 CREATE INDEX canonical_events_kind_received_idx ON public.canonical_events USING btree (kind, received_at, id);
 
+CREATE INDEX canonical_events_franking_target_idx ON public.canonical_events USING btree (
+    realm_pk,
+    actor_id,
+    ((envelope -> 'payload' ->> 'event_id'))
+) WHERE state = 'accepted' AND kind = 'ak.moderation.franking_proof';
+
 
 CREATE INDEX canonical_events_received_idx ON public.canonical_events USING btree (received_at, id);
 
@@ -2672,6 +2678,16 @@ CREATE TABLE public.idempotency_keys (
 );
 
 CREATE INDEX idempotency_keys_expiry_idx ON public.idempotency_keys USING btree (expires_at);
+
+CREATE TABLE public.moderation_franking_replay_nonces (
+    realm_id text NOT NULL,
+    received_by text NOT NULL,
+    replay_nonce text NOT NULL,
+    report_event_id text NOT NULL UNIQUE,
+    consumed_at timestamp with time zone NOT NULL,
+    CONSTRAINT moderation_franking_replay_nonces_pkey
+        PRIMARY KEY (realm_id, received_by, replay_nonce)
+);
 
 CREATE TABLE public.control_proposal_authority_acks (
     ack_key text PRIMARY KEY,

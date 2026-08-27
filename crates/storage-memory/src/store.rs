@@ -129,6 +129,8 @@ pub struct SolandMemoryPersistenceStore {
     notifications: MemoryNotificationStore,
     sync_cursors: MemorySyncCursorStore,
     pub(crate) idempotency_keys: MemoryIdempotencyStore,
+    pub(crate) franking_replay_nonces:
+        Mutex<BTreeMap<(String, String, String), soland_storage::FrankingReplayNonceCommit>>,
     control_proposal_authority_acks: MemoryControlProposalAuthorityAckStore,
     websocket_auth: MemoryWebsocketAuthStore,
     account_status_replicas: MemoryAccountStatusReplicaStore,
@@ -275,6 +277,7 @@ impl SolandMemoryPersistenceStore {
                     MemoryIdempotencyStore::new()
                 }
             },
+            franking_replay_nonces: Mutex::new(BTreeMap::new()),
             control_proposal_authority_acks: MemoryControlProposalAuthorityAckStore::new(),
             websocket_auth: MemoryWebsocketAuthStore::new(),
             account_status_replicas: MemoryAccountStatusReplicaStore::new(),

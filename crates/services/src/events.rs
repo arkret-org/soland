@@ -881,6 +881,7 @@ pub struct CommitAppletRecord {
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventBatchCommand {
     pub events: Vec<CommitAcceptedEventCommand>,
+    pub franking_replay_nonce: Option<soland_storage::FrankingReplayNonceCommit>,
     pub applet_record: Option<CommitAppletRecord>,
     pub applet_authoring_preview: Option<CommitAppletAuthoringPreview>,
     pub agent_membership_cascade: Option<soland_storage::AgentMembershipCascadeCommit>,
@@ -987,6 +988,12 @@ pub trait EventReadPort: Send + Sync {
         &self,
         realm_id: &str,
         actor_id: &str,
+    ) -> ServiceResult<Vec<AcceptedEvent>>;
+    async fn franking_proofs_for_target(
+        &self,
+        realm_id: &str,
+        received_by: &str,
+        target_event_id: &str,
     ) -> ServiceResult<Vec<AcceptedEvent>>;
     async fn canonical_batch_receipts_for_event(
         &self,
@@ -1352,6 +1359,16 @@ impl EventQueryService {
     ) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events
             .canonical_events_for_realm_actor(realm_id, actor_id)
+            .await
+    }
+    pub async fn franking_proofs_for_target(
+        &self,
+        realm_id: &str,
+        received_by: &str,
+        target_event_id: &str,
+    ) -> ServiceResult<Vec<AcceptedEvent>> {
+        self.events
+            .franking_proofs_for_target(realm_id, received_by, target_event_id)
             .await
     }
     pub async fn canonical_batch_receipts_for_event(

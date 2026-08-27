@@ -4,7 +4,7 @@ mod envelope;
 mod mls_governance;
 mod payload_shape;
 
-pub(crate) use audit::append_encrypted_message_franking;
+pub(crate) use audit::is_encrypted_message;
 pub(in crate::routing) use audit::validate_watch_set_others_audit_pairs;
 #[cfg(test)]
 pub(crate) use envelope::validate_event_envelope;

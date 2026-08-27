@@ -561,6 +561,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
     ) -> PersistenceResult<EventCommitOutcome> {
         self.commit_event_batch(EventBatchCommitRequest {
             events: vec![request],
+            franking_replay_nonce: None,
             applet_record: None,
             applet_authoring_preview: None,
             agent_membership_cascade: None,
@@ -577,6 +578,10 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 "schema_violation: empty event batch".to_owned(),
             ));
         }
+        soland_storage::validate_franking_replay_nonce_commit(
+            &request.events,
+            request.franking_replay_nonce.as_ref(),
+        )?;
         let mut conn = pg_conn(&self.pool).await?;
         let transaction_outcome = conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             // Inspect the whole batch before inserting any of its ordinary
@@ -1139,6 +1144,25 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 outbox_inserted += inserted;
                 crate::events::bind_event_outbox_rows(conn, &[event_pk], &record).await?;
             }
+            }
+
+            if let Some(nonce) = request.franking_replay_nonce {
+                let inserted = sql_query(
+                    "INSERT INTO moderation_franking_replay_nonces \
+                     (realm_id, received_by, replay_nonce, report_event_id, consumed_at) \
+                     VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+                )
+                .bind::<Text, _>(&nonce.realm_id)
+                .bind::<Text, _>(&nonce.received_by)
+                .bind::<Text, _>(&nonce.replay_nonce)
+                .bind::<Text, _>(&nonce.report_event_id)
+                .bind::<Timestamptz, _>(nonce.consumed_at)
+                .execute(conn)
+                .await
+                .map_err(PersistenceError::database)?;
+                if inserted != 1 {
+                    return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()).into());
+                }
             }
 
             if let Some(preview) = request.applet_authoring_preview {

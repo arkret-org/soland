@@ -9,6 +9,7 @@ use super::{
     identity_anchor_slot_conflicts, ids, peer_page_record_after_cursor, peer_page_record_matches,
     receipt_covers_event, record_is_peer_authz_state_record, stage_identity_anchor_events,
 };
+use serde_json::Value;
 // In-memory message store
 pub(crate) struct MemoryMessageStore {
     data: Arc<Mutex<Vec<MessageRecord>>>,
@@ -873,6 +874,36 @@ impl EventStore for MemoryEventStore {
             .values()
             .filter(|record| {
                 record.actor_id == actor_id && record.realm_id.as_deref() == Some(realm_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| {
+            left.actor_seq
+                .cmp(&right.actor_seq)
+                .then_with(|| left.event_id.cmp(&right.event_id))
+        });
+        Ok(records)
+    }
+
+    async fn franking_proofs_for_target(
+        &self,
+        realm_id: &str,
+        received_by: &str,
+        target_event_id: &str,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        let mut records = self
+            .data
+            .lock()
+            .values()
+            .filter(|record| {
+                record.realm_id.as_deref() == Some(realm_id)
+                    && record.actor_id == received_by
+                    && record.kind == arkret_wire::EventKind::ModerationFrankingProof.as_str()
+                    && record
+                        .envelope
+                        .pointer("/payload/event_id")
+                        .and_then(Value::as_str)
+                        == Some(target_event_id)
             })
             .cloned()
             .collect::<Vec<_>>();

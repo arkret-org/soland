@@ -9,7 +9,8 @@
 
 use arkret_identifiers::{EventId, Hash, RealmId};
 use arkret_models_collaboration::events_payloads::moderation::{
-    FrankingProof, FrankingProofEventTimeAnchor, ModerationReportPayload,
+    FrankingDataEventInclusionProof, FrankingProof, FrankingSealObservationOutcome,
+    FrankingSealObservationRequest, ModerationReportPayload,
 };
 use arkret_wire::{EventKind, ScopeRef};
 use ed25519_dalek::Signer as _;
@@ -27,7 +28,12 @@ use crate::state::AppState;
 use crate::wire::{ModerationReportOutcome, ModerationReportRequestBody};
 
 pub(super) fn protocol_router() -> Router {
-    Router::new().push(Router::with_path("moderation/report").post(moderation_report))
+    Router::new()
+        .push(Router::with_path("moderation/report").post(moderation_report))
+        .push(
+            Router::with_path("moderation/franking/seal-observation")
+                .post(moderation_franking_seal_observation),
+        )
 }
 
 pub(crate) async fn persist_mimi_facade_moderation_report_event(
@@ -195,22 +201,15 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
 /// Persist the receiving service's canonical delivery receipt for one accepted
 /// encrypted Event. The canonical Event store is the only durable identity and
 /// restart source; the old private audit digest is deliberately not written.
-pub(crate) async fn persist_franking_proof_event(
+pub(crate) async fn prepare_franking_proof_event(
     state: &AppState,
-    realm_id: &str,
-    target_event_id: &str,
-) -> Result<String, AppError> {
-    let service_event_lock = crate::routing::events::event_log::service_event_authoring_lock();
-    let _service_event_guard = service_event_lock.lock().await;
-    let target = state
-        .event_queries()
-        .canonical_event(target_event_id)
-        .await
-        .map_err(|error| AppError::internal(format!("franking target lookup failed: {error}")))?
-        .ok_or_else(|| AppError::not_found("franking target Event not found"))?;
-    if target.realm_id.as_deref() != Some(realm_id) {
-        return Err(AppError::not_found("franking target Event not found"));
-    }
+    target: &soland_services::events::AcceptedEvent,
+) -> Result<soland_services::events::CommitAcceptedEventCommand, AppError> {
+    let realm_id = target
+        .realm_id
+        .as_deref()
+        .ok_or_else(|| AppError::internal("franking target Event has no Realm"))?;
+    let target_event_id = target.event_id.as_str();
 
     let service_actor = state.service_id().as_str();
     let records = state
@@ -220,17 +219,6 @@ pub(crate) async fn persist_franking_proof_event(
         .map_err(|error| {
             AppError::internal(format!("franking Event frontier lookup failed: {error}"))
         })?;
-    if let Some(existing) = records.iter().find(|record| {
-        record.kind == EventKind::ModerationFrankingProof.as_str()
-            && record
-                .envelope
-                .pointer("/payload/event_id")
-                .and_then(Value::as_str)
-                == Some(target_event_id)
-    }) {
-        return Ok(existing.event_id.clone());
-    }
-
     let max_actor_seq = records.iter().map(|record| record.actor_seq).max();
     let actor_seq = max_actor_seq
         .map(|value| {
@@ -334,7 +322,6 @@ pub(crate) async fn persist_franking_proof_event(
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .map_err(|error| AppError::internal(format!("franking Event signing failed: {error}")))?;
-    let event_id = event.event_id().to_string();
     let session = soland_services::identity::SessionIdentityState {
         token_hash: "franking-proof-service".to_owned(),
         actor: state.service_id().clone(),
@@ -349,7 +336,7 @@ pub(crate) async fn persist_franking_proof_event(
     };
     let envelope = serde_json::to_value(event)
         .map_err(|error| AppError::internal(format!("franking Event serialize failed: {error}")))?;
-    crate::routing::events::event_log::submit_service_franking_proof_event_value(
+    crate::routing::events::event_log::prepare_service_franking_proof_event_value(
         state,
         &session,
         envelope,
@@ -364,8 +351,7 @@ pub(crate) async fn persist_franking_proof_event(
         )
         .with_status(error.status)
         .with_wire_code(error.code)
-    })?;
-    Ok(event_id)
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -437,7 +423,6 @@ pub(super) async fn validate_moderation_report_safety(
         effective_scope,
         evidence_package,
         franking_proof,
-        true,
     )
     .await
 }
@@ -459,7 +444,6 @@ async fn validate_signed_moderation_report_safety(
         effective_scope,
         evidence_package,
         franking_proof,
-        false,
     )
     .await
 }
@@ -472,7 +456,6 @@ async fn validate_moderation_report_content_safety(
     effective_scope: Option<&ScopeRef>,
     evidence_package: &Value,
     franking_proof: &Value,
-    consume_franking_nonce: bool,
 ) -> Result<ModerationReportSafety, AppError> {
     let effective_scope = moderation_effective_scope_value(realm_id, effective_scope)?;
     let target_scope =
@@ -483,8 +466,7 @@ async fn validate_moderation_report_content_safety(
     let evidence_package =
         validate_moderation_evidence_package(evidence_package, &effective_scope)?;
     let franking_proof =
-        validate_moderation_franking_proof(state, realm_id, franking_proof, consume_franking_nonce)
-            .await?;
+        validate_moderation_franking_proof(state, realm_id, franking_proof).await?;
     Ok(ModerationReportSafety {
         effective_scope,
         evidence_package,
@@ -697,7 +679,6 @@ async fn validate_moderation_franking_proof(
     state: &AppState,
     realm_id: &str,
     franking_proof: &Value,
-    consume_nonce: bool,
 ) -> Result<Option<Value>, AppError> {
     if franking_proof.is_null() {
         return Ok(None);
@@ -750,14 +731,15 @@ async fn validate_moderation_franking_proof(
         serde_json::from_value(franking_proof.clone()).map_err(|error| {
             franking_proof_invalid(format!("franking_proof typed validation failed: {error}"))
         })?;
-    let verification_key = crate::jws_verify::resolve_ed25519_pubkey_async(
+    let verification_key = crate::jws_verify::resolve_ed25519_pubkey_at(
         state,
         typed_proof.verification_method.as_str(),
+        typed_proof.received_at,
     )
     .await
     .map_err(|error| {
         franking_proof_invalid(format!(
-            "franking_proof verification method is not currently resolvable: {error}"
+            "franking_proof verification method has no authenticated historical state: {error}"
         ))
     })?;
     typed_proof
@@ -771,15 +753,6 @@ async fn validate_moderation_franking_proof(
         })
         .map_err(|error| franking_proof_invalid(error.to_string()))?;
     validate_franking_event_time_anchor(state, realm_id, &typed_proof).await?;
-    if consume_nonce
-        && !state.remember_moderation_franking_nonce(realm_id, received_by, replay_nonce)
-    {
-        return Err(AppError::new(
-            ErrorCode::DuplicateConflict,
-            "franking_proof replay_nonce was already used",
-        )
-        .with_status(StatusCode::CONFLICT));
-    }
     Ok(Some(franking_proof.clone()))
 }
 
@@ -814,63 +787,31 @@ async fn validate_franking_event_time_anchor(
     let proof_payload = serde_json::to_value(proof).map_err(|error| {
         franking_proof_invalid(format!("franking_proof serialization failed: {error}"))
     })?;
-    let proof_event = state
+    let mut matching = state
         .event_queries()
-        .canonical_events()
+        .franking_proofs_for_target(
+            realm_id,
+            proof.received_by.as_str(),
+            proof.event_id.as_str(),
+        )
         .await
         .map_err(|error| {
             AppError::internal(format!("franking proof Event lookup failed: {error}"))
         })?
         .into_iter()
-        .find(|candidate| {
-            candidate.kind == EventKind::ModerationFrankingProof.as_str()
-                && candidate.realm_id.as_deref() == Some(realm_id)
-                && candidate.actor_id == proof.received_by.as_str()
-                && candidate.envelope.get("payload") == Some(&proof_payload)
-        })
-        .ok_or_else(|| {
-            franking_proof_invalid(
-                "franking_proof has no byte-identical accepted durable proof Event",
-            )
-        })?;
-    let proof_event_digest = Hash::new(proof_event.canonical_digest.clone()).map_err(|error| {
-        franking_proof_invalid(format!("invalid franking proof Event digest: {error}"))
+        .filter(|candidate| candidate.envelope.get("payload") == Some(&proof_payload));
+    let proof_event = matching.next().ok_or_else(|| {
+        franking_proof_invalid("franking_proof has no byte-identical accepted durable proof Event")
     })?;
-    let covering_seal = state
-        .projections()
-        .seal_covering_event(&proof_event_digest)
-        .map_err(|error| {
-            AppError::internal(format!(
-                "franking proof covering Seal lookup failed: {error}"
-            ))
-        })?
-        .ok_or_else(|| {
-            franking_proof_invalid("franking_proof durable Event has no accepted covering Seal")
-        })?;
-    let proof_event_created_at = proof_event
-        .envelope
-        .get("created_at")
-        .and_then(Value::as_str)
-        .ok_or_else(|| franking_proof_invalid("franking proof Event has no created_at"))?
-        .parse()
-        .map_err(|error| {
-            franking_proof_invalid(format!("invalid franking proof Event created_at: {error}"))
-        })?;
-    let anchor = FrankingProofEventTimeAnchor::new(
-        EventId::new(target.event_id.clone())
-            .map_err(|error| franking_proof_invalid(format!("invalid event anchor id: {error}")))?,
-        RealmId::new(target_realm_id.to_owned()).map_err(|error| {
-            franking_proof_invalid(format!("invalid event anchor realm_id: {error}"))
-        })?,
-        arkret_identifiers::DidCoreId::new(state.service_id().clone()).map_err(|error| {
-            franking_proof_invalid(format!("invalid local franking service DID: {error}"))
-        })?,
-        proof_event_created_at,
-        covering_seal.sealed_at,
-    );
-    proof
-        .validate_event_time_anchor(&anchor)
-        .map_err(|error| franking_proof_invalid(error.to_string()))
+    if matching.next().is_some() {
+        return Err(franking_proof_invalid(
+            "franking_proof has multiple byte-identical durable proof Events",
+        ));
+    }
+    materialize_franking_seal_observation(state, &proof_event, &target)
+        .await
+        .map(|_| ())
+        .map_err(|error| franking_proof_invalid(error.message))
 }
 
 // Wire code for an invalid franking proof. `proof_invalid` is a registered
@@ -948,6 +889,265 @@ const FRANKING_PROOF_FORBIDDEN_KEYS: &[&str] = &[
     "mls_group_id",
     "epoch",
 ];
+
+#[endpoint(
+    operation_id = "ak.self.moderation.read.franking_seal_observation",
+    summary = "Read a durable franking proof Seal observation",
+    tags("moderation")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.self.moderation.read.franking_seal_observation.v1")
+)]
+async fn moderation_franking_seal_observation(
+    aa: AuthArgs,
+    body: JsonBody<FrankingSealObservationRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<FrankingSealObservationOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    if crate::routing::events::require_agent_session_scope(
+        &session,
+        arkret_wire::ServiceOperationId::SELF_MODERATION_READ_FRANKING_SEAL_OBSERVATION_V1,
+    )
+    .is_err()
+    {
+        return Err(franking_observation_not_found());
+    }
+    let request = body.into_inner();
+    let proof_event = state
+        .event_queries()
+        .canonical_event(request.proof_event_id.as_str())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("franking proof Event lookup failed: {error}"))
+        })?
+        .ok_or_else(franking_observation_not_found)?;
+    let target_event = state
+        .event_queries()
+        .canonical_event(request.target_event_id.as_str())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("franking target Event lookup failed: {error}"))
+        })?
+        .ok_or_else(franking_observation_not_found)?;
+    let target_envelope =
+        parse_accepted_event(&target_event).map_err(|_| franking_observation_not_found())?;
+    if proof_event.realm_id.as_deref() != Some(request.realm_id.as_str())
+        || target_event.realm_id.as_deref() != Some(request.realm_id.as_str())
+        || proof_event.kind != EventKind::ModerationFrankingProof.as_str()
+        || target_envelope.kind != EventKind::MessageCreate
+        || !target_envelope
+            .payload
+            .get("encrypted_content")
+            .is_some_and(Value::is_object)
+        || !actor_has_exact_scope_moderation_capability(
+            state,
+            &target_envelope.scope_ref,
+            &session.actor,
+        )
+        .await
+    {
+        return Err(franking_observation_not_found());
+    }
+    let outcome = materialize_franking_seal_observation(state, &proof_event, &target_event)
+        .await
+        .map_err(|error| {
+            if error.http_status() == StatusCode::NOT_FOUND {
+                franking_observation_not_found()
+            } else {
+                error
+            }
+        })?;
+    outcome
+        .validate_binding(&request)
+        .map_err(|_| franking_observation_not_found())?;
+    json_ok(outcome)
+}
+
+fn franking_observation_not_found() -> AppError {
+    AppError::not_found("franking Seal observation not found")
+}
+
+fn parse_accepted_event(
+    record: &soland_services::events::AcceptedEvent,
+) -> Result<arkret_wire::Event, AppError> {
+    serde_json::from_value(record.envelope.clone())
+        .map_err(|error| AppError::internal(format!("accepted Event is malformed: {error}")))
+}
+
+async fn actor_has_exact_scope_moderation_capability(
+    state: &AppState,
+    scope: &ScopeRef,
+    actor: &str,
+) -> bool {
+    if state.is_admin_principal(actor) {
+        return true;
+    }
+    let (realm_id, resource) = match scope {
+        ScopeRef::Realm { realm_id } => (realm_id.as_str(), realm_id.as_str()),
+        ScopeRef::Circle {
+            realm_id,
+            circle_id,
+        } => (realm_id.as_str(), circle_id.as_str()),
+        _ => return false,
+    };
+    let projection = state.projections().snapshot();
+    let owner = projection
+        .realm_authority_root(realm_id)
+        .map(|root| root.controller_id.to_string());
+    let members = RealmId::new(realm_id.to_owned())
+        .ok()
+        .and_then(|id| state.realm_directory().snapshot().get(&id).cloned())
+        .map(|realm| {
+            realm
+                .members
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    [
+        arkret_wire::CapabilityActionId::MODERATION_DECISION,
+        arkret_wire::CapabilityActionId::REALM_MODERATION_POLICY,
+        arkret_wire::CapabilityActionId::REALM_ADMIN,
+    ]
+    .into_iter()
+    .any(|action| {
+        state
+            .authorization()
+            .check(soland_services::authorization::AuthorizationCheck {
+                actor,
+                actor_principal_server_id: Some(state.service_id()),
+                action,
+                resource,
+                realm_id,
+                owner: owner.as_deref(),
+                members: &members,
+                resource_facets: &[],
+            })
+            .allowed
+    })
+}
+
+async fn materialize_franking_seal_observation(
+    state: &AppState,
+    proof_record: &soland_services::events::AcceptedEvent,
+    target_record: &soland_services::events::AcceptedEvent,
+) -> Result<FrankingSealObservationOutcome, AppError> {
+    let proof_event = parse_accepted_event(proof_record)?;
+    let target_event = parse_accepted_event(target_record)?;
+    let proof: FrankingProof = serde_json::from_value(
+        serde_json::to_value(&proof_event.payload).map_err(|_| franking_observation_not_found())?,
+    )
+    .map_err(|_| franking_observation_not_found())?;
+    if proof_record.kind != EventKind::ModerationFrankingProof.as_str()
+        || proof_record.realm_id != target_record.realm_id
+        || proof.realm_id.as_str() != proof_record.realm_id.as_deref().unwrap_or_default()
+        || proof.event_id.as_str() != target_record.event_id
+        || proof.received_by.as_str() != proof_record.actor_id
+    {
+        return Err(franking_observation_not_found());
+    }
+    let proof_digest = Hash::new(proof_record.canonical_digest.clone())
+        .map_err(|error| AppError::internal(format!("invalid franking Event digest: {error}")))?;
+    let realm_id = proof.realm_id.clone();
+    let leaves = state
+        .projections()
+        .realm_seal_leaves(&realm_id)
+        .map_err(|error| {
+            AppError::internal(format!("franking Seal frontier lookup failed: {error}"))
+        })?;
+    let closure = state.projections().seal_closure(&leaves).map_err(|error| {
+        AppError::internal(format!("franking Seal ancestry lookup failed: {error}"))
+    })?;
+    let mut seals = closure
+        .into_iter()
+        .map(|seal_id| {
+            state
+                .projections()
+                .seal_by_id(&seal_id)
+                .map_err(|error| {
+                    AppError::internal(format!("franking Seal lookup failed: {error}"))
+                })?
+                .ok_or_else(|| AppError::internal(format!("accepted Seal {seal_id} is missing")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    seals.sort_by(|left, right| {
+        (left.sealed_at, left.notary_seq, left.id.as_str()).cmp(&(
+            right.sealed_at,
+            right.notary_seq,
+            right.id.as_str(),
+        ))
+    });
+    let mut observation = None;
+    for seal in seals {
+        let Some(declared_root) = seal.data_event_set_root.as_ref() else {
+            continue;
+        };
+        let digests = crate::notary::data_event_digests_for_seal(state, &seal)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("rebuild DataEvent Seal window: {error}"))
+            })?;
+        let suite_name = declared_root
+            .as_str()
+            .split_once(':')
+            .map(|(suite, _)| suite)
+            .ok_or_else(|| AppError::internal("invalid data_event_set_root suite"))?;
+        let digest_suite = arkret_canonical::digest_suite(suite_name).map_err(|error| {
+            AppError::internal(format!("invalid data_event_set_root suite: {error}"))
+        })?;
+        let recomputed =
+            arkret_state::event_digest_set_root(&digests, digest_suite).map_err(|error| {
+                AppError::internal(format!("recompute data_event_set_root: {error}"))
+            })?;
+        if &recomputed != declared_root {
+            return Err(AppError::internal(
+                "accepted Seal data_event_set_root does not match its deterministic window",
+            ));
+        }
+        if !digests.contains(&proof_digest) {
+            continue;
+        }
+        let inclusion =
+            arkret_state::event_digest_set_inclusion_proof(&digests, &proof_digest, digest_suite)
+                .map_err(|error| {
+                AppError::internal(format!("build franking inclusion proof: {error}"))
+            })?;
+        observation = Some((seal, inclusion));
+        break;
+    }
+    let (covering_seal, inclusion) = observation.ok_or_else(franking_observation_not_found)?;
+    let authenticated =
+        crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
+            .await?;
+    let service_signer_evidence =
+        arkret_identity::service_signer_evidence_for_method_from_authenticated_resolution(
+            authenticated,
+            &proof.received_by,
+            proof.verification_method.clone(),
+            proof.received_at,
+        )
+        .map_err(|error| {
+            AppError::internal(format!(
+                "build historical franking signer evidence: {error}"
+            ))
+        })?;
+    Ok(FrankingSealObservationOutcome {
+        proof_event,
+        target_event,
+        covering_seal,
+        data_event_inclusion_proof: FrankingDataEventInclusionProof {
+            leaf_digest: inclusion.leaf_digest,
+            leaf_index: inclusion.leaf_index,
+            leaf_count: inclusion.leaf_count,
+            audit_path: inclusion.audit_path,
+        },
+        service_signer_evidence,
+    })
+}
 
 #[endpoint(
     operation_id = "ak.self.moderation.command.report",
@@ -1338,18 +1538,10 @@ mod report_safety_tests {
     }
 
     #[tokio::test]
-    async fn franking_replay_nonce_guard_rejects_the_second_use_within_window() {
-        let state = test_state();
-        let received_by = state.service_id().clone();
-        assert!(state.remember_moderation_franking_nonce(REALM, &received_by, "nonce_0123456789"));
-        assert!(!state.remember_moderation_franking_nonce(REALM, &received_by, "nonce_0123456789"));
-    }
-
-    #[tokio::test]
     async fn franking_without_event_time_anchor_is_rejected() {
         let state = test_state();
         let proof = valid_franking(&state);
-        let error = validate_moderation_franking_proof(&state, REALM, &proof, true)
+        let error = validate_moderation_franking_proof(&state, REALM, &proof)
             .await
             .unwrap_err();
         assert_eq!(error.wire_code(), arkret_wire::ReasonCode::PROOF_INVALID);
@@ -1360,7 +1552,7 @@ mod report_safety_tests {
         let state = test_state();
         seed_franking_event_anchor(&state, "2026-04-30T00:10:01.000Z").await;
         let proof = valid_franking(&state);
-        let error = validate_moderation_franking_proof(&state, REALM, &proof, true)
+        let error = validate_moderation_franking_proof(&state, REALM, &proof)
             .await
             .unwrap_err();
         assert_eq!(error.wire_code(), arkret_wire::ReasonCode::PROOF_INVALID);

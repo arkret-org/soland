@@ -3646,10 +3646,11 @@ use post_commit::*;
 use preflight::*;
 use value::*;
 pub(in crate::routing) use value::{
-    DevicePairingAdmission, submit_account_data_event_value, submit_event_value,
-    submit_initial_event_submission, submit_initial_event_submission_with_contact_projection,
+    DevicePairingAdmission, prepare_service_franking_proof_event_value,
+    submit_account_data_event_value, submit_event_value, submit_initial_event_submission,
+    submit_initial_event_submission_with_contact_projection,
     submit_initial_event_submission_with_device_pairing, submit_mimi_event_value,
-    submit_mimi_moderation_report_event_value, submit_service_franking_proof_event_value,
+    submit_mimi_moderation_report_event_value,
 };
 pub(in crate::routing::events::event_log) use value::{
     replay_ackless_self_principal_ingress, submit_event_value_with_idempotency,
