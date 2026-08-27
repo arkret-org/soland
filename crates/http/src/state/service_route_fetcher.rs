@@ -570,11 +570,13 @@ impl ServiceRouteFetcher for VerifiedBindingRouteFetcher {
 
 #[cfg(test)]
 mod tests {
-    use arkret_models_discovery::{ServiceDescribe, SupportedBinding};
+    use arkret_models_discovery::{OperationBinding, ServiceDescribe, SupportedBinding};
     use arkret_models_identity::{
         ResolutionCommitment, ServiceResolutionRecord, ServiceResolutionRecordCore,
     };
-    use arkret_wire::{Base64UrlString, DidFullId, DidUrl, ProtocolSignature, TrustDomainId};
+    use arkret_wire::{
+        Base64UrlString, DidFullId, DidUrl, ProtocolSignature, ServiceOperationId, TrustDomainId,
+    };
     use chrono::{Duration, TimeZone as _};
 
     use super::*;
@@ -594,8 +596,18 @@ mod tests {
             ServiceKind::PrincipalServer,
         );
         description.service_resolution = commitment.clone();
-        description.supported_bindings =
-            vec![SupportedBinding::new(BindingKind::HttpJson).with_base_url(base_url)];
+        description.operation_bindings = vec![
+            OperationBinding::current_http_json(ServiceOperationId::ServerReadDescribe).unwrap(),
+        ];
+        description.supported_bindings = vec![
+            SupportedBinding::new(BindingKind::HttpJson)
+                .with_base_url(base_url)
+                .with_extra(
+                    "operations",
+                    serde_json::json!([ServiceOperationId::ServerReadDescribe]),
+                )
+                .with_extra("extension_profile_required", serde_json::Value::Null),
+        ];
         #[derive(serde::Serialize)]
         struct Projection<'a> {
             service_id: &'a DidCoreId,

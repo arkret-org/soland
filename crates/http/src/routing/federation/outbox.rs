@@ -908,6 +908,16 @@ impl FederationDispatcher {
             Err(error) => {
                 let attempts = row.attempts.saturating_add(1);
                 let now = now_unix_secs();
+                tracing::debug!(
+                    target = "federation_outbox",
+                    worker = "federation_outbox",
+                    outbox_id = %row.delivery.id,
+                    peer_did = %row.delivery.peer_did,
+                    endpoint = %row.delivery.endpoint,
+                    attempts,
+                    %error,
+                    "federation outbox route resolution is unavailable"
+                );
                 let command = if row.delivery.realm_fanout.is_some() {
                     if attempts >= MAX_ATTEMPTS && attempts % MAX_ATTEMPTS == 0 {
                         tracing::warn!(

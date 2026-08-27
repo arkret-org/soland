@@ -416,17 +416,20 @@ async fn identity_surface_works_body() {
         .take_json()
         .await
         .unwrap();
-    let typed_describe: arkret_models_identity::identity::IdentityDescription =
+    let typed_describe: arkret_models_discovery::ServiceDescribe =
         serde_json::from_value(describe.clone())
-            .expect("identity describe uses the SDK's canonical wire types");
+            .expect("identity describe uses the SDK's canonical ServiceDescribe wire type");
+    typed_describe
+        .validate()
+        .expect("identity describe satisfies the current closed contract");
     assert_eq!(typed_describe.service_id, expected_service_id);
     assert_eq!(describe["protocol_version"], "1.0");
+    let identity = &describe["x_soland_identity_registry"];
     assert_eq!(
-        describe["resolver_policy"]["allow_methods"],
+        identity["resolver_allow_methods"],
         serde_json::json!(["web", "key", "uuid"])
     );
-    assert_eq!(describe["todos"], serde_json::json!([]));
-    let trust_roots = describe["resolver_policy"]["trust_roots"]
+    let trust_roots = identity["trust_roots"]
         .as_array()
         .expect("resolver trust roots");
     // Trust roots carry a stable slug `id` and the canonical projected
@@ -440,15 +443,7 @@ async fn identity_surface_works_body() {
                 && root["proof_verification"]["webvh_witness_quorum"] == "unsupported"),
         "identity describe must publish the local resolver trust root and proof-validation policy: {describe}"
     );
-    assert_eq!(
-        describe["resolver_policy"]["freshness_receipts"]["endpoint_template"],
-        "/_arkret/root/identity/receipts?did={did}"
-    );
-    assert_eq!(
-        describe["resolver_policy"]["webvh_validation"]["witness_quorum"],
-        "enforced_for_local_webvh_records"
-    );
-    assert_eq!(describe["did_webvh"]["enabled"], false);
+    assert_eq!(identity["did_webvh"]["enabled"], false);
 
     let resolved: Value = TestClient::post("http://server/_arkret/root/identity/resolve")
         .json(&serde_json::json!({"did": "did:web:alice.example"}))
@@ -521,26 +516,16 @@ async fn identity_describe_exposes_external_webvh_provider_body() {
         .await
         .unwrap();
 
-    assert_eq!(describe["did_webvh"]["enabled"], true);
-    assert_eq!(describe["did_webvh"]["method"], "did:webvh");
-    assert_eq!(
-        describe["did_webvh"]["providers"][0]["id"],
-        "external.webvh"
-    );
-    assert_eq!(
-        describe["did_webvh"]["providers"][0]["base_url"],
-        "http://webvh.local"
-    );
-    assert_eq!(
-        describe["did_webvh"]["providers"][0]["health"]["active"],
-        true
-    );
-    assert_eq!(
-        describe["did_webvh"]["providers"][0]["health"]["probe"],
-        "ok"
-    );
+    let identity = &describe["x_soland_identity_registry"];
+    let did_webvh = &identity["did_webvh"];
+    assert_eq!(did_webvh["enabled"], true);
+    assert_eq!(did_webvh["method"], "did:webvh");
+    assert_eq!(did_webvh["providers"][0]["id"], "external.webvh");
+    assert_eq!(did_webvh["providers"][0]["base_url"], "http://webvh.local");
+    assert_eq!(did_webvh["providers"][0]["health"]["active"], true);
+    assert_eq!(did_webvh["providers"][0]["health"]["probe"], "ok");
     assert!(
-        describe["resolver_policy"]["trust_roots"]
+        identity["trust_roots"]
             .as_array()
             .unwrap()
             .iter()
@@ -551,11 +536,11 @@ async fn identity_describe_exposes_external_webvh_provider_body() {
     // describe path (did_resolver_chain::CANONICAL_DESCRIBE_PATH), not a bare
     // `/describe`.
     assert_eq!(
-        describe["did_webvh"]["providers"][0]["freshness_probe"],
+        did_webvh["providers"][0]["freshness_probe"],
         "/_arkret/describe"
     );
     assert_eq!(
-        describe["did_webvh"]["providers"][0]["adapter_version"],
+        did_webvh["providers"][0]["adapter_version"],
         arkret_models_identity::DID_WEBVH_V1_METHOD
     );
 }
@@ -585,25 +570,20 @@ async fn identity_describe_keeps_external_webvh_provider_when_probe_fails_body()
         .await
         .unwrap();
 
-    assert_eq!(describe["did_webvh"]["enabled"], true);
+    let did_webvh = &describe["x_soland_identity_registry"]["did_webvh"];
+    assert_eq!(did_webvh["enabled"], true);
+    assert_eq!(did_webvh["providers"][0]["id"], "external.webvh");
     assert_eq!(
-        describe["did_webvh"]["providers"][0]["id"],
-        "external.webvh"
-    );
-    assert_eq!(
-        describe["did_webvh"]["providers"][0]["base_url"],
+        did_webvh["providers"][0]["base_url"],
         "http://webvh.unreachable.local"
     );
     assert_eq!(
-        describe["did_webvh"]["providers"][0]["adapter_version"],
+        did_webvh["providers"][0]["adapter_version"],
         arkret_models_identity::DID_WEBVH_V1_METHOD
     );
+    assert_eq!(did_webvh["providers"][0]["health"]["active"], false);
     assert_eq!(
-        describe["did_webvh"]["providers"][0]["health"]["active"],
-        false
-    );
-    assert_eq!(
-        describe["did_webvh"]["providers"][0]["health"]["probe"],
+        did_webvh["providers"][0]["health"]["probe"],
         "probe_failed_at_boot"
     );
 }
@@ -773,30 +753,25 @@ async fn embedded_webvh_provider_registers_and_serves_identity_body() {
         .take_json()
         .await
         .unwrap();
+    let did_webvh = &describe["x_soland_identity_registry"]["did_webvh"];
+    assert_eq!(did_webvh["default_provider_id"], "soland.embedded");
+    assert_eq!(did_webvh["providers"][0]["id"], "soland.embedded");
+    assert_eq!(did_webvh["providers"][0]["default"], true);
+    assert_eq!(did_webvh["providers"][0]["active"], true);
     assert_eq!(
-        describe["did_webvh"]["default_provider_id"],
-        "soland.embedded"
-    );
-    assert_eq!(
-        describe["did_webvh"]["providers"][0]["id"],
-        "soland.embedded"
-    );
-    assert_eq!(describe["did_webvh"]["providers"][0]["default"], true);
-    assert_eq!(describe["did_webvh"]["providers"][0]["active"], true);
-    assert_eq!(
-        describe["did_webvh"]["providers"][0]["registration_auth"]["configured"],
+        did_webvh["providers"][0]["registration_auth"]["configured"],
         true
     );
     assert_eq!(
-        describe["did_webvh"]["providers"][0]["registration_url"],
+        did_webvh["providers"][0]["registration_url"],
         "https://soland.example/_soland/root/identity/webvh/register"
     );
     assert_eq!(
-        describe["did_webvh"]["providers"][0]["document_url_template"],
+        did_webvh["providers"][0]["document_url_template"],
         "https://soland.example/webvh/{local_id}/did.json"
     );
     assert_eq!(
-        describe["did_webvh"]["providers"][0]["log_url_template"],
+        did_webvh["providers"][0]["log_url_template"],
         "https://soland.example/webvh/{local_id}/did.jsonl"
     );
 

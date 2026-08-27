@@ -1314,10 +1314,23 @@ mod tests {
             },
         );
         let value = serde_json::to_value(description).expect("description serializes");
+        assert_eq!(value["supported_bindings"][0]["kind"], "http_json");
         assert_eq!(
-            value["supported_bindings"][0],
-            json!({"kind": "http_json", "base_url": "https://soland.example/"})
+            value["supported_bindings"][0]["base_url"],
+            "https://soland.example/"
         );
+        let http_operations = value["supported_bindings"][0]["operations"]
+            .as_array()
+            .expect("HTTP transport advertises its exact operation set");
+        let described_http_operations = value["operation_bindings"]
+            .as_array()
+            .expect("operation bindings array")
+            .iter()
+            .filter(|binding| binding["binding_kind"] == "http_json")
+            .map(|binding| binding["operation_id"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(http_operations, &described_http_operations);
+        assert!(value["supported_bindings"][0]["extension_profile_required"].is_null());
         assert!(value["supported_bindings"][0].get("base_path").is_none());
         // Spec media-and-blob.md §2.1 — the resumable upload binding is
         // discoverable via feature id + tus binding entry + limits keys.

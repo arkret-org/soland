@@ -781,7 +781,7 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback_scenario(
     let _load_test_guard = CONTROL_SEAL_LOAD_TEST_LOCK.lock().await;
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
     let state = soland_test_support::app_state_with_persistence(test_config(), persistence).await;
-    let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
+    let control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let token = prepare_alice(&state).await;
     let child_realm = bootstrap_realm(&state, &token, "policy server lifecycle child").await;
     let org_realm = bootstrap_realm(&state, &token, "policy server lifecycle org").await;
@@ -950,14 +950,17 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback_scenario(
     );
     let (status, body) = get_policy_server(&state, &token, never_declared).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "never-declared GET: {body}");
+    control_seal_coordinator.abort();
+    let _ = control_seal_coordinator.await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn policy_server_declaration_survives_restart() {
+    let _load_test_guard = CONTROL_SEAL_LOAD_TEST_LOCK.lock().await;
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
     let state =
         soland_test_support::app_state_with_persistence(test_config(), persistence.clone()).await;
-    let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
+    let control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let token = prepare_alice(&state).await;
     let org_realm = bootstrap_realm(&state, &token, "policy server restart org").await;
     let org_realm = org_realm.as_str();
@@ -1044,10 +1047,14 @@ async fn policy_server_declaration_survives_restart() {
         Some(true),
         "the tombstone cell must survive restart"
     );
+    drop(projection);
+    control_seal_coordinator.abort();
+    let _ = control_seal_coordinator.await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn policy_server_same_basis_sibling_fails_closed() {
+    let _load_test_guard = CONTROL_SEAL_LOAD_TEST_LOCK.lock().await;
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
     let state = soland_test_support::app_state_with_persistence(test_config(), persistence).await;
     let control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
@@ -1218,9 +1225,10 @@ async fn policy_server_same_basis_sibling_fails_closed() {
 /// `failed_precondition`.
 #[tokio::test(flavor = "multi_thread")]
 async fn policy_server_replace_without_head_eq_is_refused() {
+    let _load_test_guard = CONTROL_SEAL_LOAD_TEST_LOCK.lock().await;
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
     let state = soland_test_support::app_state_with_persistence(test_config(), persistence).await;
-    let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
+    let control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let token = prepare_alice(&state).await;
     let realm = bootstrap_realm(&state, &token, "policy server unguarded write").await;
     let realm = realm.as_str();
@@ -1273,6 +1281,8 @@ async fn policy_server_replace_without_head_eq_is_refused() {
         view["policy_server_service_id"],
         "ak:did_core:web:second.example"
     );
+    control_seal_coordinator.abort();
+    let _ = control_seal_coordinator.await;
 }
 
 /// Event and Seal discovery remain separate closed surfaces.
@@ -1283,9 +1293,10 @@ async fn policy_server_replace_without_head_eq_is_refused() {
 /// its `delta[]` against the Event digest.
 #[tokio::test(flavor = "multi_thread")]
 async fn events_resolve_excludes_seals_and_seal_resolve_returns_exact_leaf() {
+    let _load_test_guard = CONTROL_SEAL_LOAD_TEST_LOCK.lock().await;
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
     let state = soland_test_support::app_state_with_persistence(test_config(), persistence).await;
-    let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
+    let control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let token = prepare_alice(&state).await;
     let realm = bootstrap_realm(&state, &token, "events resolve derived seals").await;
     let create_event_id = RealmId::new(realm.clone()).unwrap().event_id();
@@ -1360,4 +1371,6 @@ async fn events_resolve_excludes_seals_and_seal_resolve_returns_exact_leaf() {
         .unwrap();
     assert!(unknown["events"].as_array().unwrap().is_empty());
     assert!(unknown.get("seals").is_none());
+    control_seal_coordinator.abort();
+    let _ = control_seal_coordinator.await;
 }

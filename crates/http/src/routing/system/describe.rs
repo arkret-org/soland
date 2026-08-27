@@ -451,8 +451,7 @@ pub(crate) fn apply_claim_level_partition(
         for operation in join_operations {
             let operation_id = arkret_wire::ServiceOperationId::from_wire(operation)
                 .expect("profile operation requirements must be generated operation ids");
-            if !description.supports_operation(operation_id)
-            {
+            if !description.supports_operation(operation_id) {
                 description
                     .operation_bindings
                     .push(
@@ -477,9 +476,9 @@ pub(crate) fn apply_claim_level_partition(
         description
             .supported_profiles
             .retain(|profile| profile != ProfileId::CANDIDATE_JOIN_POLICY_V1);
-        description.operation_bindings.retain(|binding| {
-            !join_operations.contains(&binding.operation_id.as_str())
-        });
+        description
+            .operation_bindings
+            .retain(|binding| !join_operations.contains(&binding.operation_id.as_str()));
         description
             .supported_features
             .retain(|feature| !join_features.contains(&feature.as_str()));
@@ -499,6 +498,7 @@ pub(crate) fn apply_claim_level_partition(
     description.supported_profiles.dedup();
     description.operation_bindings.sort();
     description.operation_bindings.dedup();
+    synchronize_http_json_transport_operations(description);
     description.supported_features.sort();
     description.supported_features.dedup();
 
@@ -669,6 +669,38 @@ pub(crate) fn apply_claim_level_partition(
     );
     description.verified_profiles = verified_profiles;
     description.interop_surfaces.clear();
+}
+
+/// Keep the transport carrier's operation set bidirectionally equal to the
+/// role-local HTTP/JSON operation bindings after feature-gated rows change.
+fn synchronize_http_json_transport_operations(
+    description: &mut arkret_models_discovery::ServiceDescribe,
+) {
+    let operations = description
+        .operation_bindings
+        .iter()
+        .filter(|binding| binding.binding_kind == arkret_wire::BindingKind::HttpJson)
+        .map(|binding| binding.operation_id)
+        .collect::<Vec<_>>();
+    if let Some(binding) = description
+        .supported_bindings
+        .iter_mut()
+        .find(|binding| binding.kind == arkret_wire::BindingKind::HttpJson)
+    {
+        binding
+            .extra
+            .insert("operations".to_owned(), serde_json::json!(operations));
+        binding
+            .extra
+            .entry("extension_profile_required".to_owned())
+            .or_insert(serde_json::Value::Null);
+    } else if !operations.is_empty() {
+        description.supported_bindings.push(
+            arkret_models_discovery::SupportedBinding::new(arkret_wire::BindingKind::HttpJson)
+                .with_extra("operations", serde_json::json!(operations))
+                .with_extra("extension_profile_required", serde_json::Value::Null),
+        );
+    }
 }
 
 #[endpoint(operation_id = "org.arkret.soland.auth.bridge.describe")]
@@ -877,7 +909,9 @@ mod tests {
                     .is_some_and(|operation| description.supports_operation(operation))
             );
         }
-        assert!(description.validate().is_ok());
+        description
+            .validate()
+            .expect("candidate join-policy describe must remain transport-closed");
 
         apply_claim_level_partition(&mut description, &[], false, false);
         assert!(
@@ -892,10 +926,10 @@ mod tests {
                 .contains_key(ProfileId::CANDIDATE_JOIN_POLICY_V1)
         );
         assert!(
-            !description.operation_bindings.iter().any(|binding| binding
-                .operation_id
-                .as_str()
-                .contains("join_application"))
+            !description
+                .operation_bindings
+                .iter()
+                .any(|binding| binding.operation_id.as_str().contains("join_application"))
         );
     }
 
