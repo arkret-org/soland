@@ -22,7 +22,7 @@ async fn ensure_account(app: &salvo::Service, actor: &str) {
     let full_id = DidFullId::new(actor.to_owned()).expect("fixture account full DID");
     let principal_id =
         arkret_wire::project_full_id_to_core_id(&full_id).expect("fixture account core id");
-    let mut response = TestClient::post("http://server/_arkret/gate/account/register")
+    let mut response = TestClient::post("http://server/_soland/gate/account/project")
         .add_header(
             "authorization",
             format!("Bearer {ACCOUNT_REGISTER_BEARER}"),

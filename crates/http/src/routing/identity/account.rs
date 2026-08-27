@@ -1,7 +1,7 @@
 //! Account + contact handlers.
 //!
 //! Surfaces:
-//! - `POST /_arkret/gate/account/register` — create the account record
+//! - `POST /_soland/gate/account/project` — materialize an Account Authority result
 //! - `GET  /_arkret/self/account/viewer` — return the authenticated principal's account
 //! - `POST /_arkret/self/contacts/request` — open a pending contact relationship
 //! - `POST /_arkret/self/contacts/respond` — accept or reject a pending request
@@ -208,11 +208,11 @@ pub(crate) use lifecycle::{
     set_account_lifecycle_state,
 };
 
-/// `gate` trust-segment account routes — the spec `account_auth` surface
-/// group (tier `deployment_local`) binds account registration to
-/// `POST /_arkret/gate/account/register`.
-pub(super) fn protocol_gate_router() -> Router {
-    Router::with_path("account").push(Router::with_path("register").post(gate_account_register))
+/// Deployment-private Account Authority projection edge. The canonical
+/// `ak.gate.account.command.register.v1` operation is owned by the Account
+/// Authority and must never be shadowed by this Principal Server materializer.
+pub(super) fn local_gate_router() -> Router {
+    Router::with_path("account").push(Router::with_path("project").post(project_account))
 }
 
 pub(super) fn protocol_router() -> Router {
@@ -1098,7 +1098,7 @@ async fn account_viewer_impl(
     })
 }
 
-/// `POST /_arkret/gate/account/register` — deployment-local Principal Server
+/// `POST /_soland/gate/account/project` — deployment-local Principal Server
 /// projection invoked only after the Account Authority has completed the
 /// canonical registration operation.
 ///
@@ -1115,7 +1115,7 @@ async fn account_viewer_impl(
     skip_all,
     fields(op = "org.arkret.soland.gate.account.command.project")
 )]
-async fn gate_account_register(
+async fn project_account(
     depot: &mut Depot,
     req: &mut Request,
     body: JsonBody<AccountProjectionRegisterRequestBody>,

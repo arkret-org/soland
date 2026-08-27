@@ -1522,7 +1522,7 @@ pub(crate) async fn register_account(
 ) -> String {
     let full_id = DidFullId::new(did.to_owned()).expect("fixture account full DID");
     let principal_id = fixture_actor_core_id(did);
-    let registered: Value = TestClient::post("http://server/_arkret/gate/account/register")
+    let registered: Value = TestClient::post("http://server/_soland/gate/account/project")
         .json(&serde_json::json!({
             "principal_id": principal_id,
             "full_id": full_id,

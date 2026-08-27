@@ -33,6 +33,7 @@ pub(crate) async fn identity_describe(
     let mut description = crate::routing::system::describe::build_server_description(state);
     description.service_kind = arkret_wire::ServiceKind::IdentityRegistry;
     description.supported_profiles = vec![arkret_wire::ProfileId::IDENTITY_REGISTRY_V1.to_owned()];
+    description.profile_bindings.clear();
     description.supported_operation_bundles = IDENTITY_REGISTRY_OPERATION_BUNDLES
         .iter()
         .map(|bundle| (*bundle).to_owned())

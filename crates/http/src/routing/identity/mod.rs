@@ -48,9 +48,6 @@ pub fn protocol_router() -> Router {
         .push(
             Router::with_path("gate")
                 .push(auth::protocol_account_router())
-                // Deployment-private durable account projection, invoked by
-                // the Account Authority after canonical registration.
-                .push(account::protocol_gate_router())
                 .push(Router::with_path("account").push(agents::agent_key_pair_router())),
         )
         .push(
@@ -117,7 +114,13 @@ pub fn local_router() -> Router {
     Router::new()
         // Product-private authentication entry. Canonical account operations
         // are exposed only by `protocol_router` under `/_arkret`.
-        .push(Router::with_path("gate").push(auth::router()))
+        .push(
+            Router::with_path("gate")
+                .push(auth::router())
+                // Deployment-private durable account projection, invoked by
+                // the Account Authority after canonical registration.
+                .push(account::local_gate_router()),
+        )
         // Server-to-server device signing-key directory read at
         // `/_soland/gate/account/device-signing-keys/query`. The Auth Server
         // (coauth) calls this while verifying a device holder proof

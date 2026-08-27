@@ -492,6 +492,33 @@ async fn identity_surface_works_body() {
 }
 
 #[test]
+fn identity_describe_is_role_closed_with_candidate_join_policy_enabled() {
+    run_on_deep_stack_multi_thread(
+        "identity_describe_is_role_closed_with_candidate_join_policy_enabled",
+        identity_describe_is_role_closed_with_candidate_join_policy_enabled_body,
+    );
+}
+
+async fn identity_describe_is_role_closed_with_candidate_join_policy_enabled_body() {
+    let state = soland_test_support::app_state(soland_http::config::AppConfig {
+        candidate_join_policy_enabled: true,
+        ..test_config()
+    });
+    let mut response = TestClient::get("http://server/_arkret/root/identity/describe")
+        .send(&app_from_state(state))
+        .await;
+    assert_eq!(response.status_code, Some(StatusCode::OK));
+    let description: arkret_models_discovery::ServiceDescribe = response
+        .take_json()
+        .await
+        .expect("identity describe uses the closed SDK wire type");
+    assert!(description.profile_bindings.is_empty());
+    description
+        .validate()
+        .expect("identity describe remains role-closed when join policy is enabled");
+}
+
+#[test]
 fn identity_describe_exposes_external_webvh_provider() {
     run_on_deep_stack(
         "identity_describe_exposes_external_webvh_provider",

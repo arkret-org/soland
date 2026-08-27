@@ -506,7 +506,7 @@ async fn repeated_account_projection_is_idempotent_and_me_reads_state_body() {
     .await;
 
     let bob_core = fixture_actor_core_id("did:web:bob.example");
-    let mut duplicate = TestClient::post("http://server/_arkret/gate/account/register")
+    let mut duplicate = TestClient::post("http://server/_soland/gate/account/project")
         .json(&serde_json::json!({
             "principal_id": bob_core,
             "full_id": "did:web:bob.example",
@@ -744,7 +744,7 @@ async fn account_viewer_authorizes_founding_device_registered_with_account_body(
     let founding_device = "ak:device:01904100-0000-7000-8000-b0b0b0000001";
     let full_id = "did:web:bob.example";
     let did = fixture_actor_core_id(full_id);
-    let registered: Value = TestClient::post("http://server/_arkret/gate/account/register")
+    let registered: Value = TestClient::post("http://server/_soland/gate/account/project")
         .add_header(
             "authorization",
             format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
@@ -821,7 +821,7 @@ async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device_body
         .await
         .unwrap();
 
-    let registered = TestClient::post("http://server/_arkret/gate/account/register")
+    let registered = TestClient::post("http://server/_soland/gate/account/project")
         .add_header(
             "authorization",
             format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
@@ -874,7 +874,7 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device_body
     let device_id = "ak:device:01904100-0000-7000-8000-b0b0b0000003";
     let full_id = "did:web:bob-repeat.example";
     let did = fixture_actor_core_id(full_id);
-    let first = TestClient::post("http://server/_arkret/gate/account/register")
+    let first = TestClient::post("http://server/_soland/gate/account/project")
         .add_header(
             "authorization",
             format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
@@ -915,7 +915,7 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device_body
         .await
         .unwrap();
 
-    let repeated = TestClient::post("http://server/_arkret/gate/account/register")
+    let repeated = TestClient::post("http://server/_soland/gate/account/project")
         .add_header(
             "authorization",
             format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
@@ -983,7 +983,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
     .await;
 
     let bob_core = fixture_actor_core_id("did:web:bob.example");
-    let mut duplicate = TestClient::post("http://server/_arkret/gate/account/register")
+    let mut duplicate = TestClient::post("http://server/_soland/gate/account/project")
         .json(&serde_json::json!({
             "principal_id": bob_core,
             "full_id": "did:web:bob.example",

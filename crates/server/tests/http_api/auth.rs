@@ -43,7 +43,7 @@ fn account_register_requires_account_authority_bearer() {
 async fn account_register_requires_account_authority_bearer_body() {
     let state = soland_test_support::app_state(test_config());
 
-    let mut response = TestClient::post("http://server/_arkret/gate/account/register")
+    let mut response = TestClient::post("http://server/_soland/gate/account/project")
         .json(&serde_json::json!({
             "principal_id": fixture_actor_core_id("did:web:unauthorized-register.example"),
             "full_id": "did:web:unauthorized-register.example",
@@ -53,7 +53,8 @@ async fn account_register_requires_account_authority_bearer_body() {
 
     assert_eq!(response.status_code.unwrap(), StatusCode::UNAUTHORIZED);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "unauthenticated");
+    assert_eq!(body["type"], "https://arkret.org/problems/unauthenticated");
+    assert_eq!(body["status"], 401);
 }
 
 #[test]
@@ -71,7 +72,7 @@ async fn account_registration_policy_rejects_closed_and_audits_body() {
         policy.enabled = false;
     }
 
-    let mut response = TestClient::post("http://server/_arkret/gate/account/register")
+    let mut response = TestClient::post("http://server/_soland/gate/account/project")
         .add_header(
             "authorization",
             format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
@@ -86,11 +87,11 @@ async fn account_registration_policy_rejects_closed_and_audits_body() {
     let status = response.status_code.unwrap();
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert_eq!(body["error"]["code"], "failed_precondition");
     assert_eq!(
-        body["error"]["details"]["reason_detail"],
-        "registration_closed"
+        body["type"],
+        "https://arkret.org/problems/failed_precondition"
     );
+    assert_eq!(body["reason_detail"], "registration_closed");
 
     let audit = state
         .test_persistence()
@@ -132,7 +133,7 @@ async fn account_registration_policy_and_closed_projection_wire_are_enforced_bod
         };
     }
 
-    let mut missing_code = TestClient::post("http://server/_arkret/gate/account/register")
+    let mut missing_code = TestClient::post("http://server/_soland/gate/account/project")
         .add_header(
             "authorization",
             format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
@@ -147,12 +148,9 @@ async fn account_registration_policy_and_closed_projection_wire_are_enforced_bod
     let status = missing_code.status_code.unwrap();
     let missing_code: Value = missing_code.take_json().await.unwrap();
     assert_eq!(status, StatusCode::CONFLICT, "{missing_code}");
-    assert_eq!(
-        missing_code["error"]["details"]["reason_detail"],
-        "verification_code_required"
-    );
+    assert_eq!(missing_code["reason_detail"], "verification_code_required");
 
-    let mut wrong_org = TestClient::post("http://server/_arkret/gate/account/register")
+    let mut wrong_org = TestClient::post("http://server/_soland/gate/account/project")
         .add_header(
             "authorization",
             format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
@@ -176,7 +174,10 @@ async fn account_registration_policy_and_closed_projection_wire_are_enforced_bod
         StatusCode::UNPROCESSABLE_ENTITY,
         "{wrong_org}"
     );
-    assert_eq!(wrong_org["error"]["code"], "schema_violation");
+    assert_eq!(
+        wrong_org["type"],
+        "https://arkret.org/problems/schema_violation"
+    );
 
     let rate_limited_state = soland_test_support::app_state(test_config());
     {
@@ -186,7 +187,7 @@ async fn account_registration_policy_and_closed_projection_wire_are_enforced_bod
             window_seconds: 60,
         });
     }
-    let _: Value = TestClient::post("http://server/_arkret/gate/account/register")
+    let _: Value = TestClient::post("http://server/_soland/gate/account/project")
         .add_header(
             "authorization",
             format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
@@ -201,7 +202,7 @@ async fn account_registration_policy_and_closed_projection_wire_are_enforced_bod
         .take_json()
         .await
         .unwrap();
-    let mut limited = TestClient::post("http://server/_arkret/gate/account/register")
+    let mut limited = TestClient::post("http://server/_soland/gate/account/project")
         .add_header(
             "authorization",
             format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
@@ -215,8 +216,8 @@ async fn account_registration_policy_and_closed_projection_wire_are_enforced_bod
         .await;
     assert_eq!(limited.status_code.unwrap(), StatusCode::TOO_MANY_REQUESTS);
     let limited: Value = limited.take_json().await.unwrap();
-    assert_eq!(limited["error"]["code"], "rate_limited");
-    assert_eq!(limited["error"]["details"]["reason_detail"], "rate_limited");
+    assert_eq!(limited["type"], "https://arkret.org/problems/rate_limited");
+    assert_eq!(limited["reason_detail"], "rate_limited");
 }
 
 #[test]
