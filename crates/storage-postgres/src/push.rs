@@ -1,15 +1,15 @@
 use super::{
-    CountRow, DriftResult, JsonPayloadRow, Jsonb, Nullable, OptionalExtension,
-    OutboundPushBridgeCacheRecord, PersistenceError, PersistenceResult, PgPool,
-    PushBridgeCacheStore, PushDeviceStore, QueryableByName, RunQueryDsl, Text, Timestamptz, Value,
-    async_trait, evaluate_drift, pg_conn, sql_query,
+    DriftResult, JsonPayloadRow, Jsonb, Nullable, OptionalExtension, OutboundPushBridgeCacheRecord,
+    PersistenceError, PersistenceResult, PgPool, PushBridgeCacheStore, PushDeviceStore,
+    QueryableByName, RunQueryDsl, Text, Timestamptz, Value, async_trait, evaluate_drift, pg_conn,
+    sql_query,
 };
 pub struct PgPushBridgeCacheStore {
     pub pool: PgPool,
 }
 #[async_trait]
 impl PushBridgeCacheStore for PgPushBridgeCacheStore {
-    async fn get(
+    async fn current_contract(
         &self,
         bridge_describe_url: &str,
     ) -> PersistenceResult<Option<OutboundPushBridgeCacheRecord>> {
@@ -81,105 +81,6 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         .await
         .map(|_| ())
         .map_err(PersistenceError::database)
-    }
-
-    async fn delete(&self, bridge_describe_url: &str) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query("DELETE FROM push_bridge_cache WHERE bridge_describe_url = $1")
-            .bind::<Text, _>(bridge_describe_url)
-            .execute(&mut *conn)
-            .await
-            .map(|affected| affected > 0)
-            .map_err(PersistenceError::database)
-    }
-
-    async fn clear(&self) -> PersistenceResult<usize> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query("DELETE FROM push_bridge_cache")
-            .execute(&mut *conn)
-            .await
-            .map_err(PersistenceError::database)
-    }
-
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<OutboundPushBridgeCacheRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "SELECT push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
-             cache_state, contract_digest, fetched_at, remote_contract, \
-             trust_level, freshness_at, etag \
-             FROM push_bridge_cache ORDER BY bridge_describe_url",
-        )
-        .load::<PushBridgeCacheRow>(&mut *conn)
-        .await
-        .map(|rows| {
-            rows.into_iter()
-                .map(OutboundPushBridgeCacheRecord::from)
-                .collect()
-        })
-        .map_err(PersistenceError::database)
-    }
-
-    async fn len(&self) -> PersistenceResult<usize> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query("SELECT COUNT(*) AS count FROM push_bridge_cache")
-            .get_result::<CountRow>(&mut *conn)
-            .await
-            .map(|row| row.count as usize)
-            .map_err(PersistenceError::database)
-    }
-
-    async fn record_contract_snapshot(
-        &self,
-        gateway_describe_url: &str,
-        digest: &str,
-        etag: &str,
-        trust_level: &str,
-    ) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        // Upsert: if a row already exists, only bump digest/etag/trust/freshness;
-        // otherwise create a stub row that mirrors the gateway URL into the
-        // describe-URL columns until the next live fetch fills in the contract.
-        sql_query(
-            "INSERT INTO push_bridge_cache \
-             (push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
-              cache_state, contract_digest, fetched_at, remote_contract, \
-              trust_level, freshness_at, etag, updated_at) \
-             VALUES ($1, $1, $1, 'snapshot_recorded', 'snapshot_recorded', \
-                     $2, NOW(), '{}'::jsonb, $4, NOW(), $3, NOW()) \
-             ON CONFLICT (bridge_describe_url) DO UPDATE SET \
-                contract_digest = EXCLUDED.contract_digest, \
-                etag = EXCLUDED.etag, \
-                trust_level = EXCLUDED.trust_level, \
-                freshness_at = NOW(), \
-                updated_at = NOW()",
-        )
-        .bind::<Text, _>(gateway_describe_url)
-        .bind::<Text, _>(digest)
-        .bind::<Text, _>(etag)
-        .bind::<Text, _>(trust_level)
-        .execute(&mut *conn)
-        .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
-    }
-
-    async fn current_contract(
-        &self,
-        gateway_describe_url: &str,
-    ) -> PersistenceResult<Option<OutboundPushBridgeCacheRecord>> {
-        // Same projection as `get`; named separately so the call site reads
-        // intent (drift verification, not raw cache lookup).
-        self.get(gateway_describe_url).await
     }
 
     async fn verify_contract_freshness(

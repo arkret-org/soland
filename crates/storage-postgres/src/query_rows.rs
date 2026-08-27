@@ -15,12 +15,6 @@ pub struct ExistsRow {
 }
 
 #[derive(QueryableByName)]
-pub struct CountRow {
-    #[diesel(sql_type = BigInt)]
-    pub count: i64,
-}
-
-#[derive(QueryableByName)]
 pub struct ClaimSeqRow {
     #[diesel(sql_type = BigInt)]
     pub claim_seq: i64,

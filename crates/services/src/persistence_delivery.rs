@@ -290,18 +290,6 @@ impl crate::delivery::BlobPort for PersistenceBlobs {
 
 #[async_trait::async_trait]
 impl crate::delivery::PushBridgeCachePort for PersistencePushBridgeCache {
-    async fn entry(
-        &self,
-        bridge_describe_url: &str,
-    ) -> crate::ServiceResult<Option<crate::delivery::OutboundPushBridgeCacheState>> {
-        Ok(self
-            .0
-            .push_bridge_cache()
-            .get(bridge_describe_url)
-            .await?
-            .map(application_push_bridge_cache))
-    }
-
     async fn store_entry(
         &self,
         bridge_describe_url: &str,
@@ -312,35 +300,6 @@ impl crate::delivery::PushBridgeCachePort for PersistencePushBridgeCache {
             .put(bridge_describe_url, persistence_push_bridge_cache(record))
             .await?;
         Ok(())
-    }
-
-    async fn delete_entry(&self, bridge_describe_url: &str) -> crate::ServiceResult<bool> {
-        Ok(self
-            .0
-            .push_bridge_cache()
-            .delete(bridge_describe_url)
-            .await?)
-    }
-
-    async fn clear(&self) -> crate::ServiceResult<usize> {
-        Ok(self.0.push_bridge_cache().clear().await?)
-    }
-
-    async fn entries(
-        &self,
-    ) -> crate::ServiceResult<Vec<crate::delivery::OutboundPushBridgeCacheState>> {
-        Ok(self
-            .0
-            .push_bridge_cache()
-            .snapshot_all()
-            .await?
-            .into_iter()
-            .map(application_push_bridge_cache)
-            .collect())
-    }
-
-    async fn entry_count(&self) -> crate::ServiceResult<usize> {
-        Ok(self.0.push_bridge_cache().len().await?)
     }
 
     async fn current_contract(

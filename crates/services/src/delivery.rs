@@ -220,19 +220,11 @@ pub trait BlobPort: Send + Sync {
 
 #[async_trait]
 pub trait PushBridgeCachePort: Send + Sync {
-    async fn entry(
-        &self,
-        bridge_describe_url: &str,
-    ) -> ServiceResult<Option<OutboundPushBridgeCacheState>>;
     async fn store_entry(
         &self,
         bridge_describe_url: &str,
         record: OutboundPushBridgeCacheState,
     ) -> ServiceResult<()>;
-    async fn delete_entry(&self, bridge_describe_url: &str) -> ServiceResult<bool>;
-    async fn clear(&self) -> ServiceResult<usize>;
-    async fn entries(&self) -> ServiceResult<Vec<OutboundPushBridgeCacheState>>;
-    async fn entry_count(&self) -> ServiceResult<usize>;
     async fn current_contract(
         &self,
         bridge_describe_url: &str,
@@ -601,12 +593,6 @@ impl DeliveryService {
         self.blobs.blobs().await
     }
 
-    pub async fn push_bridge_cache_entry(
-        &self,
-        bridge_describe_url: &str,
-    ) -> ServiceResult<Option<OutboundPushBridgeCacheState>> {
-        self.push_bridge_cache.entry(bridge_describe_url).await
-    }
     pub async fn store_push_bridge_cache_entry(
         &self,
         bridge_describe_url: &str,
@@ -615,25 +601,6 @@ impl DeliveryService {
         self.push_bridge_cache
             .store_entry(bridge_describe_url, record)
             .await
-    }
-    pub async fn delete_push_bridge_cache_entry(
-        &self,
-        bridge_describe_url: &str,
-    ) -> ServiceResult<bool> {
-        self.push_bridge_cache
-            .delete_entry(bridge_describe_url)
-            .await
-    }
-    pub async fn clear_push_bridge_cache(&self) -> ServiceResult<usize> {
-        self.push_bridge_cache.clear().await
-    }
-    pub async fn push_bridge_cache_entries(
-        &self,
-    ) -> ServiceResult<Vec<OutboundPushBridgeCacheState>> {
-        self.push_bridge_cache.entries().await
-    }
-    pub async fn push_bridge_cache_len(&self) -> ServiceResult<usize> {
-        self.push_bridge_cache.entry_count().await
     }
     pub async fn current_push_bridge_contract(
         &self,
@@ -709,30 +676,12 @@ mod tests {
 
     #[async_trait]
     impl PushBridgeCachePort for NoPushBridgeCache {
-        async fn entry(
-            &self,
-            _bridge_describe_url: &str,
-        ) -> ServiceResult<Option<OutboundPushBridgeCacheState>> {
-            Ok(None)
-        }
         async fn store_entry(
             &self,
             _bridge_describe_url: &str,
             _record: OutboundPushBridgeCacheState,
         ) -> ServiceResult<()> {
             Ok(())
-        }
-        async fn delete_entry(&self, _bridge_describe_url: &str) -> ServiceResult<bool> {
-            Ok(false)
-        }
-        async fn clear(&self) -> ServiceResult<usize> {
-            Ok(0)
-        }
-        async fn entries(&self) -> ServiceResult<Vec<OutboundPushBridgeCacheState>> {
-            Ok(Vec::new())
-        }
-        async fn entry_count(&self) -> ServiceResult<usize> {
-            Ok(0)
         }
         async fn current_contract(
             &self,

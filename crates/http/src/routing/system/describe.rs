@@ -755,14 +755,6 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 todo: "make the session-grant introspection cache/timeout policy explicit in the published contract.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
-                name: "outbound_push_bridge".to_owned(),
-                method: "GET".to_owned(),
-                path: "/_soland/edge/push/outbound/bridge/describe".to_owned(),
-                contract: "arkret.rest.outbound_push_bridge.v1".to_owned(),
-                stability: "limited".to_owned(),
-                todo: "snapshots are durable and participate in notify drift checks; signed delivery binding to the gateway contract is still not claimed.".to_owned(),
-            },
-            IntegrationSurfaceDescriptor {
                 name: "push_register_device".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_arkret/edge/push/register-device".to_owned(),
@@ -815,13 +807,10 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
             "compose_strand": {
                 "step_1": {"service": "coauth", "path": "/_arkret/gate/account/session-grants", "method": "POST"},
                 "step_2": {"service": "soland", "path": "protected route", "method": "Authorization: DPoP <ak.session.grant> + DPoP"},
-                "step_3": {"service": "soland", "path": "/_soland/edge/push/outbound/bridge/fetch", "method": "POST"},
-                "step_4": {"service": "soland", "path": "/_arkret/edge/push/register-device", "method": "POST"}
+                "step_3": {"service": "soland", "path": "/_arkret/edge/push/register-device", "method": "POST"}
             }
         }),
         todos: vec![
-            "replace push bridge scaffolds with the direct session-grant presentation path.".to_owned(),
-            "bind outbound push notify delivery to the fetched gateway contract's advertised auth modes.".to_owned(),
             "publish the same integration manifest fields in the OpenAPI surface.".to_owned(),
         ],
     })

@@ -13,43 +13,19 @@ pub trait PushDeviceStore: Send + Sync {
     ) -> PersistenceResult<usize>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>>;
 }
-/// Outbound push-bridge contract cache (`bridge_describe_url` → snapshot).
+/// Canonical push-gateway `ServiceDescribe` cache (describe URL → snapshot).
 ///
 /// C33.1 (T0-3a): the cache row doubles as the canonical gateway-contract
-/// snapshot. `record_contract_snapshot` lands a digest+etag+trust_level,
+/// snapshot. The internal refresh path stores a complete validated snapshot;
 /// `current_contract` reads it back, and `verify_contract_freshness` is the
 /// fail-closed gate the push outbound publish path calls before fan-out.
 #[async_trait]
 pub trait PushBridgeCacheStore: Send + Sync {
-    async fn get(
-        &self,
-        bridge_describe_url: &str,
-    ) -> PersistenceResult<Option<OutboundPushBridgeCacheRecord>>;
     async fn put(
         &self,
         bridge_describe_url: &str,
         record: OutboundPushBridgeCacheRecord,
     ) -> PersistenceResult<()>;
-    async fn delete(&self, bridge_describe_url: &str) -> PersistenceResult<bool>;
-    async fn clear(&self) -> PersistenceResult<usize>;
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<OutboundPushBridgeCacheRecord>>;
-    async fn len(&self) -> PersistenceResult<usize>;
-    async fn is_empty(&self) -> PersistenceResult<bool> {
-        Ok(self.len().await? == 0)
-    }
-
-    /// Persist a fresh contract snapshot for `gateway_describe_url`. Bumps
-    /// `freshness_at` to NOW, sets `trust_level`, and stores `digest`+`etag`.
-    /// Creates a new row if no prior snapshot exists; otherwise overwrites
-    /// the digest/etag/trust/freshness columns in place (rip-and-replace).
-    async fn record_contract_snapshot(
-        &self,
-        gateway_describe_url: &str,
-        digest: &str,
-        etag: &str,
-        trust_level: &str,
-    ) -> PersistenceResult<()>;
-
     /// Read the current persisted contract snapshot for a gateway, if any.
     async fn current_contract(
         &self,

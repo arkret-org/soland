@@ -23,7 +23,9 @@ use soland_services::delivery::PushContractDrift;
 use subtle::ConstantTimeEq;
 
 use super::audit::append_audit_log;
-use super::push_outbound::{derive_push_gateway_service_base_url, join_push_gateway_url};
+use super::push_outbound::{
+    derive_push_gateway_service_base_url, join_push_gateway_url, refresh_push_gateway_description,
+};
 use super::{authenticated_session, now, sha256_hex};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -506,9 +508,9 @@ pub(super) async fn push_notify(
 
 /// Resolve the gateway URL of a registered device into its canonical describe URL
 /// and ask `PushBridgeCacheStore::verify_contract_freshness` whether the
-/// persisted snapshot is trusted + fresh + matches its own digest. Returns
-/// `Unknown` (fail-closed) when the gateway URL is empty or doesn't parse,
-/// and when no snapshot has been persisted yet.
+/// persisted snapshot is trusted + fresh + matches its own digest. A missing
+/// or stale snapshot is refreshed from canonical ServiceDescribe before the
+/// final fail-closed decision.
 async fn verify_push_gateway_contract_drift(
     state: &AppState,
     push_gateway_url: &str,
@@ -523,22 +525,44 @@ async fn verify_push_gateway_contract_drift(
     };
     let bridge_describe_url = join_push_gateway_url(&service_base_url, "/_arkret/describe");
     let service = state.deliveries();
-    let snapshot_digest = match service
+    let initial = match service
+        .current_push_bridge_contract(&bridge_describe_url)
+        .await
+    {
+        Ok(Some(record)) if !record.contract_digest.is_empty() => service
+            .verify_push_bridge_contract_freshness(
+                &bridge_describe_url,
+                &record.contract_digest,
+                max_age,
+            )
+            .await
+            .unwrap_or(PushContractDrift::Unknown),
+        Ok(_) => PushContractDrift::Unknown,
+        Err(error) => {
+            tracing::error!(%error, "failed to read push bridge cache snapshot");
+            PushContractDrift::Unknown
+        }
+    };
+    if initial == PushContractDrift::Match {
+        return initial;
+    }
+    if state.config().development_mode {
+        return initial;
+    }
+
+    if let Err(error) = refresh_push_gateway_description(state, trimmed).await {
+        tracing::warn!(%error, push_gateway = trimmed, "canonical push gateway refresh failed");
+        return initial;
+    }
+    let refreshed_digest = match service
         .current_push_bridge_contract(&bridge_describe_url)
         .await
     {
         Ok(Some(record)) => record.contract_digest,
-        Ok(None) => return PushContractDrift::Unknown,
-        Err(error) => {
-            tracing::error!(%error, "failed to read push bridge cache snapshot");
-            return PushContractDrift::Unknown;
-        }
+        _ => return PushContractDrift::Unknown,
     };
-    if snapshot_digest.is_empty() {
-        return PushContractDrift::Unknown;
-    }
     service
-        .verify_push_bridge_contract_freshness(&bridge_describe_url, &snapshot_digest, max_age)
+        .verify_push_bridge_contract_freshness(&bridge_describe_url, &refreshed_digest, max_age)
         .await
         .unwrap_or(PushContractDrift::Unknown)
 }

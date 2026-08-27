@@ -31,6 +31,35 @@ fn push_gateway_description() -> serde_json::Value {
     serde_json::to_value(description).unwrap()
 }
 
+async fn seed_push_gateway_snapshot(
+    state: &AppState,
+    push_gateway_url: &str,
+    digest: &str,
+    observed_at: chrono::DateTime<chrono::Utc>,
+) {
+    state
+        .test_persistence()
+        .push_bridge_cache()
+        .put(
+            "https://push.example/_arkret/describe",
+            soland_storage::OutboundPushBridgeCacheRecord {
+                push_gateway_url: push_gateway_url.to_owned(),
+                service_base_url: "https://push.example".to_owned(),
+                bridge_describe_url: "https://push.example/_arkret/describe".to_owned(),
+                fetch_state: "test_seed".to_owned(),
+                cache_state: "durable_cached".to_owned(),
+                contract_digest: digest.to_owned(),
+                fetched_at: observed_at,
+                remote_contract: push_gateway_description(),
+                trust_level: "trusted".to_owned(),
+                freshness_at: observed_at,
+                etag: digest.to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+}
+
 /// A `session`-class Realm-scoped Signal from Alice's seeded device.
 ///
 /// `profiles-presence.md` §3.4/§3.5 put presence and typing on exactly this
@@ -1256,6 +1285,15 @@ async fn push_reregistration_is_object_idempotent_and_replaces_the_provider_toke
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
+    for removed_path in [
+        "/_soland/edge/push/outbound/bridge/describe",
+        "/_soland/edge/push/outbound/bridge/cache/status",
+    ] {
+        let removed = TestClient::get(format!("http://server{removed_path}"))
+            .send(&service)
+            .await;
+        assert_eq!(removed.status_code, Some(StatusCode::NOT_FOUND));
+    }
     let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
     let register = |push_key: &str| {
@@ -1331,37 +1369,12 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify_
     let service = app_from_state(state.clone());
     let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let push_gateway = "https://push.example/_arkret/edge/push/notify";
-    let bridge_describe = "https://push.example/_arkret/describe";
     let stale_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
         (chrono::Utc::now() - chrono::Duration::hours(25)).timestamp_millis(),
     )
     .unwrap();
 
-    let stale_import: Value =
-        TestClient::post("http://server/_soland/edge/push/outbound/bridge/cache/import")
-            .add_header("content-type", "application/json", true)
-            .body(canonical_body(&serde_json::json!({
-                "replace_existing": true,
-                "entries": [{
-                    "push_gateway_url": push_gateway,
-                    "service_base_url": "https://push.example",
-                    "bridge_describe_url": bridge_describe,
-                    "fetch_state": "cotest_seed",
-                    "cache_state": "imported_replace_existing",
-                    "contract_digest": "sha256:stale",
-                    "fetched_at": stale_at,
-                    "remote_contract": push_gateway_description(),
-                    "trust_level": "trusted",
-                    "freshness_at": stale_at,
-                    "etag": "stale"
-                }]
-            })))
-            .send(&service)
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert_eq!(stale_import["imported_count"], 1);
+    seed_push_gateway_snapshot(&state, push_gateway, "sha256:stale", stale_at).await;
 
     let registered: Value = TestClient::post("http://server/_arkret/edge/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -1418,31 +1431,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify_
         chrono::Utc::now().timestamp_millis(),
     )
     .unwrap();
-    let fresh_import: Value =
-        TestClient::post("http://server/_soland/edge/push/outbound/bridge/cache/import")
-            .add_header("content-type", "application/json", true)
-            .body(canonical_body(&serde_json::json!({
-                "replace_existing": true,
-                "entries": [{
-                    "push_gateway_url": push_gateway,
-                    "service_base_url": "https://push.example",
-                    "bridge_describe_url": bridge_describe,
-                    "fetch_state": "cotest_seed",
-                    "cache_state": "imported_replace_existing",
-                    "contract_digest": "sha256:fresh",
-                    "fetched_at": now,
-                    "remote_contract": push_gateway_description(),
-                    "trust_level": "trusted",
-                    "freshness_at": now,
-                    "etag": "fresh"
-                }]
-            })))
-            .send(&service)
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert_eq!(fresh_import["total_entries"], 1);
+    seed_push_gateway_snapshot(&state, push_gateway, "sha256:fresh", now).await;
 
     let fresh_notify: arkret_models_integration::models_push::PushNotifyOutcome =
         TestClient::post("http://server/_arkret/edge/push/notify")
