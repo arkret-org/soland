@@ -292,19 +292,21 @@ CREATE INDEX agent_membership_cleanup_incomplete_idx
     ON public.agent_membership_cleanup_intents (cleanup_due_at, cleanup_intent_digest)
     WHERE completed_at IS NULL;
 
-CREATE TABLE public.applet_registrations (
-    id text PRIMARY KEY,
+CREATE TABLE public.applet_installations (
+    applet_id text NOT NULL,
+    effective_scope_key text NOT NULL,
     record jsonb NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT applet_registrations_status_check CHECK ((record->>'status' = ANY (ARRAY['installed'::text, 'partially_installed'::text, 'rejected'::text, 'revoked'::text])))
+    CONSTRAINT applet_installations_pkey PRIMARY KEY (applet_id, effective_scope_key),
+    CONSTRAINT applet_installations_status_check CHECK ((record->>'status' = ANY (ARRAY['installed'::text, 'partially_installed'::text, 'revoking'::text, 'rejected'::text, 'revoked'::text])))
 );
 
-CREATE INDEX applet_registrations_owner_idx ON public.applet_registrations USING btree ((record->>'owner_actor_id'));
+CREATE INDEX applet_installations_owner_idx ON public.applet_installations USING btree ((record->>'owner_actor_id'));
 
-CREATE INDEX applet_registrations_status_idx ON public.applet_registrations USING btree ((record->>'status'));
+CREATE INDEX applet_installations_status_idx ON public.applet_installations USING btree ((record->>'status'));
 
 CREATE TABLE public.applet_namespace_claims (
-    applet_id text NOT NULL REFERENCES public.applet_registrations(id),
+    applet_id text NOT NULL,
     domain text NOT NULL CHECK (domain IN ('actors', 'realms', 'handles')),
     pattern text NOT NULL,
     exclusive boolean NOT NULL,
@@ -317,7 +319,7 @@ CREATE INDEX applet_namespace_claims_domain_pattern_idx
 CREATE TABLE public.managed_authority_claims (
     actor_id text NOT NULL,
     principal_server_id text NOT NULL,
-    applet_id text NOT NULL REFERENCES public.applet_registrations(id),
+    applet_id text NOT NULL,
     PRIMARY KEY (actor_id, principal_server_id)
 );
 

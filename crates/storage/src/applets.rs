@@ -1,10 +1,15 @@
 use super::{PersistenceResult, Value, async_trait};
 #[async_trait]
 pub trait AppletStore: Send + Sync {
-    async fn get(&self, applet_id: &str) -> PersistenceResult<Option<Value>>;
+    async fn get(
+        &self,
+        applet_id: &str,
+        effective_scope_key: &str,
+    ) -> PersistenceResult<Option<Value>>;
     async fn compare_and_swap(
         &self,
         applet_id: &str,
+        effective_scope_key: &str,
         expected: &Value,
         replacement: Value,
     ) -> PersistenceResult<bool>;
@@ -57,7 +62,7 @@ pub enum AppletTransactionReplayBegin {
 }
 #[doc(hidden)]
 pub fn applet_registration_select_sql(suffix: &str) -> String {
-    format!("SELECT record FROM applet_registrations {suffix}")
+    format!("SELECT record FROM applet_installations {suffix}")
 }
 #[doc(hidden)]
 pub fn applet_transaction_replay_select_sql() -> &'static str {

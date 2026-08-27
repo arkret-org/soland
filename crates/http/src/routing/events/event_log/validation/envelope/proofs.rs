@@ -700,9 +700,28 @@ async fn verify_with_installed_applet_registration_epoch(
     let fail = |code: &'static str, message: &'static str| {
         event_validation_error(StatusCode::BAD_REQUEST, code, message)
     };
+    let effective_scope: arkret_wire::ScopeRef = serde_json::from_value(
+        object
+            .get("scope_ref")
+            .cloned()
+            .ok_or_else(|| fail("schema_violation", "Applet Event proof requires scope_ref"))?,
+    )
+    .map_err(|_| {
+        fail(
+            "schema_violation",
+            "Applet Event proof scope_ref is invalid",
+        )
+    })?;
+    let effective_scope_key = soland_storage::applet_effective_scope_key(&effective_scope)
+        .map_err(|_| {
+            fail(
+                "schema_violation",
+                "Applet Event proof scope_ref is invalid",
+            )
+        })?;
     let record = state
         .event_queries()
-        .applet(applet_id)
+        .applet(applet_id, &effective_scope_key)
         .await
         .map_err(|error| {
             tracing::error!(%error, %applet_id, "failed to read installed Applet proof authority");

@@ -154,8 +154,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    applet_registrations (id) {
-        id -> Text,
+    applet_installations (applet_id, effective_scope_key) {
+        applet_id -> Text,
+        effective_scope_key -> Text,
         record -> Jsonb,
         updated_at -> Timestamptz,
     }
@@ -1845,7 +1846,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     agent_principals,
     agent_sidecar_contexts,
     agent_sidecars,
-    applet_registrations,
+    applet_installations,
     applet_transactions,
     audit_logs,
     blobs,

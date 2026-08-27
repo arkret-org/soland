@@ -4,7 +4,7 @@ use super::{
     async_trait,
 };
 pub(crate) struct MemoryAppletStore {
-    pub(crate) records: Mutex<BTreeMap<String, Value>>,
+    pub(crate) records: Mutex<BTreeMap<(String, String), Value>>,
     transactions: Mutex<BTreeMap<(String, String, String), AppletTransactionReplayRecord>>,
     pub(crate) authoring_previews: Mutex<BTreeMap<String, AppletAuthoringPreviewRecord>>,
 }
@@ -19,21 +19,40 @@ impl MemoryAppletStore {
 }
 #[async_trait]
 impl AppletStore for MemoryAppletStore {
-    async fn get(&self, applet_id: &str) -> PersistenceResult<Option<Value>> {
-        Ok(self.records.lock().get(applet_id).cloned())
+    async fn get(
+        &self,
+        applet_id: &str,
+        effective_scope_key: &str,
+    ) -> PersistenceResult<Option<Value>> {
+        Ok(self
+            .records
+            .lock()
+            .get(&(applet_id.to_owned(), effective_scope_key.to_owned()))
+            .cloned())
     }
 
     async fn compare_and_swap(
         &self,
         applet_id: &str,
+        effective_scope_key: &str,
         expected: &Value,
         replacement: Value,
     ) -> PersistenceResult<bool> {
+        if soland_storage::applet_identity_from_record(expected)?
+            != soland_storage::applet_identity_from_record(&replacement)?
+            || soland_storage::applet_effective_scope_key_from_record(&replacement)?
+                != effective_scope_key
+        {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: Applet CAS cannot change identity or effective_scope".to_owned(),
+            ));
+        }
         let mut records = self.records.lock();
-        if records.get(applet_id) != Some(expected) {
+        let key = (applet_id.to_owned(), effective_scope_key.to_owned());
+        if records.get(&key) != Some(expected) {
             return Ok(false);
         }
-        records.insert(applet_id.to_owned(), replacement);
+        records.insert(key, replacement);
         Ok(true)
     }
 
@@ -190,28 +209,50 @@ mod tests {
     async fn stale_record_mutation_cannot_overwrite_a_concurrent_ghost_append() {
         let store = MemoryAppletStore::new();
         let applet_id = "ak:applet:01994137-0000-7000-8000-000000000001";
-        let original = serde_json::json!({"status": "installed", "ghosts": []});
+        let scope = arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_wire::RealmId::new(
+                "ak:realm:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH".to_owned(),
+            )
+            .unwrap(),
+        };
+        let scope_key = soland_storage::applet_effective_scope_key(&scope).unwrap();
+        let original = serde_json::json!({
+            "identity": {"applet_id": applet_id},
+            "effective_scope": scope.clone(),
+            "status": "installed",
+            "ghosts": []
+        });
         store
             .records
             .lock()
-            .insert(applet_id.to_owned(), original.clone());
+            .insert((applet_id.to_owned(), scope_key.clone()), original.clone());
         let appended = serde_json::json!({
+            "identity": {"applet_id": applet_id},
+            "effective_scope": scope.clone(),
             "status": "installed",
             "ghosts": [{"ghost_actor_id": "ak:did_core:webvh:z6mkghost"}],
         });
         assert!(
             store
-                .compare_and_swap(applet_id, &original, appended.clone())
+                .compare_and_swap(applet_id, &scope_key, &original, appended.clone())
                 .await
                 .unwrap()
         );
-        let stale_revoke = serde_json::json!({"status": "revoked", "ghosts": []});
+        let stale_revoke = serde_json::json!({
+            "identity": {"applet_id": applet_id},
+            "effective_scope": scope,
+            "status": "revoked",
+            "ghosts": []
+        });
         assert!(
             !store
-                .compare_and_swap(applet_id, &original, stale_revoke)
+                .compare_and_swap(applet_id, &scope_key, &original, stale_revoke)
                 .await
                 .unwrap()
         );
-        assert_eq!(store.get(applet_id).await.unwrap(), Some(appended));
+        assert_eq!(
+            store.get(applet_id, &scope_key).await.unwrap(),
+            Some(appended)
+        );
     }
 }

@@ -34,8 +34,8 @@ use super::install::{
     require_realm_admin, validate_admin_install_events, validate_applet_package,
 };
 use super::record::{
-    applet_id_param, applet_record, applet_records, encode_applet_record, ensure_not_revoked,
-    idempotency_key, persist_applet_record, query_value,
+    applet_id_param, applet_record, applet_record_for_realm, applet_records, encode_applet_record,
+    ensure_not_revoked, idempotency_key, persist_applet_record, query_value,
 };
 use super::signature::{
     VerifiedAppletServiceSignature, require_ghost_provision_signature,
@@ -243,7 +243,17 @@ async fn install_endpoint(
     let body = serde_json::to_value(&commit)
         .map_err(|error| AppError::internal(format!("install commit serialize: {error}")))?;
     let body_digest = crate::util::canonical_digest(&body)?;
-    if let Some(existing) = applet_record(state, commit.applet_package().applet_id.as_str()).await?
+    let authoring_request = commit.authoring_request();
+    let basis = authoring_request.basis.install().ok_or_else(|| {
+        AppError::param_invalid("install commit requires an install_bot authoring basis")
+            .with_wire_code("applet_install_plan_mismatch")
+    })?;
+    if let Some(existing) = applet_record(
+        state,
+        commit.applet_package().applet_id.as_str(),
+        &basis.effective_scope,
+    )
+    .await?
     {
         if exact_successful_install_replay(
             &existing.idempotency_key,
@@ -255,11 +265,6 @@ async fn install_endpoint(
             return json_ok(existing.install_response);
         }
     }
-    let authoring_request = commit.authoring_request();
-    let basis = authoring_request.basis.install().ok_or_else(|| {
-        AppError::param_invalid("install commit requires an install_bot authoring basis")
-            .with_wire_code("applet_install_plan_mismatch")
-    })?;
     authoring_request.validate_bindings().map_err(|error| {
         AppError::param_invalid(format!("install authoring request is invalid: {error}"))
     })?;
@@ -294,19 +299,20 @@ async fn install_endpoint(
         .map_err(|error| {
             AppError::param_invalid(format!("authoring request proof is invalid: {error}"))
         })?;
-    let managed_actor_bundle = commit.managed_actor_bundle().ok_or_else(|| {
-        AppError::param_invalid("install reuse is not valid for a new managed actor bundle")
-            .with_wire_code("applet_managed_actor_provision_invalid")
-    })?;
-    managed_actor_bundle
-        .validate_bindings(authoring_request)
-        .map_err(|error| {
-            AppError::param_invalid(format!("managed actor bundle is invalid: {error}"))
-        })?;
-    if managed_actor_bundle.proof.created_at > chrono::Utc::now() + chrono::Duration::seconds(30) {
-        return Err(AppError::param_invalid(
-            "managed actor bundle proof created_at is in the future",
-        ));
+    let managed_actor_bundle = commit.managed_actor_bundle();
+    if let Some(managed_actor_bundle) = managed_actor_bundle {
+        managed_actor_bundle
+            .validate_bindings(authoring_request)
+            .map_err(|error| {
+                AppError::param_invalid(format!("managed actor bundle is invalid: {error}"))
+            })?;
+        if managed_actor_bundle.proof.created_at
+            > chrono::Utc::now() + chrono::Duration::seconds(30)
+        {
+            return Err(AppError::param_invalid(
+                "managed actor bundle proof created_at is in the future",
+            ));
+        }
     }
     let registration_epoch_evidence =
         registration_epoch_evidence_from_event(&basis.registration_event)?;
@@ -317,26 +323,28 @@ async fn install_endpoint(
         commit.applet_package(),
         &registration_epoch_evidence,
     )?;
-    if !registration_epoch_evidence
-        .contains_signing_key(managed_actor_bundle.proof.verification_method.as_str())
-    {
-        return Err(AppError::param_invalid(
-            "managed actor bundle proof key is not in the accepted registration epoch",
-        ));
+    if let Some(managed_actor_bundle) = managed_actor_bundle {
+        if !registration_epoch_evidence
+            .contains_signing_key(managed_actor_bundle.proof.verification_method.as_str())
+        {
+            return Err(AppError::param_invalid(
+                "managed actor bundle proof key is not in the accepted registration epoch",
+            ));
+        }
+        crate::jws_verify::verify_did_controlled_jws_async(
+            &managed_actor_bundle
+                .proof_binding_bytes()
+                .map_err(|error| {
+                    AppError::param_invalid(format!("bundle proof binding is invalid: {error}"))
+                })?,
+            &managed_actor_bundle.proof.jws,
+            managed_actor_bundle.proof.verification_method.as_str(),
+            registration_epoch_evidence.full_id.as_str(),
+            state,
+        )
+        .await
+        .map_err(|error| AppError::param_invalid(format!("bundle proof is invalid: {error}")))?;
     }
-    crate::jws_verify::verify_did_controlled_jws_async(
-        &managed_actor_bundle
-            .proof_binding_bytes()
-            .map_err(|error| {
-                AppError::param_invalid(format!("bundle proof binding is invalid: {error}"))
-            })?,
-        &managed_actor_bundle.proof.jws,
-        managed_actor_bundle.proof.verification_method.as_str(),
-        registration_epoch_evidence.full_id.as_str(),
-        state,
-    )
-    .await
-    .map_err(|error| AppError::param_invalid(format!("bundle proof is invalid: {error}")))?;
     let approved_scopes = approved_scopes_from_formal_install_events(
         state,
         &commit,
@@ -575,7 +583,7 @@ async fn revoke_preview_endpoint(
     let session = aa.authenticated_session(state, req).await?;
     let applet_id = applet_id_param(req)?;
     let preview = body.into_inner();
-    let record = applet_record(state, &applet_id)
+    let record = applet_record(state, &applet_id, &preview.effective_scope)
         .await?
         .ok_or_else(|| AppError::not_found("applet is not registered"))?;
     validate_revoke_scope(&record, &preview.effective_scope)?;
@@ -606,7 +614,7 @@ async fn revoke_install_endpoint(
         .map_err(|error| AppError::param_invalid(format!("revoke request invalid: {error}")))?;
     let request_digest = arkret_canonical::canonical_sha256(&request_value)
         .map_err(|error| AppError::param_invalid(format!("revoke request invalid: {error}")))?;
-    let mut record = applet_record(state, &applet_id)
+    let mut record = applet_record(state, &applet_id, &revoke.effective_scope)
         .await?
         .ok_or_else(|| AppError::not_found("applet is not registered"))?;
     validate_revoke_scope(&record, &revoke.effective_scope)?;
@@ -774,8 +782,13 @@ async fn revoke_install_endpoint(
     }
 
     if revoke_mode_fences_runtime(revoke.revoke_mode) {
-        let local_outcome =
-            revoke_applet_record_after_admin_gate(state, &session.actor, &applet_id).await?;
+        let local_outcome = revoke_applet_record_after_admin_gate(
+            state,
+            &session.actor,
+            &applet_id,
+            &revoke.effective_scope,
+        )
+        .await?;
         outcome.revoked_refs.push(local_outcome.bot_actor_id);
         outcome.revoked_refs.extend(local_outcome.ghost_actor_ids);
     }
@@ -789,7 +802,7 @@ async fn revoke_install_endpoint(
     {
         step.status = AppletRevokeStepStatus::Accepted;
     }
-    record = applet_record(state, &applet_id)
+    record = applet_record(state, &applet_id, &revoke.effective_scope)
         .await?
         .ok_or_else(|| AppError::not_found("applet disappeared during revoke"))?;
     persist_revoke_execution(
@@ -1082,7 +1095,8 @@ async fn persist_revoke_execution(
             return Ok(());
         }
         let applet_id = record.applet_id.clone();
-        *record = applet_record(state, applet_id.as_str())
+        let effective_scope = record.effective_scope.clone();
+        *record = applet_record(state, applet_id.as_str(), &effective_scope)
             .await?
             .ok_or_else(|| AppError::not_found("applet disappeared during revoke"))?;
         if let Some(stored) = load_stored_revoke_outcome(
@@ -1151,7 +1165,7 @@ async fn preview_ghost_actor_endpoint(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let path_applet_id = applet_id_param(req)?;
     let preview = body.into_inner();
-    let record = applet_record(state, &path_applet_id)
+    let record = applet_record_for_realm(state, &path_applet_id, &preview.realm_id)
         .await?
         .ok_or_else(|| AppError::not_found("applet is not installed"))?;
     ensure_not_revoked(&record)?;
@@ -1207,7 +1221,7 @@ async fn preview_ghost_actor_endpoint(
             .map_err(|error| {
                 AppError::internal(format!("configured service_id is invalid: {error}"))
             })?,
-        applet_id: record.applet_id,
+        applet_id: record.applet_id.clone(),
         service_id: record.package.service_id,
         realm_id: preview.realm_id,
         external_ref: preview.external_ref,
@@ -1399,7 +1413,7 @@ async fn provision_ghost_actor_endpoint(
     // well-formed bare DID scalar (no DID URL fragment).
     let realm_id = authoring_basis.realm_id.clone();
 
-    let mut record = applet_record(state, &path_applet_id)
+    let mut record = applet_record_for_realm(state, &path_applet_id, &realm_id)
         .await?
         .ok_or_else(|| AppError::not_found("applet is not installed"))?;
     ensure_not_revoked(&record)?;
@@ -1708,7 +1722,7 @@ async fn resolve_realm_endpoint(
             || record.applet_id.as_str() == realm_id_or_alias
     });
     if let Some(record) = record {
-        let realm_id = record.portal_realm_id;
+        let realm_id = record.portal_realm_id.clone();
         return json_ok(AppletRealmView {
             exists: true,
             realm_id: Some(realm_id),
@@ -2038,7 +2052,6 @@ mod revoke_saga_tests {
     fn concurrent_revoke_progress_never_regresses_from_step_three_to_step_two() {
         let outcome = |statuses: &[&str]| {
             serde_json::from_value::<AppletRevokeOutcome>(json!({
-                "ok": false,
                 "operation_id": "ak:operation:01904100-0000-7000-8000-000000000001",
                 "revoke_plan_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 "status": "in_progress",

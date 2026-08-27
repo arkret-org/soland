@@ -81,33 +81,51 @@ pub struct PgAppletStore {
 }
 #[async_trait]
 impl AppletStore for PgAppletStore {
-    async fn get(&self, applet_id: &str) -> PersistenceResult<Option<Value>> {
+    async fn get(
+        &self,
+        applet_id: &str,
+        effective_scope_key: &str,
+    ) -> PersistenceResult<Option<Value>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(applet_registration_select_sql("WHERE id = $1"))
-            .bind::<Text, _>(applet_id)
-            .get_result::<AppletRegistrationRow>(&mut *conn)
-            .await
-            .optional()
-            .map(|row| row.map(Value::from))
-            .map_err(PersistenceError::database)
+        sql_query(applet_registration_select_sql(
+            "WHERE applet_id = $1 AND effective_scope_key = $2",
+        ))
+        .bind::<Text, _>(applet_id)
+        .bind::<Text, _>(effective_scope_key)
+        .get_result::<AppletRegistrationRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(Value::from))
+        .map_err(PersistenceError::database)
     }
 
     async fn compare_and_swap(
         &self,
         applet_id: &str,
+        effective_scope_key: &str,
         expected: &Value,
         replacement: Value,
     ) -> PersistenceResult<bool> {
+        if soland_storage::applet_identity_from_record(expected)?
+            != soland_storage::applet_identity_from_record(&replacement)?
+            || soland_storage::applet_effective_scope_key_from_record(&replacement)?
+                != effective_scope_key
+        {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: Applet CAS cannot change identity or effective_scope".to_owned(),
+            ));
+        }
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "UPDATE applet_registrations SET record = $3, updated_at = NOW() \
-             WHERE id = $1 AND record = $2",
+            "UPDATE applet_installations SET record = $4, updated_at = NOW() \
+             WHERE applet_id = $1 AND effective_scope_key = $2 AND record = $3",
         )
         .bind::<Text, _>(applet_id)
+        .bind::<Text, _>(effective_scope_key)
         .bind::<Jsonb, _>(expected)
         .bind::<Jsonb, _>(&replacement)
         .execute(&mut *conn)
@@ -121,7 +139,7 @@ impl AppletStore for PgAppletStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(applet_registration_select_sql(
-            "ORDER BY record->>'registered_at', id",
+            "ORDER BY record->>'registered_at', applet_id, effective_scope_key",
         ))
         .load::<AppletRegistrationRow>(&mut *conn)
         .await

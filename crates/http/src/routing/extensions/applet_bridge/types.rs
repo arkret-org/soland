@@ -19,6 +19,7 @@ use arkret_wire::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::ops::Deref;
 
 pub(super) const SOLAND_EDGE_APPLET_ID: &str = "ak:applet:00000000-0000-7000-8000-000000000000";
 
@@ -28,14 +29,29 @@ fn event_payload_value(event: &Event) -> Value {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AppletRecord {
+pub struct AppletIdentityRecord {
     pub applet_id: AppletId,
-    pub owner_actor_id: DidCoreId,
     pub registry_did: DidCoreId,
     pub bot_actor_id: DidCoreId,
     pub bot_actor_principal_server_id: DidCoreId,
     pub bot_actor_provision_ref: EventId,
     pub bot_principal_control_realm_id: RealmId,
+    pub initial_package: AppletPackage,
+    pub initial_owner_actor_id: DidCoreId,
+    pub initial_effective_scope: ScopeRef,
+    pub initial_registration_event: Event,
+    pub initial_capability_grant_refs: Vec<GrantId>,
+    pub bot_actor_provision_event: Event,
+    pub bot_pcr_genesis_event: Event,
+    pub bot_accountability_grant_event: Event,
+    pub bot_profile_event: Event,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppletRecord {
+    pub identity: AppletIdentityRecord,
+    pub owner_actor_id: DidCoreId,
     pub portal_realm_id: RealmId,
     pub effective_scope: ScopeRef,
     pub capabilities: Vec<String>,
@@ -55,14 +71,18 @@ pub struct AppletRecord {
     pub install_response: AppletInstallOutcome,
     pub registration_event: Event,
     pub capability_grant_events: Vec<Event>,
-    pub bot_actor_provision_event: Event,
-    pub bot_pcr_genesis_event: Event,
-    pub bot_accountability_grant_event: Event,
-    pub bot_profile_event: Event,
     pub install_execution: Value,
     #[serde(default)]
     pub revoke_execution: Option<Value>,
     pub ghosts: Vec<GhostActorRecord>,
+}
+
+impl Deref for AppletRecord {
+    type Target = AppletIdentityRecord;
+
+    fn deref(&self) -> &Self::Target {
+        &self.identity
+    }
 }
 
 pub(crate) fn registration_epoch_evidence_from_event(
@@ -185,6 +205,22 @@ fn validate_managed_actor_unit(
         AppletManagedActorRole::Bot => "Bot",
         AppletManagedActorRole::Ghost => "Ghost",
     };
+    let (authority_package, authority_scope, authority_registration_ref, authority_grant_refs) =
+        match role {
+            AppletManagedActorRole::Bot => (
+                &record.identity.initial_package,
+                &record.identity.initial_effective_scope,
+                &record.identity.initial_registration_event.event_id,
+                record.identity.initial_capability_grant_refs.as_slice(),
+            ),
+            AppletManagedActorRole::Ghost => (
+                &record.package,
+                &record.effective_scope,
+                &record.registration_event.event_id,
+                record.install_response.capability_grant_refs.as_slice(),
+            ),
+        };
+    let authority_realm_id = authority_scope.realm_id();
     validate_stored_event(
         provision_event,
         EventSubmitContext::Standard,
@@ -214,20 +250,17 @@ fn validate_managed_actor_unit(
         .map_err(|error| format!("stored {label} provision payload is invalid: {error}"))?;
     if provision.actor_role != role
         || provision.applet_id != record.applet_id
-        || provision.service_id != record.package.service_id
+        || provision.service_id != authority_package.service_id
         || &provision.actor_id != actor_id
         || &provision.actor_principal_server_id != principal_server_id
-        || provision.registration_ref != record.registration_event.event_id
-        || !record
-            .install_response
-            .capability_grant_refs
-            .contains(&provision.applet_authority_ref)
+        || &provision.registration_ref != authority_registration_ref
+        || !authority_grant_refs.contains(&provision.applet_authority_ref)
         || provision.external_ref.as_ref() != external_ref
         || provision_event.kind.as_str() != "ak.applet.managed_actor.provision"
-        || provision_event.actor_id != record.package.service_id
+        || provision_event.actor_id != authority_package.service_id
         || provision_event.principal_server_id != *principal_server_id
-        || provision_event.realm_id != record.portal_realm_id
-        || provision_event.scope_ref != record.effective_scope
+        || &provision_event.realm_id != authority_realm_id
+        || &provision_event.scope_ref != authority_scope
         || provision_event.applet_id.as_ref() != Some(&record.applet_id)
         || provision_event.authorization_ref.as_deref()
             != Some(provision.applet_authority_ref.as_str())
@@ -249,7 +282,7 @@ fn validate_managed_actor_unit(
         .map_err(|error| format!("stored {label} PCR genesis object is invalid: {error}"))?;
     if pcr_event.kind != arkret_wire::EventKind::RealmCreate
         || &pcr_event.actor_id != actor_id
-        || pcr_event.executed_by.as_ref() != Some(&record.package.service_id)
+        || pcr_event.executed_by.as_ref() != Some(&authority_package.service_id)
         || pcr_event.principal_server_id != *principal_server_id
         || pcr_event.applet_id.as_ref() != Some(&record.applet_id)
         || pcr_event.authorization_ref.as_deref() != Some(provision.applet_authority_ref.as_str())
@@ -269,7 +302,7 @@ fn validate_managed_actor_unit(
         ));
     }
 
-    let registration_method = record.package.webhook_auth.key_ref.as_str();
+    let registration_method = authority_package.webhook_auth.key_ref.as_str();
     for event in [accountability_event, profile_event] {
         validate_registration_epoch_proof_method(event, registration_method, label)?;
     }
@@ -281,16 +314,16 @@ fn validate_managed_actor_unit(
         .canonical_proof_binding_bytes()
         .map_err(|error| format!("stored {label} accountability proof is invalid: {error}"))?;
     if accountability_event.kind != arkret_wire::EventKind::IdentityAccountabilityGrant
-        || accountability_event.actor_id != record.package.service_id
+        || accountability_event.actor_id != authority_package.service_id
         || accountability_event.executed_by.is_some()
         || accountability_event.principal_server_id != *principal_server_id
-        || accountability_event.realm_id != record.portal_realm_id
-        || accountability_event.scope_ref != record.effective_scope
+        || &accountability_event.realm_id != authority_realm_id
+        || &accountability_event.scope_ref != authority_scope
         || accountability_event.applet_id.as_ref() != Some(&record.applet_id)
         || accountability_event.authorization_ref.as_deref()
             != Some(provision.applet_authority_ref.as_str())
         || accountability.schema != AccountabilityGrantPayload::SCHEMA
-        || accountability.issuer != record.package.service_id
+        || accountability.issuer != authority_package.service_id
         || &accountability.subject != actor_id
         || accountability.accountability_scope
             != AccountabilityScope::Single(AccountabilityScopeKind::ContractedService)
@@ -315,10 +348,10 @@ fn validate_managed_actor_unit(
         .map_err(|error| format!("stored {label} external_ref cannot be encoded: {error}"))?;
     if profile_event.kind != arkret_wire::EventKind::ProfileCreate
         || &profile_event.actor_id != actor_id
-        || profile_event.executed_by.as_ref() != Some(&record.package.service_id)
+        || profile_event.executed_by.as_ref() != Some(&authority_package.service_id)
         || profile_event.principal_server_id != *principal_server_id
-        || profile_event.realm_id != record.portal_realm_id
-        || profile_event.scope_ref != record.effective_scope
+        || &profile_event.realm_id != authority_realm_id
+        || &profile_event.scope_ref != authority_scope
         || profile_event.applet_id.as_ref() != Some(&record.applet_id)
         || profile_event.authorization_ref.as_deref()
             != Some(provision.applet_authority_ref.as_str())
@@ -328,9 +361,9 @@ fn validate_managed_actor_unit(
             &accountability_event.event_id,
         )
         || profile.principal_id != *actor_id
-        || profile.realm_id.as_ref() != Some(&record.portal_realm_id)
+        || profile.realm_id.as_ref() != Some(authority_realm_id)
         || profile.actor_kind != ActorKind::Integration
-        || profile.accountable_principal_ids.as_slice() != [record.package.service_id.clone()]
+        || profile.accountable_principal_ids.as_slice() != [authority_package.service_id.clone()]
         || profile
             .profile_fields
             .get("managed_by_applet")
@@ -352,8 +385,12 @@ impl AppletRecord {
             AppletInstallEffectiveStatus::PartiallyInstalled => "partially_installed",
         };
         if self.applet_id != self.package.applet_id
+            || self.applet_id != self.identity.initial_package.applet_id
             || self.applet_id != self.install_response.applet_id
             || self.registry_did != self.package.controller_id
+            || self.package.controller_id != self.identity.initial_package.controller_id
+            || self.package.service_id != self.identity.initial_package.service_id
+            || self.package.bot_actor_id != self.identity.initial_package.bot_actor_id
             || self.bot_actor_id != self.package.bot_actor_id
             || self.bot_actor_id != self.install_response.bot_actor_id
             || self.bot_actor_principal_server_id
@@ -375,6 +412,45 @@ impl AppletRecord {
                 "stored Applet record coordinate mirrors drift from the accepted package/outcome"
                     .to_owned(),
             );
+        }
+        validate_stored_event(
+            &self.identity.initial_registration_event,
+            EventSubmitContext::Standard,
+            "initial registration",
+        )?;
+        let initial_registration: arkret_models_integration::AppletRegistrationPayload =
+            serde_json::from_value(event_payload_value(
+                &self.identity.initial_registration_event,
+            ))
+            .map_err(|error| {
+                format!("stored initial registration Event payload is invalid: {error}")
+            })?;
+        let initial_evidence =
+            registration_epoch_evidence_from_event(&self.identity.initial_registration_event)?;
+        self.identity
+            .initial_package
+            .validate_with_epoch_evidence(&initial_evidence)
+            .map_err(|error| format!("stored initial Applet package is invalid: {error}"))?;
+        let expected_initial_registration = self
+            .identity
+            .initial_package
+            .to_registration(&initial_evidence)
+            .map_err(|error| {
+                format!("stored initial Applet package cannot derive registration: {error}")
+            })?;
+        if self.identity.initial_registration_event.kind
+            != arkret_wire::EventKind::AppletRegistration
+            || self.identity.initial_registration_event.actor_id
+                != self.identity.initial_owner_actor_id
+            || self.identity.initial_registration_event.principal_server_id
+                != self.identity.bot_actor_principal_server_id
+            || self.identity.initial_registration_event.scope_ref
+                != self.identity.initial_effective_scope
+            || self.identity.initial_registration_event.realm_id
+                != *self.identity.initial_effective_scope.realm_id()
+            || initial_registration != expected_initial_registration
+        {
+            return Err("stored Applet identity bootstrap registration is invalid".to_owned());
         }
         validate_stored_event(
             &self.registration_event,

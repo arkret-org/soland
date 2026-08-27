@@ -1070,9 +1070,28 @@ async fn event_uses_active_applet_registration_epoch(
     if !matches!(method_controller, Ok(ref id) if id.as_str() == signer_id) {
         return Ok(false);
     }
+    let Some(scope_value) = object.get("scope_ref").cloned() else {
+        return Ok(false);
+    };
+    let effective_scope: arkret_wire::ScopeRef =
+        serde_json::from_value(scope_value).map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("Applet proof scope_ref is invalid: {error}"),
+            )
+        })?;
+    let effective_scope_key = soland_storage::applet_effective_scope_key(&effective_scope)
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("Applet proof scope_ref is invalid: {error}"),
+            )
+        })?;
     let record = state
         .event_queries()
-        .applet(applet_id)
+        .applet(applet_id, &effective_scope_key)
         .await
         .map_err(|error| {
             event_validation_error(

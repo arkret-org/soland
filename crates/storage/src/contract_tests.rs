@@ -46,7 +46,7 @@ use super::{
     PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, ProjectionEventRecord,
     ProjectionEventStore, RealmFanoutAuthorityWitness, RealmFanoutBinding, RealmFanoutOutboxInput,
-    RealmMetaRecord, RealmMetaStore,
+    RealmMetaRecord, RealmMetaStore, applet_effective_scope_key,
 };
 
 pub fn minimal_history_signer_evidence(
@@ -1217,17 +1217,32 @@ fn contract_applet_record(
         .as_str()
         .strip_prefix("ak:applet:")
         .expect("typed Applet id has its registered prefix");
+    let effective_scope = arkret_wire::ScopeRef::Realm {
+        realm_id: arkret_wire::RealmId::new(contract_realm_id("applet-install"))
+            .expect("contract Applet Realm id"),
+    };
     serde_json::json!({
-        "applet_id": applet_id,
+        "identity": {
+            "applet_id": applet_id,
+            "bot_actor_id": format!("ak:did_core:web:bot-{bot_suffix}.example"),
+            "bot_actor_principal_server_id": "ak:did_core:webvh:z6mkcontractservice"
+        },
         "owner_actor_id": "ak:did_core:webvh:z6mkcontractowner",
-        "bot_actor_id": format!("ak:did_core:web:bot-{bot_suffix}.example"),
-        "bot_actor_principal_server_id": "ak:did_core:webvh:z6mkcontractservice",
+        "effective_scope": effective_scope,
         "package": {"namespaces": {}},
         "status": "installed",
         "revoked_at": null,
         "install_body_digest": format!("sha256:{install_marker:0>64}"),
         "ghosts": ghosts,
     })
+}
+
+fn contract_applet_scope_key() -> String {
+    let scope = arkret_wire::ScopeRef::Realm {
+        realm_id: arkret_wire::RealmId::new(contract_realm_id("applet-install"))
+            .expect("contract Applet Realm id"),
+    };
+    applet_effective_scope_key(&scope).expect("contract Applet effective scope key")
 }
 
 fn contract_ghost(
@@ -1415,7 +1430,7 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     assert_eq!(
         stores
             .applets
-            .get(stale_applet_id.as_str())
+            .get(stale_applet_id.as_str(), &contract_applet_scope_key())
             .await
             .expect("read current Applet record"),
         Some(committed_record.clone())
@@ -1438,7 +1453,7 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     assert_eq!(
         stores
             .applets
-            .get(stale_applet_id.as_str())
+            .get(stale_applet_id.as_str(), &contract_applet_scope_key())
             .await
             .expect("read merged Applet record"),
         Some(merged_record)
@@ -1518,7 +1533,7 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     assert_eq!(
         stores
             .applets
-            .get(same_applet_id.as_str())
+            .get(same_applet_id.as_str(), &contract_applet_scope_key())
             .await
             .expect("read same-tuple Applet record"),
         Some(same_winner_record)
@@ -1629,7 +1644,7 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     assert_eq!(
         stores
             .applets
-            .get(different_applet_id.as_str())
+            .get(different_applet_id.as_str(), &contract_applet_scope_key())
             .await
             .expect("read concurrent Ghost winner"),
         Some(winner_record.clone()),
@@ -1654,7 +1669,7 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     assert_eq!(
         stores
             .applets
-            .get(different_applet_id.as_str())
+            .get(different_applet_id.as_str(), &contract_applet_scope_key())
             .await
             .expect("read both concurrent Ghost registrations"),
         Some(both_record)

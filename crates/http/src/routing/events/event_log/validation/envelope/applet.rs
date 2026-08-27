@@ -5,8 +5,9 @@ async fn validate_applet_registration_is_live(
     state: &AppState,
     applet_id: &str,
     realm_id: &str,
+    effective_scope: &arkret_wire::ScopeRef,
 ) -> Result<(), EventValidationError> {
-    let record = load_installed_applet_record(state, applet_id).await?;
+    let record = load_installed_applet_record(state, applet_id, effective_scope).await?;
     if record.portal_realm_id.as_str() != realm_id {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
@@ -20,10 +21,19 @@ async fn validate_applet_registration_is_live(
 async fn load_installed_applet_record(
     state: &AppState,
     applet_id: &str,
+    effective_scope: &arkret_wire::ScopeRef,
 ) -> Result<crate::routing::extensions::applet_bridge::AppletRecord, EventValidationError> {
+    let effective_scope_key =
+        soland_storage::applet_effective_scope_key(effective_scope).map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("Event effective scope is invalid: {error}"),
+            )
+        })?;
     let record_value = state
         .event_queries()
-        .applet(applet_id)
+        .applet(applet_id, &effective_scope_key)
         .await
         .map_err(|error| {
             tracing::error!(%error, %applet_id, "failed to read applet record for delegated event");
@@ -86,8 +96,24 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     let Some(applet_id) = event_string_field(object, &["applet_id"]) else {
         return Ok(());
     };
+    let effective_scope: arkret_wire::ScopeRef =
+        serde_json::from_value(object.get("scope_ref").cloned().ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "applet Event requires scope_ref",
+            )
+        })?)
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("applet Event scope_ref is invalid: {error}"),
+            )
+        })?;
     if !is_delegated {
-        return validate_applet_registration_is_live(state, &applet_id, realm_id).await;
+        return validate_applet_registration_is_live(state, &applet_id, realm_id, &effective_scope)
+            .await;
     }
     let executed_by = event_string_field(object, &["executed_by"]).ok_or_else(|| {
         event_validation_error(
@@ -120,7 +146,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
         ));
     }
 
-    let record = load_installed_applet_record(state, &applet_id).await?;
+    let record = load_installed_applet_record(state, &applet_id, &effective_scope).await?;
     if record.portal_realm_id.as_str() != realm_id {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,

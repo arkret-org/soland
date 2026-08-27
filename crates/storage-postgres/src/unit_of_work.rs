@@ -1158,6 +1158,30 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
 
             if let Some(mutation) = request.applet_record {
                 let replacing = mutation.expected_record.is_some();
+                sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                    .bind::<Text, _>(mutation.applet_id.as_str())
+                    .execute(conn)
+                    .await
+                    .map_err(PersistenceError::database)?;
+                let effective_scope_key =
+                    soland_storage::applet_effective_scope_key_from_record(&mutation.record)?;
+                let identity = soland_storage::applet_identity_from_record(&mutation.record)?;
+                let identity_conflict = sql_query(
+                    "SELECT EXISTS (SELECT 1 FROM applet_installations \
+                     WHERE applet_id = $1 AND record->'identity' IS DISTINCT FROM $2) AS present",
+                )
+                .bind::<Text, _>(mutation.applet_id.as_str())
+                .bind::<Jsonb, _>(&identity)
+                .get_result::<ExistsRow>(conn)
+                .await
+                .map_err(PersistenceError::database)?;
+                if identity_conflict.present {
+                    return Err(PersistenceError::Conflict(
+                        "duplicate_conflict: Applet identity differs from the first accepted identity"
+                            .to_owned(),
+                    )
+                    .into());
+                }
                 let canonical_namespaces =
                     soland_storage::applet_namespaces_from_record(&mutation.record)?;
                 if let Some(expected_record) = mutation.expected_record.as_ref() {
@@ -1191,11 +1215,12 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     .collect::<Vec<_>>();
                 let updated = if let Some(expected_record) = mutation.expected_record {
                     sql_query(
-                        "UPDATE applet_registrations SET record = $3, updated_at = NOW() \
-                         WHERE id = $1 AND record = $2 AND record->>'revoked_at' IS NULL \
+                        "UPDATE applet_installations SET record = $4, updated_at = NOW() \
+                         WHERE applet_id = $1 AND effective_scope_key = $2 AND record = $3 AND record->>'revoked_at' IS NULL \
                          AND record->>'status' IN ('installed', 'partially_installed')",
                     )
                     .bind::<Text, _>(mutation.applet_id.as_str())
+                    .bind::<Text, _>(&effective_scope_key)
                     .bind::<Jsonb, _>(&expected_record)
                     .bind::<Jsonb, _>(&mutation.record)
                     .execute(conn)
@@ -1203,10 +1228,11 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     .map_err(PersistenceError::database)?
                 } else {
                     sql_query(
-                        "INSERT INTO applet_registrations (id, record, updated_at) \
-                         VALUES ($1, $2, NOW()) ON CONFLICT (id) DO NOTHING",
+                        "INSERT INTO applet_installations (applet_id, effective_scope_key, record, updated_at) \
+                         VALUES ($1, $2, $3, NOW()) ON CONFLICT (applet_id, effective_scope_key) DO NOTHING",
                     )
                     .bind::<Text, _>(mutation.applet_id.as_str())
+                    .bind::<Text, _>(&effective_scope_key)
                     .bind::<Jsonb, _>(&mutation.record)
                     .execute(conn)
                     .await
@@ -1246,7 +1272,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     .await
                     .map_err(PersistenceError::database)?;
                     let existing = sql_query(
-                        "SELECT claims.domain, claims.pattern, claims.exclusive FROM applet_namespace_claims claims JOIN applet_registrations registrations ON registrations.id = claims.applet_id WHERE claims.applet_id <> $1 AND registrations.record->>'revoked_at' IS NULL AND registrations.record->>'status' IN ('installed', 'partially_installed')",
+                        "SELECT claims.domain, claims.pattern, claims.exclusive FROM applet_namespace_claims claims WHERE claims.applet_id <> $1",
                     )
                     .bind::<Text, _>(mutation.applet_id.as_str())
                     .load::<AppletNamespaceClaimRow>(conn)
@@ -1269,7 +1295,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                                 .into());
                             }
                             sql_query(
-                                "INSERT INTO applet_namespace_claims (applet_id, domain, pattern, exclusive) VALUES ($1, $2, $3, $4)",
+                                "INSERT INTO applet_namespace_claims (applet_id, domain, pattern, exclusive) VALUES ($1, $2, $3, $4) ON CONFLICT (applet_id, domain, pattern) DO NOTHING",
                             )
                             .bind::<Text, _>(mutation.applet_id.as_str())
                             .bind::<Text, _>(*domain_wire)
@@ -1284,7 +1310,9 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
 
                 for claim in new_managed_authorities {
                     let inserted = sql_query(
-                        "INSERT INTO managed_authority_claims (actor_id, principal_server_id, applet_id) VALUES ($1, $2, $3) ON CONFLICT (actor_id, principal_server_id) DO NOTHING",
+                        "INSERT INTO managed_authority_claims (actor_id, principal_server_id, applet_id) VALUES ($1, $2, $3) \
+                         ON CONFLICT (actor_id, principal_server_id) DO UPDATE SET applet_id = EXCLUDED.applet_id \
+                         WHERE managed_authority_claims.applet_id = EXCLUDED.applet_id",
                     )
                     .bind::<Text, _>(&claim.actor_id)
                     .bind::<Text, _>(&claim.principal_server_id)

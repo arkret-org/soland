@@ -28,10 +28,13 @@ pub(super) fn encode_applet_record(record: &AppletRecord) -> Result<serde_json::
 pub(super) async fn applet_record(
     state: &AppState,
     applet_id: &str,
+    effective_scope: &arkret_wire::ScopeRef,
 ) -> Result<Option<AppletRecord>, AppError> {
+    let effective_scope_key = soland_storage::applet_effective_scope_key(effective_scope)
+        .map_err(|error| AppError::internal(format!("effective scope key failed: {error}")))?;
     let Some(value) = state
         .event_queries()
-        .applet(applet_id)
+        .applet(applet_id, &effective_scope_key)
         .await
         .map_err(|error| {
             tracing::error!(%error, %applet_id, "failed to read applet record");
@@ -59,6 +62,26 @@ pub(in crate::routing::extensions) async fn applet_records(
         .collect()
 }
 
+pub(super) async fn applet_record_for_realm(
+    state: &AppState,
+    applet_id: &str,
+    realm_id: &arkret_wire::RealmId,
+) -> Result<Option<AppletRecord>, AppError> {
+    let mut matches = applet_records(state).await?.into_iter().filter(|record| {
+        record.applet_id.as_str() == applet_id
+            && &record.portal_realm_id == realm_id
+            && record.revoked_at.is_none()
+    });
+    let result = matches.next();
+    if matches.next().is_some() {
+        return Err(AppError::conflict(
+            "multiple Applet installs share this realm; an exact effective scope is required",
+        )
+        .with_wire_code("applet_effective_scope_ambiguous"));
+    }
+    Ok(result)
+}
+
 pub(super) async fn persist_applet_record(
     state: &AppState,
     expected: &AppletRecord,
@@ -69,12 +92,21 @@ pub(super) async fn persist_applet_record(
             "Applet record CAS cannot change applet_id",
         ));
     }
+    if expected.effective_scope != replacement.effective_scope {
+        return Err(AppError::internal(
+            "Applet record CAS cannot change effective_scope",
+        ));
+    }
+    let effective_scope_key =
+        soland_storage::applet_effective_scope_key(&replacement.effective_scope)
+            .map_err(|error| AppError::internal(format!("effective scope key failed: {error}")))?;
     let expected_value = encode_applet_record(expected)?;
     let replacement_value = encode_applet_record(replacement)?;
     state
         .event_queries()
         .compare_and_swap_applet(
             replacement.applet_id.as_str(),
+            &effective_scope_key,
             &expected_value,
             replacement_value,
         )

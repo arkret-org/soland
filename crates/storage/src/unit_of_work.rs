@@ -273,6 +273,44 @@ pub struct AppletRecordCommit {
     pub record: serde_json::Value,
 }
 
+/// Stable storage coordinate for one effective Applet installation. The
+/// canonical scope JSON, rather than an ad-hoc realm/circle concatenation,
+/// keeps Realm and Circle installs disjoint and gives every backend the same
+/// composite-key derivation.
+pub fn applet_effective_scope_key(scope: &arkret_wire::ScopeRef) -> PersistenceResult<String> {
+    arkret_canonical::canonical_sha256(scope).map_err(|error| {
+        PersistenceError::Conflict(format!(
+            "schema_violation: Applet effective_scope is not canonical: {error}"
+        ))
+    })
+}
+
+pub fn applet_effective_scope_key_from_record(
+    record: &serde_json::Value,
+) -> PersistenceResult<String> {
+    let scope = record.get("effective_scope").cloned().ok_or_else(|| {
+        PersistenceError::Conflict(
+            "schema_violation: durable Applet installation omits effective_scope".to_owned(),
+        )
+    })?;
+    let scope: arkret_wire::ScopeRef = serde_json::from_value(scope).map_err(|error| {
+        PersistenceError::Conflict(format!(
+            "schema_violation: durable Applet effective_scope is invalid: {error}"
+        ))
+    })?;
+    applet_effective_scope_key(&scope)
+}
+
+pub fn applet_identity_from_record(
+    record: &serde_json::Value,
+) -> PersistenceResult<serde_json::Value> {
+    record.get("identity").cloned().ok_or_else(|| {
+        PersistenceError::Conflict(
+            "schema_violation: Applet installation record is missing identity".to_owned(),
+        )
+    })
+}
+
 /// Decode the canonical namespace source from a strict durable Applet record.
 ///
 /// The namespace claim table is a transaction-local conflict index, not a
@@ -303,8 +341,13 @@ pub fn applet_namespaces_from_record(
 pub fn applet_managed_authorities_from_record(
     record: &serde_json::Value,
 ) -> PersistenceResult<std::collections::BTreeSet<ManagedAuthorityClaim>> {
+    let identity = record.get("identity").ok_or_else(|| {
+        PersistenceError::Conflict(
+            "schema_violation: durable Applet record omits identity".to_owned(),
+        )
+    })?;
     let required = |field: &str| {
-        record
+        identity
             .get(field)
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {

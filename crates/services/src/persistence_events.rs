@@ -750,8 +750,12 @@ fn application_applet_authoring_preview(
 
 #[async_trait::async_trait]
 impl crate::events::AppletPort for PersistenceEventReader {
-    async fn applet(&self, applet_id: &str) -> crate::ServiceResult<Option<Value>> {
-        Ok(self.0.applets().get(applet_id).await?)
+    async fn applet(
+        &self,
+        applet_id: &str,
+        effective_scope_key: &str,
+    ) -> crate::ServiceResult<Option<Value>> {
+        Ok(self.0.applets().get(applet_id, effective_scope_key).await?)
     }
     async fn applets(&self) -> crate::ServiceResult<Vec<Value>> {
         Ok(self.0.applets().list().await?)
@@ -759,13 +763,14 @@ impl crate::events::AppletPort for PersistenceEventReader {
     async fn compare_and_swap_applet(
         &self,
         applet_id: &str,
+        effective_scope_key: &str,
         expected: &Value,
         replacement: Value,
     ) -> crate::ServiceResult<bool> {
         Ok(self
             .0
             .applets()
-            .compare_and_swap(applet_id, expected, replacement)
+            .compare_and_swap(applet_id, effective_scope_key, expected, replacement)
             .await?)
     }
     async fn begin_applet_transaction(

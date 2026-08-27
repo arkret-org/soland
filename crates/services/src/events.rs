@@ -750,11 +750,16 @@ pub struct AppletAuthoringPreviewState {
 
 #[async_trait::async_trait]
 pub trait AppletPort: Send + Sync {
-    async fn applet(&self, applet_id: &str) -> ServiceResult<Option<Value>>;
+    async fn applet(
+        &self,
+        applet_id: &str,
+        effective_scope_key: &str,
+    ) -> ServiceResult<Option<Value>>;
     async fn applets(&self) -> ServiceResult<Vec<Value>>;
     async fn compare_and_swap_applet(
         &self,
         applet_id: &str,
+        effective_scope_key: &str,
         expected: &Value,
         replacement: Value,
     ) -> ServiceResult<bool>;
@@ -1515,8 +1520,12 @@ impl EventQueryService {
         self.messages.messages_for_realm(realm_id, limit).await
     }
 
-    pub async fn applet(&self, applet_id: &str) -> ServiceResult<Option<Value>> {
-        self.applets.applet(applet_id).await
+    pub async fn applet(
+        &self,
+        applet_id: &str,
+        effective_scope_key: &str,
+    ) -> ServiceResult<Option<Value>> {
+        self.applets.applet(applet_id, effective_scope_key).await
     }
     pub async fn applets(&self) -> ServiceResult<Vec<Value>> {
         self.applets.applets().await
@@ -1524,11 +1533,12 @@ impl EventQueryService {
     pub async fn compare_and_swap_applet(
         &self,
         applet_id: &str,
+        effective_scope_key: &str,
         expected: &Value,
         replacement: Value,
     ) -> ServiceResult<bool> {
         self.applets
-            .compare_and_swap_applet(applet_id, expected, replacement)
+            .compare_and_swap_applet(applet_id, effective_scope_key, expected, replacement)
             .await
     }
     pub async fn begin_applet_transaction(

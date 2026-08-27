@@ -10,6 +10,7 @@ use soland_http::error::AppError;
 use soland_services::events::{AppletTransactionReplayResult, AppletTransactionReplayState};
 use soland_services::identity::SessionIdentityState as SessionRecord;
 
+use super::record::applet_record;
 use super::signature::VerifiedAppletServiceSignature;
 use super::types::AppletRecord;
 use crate::routing::events::event_log::submit_event_value;
@@ -53,8 +54,18 @@ pub(super) async fn process_verified_transaction(
     let mut rejected = Vec::new();
     for event in transaction.events {
         let event_id = event.event_id.to_string();
+        let install = match applet_record(state, applet_id.as_str(), &event.scope_ref).await? {
+            Some(install) => install,
+            None => {
+                rejected.push(rejected_event(
+                    &event_id,
+                    "applet_registration_unauthorized",
+                ));
+                continue;
+            }
+        };
         if let Err(reason_code) =
-            validate_transaction_event_binding(&verified.install, &source_service_id, &event)
+            validate_transaction_event_binding(&install, &source_service_id, &event)
         {
             rejected.push(rejected_event(&event_id, reason_code));
             continue;
@@ -182,7 +193,9 @@ fn validate_transaction_event_binding(
     {
         return Err("applet_revoked");
     }
-    if event.realm_id.as_str() != install.portal_realm_id.as_str() {
+    if event.realm_id.as_str() != install.portal_realm_id.as_str()
+        || event.scope_ref != install.effective_scope
+    {
         return Err("applet_effective_scope_mismatch");
     }
     if event.applet_id.as_ref().map(|id| id.as_str()) != Some(install.applet_id.as_str()) {
