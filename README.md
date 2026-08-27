@@ -1,6 +1,6 @@
 # soland
 
-> **Spec target**: [arkret-spec @ 8a9c32a](../arkret-spec) (v1 sync 2026-06-11)
+> **Spec target**: [arkret-spec @ e3f6832d](../arkret-spec) (v1 sync 2026-08-27)
 
 Reference Arkret v1 principal server, built with Salvo, Diesel, and
 PostgreSQL. The HTTP surface mirrors `arkret-spec/spec/v1/artifacts/openapi/arkret-service-api.openapi.yaml`;

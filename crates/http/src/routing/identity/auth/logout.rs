@@ -264,9 +264,7 @@ fn classify_logout_introspection(
     use crate::wire::SessionGrantIntrospectStatus;
 
     match outcome.status {
-        SessionGrantIntrospectStatus::NotFound
-            if !outcome.active && outcome.grant.is_none() =>
-        {
+        SessionGrantIntrospectStatus::NotFound if !outcome.active && outcome.grant.is_none() => {
             Ok(None)
         }
         SessionGrantIntrospectStatus::AudienceMismatch => Err(AppError::unauthenticated(
@@ -287,14 +285,10 @@ fn classify_logout_introspection(
     }
 }
 
-fn invalid_logout_introspection(
-    status: crate::wire::SessionGrantIntrospectStatus,
-) -> AppError {
+fn invalid_logout_introspection(status: crate::wire::SessionGrantIntrospectStatus) -> AppError {
     AppError::new(
         ErrorCode::TemporarilyUnavailable,
-        format!(
-            "invalid session grant logout introspection outcome for status {status:?}"
-        ),
+        format!("invalid session grant logout introspection outcome for status {status:?}"),
     )
 }
 
@@ -452,11 +446,13 @@ mod logout_introspection_tests {
 
     #[test]
     fn auth_side_must_confirm_both_terminal_states() {
-        assert!(confirm_auth_side_logout(AuthSessionLogoutOutcome {
-            grant_chain_terminated: true,
-            auth_session_logged_out: true,
-        })
-        .is_ok());
+        assert!(
+            confirm_auth_side_logout(AuthSessionLogoutOutcome {
+                grant_chain_terminated: true,
+                auth_session_logged_out: true,
+            })
+            .is_ok()
+        );
 
         for body in [
             AuthSessionLogoutOutcome {

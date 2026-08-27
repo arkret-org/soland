@@ -14,6 +14,10 @@ STRING_ENV_PATTERN = re.compile(r'"(SOLAND_[A-Z0-9_]+)"')
 def rust_environment_names() -> set[str]:
     names: set[str] = set()
     for path in (ROOT / "crates").rglob("*.rs"):
+        # Integration tests read operator-only toggles (e.g. release gates)
+        # that must never appear in deployment documentation.
+        if "tests" in path.relative_to(ROOT / "crates").parts:
+            continue
         names.update(STRING_ENV_PATTERN.findall(path.read_text(encoding="utf-8")))
     return {
         name

@@ -1,6 +1,6 @@
 # Media Token Issuer
 
-> Spec: `arkret-spec @ b47ff6ec`, `ak.self.call.media.exchange.issue_token.v1` operation.
+> Spec: `arkret-spec @ e3f6832d`, `ak.self.call.media.exchange.issue_token.v1` operation.
 > Companion runbook: [`../runbook.md` → Media token issuer](../runbook.md#media-token-issuer-rotating-service_signaturekid-focus-binding-troubleshooting).
 > SDK type reference:
 > [`arkret-rust-sdk docs/architecture.md`](../../../arkret-rust-sdk/docs/architecture.md#call-media-cxcallmediatoken_exchange).

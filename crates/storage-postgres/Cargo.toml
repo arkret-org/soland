@@ -39,6 +39,7 @@ uuid = {workspace = true}
 [dev-dependencies]
 arkret-wire = {workspace = true,features = ["test-support"]}
 soland-domain = {workspace = true}
+soland-storage = {workspace = true,features = ["test-support"]}
 
 [lints]
 workspace = true

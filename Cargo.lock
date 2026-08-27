@@ -451,7 +451,6 @@ dependencies = [
  "salvo-oapi",
  "serde",
  "serde_json",
- "sha2 0.11.0",
  "thiserror",
 ]
 
@@ -5389,7 +5388,6 @@ dependencies = [
  "arkret-models-identity",
  "arkret-models-integration",
  "arkret-policy",
- "arkret-push-policy",
  "arkret-rate-limit",
  "arkret-schema",
  "arkret-server",
@@ -5457,7 +5455,6 @@ dependencies = [
  "arkret-models-collaboration",
  "arkret-models-crypto",
  "arkret-models-identity",
- "arkret-models-integration",
  "arkret-policy",
  "arkret-schema",
  "arkret-signatures",
@@ -5596,7 +5593,6 @@ dependencies = [
  "soland-services",
  "soland-storage",
  "soland-storage-memory",
- "tokio",
 ]
 
 [[package]]

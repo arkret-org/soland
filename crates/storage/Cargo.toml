@@ -9,6 +9,10 @@ homepage.workspace = true
 authors.workspace = true
 description = "Persistence records and storage ports for Soland."
 
+[features]
+default = []
+test-support = ["arkret-event-draft/test-support", "arkret-wire/test-support"]
+
 [dependencies]
 arkret-canonical.workspace = true
 arkret-event-draft.workspace = true
@@ -19,7 +23,7 @@ arkret-models-crypto.workspace = true
 arkret-models-identity.workspace = true
 arkret-models-integration.workspace = true
 arkret-state.workspace = true
-arkret-wire = { workspace = true, features = ["test-support"] }
+arkret-wire.workspace = true
 async-trait = {workspace = true}
 base64 = {workspace = true}
 chrono = {workspace = true,features = ["serde"]}
@@ -33,6 +37,7 @@ uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]
 arkret-event-draft = { workspace = true, features = ["test-support"] }
+arkret-wire = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

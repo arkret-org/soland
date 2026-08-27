@@ -9,10 +9,10 @@ use super::{
 // reducer keeps an in-process projection (`ProjectionState::mls_*`); the
 // stores are the persistent mirror. The routing layer in
 // `routing/mls.rs` writes through to the stores AND updates the
-// projection; on restart `AppState::new` will eventually hydrate the
-// projection from the stores (TODO(G3.S1-followup): hydration is not
-// wired in this slice — the Memory store is in-process anyway, and the
-// Pg store is a stub pending migrations landing in production).
+// projection; on boot `hydrate_projections_from_persistence` rebuilds the
+// projection from the durable stores. The PostgreSQL counterpart
+// (`PgMultisigPendingStore` in `storage-postgres`) is fully implemented
+// and serves the production routing path.
 
 // In-memory multisig pending store
 pub(crate) struct MemoryMultisigPendingStore {

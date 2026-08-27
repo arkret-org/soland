@@ -45,7 +45,6 @@ arkret-models-integration = { workspace = true, features = ["openapi"] }
 arkret-models-crypto = { workspace = true, features = ["openapi"] }
 arkret-models-identity = { workspace = true, features = ["openapi"] }
 arkret-policy.workspace = true
-arkret-push-policy.workspace = true
 arkret-rate-limit.workspace = true
 arkret-schema = { workspace = true, features = ["embedded-artifacts"] }
 arkret-server.workspace = true

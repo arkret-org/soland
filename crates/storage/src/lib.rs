@@ -35,6 +35,7 @@ mod applets;
 mod audit;
 mod blobs;
 mod contacts;
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod contract_tests;
 mod control_proposal_acks;

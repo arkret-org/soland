@@ -275,9 +275,11 @@ impl MemberIdentityRegistry {
         // `{realm_id, actor_id, effective_events:[{event_id, segment,
         // payload_digest}], handle_claims:[{claim_digest, binding_state,
         // expires_at}]}` (effective_events sorted by (segment, event_id),
-        // handle_claims sorted by claim_digest). The handle-claim set is
-        // empty until the local handle-claim evidence cache is wired
-        // (TODO(R3.2.1)); the digest inputs are otherwise stable.
+        // handle_claims sorted by claim_digest). The local handle-claim
+        // evidence cache (`handle_claims_by_subject`) is wired and
+        // populated, but this digest call currently passes an empty
+        // handle-claim set, so the digest covers the effective events
+        // only.
         let member_display_state_digest =
             display_state_digest(realm_id, actor_id, &effective_entries, &[]);
 

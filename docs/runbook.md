@@ -220,7 +220,7 @@ GRANT INSERT ON projection_audit TO soland;
 ## R3 operational additions
 
 The sections below cover the R3 sync and later v1 updates
-(`arkret-spec @ 8a9c32a`). They are
+(`arkret-spec @ e3f6832d`). They are
 intentionally separable from the earlier runbook above so that you can
 on-call a fresh ops engineer who has not seen pre-R3 soland.
 
