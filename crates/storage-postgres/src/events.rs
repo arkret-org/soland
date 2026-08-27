@@ -207,13 +207,17 @@ impl TryFrom<EventBatchReceiptRow> for EventBatchReceipt {
             "issuer": row.issuer,
             "scope": row.scope,
             "events": row.events,
-            "created_at": arkret_canonical::normalize_timestamp_canonical(row.created_at),
+            "created_at": event_batch_receipt_timestamp_value(row.created_at),
             "proofs": row.proofs,
         }))
         .map_err(|error| {
             PersistenceError::Internal(format!("stored Event Batch Receipt is invalid: {error}"))
         })
     }
+}
+
+fn event_batch_receipt_timestamp_value(value: chrono::DateTime<chrono::Utc>) -> Value {
+    Value::String(arkret_canonical::format_timestamp_canonical(value))
 }
 /// Serialization key for every writer of one Realm/actor Event stream.
 ///
@@ -1651,7 +1655,11 @@ impl EventStore for PgEventStore {
 
 #[cfg(test)]
 mod identity_anchor_receipt_tests {
-    use super::identity_anchor_receipt_cardinality_is_valid;
+    use chrono::{TimeZone, Utc};
+
+    use super::{
+        event_batch_receipt_timestamp_value, identity_anchor_receipt_cardinality_is_valid,
+    };
 
     #[test]
     fn accepted_anchor_units_require_one_control_proposal_ack_per_event() {
@@ -1665,6 +1673,19 @@ mod identity_anchor_receipt_tests {
     fn reanchor_conflict_cannot_attach_control_proposal_acks() {
         assert!(identity_anchor_receipt_cardinality_is_valid(2, 0, true));
         assert!(!identity_anchor_receipt_cardinality_is_valid(2, 2, true));
+    }
+
+    #[test]
+    fn stored_event_batch_receipt_timestamp_keeps_canonical_milliseconds() {
+        let timestamp = Utc
+            .with_ymd_and_hms(2026, 8, 27, 4, 46, 3)
+            .single()
+            .expect("valid fixture timestamp");
+
+        assert_eq!(
+            event_batch_receipt_timestamp_value(timestamp),
+            serde_json::json!("2026-08-27T04:46:03.000Z")
+        );
     }
 }
 
