@@ -1555,9 +1555,13 @@ async fn validate_welcome_peer_claim_ledger(
             receipt.signature.kid.as_str(),
         )
         .map_err(|_| "peer_claim_welcome_invalid")?;
-        crate::jws_verify::resolve_ed25519_pubkey_async(state, receipt.signature.kid.as_str())
-            .await
-            .map_err(|_| "peer_claim_welcome_invalid")?
+        crate::jws_verify::resolve_ed25519_pubkey_at(
+            state,
+            receipt.signature.kid.as_str(),
+            receipt.claimed_at,
+        )
+        .await
+        .map_err(|_| "peer_claim_welcome_invalid")?
     };
     if !crate::routing::identity::device_signing::ed25519_verify(
         &verification_key,
@@ -2003,9 +2007,12 @@ pub(crate) async fn capture_relayed_keypackage_claim_outcome(
         destination_service_id,
         receipt.signature.kid.as_str(),
     )?;
-    let verification_key =
-        crate::jws_verify::resolve_ed25519_pubkey_async(state, receipt.signature.kid.as_str())
-            .await?;
+    let verification_key = crate::jws_verify::resolve_ed25519_pubkey_at(
+        state,
+        receipt.signature.kid.as_str(),
+        receipt.claimed_at,
+    )
+    .await?;
     if !crate::routing::identity::device_signing::ed25519_verify(
         &verification_key,
         &signing_bytes,

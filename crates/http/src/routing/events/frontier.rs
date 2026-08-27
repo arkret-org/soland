@@ -98,18 +98,24 @@ pub(crate) fn frontier_root(
 }
 
 /// Canonical payload signed by the issuing service for a federation frontier
-/// probe. The signature binds only the root plus `(realm_id, issuer,
-/// observed_at)` so peers can compare roots without replaying the whole
-/// frontier body.
+/// probe. Actor-scoped authorization roots are optional for generic
+/// federation probes, but when requested they are bound into the same signed
+/// payload and cannot be substituted independently.
 pub(crate) fn frontier_signature_payload(
     realm_id: Option<&RealmId>,
     issuer: &DidFullId,
     observed_at: DateTime<Utc>,
     frontier_root: &Hash,
+    auth_state_root: Option<&Hash>,
+    policy_frontier_root: Option<&Hash>,
+    membership_frontier_root: Option<&Hash>,
 ) -> Value {
     json!({
         "domain": arkret_wire::DomainSeparationId::EVENTS_FRONTIER_SIGNATURE_V1,
         "frontier_root": frontier_root.as_str(),
+        "auth_state_root": auth_state_root.map(Hash::as_str),
+        "policy_frontier_root": policy_frontier_root.map(Hash::as_str),
+        "membership_frontier_root": membership_frontier_root.map(Hash::as_str),
         "realm_id": realm_id.map(RealmId::as_str),
         "issuer": issuer.as_str(),
         "observed_at": arkret_canonical::format_timestamp_canonical(observed_at),
@@ -123,10 +129,20 @@ pub(crate) fn sign_frontier_root(
     realm_id: Option<&RealmId>,
     observed_at: DateTime<Utc>,
     frontier_root: &Hash,
+    auth_state_root: Option<&Hash>,
+    policy_frontier_root: Option<&Hash>,
+    membership_frontier_root: Option<&Hash>,
     signing_key: &ed25519_dalek::SigningKey,
 ) -> Result<Value, String> {
-    let signed_payload =
-        frontier_signature_payload(realm_id, service_id, observed_at, frontier_root);
+    let signed_payload = frontier_signature_payload(
+        realm_id,
+        service_id,
+        observed_at,
+        frontier_root,
+        auth_state_root,
+        policy_frontier_root,
+        membership_frontier_root,
+    );
     let canonical_bytes =
         canonical::canonical_json_bytes(&signed_payload).map_err(|error| error.to_string())?;
     let payload_digest = canonical::sha256_digest(&canonical_bytes);
@@ -218,8 +234,20 @@ mod tests {
             .with_timezone(&Utc);
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7_u8; 32]);
 
-        let signature =
-            sign_frontier_root(&alice(), Some(&realm()), observed_at, &root, &signing_key).unwrap();
+        let auth_root = Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap();
+        let policy_root = Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap();
+        let membership_root = Hash::new(format!("sha256:{}", "3".repeat(64))).unwrap();
+        let signature = sign_frontier_root(
+            &alice(),
+            Some(&realm()),
+            observed_at,
+            &root,
+            Some(&auth_root),
+            Some(&policy_root),
+            Some(&membership_root),
+            &signing_key,
+        )
+        .unwrap();
         assert!(signature.get("alg").is_none());
         assert_eq!(
             signature["verification_method"],
@@ -231,6 +259,18 @@ mod tests {
                 .is_some_and(|jws| jws.contains(".."))
         );
         assert_eq!(signature["signed_payload"]["frontier_root"], root.as_str());
+        assert_eq!(
+            signature["signed_payload"]["auth_state_root"],
+            auth_root.as_str()
+        );
+        assert_eq!(
+            signature["signed_payload"]["policy_frontier_root"],
+            policy_root.as_str()
+        );
+        assert_eq!(
+            signature["signed_payload"]["membership_frontier_root"],
+            membership_root.as_str()
+        );
         assert_eq!(
             signature["signed_payload"]["realm_id"],
             "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K"

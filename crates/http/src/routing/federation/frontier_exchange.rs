@@ -132,6 +132,7 @@ impl FrontierExchangeWorker {
         let request = arkret_models_collaboration::event_query::PeerEventsFrontierRequestBody {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
                 .map_err(|error| format!("invalid_realm_id:{error}"))?,
+            actor_id: None,
         };
         let body = arkret_canonical::canonical_json_bytes(&request)
             .map_err(|error| format!("canonical_json:{error}"))?;

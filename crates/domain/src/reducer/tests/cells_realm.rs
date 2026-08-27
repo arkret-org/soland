@@ -1763,3 +1763,74 @@ fn the_policy_frontier_digest_is_a_filtered_state_root() {
         "another Realm's policy write must not move this Realm's frontier"
     );
 }
+
+#[test]
+fn policy_check_frontiers_are_independent_actor_scoped_commitments() {
+    let realm_id = "ak:realm:AYzSDw0uyDZ0DpWUE57e1TNDnSVg-vp-MLwyB1Cp5Hdf";
+    let actor_id = "ak:did_core:web:alice.example";
+    let mut state = ProjectionState::new();
+    state.realm_null_subject_cells.insert(
+        (
+            realm_id.to_owned(),
+            arkret_wire::REALM_GENESIS_CELL.to_owned(),
+        ),
+        CellState::Value(serde_json::json!({"digest_algorithm": "sha256"})),
+    );
+    apply_bundle(
+        &mut state,
+        realm_id,
+        serde_json::json!({"policy_revision": 1, "media_service_decrypts": true}),
+    );
+    state.members.insert(
+        (realm_id.to_owned(), actor_id.to_owned()),
+        SolandMembershipState {
+            member: actor_id.to_owned(),
+            realm_id: realm_id.to_owned(),
+            state: "join".to_owned(),
+            role: "member".to_owned(),
+            delivery_status: None,
+            recipient_service_id: None,
+            recipient_service_resolution: None,
+            membership_event_ref: None,
+            delivery_binding_frontier: None,
+            delivery_binding_expires_at: None,
+            invited_at: None,
+            joined_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            reason: None,
+        },
+    );
+    state.cells.insert(
+        CellRef::new(format!("ak:cell:ak.component.member.state.v1:{actor_id}")).unwrap(),
+        CellState::Value(serde_json::json!("join")),
+    );
+
+    let policy = state.realm_policy_frontier_digest(realm_id).unwrap();
+    let membership = state
+        .realm_membership_frontier_digest(realm_id, actor_id)
+        .unwrap();
+    let auth_before = state
+        .realm_authorization_state_digest(realm_id, actor_id)
+        .unwrap();
+    assert_ne!(policy, membership);
+    assert_ne!(auth_before, policy);
+    assert_ne!(auth_before, membership);
+
+    state.cells.insert(
+        CellRef::new("ak:cell:ak.component.capability.grant.v1:grant-alice".to_owned()).unwrap(),
+        CellState::Value(serde_json::json!({
+            "realm_id": realm_id,
+            "grantee": actor_id,
+            "actions": ["ak.message.create"]
+        })),
+    );
+    let auth_after = state
+        .realm_authorization_state_digest(realm_id, actor_id)
+        .unwrap();
+    assert_ne!(auth_before, auth_after);
+    assert_eq!(state.realm_policy_frontier_digest(realm_id), Some(policy));
+    assert_eq!(
+        state.realm_membership_frontier_digest(realm_id, actor_id),
+        Some(membership)
+    );
+}

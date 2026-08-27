@@ -933,17 +933,19 @@ async fn peer_events_frontier(
     let has_body = req.method().as_str() == "QUERY";
     validate_peer_request(state, req, has_body).await?;
     let source_service_id = source_service_id_from_request(req)?;
-    let realm_id = if has_body {
-        parse_json_body::<PeerEventsFrontierRequestBody>(
+    let (realm_id, frontier_actor_id) = if has_body {
+        let body = parse_json_body::<PeerEventsFrontierRequestBody>(
             req,
             "invalid ak.peer.events.read.frontier.v1 request body",
         )
-        .await?
-        .realm_id
-        .into_string()
+        .await?;
+        (body.realm_id.into_string(), body.actor_id)
     } else {
-        query_param(req, "realm_id")
-            .ok_or_else(|| AppError::param_missing("realm_id is required"))?
+        (
+            query_param(req, "realm_id")
+                .ok_or_else(|| AppError::param_missing("realm_id is required"))?,
+            None,
+        )
     };
     let realm_id =
         RealmId::new(realm_id).map_err(|_| AppError::param_invalid("invalid realm_id"))?;
@@ -1014,6 +1016,22 @@ async fn peer_events_frontier(
     let typed_actor_bounds = super::frontier::typed_actor_upper_bounds(actor_frontier.clone());
     let frontier_root = super::frontier::frontier_root(&typed_realm_frontier, &typed_actor_bounds)
         .map_err(|error| AppError::internal(format!("frontier_root: {error}")))?;
+    let projection = state.projections().snapshot();
+    let (auth_state_root, policy_frontier_root, membership_frontier_root) =
+        if let Some(actor_id) = frontier_actor_id.as_ref() {
+            let policy = projection
+                .realm_policy_frontier_digest(realm_id.as_str())
+                .ok_or_else(|| AppError::internal("policy frontier state root failed"))?;
+            let membership = projection
+                .realm_membership_frontier_digest(realm_id.as_str(), actor_id.as_str())
+                .ok_or_else(|| AppError::not_found("not found"))?;
+            let authorization = projection
+                .realm_authorization_state_digest(realm_id.as_str(), actor_id.as_str())
+                .ok_or_else(|| AppError::internal("authorization state root failed"))?;
+            (Some(authorization), Some(policy), Some(membership))
+        } else {
+            (None, None, None)
+        };
     let service_id = DidCoreId::new(state.service_id().clone())
         .map_err(|_| AppError::internal("service_id is invalid"))?;
     let service_full_id = state.service_resolution_commitment().full_id.clone();
@@ -1023,6 +1041,9 @@ async fn peer_events_frontier(
         Some(&realm_id),
         observed_at,
         &frontier_root,
+        auth_state_root.as_ref(),
+        policy_frontier_root.as_ref(),
+        membership_frontier_root.as_ref(),
         state.notary_signing_key().as_ref(),
     )
     .map_err(|error| AppError::internal(format!("frontier signature: {error}")))?;
@@ -1030,6 +1051,9 @@ async fn peer_events_frontier(
         realm_id,
         heads: typed_heads,
         frontier_root,
+        auth_state_root,
+        policy_frontier_root,
+        membership_frontier_root,
         actor_seq_upper_bounds: typed_actor_frontier,
         witness_receipts: Vec::new(),
         observed_at: arkret_canonical::format_timestamp_canonical(observed_at),

@@ -22,6 +22,32 @@ fn is_policy_frontier_component(component: &str) -> bool {
                 .any(|marker| component.contains(marker)))
 }
 
+fn is_membership_frontier_component(component: &str) -> bool {
+    matches!(
+        component,
+        arkret_wire::CellFamilyId::MEMBER_STATE_V1
+            | arkret_wire::CellFamilyId::MEMBER_IDENTITY_V1
+            | arkret_wire::CellFamilyId::CIRCLE_MEMBER_V1
+            | arkret_wire::CellFamilyId::DEVICE_AUTHORIZATION_V1
+            | arkret_wire::CellFamilyId::DEVICE_LIST_UPDATE_V1
+            | arkret_wire::CellFamilyId::DEVICE_REANCHOR_V1
+    ) || component.contains("role")
+        || component.contains("account.lifecycle")
+}
+
+fn value_mentions_actor(value: &Value, actor_id: &str) -> bool {
+    match value {
+        Value::String(value) => value == actor_id,
+        Value::Array(values) => values
+            .iter()
+            .any(|value| value_mentions_actor(value, actor_id)),
+        Value::Object(values) => values
+            .values()
+            .any(|value| value_mentions_actor(value, actor_id)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
 impl ProjectionState {
     pub(crate) fn message_by_target_ref(&self, target_ref: &str) -> Option<&MessageState> {
         // Classify by canonical typed id, not by kind prefix: `ak:event:x` is
@@ -907,6 +933,97 @@ impl ProjectionState {
         self.realm_digest_algorithm(realm_id)
             .and_then(|algorithm| arkret_canonical::digest_suite(&algorithm).ok())
             .and_then(|suite| arkret_state::compute_state_root(&cells, suite).ok())
+    }
+
+    /// Actor-scoped membership/role filtered state root used by policy-check
+    /// decisions. Only non-bottom canonical cells that name the actor are
+    /// included; this prevents a Realm-wide member-list hash from standing in
+    /// for the actor-specific frontier required by the policy protocol.
+    pub fn realm_membership_frontier_digest(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> Option<arkret_wire::Hash> {
+        if !self
+            .members
+            .contains_key(&(realm_id.to_owned(), actor_id.to_owned()))
+        {
+            return None;
+        }
+        let cells = self
+            .cells
+            .iter()
+            .filter_map(|(cell_ref, state)| {
+                let cell_id = arkret_wire::cell::CellId::from_ref(cell_ref).ok()?;
+                if !is_membership_frontier_component(cell_id.component())
+                    || matches!(state, arkret_state::lattice::CellState::Bottom(_))
+                {
+                    return None;
+                }
+                let actor_subject = cell_ref.as_str().ends_with(&format!(":{actor_id}"));
+                let actor_value = match state {
+                    arkret_state::lattice::CellState::Value(value) => {
+                        value_mentions_actor(value, actor_id)
+                    }
+                    arkret_state::lattice::CellState::Bottom(_) => false,
+                };
+                (actor_subject || actor_value).then(|| (cell_ref.clone(), state.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        self.filtered_state_root(realm_id, &cells)
+    }
+
+    /// Issuer-local authorization commitment over the accepted policy,
+    /// actor membership/role, and actor-scoped capability cells.
+    pub fn realm_authorization_state_digest(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> Option<arkret_wire::Hash> {
+        let mut cells = self
+            .realm_policy_control_cells(realm_id)
+            .into_iter()
+            .filter(|(cell, _)| {
+                arkret_wire::cell::CellId::from_ref(cell)
+                    .map(|cell| is_policy_frontier_component(cell.component()))
+                    .unwrap_or(false)
+            })
+            .collect::<BTreeMap<_, _>>();
+        for (cell_ref, state) in &self.cells {
+            if matches!(state, arkret_state::lattice::CellState::Bottom(_)) {
+                continue;
+            }
+            let Ok(cell_id) = arkret_wire::cell::CellId::from_ref(cell_ref) else {
+                continue;
+            };
+            let actor_subject = cell_ref.as_str().ends_with(&format!(":{actor_id}"));
+            let actor_value = match state {
+                arkret_state::lattice::CellState::Value(value) => {
+                    value_mentions_actor(value, actor_id)
+                        && (cell_id.component() != arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1
+                            || grant_snapshot_from_value(value).realm_id.as_deref()
+                                == Some(realm_id))
+                }
+                arkret_state::lattice::CellState::Bottom(_) => false,
+            };
+            if (is_membership_frontier_component(cell_id.component())
+                || cell_id.component() == arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1)
+                && (actor_subject || actor_value)
+            {
+                cells.insert(cell_ref.clone(), state.clone());
+            }
+        }
+        self.filtered_state_root(realm_id, &cells)
+    }
+
+    fn filtered_state_root(
+        &self,
+        realm_id: &str,
+        cells: &BTreeMap<CellRef, arkret_state::lattice::CellState>,
+    ) -> Option<arkret_wire::Hash> {
+        self.realm_digest_algorithm(realm_id)
+            .and_then(|algorithm| arkret_canonical::digest_suite(&algorithm).ok())
+            .and_then(|suite| arkret_state::compute_state_root(cells, suite).ok())
     }
 
     pub fn realm_digest_algorithm(&self, realm_id: &str) -> Option<String> {

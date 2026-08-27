@@ -1057,6 +1057,40 @@ pub async fn resolve_ed25519_pubkey_async(
         .map_err(|error| error.to_string())
 }
 
+/// Resolve the Ed25519 key that was effective at a signed historical instant.
+///
+/// `did:key` is intrinsically immutable. `did:webvh` is selected from a fully
+/// verified method history. Other DID methods fail closed because the current
+/// resolver cannot prove which key controlled them at an earlier instant.
+pub async fn resolve_ed25519_pubkey_at(
+    state: &AppState,
+    verification_method: &str,
+    at: chrono::DateTime<chrono::Utc>,
+) -> Result<VerifyingKey, String> {
+    let did = arkret_identity::verification_method_did(verification_method)
+        .map_err(|error| error.to_string())?;
+    let document = match did.method() {
+        "key" => arkret_identity::DidKeyResolver::new()
+            .resolve_did_document(&did)
+            .map_err(|error| error.to_string())?,
+        "webvh" => {
+            let pinned = state
+                .dids()
+                .resolve_webvh_state_at(&did, at)
+                .await
+                .map_err(|error| error.to_string())?;
+            decode_pinned_did_document(&pinned.document)?
+        }
+        method => {
+            return Err(format!(
+                "historical verification is unavailable for did:{method}"
+            ));
+        }
+    };
+    arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
+        .map_err(|error| error.to_string())
+}
+
 /// Resolve and validate a DID-scoped Ed25519 verification method.
 ///
 /// This is the shared verifier boundary used by federation, recovery and

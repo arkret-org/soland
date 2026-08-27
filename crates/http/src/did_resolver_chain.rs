@@ -451,6 +451,28 @@ impl soland_services::identity::DidResolverPort for SolandDidResolver {
         select_pinned_did_webvh_state(did, &history, version_id, log_head_digest)
     }
 
+    async fn resolve_external_webvh_state_at(
+        &self,
+        did: &DidFullId,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<
+        soland_services::identity::PinnedDidDocumentState,
+        soland_services::identity::PinnedDidResolutionError,
+    > {
+        use soland_services::identity::{PinnedDidResolutionError, select_did_webvh_state_at};
+        if did.method() != "webvh" {
+            return Err(PinnedDidResolutionError::UnsupportedMethod);
+        }
+        if !self.method_allowed("webvh") {
+            return Err(PinnedDidResolutionError::MethodNotAllowed);
+        }
+        let history = self
+            .fetch_verified_webvh_history(did)
+            .await
+            .map_err(PinnedDidResolutionError::HistoryUnverifiable)?;
+        select_did_webvh_state_at(did, &history, at)
+    }
+
     fn cache_document_state(
         &self,
         document: soland_services::identity::DidDocumentState,
