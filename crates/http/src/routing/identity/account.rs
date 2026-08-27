@@ -12,8 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{
-    ActorProfileId, BlobRef, CellRef, DeviceId, DidCoreId, DidFullId, EventId, Hash, RealmId,
-    StrandId,
+    ActorProfileId, BlobRef, CellRef, DeviceId, DidCoreId, EventId, Hash, RealmId, StrandId,
 };
 use arkret_models_collaboration::account_lifecycle::{
     AccountProfileAcceptedBasis, AccountUpdateProfileRequestBody, AccountView,
@@ -61,6 +60,7 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_contracts::AccountProjectionRequestBody;
 use soland_contracts::admin::{
     AccountLocalpartAddRequestBody, AccountLocalpartDeleteOutcome, AccountLocalpartListOutcome,
     AccountLocalpartMutationOutcome, AccountLocalpartUpdateRequestBody, AccountLocalpartView,
@@ -99,36 +99,6 @@ struct AccountProjectionRegisterOutcome {
     #[salvo(schema(value_type = Option<serde_json::Value>))]
     profile: Option<ActorProfile>,
     registration_audit: AccountRegistrationAudit,
-}
-
-/// Closed deployment-private command accepted only from the configured
-/// Account Authority bearer after it has independently verified `full_id`.
-/// It intentionally carries no public registration proof or identity-creation
-/// branch: this edge only persists the Principal Server projection.
-#[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
-#[serde(deny_unknown_fields)]
-struct AccountProjectionRegisterRequestBody {
-    principal_id: DidCoreId,
-    full_id: DidFullId,
-    #[serde(default)]
-    display_name: Option<String>,
-    #[serde(default)]
-    device_id: Option<DeviceId>,
-}
-
-impl AccountProjectionRegisterRequestBody {
-    fn validate_verified_projection(&self) -> Result<(), AppError> {
-        let projected =
-            arkret_identifiers::project_full_id_to_core_id(&self.full_id).map_err(|error| {
-                AppError::param_invalid(format!("full_id cannot be projected: {error}"))
-            })?;
-        if projected != self.principal_id {
-            return Err(AppError::param_invalid(
-                "full_id must project to principal_id",
-            ));
-        }
-        Ok(())
-    }
 }
 
 pub(crate) async fn record_handle_release(
@@ -1118,12 +1088,12 @@ async fn account_viewer_impl(
 async fn project_account(
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<AccountProjectionRegisterRequestBody>,
+    body: JsonBody<AccountProjectionRequestBody>,
 ) -> JsonResult<AccountProjectionRegisterOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_embedded_webvh_registration_bearer(state, req)?;
     let body = body.into_inner();
-    body.validate_verified_projection()?;
+    body.validate().map_err(AppError::param_invalid)?;
     let did = body.principal_id.as_str().to_owned();
     crate::routing::extensions::sovereign::validate_sovereign_did_registration(
         state,
@@ -2405,15 +2375,14 @@ mod tests {
 
     #[test]
     fn account_projection_body_accepts_only_matching_verified_full_id() {
-        let body: AccountProjectionRegisterRequestBody =
+        let body: AccountProjectionRequestBody =
             serde_json::from_value(projection_body_json()).unwrap();
-        body.validate_verified_projection().unwrap();
+        body.validate().unwrap();
 
         let mut mismatched = projection_body_json();
         mismatched["principal_id"] = json!("ak:did_core:webvh:z6MkmismatchedPrincipalScid");
-        let body: AccountProjectionRegisterRequestBody =
-            serde_json::from_value(mismatched).unwrap();
-        assert!(body.validate_verified_projection().is_err());
+        let body: AccountProjectionRequestBody = serde_json::from_value(mismatched).unwrap();
+        assert!(body.validate().is_err());
     }
 
     #[test]
@@ -2422,7 +2391,7 @@ mod tests {
             let mut value = projection_body_json();
             value[field] = json!({});
             assert!(
-                serde_json::from_value::<AccountProjectionRegisterRequestBody>(value).is_err(),
+                serde_json::from_value::<AccountProjectionRequestBody>(value).is_err(),
                 "deployment-private projection DTO must reject {field}"
             );
         }
@@ -2432,7 +2401,7 @@ mod tests {
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:alice.example#device-1"
         );
         assert!(
-            serde_json::from_value::<AccountProjectionRegisterRequestBody>(did_url).is_err(),
+            serde_json::from_value::<AccountProjectionRequestBody>(did_url).is_err(),
             "full_id must be a bare DID, not a DID URL"
         );
     }
