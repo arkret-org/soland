@@ -52,7 +52,20 @@ pub(super) async fn logout(
         .map(str::to_owned)
         .ok_or_else(|| AppError::unauthenticated("missing DPoP session grant"))?;
 
-    let grant = introspect_session_grant_for_logout(state, &grant_jwt).await?;
+    let Some(grant) = introspect_session_grant_for_logout(state, &grant_jwt).await? else {
+        // A durable client logout journal can outlive the Auth Server's grant
+        // row. `not_found` proves there is no active chain or Principal-side
+        // metadata left to target, but §4.1 still requires the standard
+        // Auth-side sub-operation to confirm idempotent completion before the
+        // Account Authority returns success. `audience_mismatch` never reaches
+        // this branch; it remains fail-closed in the classifier below.
+        trigger_auth_side_auth_session_logout(state, &grant_jwt).await?;
+        super::super::auth_grant_dpop::invalidate_cached_grant(state, &grant_jwt);
+        // `revoked` reports whether a live Principal-side device session was
+        // revoked. With no metadata there is no safe local target, even though
+        // the Auth-side chain has been durably confirmed terminal.
+        return json_ok(AccountLogoutOutcome { revoked: false });
+    };
     if grant.credential_class
         != arkret_models_identity::session_credential::SessionGrantCredentialClass::Standard
     {
@@ -77,7 +90,7 @@ pub(super) async fn logout(
         ));
     }
 
-    let auth_side_revoked = trigger_auth_side_auth_session_logout(state, &grant_jwt).await?;
+    trigger_auth_side_auth_session_logout(state, &grant_jwt).await?;
 
     // §4.1 step 3 (Principal-side, local): invalidate this grant's cached
     // introspection so the next `/_arkret/self/*` request re-introspects against
@@ -107,9 +120,7 @@ pub(super) async fn logout(
     )
     .await;
 
-    json_ok(AccountLogoutOutcome {
-        revoked: revoked || auth_side_revoked,
-    })
+    json_ok(AccountLogoutOutcome { revoked })
 }
 
 fn auth_error_to_app_error(error: (StatusCode, &'static str, &'static str)) -> AppError {
@@ -175,7 +186,7 @@ async fn dev_mode_local_logout(
 async fn introspect_session_grant_for_logout(
     state: &AppState,
     grant_jwt: &str,
-) -> Result<crate::wire::SessionGrantIntrospectGrant, AppError> {
+) -> Result<Option<crate::wire::SessionGrantIntrospectGrant>, AppError> {
     let Some(introspection_url) = state.config().session_grant_introspection_url.as_deref() else {
         return Err(AppError::unsupported_feature(
             "session grant introspection requires SOLAND_SESSION_GRANT_INTROSPECTION_URL outside development mode",
@@ -237,23 +248,70 @@ async fn introspect_session_grant_for_logout(
                 format!("invalid session grant logout introspection response: {error}"),
             )
         })?;
-    response.grant.ok_or_else(|| {
-        AppError::unauthenticated("session grant introspection omitted grant metadata")
-    })
+    classify_logout_introspection(response)
+}
+
+/// Preserve the Auth Server's closed introspection status instead of
+/// collapsing both metadata-withholding states into the same 401.
+///
+/// `not_found` is the expected durable-journal retry after a grant row has
+/// expired or been pruned. The caller still runs the idempotent Auth-side
+/// logout sub-operation before returning success. `audience_mismatch` is a
+/// routing/authentication error and must never be treated as already gone.
+fn classify_logout_introspection(
+    outcome: SessionGrantIntrospectOutcome,
+) -> Result<Option<crate::wire::SessionGrantIntrospectGrant>, AppError> {
+    use crate::wire::SessionGrantIntrospectStatus;
+
+    match outcome.status {
+        SessionGrantIntrospectStatus::NotFound
+            if !outcome.active && outcome.grant.is_none() =>
+        {
+            Ok(None)
+        }
+        SessionGrantIntrospectStatus::AudienceMismatch => Err(AppError::unauthenticated(
+            "session grant audience does not match this Account Authority",
+        )),
+        SessionGrantIntrospectStatus::Active if outcome.active => outcome
+            .grant
+            .map(Some)
+            .ok_or_else(|| invalid_logout_introspection(outcome.status)),
+        SessionGrantIntrospectStatus::Active | SessionGrantIntrospectStatus::NotFound => {
+            Err(invalid_logout_introspection(outcome.status))
+        }
+        status if !outcome.active => outcome
+            .grant
+            .map(Some)
+            .ok_or_else(|| invalid_logout_introspection(status)),
+        status => Err(invalid_logout_introspection(status)),
+    }
+}
+
+fn invalid_logout_introspection(
+    status: crate::wire::SessionGrantIntrospectStatus,
+) -> AppError {
+    AppError::new(
+        ErrorCode::TemporarilyUnavailable,
+        format!(
+            "invalid session grant logout introspection outcome for status {status:?}"
+        ),
+    )
 }
 
 /// Auth-side trigger of the single hard logout: call the Auth Server's S2S
 /// `POST {gate_account_base}/auth-sessions/logout` sub-operation so the grant
 /// rotation chain + browser session are terminated (account-lifecycle §4.1
-/// step 2). The client DPoP proof is validated by soland before this call and
-/// is not forwarded to the Auth Server.
+/// step 2). When introspection returned grant metadata, the client DPoP proof
+/// is validated by soland before this call and is not forwarded to the Auth
+/// Server. A `not_found` retry has no holder metadata left to validate; this
+/// sub-operation then only confirms that no Auth-side chain remains.
 async fn trigger_auth_side_auth_session_logout(
     state: &AppState,
     grant_jwt: &str,
-) -> Result<bool, AppError> {
+) -> Result<(), AppError> {
     let Some(introspection_url) = state.config().session_grant_introspection_url.as_deref() else {
         // Dev mode without an Auth Server: no rotation chain to terminate.
-        return Ok(false);
+        return Ok(());
     };
     let Some(logout_url) = introspection_url
         .strip_suffix("/session-grants/introspect")
@@ -311,7 +369,17 @@ async fn trigger_auth_side_auth_session_logout(
                 format!("invalid Auth-side session logout response: {error}"),
             )
         })?;
-    Ok(body.grant_chain_terminated && body.auth_session_logged_out)
+    confirm_auth_side_logout(body)
+}
+
+fn confirm_auth_side_logout(body: AuthSessionLogoutOutcome) -> Result<(), AppError> {
+    if body.grant_chain_terminated && body.auth_session_logged_out {
+        return Ok(());
+    }
+    Err(AppError::new(
+        ErrorCode::TemporarilyUnavailable,
+        "Auth-side session logout did not confirm grant-chain termination",
+    ))
 }
 
 /// Revoke every active soland bearer session for a specific (actor, device).
@@ -328,6 +396,87 @@ async fn revoke_sessions_for_actor_device(
         .revoke_actor_device_sessions(actor, device_id, revoked_at)
         .await
         .map_err(|error| AppError::internal(error.to_string()))
+}
+
+#[cfg(test)]
+mod logout_introspection_tests {
+    use super::*;
+    use crate::wire::SessionGrantIntrospectStatus;
+
+    fn outcome(
+        active: bool,
+        status: SessionGrantIntrospectStatus,
+    ) -> SessionGrantIntrospectOutcome {
+        SessionGrantIntrospectOutcome {
+            active,
+            status,
+            proof_required: false,
+            one_time_use_consumed: false,
+            grant: None,
+        }
+    }
+
+    #[test]
+    fn not_found_is_an_idempotent_logout_retry_state() {
+        assert!(matches!(
+            classify_logout_introspection(outcome(false, SessionGrantIntrospectStatus::NotFound)),
+            Ok(None)
+        ));
+    }
+
+    #[test]
+    fn audience_mismatch_remains_fail_closed() {
+        let error = classify_logout_introspection(outcome(
+            false,
+            SessionGrantIntrospectStatus::AudienceMismatch,
+        ))
+        .expect_err("audience mismatch must be rejected");
+        assert_eq!(error.code, ErrorCode::Unauthenticated);
+    }
+
+    #[test]
+    fn missing_metadata_for_other_statuses_is_a_protocol_failure() {
+        for status in [
+            SessionGrantIntrospectStatus::Active,
+            SessionGrantIntrospectStatus::Revoked,
+            SessionGrantIntrospectStatus::Expired,
+        ] {
+            let error = classify_logout_introspection(outcome(
+                status == SessionGrantIntrospectStatus::Active,
+                status,
+            ))
+            .expect_err("non-not-found outcome must carry grant metadata");
+            assert_eq!(error.code, ErrorCode::TemporarilyUnavailable);
+        }
+    }
+
+    #[test]
+    fn auth_side_must_confirm_both_terminal_states() {
+        assert!(confirm_auth_side_logout(AuthSessionLogoutOutcome {
+            grant_chain_terminated: true,
+            auth_session_logged_out: true,
+        })
+        .is_ok());
+
+        for body in [
+            AuthSessionLogoutOutcome {
+                grant_chain_terminated: false,
+                auth_session_logged_out: true,
+            },
+            AuthSessionLogoutOutcome {
+                grant_chain_terminated: true,
+                auth_session_logged_out: false,
+            },
+            AuthSessionLogoutOutcome {
+                grant_chain_terminated: false,
+                auth_session_logged_out: false,
+            },
+        ] {
+            let error = confirm_auth_side_logout(body)
+                .expect_err("partial Auth-side completion must be retryable");
+            assert_eq!(error.code, ErrorCode::TemporarilyUnavailable);
+        }
+    }
 }
 
 /// `POST /_arkret/gate/account/session-grants/revoke` — spec
