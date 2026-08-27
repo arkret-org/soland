@@ -207,18 +207,20 @@ async fn introspect_session_grant_for_logout(
             std::time::Duration::from_secs(10),
         )
         .map_err(AppError::capability_denied)?;
-    let response = client
-        .post(introspection_url)
-        .bearer_auth(bearer)
-        .json(&request)
-        .send()
-        .await
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::TemporarilyUnavailable,
-                format!("session grant logout introspection request failed: {error}"),
-            )
-        })?;
+    let response = crate::routing::with_arkret_operation(
+        client.post(introspection_url),
+        arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
+    )
+    .bearer_auth(bearer)
+    .json(&request)
+    .send()
+    .await
+    .map_err(|error| {
+        AppError::new(
+            ErrorCode::TemporarilyUnavailable,
+            format!("session grant logout introspection request failed: {error}"),
+        )
+    })?;
     if !response.status().is_success() {
         let status = response.status();
         return Err(AppError::new(
@@ -279,18 +281,20 @@ async fn trigger_auth_side_auth_session_logout(
         validated_at: Some(now()),
         reason_code: Some("account_logout".to_owned()),
     };
-    let response = client
-        .post(logout_url)
-        .bearer_auth(bearer)
-        .json(&request)
-        .send()
-        .await
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::TemporarilyUnavailable,
-                format!("Auth-side session logout request failed: {error}"),
-            )
-        })?;
+    let response = crate::routing::with_arkret_operation(
+        client.post(logout_url),
+        arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_LOGOUT_AUTH_SESSION_V1,
+    )
+    .bearer_auth(bearer)
+    .json(&request)
+    .send()
+    .await
+    .map_err(|error| {
+        AppError::new(
+            ErrorCode::TemporarilyUnavailable,
+            format!("Auth-side session logout request failed: {error}"),
+        )
+    })?;
     if !response.status().is_success() {
         let status = response.status();
         return Err(AppError::new(

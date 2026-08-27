@@ -4,8 +4,8 @@
 		Access-Control-Allow-Origin "{http.request.header.Origin}"
 		Access-Control-Allow-Credentials "true"
 		Access-Control-Allow-Methods "GET, QUERY, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
-		Access-Control-Allow-Headers "authorization, content-type, signature, signature-input, content-digest, dpop, idempotency-key, x-arkret-request-id, x-arkret-wait-for, x-arkret-content-digest, x-arkret-realm-id, x-arkret-filename, x-arkret-blob-encrypted, x-arkret-blob-purpose, x-arkret-purpose, x-arkret-attachment-envelope, x-arkret-key-backup-unlock-proof, range"
-		Access-Control-Expose-Headers "retry-after, x-arkret-wait-for-satisfied, content-range, accept-ranges"
+		Access-Control-Allow-Headers "authorization, content-type, arkret-operation, signature, signature-input, content-digest, dpop, idempotency-key, x-arkret-request-id, x-arkret-wait-for, x-arkret-content-digest, x-arkret-realm-id, x-arkret-filename, x-arkret-blob-encrypted, x-arkret-blob-purpose, x-arkret-purpose, x-arkret-attachment-envelope, x-arkret-key-backup-unlock-proof, range"
+		Access-Control-Expose-Headers "arkret-operation, retry-after, x-arkret-wait-for-satisfied, content-range, accept-ranges"
 		Vary "Origin"
 		defer
 	}
@@ -18,8 +18,8 @@
 			Access-Control-Allow-Origin "{http.request.header.Origin}"
 			Access-Control-Allow-Credentials "true"
 			Access-Control-Allow-Methods "GET, QUERY, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
-			Access-Control-Allow-Headers "authorization, content-type, signature, signature-input, content-digest, dpop, idempotency-key, x-arkret-request-id, x-arkret-wait-for, x-arkret-content-digest, x-arkret-realm-id, x-arkret-filename, x-arkret-blob-encrypted, x-arkret-blob-purpose, x-arkret-purpose, x-arkret-attachment-envelope, x-arkret-key-backup-unlock-proof, range"
-			Access-Control-Expose-Headers "retry-after, x-arkret-wait-for-satisfied, content-range, accept-ranges"
+			Access-Control-Allow-Headers "authorization, content-type, arkret-operation, signature, signature-input, content-digest, dpop, idempotency-key, x-arkret-request-id, x-arkret-wait-for, x-arkret-content-digest, x-arkret-realm-id, x-arkret-filename, x-arkret-blob-encrypted, x-arkret-blob-purpose, x-arkret-purpose, x-arkret-attachment-envelope, x-arkret-key-backup-unlock-proof, range"
+			Access-Control-Expose-Headers "arkret-operation, retry-after, x-arkret-wait-for-satisfied, content-range, accept-ranges"
 			Vary "Origin"
 		}
 		respond "{err.status_code} {err.status_text}" {err.status_code}
@@ -38,5 +38,17 @@ https://auth.local.host:443 {
 	tls internal
 	import dev_cors
 	import dev_error_cors
-	reverse_proxy 127.0.0.1:7080
+
+	# The Account Authority gate is split across Coauth and Soland. Coauth owns
+	# onboarding/session issuance, while Soland owns the single client-visible
+	# hard-logout operation and performs the principal-side cleanup before
+	# terminating the Auth-side session.
+	@account_logout path /_arkret/gate/account/logout
+	handle @account_logout {
+		reverse_proxy 127.0.0.1:8698
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:7080
+	}
 }

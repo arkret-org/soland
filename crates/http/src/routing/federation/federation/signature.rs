@@ -156,6 +156,9 @@ async fn verify_inbound_peer_http_signature_inner(
     if idempotency_key.is_some() {
         required_components.push(Component::Header("idempotency-key".to_owned()));
     }
+    if req.headers().contains_key("arkret-operation") {
+        required_components.push(Component::Header("arkret-operation".to_owned()));
+    }
     if endpoint_digest.is_some() {
         required_components.push(Component::Header(
             "destination-service-endpoint-digest".to_owned(),

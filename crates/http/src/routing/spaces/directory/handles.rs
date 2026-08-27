@@ -318,6 +318,10 @@ async fn fetch_remote_handle_from_peer(
     .map_err(AppError::capability_denied)?;
     let response = client
         .post(url.clone())
+        .header(
+            "arkret-operation",
+            arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_HANDLE_V1,
+        )
         .json(&remote_body)
         .send()
         .await

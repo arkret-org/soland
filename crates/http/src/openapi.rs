@@ -126,8 +126,8 @@ fn install_operation_selector_parameters(doc: &mut Value) {
             parameters.push(json!({
                 "name": "Arkret-Operation",
                 "in": "header",
-                "required": false,
-                "description": "Exact operation_id selector; required only when endpoint context cannot select one version.",
+                "required": true,
+                "description": "Required exact versioned operation_id selector for every canonical Arkret HTTP request.",
                 "schema": selector_schema
             }));
         }

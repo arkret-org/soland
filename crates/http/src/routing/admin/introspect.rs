@@ -248,18 +248,20 @@ pub(crate) async fn introspect_admin_scopes(
         Duration::from_secs(10),
     )
     .map_err(AppError::capability_denied)?;
-    let response = client
-        .post(url)
-        .bearer_auth(bearer)
-        .json(&request)
-        .send()
-        .await
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::TemporarilyUnavailable,
-                format!("admin scope introspection request failed: {error}"),
-            )
-        })?;
+    let response = crate::routing::with_arkret_operation(
+        client.post(url),
+        arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
+    )
+    .bearer_auth(bearer)
+    .json(&request)
+    .send()
+    .await
+    .map_err(|error| {
+        AppError::new(
+            ErrorCode::TemporarilyUnavailable,
+            format!("admin scope introspection request failed: {error}"),
+        )
+    })?;
     if !response.status().is_success() {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,

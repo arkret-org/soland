@@ -363,6 +363,10 @@ pub(crate) async fn fetch_service_signer_evidence(
     .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let response = client
         .get(url)
+        .header(
+            "arkret-operation",
+            arkret_wire::ServiceOperationId::OPEN_SERVICE_READ_RESOLUTION_V1,
+        )
         .send()
         .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
@@ -792,6 +796,11 @@ async fn preflight_controller_gate(
     crate::routing::federation::outbox::insert_header_if_valid(
         &mut headers,
         "arkret-operation-id",
+        arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_ISSUE_CONTROLLER_GATE_ATTESTATION_V1,
+    );
+    crate::routing::federation::outbox::insert_header_if_valid(
+        &mut headers,
+        "arkret-operation",
         arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_ISSUE_CONTROLLER_GATE_ATTESTATION_V1,
     );
     crate::routing::federation::outbox::insert_header_if_valid(

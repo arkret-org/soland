@@ -352,7 +352,15 @@ async fn fetch_peer_description(
             return None;
         }
     };
-    let response = match client.get(url.clone()).send().await {
+    let response = match client
+        .get(url.clone())
+        .header(
+            "arkret-operation",
+            arkret_wire::ServiceOperationId::SERVER_READ_DESCRIBE_V1,
+        )
+        .send()
+        .await
+    {
         Ok(value) => value,
         Err(error) => {
             tracing::warn!(

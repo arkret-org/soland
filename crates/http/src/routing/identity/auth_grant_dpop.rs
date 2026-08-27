@@ -316,12 +316,14 @@ async fn introspect_session_grant_remote(
                     )
                 },
             )?;
-        match client
-            .post(validated_url)
-            .bearer_auth(bearer)
-            .json(&request)
-            .send()
-            .await
+        match crate::routing::with_arkret_operation(
+            client.post(validated_url),
+            arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
+        )
+        .bearer_auth(bearer)
+        .json(&request)
+        .send()
+        .await
         {
             Ok(value) => {
                 response = Some(value);

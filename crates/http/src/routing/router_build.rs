@@ -1,8 +1,7 @@
 use salvo::affix_state;
 use salvo::cors::{Cors, CorsHandler};
-use salvo::http::HeaderValue;
-use salvo::http::Method;
 use salvo::http::request::SecureMaxSize;
+use salvo::http::{HeaderValue, Method};
 use salvo::prelude::*;
 use soland_http::ratelimit::{RateLimiter, RateLimiterConfig, RateLimiterMiddleware};
 
@@ -68,11 +67,10 @@ impl Handler for OperationSelectorMiddleware {
 
         let mut header_values = req.headers().get_all(ARKRET_OPERATION_HEADER).iter();
         let first = header_values.next();
-        let has_selector = first.is_some();
-        if first.is_none() && candidates.len() > 1 {
+        if first.is_none() {
             let error = soland_http::error::AppError::new(
                 soland_http::error::ErrorCode::OperationSelectorRequired,
-                "Arkret-Operation is required when multiple operation versions are available",
+                "canonical Arkret HTTP requests require Arkret-Operation",
             );
             error.write(req, depot, res).await;
             ctrl.skip_rest();
@@ -81,13 +79,8 @@ impl Handler for OperationSelectorMiddleware {
         let supplied = first
             .and_then(|value| value.to_str().ok())
             .and_then(arkret_wire::ServiceOperationId::from_wire);
-        let selected = if has_selector {
-            supplied
-        } else {
-            (candidates.len() == 1).then_some(candidates[0])
-        };
         let duplicate_selector = header_values.next().is_some();
-        let Some(selected) = selected.filter(|operation| candidates.contains(operation)) else {
+        let Some(selected) = supplied.filter(|operation| candidates.contains(operation)) else {
             let error = soland_http::error::AppError::new(
                 soland_http::error::ErrorCode::UnsupportedOperationVersion,
                 "Arkret-Operation does not select an advertised operation version for this method and path",
@@ -534,8 +527,7 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
         .allow_headers(vec![
             "authorization",
             "content-type",
-            // Carries an exact operation_id only when endpoint context cannot
-            // select a unique advertised version.
+            // Every canonical Arkret HTTP request selects its exact version.
             "arkret-operation",
             // RFC 9421 message signatures ride on every `/_arkret/self/*` and
             // `/_arkret/root/*` request the SDK signs; without these three the
@@ -569,6 +561,7 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
     };
 
     cors.expose_headers(vec![
+        "arkret-operation",
         "retry-after",
         "x-arkret-wait-for-satisfied",
         "content-range",

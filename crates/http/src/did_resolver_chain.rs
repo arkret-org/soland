@@ -496,6 +496,10 @@ pub async fn probe_webvh_provider_describe(
     )?;
     let resp = client
         .get(describe_url)
+        .header(
+            "arkret-operation",
+            arkret_wire::ServiceOperationId::SERVER_READ_DESCRIBE_V1,
+        )
         .send()
         .await
         .map_err(|e| format!("webvh provider describe request failed: {e}"))?;

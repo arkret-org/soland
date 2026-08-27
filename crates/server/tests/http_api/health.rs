@@ -35,6 +35,17 @@ async fn health_and_describe_work_body() {
     assert_eq!(readyz["checks"]["database"]["ok"], true);
     assert_eq!(readyz["checks"]["pq_hybrid_tls"]["ok"], true);
 
+    let mut missing_selector = salvo::test::TestClient::get("http://server/_arkret/describe")
+        .send(&app())
+        .await;
+    assert_eq!(missing_selector.status_code, Some(StatusCode::BAD_REQUEST));
+    let missing_selector: Value = missing_selector.take_json().await.unwrap();
+    assert_eq!(
+        missing_selector["type"],
+        "https://arkret.org/problems/operation_selector_required"
+    );
+    assert_eq!(missing_selector["status"], 400);
+
     let mut wrong_selector = salvo::test::TestClient::get("http://server/_arkret/describe")
         .add_header("Arkret-Operation", "ak.self.events.read.describe.v1", true)
         .send(&app())

@@ -261,6 +261,13 @@ async fn install_recovery_policy_introspection(config: &mut soland_http::config:
                     Some(expected_authorization.as_str()),
                     "introspection must authenticate as the configured Account Authority client"
                 );
+                assert_eq!(
+                    headers.get("arkret-operation").map(String::as_str),
+                    Some(
+                        arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1
+                    ),
+                    "introspection must select its exact canonical Arkret operation"
+                );
                 assert!(
                     headers
                         .get("content-type")

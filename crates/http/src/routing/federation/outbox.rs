@@ -210,6 +210,14 @@ pub(crate) fn rfc9421_sign(
     rfc9421_sign_with_window(state, headers, method, target_url, 300)
 }
 
+fn operation_for_canonical_http_request(
+    method: &str,
+    target_url: &str,
+) -> Option<arkret_wire::ServiceOperationId> {
+    let url = reqwest::Url::parse(target_url).ok()?;
+    arkret_wire::ServiceOperationId::from_http_request(method, url.path())
+}
+
 pub(crate) fn rfc9421_sign_controller_gate_request(
     state: &AppState,
     mut headers: reqwest::header::HeaderMap,
@@ -226,6 +234,7 @@ pub(crate) fn rfc9421_sign_controller_gate_request(
         Component::Header("content-digest".to_owned()),
         Component::Header("source-service-id".to_owned()),
         Component::Header("destination-service-id".to_owned()),
+        Component::Header("arkret-operation".to_owned()),
         Component::Header("arkret-operation-id".to_owned()),
         Component::Header("arkret-request-id".to_owned()),
     ];
@@ -287,6 +296,10 @@ fn rfc9421_sign_with_window(
         Component::Header("source-trust-domain".to_owned()),
         Component::Header("destination-trust-domain".to_owned()),
     ];
+    if let Some(operation) = operation_for_canonical_http_request(method, target_url) {
+        insert_header_if_valid(&mut headers, "arkret-operation", operation.as_str());
+        covered.push(Component::Header("arkret-operation".to_owned()));
+    }
     let idempotency_key = header_value(&headers, "idempotency-key");
     if idempotency_key.is_some() {
         covered.push(Component::Header("idempotency-key".to_owned()));
@@ -2753,4 +2766,22 @@ mod tests {
         let trimmed = excerpt(&body);
         assert_eq!(trimmed.len(), RESPONSE_EXCERPT_BYTES);
     }
+}
+#[test]
+fn canonical_http_request_selects_exact_operation_version() {
+    assert_eq!(
+        operation_for_canonical_http_request(
+            "POST",
+            "https://peer.example/_arkret/peer/events?ignored=yes",
+        )
+        .map(arkret_wire::ServiceOperationId::as_str),
+        Some(arkret_wire::ServiceOperationId::PEER_EVENTS_COMMAND_SUBMIT_V1)
+    );
+    assert_eq!(
+        operation_for_canonical_http_request(
+            "GET",
+            "https://peer.example/_private/not-a-canonical-route",
+        ),
+        None
+    );
 }

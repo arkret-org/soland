@@ -489,6 +489,10 @@ impl PolicyClient {
             .map_err(PolicyClientError::Transport)?;
         let response = client
             .post(url)
+            .header(
+                "arkret-operation",
+                arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK_V1,
+            )
             .json(body)
             .send()
             .await

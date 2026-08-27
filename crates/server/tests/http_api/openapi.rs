@@ -37,12 +37,12 @@ async fn served_openapi_is_generated_from_the_router_body() {
     );
     assert_required_migrated_operations(&spec);
     assert_event_read_query_bindings(&spec);
-    assert_operation_selectors_are_conditional(&spec);
+    assert_operation_selectors_are_required(&spec);
     assert_operation_ids_are_unique(&spec);
     assert_component_refs_resolve(&spec, &spec);
 }
 
-fn assert_operation_selectors_are_conditional(root: &Value) {
+fn assert_operation_selectors_are_required(root: &Value) {
     let operation = &root["paths"]["/_arkret/describe"]["get"];
     assert_eq!(operation["operationId"], "ak.server.read.describe");
     let selector = operation["parameters"]
@@ -51,7 +51,7 @@ fn assert_operation_selectors_are_conditional(root: &Value) {
         .iter()
         .find(|parameter| parameter["name"] == "Arkret-Operation")
         .expect("describe Arkret-Operation parameter");
-    assert_eq!(selector["required"], false);
+    assert_eq!(selector["required"], true);
     assert_eq!(selector["schema"]["const"], "ak.server.read.describe.v1");
 }
 

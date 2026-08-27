@@ -57,6 +57,20 @@ use spaces::space::{
 };
 use system::extract::AuthArgs;
 
+const ARKRET_OPERATION_HEADER: &str = "Arkret-Operation";
+
+/// Select the exact canonical operation on outbound Arkret HTTP calls.
+///
+/// Coauth validates this header before its handlers run, so every Soland ->
+/// Account Authority request must use the same generated operation id that
+/// selected the route locally.
+pub(crate) fn with_arkret_operation(
+    builder: reqwest::RequestBuilder,
+    operation_id: &'static str,
+) -> reqwest::RequestBuilder {
+    builder.header(ARKRET_OPERATION_HEADER, operation_id)
+}
+
 // Router construction (router builders, CORS handler, root/preflight handlers).
 mod router_build;
 // OpenAPI document construction + the soland-extension operation table.
@@ -96,6 +110,27 @@ use soland_http::openapi_routes::{api_not_found, wait_for_sync_token};
 
 pub(crate) async fn sync_token(state: &AppState) -> String {
     events::sync::sync_token_for_state(state).await
+}
+
+#[cfg(test)]
+mod outbound_operation_selector_tests {
+    #[test]
+    fn outbound_arkret_request_carries_exact_operation_selector() {
+        let request = super::with_arkret_operation(
+            reqwest::Client::new().post("http://127.0.0.1/_arkret/gate/account/logout"),
+            arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_LOGOUT_V1,
+        )
+        .build()
+        .expect("request builds");
+
+        assert_eq!(
+            request
+                .headers()
+                .get(super::ARKRET_OPERATION_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some(arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_LOGOUT_V1)
+        );
+    }
 }
 
 #[cfg(test)]
