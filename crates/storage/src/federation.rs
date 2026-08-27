@@ -1,6 +1,7 @@
 use super::{
     FederationFrontierExchangeRecord, FederationOutboxDeadLetterRecord, FederationOutboxRecord,
-    FederationOutboxState, PersistenceResult, ProjectedEventOperation, async_trait,
+    FederationOutboxState, PersistenceError, PersistenceResult, ProjectedEventOperation,
+    async_trait,
 };
 
 /// One atomic "read due rows and take ownership of them" operation.
@@ -65,6 +66,92 @@ pub struct FederationOutboxTransition {
     pub last_response_excerpt: Option<String>,
     pub observed_at: i64,
     pub outcome: FederationOutboxOutcome,
+}
+
+/// Storage-neutral projection of an outbox delivery outcome.
+///
+/// The memory and PostgreSQL adapters deliberately share this classifier so
+/// lifecycle admission and field projection cannot drift between backends.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FederationOutboxCompletion {
+    pub state: FederationOutboxState,
+    pub next_attempt_at: i64,
+    pub completed_at: Option<i64>,
+    pub policy_version: Option<String>,
+}
+
+#[doc(hidden)]
+pub fn classify_federation_outbox_completion(
+    realm_fanout: bool,
+    transition: &FederationOutboxTransition,
+) -> PersistenceResult<FederationOutboxCompletion> {
+    if (realm_fanout
+        && matches!(
+            &transition.outcome,
+            FederationOutboxOutcome::PolicySuppressed { .. }
+                | FederationOutboxOutcome::DeadLettered(_)
+                | FederationOutboxOutcome::Superseded(_)
+        ))
+        || (!realm_fanout
+            && matches!(
+                &transition.outcome,
+                FederationOutboxOutcome::RouteUnavailable { .. }
+                    | FederationOutboxOutcome::CancelledAuthorityLost
+            ))
+    {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: federation transition does not match the row lifecycle".to_owned(),
+        ));
+    }
+
+    let (state, next_attempt_at, completed_at, policy_version) = match &transition.outcome {
+        FederationOutboxOutcome::Retry { next_attempt_at } => {
+            (FederationOutboxState::Pending, *next_attempt_at, None, None)
+        }
+        FederationOutboxOutcome::RouteUnavailable { next_attempt_at } => (
+            FederationOutboxState::PendingRoute,
+            *next_attempt_at,
+            None,
+            None,
+        ),
+        FederationOutboxOutcome::Delivered => (
+            FederationOutboxState::Delivered,
+            transition.observed_at,
+            Some(transition.observed_at),
+            None,
+        ),
+        FederationOutboxOutcome::CancelledAuthorityLost => (
+            FederationOutboxState::CancelledAuthorityLost,
+            transition.observed_at,
+            Some(transition.observed_at),
+            None,
+        ),
+        FederationOutboxOutcome::PolicySuppressed { policy_version } => (
+            FederationOutboxState::PolicySuppressed,
+            transition.observed_at,
+            Some(transition.observed_at),
+            Some(policy_version.clone()),
+        ),
+        FederationOutboxOutcome::DeadLettered(_) => (
+            FederationOutboxState::DeadLettered,
+            transition.observed_at,
+            Some(transition.observed_at),
+            None,
+        ),
+        FederationOutboxOutcome::Superseded(_) => (
+            FederationOutboxState::Superseded,
+            transition.observed_at,
+            Some(transition.observed_at),
+            None,
+        ),
+    };
+
+    Ok(FederationOutboxCompletion {
+        state,
+        next_attempt_at,
+        completed_at,
+        policy_version,
+    })
 }
 
 /// Verdict of one `policy_suppressed` revalidation.
@@ -207,6 +294,10 @@ pub trait FederationFrontierExchangeStore: Send + Sync {
     ) -> PersistenceResult<FederationFrontierExchangeRecord>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationFrontierExchangeRecord>>;
 }
+
+#[cfg(test)]
+#[path = "federation/tests.rs"]
+mod tests;
 #[doc(hidden)]
 pub fn frontier_exchange_success_record(
     existing: Option<FederationFrontierExchangeRecord>,

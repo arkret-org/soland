@@ -4,8 +4,8 @@ use super::{
     FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
     FederationOutboxRequeue, FederationOutboxState, FederationOutboxStateDepth,
     FederationOutboxStore, FederationOutboxTransition, Mutex, PersistenceError, PersistenceResult,
-    ProjectedEventOperation, async_trait, frontier_exchange_failure_record,
-    frontier_exchange_success_record,
+    ProjectedEventOperation, async_trait, classify_federation_outbox_completion,
+    frontier_exchange_failure_record, frontier_exchange_success_record,
 };
 // G3.S0 — in-memory outbound federation HTTP delivery queue.
 // Keyed by `id` (the row PK) with a secondary `(peer_did,
@@ -139,26 +139,8 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
         if row.lease_token.as_deref() != Some(transition.lease_token.as_str()) {
             return Ok(false);
         }
-        let realm_fanout = row.realm_fanout.is_some();
-        if (realm_fanout
-            && matches!(
-                &transition.outcome,
-                FederationOutboxOutcome::PolicySuppressed { .. }
-                    | FederationOutboxOutcome::DeadLettered(_)
-                    | FederationOutboxOutcome::Superseded(_)
-            ))
-            || (!realm_fanout
-                && matches!(
-                    &transition.outcome,
-                    FederationOutboxOutcome::RouteUnavailable { .. }
-                        | FederationOutboxOutcome::CancelledAuthorityLost
-                ))
-        {
-            return Err(PersistenceError::Conflict(
-                "schema_violation: federation transition does not match the row lifecycle"
-                    .to_owned(),
-            ));
-        }
+        let completion =
+            classify_federation_outbox_completion(row.realm_fanout.is_some(), transition)?;
         row.attempts = transition.attempts;
         row.semantic_attempts = transition.semantic_attempts;
         row.last_http_status = transition.last_http_status;
@@ -168,48 +150,20 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
         row.lease_token = None;
         row.lease_expires_at = None;
         row.leased_from_state = None;
-        row.policy_version = None;
+        row.state = completion.state;
+        row.next_attempt_at = completion.next_attempt_at;
+        row.completed_at = completion.completed_at;
+        row.policy_version = completion.policy_version;
         let mut dead_letter = None;
         let mut successor = None;
         match &transition.outcome {
-            FederationOutboxOutcome::Retry { next_attempt_at } => {
-                row.state = FederationOutboxState::Pending;
-                row.next_attempt_at = *next_attempt_at;
-                row.completed_at = None;
-            }
-            FederationOutboxOutcome::RouteUnavailable { next_attempt_at } => {
-                row.state = FederationOutboxState::PendingRoute;
-                row.next_attempt_at = *next_attempt_at;
-                row.completed_at = None;
-            }
-            FederationOutboxOutcome::Delivered => {
-                row.state = FederationOutboxState::Delivered;
-                row.next_attempt_at = transition.observed_at;
-                row.completed_at = Some(transition.observed_at);
-            }
-            FederationOutboxOutcome::CancelledAuthorityLost => {
-                row.state = FederationOutboxState::CancelledAuthorityLost;
-                row.next_attempt_at = transition.observed_at;
-                row.completed_at = Some(transition.observed_at);
-            }
-            FederationOutboxOutcome::PolicySuppressed { policy_version } => {
-                row.state = FederationOutboxState::PolicySuppressed;
-                row.next_attempt_at = transition.observed_at;
-                row.policy_version = Some(policy_version.clone());
-                row.completed_at = Some(transition.observed_at);
-            }
             FederationOutboxOutcome::DeadLettered(record) => {
-                row.state = FederationOutboxState::DeadLettered;
-                row.next_attempt_at = transition.observed_at;
-                row.completed_at = Some(transition.observed_at);
                 dead_letter = Some((**record).clone());
             }
             FederationOutboxOutcome::Superseded(record) => {
-                row.state = FederationOutboxState::Superseded;
-                row.next_attempt_at = transition.observed_at;
-                row.completed_at = Some(transition.observed_at);
                 successor = Some((**record).clone());
             }
+            _ => {}
         }
         if let Some(successor) = successor {
             let duplicate = data.values().any(|existing| {

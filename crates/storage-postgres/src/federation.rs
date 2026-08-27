@@ -6,8 +6,9 @@ use super::{
     FederationOutboxStateDepth, FederationOutboxStore, FederationOutboxTransition, Integer,
     JsonPayloadRow, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult,
     PgPool, PgTransactionError, ProjectedEventOperation, QueryableByName, RunQueryDsl, Text,
-    Timestamptz, async_trait, frontier_exchange_failure_record, frontier_exchange_success_record,
-    ids, pg_conn, sql_query, sql_types,
+    Timestamptz, async_trait, classify_federation_outbox_completion,
+    frontier_exchange_failure_record, frontier_exchange_success_record, ids, pg_conn, sql_query,
+    sql_types,
 };
 
 /// Every column of `federation_outbox`, aliased to the record field names.
@@ -264,67 +265,9 @@ impl FederationOutboxStore for PgFederationOutboxStore {
             let Some(row_kind) = row_kind else {
                 return Ok(false);
             };
-            if (row_kind.present
-                && matches!(
-                    &transition.outcome,
-                    FederationOutboxOutcome::PolicySuppressed { .. }
-                        | FederationOutboxOutcome::DeadLettered(_)
-                        | FederationOutboxOutcome::Superseded(_)
-                ))
-                || (!row_kind.present
-                    && matches!(
-                        &transition.outcome,
-                        FederationOutboxOutcome::RouteUnavailable { .. }
-                            | FederationOutboxOutcome::CancelledAuthorityLost
-                    ))
-            {
-                return Err(PersistenceError::Conflict(
-                    "schema_violation: federation transition does not match the row lifecycle"
-                        .to_owned(),
-                )
-                .into());
-            }
-            let (state, next_attempt_at, completed_at, policy_version) = match &transition.outcome {
-                FederationOutboxOutcome::Retry { next_attempt_at } => {
-                    (FederationOutboxState::Pending, *next_attempt_at, None, None)
-                }
-                FederationOutboxOutcome::RouteUnavailable { next_attempt_at } => (
-                    FederationOutboxState::PendingRoute,
-                    *next_attempt_at,
-                    None,
-                    None,
-                ),
-                FederationOutboxOutcome::Delivered => (
-                    FederationOutboxState::Delivered,
-                    transition.observed_at,
-                    Some(transition.observed_at),
-                    None,
-                ),
-                FederationOutboxOutcome::CancelledAuthorityLost => (
-                    FederationOutboxState::CancelledAuthorityLost,
-                    transition.observed_at,
-                    Some(transition.observed_at),
-                    None,
-                ),
-                FederationOutboxOutcome::PolicySuppressed { policy_version } => (
-                    FederationOutboxState::PolicySuppressed,
-                    transition.observed_at,
-                    Some(transition.observed_at),
-                    Some(policy_version.clone()),
-                ),
-                FederationOutboxOutcome::DeadLettered(_) => (
-                    FederationOutboxState::DeadLettered,
-                    transition.observed_at,
-                    Some(transition.observed_at),
-                    None,
-                ),
-                FederationOutboxOutcome::Superseded(_) => (
-                    FederationOutboxState::Superseded,
-                    transition.observed_at,
-                    Some(transition.observed_at),
-                    None,
-                ),
-            };
+            let completion =
+                classify_federation_outbox_completion(row_kind.present, &transition)
+                    .map_err(PgTransactionError::from)?;
             // The lease-token predicate is the concurrency guard: a stale
             // holder's late response updates zero rows and is dropped.
             let updated = sql_query(
@@ -337,15 +280,15 @@ impl FederationOutboxStore for PgFederationOutboxStore {
             )
             .bind::<Text, _>(&transition.id)
             .bind::<Text, _>(&transition.lease_token)
-            .bind::<Text, _>(state.as_str())
+            .bind::<Text, _>(completion.state.as_str())
             .bind::<Integer, _>(transition.attempts)
             .bind::<Integer, _>(transition.semantic_attempts)
-            .bind::<BigInt, _>(next_attempt_at)
+            .bind::<BigInt, _>(completion.next_attempt_at)
             .bind::<Nullable<Integer>, _>(transition.last_http_status)
             .bind::<Nullable<Text>, _>(transition.last_error_code.as_deref())
             .bind::<Nullable<Text>, _>(transition.last_response_excerpt.as_deref())
-            .bind::<Nullable<Text>, _>(policy_version.as_deref())
-            .bind::<Nullable<BigInt>, _>(completed_at)
+            .bind::<Nullable<Text>, _>(completion.policy_version.as_deref())
+            .bind::<Nullable<BigInt>, _>(completion.completed_at)
             .execute(&mut *conn)
             .await
             .map_err(PersistenceError::database)?;
