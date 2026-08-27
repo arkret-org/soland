@@ -1,0 +1,8 @@
+[
+  "org.arkret.soland.blob.resumable.create",
+  "org.arkret.soland.blob.resumable.delete",
+  "org.arkret.soland.blob.resumable.finalize",
+  "org.arkret.soland.blob.resumable.head",
+  "org.arkret.soland.blob.resumable.options",
+  "org.arkret.soland.blob.resumable.patch"
+]

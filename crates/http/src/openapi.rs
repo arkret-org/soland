@@ -10,7 +10,8 @@ use serde_json::{Value, json};
 use crate::openapi_routes::{ArkretOpenApiDoc, populate_known_routes};
 
 static ARKRET_OPENAPI_DOC: OnceLock<Value> = OnceLock::new();
-static PRODUCT_OPERATION_IDS: OnceLock<std::result::Result<Vec<String>, String>> = OnceLock::new();
+static TRANSPORT_OPERATION_IDS: OnceLock<std::result::Result<Vec<String>, String>> =
+    OnceLock::new();
 
 /// Build (once) and return the served OpenAPI document.
 ///
@@ -275,15 +276,15 @@ fn join_route_path(parent: &str, fragment: &str) -> String {
 
 /// The soland extension operationIds advertised through `*.describe`.
 ///
-/// The compact registry preserves transport-specialized and conformance
-/// operations that do not contribute an OpenAPI operation. It is unioned with
-/// the generated live-router document so newly annotated operations cannot be
-/// omitted from discovery.
+/// Raw transport handlers that cannot contribute an OpenAPI operation are
+/// declared in a small registry. Every ordinary HTTP endpoint comes from the
+/// live router document; duplicating one in the transport registry is rejected.
 pub fn soland_extension_operation_ids() -> Vec<String> {
-    let mut operation_ids = PRODUCT_OPERATION_IDS
+    let mut operation_ids = TRANSPORT_OPERATION_IDS
         .get_or_init(|| {
-            serde_json::from_str(include_str!("product_operation_ids.json"))
-                .map_err(|error| format!("failed to parse product operation-id registry: {error}"))
+            serde_json::from_str(include_str!("transport_operation_ids.json")).map_err(|error| {
+                format!("failed to parse transport operation-id registry: {error}")
+            })
         })
         .as_ref()
         .unwrap_or_else(|error| panic!("{error}"))
@@ -298,23 +299,26 @@ pub fn soland_extension_operation_ids() -> Vec<String> {
         generated = product_openapi_surface_doc();
         &generated
     };
-    operation_ids.extend(
-        document
-            .get("paths")
-            .and_then(Value::as_object)
-            .into_iter()
-            .flat_map(|paths| paths.values())
-            .filter_map(Value::as_object)
-            .flat_map(|path_item| {
-                path_item
-                    .iter()
-                    .filter(|(method, _)| OPENAPI_METHODS.contains(&method.as_str()))
-                    .filter_map(|(_, operation)| operation.get("operationId"))
-                    .filter_map(Value::as_str)
-            })
-            .filter(|operation_id| operation_id.starts_with("org.arkret.soland."))
-            .map(ToOwned::to_owned),
-    );
+    let generated_operation_ids = document
+        .get("paths")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|paths| paths.values())
+        .filter_map(Value::as_object)
+        .flat_map(|path_item| {
+            path_item
+                .iter()
+                .filter(|(method, _)| OPENAPI_METHODS.contains(&method.as_str()))
+                .filter_map(|(_, operation)| operation.get("operationId"))
+                .filter_map(Value::as_str)
+        })
+        .filter(|operation_id| operation_id.starts_with("org.arkret.soland."))
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+    if let Some(duplicate) = operation_ids.intersection(&generated_operation_ids).next() {
+        panic!("transport operation-id registry duplicates live OpenAPI operation `{duplicate}`");
+    }
+    operation_ids.extend(generated_operation_ids);
     operation_ids.into_iter().collect()
 }
 

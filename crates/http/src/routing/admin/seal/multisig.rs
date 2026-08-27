@@ -12,7 +12,10 @@ use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
 /// `GET /_soland/admin/realms/{realm_id}/multisig/pending`.
-#[salvo::oapi::endpoint(tags("soland_admin"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.multisig.pending",
+    tags("soland_admin")
+)]
 pub(crate) async fn admin_list_multisig_pending(
     aa: AuthArgs,
     depot: &mut Depot,

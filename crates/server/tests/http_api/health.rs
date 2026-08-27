@@ -229,14 +229,14 @@ async fn health_and_describe_work_body() {
     }
     assert_eq!(
         describe["limits"]["profile_status"]["local_extension_operation_source"],
-        "compact_registry+served_openapi"
+        "transport_registry+live_openapi"
     );
     assert!(
         describe["limits"]["profile_status"]["local_extension_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "org.arkret.soland.admin.actors")
+            .any(|operation| operation == "org.arkret.soland.admin.actors.get")
     );
     assert!(
         describe["limits"]["profile_status"]["implemented_surfaces"]

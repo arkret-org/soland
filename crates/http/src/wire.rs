@@ -831,7 +831,7 @@ pub fn describe(
                 ],
                 "principal_server_full_profile_gaps": full_principal_server_gap_summary(),
                 "local_extension_operations": local_extension_operations,
-                "local_extension_operation_source": "compact_registry+served_openapi",
+                "local_extension_operation_source": "transport_registry+live_openapi",
                 "implemented_surfaces": [
                     "principal_server",
                     "events_api_minimal",

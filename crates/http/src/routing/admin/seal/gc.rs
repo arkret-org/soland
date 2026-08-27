@@ -21,7 +21,10 @@ pub struct GcCandidatesOutcome {
 
 /// `GET /_soland/admin/realms/{realm_id}/gc-candidates` — list Moves that
 /// are GC-eligible per MAL-13 rules. Read-only (no actual deletion).
-#[salvo::oapi::endpoint(tags("soland_admin"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.spaces.gc_candidates",
+    tags("soland_admin")
+)]
 pub(crate) async fn admin_list_gc_candidates(
     aa: AuthArgs,
     depot: &mut Depot,

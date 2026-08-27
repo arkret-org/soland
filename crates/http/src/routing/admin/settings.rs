@@ -32,14 +32,20 @@ pub(super) fn router() -> Router {
         .put(put_settings)
 }
 
-#[salvo::oapi::endpoint(tags("soland_admin"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.settings.get",
+    tags("soland_admin")
+)]
 async fn get_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<RuntimeSettings> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = AuthArgs.authenticated_session(state, req).await?;
     json_ok((*state.settings()).clone())
 }
 
-#[salvo::oapi::endpoint(tags("soland_admin"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.settings.update",
+    tags("soland_admin")
+)]
 async fn put_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<RuntimeSettings> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = AuthArgs.authenticated_session(state, req).await?;

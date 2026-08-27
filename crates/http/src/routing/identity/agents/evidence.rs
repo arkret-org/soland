@@ -29,7 +29,6 @@ use arkret_wire::{
     SchemaId, Seal,
 };
 use salvo::oapi::extract::JsonBody;
-use salvo::prelude::*;
 
 use super::*;
 
