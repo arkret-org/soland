@@ -255,7 +255,7 @@ pub(crate) async fn ensure_current_record(
     ))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.open.service.read.resolution.v1", tags("identity"))]
+#[salvo::oapi::endpoint(operation_id = "ak.open.service.read.resolution", tags("identity"))]
 async fn open_service_resolution(
     service_id: PathParam<String>,
     depot: &mut Depot,

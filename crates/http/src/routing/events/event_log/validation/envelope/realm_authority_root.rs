@@ -69,7 +69,7 @@ pub(super) fn validate_realm_authority_root_authorization(
     // aggregate's operational coverage would contradict that rule: the closed
     // follow-up set deliberately contains kinds the aggregate does not cover on
     // its own (`ak.member.state` is governed by `ak.realm.admin` /
-    // `ak.realm.join.review` outside genesis). The staged root proves *who*
+    // `ak.realm.admin` outside genesis). The staged root proves *who*
     // speaks for the Realm during genesis; the unit whitelist fixes *what* may
     // be said.
     if !bootstrap_unit_member

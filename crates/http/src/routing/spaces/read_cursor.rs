@@ -22,7 +22,7 @@ use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
 #[endpoint(
-    operation_id = "ak.self.read_cursor.command.advance.v1",
+    operation_id = "ak.self.read_cursor.command.advance",
     summary = "Advance a read cursor",
     tags("read_cursor")
 )]
@@ -143,7 +143,7 @@ fn validate_caller_signed_read_cursor(
 }
 
 #[endpoint(
-    operation_id = "ak.self.read_cursor.read.list.v1",
+    operation_id = "ak.self.read_cursor.read.list",
     summary = "List read cursors",
     tags("read_cursor")
 )]

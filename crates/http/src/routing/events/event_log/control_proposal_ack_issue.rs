@@ -3,7 +3,7 @@
 use super::*;
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.control_proposal_acks.command.issue.v1",
+    operation_id = "ak.self.control_proposal_acks.command.issue",
     tags("events")
 )]
 #[tracing::instrument(

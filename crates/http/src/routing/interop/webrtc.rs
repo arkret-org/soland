@@ -71,7 +71,7 @@ struct IceConfigRequestContext {
 }
 
 #[endpoint(
-    operation_id = "ak.self.media.read.ice_config.v1",
+    operation_id = "ak.self.media.read.ice_config",
     summary = "Get media ICE configuration",
     tags("media")
 )]
@@ -1246,7 +1246,7 @@ fn focus_unavailable_error(message: impl Into<String>) -> AppError {
 }
 
 #[endpoint(
-    operation_id = "ak.self.call.media.exchange.issue_token.v1",
+    operation_id = "ak.self.call.media.exchange.issue_token",
     summary = "Exchange a call media token",
     tags("media")
 )]

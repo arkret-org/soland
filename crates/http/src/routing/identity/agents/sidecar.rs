@@ -1261,7 +1261,7 @@ async fn ensure_sidecar_impl(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.agent.sidecar.command.ensure.v1",
+    operation_id = "ak.self.agent.sidecar.command.ensure",
     tags("identity")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.sidecar.command.ensure.v1"))]

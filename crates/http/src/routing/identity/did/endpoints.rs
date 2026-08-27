@@ -14,7 +14,7 @@ pub(crate) const IDENTITY_REGISTRY_OPERATION_BUNDLES: &[&str] = &[
 pub struct RawDidDocumentJson(pub serde_json::Value);
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.registry.read.describe.v1",
+    operation_id = "ak.root.identity.registry.read.describe",
     tags("identity")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.registry.read.describe.v1"))]
@@ -615,7 +615,7 @@ pub(crate) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res
     res.write_body(body.into_bytes()).ok();
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.root.identity.read.resolve.v1", tags("identity"))]
+#[salvo::oapi::endpoint(operation_id = "ak.root.identity.read.resolve", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.read.resolve.v1"))]
 pub(crate) async fn identity_resolve(
     body: JsonBody<IdentityResolveRequestBody>,
@@ -706,7 +706,7 @@ fn require_requested_webvh_evidence(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.document.resource.get.v1",
+    operation_id = "ak.root.identity.document.resource.get",
     tags("identity")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.document.resource.get.v1"))]
@@ -794,7 +794,7 @@ pub(crate) async fn identity_did_document(
     json_ok(RawDidDocumentJson(record.did_document))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.root.identity.log.read.list.v1", tags("identity"))]
+#[salvo::oapi::endpoint(operation_id = "ak.root.identity.log.read.list", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.log.read.list.v1"))]
 pub(crate) async fn identity_log(
     did: salvo::oapi::extract::QueryParam<String, true>,
@@ -869,10 +869,7 @@ mod identity_log_tests {
     }
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.receipts.read.list.v1",
-    tags("identity")
-)]
+#[salvo::oapi::endpoint(operation_id = "ak.root.identity.receipts.read.list", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.receipts.read.list.v1"))]
 pub(crate) async fn identity_receipts(
     did: salvo::oapi::extract::QueryParam<String, true>,
@@ -889,7 +886,7 @@ pub(crate) async fn identity_receipts(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.command.submit_did_operation.v1",
+    operation_id = "ak.root.identity.command.submit_did_operation",
     tags("identity")
 )]
 #[tracing::instrument(

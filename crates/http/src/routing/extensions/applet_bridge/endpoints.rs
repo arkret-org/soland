@@ -103,7 +103,7 @@ pub(in crate::routing::extensions) fn protocol_router() -> Router {
         )
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.edge.applet.read.ping.v1", tags("extensions"))]
+#[salvo::oapi::endpoint(operation_id = "ak.edge.applet.read.ping", tags("extensions"))]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.read.ping.v1"))]
 async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -120,7 +120,7 @@ async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutco
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.edge.applet.read.describe.v1", tags("extensions"))]
+#[salvo::oapi::endpoint(operation_id = "ak.edge.applet.read.describe", tags("extensions"))]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.read.describe.v1"))]
 async fn protocol_describe_endpoint(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -130,7 +130,7 @@ async fn protocol_describe_endpoint(depot: &mut Depot) -> JsonResult<ServiceDesc
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.applet.install.command.preview.v1",
+    operation_id = "ak.self.applet.install.command.preview",
     tags("extensions")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.install.command.preview.v1"))]
@@ -221,7 +221,7 @@ async fn install_preview_endpoint(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.applet.command.install.v1", tags("extensions"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.applet.command.install", tags("extensions"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.command.install.v1"))]
 async fn install_endpoint(
     aa: AuthArgs,
@@ -561,7 +561,7 @@ fn require_current_principal_server_authoring_binding(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.applet.revoke.command.preview.v1",
+    operation_id = "ak.self.applet.revoke.command.preview",
     tags("extensions")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.revoke.command.preview.v1"))]
@@ -583,7 +583,7 @@ async fn revoke_preview_endpoint(
     json_ok(build_revoke_plan(state, &record, &preview)?)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.applet.command.revoke.v1", tags("extensions"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.applet.command.revoke", tags("extensions"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.command.revoke.v1"))]
 async fn revoke_install_endpoint(
     aa: AuthArgs,
@@ -1136,7 +1136,7 @@ fn revoke_outcome_progress(outcome: &AppletRevokeOutcome) -> (bool, usize, usize
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.applet.ghost.command.preview.v1",
+    operation_id = "ak.self.applet.ghost.command.preview",
     tags("extensions")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.ghost.command.preview.v1"))]
@@ -1240,7 +1240,7 @@ async fn preview_ghost_actor_endpoint(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.applet.ghost.command.provision.v1",
+    operation_id = "ak.self.applet.ghost.command.provision",
     tags("extensions")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.ghost.command.provision.v1"))]
@@ -1604,7 +1604,7 @@ async fn provision_ghost_actor_endpoint(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.edge.applet.command.transaction.v1",
+    operation_id = "ak.edge.applet.command.transaction",
     tags("extensions")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.command.transaction.v1"))]
@@ -1641,10 +1641,7 @@ async fn transaction_endpoint(
     json_ok(outcome)
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.edge.applet.actor.read.resolve.v1",
-    tags("extensions")
-)]
+#[salvo::oapi::endpoint(operation_id = "ak.edge.applet.actor.read.resolve", tags("extensions"))]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.actor.read.resolve.v1"))]
 async fn resolve_actor_endpoint(
     req: &mut Request,
@@ -1689,10 +1686,7 @@ async fn resolve_actor_endpoint(
     })
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.edge.applet.realm.read.resolve.v1",
-    tags("extensions")
-)]
+#[salvo::oapi::endpoint(operation_id = "ak.edge.applet.realm.read.resolve", tags("extensions"))]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.realm.read.resolve.v1"))]
 async fn resolve_realm_endpoint(
     req: &mut Request,
@@ -1742,7 +1736,7 @@ async fn resolve_realm_endpoint(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.edge.applet.read.protocol_metadata.v1",
+    operation_id = "ak.edge.applet.read.protocol_metadata",
     tags("extensions")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.read.protocol_metadata.v1"))]
@@ -1803,7 +1797,7 @@ async fn protocol_metadata_endpoint(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.edge.applet.third_party_users.read.list.v1",
+    operation_id = "ak.edge.applet.third_party_users.read.list",
     tags("extensions")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.third_party_users.read.list.v1"))]
@@ -1850,7 +1844,7 @@ async fn third_party_users_endpoint(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.edge.applet.third_party_locations.read.list.v1",
+    operation_id = "ak.edge.applet.third_party_locations.read.list",
     tags("extensions")
 )]
 #[tracing::instrument(

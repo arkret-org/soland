@@ -4,7 +4,7 @@ use serde_json::Value;
 use super::*;
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.gate.account.command.pair_device.v1",
+    operation_id = "ak.gate.account.command.pair_device",
     summary = "Pair an account device",
     tags("account")
 )]

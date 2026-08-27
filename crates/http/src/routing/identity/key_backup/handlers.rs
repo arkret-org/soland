@@ -193,7 +193,7 @@ pub(super) async fn owned_key_backup_snapshot(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.keys.backups.resource.replace.v1",
+    operation_id = "ak.self.keys.backups.resource.replace",
     tags("identity")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.resource.replace.v1"))]
@@ -360,7 +360,7 @@ async fn persist_key_backup_idempotency(
     }
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.keys.backups.read.list.v1", tags("identity"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.keys.backups.read.list", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.read.list.v1"))]
 pub(crate) async fn list_key_backups(
     aa: AuthArgs,
@@ -451,10 +451,7 @@ async fn list_key_backups_impl(
     })
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.self.keys.backups.command.unlock.v1",
-    tags("identity")
-)]
+#[salvo::oapi::endpoint(operation_id = "ak.self.keys.backups.command.unlock", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.command.unlock.v1"))]
 pub(super) async fn unlock_key_backup(
     aa: AuthArgs,
@@ -534,7 +531,7 @@ pub(super) async fn unlock_key_backup(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.keys.backups.resource.delete.v1",
+    operation_id = "ak.self.keys.backups.resource.delete",
     tags("identity")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.resource.delete.v1"))]

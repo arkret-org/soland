@@ -239,7 +239,7 @@ fn allocation_mismatch() -> AppError {
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.command.provision.v1",
+    operation_id = "ak.self.agent.command.provision",
     summary = "Provision an agent",
     tags("agents")
 )]
@@ -909,7 +909,7 @@ fn abandonment_storage_error(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.command.issue_provisioning_abandonment_challenge.v1",
+    operation_id = "ak.self.agent.command.issue_provisioning_abandonment_challenge",
     summary = "Issue an Agent provisioning abandonment challenge",
     tags("agents")
 )]
@@ -1037,7 +1037,7 @@ pub(super) async fn issue_provisioning_abandonment_challenge(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.command.abandon_provisioning.v1",
+    operation_id = "ak.self.agent.command.abandon_provisioning",
     summary = "Abandon an Agent provisioning",
     tags("agents")
 )]
@@ -1116,7 +1116,7 @@ pub(super) async fn abandon_provisioning(
 /// Re-opening is never a lifecycle transition and never requires a forced
 /// pause; `deactivated` is terminal.
 #[endpoint(
-    operation_id = "ak.self.agent.command.renew_pairing.v1",
+    operation_id = "ak.self.agent.command.renew_pairing",
     summary = "Renew an agent's pairing",
     tags("agents")
 )]
@@ -1267,7 +1267,7 @@ pub(super) async fn renew_agent_pairing(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.read.list.v1",
+    operation_id = "ak.self.agent.read.list",
     summary = "List agents",
     tags("agents")
 )]
@@ -1312,7 +1312,7 @@ pub(super) async fn list_agents(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.resource.get.v1",
+    operation_id = "ak.self.agent.resource.get",
     summary = "Get one agent",
     tags("agents")
 )]
@@ -1542,7 +1542,7 @@ pub(super) async fn lifecycle_transition(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.command.pause.v1",
+    operation_id = "ak.self.agent.command.pause",
     summary = "Pause an agent",
     tags("agents")
 )]
@@ -1572,7 +1572,7 @@ pub(super) async fn pause_agent(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.command.resume.v1",
+    operation_id = "ak.self.agent.command.resume",
     summary = "Resume an agent",
     tags("agents")
 )]
@@ -1602,7 +1602,7 @@ pub(super) async fn resume_agent(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.command.deactivate.v1",
+    operation_id = "ak.self.agent.command.deactivate",
     summary = "Deactivate an agent",
     tags("agents")
 )]
@@ -1651,7 +1651,7 @@ pub(super) async fn deactivate_agent(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.grant.command.attach.v1",
+    operation_id = "ak.self.agent.grant.command.attach",
     summary = "Attach a grant to an agent",
     tags("agents")
 )]
@@ -1717,7 +1717,7 @@ pub(super) async fn attach_agent_grant(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.grant.resource.delete.v1",
+    operation_id = "ak.self.agent.grant.resource.delete",
     summary = "Detach a grant from an agent",
     tags("agents")
 )]

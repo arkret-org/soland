@@ -91,7 +91,7 @@ fn realm_link_entry_from(row: &RealmLinkState) -> Result<RealmLinkEntry, AppErro
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm_link.read.list.v1",
+    operation_id = "ak.self.realm_link.read.list",
     summary = "List typed cross-Realm links",
     tags("realm_links")
 )]
@@ -183,7 +183,7 @@ async fn list_realm_links_impl(
 /// `zh/extensions/capabilities.md` sections 118/361,
 /// `zh/security/key-management.md` section 411).
 #[endpoint(
-    operation_id = "ak.self.realm_link.command.create.v1",
+    operation_id = "ak.self.realm_link.command.create",
     summary = "Create a cross-Realm link",
     tags("realm_links")
 )]
@@ -329,7 +329,7 @@ fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
 /// also retires the `link_kind` query parameter — a query parameter is outside
 /// the bytes the caller signs, so the kind travels in the signed payload.
 #[endpoint(
-    operation_id = "ak.self.realm_link.resource.delete.v1",
+    operation_id = "ak.self.realm_link.resource.delete",
     summary = "Tombstone a cross-Realm link",
     tags("realm_links")
 )]
@@ -383,7 +383,7 @@ async fn delete_realm_link(
 /// `effective_policy` collapses to the realm's own local policy in
 /// that case.
 #[endpoint(
-    operation_id = "ak.self.realm_link.read.effective_policy.v1",
+    operation_id = "ak.self.realm_link.read.effective_policy",
     summary = "Get a realm's merged effective policy",
     tags("realm_links")
 )]

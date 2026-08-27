@@ -702,7 +702,7 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
     events
 }
 
-#[endpoint(operation_id = "ak.self.events.read.scan.v1")]
+#[endpoint(operation_id = "ak.self.events.read.scan")]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.read.scan.v1"))]
 pub(crate) async fn events_read_body(
     body: salvo::oapi::extract::JsonBody<EventsQueryPostRequestBody>,
@@ -1938,7 +1938,7 @@ async fn durable_events_query_from_parts(
     }
 }
 
-#[endpoint(operation_id = "ak.self.snapshot.read.manifest_head.v1")]
+#[endpoint(operation_id = "ak.self.snapshot.read.manifest_head")]
 #[tracing::instrument(skip_all, fields(op = "ak.self.snapshot.read.manifest_head.v1"))]
 pub(super) async fn snapshot_head(
     depot: &mut Depot,

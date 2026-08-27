@@ -106,7 +106,7 @@ fn current_binding_stable(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.peer.device_revocations.command.check.v1",
+    operation_id = "ak.peer.device_revocations.command.check",
     tags("events")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.device_revocations.command.check.v1"))]

@@ -1,7 +1,7 @@
 use super::*;
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.find.directory.read.search_organizations.v1",
+    operation_id = "ak.find.directory.read.search_organizations",
     tags("spaces")
 )]
 #[tracing::instrument(
@@ -41,7 +41,7 @@ pub(super) async fn search_organizations(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.find.directory.read.resolve_organization.v1",
+    operation_id = "ak.find.directory.read.resolve_organization",
     tags("spaces")
 )]
 #[tracing::instrument(

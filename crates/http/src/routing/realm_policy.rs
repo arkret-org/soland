@@ -47,7 +47,7 @@ pub(crate) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm_policy_server.resource.get.v1",
+    operation_id = "ak.self.realm_policy_server.resource.get",
     summary = "Get a realm's policy server config",
     tags("realm_policy_server")
 )]
@@ -70,7 +70,7 @@ async fn get_realm_policy_server(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm_policy_server.resource.replace.v1",
+    operation_id = "ak.self.realm_policy_server.resource.replace",
     summary = "Replace a realm's policy server config",
     tags("realm_policy_server")
 )]
@@ -132,7 +132,7 @@ async fn put_realm_policy_server(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm_policy_server.resource.delete.v1",
+    operation_id = "ak.self.realm_policy_server.resource.delete",
     summary = "Delete a realm's policy server config",
     tags("realm_policy_server")
 )]

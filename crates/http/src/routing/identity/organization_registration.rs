@@ -66,7 +66,7 @@ impl OrganizationRegistrationReceiptSigner for CurrentReceiptSigner {
 }
 
 #[endpoint(
-    operation_id = "ak.root.identity.organization_registration.command.prepare.v1",
+    operation_id = "ak.root.identity.organization_registration.command.prepare",
     request_body = OrganizationRegistrationChallengeRequestBody,
     summary = "Prepare an external organization DID registration",
     tags("organization_registration")
@@ -97,7 +97,7 @@ pub(crate) async fn prepare(
 }
 
 #[endpoint(
-    operation_id = "ak.root.identity.organization_registration.command.ensure.v1",
+    operation_id = "ak.root.identity.organization_registration.command.ensure",
     request_body = OrganizationRegistrationEnsureRequestBody,
     summary = "Ensure an external organization DID registration",
     tags("organization_registration")
@@ -120,7 +120,7 @@ pub(crate) async fn ensure(
 }
 
 #[endpoint(
-    operation_id = "ak.root.identity.organization_registration.resource.get.v1",
+    operation_id = "ak.root.identity.organization_registration.resource.get",
     summary = "Get an external organization DID registration",
     tags("organization_registration")
 )]
@@ -156,7 +156,7 @@ pub(crate) async fn get(
 }
 
 #[endpoint(
-    operation_id = "ak.root.identity.organization_registration.command.refresh.v1",
+    operation_id = "ak.root.identity.organization_registration.command.refresh",
     summary = "Refresh an external organization DID registration",
     tags("organization_registration")
 )]
@@ -179,7 +179,7 @@ pub(crate) async fn refresh(
 }
 
 #[endpoint(
-    operation_id = "ak.root.identity.organization_registration.command.revoke.v1",
+    operation_id = "ak.root.identity.organization_registration.command.revoke",
     summary = "Revoke an external organization DID registration",
     tags("organization_registration")
 )]

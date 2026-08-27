@@ -18,7 +18,7 @@ pub(crate) use contact_write::{
 };
 
 #[endpoint(
-    operation_id = "ak.self.contact.command.request.v1",
+    operation_id = "ak.self.contact.command.request",
     summary = "Prepare or commit a holder-signed Contact request",
     tags("contacts")
 )]
@@ -35,7 +35,7 @@ pub(crate) async fn contact_request(
 }
 
 #[endpoint(
-    operation_id = "ak.self.contact.command.respond.v1",
+    operation_id = "ak.self.contact.command.respond",
     summary = "Prepare or commit a normal Contact acceptance",
     tags("contacts")
 )]
@@ -52,7 +52,7 @@ pub(crate) async fn contact_respond(
 }
 
 #[endpoint(
-    operation_id = "ak.self.contact.command.reject.v1",
+    operation_id = "ak.self.contact.command.reject",
     summary = "Prepare or commit a terminal Contact request rejection",
     tags("contacts")
 )]
@@ -69,7 +69,7 @@ pub(crate) async fn contact_reject(
 }
 
 #[endpoint(
-    operation_id = "ak.self.contact.command.scope_update.v1",
+    operation_id = "ak.self.contact.command.scope_update",
     summary = "Prepare or commit a directional Contact scope replacement",
     tags("contacts")
 )]
@@ -86,7 +86,7 @@ pub(crate) async fn contact_scope_update(
 }
 
 #[endpoint(
-    operation_id = "ak.self.contact.command.tombstone.v1",
+    operation_id = "ak.self.contact.command.tombstone",
     summary = "Prepare or commit a terminal Contact tombstone",
     tags("contacts")
 )]
@@ -103,7 +103,7 @@ pub(crate) async fn contact_tombstone(
 }
 
 #[endpoint(
-    operation_id = "ak.self.contact.command.checkpoint.v1",
+    operation_id = "ak.self.contact.command.checkpoint",
     summary = "Issue or replay a bilateral Contact continuity checkpoint",
     tags("contacts")
 )]
@@ -263,7 +263,7 @@ pub(crate) async fn contact_continuity_checkpoint(
     json_ok(outcome)
 }
 #[endpoint(
-    operation_id = "ak.self.invite_receive_policy.resource.get.v1",
+    operation_id = "ak.self.invite_receive_policy.resource.get",
     summary = "Get the invite receive policy",
     tags("contacts")
 )]
@@ -288,7 +288,7 @@ pub(crate) async fn get_invite_receive_policy(
 }
 
 #[endpoint(
-    operation_id = "ak.self.invite_receive_policy.resource.replace.v1",
+    operation_id = "ak.self.invite_receive_policy.resource.replace",
     summary = "Replace the invite receive policy",
     tags("contacts")
 )]
@@ -326,7 +326,7 @@ pub(crate) async fn set_invite_receive_policy(
 }
 
 #[endpoint(
-    operation_id = "ak.self.contact.read.list.v1",
+    operation_id = "ak.self.contact.read.list",
     summary = "List contacts",
     tags("contacts")
 )]

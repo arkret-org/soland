@@ -300,7 +300,7 @@ fn response_from_value(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm.join_application.command.submit.v1",
+    operation_id = "ak.self.realm.join_application.command.submit",
     summary = "Submit a profile-private signed join application",
     tags("join_applications")
 )]
@@ -373,7 +373,12 @@ async fn submit_join_application(
     {
         let action = snapshot
             .realm_join_policy_review_capability(realm_id.as_str())
-            .unwrap_or_else(|| CapabilityActionId::REALM_JOIN_REVIEW.to_owned());
+            .ok_or_else(|| {
+                failed_precondition(
+                    "gate_check_failed",
+                    "join policy is missing its required review capability",
+                )
+            })?;
         let mut recipients = BTreeSet::new();
         for recipient in &encryption_envelope.recipients {
             if recipient.recipient_hpke_kid.is_empty()
@@ -439,7 +444,7 @@ async fn submit_join_application(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm.join_application.command.review.v1",
+    operation_id = "ak.self.realm.join_application.command.review",
     summary = "Submit a reviewer-signed join-application decision",
     tags("join_applications")
 )]
@@ -515,7 +520,7 @@ async fn review_join_application(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm.join_application.command.cancel.v1",
+    operation_id = "ak.self.realm.join_application.command.cancel",
     summary = "Cancel a profile-private join application",
     tags("join_applications")
 )]
@@ -591,21 +596,21 @@ fn viewer_context(state: &AppState, realm_id: &RealmId, actor: &str) -> (bool, b
     // Read-model surface: the evaluation basis is the request instant, taken
     // once here rather than inside the projection helpers.
     let evaluated_at = chrono::Utc::now();
-    let review_action = snapshot
-        .realm_join_policy_review_capability(realm_id.as_str())
-        .unwrap_or_else(|| CapabilityActionId::REALM_JOIN_REVIEW.to_owned());
+    let review_action = snapshot.realm_join_policy_review_capability(realm_id.as_str());
     // Review eligibility is a Realm-governance decision, so it goes through the
     // shared predicate: the owner aggregate satisfies it without a verbatim
     // reviewer grant. Audit read is not a governance decision and stays an
     // operational capability - the owner aggregate does not reach the non-Event
     // audit surface (`capabilities.md` section 3.2 empty-coverage guard).
-    let reviewer = snapshot.actor_governs_realm(
-        realm_id.as_str(),
-        actor,
-        state.service_id(),
-        &[review_action.as_str()],
-        evaluated_at,
-    );
+    let reviewer = review_action.is_some_and(|review_action| {
+        snapshot.actor_governs_realm(
+            realm_id.as_str(),
+            actor,
+            state.service_id(),
+            &[review_action.as_str()],
+            evaluated_at,
+        )
+    });
     let audit_reader = snapshot.issuer_has_projected_capability(
         actor,
         state.service_id(),
@@ -685,7 +690,7 @@ async fn audit_body_read(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm.join_application.read.list.v1",
+    operation_id = "ak.self.realm.join_application.read.list",
     summary = "List viewer-scoped join applications",
     tags("join_applications")
 )]
@@ -758,7 +763,7 @@ async fn list_join_applications(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm.join_application.resource.get.v1",
+    operation_id = "ak.self.realm.join_application.resource.get",
     summary = "Read one authorized join application",
     tags("join_applications")
 )]
@@ -792,7 +797,7 @@ async fn get_join_application(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm.join_application.audit.read.list.v1",
+    operation_id = "ak.self.realm.join_application.audit.read.list",
     summary = "Read one join application's audit trail",
     tags("join_applications")
 )]

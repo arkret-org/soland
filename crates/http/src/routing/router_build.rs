@@ -1,5 +1,6 @@
 use salvo::affix_state;
 use salvo::cors::{Cors, CorsHandler};
+use salvo::http::HeaderValue;
 use salvo::http::Method;
 use salvo::http::request::SecureMaxSize;
 use salvo::prelude::*;
@@ -9,12 +10,6 @@ use super::*;
 use crate::state::AppState;
 
 const ARKRET_OPERATION_HEADER: &str = "Arkret-Operation";
-
-#[derive(Clone, Copy)]
-enum OperationSelectorExpectation {
-    HttpFamily,
-    Exact(arkret_wire::ServiceOperationId),
-}
 
 #[derive(Clone)]
 struct OperationSelectorMiddleware;
@@ -34,63 +29,89 @@ impl Handler for OperationSelectorMiddleware {
         }
         let method = req.method().as_str();
         let path = req.uri().path();
-        let expectation = if is_tus_operation_path(method, path) {
-            Some(OperationSelectorExpectation::Exact(
-                arkret_wire::ServiceOperationId::SelfBlobUploadCreateV1,
-            ))
-        } else if arkret_wire::ServiceOperationId::ALL
-            .iter()
-            .copied()
-            .any(|operation| operation.matches_http_request(method, path))
-        {
-            Some(OperationSelectorExpectation::HttpFamily)
+        if !crate::openapi_routes::is_registered_route(req.method(), path) {
+            ctrl.call_next(req, depot, res).await;
+            return;
+        }
+        let binding_kind = if is_tus_operation_path(method, path) {
+            arkret_wire::BindingKind::Tus
         } else {
-            None
+            arkret_wire::BindingKind::HttpJson
         };
-        let Some(expectation) = expectation else {
+        let Ok(state) = depot.get_typed::<AppState>() else {
             ctrl.call_next(req, depot, res).await;
             return;
         };
+        let candidates = if binding_kind == arkret_wire::BindingKind::Tus {
+            [arkret_wire::ServiceOperationId::SelfBlobUploadCreateV1]
+                .into_iter()
+                .filter(|operation| locally_advertises(state, *operation, binding_kind))
+                .collect::<Vec<_>>()
+        } else {
+            arkret_wire::ServiceOperationId::ALL
+                .iter()
+                .copied()
+                .filter(|operation| operation.matches_http_request(method, path))
+                .filter(|operation| locally_advertises(state, *operation, binding_kind))
+                .collect::<Vec<_>>()
+        };
+        if candidates.is_empty()
+            && !arkret_wire::ServiceOperationId::ALL
+                .iter()
+                .copied()
+                .any(|operation| operation.matches_http_request(method, path))
+            && !is_tus_operation_path(method, path)
+        {
+            ctrl.call_next(req, depot, res).await;
+            return;
+        }
 
         let mut header_values = req.headers().get_all(ARKRET_OPERATION_HEADER).iter();
         let first = header_values.next();
-        if first.is_none() {
+        let has_selector = first.is_some();
+        if first.is_none() && candidates.len() > 1 {
             let error = soland_http::error::AppError::new(
                 soland_http::error::ErrorCode::OperationSelectorRequired,
-                "Arkret-Operation is required for registered operations",
+                "Arkret-Operation is required when multiple operation versions are available",
             );
             error.write(req, depot, res).await;
             ctrl.skip_rest();
             return;
         }
-        let selected = first
+        let supplied = first
             .and_then(|value| value.to_str().ok())
             .and_then(arkret_wire::ServiceOperationId::from_wire);
-        let selector_matches = selected.is_some_and(|operation| match expectation {
-            OperationSelectorExpectation::HttpFamily => {
-                operation.matches_http_request(method, path)
-            }
-            OperationSelectorExpectation::Exact(expected) => operation == expected,
-        });
-        let binding_kind = match expectation {
-            OperationSelectorExpectation::HttpFamily => arkret_wire::BindingKind::HttpJson,
-            OperationSelectorExpectation::Exact(_) => arkret_wire::BindingKind::Tus,
+        let selected = if has_selector {
+            supplied
+        } else {
+            (candidates.len() == 1).then_some(candidates[0])
         };
-        let advertised = selected.is_some_and(|operation| {
-            depot
-                .get_typed::<AppState>()
-                .is_ok_and(|state| locally_advertises(state, operation, binding_kind))
-        });
-        if header_values.next().is_some() || !selector_matches || !advertised {
+        let duplicate_selector = header_values.next().is_some();
+        let Some(selected) = selected.filter(|operation| candidates.contains(operation)) else {
             let error = soland_http::error::AppError::new(
                 soland_http::error::ErrorCode::UnsupportedOperationVersion,
-                "Arkret-Operation does not select this method and path",
+                "Arkret-Operation does not select an advertised operation version for this method and path",
+            );
+            error.write(req, depot, res).await;
+            ctrl.skip_rest();
+            return;
+        };
+        if duplicate_selector {
+            let error = soland_http::error::AppError::new(
+                soland_http::error::ErrorCode::UnsupportedOperationVersion,
+                "Arkret-Operation must occur exactly once",
             );
             error.write(req, depot, res).await;
             ctrl.skip_rest();
             return;
         }
         ctrl.call_next(req, depot, res).await;
+        if res.status_code.unwrap_or(StatusCode::OK).is_success() {
+            res.headers_mut().insert(
+                ARKRET_OPERATION_HEADER,
+                HeaderValue::from_static(selected.as_str()),
+            );
+        }
     }
 }
 
@@ -513,8 +534,8 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
         .allow_headers(vec![
             "authorization",
             "content-type",
-            // Every canonical Arkret HTTP request selects its exact
-            // versioned contract before body parsing.
+            // Carries an exact operation_id only when endpoint context cannot
+            // select a unique advertised version.
             "arkret-operation",
             // RFC 9421 message signatures ride on every `/_arkret/self/*` and
             // `/_arkret/root/*` request the SDK signs; without these three the

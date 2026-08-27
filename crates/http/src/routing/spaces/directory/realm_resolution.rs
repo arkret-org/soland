@@ -1,9 +1,6 @@
 use super::*;
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.find.directory.read.search_realms.v1",
-    tags("spaces")
-)]
+#[salvo::oapi::endpoint(operation_id = "ak.find.directory.read.search_realms", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.search_realms.v1"))]
 pub(super) async fn search_realms(
     body: JsonBody<DirectorySearchRealmsRequestBody>,
@@ -45,10 +42,7 @@ pub(super) async fn search_realms(
     })
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.find.directory.read.resolve_realm.v1",
-    tags("spaces")
-)]
+#[salvo::oapi::endpoint(operation_id = "ak.find.directory.read.resolve_realm", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.resolve_realm.v1"))]
 pub(super) async fn resolve_realm(
     body: JsonBody<DirectoryResolveRealmRequestBody>,
@@ -139,10 +133,7 @@ pub(super) async fn resolve_realm(
     }
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.find.directory.read.resolve_target.v1",
-    tags("spaces")
-)]
+#[salvo::oapi::endpoint(operation_id = "ak.find.directory.read.resolve_target", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.resolve_target.v1"))]
 pub(super) async fn resolve_target(
     body: JsonBody<DirectoryResolveTargetRequestBody>,

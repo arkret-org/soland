@@ -37,8 +37,22 @@ async fn served_openapi_is_generated_from_the_router_body() {
     );
     assert_required_migrated_operations(&spec);
     assert_event_read_query_bindings(&spec);
+    assert_operation_selectors_are_conditional(&spec);
     assert_operation_ids_are_unique(&spec);
     assert_component_refs_resolve(&spec, &spec);
+}
+
+fn assert_operation_selectors_are_conditional(root: &Value) {
+    let operation = &root["paths"]["/_arkret/describe"]["get"];
+    assert_eq!(operation["operationId"], "ak.server.read.describe");
+    let selector = operation["parameters"]
+        .as_array()
+        .expect("describe parameters")
+        .iter()
+        .find(|parameter| parameter["name"] == "Arkret-Operation")
+        .expect("describe Arkret-Operation parameter");
+    assert_eq!(selector["required"], false);
+    assert_eq!(selector["schema"]["const"], "ak.server.read.describe.v1");
 }
 
 #[test]
@@ -94,10 +108,10 @@ fn assert_required_migrated_operations(root: &Value) {
     let operation_ids = operation_ids(root);
     for expected in [
         "org.arkret.soland.system.health",
-        "ak.server.read.describe.v1",
-        "ak.self.events.read.scan.v1",
-        "ak.self.snapshot.read.manifest_head.v1",
-        "ak.self.blob.command.presign.v1",
+        "ak.server.read.describe",
+        "ak.self.events.read.scan",
+        "ak.self.snapshot.read.manifest_head",
+        "ak.self.blob.command.presign",
         "org.arkret.soland.interop.mimi.protocol_directory",
         "org.arkret.soland.well_known.arkret",
     ] {
@@ -112,37 +126,37 @@ fn assert_event_read_query_bindings(root: &Value) {
     for (path, operation_id) in [
         (
             "/_arkret/self/events/describe",
-            "ak.self.events.read.describe.v1",
+            "ak.self.events.read.describe",
         ),
         (
             "/_arkret/self/events/frontier",
-            "ak.self.events.read.frontier.v1",
+            "ak.self.events.read.frontier",
         ),
         (
             "/_arkret/self/seals/frontier",
-            "ak.self.seals.read.frontier.v1",
+            "ak.self.seals.read.frontier",
         ),
-        ("/_arkret/self/events", "ak.self.events.read.scan.v1"),
+        ("/_arkret/self/events", "ak.self.events.read.scan"),
         (
             "/_arkret/self/events/resolve",
-            "ak.self.events.read.resolve.v1",
+            "ak.self.events.read.resolve",
         ),
         (
             "/_arkret/peer/events/describe",
-            "ak.peer.events.read.describe.v1",
+            "ak.peer.events.read.describe",
         ),
         (
             "/_arkret/peer/events/frontier",
-            "ak.peer.events.read.frontier.v1",
+            "ak.peer.events.read.frontier",
         ),
         (
             "/_arkret/peer/seals/frontier",
-            "ak.peer.seals.read.frontier.v1",
+            "ak.peer.seals.read.frontier",
         ),
-        ("/_arkret/peer/events", "ak.peer.events.read.scan.v1"),
+        ("/_arkret/peer/events", "ak.peer.events.read.scan"),
         (
             "/_arkret/peer/events/resolve",
-            "ak.peer.events.read.resolve.v1",
+            "ak.peer.events.read.resolve",
         ),
     ] {
         let query = &root["paths"][path]["query"];
@@ -155,7 +169,7 @@ fn assert_event_read_query_bindings(root: &Value) {
     let proof = &root["paths"]["/_arkret/self/seals/mls-governance-proof"]["post"];
     assert_eq!(
         proof["operationId"],
-        "ak.self.seals.read.mls_governance_proof.v1"
+        "ak.self.seals.read.mls_governance_proof"
     );
     assert!(
         proof["requestBody"]["content"]["application/json"].is_object(),
@@ -164,11 +178,11 @@ fn assert_event_read_query_bindings(root: &Value) {
     for (path, operation_id) in [
         (
             "/_arkret/peer/seals/mls-governance-proof",
-            "ak.peer.seals.read.mls_governance_proof.v1",
+            "ak.peer.seals.read.mls_governance_proof",
         ),
         (
             "/_arkret/peer/mls/group-state-material",
-            "ak.peer.mls.read.group_state_material.v1",
+            "ak.peer.mls.read.group_state_material",
         ),
     ] {
         let operation = &root["paths"][path]["post"];
@@ -226,5 +240,9 @@ async fn artifact_only_path_is_not_treated_as_a_registered_route_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(response["error"]["code"], "unrecognized_endpoint");
+    assert_eq!(response["status"], 404);
+    assert_eq!(
+        response["type"],
+        "https://arkret.org/problems/unrecognized_endpoint"
+    );
 }

@@ -159,7 +159,7 @@ pub(crate) fn protocol_router() -> Router {
         .push(Router::with_path("directory/push/register").post(directory_subscribe))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.find.directory.read.describe.v1", tags("spaces"))]
+#[salvo::oapi::endpoint(operation_id = "ak.find.directory.read.describe", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.describe.v1"))]
 async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");

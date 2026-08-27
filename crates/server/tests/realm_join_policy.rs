@@ -462,7 +462,7 @@ fn manual_review_gate_is_not_satisfied_by_automatic_join() {
                 "auto_resolve": false
             }],
             "combinator": "any",
-            "review_capability": "ak.realm.join.review"
+            "review_capability": "ak.realm.admin"
         }),
     );
 

@@ -4,7 +4,7 @@
 
 use super::*;
 
-#[endpoint(operation_id = "ak.self.account.read.describe.v1")]
+#[endpoint(operation_id = "ak.self.account.read.describe")]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.read.describe.v1"))]
 pub(super) async fn account_describe(
     depot: &mut Depot,

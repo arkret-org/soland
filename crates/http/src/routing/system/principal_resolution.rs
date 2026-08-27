@@ -26,7 +26,7 @@ pub(super) fn open_router() -> Router {
 /// device-revocation gate receipt uses.
 const PROJECTION_ATTESTATION_TTL_SECONDS: i64 = 600;
 
-#[salvo::oapi::endpoint(operation_id = "ak.open.identity.read.resolution.v1", tags("identity"))]
+#[salvo::oapi::endpoint(operation_id = "ak.open.identity.read.resolution", tags("identity"))]
 async fn open_principal_resolution(
     principal_id: PathParam<String>,
     principal_server_id: QueryParam<String, true>,

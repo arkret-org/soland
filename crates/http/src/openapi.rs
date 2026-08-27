@@ -87,14 +87,21 @@ fn install_operation_selector_parameters(doc: &mut Value) {
             let Some(operation) = path_item.get_mut(*method).and_then(Value::as_object_mut) else {
                 continue;
             };
-            let Some(operation_id) = operation
+            let Some(endpoint_operation_id) = operation
                 .get("operationId")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
             else {
                 continue;
             };
-            if arkret_wire::ServiceOperationId::from_wire(&operation_id).is_none() {
+            let candidates = arkret_wire::ServiceOperationId::ALL
+                .iter()
+                .map(|operation| operation.as_str())
+                .filter(|operation_id| {
+                    stable_endpoint_operation_id(operation_id) == endpoint_operation_id
+                })
+                .collect::<Vec<_>>();
+            if candidates.is_empty() {
                 continue;
             }
             let parameters = operation
@@ -105,17 +112,35 @@ fn install_operation_selector_parameters(doc: &mut Value) {
             parameters.retain(|parameter| {
                 parameter.get("name").and_then(Value::as_str) != Some("Arkret-Operation")
             });
+            let selector_schema = if candidates.len() == 1 {
+                json!({
+                    "type": "string",
+                    "const": candidates[0]
+                })
+            } else {
+                json!({
+                    "type": "string",
+                    "enum": candidates
+                })
+            };
             parameters.push(json!({
                 "name": "Arkret-Operation",
                 "in": "header",
-                "required": true,
-                "schema": {
-                    "type": "string",
-                    "const": operation_id
-                }
+                "required": false,
+                "description": "Exact operation_id selector; required only when endpoint context cannot select one version.",
+                "schema": selector_schema
             }));
         }
     }
+}
+
+fn stable_endpoint_operation_id(operation_id: &str) -> &str {
+    operation_id
+        .rsplit_once(".v")
+        .filter(|(_, version)| {
+            !version.is_empty() && version.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        .map_or(operation_id, |(endpoint_id, _)| endpoint_id)
 }
 
 /// salvo-oapi 0.95.2 can emit an OpenAPI 3.2 document, while its typed

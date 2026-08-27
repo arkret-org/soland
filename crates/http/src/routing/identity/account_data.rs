@@ -411,7 +411,7 @@ async fn admit_caller_signed_account_data_set(
 }
 
 #[endpoint(
-    operation_id = "ak.self.account_data.resource.replace.v1",
+    operation_id = "ak.self.account_data.resource.replace",
     summary = "Replace an account-data entry",
     tags("account_data")
 )]
@@ -507,7 +507,7 @@ async fn put_account_data(
 }
 
 #[endpoint(
-    operation_id = "ak.self.account_data.resource.get.v1",
+    operation_id = "ak.self.account_data.resource.get",
     summary = "Get an account-data entry",
     tags("account_data")
 )]
@@ -548,7 +548,7 @@ async fn get_account_data(
 }
 
 #[endpoint(
-    operation_id = "ak.self.account_data.read.list.v1",
+    operation_id = "ak.self.account_data.read.list",
     summary = "List account-data entries",
     tags("account_data")
 )]
@@ -587,7 +587,7 @@ pub(crate) fn is_service_internal_account_data_key(key: &str) -> bool {
 }
 
 #[endpoint(
-    operation_id = "ak.self.account_data.resource.delete.v1",
+    operation_id = "ak.self.account_data.resource.delete",
     summary = "Delete an account-data entry",
     tags("account_data")
 )]

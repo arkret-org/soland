@@ -450,7 +450,7 @@ fn recovery_grant_coordinates(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.recovery_session.command.create.v1",
+    operation_id = "ak.root.identity.recovery_session.command.create",
     tags("identity")
 )]
 #[tracing::instrument(
@@ -764,7 +764,7 @@ pub(super) async fn recovery_session_create(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.recovery_session.resource.get.v1",
+    operation_id = "ak.root.identity.recovery_session.resource.get",
     tags("identity")
 )]
 #[tracing::instrument(
@@ -785,7 +785,7 @@ pub(super) async fn recovery_session_get(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.recovery_session.command.submit_proof.v1",
+    operation_id = "ak.root.identity.recovery_session.command.submit_proof",
     tags("identity")
 )]
 #[tracing::instrument(

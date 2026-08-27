@@ -950,7 +950,7 @@ const FRANKING_PROOF_FORBIDDEN_KEYS: &[&str] = &[
 ];
 
 #[endpoint(
-    operation_id = "ak.self.moderation.command.report.v1",
+    operation_id = "ak.self.moderation.command.report",
     summary = "File a content moderation report",
     tags("moderation")
 )]

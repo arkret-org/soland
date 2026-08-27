@@ -94,7 +94,7 @@ pub(super) fn protocol_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ak.self.device_messages.command.send.v1",
+    operation_id = "ak.self.device_messages.command.send",
     summary = "Send device-to-device messages",
     tags("device_messages")
 )]
@@ -521,7 +521,7 @@ pub(crate) async fn fanout_actor_private_update(
 }
 
 #[endpoint(
-    operation_id = "ak.self.device_messages.read.list.v1",
+    operation_id = "ak.self.device_messages.read.list",
     summary = "List pending device messages",
     tags("device_messages")
 )]
@@ -654,7 +654,7 @@ async fn get_device_messages(
 }
 
 #[endpoint(
-    operation_id = "ak.self.device_messages.command.ack.v1",
+    operation_id = "ak.self.device_messages.command.ack",
     summary = "Acknowledge received device messages",
     tags("device_messages")
 )]

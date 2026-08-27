@@ -293,7 +293,7 @@ async fn database_ready(state: &AppState) -> bool {
     state.jobs().database_ready().await
 }
 
-#[endpoint(operation_id = "ak.server.read.describe.v1")]
+#[endpoint(operation_id = "ak.server.read.describe")]
 #[tracing::instrument(skip_all, fields(op = "ak.server.read.describe.v1"))]
 async fn server_describe(
     service_kind: QueryParam<String, false>,

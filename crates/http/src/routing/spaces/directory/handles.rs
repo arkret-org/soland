@@ -493,10 +493,7 @@ fn proof_audience_covers_expected(audience: Option<&Audience>, expected: &str) -
     }
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.find.directory.read.resolve_handle.v1",
-    tags("spaces")
-)]
+#[salvo::oapi::endpoint(operation_id = "ak.find.directory.read.resolve_handle", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.resolve_handle.v1"))]
 pub(super) async fn resolve_handle(
     body: JsonBody<DirectoryResolveHandleRequestBody>,
@@ -736,7 +733,7 @@ pub(super) async fn signed_handle_claim(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.find.directory.read.list_handles_for_subject.v1",
+    operation_id = "ak.find.directory.read.list_handles_for_subject",
     tags("spaces")
 )]
 #[tracing::instrument(

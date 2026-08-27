@@ -80,7 +80,7 @@ fn random_base64url(bytes: usize) -> Base64UrlString {
 /// unrelated principal cannot use this endpoint to learn whether a backup id
 /// exists.
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.keys.backups.command.issue_delete_challenge.v1",
+    operation_id = "ak.self.keys.backups.command.issue_delete_challenge",
     tags("identity")
 )]
 #[tracing::instrument(

@@ -874,7 +874,7 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
 /// recovery state. `revoke_scope` controls breadth (`this_cursor` default,
 /// `same_device`, `same_session`).
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.account.command.revoke_cursor.v1",
+    operation_id = "ak.self.account.command.revoke_cursor",
     summary = "Revoke an account read cursor",
     tags("account")
 )]

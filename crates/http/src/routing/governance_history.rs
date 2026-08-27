@@ -176,7 +176,7 @@ pub(super) fn peer_router() -> Router {
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.peer.seals.read.mls_governance_proof.v1",
+    operation_id = "ak.peer.seals.read.mls_governance_proof",
     tags("governance")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.seals.read.mls_governance_proof.v1"))]
@@ -205,7 +205,7 @@ async fn resolve_peer_mls_governance_proof(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.peer.mls.read.group_state_material.v1",
+    operation_id = "ak.peer.mls.read.group_state_material",
     tags("governance")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.mls.read.group_state_material.v1"))]
@@ -333,7 +333,7 @@ async fn load_mls_public_blob(
     Ok(bytes)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.seals.read.resolve.v1", tags("governance"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.seals.read.resolve", tags("governance"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.seals.read.resolve.v1"))]
 async fn resolve_self_seals(
     aa: AuthArgs,
@@ -387,7 +387,7 @@ async fn resolve_self_seals(
     seal_outcome(seals, missing_seal_refs)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.seals.read.resolve.v1", tags("governance"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.seals.read.resolve", tags("governance"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.seals.read.resolve.v1"))]
 async fn resolve_peer_seals(
     depot: &mut Depot,
@@ -467,7 +467,7 @@ fn seal_outcome(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.seals.read.governance_dependencies.v1",
+    operation_id = "ak.self.seals.read.governance_dependencies",
     tags("governance")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.seals.read.governance_dependencies.v1"))]
@@ -497,7 +497,7 @@ async fn resolve_self_dependencies(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.peer.seals.read.governance_dependencies.v1",
+    operation_id = "ak.peer.seals.read.governance_dependencies",
     tags("governance")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.seals.read.governance_dependencies.v1"))]
@@ -529,7 +529,7 @@ async fn resolve_peer_dependencies(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.history_key_requests.command.create.v1",
+    operation_id = "ak.self.history_key_requests.command.create",
     tags("governance")
 )]
 #[tracing::instrument(
@@ -936,7 +936,7 @@ async fn validate_local_history_release_binding(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.history_key_responses.command.send.v1",
+    operation_id = "ak.self.history_key_responses.command.send",
     tags("governance")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.history_key_responses.command.send.v1"))]
@@ -1022,7 +1022,7 @@ async fn send_history_key_response(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.peer.history_key_responses.command.relay.v1",
+    operation_id = "ak.peer.history_key_responses.command.relay",
     tags("governance")
 )]
 #[tracing::instrument(
@@ -4335,7 +4335,7 @@ async fn validate_manifest_current_gate(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.history_key_requests.read.list.v1",
+    operation_id = "ak.self.history_key_requests.read.list",
     tags("governance")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.history_key_requests.read.list.v1"))]
@@ -4481,7 +4481,7 @@ async fn history_scope_has_current_member(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.organization_recovery_archives.read.list.v1",
+    operation_id = "ak.self.organization_recovery_archives.read.list",
     tags("governance")
 )]
 #[tracing::instrument(
@@ -4584,7 +4584,7 @@ async fn list_organization_recovery_archives(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.peer.history_key_requests.command.replicate.v1",
+    operation_id = "ak.peer.history_key_requests.command.replicate",
     tags("governance")
 )]
 #[tracing::instrument(
@@ -4790,7 +4790,7 @@ async fn validate_history_request_replica_destination(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.peer.organization_recovery_archives.command.replicate.v1",
+    operation_id = "ak.peer.organization_recovery_archives.command.replicate",
     tags("governance")
 )]
 #[tracing::instrument(

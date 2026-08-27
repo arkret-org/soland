@@ -2,14 +2,12 @@ use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 
 use super::*;
 
-/// Actions that authorize a Realm join / membership review decision.
+/// Action that authorizes a Realm join / membership review decision.
 ///
 /// Kept in one place so the member-state review branches and the join
 /// application surfaces cannot drift into different action sets.
-pub(crate) const REALM_JOIN_REVIEW_ACTIONS: &[&str] = &[
-    arkret_wire::CapabilityActionId::REALM_ADMIN,
-    arkret_wire::CapabilityActionId::REALM_JOIN_REVIEW,
-];
+pub(crate) const REALM_MEMBERSHIP_ADMIN_ACTIONS: &[&str] =
+    &[arkret_wire::CapabilityActionId::REALM_ADMIN];
 
 pub(super) fn validate_direct_conversation_realm_policy(
     state: &AppState,
@@ -181,7 +179,7 @@ pub(super) async fn validate_member_state_policy(
             realm_id,
             actor,
             Some(operation.context.principal_server_id.as_str()),
-            REALM_JOIN_REVIEW_ACTIONS,
+            REALM_MEMBERSHIP_ADMIN_ACTIONS,
             operation.created_at,
         )
         .await
@@ -204,7 +202,7 @@ pub(super) async fn validate_member_state_policy(
             realm_id,
             actor,
             Some(operation.context.principal_server_id.as_str()),
-            REALM_JOIN_REVIEW_ACTIONS,
+            REALM_MEMBERSHIP_ADMIN_ACTIONS,
             operation.created_at,
         )
         .await

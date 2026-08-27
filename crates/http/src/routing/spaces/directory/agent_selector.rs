@@ -140,7 +140,7 @@ pub(super) fn signed_agent_selector_claim(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.find.directory.read.resolve_agent_selector.v1",
+    operation_id = "ak.find.directory.read.resolve_agent_selector",
     tags("spaces")
 )]
 #[tracing::instrument(

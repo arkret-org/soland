@@ -27,7 +27,7 @@ pub(super) fn router() -> Router {
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.peer.service_resolution.command.publish.v1",
+    operation_id = "ak.peer.service_resolution.command.publish",
     tags("identity")
 )]
 async fn peer_publish(
@@ -126,7 +126,7 @@ async fn peer_publish(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.peer.service_resolution.read.resolve.v1",
+    operation_id = "ak.peer.service_resolution.read.resolve",
     tags("identity")
 )]
 async fn peer_resolve(

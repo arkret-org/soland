@@ -152,6 +152,10 @@ fn allow_methods_for_path(path: &str) -> Option<Vec<Method>> {
     Some(sorted)
 }
 
+pub(crate) fn is_registered_route(method: &Method, path: &str) -> bool {
+    allow_methods_for_path(path).is_some_and(|methods| methods.iter().any(|item| item == method))
+}
+
 /// Canonical order for the `Allow` response header. Matches the order
 /// the spec example uses (`Allow: POST, GET, ...`) so produced headers
 /// are stable across runs and easy to diff in tests.

@@ -3,7 +3,7 @@ use salvo::oapi::endpoint;
 use super::*;
 
 #[endpoint(
-    operation_id = "ak.open.agent_pairing.read.resolve.v1",
+    operation_id = "ak.open.agent_pairing.read.resolve",
     summary = "Resolve an agent pairing bootstrap",
     tags("agent_pairing")
 )]
@@ -67,7 +67,7 @@ pub(super) async fn resolve_agent_pairing(
 }
 
 #[endpoint(
-    operation_id = "ak.open.agent_pairing.command.submit_runtime_key_request.v1",
+    operation_id = "ak.open.agent_pairing.command.submit_runtime_key_request",
     summary = "Submit an agent runtime key request",
     tags("agent_pairing")
 )]
@@ -278,7 +278,7 @@ pub(super) async fn submit_agent_runtime_key_request(
 }
 
 #[endpoint(
-    operation_id = "ak.open.agent_pairing.read.runtime_key_request_status.v1",
+    operation_id = "ak.open.agent_pairing.read.runtime_key_request_status",
     summary = "Get an agent runtime key request status",
     tags("agent_pairing")
 )]
@@ -618,7 +618,7 @@ pub(super) fn agent_runtime_key_request_status_outcome(
 }
 
 #[endpoint(
-    operation_id = "ak.gate.account.command.pair_agent_key.v1",
+    operation_id = "ak.gate.account.command.pair_agent_key",
     summary = "Pair an agent device key",
     tags("agent_pairing")
 )]

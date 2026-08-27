@@ -39,7 +39,7 @@ pub(super) fn sign_history_request_replica_outcome(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.history_key_responses.read.list.v1",
+    operation_id = "ak.self.history_key_responses.read.list",
     tags("governance")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.history_key_responses.read.list.v1"))]
@@ -118,7 +118,7 @@ pub(super) async fn read_history_key_responses(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.history_key_responses.command.ack.v1",
+    operation_id = "ak.self.history_key_responses.command.ack",
     tags("governance")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.history_key_responses.command.ack.v1"))]

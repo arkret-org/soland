@@ -47,7 +47,7 @@ fn de_str<T: DeserializeOwned>(field: &str, value: &str) -> Result<T, AppError> 
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm_organization.read.list.v1",
+    operation_id = "ak.self.realm_organization.read.list",
     summary = "List a realm's organization relationships",
     tags("realm_organizations")
 )]

@@ -35,17 +35,6 @@ async fn health_and_describe_work_body() {
     assert_eq!(readyz["checks"]["database"]["ok"], true);
     assert_eq!(readyz["checks"]["pq_hybrid_tls"]["ok"], true);
 
-    let mut missing_selector = salvo::test::TestClient::get("http://server/_arkret/describe")
-        .send(&app())
-        .await;
-    assert_eq!(missing_selector.status_code, Some(StatusCode::BAD_REQUEST));
-    let missing_selector: Value = missing_selector.take_json().await.unwrap();
-    assert_eq!(
-        missing_selector["type"],
-        "https://arkret.org/problems/operation_selector_required"
-    );
-    assert_eq!(missing_selector["status"], 400);
-
     let mut wrong_selector = salvo::test::TestClient::get("http://server/_arkret/describe")
         .add_header("Arkret-Operation", "ak.self.events.read.describe.v1", true)
         .send(&app())
@@ -61,12 +50,18 @@ async fn health_and_describe_work_body() {
     );
     assert_eq!(wrong_selector["status"], 422);
 
-    let describe: Value = TestClient::get("http://server/_arkret/describe")
+    let mut describe_response = TestClient::get("http://server/_arkret/describe")
         .send(&app())
-        .await
-        .take_json()
-        .await
-        .unwrap();
+        .await;
+    assert_eq!(describe_response.status_code, Some(StatusCode::OK));
+    assert_eq!(
+        describe_response
+            .headers()
+            .get("Arkret-Operation")
+            .and_then(|value| value.to_str().ok()),
+        Some("ak.server.read.describe.v1")
+    );
+    let describe: Value = describe_response.take_json().await.unwrap();
     assert_eq!(describe["protocol_version"], "1.0");
     assert_eq!(describe["service_kind"], "principal_server");
     assert!(

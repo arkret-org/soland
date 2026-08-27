@@ -43,7 +43,7 @@ const SIGNAL_SUBSCRIBE_POLL_MS: u64 = 250;
 /// `ak.self.signal.command.send.v1`.
 ///
 /// The body is an `ak.schema.signal_envelope.v1` [`SignalEnvelope`].
-#[endpoint(operation_id = "ak.self.signal.command.send.v1")]
+#[endpoint(operation_id = "ak.self.signal.command.send")]
 #[tracing::instrument(skip_all, fields(op = "ak.self.signal.command.send.v1"))]
 pub(super) async fn submit_signal(
     aa: crate::routing::system::extract::AuthArgs,

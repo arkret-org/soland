@@ -91,7 +91,7 @@ async fn load_owned_security_transaction(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.security_transaction.command.create.v1",
+    operation_id = "ak.self.security_transaction.command.create",
     tags("identity")
 )]
 #[tracing::instrument(
@@ -142,7 +142,7 @@ pub(super) async fn security_transaction_create(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.security_transaction.resource.get.v1",
+    operation_id = "ak.self.security_transaction.resource.get",
     tags("identity")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.security_transaction.resource.get.v1"))]
@@ -163,7 +163,7 @@ pub(super) async fn security_transaction_get(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.security_transaction.command.continue.v1",
+    operation_id = "ak.self.security_transaction.command.continue",
     tags("identity")
 )]
 #[tracing::instrument(
@@ -680,7 +680,7 @@ fn refresh_backup_erase_completion(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.keys.backup_series.command.erase.v1",
+    operation_id = "ak.self.keys.backup_series.command.erase",
     tags("identity")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.backup_series.command.erase.v1"))]

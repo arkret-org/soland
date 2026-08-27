@@ -1040,7 +1040,7 @@ async fn delete_account_localpart(
     json_ok(AccountLocalpartDeleteOutcome { ok: true })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.account.read.viewer.v1", tags("identity"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.account.read.viewer", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.read.viewer.v1"))]
 pub(crate) async fn account_viewer(
     aa: AuthArgs,
@@ -1231,7 +1231,7 @@ async fn gate_account_register(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.account.command.update_profile.v1",
+    operation_id = "ak.self.account.command.update_profile",
     tags("identity")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.command.update_profile.v1"))]
@@ -1570,10 +1570,7 @@ async fn resolved_actor_profile_evidence(
     Ok(None)
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.self.actor_profile.read.resolve.v1",
-    tags("identity")
-)]
+#[salvo::oapi::endpoint(operation_id = "ak.self.actor_profile.read.resolve", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.actor_profile.read.resolve.v1"))]
 async fn resolve_actor_profiles(
     aa: AuthArgs,
@@ -1629,7 +1626,7 @@ async fn resolve_actor_profiles(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.identity.read.resolution_audit.v1",
+    operation_id = "ak.self.identity.read.resolution_audit",
     tags("identity")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.identity.read.resolution_audit.v1"))]
@@ -1754,7 +1751,7 @@ async fn read_principal_resolution_audit(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.direct_conversation.read.resolve.v1",
+    operation_id = "ak.self.direct_conversation.read.resolve",
     tags("identity")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.direct_conversation.read.resolve.v1"))]

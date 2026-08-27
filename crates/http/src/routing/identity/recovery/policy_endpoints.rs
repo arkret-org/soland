@@ -156,7 +156,7 @@ pub(super) fn recovery_policy_acceptance_basis(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.recovery_policy.resource.get.v1",
+    operation_id = "ak.root.identity.recovery_policy.resource.get",
     tags("identity")
 )]
 #[tracing::instrument(
@@ -224,7 +224,7 @@ pub(super) async fn recovery_policies_get(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.recovery_policy.command.publish.v1",
+    operation_id = "ak.root.identity.recovery_policy.command.publish",
     tags("identity")
 )]
 #[tracing::instrument(

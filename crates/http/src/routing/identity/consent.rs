@@ -587,7 +587,7 @@ fn projected_consent_remove_dots(
 // ────────────────────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "ak.self.consent.read.list.v1",
+    operation_id = "ak.self.consent.read.list",
     summary = "List consent cells",
     tags("consent")
 )]
@@ -613,7 +613,7 @@ async fn list_consent_cells(
 }
 
 #[endpoint(
-    operation_id = "ak.self.consent.resource.get.v1",
+    operation_id = "ak.self.consent.resource.get",
     summary = "Get one consent cell",
     tags("consent")
 )]
@@ -654,7 +654,7 @@ async fn get_consent_cell(
 }
 
 #[endpoint(
-    operation_id = "ak.self.consent.command.grant.v1",
+    operation_id = "ak.self.consent.command.grant",
     summary = "Grant a consent cell",
     tags("consent")
 )]
@@ -681,7 +681,7 @@ async fn grant_consent_cell(
 }
 
 #[endpoint(
-    operation_id = "ak.self.consent.command.revoke.v1",
+    operation_id = "ak.self.consent.command.revoke",
     summary = "Revoke a consent cell",
     tags("consent")
 )]
@@ -711,7 +711,7 @@ async fn revoke_consent_cell(
 }
 
 #[endpoint(
-    operation_id = "ak.self.consent.command.request.v1",
+    operation_id = "ak.self.consent.command.request",
     summary = "Request consent from a peer",
     tags("consent")
 )]

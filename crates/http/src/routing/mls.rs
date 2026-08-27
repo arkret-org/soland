@@ -229,7 +229,7 @@ pub(crate) fn enqueue_device_revoke_mls_removals(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.keys.keypackages.upload.create.v1",
+    operation_id = "ak.self.keys.keypackages.upload.create",
     tags("mls.rs")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.upload.create.v1"))]
@@ -520,7 +520,7 @@ async fn upload_keypackage(
 // ── claim ─────────────────────────────────────────────────────────────
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.peer.keys.keypackages.command.claim.v1",
+    operation_id = "ak.peer.keys.keypackages.command.claim",
     tags("mls.rs")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.keys.keypackages.command.claim.v1"))]
@@ -800,10 +800,7 @@ async fn claim_keypackage_at_destination(
     Err(peer_claim_failed())
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.peer.keys.keypackages.read.claim.v1",
-    tags("mls.rs")
-)]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.keys.keypackages.read.claim", tags("mls.rs"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.keys.keypackages.read.claim.v1"))]
 async fn peer_query_keypackage_claim(
     depot: &mut Depot,
@@ -1829,7 +1826,7 @@ fn peer_claim_failed() -> AppError {
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.keys.keypackages.command.claim.v1",
+    operation_id = "ak.self.keys.keypackages.command.claim",
     tags("mls.rs")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.claim.v1"))]
@@ -2362,7 +2359,7 @@ fn claim_failed_source_winner_matches(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.keys.keypackages.command.consume.v1",
+    operation_id = "ak.self.keys.keypackages.command.consume",
     tags("mls.rs")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.consume.v1"))]
@@ -3513,7 +3510,7 @@ fn projected_welcome_matches_consumer(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.keys.keypackages.command.revoke.v1",
+    operation_id = "ak.self.keys.keypackages.command.revoke",
     tags("mls.rs")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.revoke.v1"))]

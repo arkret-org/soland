@@ -225,7 +225,7 @@ pub(in crate::routing::events) fn router() -> Router {
         .push(Router::with_path("events/{event_id}").get(get_event))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.seals.command.submit.v1", tags("events"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.seals.command.submit", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.seals.command.submit.v1"))]
 async fn submit_event_seal(
     aa: AuthArgs,
@@ -319,7 +319,7 @@ async fn submit_event_seal(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.describe.v1", tags("events"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.describe", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.read.describe.v1"))]
 async fn events_describe(
     depot: &mut Depot,
@@ -372,7 +372,7 @@ async fn events_describe(
     json_ok(description)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.command.submit.v1", tags("events"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.command.submit", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.command.submit.v1"))]
 async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -745,7 +745,7 @@ fn envelope_operation_id(envelope: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.resource.get.v1", tags("events"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.resource.get", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.resource.get.v1"))]
 async fn get_event(
     aa: AuthArgs,
@@ -769,10 +769,7 @@ async fn get_event(
     event_view_for_state(state, &record).await
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.self.events.read.delivery_status.v1",
-    tags("events")
-)]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.delivery_status", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.read.delivery_status.v1"))]
 async fn event_delivery_status(
     aa: AuthArgs,
@@ -996,7 +993,7 @@ async fn verified_contact_mirror_event(
     Ok(Some((event, request_digest)))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.resolve.v1", tags("events"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.resolve", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.read.resolve.v1"))]
 async fn resolve_events(
     aa: AuthArgs,
@@ -1175,7 +1172,7 @@ async fn resolve_events(
     json_ok(outcome)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.seals.read.frontier.v1", tags("events"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.seals.read.frontier", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.seals.read.frontier.v1"))]
 async fn seals_frontier(
     aa: crate::routing::system::extract::AuthArgs,
@@ -1269,7 +1266,7 @@ async fn seals_frontier(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.frontier.v1", tags("events"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.frontier", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.read.frontier.v1"))]
 async fn events_frontier(
     aa: crate::routing::system::extract::AuthArgs,

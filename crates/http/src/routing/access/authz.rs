@@ -46,7 +46,7 @@ pub(super) fn protocol_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ak.self.authz.read.check.v1",
+    operation_id = "ak.self.authz.read.check",
     summary = "Evaluate an authorization decision",
     tags("authz")
 )]
@@ -358,10 +358,7 @@ mod tests {
     }
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.self.authz.grants.read.effective.v1",
-    tags("access")
-)]
+#[salvo::oapi::endpoint(operation_id = "ak.self.authz.grants.read.effective", tags("access"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.authz.grants.read.effective.v1"))]
 async fn effective_grants(
     aa: AuthArgs,
@@ -720,7 +717,7 @@ fn capability_resource_selector(
         .map_err(|error| AppError::internal(format!("resource selector encode failed: {error}")))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.authz.invites.read.list.v1", tags("access"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.authz.invites.read.list", tags("access"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.authz.invites.read.list.v1"))]
 async fn invites(
     aa: crate::routing::system::extract::AuthArgs,

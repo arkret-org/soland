@@ -50,7 +50,7 @@ const DEVICE_PAIRING_TTL_MINUTES: i64 = 10;
 const DEVICE_PAIRING_EXPIRED_RETENTION_MINUTES: i64 = 60;
 
 #[endpoint(
-    operation_id = "ak.open.device_pairing.command.stage.v1",
+    operation_id = "ak.open.device_pairing.command.stage",
     summary = "Stage a device pairing short-link request",
     tags("device_pairing")
 )]
@@ -132,7 +132,7 @@ pub(super) async fn stage_device_pairing(
 }
 
 #[endpoint(
-    operation_id = "ak.open.device_pairing.read.resolve.v1",
+    operation_id = "ak.open.device_pairing.read.resolve",
     summary = "Resolve a device pairing bootstrap",
     tags("device_pairing")
 )]
@@ -216,7 +216,7 @@ pub(super) async fn resolve_device_pairing(
 }
 
 #[endpoint(
-    operation_id = "ak.open.device_pairing.read.status.v1",
+    operation_id = "ak.open.device_pairing.read.status",
     summary = "Poll a device pairing request status",
     tags("device_pairing")
 )]

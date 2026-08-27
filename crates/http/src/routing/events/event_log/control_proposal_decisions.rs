@@ -234,7 +234,7 @@ fn submit_outcome(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.control_proposal_decisions.command.submit.v1",
+    operation_id = "ak.self.control_proposal_decisions.command.submit",
     tags("events")
 )]
 #[tracing::instrument(
@@ -333,7 +333,7 @@ pub(super) async fn submit_control_proposal_decision(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.control_proposal_decisions.read.get.v1",
+    operation_id = "ak.self.control_proposal_decisions.read.get",
     tags("events")
 )]
 #[tracing::instrument(

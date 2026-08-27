@@ -76,7 +76,7 @@ pub(super) fn router() -> Router {
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.peer.principal_genesis.command.submit.v1",
+    operation_id = "ak.peer.principal_genesis.command.submit",
     tags("events")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.principal_genesis.command.submit.v1"))]
@@ -190,10 +190,7 @@ pub(crate) async fn trusted_account_authority_service_id(
     })
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.peer.account_status.command.submit.v1",
-    tags("events")
-)]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.account_status.command.submit", tags("events"))]
 async fn peer_account_status_submit(
     depot: &mut Depot,
     req: &mut Request,
@@ -616,7 +613,7 @@ async fn validate_account_status_publication(
     Ok(())
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.signal.command.relay.v1", tags("events"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.signal.command.relay", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.signal.command.relay.v1"))]
 async fn peer_signal_relay(depot: &mut Depot, req: &mut Request) -> JsonResult<SignalRelayOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -665,7 +662,7 @@ fn validate_signal_signature_window(req: &Request) -> Result<(), AppError> {
     Ok(())
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.describe.v1", tags("events"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.describe", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.describe.v1"))]
 async fn peer_events_describe(
     depot: &mut Depot,
@@ -704,7 +701,7 @@ async fn peer_events_describe(
     json_ok(description)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.command.submit.v1", tags("events"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.command.submit", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.command.submit.v1"))]
 async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -738,7 +735,7 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
     super::event_log::submit_federation_events(state, req, body_value, res).await;
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.scan.v1", tags("events"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.scan", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.scan.v1"))]
 async fn peer_events_read_body(
     depot: &mut Depot,
@@ -756,7 +753,7 @@ async fn peer_events_read_body(
     peer_events_query_response(state, source_service_id, parts).await
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.resolve.v1", tags("events"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.resolve", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.resolve.v1"))]
 async fn peer_events_resolve(
     depot: &mut Depot,
@@ -926,7 +923,7 @@ async fn peer_events_resolve(
     json_ok(outcome)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.frontier.v1", tags("events"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.frontier", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.frontier.v1"))]
 async fn peer_events_frontier(
     depot: &mut Depot,
@@ -1056,7 +1053,7 @@ struct PeerSealFrontierProofBinding<'a> {
     created_at: DateTime<Utc>,
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.seals.read.frontier.v1", tags("events"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.seals.read.frontier", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.seals.read.frontier.v1"))]
 async fn peer_seals_frontier(
     depot: &mut Depot,
@@ -1126,10 +1123,7 @@ async fn peer_seals_frontier(
 /// closed with `not_implemented` until a real signing path lands. The
 /// dev snapshot bundle remains reachable on the `/_soland/` product face
 /// (`org.arkret.soland.sync.snapshot_chunk`).
-#[salvo::oapi::endpoint(
-    operation_id = "ak.peer.snapshot.read.manifest_head.v1",
-    tags("events")
-)]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.snapshot.read.manifest_head", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.snapshot.read.manifest_head.v1"))]
 async fn peer_snapshot_head(
     depot: &mut Depot,

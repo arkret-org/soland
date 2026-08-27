@@ -201,23 +201,22 @@ impl TryFrom<EventBatchReceiptRow> for EventBatchReceipt {
     type Error = PersistenceError;
 
     fn try_from(row: EventBatchReceiptRow) -> Result<Self, Self::Error> {
-        serde_json::from_value(serde_json::json!({
-            "schema": row.schema,
-            "receipt_id": ids::format_typed_uuid("receipt", &row.id),
-            "issuer": row.issuer,
-            "scope": row.scope,
-            "events": row.events,
-            "created_at": event_batch_receipt_timestamp_value(row.created_at),
-            "proofs": row.proofs,
-        }))
-        .map_err(|error| {
+        let invalid = |error: serde_json::Error| {
             PersistenceError::Internal(format!("stored Event Batch Receipt is invalid: {error}"))
+        };
+        Ok(EventBatchReceipt {
+            schema: row.schema,
+            receipt_id: serde_json::from_value(Value::String(ids::format_typed_uuid(
+                "receipt", &row.id,
+            )))
+            .map_err(invalid)?,
+            issuer: serde_json::from_value(Value::String(row.issuer)).map_err(invalid)?,
+            scope: serde_json::from_value(row.scope).map_err(invalid)?,
+            events: serde_json::from_value(row.events).map_err(invalid)?,
+            created_at: row.created_at,
+            proofs: serde_json::from_value(row.proofs).map_err(invalid)?,
         })
     }
-}
-
-fn event_batch_receipt_timestamp_value(value: chrono::DateTime<chrono::Utc>) -> Value {
-    Value::String(arkret_canonical::format_timestamp_canonical(value))
 }
 /// Serialization key for every writer of one Realm/actor Event stream.
 ///
@@ -1655,11 +1654,7 @@ impl EventStore for PgEventStore {
 
 #[cfg(test)]
 mod identity_anchor_receipt_tests {
-    use chrono::{TimeZone, Utc};
-
-    use super::{
-        event_batch_receipt_timestamp_value, identity_anchor_receipt_cardinality_is_valid,
-    };
+    use super::identity_anchor_receipt_cardinality_is_valid;
 
     #[test]
     fn accepted_anchor_units_require_one_control_proposal_ack_per_event() {
@@ -1673,19 +1668,6 @@ mod identity_anchor_receipt_tests {
     fn reanchor_conflict_cannot_attach_control_proposal_acks() {
         assert!(identity_anchor_receipt_cardinality_is_valid(2, 0, true));
         assert!(!identity_anchor_receipt_cardinality_is_valid(2, 2, true));
-    }
-
-    #[test]
-    fn stored_event_batch_receipt_timestamp_keeps_canonical_milliseconds() {
-        let timestamp = Utc
-            .with_ymd_and_hms(2026, 8, 27, 4, 46, 3)
-            .single()
-            .expect("valid fixture timestamp");
-
-        assert_eq!(
-            event_batch_receipt_timestamp_value(timestamp),
-            serde_json::json!("2026-08-27T04:46:03.000Z")
-        );
     }
 }
 

@@ -173,27 +173,27 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable_bo
         (
             "/_arkret/root/identity/organization-registrations:prepare",
             "post",
-            "ak.root.identity.organization_registration.command.prepare.v1",
+            "ak.root.identity.organization_registration.command.prepare",
         ),
         (
             "/_arkret/root/identity/organization-registrations:ensure",
             "post",
-            "ak.root.identity.organization_registration.command.ensure.v1",
+            "ak.root.identity.organization_registration.command.ensure",
         ),
         (
             "/_arkret/root/identity/organization-registrations",
             "get",
-            "ak.root.identity.organization_registration.resource.get.v1",
+            "ak.root.identity.organization_registration.resource.get",
         ),
         (
             "/_arkret/root/identity/organization-registrations:refresh",
             "post",
-            "ak.root.identity.organization_registration.command.refresh.v1",
+            "ak.root.identity.organization_registration.command.refresh",
         ),
         (
             "/_arkret/root/identity/organization-registrations:revoke",
             "post",
-            "ak.root.identity.organization_registration.command.revoke.v1",
+            "ak.root.identity.organization_registration.command.revoke",
         ),
     ] {
         assert_eq!(
@@ -215,11 +215,10 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable_bo
             .send(&app)
             .await;
     let unsupported_scope_body: serde_json::Value = unsupported_scope.take_json().await.unwrap();
+    assert_eq!(unsupported_scope_body["status"], 422);
     assert_eq!(
-        unsupported_scope_body.pointer("/error/code"),
-        Some(&serde_json::Value::String(
-            "unsupported_organization_registration_scope".to_owned()
-        ))
+        unsupported_scope_body["type"],
+        "https://arkret.org/problems/unsupported_organization_registration_scope"
     );
 
     let challenge: OrganizationRegistrationChallenge =
@@ -358,15 +357,9 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable_bo
     assert_eq!(absent.status_code.unwrap(), StatusCode::NOT_FOUND);
     let absent_body: serde_json::Value = absent.take_json().await.unwrap();
     assert_eq!(
-        unauthorized_body.pointer("/error/code"),
-        Some(&serde_json::Value::String("did_not_found".to_owned()))
+        unauthorized_body["type"],
+        "https://arkret.org/problems/did_not_found"
     );
-    assert_eq!(
-        unauthorized_body.pointer("/error/code"),
-        absent_body.pointer("/error/code")
-    );
-    assert_eq!(
-        unauthorized_body.pointer("/error/message"),
-        absent_body.pointer("/error/message")
-    );
+    assert_eq!(unauthorized_body["type"], absent_body["type"]);
+    assert_eq!(unauthorized_body["detail"], absent_body["detail"]);
 }

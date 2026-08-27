@@ -42,7 +42,7 @@ pub(super) fn agent_participation_failed_precondition(reason: &'static str) -> A
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.participation.resource.replace.v1",
+    operation_id = "ak.self.agent.participation.resource.replace",
     summary = "Replace an agent's participation policy",
     tags("agent_participation")
 )]
@@ -118,7 +118,7 @@ pub(super) async fn set_agent_participation(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.participation.resource.get.v1",
+    operation_id = "ak.self.agent.participation.resource.get",
     summary = "Get an agent's participation policy",
     tags("agent_participation")
 )]

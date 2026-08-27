@@ -17,7 +17,7 @@ pub(super) async fn mimi_protocol_directory(
     json_ok(mimi_provider_directory_value(state)?)
 }
 
-#[endpoint(operation_id = "ak.open.mimi.read.provider_directory.v1")]
+#[endpoint(operation_id = "ak.open.mimi.read.provider_directory")]
 #[tracing::instrument(skip_all, fields(op = "ak.open.mimi.read.provider_directory.v1"))]
 pub(super) async fn mimi_provider_directory(
     depot: &mut Depot,
@@ -27,7 +27,7 @@ pub(super) async fn mimi_provider_directory(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.exchange.request_key_material.v1",
+    operation_id = "ak.open.mimi.exchange.request_key_material",
     summary = "Request MIMI key material",
     tags("mimi")
 )]
@@ -71,7 +71,7 @@ pub(super) async fn mimi_key_material(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.command.update_room.v1",
+    operation_id = "ak.open.mimi.command.update_room",
     summary = "Update a MIMI room",
     tags("mimi")
 )]
@@ -172,7 +172,7 @@ pub(super) async fn mimi_room_update(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.command.notify.v1",
+    operation_id = "ak.open.mimi.command.notify",
     summary = "MIMI notify",
     tags("mimi")
 )]
@@ -217,7 +217,7 @@ pub(super) async fn mimi_notify(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.command.submit_message.v1",
+    operation_id = "ak.open.mimi.command.submit_message",
     summary = "Submit a MIMI message",
     tags("mimi")
 )]
@@ -354,7 +354,7 @@ pub(super) async fn mimi_room_message(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.read.group_info.v1",
+    operation_id = "ak.open.mimi.read.group_info",
     summary = "Get MIMI group info",
     tags("mimi")
 )]
@@ -399,7 +399,7 @@ pub(super) async fn mimi_group_info(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.command.request_consent.v1",
+    operation_id = "ak.open.mimi.command.request_consent",
     summary = "Request MIMI consent",
     tags("mimi")
 )]
@@ -458,7 +458,7 @@ pub(super) async fn mimi_consent_request(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.command.update_consent.v1",
+    operation_id = "ak.open.mimi.command.update_consent",
     summary = "Update MIMI consent",
     tags("mimi")
 )]
@@ -925,7 +925,7 @@ pub(super) fn request_has_bearer_session(req: &Request) -> bool {
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.read.identifiers.v1",
+    operation_id = "ak.open.mimi.read.identifiers",
     summary = "Query MIMI identifiers",
     tags("mimi")
 )]
@@ -996,7 +996,7 @@ pub(super) async fn mimi_identifiers_query(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.command.report_abuse.v1",
+    operation_id = "ak.open.mimi.command.report_abuse",
     summary = "Report MIMI abuse",
     tags("mimi")
 )]
@@ -1194,7 +1194,7 @@ pub(super) async fn enforce_mimi_reporter_resolution(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.command.proxy_download.v1",
+    operation_id = "ak.open.mimi.command.proxy_download",
     summary = "Proxy a MIMI download",
     tags("mimi")
 )]

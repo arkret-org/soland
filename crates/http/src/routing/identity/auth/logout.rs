@@ -24,7 +24,7 @@ use super::*;
 ///    for the grant's device, remove push registrations, and drop queued to-device messages. It
 ///    does NOT issue an AccountStatusRecord, emit `ak.device.revoke`, or mark the durable device
 ///    inventory record revoked; a later login restores a session for the same authorized device.
-#[salvo::oapi::endpoint(operation_id = "ak.gate.account.command.logout.v1", tags("identity"))]
+#[salvo::oapi::endpoint(operation_id = "ak.gate.account.command.logout", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.logout.v1"))]
 pub(super) async fn logout(
     aa: super::super::AuthArgs,
@@ -338,7 +338,7 @@ async fn revoke_sessions_for_actor_device(
 /// require a fresh lifecycle proof whose request digest and Ed25519 signature
 /// verify against the caller DID.
 #[salvo::oapi::endpoint(
-    operation_id = "ak.gate.account.command.revoke_session.v1",
+    operation_id = "ak.gate.account.command.revoke_session",
     tags("identity")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.revoke_session.v1"))]

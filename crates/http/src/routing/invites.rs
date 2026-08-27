@@ -230,7 +230,7 @@ async fn revoke_invite_locator(
 }
 
 #[endpoint(
-    operation_id = "ak.peer.invites.command.submit.v1",
+    operation_id = "ak.peer.invites.command.submit",
     summary = "Submit a peer invite delivery",
     tags("invites")
 )]
@@ -480,7 +480,7 @@ async fn receive_private_invite_delivery(
 }
 
 #[endpoint(
-    operation_id = "ak.self.invites.command.dispatch.v1",
+    operation_id = "ak.self.invites.command.dispatch",
     summary = "Dispatch a private invite delivery",
     tags("invites")
 )]
@@ -971,7 +971,7 @@ fn invite_delivery_entry_active(
 }
 
 #[endpoint(
-    operation_id = "ak.open.invite_locator.read.resolve.v1",
+    operation_id = "ak.open.invite_locator.read.resolve",
     summary = "Resolve an invite locator",
     tags("invites")
 )]

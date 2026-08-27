@@ -17,7 +17,7 @@ use super::*;
 const LEASE_TTL_MINUTES: i64 = 10;
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.authorization_leases.command.issue.v1",
+    operation_id = "ak.self.authorization_leases.command.issue",
     tags("events")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.authorization_leases.command.issue.v1"))]

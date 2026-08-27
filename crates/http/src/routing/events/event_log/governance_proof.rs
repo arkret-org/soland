@@ -21,7 +21,7 @@ use salvo::oapi::extract::JsonBody;
 use super::*;
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.seals.read.mls_governance_proof.v1",
+    operation_id = "ak.self.seals.read.mls_governance_proof",
     tags("seals")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.seals.read.mls_governance_proof.v1"))]

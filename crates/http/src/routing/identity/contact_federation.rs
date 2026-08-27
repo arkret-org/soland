@@ -208,7 +208,7 @@ fn peer_contact_delivery_address(
     }
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.contacts.command.submit.v1", tags("identity"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.contacts.command.submit", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.contacts.command.submit.v1"))]
 async fn peer_contacts_submit(
     depot: &mut Depot,

@@ -12,7 +12,6 @@ use arkret_models_collaboration::governance::join_policy::{
     JoinApplicationDecision, JoinApplicationPrivateBody, JoinApplicationReceipt,
     JoinApplicationReviewReceipt, JoinApplicationStatus,
 };
-use arkret_wire::CapabilityActionId;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
@@ -69,13 +68,12 @@ fn join_policy_duration_or(join_policy: &Value, field: &str, default: &str) -> D
         .unwrap_or_else(|| Duration::hours(168))
 }
 
-fn join_policy_review_capability(join_policy: &Value) -> String {
+fn join_policy_review_capability(join_policy: &Value) -> Option<String> {
     join_policy
         .get("review_capability")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or(CapabilityActionId::REALM_JOIN_REVIEW)
-        .to_owned()
+        .map(ToOwned::to_owned)
 }
 
 fn status_name(status: &JoinApplicationStatus) -> &'static str {
@@ -200,7 +198,7 @@ impl ProjectionState {
         if policy_digest != application.policy_version_digest {
             return Err("failed_precondition");
         }
-        let action = join_policy_review_capability(join_policy);
+        let action = join_policy_review_capability(join_policy).ok_or("gate_check_failed")?;
         if !self.projected_capability_grant_matches(
             receipt.reviewer_capability_proof.grant_id.as_str(),
             receipt.reviewer_actor_id.as_str(),
@@ -364,7 +362,7 @@ impl ProjectionState {
 
     pub fn realm_join_policy_review_capability(&self, realm_id: &str) -> Option<String> {
         self.realm_join_policy_cell_value(realm_id)
-            .map(join_policy_review_capability)
+            .and_then(join_policy_review_capability)
     }
 
     fn member_application_by_receipt(

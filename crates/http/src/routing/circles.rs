@@ -302,7 +302,7 @@ fn mls_event_group_ref(payload: &std::collections::BTreeMap<String, Value>) -> O
 // ── Handlers ────────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "ak.self.circle.read.list.v1",
+    operation_id = "ak.self.circle.read.list",
     summary = "List circles",
     tags("circles")
 )]
@@ -329,7 +329,7 @@ async fn list_circles(
 }
 
 #[endpoint(
-    operation_id = "ak.self.circle.resource.get.v1",
+    operation_id = "ak.self.circle.resource.get",
     summary = "Get one circle",
     tags("circles")
 )]
@@ -360,7 +360,7 @@ async fn get_circle(
 }
 
 #[endpoint(
-    operation_id = "ak.self.circle.command.create.v1",
+    operation_id = "ak.self.circle.command.create",
     summary = "Create a circle",
     tags("circles")
 )]
@@ -460,7 +460,7 @@ async fn submit_caller_signed_circle_event(
 }
 
 #[endpoint(
-    operation_id = "ak.self.circle.member.command.add.v1",
+    operation_id = "ak.self.circle.member.command.add",
     summary = "Add a circle member",
     tags("circles")
 )]
@@ -583,7 +583,7 @@ fn caller_signed_circle_member_delete_target(
 }
 
 #[endpoint(
-    operation_id = "ak.self.circle.member.resource.delete.v1",
+    operation_id = "ak.self.circle.member.resource.delete",
     summary = "Remove a circle member",
     tags("circles")
 )]
@@ -619,7 +619,7 @@ async fn delete_circle_member(
 }
 
 #[endpoint(
-    operation_id = "ak.self.circle.command.rotate_scope.v1",
+    operation_id = "ak.self.circle.command.rotate_scope",
     summary = "Rotate a circle's scope",
     tags("circles")
 )]
@@ -704,7 +704,7 @@ async fn post_scope_rotate(
 }
 
 #[endpoint(
-    operation_id = "ak.self.circle.command.archive.v1",
+    operation_id = "ak.self.circle.command.archive",
     summary = "Archive a circle",
     tags("circles")
 )]
@@ -728,7 +728,7 @@ async fn post_circle_archive(
 }
 
 #[endpoint(
-    operation_id = "ak.self.circle.command.restore.v1",
+    operation_id = "ak.self.circle.command.restore",
     summary = "Restore a circle",
     tags("circles")
 )]
@@ -752,7 +752,7 @@ async fn post_circle_restore(
 }
 
 #[endpoint(
-    operation_id = "ak.self.circle.command.tombstone.v1",
+    operation_id = "ak.self.circle.command.tombstone",
     summary = "Tombstone a circle",
     tags("circles")
 )]

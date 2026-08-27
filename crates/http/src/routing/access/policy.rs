@@ -260,7 +260,7 @@ async fn delete_policy_document(
     json_ok(OkOutcome { ok: true })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.policy.read.check.v1", tags("access"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.policy.read.check", tags("access"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.policy.read.check.v1"))]
 async fn policy_check(
     aa: AuthArgs,
