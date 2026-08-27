@@ -67,7 +67,7 @@ pub struct AccountRecord {
     pub display_name: Option<String>,
     /// Free-form short description for directory rendering. Updated via
     /// `POST /_arkret/self/account/profile` (operationId
-    /// `ak.self.account.command.update_profile`); rendered by `demo_actors` in directory
+    /// `ak.self.account.command.update_profile.v1`); rendered by `demo_actors` in directory
     /// search results.
     pub bio: Option<String>,
     /// Canonical content-addressed avatar Blob reference.
@@ -218,7 +218,7 @@ pub struct BackupSeriesEraseProgressRecord {
     pub outcome: arkret_models_crypto::BackupSeriesEraseOutcome,
 }
 
-/// A revoked cursor authority recorded by `ak.self.account.command.revoke_cursor`.
+/// A revoked cursor authority recorded by `ak.self.account.command.revoke_cursor.v1`.
 ///
 /// `scope` mirrors the wire enum: `this_cursor` matches the exact cursor by
 /// `cursor_digest`; `same_device` / `same_session` match any cursor that

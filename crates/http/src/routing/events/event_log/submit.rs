@@ -2363,7 +2363,9 @@ pub(crate) async fn submit_federation_events(
                 res,
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                &format!("ak.peer.events.command.submit body is not canonical-hashable: {error}"),
+                &format!(
+                    "ak.peer.events.command.submit.v1 body is not canonical-hashable: {error}"
+                ),
             );
             return;
         }
@@ -2375,7 +2377,7 @@ pub(crate) async fn submit_federation_events(
                 res,
                 StatusCode::BAD_REQUEST,
                 "json_invalid",
-                &format!("invalid ak.peer.events.command.submit request body: {error}"),
+                &format!("invalid ak.peer.events.command.submit.v1 request body: {error}"),
             );
             return;
         }
@@ -2584,7 +2586,7 @@ pub(crate) async fn submit_federation_events(
             res,
             StatusCode::BAD_REQUEST,
             "param_missing",
-            "ak.peer.events.command.submit must contain at least one event",
+            "ak.peer.events.command.submit.v1 must contain at least one event",
         );
         return;
     }
@@ -2593,7 +2595,7 @@ pub(crate) async fn submit_federation_events(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
             "payload_too_large",
-            "ak.peer.events.command.submit exceeds max batch size",
+            "ak.peer.events.command.submit.v1 exceeds max batch size",
         );
         return;
     }

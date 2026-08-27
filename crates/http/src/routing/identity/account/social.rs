@@ -18,11 +18,11 @@ pub(crate) use contact_write::{
 };
 
 #[endpoint(
-    operation_id = "ak.self.contact.command.request",
+    operation_id = "ak.self.contact.command.request.v1",
     summary = "Prepare or commit a holder-signed Contact request",
     tags("contacts")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.request"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.request.v1"))]
 pub(crate) async fn contact_request(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -35,11 +35,11 @@ pub(crate) async fn contact_request(
 }
 
 #[endpoint(
-    operation_id = "ak.self.contact.command.respond",
+    operation_id = "ak.self.contact.command.respond.v1",
     summary = "Prepare or commit a normal Contact acceptance",
     tags("contacts")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.respond"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.respond.v1"))]
 pub(crate) async fn contact_respond(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -52,11 +52,11 @@ pub(crate) async fn contact_respond(
 }
 
 #[endpoint(
-    operation_id = "ak.self.contact.command.reject",
+    operation_id = "ak.self.contact.command.reject.v1",
     summary = "Prepare or commit a terminal Contact request rejection",
     tags("contacts")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.reject"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.reject.v1"))]
 pub(crate) async fn contact_reject(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -69,11 +69,11 @@ pub(crate) async fn contact_reject(
 }
 
 #[endpoint(
-    operation_id = "ak.self.contact.command.scope_update",
+    operation_id = "ak.self.contact.command.scope_update.v1",
     summary = "Prepare or commit a directional Contact scope replacement",
     tags("contacts")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.scope_update"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.scope_update.v1"))]
 pub(crate) async fn contact_scope_update(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -86,11 +86,11 @@ pub(crate) async fn contact_scope_update(
 }
 
 #[endpoint(
-    operation_id = "ak.self.contact.command.tombstone",
+    operation_id = "ak.self.contact.command.tombstone.v1",
     summary = "Prepare or commit a terminal Contact tombstone",
     tags("contacts")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.tombstone"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.tombstone.v1"))]
 pub(crate) async fn contact_tombstone(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -103,11 +103,11 @@ pub(crate) async fn contact_tombstone(
 }
 
 #[endpoint(
-    operation_id = "ak.self.contact.command.checkpoint",
+    operation_id = "ak.self.contact.command.checkpoint.v1",
     summary = "Issue or replay a bilateral Contact continuity checkpoint",
     tags("contacts")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.checkpoint"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.checkpoint.v1"))]
 pub(crate) async fn contact_continuity_checkpoint(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -263,11 +263,11 @@ pub(crate) async fn contact_continuity_checkpoint(
     json_ok(outcome)
 }
 #[endpoint(
-    operation_id = "ak.self.invite_receive_policy.resource.get",
+    operation_id = "ak.self.invite_receive_policy.resource.get.v1",
     summary = "Get the invite receive policy",
     tags("contacts")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.invite_receive_policy.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.invite_receive_policy.resource.get.v1"))]
 pub(crate) async fn get_invite_receive_policy(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -288,13 +288,13 @@ pub(crate) async fn get_invite_receive_policy(
 }
 
 #[endpoint(
-    operation_id = "ak.self.invite_receive_policy.resource.replace",
+    operation_id = "ak.self.invite_receive_policy.resource.replace.v1",
     summary = "Replace the invite receive policy",
     tags("contacts")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.self.invite_receive_policy.resource.replace")
+    fields(op = "ak.self.invite_receive_policy.resource.replace.v1")
 )]
 pub(crate) async fn set_invite_receive_policy(
     aa: AuthArgs,
@@ -326,11 +326,11 @@ pub(crate) async fn set_invite_receive_policy(
 }
 
 #[endpoint(
-    operation_id = "ak.self.contact.read.list",
+    operation_id = "ak.self.contact.read.list.v1",
     summary = "List contacts",
     tags("contacts")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.contact.read.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.contact.read.list.v1"))]
 pub(crate) async fn list_contacts(
     aa: AuthArgs,
     depot: &mut Depot,

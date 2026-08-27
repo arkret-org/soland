@@ -365,7 +365,7 @@ mod tests {
             [0; 32],
         );
         let now = Utc::now();
-        let key = "ak.self.events.stream.subscribe|alice|realm-a";
+        let key = "ak.self.events.stream.subscribe.v1|alice|realm-a";
         service.arm_subscribe_reconnect(key.to_owned(), now, 10_000);
         let retry_after = service
             .subscribe_retry_after_ms(key, now + chrono::Duration::milliseconds(2_500))

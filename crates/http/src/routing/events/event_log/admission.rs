@@ -168,7 +168,7 @@ where
     Ok(())
 }
 
-/// Reject receipt objects at the `ak.self.events.command.submit` entrypoint.
+/// Reject receipt objects at the `ak.self.events.command.submit.v1` entrypoint.
 ///
 /// Returns the canonical [`ErrorCode`] + human reason when the kind MUST be
 /// rejected; returns `None` when the kind is fine to forward to the

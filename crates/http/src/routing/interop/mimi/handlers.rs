@@ -17,8 +17,8 @@ pub(super) async fn mimi_protocol_directory(
     json_ok(mimi_provider_directory_value(state)?)
 }
 
-#[endpoint(operation_id = "ak.open.mimi.read.provider_directory")]
-#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.read.provider_directory"))]
+#[endpoint(operation_id = "ak.open.mimi.read.provider_directory.v1")]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.read.provider_directory.v1"))]
 pub(super) async fn mimi_provider_directory(
     depot: &mut Depot,
 ) -> JsonResult<arkret_models_collaboration::objects::interop::ProviderDirectory> {
@@ -27,11 +27,11 @@ pub(super) async fn mimi_provider_directory(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.exchange.request_key_material",
+    operation_id = "ak.open.mimi.exchange.request_key_material.v1",
     summary = "Request MIMI key material",
     tags("mimi")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.exchange.request_key_material"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.exchange.request_key_material.v1"))]
 pub(super) async fn mimi_key_material(
     body: JsonBody<MimiKeyMaterialRequestBody>,
     depot: &mut Depot,
@@ -54,7 +54,7 @@ pub(super) async fn mimi_key_material(
         .unwrap_or("unknown");
     let _receipt = mimi_receipt(
         state,
-        arkret_wire::ServiceOperationId::OPEN_MIMI_EXCHANGE_REQUEST_KEY_MATERIAL,
+        arkret_wire::ServiceOperationId::OPEN_MIMI_EXCHANGE_REQUEST_KEY_MATERIAL_V1,
         &body,
         json!({
             "target": target,
@@ -71,11 +71,11 @@ pub(super) async fn mimi_key_material(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.command.update_room",
+    operation_id = "ak.open.mimi.command.update_room.v1",
     summary = "Update a MIMI room",
     tags("mimi")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.update_room"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.update_room.v1"))]
 pub(super) async fn mimi_room_update(
     strand_id: PathParam<String>,
     body: JsonBody<MimiRoomUpdateRequestBody>,
@@ -155,7 +155,7 @@ pub(super) async fn mimi_room_update(
         .map_err(|error| AppError::internal(format!("MIMI room state ref: {error}")))?;
     let _receipt = mimi_receipt(
         state,
-        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_UPDATE_ROOM,
+        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_UPDATE_ROOM_V1,
         &body,
         json!({
             "mimi_room_uri": mimi_room_uri(state, &room_id)?,
@@ -172,11 +172,11 @@ pub(super) async fn mimi_room_update(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.command.notify",
+    operation_id = "ak.open.mimi.command.notify.v1",
     summary = "MIMI notify",
     tags("mimi")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.notify"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.notify.v1"))]
 pub(super) async fn mimi_notify(
     strand_id: PathParam<String>,
     body: JsonBody<MimiNotifyRequestBody>,
@@ -202,7 +202,7 @@ pub(super) async fn mimi_notify(
     })?;
     let _receipt = mimi_receipt(
         state,
-        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_NOTIFY,
+        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_NOTIFY_V1,
         &body,
         json!({
             "delivery": "queued",
@@ -217,11 +217,11 @@ pub(super) async fn mimi_notify(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.command.submit_message",
+    operation_id = "ak.open.mimi.command.submit_message.v1",
     summary = "Submit a MIMI message",
     tags("mimi")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.submit_message"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.submit_message.v1"))]
 pub(super) async fn mimi_room_message(
     strand_id: PathParam<String>,
     body: JsonBody<MimiSubmitMessageRequestBody>,
@@ -304,7 +304,7 @@ pub(super) async fn mimi_room_message(
     let body_value = typed_body_value(&body, "mimi submit message")?;
     let _receipt = mimi_receipt(
         state,
-        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_SUBMIT_MESSAGE,
+        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_SUBMIT_MESSAGE_V1,
         &body_value,
         json!({
             "schema": arkret_wire::SchemaId::MIMI_INTEROP_V1,
@@ -354,11 +354,11 @@ pub(super) async fn mimi_room_message(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.read.group_info",
+    operation_id = "ak.open.mimi.read.group_info.v1",
     summary = "Get MIMI group info",
     tags("mimi")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.read.group_info"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.read.group_info.v1"))]
 pub(super) async fn mimi_group_info(
     strand_id: PathParam<String>,
     depot: &mut Depot,
@@ -384,7 +384,7 @@ pub(super) async fn mimi_group_info(
     };
     let _receipt = mimi_receipt(
         state,
-        arkret_wire::ServiceOperationId::OPEN_MIMI_READ_GROUP_INFO,
+        arkret_wire::ServiceOperationId::OPEN_MIMI_READ_GROUP_INFO_V1,
         &json!({"room_id": room_id}),
         json!({
             "truth_source": "arkret_signed_event_reducer",
@@ -399,11 +399,11 @@ pub(super) async fn mimi_group_info(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.command.request_consent",
+    operation_id = "ak.open.mimi.command.request_consent.v1",
     summary = "Request MIMI consent",
     tags("mimi")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.request_consent"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.request_consent.v1"))]
 pub(super) async fn mimi_consent_request(
     aa: AuthArgs,
     body: JsonBody<MimiRequestConsentRequestBody>,
@@ -441,7 +441,7 @@ pub(super) async fn mimi_consent_request(
         })?;
     let _receipt = mimi_receipt(
         state,
-        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_REQUEST_CONSENT,
+        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_REQUEST_CONSENT_V1,
         &body_value,
         json!({
             "consent_grants_space_capability": false,
@@ -458,11 +458,11 @@ pub(super) async fn mimi_consent_request(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.command.update_consent",
+    operation_id = "ak.open.mimi.command.update_consent.v1",
     summary = "Update MIMI consent",
     tags("mimi")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.update_consent"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.update_consent.v1"))]
 pub(super) async fn mimi_consent_update(
     aa: AuthArgs,
     body: JsonBody<MimiUpdateConsentRequestBody>,
@@ -925,11 +925,11 @@ pub(super) fn request_has_bearer_session(req: &Request) -> bool {
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.read.identifiers",
+    operation_id = "ak.open.mimi.read.identifiers.v1",
     summary = "Query MIMI identifiers",
     tags("mimi")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.read.identifiers"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.read.identifiers.v1"))]
 pub(super) async fn mimi_identifiers_query(
     body: JsonBody<MimiIdentifierQueryRequestBody>,
     depot: &mut Depot,
@@ -979,7 +979,7 @@ pub(super) async fn mimi_identifiers_query(
     }
     let _receipt = mimi_receipt(
         state,
-        arkret_wire::ServiceOperationId::OPEN_MIMI_READ_IDENTIFIERS,
+        arkret_wire::ServiceOperationId::OPEN_MIMI_READ_IDENTIFIERS_V1,
         &body,
         json!({
             "contact_graph_exposed": false,
@@ -996,11 +996,11 @@ pub(super) async fn mimi_identifiers_query(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.command.report_abuse",
+    operation_id = "ak.open.mimi.command.report_abuse.v1",
     summary = "Report MIMI abuse",
     tags("mimi")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.report_abuse"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.report_abuse.v1"))]
 pub(super) async fn mimi_report_abuse(
     body: JsonBody<MimiReportAbuseRequestBody>,
     depot: &mut Depot,
@@ -1140,7 +1140,7 @@ pub(super) async fn mimi_report_abuse(
     ];
     let _receipt = mimi_receipt(
         state,
-        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_REPORT_ABUSE,
+        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_REPORT_ABUSE_V1,
         &body,
         json!({
             "e2ee_evidence_plaintext_required": false,
@@ -1194,11 +1194,11 @@ pub(super) async fn enforce_mimi_reporter_resolution(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.command.proxy_download",
+    operation_id = "ak.open.mimi.command.proxy_download.v1",
     summary = "Proxy a MIMI download",
     tags("mimi")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.proxy_download"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.command.proxy_download.v1"))]
 pub(super) async fn mimi_proxy_download(
     body: JsonBody<MimiProxyDownloadRequestBody>,
     depot: &mut Depot,
@@ -1233,7 +1233,7 @@ pub(super) async fn mimi_proxy_download(
     }
     let _receipt = mimi_receipt(
         state,
-        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_PROXY_DOWNLOAD,
+        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_PROXY_DOWNLOAD_V1,
         &body,
         json!({
             "asset_privacy_policy": asset_policy,

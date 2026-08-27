@@ -39,10 +39,10 @@ pub(super) fn sign_history_request_replica_outcome(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.history_key_responses.read.list",
+    operation_id = "ak.self.history_key_responses.read.list.v1",
     tags("governance")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.history_key_responses.read.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.history_key_responses.read.list.v1"))]
 pub(super) async fn read_history_key_responses(
     depot: &mut Depot,
     req: &mut Request,
@@ -118,10 +118,10 @@ pub(super) async fn read_history_key_responses(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.history_key_responses.command.ack",
+    operation_id = "ak.self.history_key_responses.command.ack.v1",
     tags("governance")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.history_key_responses.command.ack"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.history_key_responses.command.ack.v1"))]
 pub(super) async fn ack_history_key_responses(
     body: JsonBody<HistoryKeyResponseAckRequest>,
     depot: &mut Depot,

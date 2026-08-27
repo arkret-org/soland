@@ -8,7 +8,7 @@ use super::{PersistenceResult, Value, async_trait};
 /// A not-yet-authorized device stages its device key here (account-less, inert)
 /// and receives a short `device_pairing_request_id` + `pairing_code`. The row is
 /// flipped to `authorized` only when a verified sibling device drives the
-/// existing authenticated `ak.gate.account.command.pair_device`. Mirrors the
+/// existing authenticated `ak.gate.account.command.pair_device.v1`. Mirrors the
 /// agent-pairing template but has no controller/PCR binding — it grants nothing
 /// on its own.
 #[derive(Clone, Debug, PartialEq)]

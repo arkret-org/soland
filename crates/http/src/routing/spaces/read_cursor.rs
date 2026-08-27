@@ -22,11 +22,11 @@ use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
 #[endpoint(
-    operation_id = "ak.self.read_cursor.command.advance",
+    operation_id = "ak.self.read_cursor.command.advance.v1",
     summary = "Advance a read cursor",
     tags("read_cursor")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.read_cursor.command.advance"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.read_cursor.command.advance.v1"))]
 pub(super) async fn set_read_cursor(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -143,11 +143,11 @@ fn validate_caller_signed_read_cursor(
 }
 
 #[endpoint(
-    operation_id = "ak.self.read_cursor.read.list",
+    operation_id = "ak.self.read_cursor.read.list.v1",
     summary = "List read cursors",
     tags("read_cursor")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.read_cursor.read.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.read_cursor.read.list.v1"))]
 pub(super) async fn get_read_cursors(
     aa: AuthArgs,
     depot: &mut Depot,

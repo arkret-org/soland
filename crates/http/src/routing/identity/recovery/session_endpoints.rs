@@ -450,12 +450,12 @@ fn recovery_grant_coordinates(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.recovery_session.command.create",
+    operation_id = "ak.root.identity.recovery_session.command.create.v1",
     tags("identity")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.root.identity.recovery_session.command.create")
+    fields(op = "ak.root.identity.recovery_session.command.create.v1")
 )]
 pub(super) async fn recovery_session_create(
     aa: AuthArgs,
@@ -745,7 +745,7 @@ pub(super) async fn recovery_session_create(
     append_audit_log(
         state,
         Some(&session.actor),
-        arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_CREATE,
+        arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_CREATE_V1,
         json!({
             "recovery_session_id": record.recovery_session_id.clone(),
             "principal_authority": {
@@ -764,12 +764,12 @@ pub(super) async fn recovery_session_create(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.recovery_session.resource.get",
+    operation_id = "ak.root.identity.recovery_session.resource.get.v1",
     tags("identity")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.root.identity.recovery_session.resource.get")
+    fields(op = "ak.root.identity.recovery_session.resource.get.v1")
 )]
 pub(super) async fn recovery_session_get(
     aa: AuthArgs,
@@ -785,12 +785,12 @@ pub(super) async fn recovery_session_get(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.recovery_session.command.submit_proof",
+    operation_id = "ak.root.identity.recovery_session.command.submit_proof.v1",
     tags("identity")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.root.identity.recovery_session.command.submit_proof")
+    fields(op = "ak.root.identity.recovery_session.command.submit_proof.v1")
 )]
 pub(super) async fn recovery_session_proof_submit(
     aa: AuthArgs,
@@ -898,7 +898,7 @@ pub(super) async fn recovery_session_proof_submit(
     append_audit_log(
         state,
         Some(&updated.principal_id),
-        arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_SUBMIT_PROOF,
+        arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_SUBMIT_PROOF_V1,
         json!({
             "recovery_session_id": updated.recovery_session_id.clone(),
             "principal_id": updated.principal_id.clone(),

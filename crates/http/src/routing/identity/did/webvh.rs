@@ -132,7 +132,7 @@ pub(super) fn did_webvh_descriptor(state: &AppState) -> Value {
             "active": state.config().external_webvh_provider_active,
             "base_url": url,
             // STA-07-002 — advertise the canonical generic server-describe
-            // endpoint (operation_id ak.server.read.describe) the resolver
+            // endpoint (operation_id ak.server.read.describe.v1) the resolver
             // freshness probe targets. Provider-specific `<URL>/describe`
             // shapes are not probed.
             "describe_url": format!(

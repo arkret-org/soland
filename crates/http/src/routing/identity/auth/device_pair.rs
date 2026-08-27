@@ -4,11 +4,11 @@ use serde_json::Value;
 use super::*;
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.gate.account.command.pair_device",
+    operation_id = "ak.gate.account.command.pair_device.v1",
     summary = "Pair an account device",
     tags("account")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.pair_device"))]
+#[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.pair_device.v1"))]
 pub(super) async fn account_device_pair(
     aa: super::super::AuthArgs,
     depot: &mut Depot,
@@ -237,7 +237,7 @@ async fn authorize_account_device_pair(
         .await
         .map_err(|error| {
             crate::routing::events::event_log::submit_one_error_to_app_error(
-                "ak.gate.account.command.pair_device authorize Event submit failed",
+                "ak.gate.account.command.pair_device.v1 authorize Event submit failed",
                 error.status,
                 error.code,
                 &error.message,

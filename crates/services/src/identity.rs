@@ -1324,7 +1324,7 @@ pub trait DevicePairingPort: Send + Sync {
 
 /// Minimal façade over the device-pairing short-link store: stage a new
 /// account-less request, look one up, flip it to authorized once a verified
-/// sibling drives `ak.gate.account.command.pair_device`, and prune expired rows.
+/// sibling drives `ak.gate.account.command.pair_device.v1`, and prune expired rows.
 #[derive(Clone)]
 pub struct DevicePairingService {
     pairing: Arc<dyn DevicePairingPort>,

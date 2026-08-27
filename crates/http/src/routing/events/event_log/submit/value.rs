@@ -1447,7 +1447,7 @@ pub(super) async fn accepted_event_envelope(
             agent_id: signer_id,
             verification_method: producer.verification_method.clone(),
             operation_id: arkret_wire::ProtocolOperationId::new(
-                "ak:operation:ak.self.events.command.submit",
+                "ak:operation:ak.self.events.command.submit.v1",
             )
             .map_err(|error| SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,

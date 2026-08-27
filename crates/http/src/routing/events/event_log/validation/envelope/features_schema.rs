@@ -135,8 +135,6 @@ pub(super) fn service_declared_event_requirement_features(
         state.config().sovereign_enclave_enabled,
     );
     declared.extend(description.supported_features);
-    declared.extend(description.implemented_features);
-    declared.extend(description.experimental_features);
     declared
 }
 

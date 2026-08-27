@@ -435,7 +435,7 @@ mod requested_scope_tests {
             "actions": [CapabilityActionId::EVENT_READ],
             "resources": [{
                 "kind": "operation",
-                "operation": "ak.self.events.stream.subscribe"
+                "operation": "ak.self.events.stream.subscribe.v1"
             }],
             "constraints": [mandatory_value]
         }));

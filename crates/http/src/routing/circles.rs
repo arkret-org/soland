@@ -302,11 +302,11 @@ fn mls_event_group_ref(payload: &std::collections::BTreeMap<String, Value>) -> O
 // ── Handlers ────────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "ak.self.circle.read.list",
+    operation_id = "ak.self.circle.read.list.v1",
     summary = "List circles",
     tags("circles")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.circle.read.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.read.list.v1"))]
 async fn list_circles(
     aa: AuthArgs,
     realm_id: QueryParam<String, true>,
@@ -329,11 +329,11 @@ async fn list_circles(
 }
 
 #[endpoint(
-    operation_id = "ak.self.circle.resource.get",
+    operation_id = "ak.self.circle.resource.get.v1",
     summary = "Get one circle",
     tags("circles")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.circle.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.resource.get.v1"))]
 async fn get_circle(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -360,11 +360,11 @@ async fn get_circle(
 }
 
 #[endpoint(
-    operation_id = "ak.self.circle.command.create",
+    operation_id = "ak.self.circle.command.create.v1",
     summary = "Create a circle",
     tags("circles")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.create"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.create.v1"))]
 async fn post_circle(
     aa: AuthArgs,
     body: JsonBody<CircleCreateRequestBody>,
@@ -460,11 +460,11 @@ async fn submit_caller_signed_circle_event(
 }
 
 #[endpoint(
-    operation_id = "ak.self.circle.member.command.add",
+    operation_id = "ak.self.circle.member.command.add.v1",
     summary = "Add a circle member",
     tags("circles")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.circle.member.command.add"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.member.command.add.v1"))]
 async fn post_circle_member(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -583,11 +583,11 @@ fn caller_signed_circle_member_delete_target(
 }
 
 #[endpoint(
-    operation_id = "ak.self.circle.member.resource.delete",
+    operation_id = "ak.self.circle.member.resource.delete.v1",
     summary = "Remove a circle member",
     tags("circles")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.circle.member.resource.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.member.resource.delete.v1"))]
 async fn delete_circle_member(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -619,11 +619,11 @@ async fn delete_circle_member(
 }
 
 #[endpoint(
-    operation_id = "ak.self.circle.command.rotate_scope",
+    operation_id = "ak.self.circle.command.rotate_scope.v1",
     summary = "Rotate a circle's scope",
     tags("circles")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.rotate_scope"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.rotate_scope.v1"))]
 async fn post_scope_rotate(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -704,11 +704,11 @@ async fn post_scope_rotate(
 }
 
 #[endpoint(
-    operation_id = "ak.self.circle.command.archive",
+    operation_id = "ak.self.circle.command.archive.v1",
     summary = "Archive a circle",
     tags("circles")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.archive"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.archive.v1"))]
 async fn post_circle_archive(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -728,11 +728,11 @@ async fn post_circle_archive(
 }
 
 #[endpoint(
-    operation_id = "ak.self.circle.command.restore",
+    operation_id = "ak.self.circle.command.restore.v1",
     summary = "Restore a circle",
     tags("circles")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.restore"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.restore.v1"))]
 async fn post_circle_restore(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -752,11 +752,11 @@ async fn post_circle_restore(
 }
 
 #[endpoint(
-    operation_id = "ak.self.circle.command.tombstone",
+    operation_id = "ak.self.circle.command.tombstone.v1",
     summary = "Tombstone a circle",
     tags("circles")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.tombstone"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.tombstone.v1"))]
 async fn post_circle_tombstone(
     aa: AuthArgs,
     circle_id: PathParam<String>,

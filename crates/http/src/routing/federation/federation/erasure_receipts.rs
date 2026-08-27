@@ -20,7 +20,7 @@ pub(crate) fn router() -> Router {
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.peer.erasure_receipt.command.submit",
+    operation_id = "ak.peer.erasure_receipt.command.submit.v1",
     tags("federation")
 )]
 async fn submit(
@@ -184,7 +184,7 @@ async fn submit(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.peer.erasure_receipt.resource.get",
+    operation_id = "ak.peer.erasure_receipt.resource.get.v1",
     tags("federation")
 )]
 async fn get(

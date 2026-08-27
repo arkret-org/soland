@@ -42,11 +42,14 @@ pub(super) fn agent_participation_failed_precondition(reason: &'static str) -> A
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.participation.resource.replace",
+    operation_id = "ak.self.agent.participation.resource.replace.v1",
     summary = "Replace an agent's participation policy",
     tags("agent_participation")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.participation.resource.replace"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.self.agent.participation.resource.replace.v1")
+)]
 pub(super) async fn set_agent_participation(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -99,7 +102,7 @@ pub(super) async fn set_agent_participation(
     append_audit_log(
         state,
         Some(&session.actor),
-        arkret_wire::ServiceOperationId::SELF_AGENT_PARTICIPATION_RESOURCE_REPLACE,
+        arkret_wire::ServiceOperationId::SELF_AGENT_PARTICIPATION_RESOURCE_REPLACE_V1,
         json!({
             "agent_id": agent_id,
             "controller_id": session.actor.clone(),
@@ -115,11 +118,11 @@ pub(super) async fn set_agent_participation(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.participation.resource.get",
+    operation_id = "ak.self.agent.participation.resource.get.v1",
     summary = "Get an agent's participation policy",
     tags("agent_participation")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.participation.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.participation.resource.get.v1"))]
 pub(super) async fn get_agent_participation(
     aa: AuthArgs,
     agent_id: PathParam<String>,

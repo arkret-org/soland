@@ -19,9 +19,9 @@
 use super::common::*;
 
 const CEREMONY_SCOPE_ACTIONS: [&str; 3] = [
-    "ak.self.events.stream.subscribe",
-    "ak.self.events.read.scan",
-    "ak.self.events.command.submit",
+    "ak.self.events.stream.subscribe.v1",
+    "ak.self.events.read.scan.v1",
+    "ak.self.events.command.submit.v1",
 ];
 
 fn ceremony_requested_scope() -> Value {
@@ -211,7 +211,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
             .expect("signing key binding core digest");
     let pairing_digest =
         arkret_models_collaboration::agent_operations::agent_key_pairing_request_binding_digest(
-            arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY,
+            arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY_V1,
             &controller_core,
             &outcome.agent_id,
             &outcome.pairing_request_id,
@@ -370,7 +370,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
             requested_scope: requested_scope_typed,
             verifier_service_id: service_core.clone(),
             audience: arkret_wire::NonEmptyString::new(
-                arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY,
+                arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY_V1,
             )
             .unwrap(),
             challenge: arkret_wire::NonEmptyString::new(

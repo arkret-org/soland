@@ -9,7 +9,7 @@
 //!   validators (URL scheme, on_timeout enum) and the `ak.policy.manage` capability run.
 //! - `DELETE /_arkret/self/realms/{realm_id}/policy-server` — submit the caller-signed durable
 //!   `{"tombstone":true}` value to the same CAS-register cell. It takes a request body, the way
-//!   `ak.self.keys.backups.resource.delete` already does: the removal is a signed Event.
+//!   `ak.self.keys.backups.resource.delete.v1` already does: the removal is a signed Event.
 //!
 //! Both writes used to be authored here and signed with the service notary key under the caller's
 //! `actor_id`. That is the substitution `zh/security/key-management.md` section 411 forbids, and it
@@ -47,11 +47,11 @@ pub(crate) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm_policy_server.resource.get",
+    operation_id = "ak.self.realm_policy_server.resource.get.v1",
     summary = "Get a realm's policy server config",
     tags("realm_policy_server")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.get.v1"))]
 async fn get_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -70,11 +70,14 @@ async fn get_realm_policy_server(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm_policy_server.resource.replace",
+    operation_id = "ak.self.realm_policy_server.resource.replace.v1",
     summary = "Replace a realm's policy server config",
     tags("realm_policy_server")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.replace"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.self.realm_policy_server.resource.replace.v1")
+)]
 async fn put_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -129,11 +132,14 @@ async fn put_realm_policy_server(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm_policy_server.resource.delete",
+    operation_id = "ak.self.realm_policy_server.resource.delete.v1",
     summary = "Delete a realm's policy server config",
     tags("realm_policy_server")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.delete"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.self.realm_policy_server.resource.delete.v1")
+)]
 async fn delete_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,

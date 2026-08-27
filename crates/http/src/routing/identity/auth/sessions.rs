@@ -186,10 +186,10 @@ async fn enforce_recovery_session_grant_operation(
     }
     let pre_proof = matches!(
         operation,
-        arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_RESOURCE_GET
-            | arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_CREATE
-            | arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_RESOURCE_GET
-            | arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_SUBMIT_PROOF
+        arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_RESOURCE_GET_V1
+            | arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_CREATE_V1
+            | arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_RESOURCE_GET_V1
+            | arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_SUBMIT_PROOF_V1
     );
     if pre_proof {
         return Ok(());
@@ -258,24 +258,24 @@ fn recovery_operation_for_request(method: &str, path: &str) -> Option<&'static s
     use arkret_wire::ServiceOperationId;
     match (method, path) {
         ("GET", "/_arkret/root/identity/recovery-policy") => {
-            Some(ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_RESOURCE_GET)
+            Some(ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_RESOURCE_GET_V1)
         }
         ("POST", "/_arkret/root/identity/recovery-sessions") => {
-            Some(ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_CREATE)
+            Some(ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_CREATE_V1)
         }
         ("GET", "/_arkret/root/identity/log") => {
-            Some(ServiceOperationId::ROOT_IDENTITY_LOG_READ_LIST)
+            Some(ServiceOperationId::ROOT_IDENTITY_LOG_READ_LIST_V1)
         }
         ("QUERY", "/_arkret/self/events/frontier") => {
-            Some(ServiceOperationId::SELF_EVENTS_READ_FRONTIER)
+            Some(ServiceOperationId::SELF_EVENTS_READ_FRONTIER_V1)
         }
-        ("QUERY", "/_arkret/self/events") => Some(ServiceOperationId::SELF_EVENTS_READ_SCAN),
+        ("QUERY", "/_arkret/self/events") => Some(ServiceOperationId::SELF_EVENTS_READ_SCAN_V1),
         ("GET", "/_arkret/self/keys/backups") => {
-            Some(ServiceOperationId::SELF_KEYS_BACKUPS_READ_LIST)
+            Some(ServiceOperationId::SELF_KEYS_BACKUPS_READ_LIST_V1)
         }
-        ("POST", "/_arkret/self/keys/query") => Some(ServiceOperationId::SELF_KEYS_READ_LOOKUP),
+        ("POST", "/_arkret/self/keys/query") => Some(ServiceOperationId::SELF_KEYS_READ_LOOKUP_V1),
         ("POST", "/_arkret/self/security-transactions") => {
-            Some(ServiceOperationId::SELF_SECURITY_TRANSACTION_COMMAND_CREATE)
+            Some(ServiceOperationId::SELF_SECURITY_TRANSACTION_COMMAND_CREATE_V1)
         }
         _ if method == "GET"
             && path_template_matches(
@@ -283,7 +283,7 @@ fn recovery_operation_for_request(method: &str, path: &str) -> Option<&'static s
                 path,
             ) =>
         {
-            Some(ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_RESOURCE_GET)
+            Some(ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_RESOURCE_GET_V1)
         }
         _ if method == "POST"
             && path_template_matches(
@@ -291,12 +291,12 @@ fn recovery_operation_for_request(method: &str, path: &str) -> Option<&'static s
                 path,
             ) =>
         {
-            Some(ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_SUBMIT_PROOF)
+            Some(ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_SUBMIT_PROOF_V1)
         }
         _ if method == "POST"
             && path_template_matches("/_arkret/self/keys/backups/{backup_id}/unlock", path) =>
         {
-            Some(ServiceOperationId::SELF_KEYS_BACKUPS_COMMAND_UNLOCK)
+            Some(ServiceOperationId::SELF_KEYS_BACKUPS_COMMAND_UNLOCK_V1)
         }
         _ if method == "GET"
             && path_template_matches(
@@ -304,7 +304,7 @@ fn recovery_operation_for_request(method: &str, path: &str) -> Option<&'static s
                 path,
             ) =>
         {
-            Some(ServiceOperationId::SELF_SECURITY_TRANSACTION_RESOURCE_GET)
+            Some(ServiceOperationId::SELF_SECURITY_TRANSACTION_RESOURCE_GET_V1)
         }
         _ if method == "POST"
             && path_template_matches(
@@ -312,7 +312,7 @@ fn recovery_operation_for_request(method: &str, path: &str) -> Option<&'static s
                 path,
             ) =>
         {
-            Some(ServiceOperationId::SELF_SECURITY_TRANSACTION_COMMAND_CONTINUE)
+            Some(ServiceOperationId::SELF_SECURITY_TRANSACTION_COMMAND_CONTINUE_V1)
         }
         _ => None,
     }

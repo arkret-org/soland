@@ -543,7 +543,7 @@ async fn mls_lifecycle_end_to_end_body() {
     }
     install_routable_member(&state, realm_id, &alice_core);
 
-    // ── 1. upload a KeyPackage (W1C: ak.self.keys.keypackages.upload.create) ──
+    // ── 1. upload a KeyPackage (W1C: ak.self.keys.keypackages.upload.create.v1) ──
     let alice_mls_identity = arkret_mls::ArkretMlsIdentity::new_human_device(
         alice_core.clone(),
         arkret_wire::DeviceId::new(alice_device.to_owned()).unwrap(),
@@ -661,7 +661,7 @@ async fn mls_lifecycle_end_to_end_body() {
         Some(alice_device_authorize_event_id.as_str())
     );
 
-    // ── 2a. atomic claim wins (W1C: ak.self.keys.keypackages.command.claim) ───
+    // ── 2a. atomic claim wins (W1C: ak.self.keys.keypackages.command.claim.v1) ───
     let claim_url = "http://server/_arkret/self/keys/keypackages/claim".to_owned();
     let claim_expires_at = Utc::now() + chrono::Duration::minutes(4);
     let initial_claim = signed_keypackage_claim_request(
@@ -1153,7 +1153,7 @@ async fn mls_lifecycle_end_to_end_body() {
     // ── 5. MLS commits no longer have a dedicated REST surface ──
     // The dedicated `POST /_arkret/self/mls/commits` endpoint was removed in
     // W1C; clients now submit `ak.mls.commit` events via the canonical
-    // `POST /_arkret/self/events` pipeline (ak.self.events.command.submit of the registered
+    // `POST /_arkret/self/events` pipeline (ak.self.events.command.submit.v1 of the registered
     // durable `ak.mls.commit` kind). The reducer-level epoch-bump path is
     // covered by unit tests in `reducer::mls`. We deliberately do not
     // re-exercise it here from the HTTP layer.

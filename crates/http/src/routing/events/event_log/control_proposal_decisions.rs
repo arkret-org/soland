@@ -12,9 +12,9 @@ use arkret_wire::{
 use super::*;
 
 const SUBMIT_OPERATION: &str =
-    arkret_wire::ServiceOperationId::SELF_CONTROL_PROPOSAL_DECISIONS_COMMAND_SUBMIT;
+    arkret_wire::ServiceOperationId::SELF_CONTROL_PROPOSAL_DECISIONS_COMMAND_SUBMIT_V1;
 const READ_OPERATION: &str =
-    arkret_wire::ServiceOperationId::SELF_CONTROL_PROPOSAL_DECISIONS_READ_GET;
+    arkret_wire::ServiceOperationId::SELF_CONTROL_PROPOSAL_DECISIONS_READ_GET_V1;
 
 fn proposal_not_found() -> AppError {
     AppError::not_found("control proposal not found")
@@ -234,12 +234,12 @@ fn submit_outcome(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.control_proposal_decisions.command.submit",
+    operation_id = "ak.self.control_proposal_decisions.command.submit.v1",
     tags("events")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.self.control_proposal_decisions.command.submit")
+    fields(op = "ak.self.control_proposal_decisions.command.submit.v1")
 )]
 pub(super) async fn submit_control_proposal_decision(
     aa: AuthArgs,
@@ -333,10 +333,13 @@ pub(super) async fn submit_control_proposal_decision(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.control_proposal_decisions.read.get",
+    operation_id = "ak.self.control_proposal_decisions.read.get.v1",
     tags("events")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.control_proposal_decisions.read.get"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.self.control_proposal_decisions.read.get.v1")
+)]
 pub(super) async fn read_control_proposal_decision(
     aa: AuthArgs,
     depot: &mut Depot,

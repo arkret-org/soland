@@ -34,7 +34,7 @@ use salvo::prelude::*;
 use super::*;
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.agent_signer_evidence.read.resolve",
+    operation_id = "ak.self.agent_signer_evidence.read.resolve.v1",
     tags("identity")
 )]
 pub(super) async fn query_agent_signer_evidence(
@@ -792,7 +792,7 @@ async fn preflight_controller_gate(
     crate::routing::federation::outbox::insert_header_if_valid(
         &mut headers,
         "arkret-operation-id",
-        arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_ISSUE_CONTROLLER_GATE_ATTESTATION,
+        arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_ISSUE_CONTROLLER_GATE_ATTESTATION_V1,
     );
     crate::routing::federation::outbox::insert_header_if_valid(
         &mut headers,

@@ -51,9 +51,9 @@ use crate::artifacts;
 // Canonical kinds per
 // `arkret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json` (kind enum):
 //   - `ak.mls.keypackage`    — KeyPackage publication. The publish/claim distinction lives at the
-//     HTTP operation_id layer (`ak.self.keys.keypackages.upload.create` /
-//     `ak.self.keys.keypackages.command.claim`); the event log stores only the canonical kind. The
-//     reducer dispatches publish-vs-claim on the `payload.action == "publish" | "claim"` field.
+//     HTTP operation_id layer (`ak.self.keys.keypackages.upload.create.v1` /
+//     `ak.self.keys.keypackages.command.claim.v1`); the event log stores only the canonical kind.
+//     The reducer dispatches publish-vs-claim on the `payload.action == "publish" | "claim"` field.
 //   - `ak.mls.welcome`       — Welcome envelope reference. Per-(recipient, device) queue semantics
 //     are conveyed via payload shape; no separate `.enqueue` suffix.
 //   - `ak.mls.commit`        — MLS commit (bumps the group's stored epoch by +1 from

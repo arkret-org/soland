@@ -76,10 +76,10 @@ fn percent_encode_path_segment(value: &str) -> String {
 
 fn route_binding_digest(description: &ServiceDescribe) -> Result<Hash, AppError> {
     let binding_base = description
-        .supported_bindings
+        .transport_bindings
         .iter()
-        .find(|binding| binding.kind == arkret_wire::BindingKind::HttpJson)
-        .and_then(|binding| binding.base_url.as_deref())
+        .find(|binding| binding.kind() == arkret_wire::BindingKind::HttpJson)
+        .map(arkret_models_discovery::TransportBinding::base_url)
         .ok_or_else(|| {
             AppError::new(
                 ErrorCode::ServiceIdentityConflict,
@@ -255,7 +255,7 @@ pub(crate) async fn ensure_current_record(
     ))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.open.service.read.resolution", tags("identity"))]
+#[salvo::oapi::endpoint(operation_id = "ak.open.service.read.resolution.v1", tags("identity"))]
 async fn open_service_resolution(
     service_id: PathParam<String>,
     depot: &mut Depot,

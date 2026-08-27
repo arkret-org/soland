@@ -17,7 +17,7 @@ pub(crate) use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 pub(crate) use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
 pub(crate) use futures_util::StreamExt;
 pub(crate) use salvo::http::StatusCode;
-pub(crate) use salvo::test::{ResponseExt, TestClient};
+pub(crate) use salvo::test::ResponseExt;
 pub(crate) use serde_json::Value;
 pub(crate) use sha2::{Digest, Sha256};
 pub(crate) use soland_domain::artifacts;
@@ -30,6 +30,103 @@ pub(crate) use soland_http::{
 pub(crate) use soland_storage::{RealmInviteRecord, RealmMetaRecord, WebvhDocumentRecord};
 pub(crate) use soland_storage_postgres::Db;
 pub(crate) use soland_test_support::AppStateTestExt;
+
+/// Protocol-aware test request factory. Production clients choose an exact
+/// operation before sending; the integration harness derives that same exact
+/// selector from the canonical registry so unrelated handler tests do not
+/// duplicate 260 static header literals. Selector-negative tests must use
+/// `salvo::test::TestClient` directly.
+pub(crate) struct TestClient;
+
+impl TestClient {
+    fn select(
+        method: salvo::http::Method,
+        url: impl AsRef<str>,
+        builder: salvo::test::RequestBuilder,
+    ) -> salvo::test::RequestBuilder {
+        let path = url::Url::parse(url.as_ref())
+            .expect("test request URL is absolute")
+            .path()
+            .to_owned();
+        let operation = if matches!(
+            method,
+            salvo::http::Method::POST
+                | salvo::http::Method::PATCH
+                | salvo::http::Method::HEAD
+                | salvo::http::Method::DELETE
+        ) && (path == "/_arkret/self/blob/resumable"
+            || path.starts_with("/_arkret/self/blob/resumable/"))
+        {
+            Some(arkret_wire::ServiceOperationId::SelfBlobUploadCreateV1)
+        } else {
+            arkret_wire::ServiceOperationId::from_http_request(method.as_str(), &path)
+        };
+        match operation {
+            Some(operation) => builder.add_header("Arkret-Operation", operation.as_str(), true),
+            None => builder,
+        }
+    }
+
+    pub(crate) fn get(url: impl AsRef<str>) -> salvo::test::RequestBuilder {
+        Self::select(
+            salvo::http::Method::GET,
+            url.as_ref(),
+            salvo::test::TestClient::get(url.as_ref()),
+        )
+    }
+
+    pub(crate) fn post(url: impl AsRef<str>) -> salvo::test::RequestBuilder {
+        Self::select(
+            salvo::http::Method::POST,
+            url.as_ref(),
+            salvo::test::TestClient::post(url.as_ref()),
+        )
+    }
+
+    pub(crate) fn put(url: impl AsRef<str>) -> salvo::test::RequestBuilder {
+        Self::select(
+            salvo::http::Method::PUT,
+            url.as_ref(),
+            salvo::test::TestClient::put(url.as_ref()),
+        )
+    }
+
+    pub(crate) fn query(url: impl AsRef<str>) -> salvo::test::RequestBuilder {
+        Self::select(
+            salvo::http::Method::QUERY,
+            url.as_ref(),
+            salvo::test::TestClient::query(url.as_ref()),
+        )
+    }
+
+    pub(crate) fn delete(url: impl AsRef<str>) -> salvo::test::RequestBuilder {
+        Self::select(
+            salvo::http::Method::DELETE,
+            url.as_ref(),
+            salvo::test::TestClient::delete(url.as_ref()),
+        )
+    }
+
+    pub(crate) fn head(url: impl AsRef<str>) -> salvo::test::RequestBuilder {
+        Self::select(
+            salvo::http::Method::HEAD,
+            url.as_ref(),
+            salvo::test::TestClient::head(url.as_ref()),
+        )
+    }
+
+    pub(crate) fn options(url: impl AsRef<str>) -> salvo::test::RequestBuilder {
+        salvo::test::TestClient::options(url)
+    }
+
+    pub(crate) fn patch(url: impl AsRef<str>) -> salvo::test::RequestBuilder {
+        Self::select(
+            salvo::http::Method::PATCH,
+            url.as_ref(),
+            salvo::test::TestClient::patch(url.as_ref()),
+        )
+    }
+}
 
 /// Derived, never copied: the demo Realm id is `retype(genesis.event_id)` and
 /// moves with any `arkret-spec` change that touches the genesis payload.
@@ -114,6 +211,19 @@ pub(crate) fn app() -> salvo::Service {
 
 pub(crate) fn app_from_state(state: AppState) -> salvo::Service {
     service(state)
+}
+
+pub(crate) fn advertises_operation(describe: &Value, operation_id: &str) -> bool {
+    describe["supported_operation_bundles"]
+        .as_array()
+        .is_some_and(|bundles| {
+            bundles
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(arkret_wire::operation_bundle_descriptor)
+                .flat_map(|bundle| bundle.members)
+                .any(|binding| binding.operation_id.as_str() == operation_id)
+        })
 }
 
 /// Prepare the closed authority-authored self-principal PCR submission path.
@@ -2085,7 +2195,7 @@ pub(crate) fn signed_signal_envelope(
     envelope
 }
 
-/// `POST /_arkret/self/signal` — `ak.self.signal.command.send`.
+/// `POST /_arkret/self/signal` — `ak.self.signal.command.send.v1`.
 pub(crate) async fn post_signal(
     state: AppState,
     token: &str,

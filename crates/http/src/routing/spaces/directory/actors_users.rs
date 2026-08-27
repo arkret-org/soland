@@ -1,7 +1,10 @@
 use super::*;
 
-#[salvo::oapi::endpoint(operation_id = "ak.find.directory.read.search_actors", tags("spaces"))]
-#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.search_actors"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.find.directory.read.search_actors.v1",
+    tags("spaces")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.search_actors.v1"))]
 pub(super) async fn search_actors(
     body: JsonBody<DirectorySearchActorsRequestBody>,
     depot: &mut Depot,
@@ -44,8 +47,11 @@ pub(super) async fn search_actors(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.find.directory.read.search_users", tags("spaces"))]
-#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.search_users"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.find.directory.read.search_users.v1",
+    tags("spaces")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.search_users.v1"))]
 pub(super) async fn search_users(
     body: JsonBody<DirectorySearchUsersRequestBody>,
     depot: &mut Depot,
@@ -57,11 +63,11 @@ pub(super) async fn search_users(
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
     let query = body.query;
     let session = authenticated_session(state, req).await.ok();
-    // DIR-1 (R3.1, arkret-spec @ 7157ee8) — `ak.find.directory.read.search_users`
+    // DIR-1 (R3.1, arkret-spec @ 7157ee8) — `ak.find.directory.read.search_users.v1`
     // response rows MUST NOT carry `handle_uri`. Only `handle` (canonical
     // `<localpart>:<domain>`) + optional `display_name`/`verified`/`subject`
     // survive the rename. Other actor metadata (presence, organization,
-    // avatar) goes through `ak.find.directory.read.search_actors` or
+    // avatar) goes through `ak.find.directory.read.search_actors.v1` or
     // `ak.directory.resolve-handle`.
     let mut results: Vec<UserSearchOutcome> = Vec::new();
     for actor in demo_actors(state).await {
@@ -86,7 +92,7 @@ pub(super) async fn search_users(
 }
 
 /// DIR-1 — project a [`demo_actors`] row into the spec-shape
-/// `ak.find.directory.read.search_users` response entry. Only `handle` (canonical
+/// `ak.find.directory.read.search_users.v1` response entry. Only `handle` (canonical
 /// `<localpart>:<domain>` per handle-claim.schema.json, arkret-spec @
 /// 7157ee8) + optional `display_name`/`verified`/`subject` survive.
 pub(super) fn project_search_users_row(

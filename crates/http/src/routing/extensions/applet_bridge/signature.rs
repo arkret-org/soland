@@ -367,7 +367,7 @@ pub(super) fn applet_delivery_authentication_record_digest(
 ) -> String {
     let anchor = serde_json::json!({
         "profile": arkret_wire::DomainSeparationId::APPLET_DELIVERY_AUTHENTICATION_RECORD_DIGEST_V1,
-        "operation_id": arkret_wire::ServiceOperationId::EDGE_APPLET_COMMAND_TRANSACTION,
+        "operation_id": arkret_wire::ServiceOperationId::EDGE_APPLET_COMMAND_TRANSACTION_V1,
         "direction": "applet_to_arkret_inbound",
         "source_service_id": source_service_id,
         "destination_service_id": destination_service_id,

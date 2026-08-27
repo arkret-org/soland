@@ -357,7 +357,7 @@ mod tests {
             challenge_id: arkret_wire::Base64UrlString::new("Y2hhbGxlbmdlLWlk").unwrap(),
             challenge: arkret_wire::Base64UrlString::new("Y2hhbGxlbmdlLWJ5dGVz").unwrap(),
             nonce: arkret_wire::Base64UrlString::new("bm9uY2UtYnl0ZXM").unwrap(),
-            operation: "ak.self.keys.backups.resource.delete".to_owned(),
+            operation: "ak.self.keys.backups.resource.delete.v1".to_owned(),
             principal_id: DidCoreId::new(ACTOR.to_owned()).unwrap(),
             backup_id: BackupId::new(BACKUP_ID.to_owned()).unwrap(),
             audience: arkret_wire::NonEmptyString::new("https://soland.test").unwrap(),
@@ -402,7 +402,10 @@ mod tests {
             object["context"],
             arkret_wire::ProofContextId::KEY_BACKUP_DELETE_PROOF_V1
         );
-        assert_eq!(object["operation"], "ak.self.keys.backups.resource.delete");
+        assert_eq!(
+            object["operation"],
+            "ak.self.keys.backups.resource.delete.v1"
+        );
         assert!(
             object["reason"].is_null(),
             "an absent reason MUST be encoded as JSON null, not omitted"

@@ -857,7 +857,7 @@ mod tests {
                     &arkret_wire::DidFullId::new("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service").unwrap(),
                 )
                 .unwrap(),
-            scopes: vec!["ak.self.events.read.scan".to_owned()],
+            scopes: vec!["ak.self.events.read.scan.v1".to_owned()],
             expires_at: crate::wire::now() + Duration::minutes(5),
             revoked_at: None,
             revocation_ref: "ak:session:grant-1".to_owned(),
@@ -899,7 +899,7 @@ mod tests {
         grant.device_id = None;
         grant.device_binding = None;
         grant.subject = DidCoreId::new("ak:did_core:web:agent.example").unwrap();
-        grant.scopes = vec!["ak.self.events.read.scan".to_owned()];
+        grant.scopes = vec!["ak.self.events.read.scan.v1".to_owned()];
         grant.holder_binding = SessionGrantHolderBinding::AgentRuntime {
             agent_id: DidCoreId::new("ak:did_core:web:agent.example").unwrap(),
             device_id: DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap(),
@@ -917,7 +917,7 @@ mod tests {
         let agent_session = agent_session.unwrap();
         assert_eq!(
             agent_session.granted_scope,
-            vec!["ak.self.events.read.scan"]
+            vec!["ak.self.events.read.scan.v1"]
         );
         assert_eq!(agent_session.freshness_state, FreshnessState::Fresh);
         assert_eq!(

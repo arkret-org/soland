@@ -1,12 +1,14 @@
 //! Server-mediated device-pairing short-link surface (mirrors the agent-pairing
 //! `open` template). Mounted UNAUTHENTICATED under `/_arkret/open`:
 //!
-//! - `POST /_arkret/open/device-pairing/requests`         — `ak.open.device_pairing.command.stage`
-//! - `POST /_arkret/open/device-pairing/resolve`          — `ak.open.device_pairing.read.resolve`
-//! - `POST /_arkret/open/device-pairing/requests/status`  — `ak.open.device_pairing.read.status`
+//! - `POST /_arkret/open/device-pairing/requests`         —
+//!   `ak.open.device_pairing.command.stage.v1`
+//! - `POST /_arkret/open/device-pairing/resolve`          —
+//!   `ak.open.device_pairing.read.resolve.v1`
+//! - `POST /_arkret/open/device-pairing/requests/status`  — `ak.open.device_pairing.read.status.v1`
 //!
 //! Security: the staged row is account-less and grants nothing until a verified
-//! device drives the authenticated `ak.gate.account.command.pair_device`. These
+//! device drives the authenticated `ak.gate.account.command.pair_device.v1`. These
 //! handlers take NO `AuthArgs` and never call `authenticated_session`. `resolve`
 //! fails closed with a UNIFORM not-found for absent, wrong-code,
 //! expired, and already-authorized records. `status` uses the same not-found for
@@ -48,11 +50,11 @@ const DEVICE_PAIRING_TTL_MINUTES: i64 = 10;
 const DEVICE_PAIRING_EXPIRED_RETENTION_MINUTES: i64 = 60;
 
 #[endpoint(
-    operation_id = "ak.open.device_pairing.command.stage",
+    operation_id = "ak.open.device_pairing.command.stage.v1",
     summary = "Stage a device pairing short-link request",
     tags("device_pairing")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.device_pairing.command.stage"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.device_pairing.command.stage.v1"))]
 pub(super) async fn stage_device_pairing(
     depot: &mut Depot,
     req: &mut Request,
@@ -130,11 +132,11 @@ pub(super) async fn stage_device_pairing(
 }
 
 #[endpoint(
-    operation_id = "ak.open.device_pairing.read.resolve",
+    operation_id = "ak.open.device_pairing.read.resolve.v1",
     summary = "Resolve a device pairing bootstrap",
     tags("device_pairing")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.device_pairing.read.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.device_pairing.read.resolve.v1"))]
 pub(super) async fn resolve_device_pairing(
     depot: &mut Depot,
     req: &mut Request,
@@ -214,11 +216,11 @@ pub(super) async fn resolve_device_pairing(
 }
 
 #[endpoint(
-    operation_id = "ak.open.device_pairing.read.status",
+    operation_id = "ak.open.device_pairing.read.status.v1",
     summary = "Poll a device pairing request status",
     tags("device_pairing")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.device_pairing.read.status"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.device_pairing.read.status.v1"))]
 pub(super) async fn device_pairing_status(
     depot: &mut Depot,
     req: &mut Request,

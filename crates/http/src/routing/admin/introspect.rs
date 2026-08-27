@@ -129,7 +129,7 @@ fn admin_grant_from_introspection_outcome(
             .device_id
             .map(|device_id| device_id.as_str().to_owned()),
         audit_context: serde_json::json!({
-            "source": arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT,
+            "source": arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
             "grant_id": grant.id.as_str(),
             "audience": grant.audience,
         }),

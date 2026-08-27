@@ -1703,7 +1703,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
     assert_eq!(forbidden_audit.status_code.unwrap().as_u16(), 403);
 
     // Exercise the canonical spec path `/_arkret/gate/account/logout`
-    // (ak.gate.account.command.logout) — the only device-logout surface.
+    // (ak.gate.account.command.logout.v1) — the only device-logout surface.
     let logout: Value = TestClient::post("http://server/_arkret/gate/account/logout")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))

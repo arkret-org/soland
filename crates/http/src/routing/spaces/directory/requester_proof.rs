@@ -63,7 +63,7 @@ async fn directory_requester_proof_verified(
         return false;
     }
     // §9.0.1: `audience` MUST be the target Directory `service_id` published by
-    // `ak.find.directory.read.describe`, single valued and in `did_core_id`
+    // `ak.find.directory.read.describe.v1`, single valued and in `did_core_id`
     // form. The SDK rejects any other shape; the receiver decides whether the
     // single value actually names it. `state.service_id()` is this deployment's
     // projected core id, which is exactly the value describe publishes.

@@ -1,4 +1,4 @@
-//! Integration tests — `ak.self.realm.join_application.read.list` pagination
+//! Integration tests — `ak.self.realm.join_application.read.list.v1` pagination
 //! cursor.
 //!
 //! api-conventions.md §7 requires the single opaque `ak:cursor:` token type on

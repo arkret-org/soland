@@ -4,8 +4,8 @@
 //! - `POST /_soland/gate/auth/dev-login` — dev-mode session credential issue
 //! - `POST /_arkret/gate/account/session-grants` — coauth session-grant bridge
 //! - `POST /_arkret/gate/account/session-grants/revoke` — spec
-//!   `ak.gate.account.command.revoke_session`
-//! - `POST /_arkret/gate/account/logout` — spec `ak.gate.account.command.logout`: revoke the
+//!   `ak.gate.account.command.revoke_session.v1`
+//! - `POST /_arkret/gate/account/logout` — spec `ak.gate.account.command.logout.v1`: revoke the
 //!   presented session credential + queued to-device while preserving device authorization
 //!
 //! Internal helpers exported for the rest of `crate::routing`:
@@ -85,12 +85,12 @@ pub(super) fn protocol_account_router() -> Router {
             // ak.session.grant directly to `/_arkret/self/*` with a DPoP proof,
             // so there is no `session-grants .post(...)` mount here — only `revoke`.
             //
-            // Spec `account_auth` surface group: `ak.gate.account.command.revoke_session`
+            // Spec `account_auth` surface group: `ak.gate.account.command.revoke_session.v1`
             // binds to `POST /_arkret/gate/account/session-grants/revoke`.
             Router::with_path("session-grants")
                 .push(Router::with_path("revoke").post(session_revoke)),
         )
-        // Spec `ak.gate.account.command.logout` — Principal Server device
+        // Spec `ak.gate.account.command.logout.v1` — Principal Server device
         // logout (account-lifecycle §4.1): revoke this session credential and
         // drop the device's queued to-device while preserving its durable
         // authorization. Canonical `/_arkret/gate/account/logout`; deployment
@@ -101,7 +101,7 @@ pub(super) fn protocol_account_router() -> Router {
 }
 
 pub(super) fn local_router() -> Router {
-    // Device logout is the spec op `ak.gate.account.command.logout`, served at
+    // Device logout is the spec op `ak.gate.account.command.logout.v1`, served at
     // the canonical `/_arkret/gate/account/logout` (see `protocol_account_router`).
     // Deployment gateways route that longer prefix to soland (the Principal
     // Server) even though `/_arkret/gate/` otherwise goes to the Auth Server, so

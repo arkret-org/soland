@@ -1,8 +1,8 @@
 //! Signal Extension rail (`zh/sync/signal.md`).
 //!
 //! Two local client surfaces:
-//! - `POST /_arkret/self/signal`           — `ak.self.signal.command.send`
-//! - `GET  /_arkret/self/signal/subscribe` — `ak.self.signal.stream.subscribe`
+//! - `POST /_arkret/self/signal`           — `ak.self.signal.command.send.v1`
+//! - `GET  /_arkret/self/signal/subscribe` — `ak.self.signal.stream.subscribe.v1`
 //!
 //! Cross-service recipients are reached through the separate authenticated
 //! single-hop `POST /_arkret/peer/signal` federation binding.
@@ -40,11 +40,11 @@ const SIGNAL_SUBSCRIBE_DEFAULT_HEARTBEAT_MS: u64 = 15_000;
 /// not carried on the durable event broadcast, so the live rail polls.
 const SIGNAL_SUBSCRIBE_POLL_MS: u64 = 250;
 
-/// `ak.self.signal.command.send`.
+/// `ak.self.signal.command.send.v1`.
 ///
 /// The body is an `ak.schema.signal_envelope.v1` [`SignalEnvelope`].
-#[endpoint(operation_id = "ak.self.signal.command.send")]
-#[tracing::instrument(skip_all, fields(op = "ak.self.signal.command.send"))]
+#[endpoint(operation_id = "ak.self.signal.command.send.v1")]
+#[tracing::instrument(skip_all, fields(op = "ak.self.signal.command.send.v1"))]
 pub(super) async fn submit_signal(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
@@ -54,7 +54,7 @@ pub(super) async fn submit_signal(
     let session = aa.authenticated_session(state, req).await?;
     super::super::require_agent_session_scope(
         &session,
-        arkret_wire::ServiceOperationId::SELF_SIGNAL_COMMAND_SEND,
+        arkret_wire::ServiceOperationId::SELF_SIGNAL_COMMAND_SEND_V1,
     )?;
 
     let envelope: SignalEnvelope = req.parse_json().await.map_err(|error| {
@@ -619,7 +619,7 @@ fn signal_rail_unavailable(what: &str) -> AppError {
     )
 }
 
-/// `ak.self.signal.stream.subscribe` at `GET /_arkret/self/signal/subscribe`.
+/// `ak.self.signal.stream.subscribe.v1` at `GET /_arkret/self/signal/subscribe`.
 ///
 /// NDJSON of the verbatim admitted [`SignalEnvelope`], so a receiver verifies
 /// `proof` over the exact canonical bytes the sender signed. §4 forbids a new
@@ -628,7 +628,7 @@ fn signal_rail_unavailable(what: &str) -> AppError {
 /// the stream therefore takes no scope selector and no `after` token. It emits
 /// envelope lines plus bounded transport control frames only.
 #[handler]
-#[tracing::instrument(skip_all, fields(op = "ak.self.signal.stream.subscribe"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.signal.stream.subscribe.v1"))]
 pub(super) async fn signal_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot
         .get_typed::<AppState>()
@@ -640,7 +640,7 @@ pub(super) async fn signal_subscribe(depot: &mut Depot, req: &mut Request, res: 
     };
     if let Err(error) = super::super::require_agent_session_scope(
         &session,
-        arkret_wire::ServiceOperationId::SELF_SIGNAL_STREAM_SUBSCRIBE,
+        arkret_wire::ServiceOperationId::SELF_SIGNAL_STREAM_SUBSCRIBE_V1,
     ) {
         soland_http::error::render_error(
             res,

@@ -1,7 +1,10 @@
 use super::*;
 
-#[salvo::oapi::endpoint(operation_id = "ak.find.directory.read.search_realms", tags("spaces"))]
-#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.search_realms"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.find.directory.read.search_realms.v1",
+    tags("spaces")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.search_realms.v1"))]
 pub(super) async fn search_realms(
     body: JsonBody<DirectorySearchRealmsRequestBody>,
     depot: &mut Depot,
@@ -42,8 +45,11 @@ pub(super) async fn search_realms(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.find.directory.read.resolve_realm", tags("spaces"))]
-#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.resolve_realm"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.find.directory.read.resolve_realm.v1",
+    tags("spaces")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.resolve_realm.v1"))]
 pub(super) async fn resolve_realm(
     body: JsonBody<DirectoryResolveRealmRequestBody>,
     depot: &mut Depot,
@@ -133,8 +139,11 @@ pub(super) async fn resolve_realm(
     }
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.find.directory.read.resolve_target", tags("spaces"))]
-#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.resolve_target"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.find.directory.read.resolve_target.v1",
+    tags("spaces")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.resolve_target.v1"))]
 pub(super) async fn resolve_target(
     body: JsonBody<DirectoryResolveTargetRequestBody>,
     depot: &mut Depot,
@@ -857,7 +866,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
             role: RealmJoinCandidateRole::JoinedMemberPrincipalServer,
             endpoint: None,
             operations: vec![
-                arkret_wire::ServiceOperationId::PEER_EVENTS_COMMAND_SUBMIT.to_owned(),
+                arkret_wire::ServiceOperationId::PEER_EVENTS_COMMAND_SUBMIT_V1.to_owned(),
             ],
             join_methods,
             encryption_profile,

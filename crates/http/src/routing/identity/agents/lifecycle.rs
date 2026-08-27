@@ -239,11 +239,11 @@ fn allocation_mismatch() -> AppError {
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.command.provision",
+    operation_id = "ak.self.agent.command.provision.v1",
     summary = "Provision an agent",
     tags("agents")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.provision"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.provision.v1"))]
 pub(super) async fn provision_agent(
     aa: AuthArgs,
     body: JsonBody<AgentProvisionRequestBody>,
@@ -806,7 +806,7 @@ pub(super) async fn provision_agent(
             append_audit_log(
                 state,
                 Some(&session.actor),
-                arkret_wire::ServiceOperationId::SELF_AGENT_COMMAND_PROVISION,
+                arkret_wire::ServiceOperationId::SELF_AGENT_COMMAND_PROVISION_V1,
                 json!({
                     "agent_id": agent_id,
                     "controller_id": controller_id,
@@ -909,13 +909,13 @@ fn abandonment_storage_error(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.command.issue_provisioning_abandonment_challenge",
+    operation_id = "ak.self.agent.command.issue_provisioning_abandonment_challenge.v1",
     summary = "Issue an Agent provisioning abandonment challenge",
     tags("agents")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.self.agent.command.issue_provisioning_abandonment_challenge")
+    fields(op = "ak.self.agent.command.issue_provisioning_abandonment_challenge.v1")
 )]
 pub(super) async fn issue_provisioning_abandonment_challenge(
     aa: AuthArgs,
@@ -1037,11 +1037,11 @@ pub(super) async fn issue_provisioning_abandonment_challenge(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.command.abandon_provisioning",
+    operation_id = "ak.self.agent.command.abandon_provisioning.v1",
     summary = "Abandon an Agent provisioning",
     tags("agents")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.abandon_provisioning"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.abandon_provisioning.v1"))]
 pub(super) async fn abandon_provisioning(
     aa: AuthArgs,
     body: JsonBody<AgentProvisioningAbandonmentRequestBody>,
@@ -1088,7 +1088,7 @@ pub(super) async fn abandon_provisioning(
     append_audit_log(
         state,
         Some(&session.actor),
-        arkret_wire::ServiceOperationId::SELF_AGENT_COMMAND_ABANDON_PROVISIONING,
+        arkret_wire::ServiceOperationId::SELF_AGENT_COMMAND_ABANDON_PROVISIONING_V1,
         json!({
             "agent_id": &outcome.agent_id,
             "principal_control_realm_id": &outcome.principal_control_realm_id,
@@ -1099,7 +1099,7 @@ pub(super) async fn abandon_provisioning(
     .await;
     json_ok(outcome)
 }
-/// `ak.self.agent.command.renew_pairing` — re-open pairing for a bootstrap or
+/// `ak.self.agent.command.renew_pairing.v1` — re-open pairing for a bootstrap or
 /// a runtime-replacement agent (key-management.md §3.6.1). Both branches share
 /// the one-time-handle invariant (the fresh `pairing_request_id` +
 /// `pairing_code` replace the old tuple, which becomes permanently unresolvable
@@ -1116,11 +1116,11 @@ pub(super) async fn abandon_provisioning(
 /// Re-opening is never a lifecycle transition and never requires a forced
 /// pause; `deactivated` is terminal.
 #[endpoint(
-    operation_id = "ak.self.agent.command.renew_pairing",
+    operation_id = "ak.self.agent.command.renew_pairing.v1",
     summary = "Renew an agent's pairing",
     tags("agents")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.renew_pairing"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.renew_pairing.v1"))]
 pub(super) async fn renew_agent_pairing(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -1232,7 +1232,7 @@ pub(super) async fn renew_agent_pairing(
     append_audit_log(
         state,
         Some(&session.actor),
-        arkret_wire::ServiceOperationId::SELF_AGENT_COMMAND_RENEW_PAIRING,
+        arkret_wire::ServiceOperationId::SELF_AGENT_COMMAND_RENEW_PAIRING_V1,
         json!({
             "agent_id": agent_id,
             "controller_id": session.actor,
@@ -1267,11 +1267,11 @@ pub(super) async fn renew_agent_pairing(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.read.list",
+    operation_id = "ak.self.agent.read.list.v1",
     summary = "List agents",
     tags("agents")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.read.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.read.list.v1"))]
 pub(super) async fn list_agents(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1312,11 +1312,11 @@ pub(super) async fn list_agents(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.resource.get",
+    operation_id = "ak.self.agent.resource.get.v1",
     summary = "Get one agent",
     tags("agents")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.resource.get.v1"))]
 pub(super) async fn get_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -1542,11 +1542,11 @@ pub(super) async fn lifecycle_transition(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.command.pause",
+    operation_id = "ak.self.agent.command.pause.v1",
     summary = "Pause an agent",
     tags("agents")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.pause"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.pause.v1"))]
 pub(super) async fn pause_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -1572,11 +1572,11 @@ pub(super) async fn pause_agent(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.command.resume",
+    operation_id = "ak.self.agent.command.resume.v1",
     summary = "Resume an agent",
     tags("agents")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.resume"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.resume.v1"))]
 pub(super) async fn resume_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -1602,11 +1602,11 @@ pub(super) async fn resume_agent(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.command.deactivate",
+    operation_id = "ak.self.agent.command.deactivate.v1",
     summary = "Deactivate an agent",
     tags("agents")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.deactivate"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.deactivate.v1"))]
 pub(super) async fn deactivate_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -1651,11 +1651,11 @@ pub(super) async fn deactivate_agent(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.grant.command.attach",
+    operation_id = "ak.self.agent.grant.command.attach.v1",
     summary = "Attach a grant to an agent",
     tags("agents")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.grant.command.attach"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.grant.command.attach.v1"))]
 pub(super) async fn attach_agent_grant(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -1702,7 +1702,7 @@ pub(super) async fn attach_agent_grant(
     append_audit_log(
         state,
         Some(&session.actor),
-        arkret_wire::ServiceOperationId::SELF_AGENT_GRANT_COMMAND_ATTACH,
+        arkret_wire::ServiceOperationId::SELF_AGENT_GRANT_COMMAND_ATTACH_V1,
         json!({
             "agent_id": agent_id,
             "grant_id": grant_id,
@@ -1717,11 +1717,11 @@ pub(super) async fn attach_agent_grant(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.grant.resource.delete",
+    operation_id = "ak.self.agent.grant.resource.delete.v1",
     summary = "Detach a grant from an agent",
     tags("agents")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.grant.resource.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.grant.resource.delete.v1"))]
 pub(super) async fn detach_agent_grant(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -1785,7 +1785,7 @@ pub(super) async fn detach_agent_grant(
     append_audit_log(
         state,
         Some(&session.actor),
-        arkret_wire::ServiceOperationId::SELF_AGENT_GRANT_RESOURCE_DELETE,
+        arkret_wire::ServiceOperationId::SELF_AGENT_GRANT_RESOURCE_DELETE_V1,
         json!({
             "agent_id": agent_id,
             "grant_id": typed_grant_id,

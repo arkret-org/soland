@@ -49,10 +49,10 @@ fn generate_openapi_doc(router: &Router, artifact_registry_summary: Value) -> Va
     root.insert(
         "x-operation-aliases".to_owned(),
         json!({
-            "events.submit": arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT,
-            "events.read": arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN,
-            "events.subscribe": arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
-            "account.subscribe": arkret_wire::ServiceOperationId::SELF_ACCOUNT_STREAM_SUBSCRIBE,
+            "events.submit": arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
+            "events.read": arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN_V1,
+            "events.subscribe": arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE_V1,
+            "account.subscribe": arkret_wire::ServiceOperationId::SELF_ACCOUNT_STREAM_SUBSCRIBE_V1,
         }),
     );
     root.insert(
@@ -67,12 +67,56 @@ fn generate_openapi_doc(router: &Router, artifact_registry_summary: Value) -> Va
         }),
     );
     install_event_read_query_bindings(&mut doc);
+    install_operation_selector_parameters(&mut doc);
     doc
 }
 
 const OPENAPI_METHODS: &[&str] = &[
     "get", "head", "post", "put", "patch", "delete", "options", "query", "trace",
 ];
+
+fn install_operation_selector_parameters(doc: &mut Value) {
+    let paths = doc["paths"]
+        .as_object_mut()
+        .expect("generated OpenAPI paths must be an object");
+    for path_item in paths.values_mut() {
+        let Some(path_item) = path_item.as_object_mut() else {
+            continue;
+        };
+        for method in OPENAPI_METHODS {
+            let Some(operation) = path_item.get_mut(*method).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            let Some(operation_id) = operation
+                .get("operationId")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            if arkret_wire::ServiceOperationId::from_wire(&operation_id).is_none() {
+                continue;
+            }
+            let parameters = operation
+                .entry("parameters".to_owned())
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .expect("OpenAPI operation parameters must be an array");
+            parameters.retain(|parameter| {
+                parameter.get("name").and_then(Value::as_str) != Some("Arkret-Operation")
+            });
+            parameters.push(json!({
+                "name": "Arkret-Operation",
+                "in": "header",
+                "required": true,
+                "schema": {
+                    "type": "string",
+                    "const": operation_id
+                }
+            }));
+        }
+    }
+}
 
 /// salvo-oapi 0.95.2 can emit an OpenAPI 3.2 document, while its typed
 /// `PathItemType` still predates the 3.2 `query` member. Runtime routing comes

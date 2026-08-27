@@ -296,9 +296,9 @@ fn validate_service_describe(
         ));
     }
     let mut http_json_bindings = description
-        .supported_bindings
+        .transport_bindings
         .iter()
-        .filter(|binding| binding.kind == BindingKind::HttpJson);
+        .filter(|binding| binding.kind() == BindingKind::HttpJson);
     let binding = http_json_bindings.next().ok_or_else(|| {
         ServiceError::SchemaViolation(
             "ServiceDescribe has no selected http_json binding".to_owned(),
@@ -309,11 +309,7 @@ fn validate_service_describe(
             "ServiceDescribe has multiple http_json bindings".to_owned(),
         ));
     }
-    let advertised_base_raw = binding.base_url.as_deref().ok_or_else(|| {
-        ServiceError::SchemaViolation(
-            "ServiceDescribe http_json binding has no base_url".to_owned(),
-        )
-    })?;
+    let advertised_base_raw = binding.base_url();
     let advertised_base = CanonicalServiceUrl::canonicalize(advertised_base_raw)
         .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
     if advertised_base.as_str() != advertised_base_raw
@@ -570,13 +566,11 @@ impl ServiceRouteFetcher for VerifiedBindingRouteFetcher {
 
 #[cfg(test)]
 mod tests {
-    use arkret_models_discovery::{OperationBinding, ServiceDescribe, SupportedBinding};
+    use arkret_models_discovery::{ServiceDescribe, TransportBinding};
     use arkret_models_identity::{
         ResolutionCommitment, ServiceResolutionRecord, ServiceResolutionRecordCore,
     };
-    use arkret_wire::{
-        Base64UrlString, DidFullId, DidUrl, ProtocolSignature, ServiceOperationId, TrustDomainId,
-    };
+    use arkret_wire::{Base64UrlString, DidFullId, DidUrl, ProtocolSignature, TrustDomainId};
     use chrono::{Duration, TimeZone as _};
 
     use super::*;
@@ -594,20 +588,13 @@ mod tests {
             full_id.clone(),
             TrustDomainId::new("ak:trust_domain:route.example").unwrap(),
             ServiceKind::PrincipalServer,
+            vec!["ak.operation_bundle.principal_server.describe.v1".to_owned()],
+            vec![TransportBinding::HttpJson {
+                base_url: base_url.to_owned(),
+                extension_profile_required: (),
+            }],
         );
         description.service_resolution = commitment.clone();
-        description.operation_bindings = vec![
-            OperationBinding::current_http_json(ServiceOperationId::ServerReadDescribe).unwrap(),
-        ];
-        description.supported_bindings = vec![
-            SupportedBinding::new(BindingKind::HttpJson)
-                .with_base_url(base_url)
-                .with_extra(
-                    "operations",
-                    serde_json::json!([ServiceOperationId::ServerReadDescribe]),
-                )
-                .with_extra("extension_profile_required", serde_json::Value::Null),
-        ];
         #[derive(serde::Serialize)]
         struct Projection<'a> {
             service_id: &'a DidCoreId,
@@ -666,7 +653,11 @@ mod tests {
         );
 
         let mut wrong_base = description;
-        wrong_base.supported_bindings[0].base_url = Some("https://other.example/".to_owned());
+        let TransportBinding::HttpJson { base_url, .. } = &mut wrong_base.transport_bindings[0]
+        else {
+            panic!("fixture transport must be HTTP JSON")
+        };
+        *base_url = "https://other.example/".to_owned();
         assert!(
             validate_service_describe(&record, wrong_base, ServiceKind::PrincipalServer).is_err()
         );

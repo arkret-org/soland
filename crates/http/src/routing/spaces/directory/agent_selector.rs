@@ -140,10 +140,13 @@ pub(super) fn signed_agent_selector_claim(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.find.directory.read.resolve_agent_selector",
+    operation_id = "ak.find.directory.read.resolve_agent_selector.v1",
     tags("spaces")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.resolve_agent_selector"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.find.directory.read.resolve_agent_selector.v1")
+)]
 pub(super) async fn resolve_agent_selector(
     body: JsonBody<DirectoryResolveAgentSelectorRequestBody>,
     depot: &mut Depot,

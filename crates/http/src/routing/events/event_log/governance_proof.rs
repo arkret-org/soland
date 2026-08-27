@@ -21,10 +21,10 @@ use salvo::oapi::extract::JsonBody;
 use super::*;
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.seals.read.mls_governance_proof",
+    operation_id = "ak.self.seals.read.mls_governance_proof.v1",
     tags("seals")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.seals.read.mls_governance_proof"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.seals.read.mls_governance_proof.v1"))]
 pub(super) async fn mls_governance_proof(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -39,7 +39,7 @@ pub(super) async fn mls_governance_proof(
         .map_err(|error| AppError::param_invalid(format!("invalid proof request: {error}")))?;
     super::super::require_agent_session_scope(
         &session,
-        arkret_wire::ServiceOperationId::SELF_SEALS_READ_MLS_GOVERNANCE_PROOF,
+        arkret_wire::ServiceOperationId::SELF_SEALS_READ_MLS_GOVERNANCE_PROOF_V1,
     )?;
 
     let realm_id = request.effective_scope.realm_id_opt().ok_or_else(|| {

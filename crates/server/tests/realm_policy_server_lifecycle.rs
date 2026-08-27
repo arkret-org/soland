@@ -346,7 +346,7 @@ async fn delete_policy_server(
     realm_id: &str,
 ) -> (StatusCode, Value) {
     // The removal is a signed Event, so this DELETE carries a body the way
-    // `ak.self.keys.backups.resource.delete` already does.
+    // `ak.self.keys.backups.resource.delete.v1` already does.
     let seal = accepted_seal_id(state, token, realm_id).await;
     let (actor_seq, prev_refs) = actor_frontier(state, token, realm_id).await;
     let request = RealmPolicyServerDeleteRequestBody {
@@ -1289,9 +1289,9 @@ async fn policy_server_replace_without_head_eq_is_refused() {
 
 /// Event and Seal discovery remain separate closed surfaces.
 ///
-/// `service-http-binding.md` makes `ak.self.events.read.resolve` return Event
+/// `service-http-binding.md` makes `ak.self.events.read.resolve.v1` return Event
 /// bytes only. A caller discovers the current Seal leaf independently, then
-/// resolves that exact leaf through `ak.self.seals.read.resolve` and verifies
+/// resolves that exact leaf through `ak.self.seals.read.resolve.v1` and verifies
 /// its `delta[]` against the Event digest.
 #[tokio::test(flavor = "multi_thread")]
 async fn events_resolve_excludes_seals_and_seal_resolve_returns_exact_leaf() {

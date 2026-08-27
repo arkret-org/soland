@@ -58,7 +58,7 @@ pub(super) async fn validate_circle_create_policy(
                 .check(soland_services::authorization::AuthorizationCheck {
                     actor,
                     actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
-                    action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE,
+                    action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE_V1,
                     resource: realm_id,
                     realm_id,
                     owner: owner.as_deref(),

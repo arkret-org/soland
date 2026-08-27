@@ -433,7 +433,7 @@ pub(super) async fn peer_event_batch_fanout_records(
     let submissions = federation_submissions(state, &events, None, &[], &[], None).await?;
     let digest_suites = accepted_event_digest_suites(&events)?;
     let binding_payload = json!({
-        "domain": arkret_wire::DomainSeparationId::PEER_EVENTS_COMMAND_SUBMIT_SERVICE_BINDING_V1,
+        "domain": arkret_wire::DomainSeparationId::PEER_EVENTS_COMMAND_SUBMIT_V1_SERVICE_BINDING_V1,
         "realm_id": first.realm_id,
         "event_ids": parsed_events.iter().map(|event| event.event_id.as_str()).collect::<Vec<_>>(),
         "canonical_digests": parsed_events.iter().map(|event| event.canonical_digest.as_str()).collect::<Vec<_>>(),
@@ -687,7 +687,7 @@ pub(super) async fn peer_event_fanout_records(
     }
     let event_id = parsed.event_id.as_str();
     let binding_payload = json!({
-        "domain": arkret_wire::DomainSeparationId::PEER_EVENTS_COMMAND_SUBMIT_SERVICE_BINDING_V1,
+        "domain": arkret_wire::DomainSeparationId::PEER_EVENTS_COMMAND_SUBMIT_V1_SERVICE_BINDING_V1,
         "realm_id": parsed.realm_id,
         "event_id": event_id,
         "canonical_digest": parsed.canonical_digest,
@@ -714,7 +714,7 @@ pub(super) async fn peer_event_fanout_records(
         let service_binding_ref = service_binding_ref_for_target(parsed, &binding_payload, &peer)
             .ok_or_else(|| {
             format!(
-                "failed to build typed dynamic ak.peer.events.command.submit service binding \
+                "failed to build typed dynamic ak.peer.events.command.submit.v1 service binding \
                      for {}",
                 peer.service_id
             )
@@ -781,7 +781,7 @@ pub(super) async fn peer_event_fanout_records(
             .and_then(|bytes| String::from_utf8(bytes).ok())
             .ok_or_else(|| {
                 format!(
-                    "failed to encode dynamic ak.peer.events.command.submit body for {event_id}"
+                    "failed to encode dynamic ak.peer.events.command.submit.v1 body for {event_id}"
                 )
             })?;
         records.push(soland_services::federation::FederationDeliveryRecord {
@@ -969,7 +969,7 @@ async fn realm_bootstrap_fanout_record(
         .map(|record| record.canonical_digest.as_str())
         .collect::<Vec<_>>();
     let binding_payload = json!({
-        "domain": arkret_wire::DomainSeparationId::PEER_EVENTS_COMMAND_SUBMIT_SERVICE_BINDING_V1,
+        "domain": arkret_wire::DomainSeparationId::PEER_EVENTS_COMMAND_SUBMIT_V1_SERVICE_BINDING_V1,
         "realm_id": parsed.realm_id,
         "event_ids": event_ids,
         "canonical_digests": canonical_digests,

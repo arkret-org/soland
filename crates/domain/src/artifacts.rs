@@ -485,7 +485,7 @@ mod tests {
                     && group
                         .operations
                         .iter()
-                        .any(|op| op == "ak.self.events.command.submit")
+                        .any(|op| op == "ak.self.events.command.submit.v1")
             }),
             "events_sync operation surface group should come from operation-registry.json"
         );
@@ -494,12 +494,12 @@ mod tests {
         assert!(
             operations
                 .iter()
-                .any(|op| op == "ak.self.events.command.submit")
+                .any(|op| op == "ak.self.events.command.submit.v1")
         );
         assert!(
             operations
                 .iter()
-                .any(|op| op == "ak.edge.push.command.notify")
+                .any(|op| op == "ak.edge.push.command.notify.v1")
         );
         assert!(operations.iter().all(|op| operation_ids().contains(op)));
     }

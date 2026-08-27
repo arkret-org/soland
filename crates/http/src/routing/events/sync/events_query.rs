@@ -1,5 +1,5 @@
-//! Multi-Realm / multi-actor event stream (`ak.self.events.stream.subscribe`),
-//! projection-aware events read (`ak.self.events.read.scan`),
+//! Multi-Realm / multi-actor event stream (`ak.self.events.stream.subscribe.v1`),
+//! projection-aware events read (`ak.self.events.read.scan.v1`),
 //! signed snapshot-manifest head, plus the NDJSON framing and reconnect-gate
 //! helpers shared by both subscribe surfaces.
 
@@ -10,7 +10,7 @@ use super::*;
 pub(crate) const EVENTS_CATCHUP_LIMIT: usize = 100;
 const EVENTS_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 30_000;
 
-/// `ak.self.events.stream.subscribe` at `GET /_arkret/self/events/subscribe`. NDJSON
+/// `ak.self.events.stream.subscribe.v1` at `GET /_arkret/self/events/subscribe`. NDJSON
 /// streaming: each line is one frame, frame `kind` is one of
 /// `event` / `catchup_complete` / `heartbeat` / `dropped`.
 ///
@@ -61,7 +61,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     if let Some(session) = session.as_ref()
         && let Err(error) = super::super::require_agent_session_scope(
             session,
-            arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
+            arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE_V1,
         )
     {
         render_error(res, error.http_status(), error.wire_code(), &error.message);
@@ -480,7 +480,7 @@ pub(crate) fn events_subscribe_filter_digest(accessible_realms: &[String]) -> St
         .into_iter()
         .collect::<Vec<_>>();
     sync_filter_digest(Some(&json!({
-        "operation_id": arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
+        "operation_id": arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE_V1,
         "realms": realms,
     })))
 }
@@ -498,7 +498,7 @@ fn events_subscribe_scope_key(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "ak.self.events.stream.subscribe|{}|realms={realms}",
+        "ak.self.events.stream.subscribe.v1|{}|realms={realms}",
         subscribe_subject(req, session)
     )
 }
@@ -612,7 +612,7 @@ fn events_query_scope_digest(
         .into_iter()
         .collect::<Vec<_>>();
     let binding = json!({
-        "operation_id": arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN,
+        "operation_id": arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN_V1,
         "realms": realms,
         "actors": actors,
         "filters": filters.cloned().unwrap_or_else(|| json!({})),
@@ -702,8 +702,8 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
     events
 }
 
-#[endpoint(operation_id = "ak.self.events.read.scan")]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.scan"))]
+#[endpoint(operation_id = "ak.self.events.read.scan.v1")]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.scan.v1"))]
 pub(crate) async fn events_read_body(
     body: salvo::oapi::extract::JsonBody<EventsQueryPostRequestBody>,
     depot: &mut Depot,
@@ -787,7 +787,7 @@ async fn events_query_impl(
     if let Some(session) = session.as_ref() {
         super::super::require_agent_session_scope(
             session,
-            arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN,
+            arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN_V1,
         )?;
     }
     let filter_digest =
@@ -1938,8 +1938,8 @@ async fn durable_events_query_from_parts(
     }
 }
 
-#[endpoint(operation_id = "ak.self.snapshot.read.manifest_head")]
-#[tracing::instrument(skip_all, fields(op = "ak.self.snapshot.read.manifest_head"))]
+#[endpoint(operation_id = "ak.self.snapshot.read.manifest_head.v1")]
+#[tracing::instrument(skip_all, fields(op = "ak.self.snapshot.read.manifest_head.v1"))]
 pub(super) async fn snapshot_head(
     depot: &mut Depot,
     req: &mut Request,

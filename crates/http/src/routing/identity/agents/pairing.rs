@@ -3,11 +3,11 @@ use salvo::oapi::endpoint;
 use super::*;
 
 #[endpoint(
-    operation_id = "ak.open.agent_pairing.read.resolve",
+    operation_id = "ak.open.agent_pairing.read.resolve.v1",
     summary = "Resolve an agent pairing bootstrap",
     tags("agent_pairing")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.agent_pairing.read.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.agent_pairing.read.resolve.v1"))]
 pub(super) async fn resolve_agent_pairing(
     depot: &mut Depot,
     req: &mut Request,
@@ -67,13 +67,13 @@ pub(super) async fn resolve_agent_pairing(
 }
 
 #[endpoint(
-    operation_id = "ak.open.agent_pairing.command.submit_runtime_key_request",
+    operation_id = "ak.open.agent_pairing.command.submit_runtime_key_request.v1",
     summary = "Submit an agent runtime key request",
     tags("agent_pairing")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.open.agent_pairing.command.submit_runtime_key_request")
+    fields(op = "ak.open.agent_pairing.command.submit_runtime_key_request.v1")
 )]
 pub(super) async fn submit_agent_runtime_key_request(
     body: JsonBody<AgentRuntimeApprovalRequestBody>,
@@ -278,13 +278,13 @@ pub(super) async fn submit_agent_runtime_key_request(
 }
 
 #[endpoint(
-    operation_id = "ak.open.agent_pairing.read.runtime_key_request_status",
+    operation_id = "ak.open.agent_pairing.read.runtime_key_request_status.v1",
     summary = "Get an agent runtime key request status",
     tags("agent_pairing")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.open.agent_pairing.read.runtime_key_request_status")
+    fields(op = "ak.open.agent_pairing.read.runtime_key_request_status.v1")
 )]
 pub(super) async fn agent_runtime_key_request_status(
     body: JsonBody<AgentRuntimeApprovalStatusRequestBody>,
@@ -618,11 +618,11 @@ pub(super) fn agent_runtime_key_request_status_outcome(
 }
 
 #[endpoint(
-    operation_id = "ak.gate.account.command.pair_agent_key",
+    operation_id = "ak.gate.account.command.pair_agent_key.v1",
     summary = "Pair an agent device key",
     tags("agent_pairing")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.pair_agent_key"))]
+#[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.pair_agent_key.v1"))]
 pub(super) async fn agent_key_pair(
     aa: AuthArgs,
     body: JsonBody<AgentKeyPairRequestBody>,
@@ -1110,7 +1110,7 @@ async fn validate_requested_scope_disclosure(
     }
     if disclosure.verifier_service_id.as_str() != state.service_id()
         || disclosure.audience.as_str()
-            != arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY
+            != arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY_V1
     {
         return Err(AppError::param_invalid(
             "requested_scope_disclosure verifier or audience does not match this operation",
@@ -1864,7 +1864,7 @@ pub(super) fn pairing_request_binding_digest(
         .ok_or_else(|| incomplete_pairing_metadata("runtime_key_request"))?
         .proof_of_possession;
     arkret_models_collaboration::agent_operations::agent_key_pairing_request_binding_digest(
-        arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY,
+        arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY_V1,
         &controller,
         &agent_id,
         &pairing_request_id,
@@ -1952,16 +1952,16 @@ mod requested_scope_tests {
     #[test]
     fn authorize_scope_may_narrow_but_cannot_widen_provision_ceiling() {
         let ceiling = json!({
-            "actions": ["ak.message.create", "ak.self.events.command.submit"],
+            "actions": ["ak.message.create", "ak.self.events.command.submit.v1"],
             "resources": [{
                 "kind": "operation",
-                "operation": "ak.self.events.command.submit"
+                "operation": "ak.self.events.command.submit.v1"
             }],
             "constraints": [{"controller_approval_required": true}]
         });
         let payload = json!({
             "agent_key_scope": {
-                "actions": ["ak.self.events.command.submit"],
+                "actions": ["ak.self.events.command.submit.v1"],
                 "resources": ceiling["resources"].clone(),
                 "constraints": [
                     {"controller_approval_required": true},
@@ -1982,7 +1982,7 @@ mod requested_scope_tests {
                 "actions": [
                     "ak.message.create",
                     "ak.reaction.add",
-                    "ak.self.events.command.submit"
+                    "ak.self.events.command.submit.v1"
                 ],
                 "resources": ceiling["resources"].clone(),
                 "constraints": ceiling["constraints"].clone()
@@ -1998,7 +1998,7 @@ mod requested_scope_tests {
 
         let dropped_constraint = json!({
             "agent_key_scope": {
-                "actions": ["ak.self.events.command.submit"],
+                "actions": ["ak.self.events.command.submit.v1"],
                 "resources": ceiling["resources"].clone()
             }
         });
@@ -2012,10 +2012,10 @@ mod requested_scope_tests {
 
         let escaped_resource = json!({
             "agent_key_scope": {
-                "actions": ["ak.self.events.command.submit"],
+                "actions": ["ak.self.events.command.submit.v1"],
                 "resources": [{
                     "kind": "operation",
-                    "operation": "ak.self.events.read.scan"
+                    "operation": "ak.self.events.read.scan.v1"
                 }],
                 "constraints": ceiling["constraints"].clone()
             }

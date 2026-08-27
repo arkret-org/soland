@@ -4,16 +4,6 @@
 
 use super::common::*;
 
-fn advertises_operation(describe: &Value, operation_id: &str) -> bool {
-    describe["operation_bindings"]
-        .as_array()
-        .is_some_and(|bindings| {
-            bindings
-                .iter()
-                .any(|binding| binding["operation_id"] == operation_id)
-        })
-}
-
 #[test]
 fn health_and_describe_work() {
     run_on_deep_stack("health_and_describe_work", health_and_describe_work_body);
@@ -45,6 +35,32 @@ async fn health_and_describe_work_body() {
     assert_eq!(readyz["checks"]["database"]["ok"], true);
     assert_eq!(readyz["checks"]["pq_hybrid_tls"]["ok"], true);
 
+    let mut missing_selector = salvo::test::TestClient::get("http://server/_arkret/describe")
+        .send(&app())
+        .await;
+    assert_eq!(missing_selector.status_code, Some(StatusCode::BAD_REQUEST));
+    let missing_selector: Value = missing_selector.take_json().await.unwrap();
+    assert_eq!(
+        missing_selector["type"],
+        "https://arkret.org/problems/operation_selector_required"
+    );
+    assert_eq!(missing_selector["status"], 400);
+
+    let mut wrong_selector = salvo::test::TestClient::get("http://server/_arkret/describe")
+        .add_header("Arkret-Operation", "ak.self.events.read.describe.v1", true)
+        .send(&app())
+        .await;
+    assert_eq!(
+        wrong_selector.status_code,
+        Some(StatusCode::UNPROCESSABLE_ENTITY)
+    );
+    let wrong_selector: Value = wrong_selector.take_json().await.unwrap();
+    assert_eq!(
+        wrong_selector["type"],
+        "https://arkret.org/problems/unsupported_operation_version"
+    );
+    assert_eq!(wrong_selector["status"], 422);
+
     let describe: Value = TestClient::get("http://server/_arkret/describe")
         .send(&app())
         .await
@@ -59,13 +75,6 @@ async fn health_and_describe_work_body() {
             .unwrap()
             .iter()
             .any(|profile| profile == "org.arkret.soland.profile.limited_server.v1")
-    );
-    assert!(
-        describe["experimental_features"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|feature| feature == "org.arkret.soland.profile.limited_server.v1")
     );
 
     let operator_describe: Value = TestClient::get("http://server/_soland/describe")
@@ -152,29 +161,29 @@ async fn health_and_describe_work_body() {
     );
     assert!(advertises_operation(
         &describe,
-        "ak.open.mimi.command.submit_message"
+        "ak.open.mimi.command.submit_message.v1"
     ));
     assert!(advertises_operation(
         &describe,
-        "ak.self.events.command.submit"
+        "ak.self.events.command.submit.v1"
     ));
     assert!(advertises_operation(
         &describe,
-        "ak.self.blob.upload.create"
+        "ak.self.blob.upload.create.v1"
     ));
     assert!(advertises_operation(
         &describe,
-        "ak.self.keys.backups.resource.replace"
+        "ak.self.keys.backups.resource.replace.v1"
     ));
     assert!(advertises_operation(
         &describe,
-        "ak.self.circle.command.restore"
+        "ak.self.circle.command.restore.v1"
     ));
     for operation_id in [
-        "ak.self.authz.read.check",
-        "ak.self.authz.grants.read.effective",
-        "ak.self.authz.invites.read.list",
-        "ak.self.policy.read.check",
+        "ak.self.authz.read.check.v1",
+        "ak.self.authz.grants.read.effective.v1",
+        "ak.self.authz.invites.read.list.v1",
+        "ak.self.policy.read.check.v1",
     ] {
         assert!(
             advertises_operation(&describe, operation_id),
@@ -205,13 +214,11 @@ async fn health_and_describe_work_body() {
         describe["limits"]["authz_policy"]["invites"]["response_schema_ref"],
         "schemas/authz-operations.schema.json#/$defs/authz_invite_list"
     );
-    for binding in describe["operation_bindings"].as_array().unwrap() {
-        let operation = binding["operation_id"]
-            .as_str()
-            .expect("operation id string");
+    for bundle in describe["supported_operation_bundles"].as_array().unwrap() {
+        let bundle = bundle.as_str().expect("bundle id string");
         assert!(
-            artifacts::operation_ids().contains(operation),
-            "operation_bindings must only advertise spec operation ids, got {operation}"
+            arkret_wire::operation_bundle_descriptor(bundle).is_some(),
+            "supported_operation_bundles must only advertise registered ids, got {bundle}"
         );
     }
     assert_eq!(
@@ -224,20 +231,6 @@ async fn health_and_describe_work_body() {
             .unwrap()
             .iter()
             .any(|operation| operation == "org.arkret.soland.admin.actors")
-    );
-    assert!(
-        describe["limits"]["profile_status"]["supported_operation_catalog"]["derived_surface_groups"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|surface| surface == "events_sync")
-    );
-    assert!(
-        describe["limits"]["profile_status"]["supported_operation_catalog"]["derived_surface_groups"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|surface| surface == "circle_management")
     );
     assert!(
         describe["limits"]["profile_status"]["implemented_surfaces"]
@@ -432,25 +425,15 @@ async fn describe_separates_claim_levels_body() {
         assert!(entry["profile_id"].is_string());
     }
 
-    let implemented = describe["implemented_features"]
+    let features = describe["supported_features"]
         .as_array()
-        .expect("implemented_features array present");
-    assert!(!implemented.is_empty());
-
-    let experimental: std::collections::HashSet<&str> = describe["experimental_features"]
-        .as_array()
-        .expect("experimental_features array present")
-        .iter()
-        .filter_map(|v| v.as_str())
-        .collect();
-    let verified_ids: std::collections::HashSet<&str> = verified
-        .iter()
-        .filter_map(|v| v["profile_id"].as_str())
-        .collect();
-    assert!(
-        experimental.is_disjoint(&verified_ids),
-        "experimental_features must not overlap verified_profiles"
-    );
+        .expect("supported_features array present");
+    assert!(!features.is_empty());
+    assert!(features.iter().all(|feature| {
+        feature
+            .as_str()
+            .is_some_and(|feature| arkret_wire::feature_descriptor(feature).is_some())
+    }));
 
     let interop = describe["interop_surfaces"]
         .as_array()

@@ -610,43 +610,43 @@ fn canonical_event_read_operation(req: &Request) -> Option<&'static str> {
     let path = req.uri().path();
     match (method, path) {
         ("QUERY", "/_arkret/self/events/describe") => {
-            Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_DESCRIBE)
+            Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_DESCRIBE_V1)
         }
         ("QUERY", "/_arkret/self/events/frontier") => {
-            Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_FRONTIER)
+            Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_FRONTIER_V1)
         }
         ("QUERY", "/_arkret/self/seals/frontier") => {
-            Some(arkret_wire::ServiceOperationId::SELF_SEALS_READ_FRONTIER)
+            Some(arkret_wire::ServiceOperationId::SELF_SEALS_READ_FRONTIER_V1)
         }
         ("QUERY", "/_arkret/self/events") => {
-            Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN)
+            Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN_V1)
         }
         ("QUERY", "/_arkret/self/events/resolve") => {
-            Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_RESOLVE)
+            Some(arkret_wire::ServiceOperationId::SELF_EVENTS_READ_RESOLVE_V1)
         }
         ("POST", "/_arkret/self/seals/mls-governance-proof") => {
-            Some(arkret_wire::ServiceOperationId::SELF_SEALS_READ_MLS_GOVERNANCE_PROOF)
+            Some(arkret_wire::ServiceOperationId::SELF_SEALS_READ_MLS_GOVERNANCE_PROOF_V1)
         }
         ("POST", "/_arkret/peer/seals/mls-governance-proof") => {
-            Some(arkret_wire::ServiceOperationId::PEER_SEALS_READ_MLS_GOVERNANCE_PROOF)
+            Some(arkret_wire::ServiceOperationId::PEER_SEALS_READ_MLS_GOVERNANCE_PROOF_V1)
         }
         ("POST", "/_arkret/peer/mls/group-state-material") => {
-            Some(arkret_wire::ServiceOperationId::PEER_MLS_READ_GROUP_STATE_MATERIAL)
+            Some(arkret_wire::ServiceOperationId::PEER_MLS_READ_GROUP_STATE_MATERIAL_V1)
         }
         ("QUERY", "/_arkret/peer/events/describe") => {
-            Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_DESCRIBE)
+            Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_DESCRIBE_V1)
         }
         ("QUERY", "/_arkret/peer/events/frontier") => {
-            Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_FRONTIER)
+            Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_FRONTIER_V1)
         }
         ("QUERY", "/_arkret/peer/seals/frontier") => {
-            Some(arkret_wire::ServiceOperationId::PEER_SEALS_READ_FRONTIER)
+            Some(arkret_wire::ServiceOperationId::PEER_SEALS_READ_FRONTIER_V1)
         }
         ("QUERY", "/_arkret/peer/events") => {
-            Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_SCAN)
+            Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_SCAN_V1)
         }
         ("QUERY", "/_arkret/peer/events/resolve") => {
-            Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_RESOLVE)
+            Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_RESOLVE_V1)
         }
         _ => None,
     }
@@ -737,20 +737,20 @@ mod tests {
         use salvo::test::TestClient;
 
         let request = TestClient::query("http://localhost/_arkret/self/events").build();
-        assert_eq!(request_op_label(&request), "ak.self.events.read.scan");
+        assert_eq!(request_op_label(&request), "ak.self.events.read.scan.v1");
 
         let peer_request =
             TestClient::query("http://localhost/_arkret/peer/events/resolve").build();
         assert_eq!(
             request_op_label(&peer_request),
-            "ak.peer.events.read.resolve"
+            "ak.peer.events.read.resolve.v1"
         );
 
         let peer_mls =
             TestClient::post("http://localhost/_arkret/peer/mls/group-state-material").build();
         assert_eq!(
             request_op_label(&peer_mls),
-            "ak.peer.mls.read.group_state_material"
+            "ak.peer.mls.read.group_state_material.v1"
         );
     }
 

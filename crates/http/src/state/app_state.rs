@@ -158,7 +158,7 @@ pub struct AppState {
     /// Domain-separated root key for service-scoped push target pseudonyms.
     /// Per-epoch keys are derived from this root inside the push routing
     /// module; only public epoch labels are exposed on describe.
-    /// Revoked cursor authorities (`ak.self.account.command.revoke_cursor`). High-assurance
+    /// Revoked cursor authorities (`ak.self.account.command.revoke_cursor.v1`). High-assurance
     /// optional endpoint: a revoked cursor returns `cursor_revoked` and MUST NOT
     /// advance to-device ack, account-subscribe resume position, wait-for barrier
     /// state, or dropped-recovery state. Entries are pruned once the revoked
@@ -180,7 +180,7 @@ pub struct AppState {
     /// validates the document's Principal Server endpoint binding before
     /// publishing a key.
     federation_peer_verifying_keys: Arc<ArcSwap<BTreeMap<String, VerifyingKey>>>,
-    /// Live event notification bus for `ak.self.events.stream.subscribe`.
+    /// Live event notification bus for `ak.self.events.stream.subscribe.v1`.
     /// Memory mode uses the local broadcast channel; PostgreSQL mode also
     /// publishes over LISTEN/NOTIFY so subscribers connected to another
     /// replica receive the same live frames.

@@ -4,21 +4,25 @@ use std::collections::BTreeMap;
 
 use super::*;
 
+pub(crate) const IDENTITY_REGISTRY_OPERATION_BUNDLES: &[&str] = &[
+    "ak.operation_bundle.identity_registry.describe.v1",
+    "ak.operation_bundle.identity_registry.http_core.v1",
+];
+
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 #[serde(transparent)]
 pub struct RawDidDocumentJson(pub serde_json::Value);
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.registry.read.describe",
+    operation_id = "ak.root.identity.registry.read.describe.v1",
     tags("identity")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.root.identity.registry.read.describe"))]
+#[tracing::instrument(skip_all, fields(op = "ak.root.identity.registry.read.describe.v1"))]
 pub(crate) async fn identity_describe(
     depot: &mut Depot,
 ) -> JsonResult<arkret_models_discovery::ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let did_webvh = did_webvh_descriptor(state);
-    let profiles = vec![arkret_wire::ProfileId::IDENTITY_REGISTRY_V1.to_owned()];
     let supported_did_methods = state
         .config()
         .did_resolver_allow_methods
@@ -26,48 +30,23 @@ pub(crate) async fn identity_describe(
         .map(|method| format!("did:{method}"))
         .collect::<Vec<_>>();
     let trust_roots = identity_trust_roots(state);
-    let experimental_features = state
-        .config()
-        .development_mode
-        .then(|| "org.arkret.soland.identity.local_dev.v1".to_owned())
-        .into_iter()
-        .collect();
-
-    let operation_ids = [
-        arkret_wire::ServiceOperationId::RootIdentityRegistryReadDescribe,
-        arkret_wire::ServiceOperationId::RootIdentityReadResolve,
-        arkret_wire::ServiceOperationId::RootIdentityDocumentResourceGet,
-        arkret_wire::ServiceOperationId::RootIdentityLogReadList,
-        arkret_wire::ServiceOperationId::RootIdentityReceiptsReadList,
-        arkret_wire::ServiceOperationId::RootIdentityCommandSubmitDidOperation,
-        arkret_wire::ServiceOperationId::RootIdentityServiceRegistrationCommandEnsure,
-        arkret_wire::ServiceOperationId::RootIdentityServiceRegistrationResourceGet,
-    ];
     let mut description = crate::routing::system::describe::build_server_description(state);
     description.service_kind = arkret_wire::ServiceKind::IdentityRegistry;
-    description.supported_profiles = profiles;
-    description.operation_bindings = operation_ids
+    description.supported_profiles = vec![arkret_wire::ProfileId::IDENTITY_REGISTRY_V1.to_owned()];
+    description.supported_operation_bundles = IDENTITY_REGISTRY_OPERATION_BUNDLES
         .iter()
-        .copied()
-        .map(|operation_id| {
-            arkret_models_discovery::OperationBinding::current_http_json(operation_id)
-                .expect("identity operation must have a current HTTP JSON carrier")
-        })
+        .map(|bundle| (*bundle).to_owned())
         .collect();
-    description.supported_bindings = vec![
-        arkret_models_discovery::SupportedBinding::new(arkret_wire::BindingKind::HttpJson)
-            .with_base_url(state.config().public_base_url.trim_end_matches('/'))
-            .with_extra("operations", json!(operation_ids))
-            .with_extra("extension_profile_required", Value::Null),
-    ];
+    description.transport_bindings = vec![arkret_models_discovery::TransportBinding::HttpJson {
+        base_url: format!("{}/", state.config().public_base_url.trim_end_matches('/')),
+        extension_profile_required: (),
+    }];
     description.supported_features.clear();
-    description.implemented_features.clear();
     description.claimed_profiles =
         vec![arkret_models_discovery::ClaimedProfileEntry::self_claimed(
             arkret_wire::ProfileId::IDENTITY_REGISTRY_V1,
         )];
     description.verified_profiles.clear();
-    description.experimental_features = experimental_features;
     description.interop_surfaces.clear();
     description.plaintext_visibility = arkret_models_discovery::PlaintextVisibility::none();
     description
@@ -636,8 +615,8 @@ pub(crate) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res
     res.write_body(body.into_bytes()).ok();
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.root.identity.read.resolve", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.root.identity.read.resolve"))]
+#[salvo::oapi::endpoint(operation_id = "ak.root.identity.read.resolve.v1", tags("identity"))]
+#[tracing::instrument(skip_all, fields(op = "ak.root.identity.read.resolve.v1"))]
 pub(crate) async fn identity_resolve(
     body: JsonBody<IdentityResolveRequestBody>,
     depot: &mut Depot,
@@ -727,10 +706,10 @@ fn require_requested_webvh_evidence(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.document.resource.get",
+    operation_id = "ak.root.identity.document.resource.get.v1",
     tags("identity")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.root.identity.document.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.root.identity.document.resource.get.v1"))]
 pub(crate) async fn identity_document(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
@@ -815,8 +794,8 @@ pub(crate) async fn identity_did_document(
     json_ok(RawDidDocumentJson(record.did_document))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.root.identity.log.read.list", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.root.identity.log.read.list"))]
+#[salvo::oapi::endpoint(operation_id = "ak.root.identity.log.read.list.v1", tags("identity"))]
+#[tracing::instrument(skip_all, fields(op = "ak.root.identity.log.read.list.v1"))]
 pub(crate) async fn identity_log(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
@@ -890,8 +869,11 @@ mod identity_log_tests {
     }
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.root.identity.receipts.read.list", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.root.identity.receipts.read.list"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.root.identity.receipts.read.list.v1",
+    tags("identity")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.root.identity.receipts.read.list.v1"))]
 pub(crate) async fn identity_receipts(
     did: salvo::oapi::extract::QueryParam<String, true>,
     _depot: &mut Depot,
@@ -907,10 +889,13 @@ pub(crate) async fn identity_receipts(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.command.submit_did_operation",
+    operation_id = "ak.root.identity.command.submit_did_operation.v1",
     tags("identity")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.root.identity.command.submit_did_operation"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.root.identity.command.submit_did_operation.v1")
+)]
 pub(crate) async fn identity_submit_did_operation(
     depot: &mut Depot,
     body: JsonBody<DidOperationSubmitRequestBody>,
@@ -1061,7 +1046,7 @@ pub(crate) async fn identity_submit_did_operation(
         seq: next_seq,
         method_evidence: json!({
             "mode": "submitted_operation",
-            "source": arkret_wire::ServiceOperationId::ROOT_IDENTITY_COMMAND_SUBMIT_DID_OPERATION,
+            "source": arkret_wire::ServiceOperationId::ROOT_IDENTITY_COMMAND_SUBMIT_DID_OPERATION_V1,
             "version_id": version_id,
         }),
         // put_document authoritatively overwrites freshness evidence with

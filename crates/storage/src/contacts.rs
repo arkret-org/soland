@@ -57,8 +57,8 @@ pub trait ContactStore: Send + Sync {
 /// (spec `sync/invite-addressing.md` §5). The in-memory
 /// `AppState::invite_receive_policies` map remains the working projection; this
 /// store hydrates it on boot and is written through on policy changes
-/// (`ak.self.invite_receive_policy.resource.replace`,
-/// `ak.self.contact.command.tombstone(block_peer)`).
+/// (`ak.self.invite_receive_policy.resource.replace.v1`,
+/// `ak.self.contact.command.tombstone.v1(block_peer)`).
 #[async_trait]
 pub trait InviteReceivePolicyStore: Send + Sync {
     async fn get(

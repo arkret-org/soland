@@ -843,7 +843,7 @@ fn apply_moderation_appeal_dispatch(
 // `ak.mls.keypackage` kind covers both publish and claim. The reducer
 // dispatches on `payload.action == "publish" | "claim"` (the publish-
 // vs-claim split lives at the HTTP operation_id layer:
-// `ak.self.keys.keypackages.upload.create` vs `ak.self.keys.keypackages.command.claim`).
+// `ak.self.keys.keypackages.upload.create.v1` vs `ak.self.keys.keypackages.command.claim.v1`).
 
 fn apply_mls_keypackage_dispatch(
     s: &mut ProjectionState,

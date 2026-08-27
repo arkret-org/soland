@@ -201,8 +201,8 @@ async fn run_introspection_mock(
                 "device_binding": device_binding.clone(),
                 "audience": audience,
                 "scopes": [
-                    "ak.self.account.stream.subscribe",
-                    "ak.self.events.stream.subscribe"
+                    "ak.self.account.stream.subscribe.v1",
+                    "ak.self.events.stream.subscribe.v1"
                 ],
                 "expires_at": expires_at,
                 "revocation_ref": "ak:session:live-websocket-test",
@@ -514,8 +514,16 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
         WS_MAX_FRAME_BYTES,
     )
     .expect("the live-tested deployment advertises its WebSocket binding");
-    assert_eq!(advertised.base_url, base_url);
-    assert_eq!(advertised.max_channels, WS_MAX_CHANNELS);
+    let arkret_models_discovery::TransportBinding::Websocket {
+        base_url: advertised_base_url,
+        max_channels,
+        ..
+    } = advertised
+    else {
+        panic!("selected transport is not WebSocket");
+    };
+    assert_eq!(advertised_base_url, &base_url);
+    assert_eq!(*max_channels, WS_MAX_CHANNELS);
     assert!(
         description
             .claimed_profiles

@@ -353,7 +353,7 @@ pub struct AppConfig {
     /// history, DID document, stored identity, KeyStore, and recovery bundle
     /// can be updated as one recoverable transition.
     pub key_store: KeyStoreConfig,
-    /// Federation fanout topology. The on-the-wire shape is `ak.peer.events.command.submit`
+    /// Federation fanout topology. The on-the-wire shape is `ak.peer.events.command.submit.v1`
     /// under `/_arkret/peer/events`; the topology only changes which peer set
     /// receives accepted Event fanout.
     ///

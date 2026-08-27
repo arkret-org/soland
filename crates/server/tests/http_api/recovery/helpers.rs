@@ -110,8 +110,8 @@ fn register_recovery_policy_grant(
             "device_id": device_id,
             "audience": state.service_id(),
             "scopes": [
-                arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_COMMAND_PUBLISH,
-                arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_RESOURCE_GET,
+                arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_COMMAND_PUBLISH_V1,
+                arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_RESOURCE_GET_V1,
             ],
             "expires_at": canonical_timestamp(
                 chrono::Utc::now() + chrono::Duration::minutes(5)

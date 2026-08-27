@@ -1,7 +1,7 @@
 use super::*;
 
 /// Build one snapshot of the account-aggregate sync response for the next
-/// `ak.self.account.stream.subscribe` delta frame.
+/// `ak.self.account.stream.subscribe.v1` delta frame.
 pub(crate) async fn build_sync_snapshot(
     state: &AppState,
     session: Option<&SessionIdentityState>,

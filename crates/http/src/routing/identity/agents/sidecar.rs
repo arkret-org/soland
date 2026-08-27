@@ -76,7 +76,7 @@ async fn authorize_sidecar_ensure(
         .check(soland_services::authorization::AuthorizationCheck {
             actor: controller,
             actor_principal_server_id: Some(state.service_id()),
-            action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE,
+            action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE_V1,
             resource: realm_id,
             realm_id,
             owner: owner.as_deref(),
@@ -91,14 +91,14 @@ async fn authorize_sidecar_ensure(
         "explicit_deny" | "quarantine" | "require_review" | "constraints_not_satisfied"
     ) {
         return Err(sidecar_create_denied(
-            "ak.self.agent.sidecar.command.ensure denied by policy",
+            "ak.self.agent.sidecar.command.ensure.v1 denied by policy",
         ));
     }
     if realm_member_joined(state, realm_id, controller) {
         return Ok(());
     }
     Err(sidecar_create_denied(
-        "ak.self.agent.sidecar.command.ensure requires a Realm member controller",
+        "ak.self.agent.sidecar.command.ensure.v1 requires a Realm member controller",
     ))
 }
 
@@ -1261,10 +1261,10 @@ async fn ensure_sidecar_impl(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.agent.sidecar.command.ensure",
+    operation_id = "ak.self.agent.sidecar.command.ensure.v1",
     tags("identity")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.sidecar.command.ensure"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.sidecar.command.ensure.v1"))]
 pub(super) async fn ensure_sidecar(
     aa: AuthArgs,
     body: JsonBody<SidecarEnsureRequestBody>,

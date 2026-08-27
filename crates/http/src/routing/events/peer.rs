@@ -76,10 +76,10 @@ pub(super) fn router() -> Router {
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.peer.principal_genesis.command.submit",
+    operation_id = "ak.peer.principal_genesis.command.submit.v1",
     tags("events")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.principal_genesis.command.submit"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.principal_genesis.command.submit.v1"))]
 async fn peer_principal_genesis(
     depot: &mut Depot,
     req: &mut Request,
@@ -91,7 +91,7 @@ async fn peer_principal_genesis(
     let header_idempotency_key = required_header(req, "idempotency-key")?;
     let request = parse_json_body::<PcrGenesisSubmitRequestBody>(
         req,
-        "invalid ak.peer.principal_genesis.command.submit request body",
+        "invalid ak.peer.principal_genesis.command.submit.v1 request body",
     )
     .await?;
     request
@@ -190,7 +190,10 @@ pub(crate) async fn trusted_account_authority_service_id(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.account_status.command.submit", tags("events"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.peer.account_status.command.submit.v1",
+    tags("events")
+)]
 async fn peer_account_status_submit(
     depot: &mut Depot,
     req: &mut Request,
@@ -201,7 +204,7 @@ async fn peer_account_status_submit(
     let idempotency_key = required_header(req, "idempotency-key")?;
     let request = parse_json_body::<AccountStatusPublicationRequestBody>(
         req,
-        "invalid ak.peer.account_status.command.submit request body",
+        "invalid ak.peer.account_status.command.submit.v1 request body",
     )
     .await?;
     request
@@ -613,20 +616,20 @@ async fn validate_account_status_publication(
     Ok(())
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.signal.command.relay", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.signal.command.relay"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.signal.command.relay.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.signal.command.relay.v1"))]
 async fn peer_signal_relay(depot: &mut Depot, req: &mut Request) -> JsonResult<SignalRelayOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     if req.headers().contains_key("idempotency-key") {
         return Err(schema_violation(
-            "ak.peer.signal.command.relay forbids Idempotency-Key",
+            "ak.peer.signal.command.relay.v1 forbids Idempotency-Key",
         ));
     }
     validate_peer_request(state, req, true).await?;
     validate_signal_signature_window(req)?;
     let request = parse_json_body::<SignalRelayRequest>(
         req,
-        "invalid ak.peer.signal.command.relay request body",
+        "invalid ak.peer.signal.command.relay.v1 request body",
     )
     .await?;
     request
@@ -662,8 +665,8 @@ fn validate_signal_signature_window(req: &Request) -> Result<(), AppError> {
     Ok(())
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.describe", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.describe"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.describe.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.describe.v1"))]
 async fn peer_events_describe(
     depot: &mut Depot,
     req: &mut Request,
@@ -671,38 +674,15 @@ async fn peer_events_describe(
     if req.method().as_str() == "QUERY" {
         parse_json_body::<PeerEventsDescribeRequestBody>(
             req,
-            "invalid ak.peer.events.read.describe request body",
+            "invalid ak.peer.events.read.describe.v1 request body",
         )
         .await?;
     }
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let operation_ids = [
-        arkret_wire::ServiceOperationId::PeerEventsReadDescribe,
-        arkret_wire::ServiceOperationId::PeerEventsCommandSubmit,
-        arkret_wire::ServiceOperationId::PeerEventsReadScan,
-        arkret_wire::ServiceOperationId::PeerEventsReadResolve,
-        arkret_wire::ServiceOperationId::PeerEventsReadFrontier,
-        arkret_wire::ServiceOperationId::PeerInvitesCommandSubmit,
-        arkret_wire::ServiceOperationId::PeerSignalCommandRelay,
-    ];
     let mut description = crate::routing::system::describe::build_server_description(state);
     description.supported_profiles = vec![
         arkret_wire::ProfileId::FEDERATION_MINIMAL_V1.to_owned(),
         arkret_wire::ProfileId::SIGNAL_PEER_RELAY_V1.to_owned(),
-    ];
-    description.operation_bindings = operation_ids
-        .iter()
-        .copied()
-        .map(|operation_id| {
-            arkret_models_discovery::OperationBinding::current_http_json(operation_id)
-                .expect("peer operation must have a current HTTP JSON carrier")
-        })
-        .collect();
-    description.supported_bindings = vec![
-        arkret_models_discovery::SupportedBinding::new(arkret_wire::BindingKind::HttpJson)
-            .with_base_url(state.config().public_base_url.trim_end_matches('/'))
-            .with_extra("operations", json!(operation_ids))
-            .with_extra("extension_profile_required", Value::Null),
     ];
     description.limits.extensions.insert(
         "peer_events".to_owned(),
@@ -724,8 +704,8 @@ async fn peer_events_describe(
     json_ok(description)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.command.submit", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.command.submit"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.command.submit.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.command.submit.v1"))]
 async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     if let Err(error) = validate_peer_request(state, req, true).await {
@@ -739,7 +719,7 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
                 res,
                 StatusCode::BAD_REQUEST,
                 "json_invalid",
-                "invalid ak.peer.events.command.submit request body",
+                "invalid ak.peer.events.command.submit.v1 request body",
             );
             return;
         }
@@ -750,7 +730,7 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
         render_app_error(
             res,
             schema_violation(format!(
-                "invalid ak.peer.events.command.submit request body: {error}"
+                "invalid ak.peer.events.command.submit.v1 request body: {error}"
             )),
         );
         return;
@@ -758,8 +738,8 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
     super::event_log::submit_federation_events(state, req, body_value, res).await;
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.scan", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.scan"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.scan.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.scan.v1"))]
 async fn peer_events_read_body(
     depot: &mut Depot,
     req: &mut Request,
@@ -768,7 +748,7 @@ async fn peer_events_read_body(
     validate_peer_request(state, req, true).await?;
     let request = parse_json_body::<EventsQueryPostRequestBody>(
         req,
-        "invalid ak.peer.events.read.scan request body",
+        "invalid ak.peer.events.read.scan.v1 request body",
     )
     .await?;
     let source_service_id = source_service_id_from_request(req)?;
@@ -776,8 +756,8 @@ async fn peer_events_read_body(
     peer_events_query_response(state, source_service_id, parts).await
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.resolve", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.resolve"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.resolve.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.resolve.v1"))]
 async fn peer_events_resolve(
     depot: &mut Depot,
     req: &mut Request,
@@ -786,7 +766,7 @@ async fn peer_events_resolve(
     validate_peer_request(state, req, true).await?;
     let request = parse_json_body::<PeerEventsResolveRequestBody>(
         req,
-        "invalid ak.peer.events.read.resolve request body",
+        "invalid ak.peer.events.read.resolve.v1 request body",
     )
     .await?;
     request
@@ -946,8 +926,8 @@ async fn peer_events_resolve(
     json_ok(outcome)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.frontier", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.frontier"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.frontier.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.frontier.v1"))]
 async fn peer_events_frontier(
     depot: &mut Depot,
     req: &mut Request,
@@ -959,7 +939,7 @@ async fn peer_events_frontier(
     let realm_id = if has_body {
         parse_json_body::<PeerEventsFrontierRequestBody>(
             req,
-            "invalid ak.peer.events.read.frontier request body",
+            "invalid ak.peer.events.read.frontier.v1 request body",
         )
         .await?
         .realm_id
@@ -1076,8 +1056,8 @@ struct PeerSealFrontierProofBinding<'a> {
     created_at: DateTime<Utc>,
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.seals.read.frontier", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.seals.read.frontier"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.seals.read.frontier.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.seals.read.frontier.v1"))]
 async fn peer_seals_frontier(
     depot: &mut Depot,
     req: &mut Request,
@@ -1087,7 +1067,7 @@ async fn peer_seals_frontier(
     let source_service_id = source_service_id_from_request(req)?;
     let request = parse_json_body::<SealFrontierRequestBody>(
         req,
-        "invalid ak.peer.seals.read.frontier request body",
+        "invalid ak.peer.seals.read.frontier.v1 request body",
     )
     .await?;
     if is_realm_deleted(state, request.realm_id.as_str()).await
@@ -1137,7 +1117,7 @@ async fn peer_seals_frontier(
     })
 }
 
-/// Spec resolution (2026-06-11): `ak.peer.snapshot.read.manifest_head` returns the full
+/// Spec resolution (2026-06-11): `ak.peer.snapshot.read.manifest_head.v1` returns the full
 /// signed `ak.schema.snapshot.v1` manifest. soland cannot produce a real
 /// Snapshot detached proof yet, and the spec forbids serving a dev-signed
 /// stand-in (`signature` / `authority_binding` / `event_set_commitment`
@@ -1146,8 +1126,11 @@ async fn peer_seals_frontier(
 /// closed with `not_implemented` until a real signing path lands. The
 /// dev snapshot bundle remains reachable on the `/_soland/` product face
 /// (`org.arkret.soland.sync.snapshot_chunk`).
-#[salvo::oapi::endpoint(operation_id = "ak.peer.snapshot.read.manifest_head", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.snapshot.read.manifest_head"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.peer.snapshot.read.manifest_head.v1",
+    tags("events")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.snapshot.read.manifest_head.v1"))]
 async fn peer_snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
@@ -1156,7 +1139,7 @@ async fn peer_snapshot_head(
     validate_peer_request(state, req, false).await?;
     Err(AppError::new(
         soland_http::error::ErrorCode::NotImplemented,
-        "ak.peer.snapshot.read.manifest_head is not implemented: this deployment cannot \
+        "ak.peer.snapshot.read.manifest_head.v1 is not implemented: this deployment cannot \
          produce a signed ak.schema.snapshot.v1 manifest",
     ))
 }
@@ -1207,7 +1190,7 @@ impl PeerEventsQueryParts {
     fn validate(&self) -> Result<(), AppError> {
         if self.realms.is_empty() && self.actors.is_empty() {
             return Err(AppError::param_missing(
-                "ak.peer.events.read.scan requires at least one of realms[] / actors[]",
+                "ak.peer.events.read.scan.v1 requires at least one of realms[] / actors[]",
             ));
         }
         if self.after.is_some() && self.before.is_some() {
@@ -1864,7 +1847,7 @@ fn peer_events_query_scope_digest(source_service_id: &str, parts: &PeerEventsQue
         .into_iter()
         .collect::<Vec<_>>();
     let binding = json!({
-        "operation_id": arkret_wire::ServiceOperationId::PEER_EVENTS_READ_SCAN,
+        "operation_id": arkret_wire::ServiceOperationId::PEER_EVENTS_READ_SCAN_V1,
         "source_service_id": source_service_id,
         "realms": realms,
         "actors": actors,

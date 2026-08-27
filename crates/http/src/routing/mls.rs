@@ -3,15 +3,15 @@
 //! Spec-canonical binding under `/_arkret/self/keys/keypackages/*` (see
 //! `arkret-service-api.openapi.yaml §/keys/keypackages/*`):
 //!
-//! - `POST /_arkret/self/keys/keypackages/upload` — op `ak.self.keys.keypackages.upload.create`
+//! - `POST /_arkret/self/keys/keypackages/upload` — op `ak.self.keys.keypackages.upload.create.v1`
 //!   (publishes a fresh KeyPackage).
-//! - `POST /_arkret/self/keys/keypackages/claim`  — op `ak.self.keys.keypackages.command.claim`
+//! - `POST /_arkret/self/keys/keypackages/claim`  — op `ak.self.keys.keypackages.command.claim.v1`
 //!   (atomically claim a published KeyPackage; second claim of the same id returns `409
 //!   cas_conflict`).
 //!
 //! MLS *commits* are no longer served by a dedicated REST surface — clients
 //! submit `ak.mls.commit` events via the normal `POST /_arkret/self/events`
-//! pipeline (`ak.self.events.command.submit` of the registered durable `ak.mls.commit`
+//! pipeline (`ak.self.events.command.submit.v1` of the registered durable `ak.mls.commit`
 //! kind). The reducer's epoch-bump path is unchanged; only the HTTP
 //! entrypoint moved.
 //!
@@ -229,10 +229,10 @@ pub(crate) fn enqueue_device_revoke_mls_removals(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.keys.keypackages.upload.create",
+    operation_id = "ak.self.keys.keypackages.upload.create.v1",
     tags("mls.rs")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.upload.create"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.upload.create.v1"))]
 async fn upload_keypackage(
     aa: AuthArgs,
     body: JsonBody<KeyPackagesUploadRequestBody>,
@@ -520,10 +520,10 @@ async fn upload_keypackage(
 // ── claim ─────────────────────────────────────────────────────────────
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.peer.keys.keypackages.command.claim",
+    operation_id = "ak.peer.keys.keypackages.command.claim.v1",
     tags("mls.rs")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.keys.keypackages.command.claim"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.keys.keypackages.command.claim.v1"))]
 async fn peer_claim_keypackage(
     depot: &mut Depot,
     req: &mut Request,
@@ -800,8 +800,11 @@ async fn claim_keypackage_at_destination(
     Err(peer_claim_failed())
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.keys.keypackages.read.claim", tags("mls.rs"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.keys.keypackages.read.claim"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.peer.keys.keypackages.read.claim.v1",
+    tags("mls.rs")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.keys.keypackages.read.claim.v1"))]
 async fn peer_query_keypackage_claim(
     depot: &mut Depot,
     req: &mut Request,
@@ -1826,10 +1829,10 @@ fn peer_claim_failed() -> AppError {
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.keys.keypackages.command.claim",
+    operation_id = "ak.self.keys.keypackages.command.claim.v1",
     tags("mls.rs")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.claim"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.claim.v1"))]
 async fn claim_keypackage(
     aa: AuthArgs,
     body: JsonBody<KeyPackagesClaimRequestBody>,
@@ -2359,10 +2362,10 @@ fn claim_failed_source_winner_matches(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.keys.keypackages.command.consume",
+    operation_id = "ak.self.keys.keypackages.command.consume.v1",
     tags("mls.rs")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.consume"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.consume.v1"))]
 async fn consume_keypackages(
     aa: AuthArgs,
     body: JsonBody<KeyPackagesConsumeRequestBody>,
@@ -3510,10 +3513,10 @@ fn projected_welcome_matches_consumer(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.keys.keypackages.command.revoke",
+    operation_id = "ak.self.keys.keypackages.command.revoke.v1",
     tags("mls.rs")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.revoke"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.revoke.v1"))]
 async fn revoke_keypackages(
     aa: AuthArgs,
     body: JsonBody<KeyPackagesRevokeRequestBody>,
@@ -3668,7 +3671,7 @@ pub(crate) async fn retire_device_keypackages(
 //
 // Deleted as part of the spec-canonical refactor. MLS commits are now
 // submitted via the regular events pipeline as `ak.mls.commit` durable
-// events through `POST /_arkret/self/events` (op `ak.self.events.command.submit`). The
+// events through `POST /_arkret/self/events` (op `ak.self.events.command.submit.v1`). The
 // reducer's epoch-bump path (`reducer::mls::apply_commit_epoch`) is
 // invoked from the events submission strand; no dedicated REST surface.
 

@@ -91,10 +91,13 @@ async fn load_owned_security_transaction(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.security_transaction.command.create",
+    operation_id = "ak.self.security_transaction.command.create.v1",
     tags("identity")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.security_transaction.command.create"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.self.security_transaction.command.create.v1")
+)]
 pub(super) async fn security_transaction_create(
     aa: AuthArgs,
     body: JsonBody<SecurityTransactionCreateRequest>,
@@ -139,10 +142,10 @@ pub(super) async fn security_transaction_create(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.security_transaction.resource.get",
+    operation_id = "ak.self.security_transaction.resource.get.v1",
     tags("identity")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.security_transaction.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.security_transaction.resource.get.v1"))]
 pub(super) async fn security_transaction_get(
     aa: AuthArgs,
     transaction_id: PathParam<String>,
@@ -160,10 +163,13 @@ pub(super) async fn security_transaction_get(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.security_transaction.command.continue",
+    operation_id = "ak.self.security_transaction.command.continue.v1",
     tags("identity")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.security_transaction.command.continue"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.self.security_transaction.command.continue.v1")
+)]
 pub(super) async fn security_transaction_continue(
     aa: AuthArgs,
     transaction_id: PathParam<String>,
@@ -252,7 +258,7 @@ pub(super) async fn security_transaction_continue(
             continue_rotation_switch(state, &session, transaction, canonical_request, res).await
         }
         SecurityTransactionStep::EraseOldMaterial => Err(AppError::conflict(
-            "erase_old_material advances only through ak.self.keys.backup_series.command.erase",
+            "erase_old_material advances only through ak.self.keys.backup_series.command.erase.v1",
         )
         .with_wire_code("security_transaction_failed_precondition")),
         SecurityTransactionStep::LocalCommit => {
@@ -674,10 +680,10 @@ fn refresh_backup_erase_completion(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.keys.backup_series.command.erase",
+    operation_id = "ak.self.keys.backup_series.command.erase.v1",
     tags("identity")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.keys.backup_series.command.erase"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.backup_series.command.erase.v1"))]
 pub(crate) async fn backup_series_erase_command(
     aa: AuthArgs,
     body: JsonBody<arkret_models_crypto::BackupSeriesEraseRequestBody>,
@@ -742,7 +748,7 @@ pub(crate) async fn backup_series_erase_command(
         || request.authorization_lease.actor_id != transaction.resource.principal_id
         || request.authorization_lease.device_id.as_str() != session.device_id
         || request.authorization_lease.action
-            != arkret_wire::CapabilityActionId::SELF_KEYS_BACKUP_SERIES_COMMAND_ERASE
+            != arkret_wire::CapabilityActionId::SELF_KEYS_BACKUP_SERIES_COMMAND_ERASE_V1
         || request.authorization_lease.authorization_rule_id != "realm_admission"
         || request.authorization_lease.risk_tier != arkret_wire::RiskTier::High
         || !request.authorization_lease.covers_instant(now)

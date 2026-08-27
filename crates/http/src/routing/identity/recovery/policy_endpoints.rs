@@ -156,10 +156,13 @@ pub(super) fn recovery_policy_acceptance_basis(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.recovery_policy.resource.get",
+    operation_id = "ak.root.identity.recovery_policy.resource.get.v1",
     tags("identity")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.root.identity.recovery_policy.resource.get"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.root.identity.recovery_policy.resource.get.v1")
+)]
 pub(super) async fn recovery_policy_get(
     aa: AuthArgs,
     principal_id: QueryParam<String, false>,
@@ -221,12 +224,12 @@ pub(super) async fn recovery_policies_get(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.recovery_policy.command.publish",
+    operation_id = "ak.root.identity.recovery_policy.command.publish.v1",
     tags("identity")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.root.identity.recovery_policy.command.publish")
+    fields(op = "ak.root.identity.recovery_policy.command.publish.v1")
 )]
 pub(super) async fn recovery_policy_put(
     aa: AuthArgs,
@@ -402,7 +405,7 @@ pub(super) async fn recovery_policy_put(
     append_audit_log(
         state,
         Some(&session.actor),
-        arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_COMMAND_PUBLISH,
+        arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_COMMAND_PUBLISH_V1,
         json!({
             "policy_id": record.policy_id.clone(),
             "principal_id": record.principal_id.clone(),

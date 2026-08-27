@@ -432,8 +432,6 @@ fn profile_ids_from_description(description: &ServiceDescribe) -> BTreeSet<Strin
 fn feature_ids_from_description(description: &ServiceDescribe) -> BTreeSet<String> {
     let mut features = BTreeSet::new();
     features.extend(description.supported_features.iter().cloned());
-    features.extend(description.implemented_features.iter().cloned());
-    features.extend(description.experimental_features.iter().cloned());
     features
 }
 

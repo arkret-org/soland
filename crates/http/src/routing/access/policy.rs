@@ -57,14 +57,14 @@ const POLICY_FRESHNESS_CLOCK_SKEW_MS: i64 = 60_000;
 const POLICY_FRESHNESS_RETRY_AFTER_SECONDS: i64 = 30;
 
 /// Protocol surface (`/_arkret/self/...`): only the policy decision check is
-/// a v1 protocol operation (`ak.self.policy.read.check`).
+/// a v1 protocol operation (`ak.self.policy.read.check.v1`).
 pub(super) fn protocol_router() -> Router {
     Router::new().push(Router::with_path("policy/check").post(policy_check))
 }
 
 /// Product surface (`/_soland/self/...`): owner-scoped policy document storage
 /// CRUD. Deployment-local management capability backing
-/// `ak.self.policy.read.check`; kept off the protocol root per
+/// `ak.self.policy.read.check.v1`; kept off the protocol root per
 /// `service-http-binding.md` §1007.
 pub(super) fn product_router() -> Router {
     Router::new()
@@ -260,8 +260,8 @@ async fn delete_policy_document(
     json_ok(OkOutcome { ok: true })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.policy.read.check", tags("access"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.policy.read.check"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.policy.read.check.v1", tags("access"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.policy.read.check.v1"))]
 async fn policy_check(
     aa: AuthArgs,
     body: JsonBody<PolicyCheckRequestBody>,
@@ -275,7 +275,7 @@ async fn policy_check(
         append_audit_log(
             state,
             Some(&session.actor),
-            arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK,
+            arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK_V1,
             json!({
                 "realm_id": body.realm_id.as_str(),
                 "action": body.action.as_str(),
@@ -375,7 +375,7 @@ async fn policy_check(
         append_audit_log(
             state,
             Some(&session.actor),
-            arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK,
+            arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK_V1,
             json!({
                 "realm_id": body.realm_id.as_str(),
                 "action": body.action.as_str(),

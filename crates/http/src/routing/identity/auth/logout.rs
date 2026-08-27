@@ -6,7 +6,7 @@ use ed25519_dalek::{Signature, Verifier as _};
 
 use super::*;
 
-/// `POST /_arkret/gate/account/logout` — spec `ak.gate.account.command.logout`,
+/// `POST /_arkret/gate/account/logout` — spec `ak.gate.account.command.logout.v1`,
 /// the single client-visible hard logout (account-lifecycle §4.1).
 ///
 /// Request identity differs from every other protected endpoint: per §4.1 the
@@ -24,8 +24,8 @@ use super::*;
 ///    for the grant's device, remove push registrations, and drop queued to-device messages. It
 ///    does NOT issue an AccountStatusRecord, emit `ak.device.revoke`, or mark the durable device
 ///    inventory record revoked; a later login restores a session for the same authorized device.
-#[salvo::oapi::endpoint(operation_id = "ak.gate.account.command.logout", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.logout"))]
+#[salvo::oapi::endpoint(operation_id = "ak.gate.account.command.logout.v1", tags("identity"))]
+#[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.logout.v1"))]
 pub(super) async fn logout(
     aa: super::super::AuthArgs,
     depot: &mut Depot,
@@ -327,7 +327,7 @@ async fn revoke_sessions_for_actor_device(
 }
 
 /// `POST /_arkret/gate/account/session-grants/revoke` — spec
-/// `ak.gate.account.command.revoke_session` (surface group `account_auth`).
+/// `ak.gate.account.command.revoke_session.v1` (surface group `account_auth`).
 ///
 /// Spec: sync/service-http-binding.md — the body MAY be omitted (revoke the
 /// calling session); `target_session_grant_id` / `target_device_id` /
@@ -338,10 +338,10 @@ async fn revoke_sessions_for_actor_device(
 /// require a fresh lifecycle proof whose request digest and Ed25519 signature
 /// verify against the caller DID.
 #[salvo::oapi::endpoint(
-    operation_id = "ak.gate.account.command.revoke_session",
+    operation_id = "ak.gate.account.command.revoke_session.v1",
     tags("identity")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.revoke_session"))]
+#[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.revoke_session.v1"))]
 pub(super) async fn session_revoke(
     aa: super::super::AuthArgs,
     depot: &mut Depot,

@@ -129,8 +129,11 @@ fn push_registration_id(push_target_tag: &str) -> Result<arkret_wire::OpaqueLoca
     arkret_wire::OpaqueLocalId::new(format!("push_registration:{push_target_tag}"))
         .map_err(|error| AppError::internal(format!("push registration id is invalid: {error}")))
 }
-#[salvo::oapi::endpoint(operation_id = "ak.edge.push.command.register_device", tags("interop"))]
-#[tracing::instrument(skip_all, fields(op = "ak.edge.push.command.register_device"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.edge.push.command.register_device.v1",
+    tags("interop")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.push.command.register_device.v1"))]
 pub(super) async fn push_register(
     body: JsonBody<PushRegisterDeviceRequestBody>,
     depot: &mut Depot,
@@ -344,10 +347,10 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.edge.push.command.unregister_device",
+    operation_id = "ak.edge.push.command.unregister_device.v1",
     tags("interop")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.edge.push.command.unregister_device"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.push.command.unregister_device.v1"))]
 pub(super) async fn push_unregister(
     aa: AuthArgs,
     body: JsonBody<PushUnregisterDeviceRequestBody>,
@@ -387,8 +390,8 @@ pub(super) async fn push_unregister(
     Ok(())
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.edge.push.command.notify", tags("interop"))]
-#[tracing::instrument(skip_all, fields(op = "ak.edge.push.command.notify"))]
+#[salvo::oapi::endpoint(operation_id = "ak.edge.push.command.notify.v1", tags("interop"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.push.command.notify.v1"))]
 pub(super) async fn push_notify(
     body: JsonBody<PushNotifyRequestBody>,
     depot: &mut Depot,

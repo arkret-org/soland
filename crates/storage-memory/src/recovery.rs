@@ -539,7 +539,7 @@ mod tests {
                 rule_id: "backup_erase".to_owned(),
                 issuer_role: AuthoritySetIssuerRole::RealmAdmission,
                 allowed_actions: vec![
-                    arkret_wire::CapabilityActionId::SELF_KEYS_BACKUP_SERIES_COMMAND_ERASE
+                    arkret_wire::CapabilityActionId::SELF_KEYS_BACKUP_SERIES_COMMAND_ERASE_V1
                         .to_owned(),
                 ],
                 issuers: vec![AuthoritySetIssuer {
@@ -566,7 +566,7 @@ mod tests {
             .unwrap(),
             device_id: DeviceId::new("ak:device:019a7360-0000-7000-8000-000000000113").unwrap(),
             scope_ref,
-            action: arkret_wire::CapabilityActionId::SELF_KEYS_BACKUP_SERIES_COMMAND_ERASE
+            action: arkret_wire::CapabilityActionId::SELF_KEYS_BACKUP_SERIES_COMMAND_ERASE_V1
                 .to_owned(),
             authorization_rule_id: "backup_erase".to_owned(),
             risk_tier: RiskTier::High,

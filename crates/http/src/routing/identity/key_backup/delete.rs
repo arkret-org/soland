@@ -41,7 +41,7 @@ pub(super) const DELETE_CHALLENGE_TTL_SECONDS: i64 = 300;
 
 /// The operation every delete challenge and transcript is bound to.
 pub(super) const KEY_BACKUP_DELETE_OPERATION: &str =
-    ServiceOperationId::SELF_KEYS_BACKUPS_RESOURCE_DELETE;
+    ServiceOperationId::SELF_KEYS_BACKUPS_RESOURCE_DELETE_V1;
 
 /// How long the `(principal_id, backup_id, request_id)` terminal outcome is
 /// replayable (§7.8.1 step 4). Matches the generic `Idempotency-Key` TTL.
@@ -80,12 +80,12 @@ fn random_base64url(bytes: usize) -> Base64UrlString {
 /// unrelated principal cannot use this endpoint to learn whether a backup id
 /// exists.
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.keys.backups.command.issue_delete_challenge",
+    operation_id = "ak.self.keys.backups.command.issue_delete_challenge.v1",
     tags("identity")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.self.keys.backups.command.issue_delete_challenge")
+    fields(op = "ak.self.keys.backups.command.issue_delete_challenge.v1")
 )]
 pub(super) async fn issue_key_backup_delete_challenge(
     aa: AuthArgs,

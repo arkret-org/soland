@@ -1,4 +1,4 @@
-//! Admin mid-stream control-frame triggers for `ak.self.events.stream.subscribe`.
+//! Admin mid-stream control-frame triggers for `ak.self.events.stream.subscribe.v1`.
 //!
 //! `events.subscribe` already dispatches five `EventNotificationKind`
 //! variants — `Event` / `EpochRotation` / `Frontier` / `ResyncRequired` /

@@ -587,11 +587,11 @@ fn projected_consent_remove_dots(
 // ────────────────────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "ak.self.consent.read.list",
+    operation_id = "ak.self.consent.read.list.v1",
     summary = "List consent cells",
     tags("consent")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.consent.read.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.consent.read.list.v1"))]
 async fn list_consent_cells(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -613,11 +613,11 @@ async fn list_consent_cells(
 }
 
 #[endpoint(
-    operation_id = "ak.self.consent.resource.get",
+    operation_id = "ak.self.consent.resource.get.v1",
     summary = "Get one consent cell",
     tags("consent")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.consent.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.consent.resource.get.v1"))]
 async fn get_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -654,11 +654,11 @@ async fn get_consent_cell(
 }
 
 #[endpoint(
-    operation_id = "ak.self.consent.command.grant",
+    operation_id = "ak.self.consent.command.grant.v1",
     summary = "Grant a consent cell",
     tags("consent")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.consent.command.grant"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.consent.command.grant.v1"))]
 async fn grant_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -681,11 +681,11 @@ async fn grant_consent_cell(
 }
 
 #[endpoint(
-    operation_id = "ak.self.consent.command.revoke",
+    operation_id = "ak.self.consent.command.revoke.v1",
     summary = "Revoke a consent cell",
     tags("consent")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.consent.command.revoke"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.consent.command.revoke.v1"))]
 async fn revoke_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -711,11 +711,11 @@ async fn revoke_consent_cell(
 }
 
 #[endpoint(
-    operation_id = "ak.self.consent.command.request",
+    operation_id = "ak.self.consent.command.request.v1",
     summary = "Request consent from a peer",
     tags("consent")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.consent.command.request"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.consent.command.request.v1"))]
 async fn request_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,

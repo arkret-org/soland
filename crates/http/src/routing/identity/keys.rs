@@ -44,8 +44,8 @@ pub(super) fn product_router() -> Router {
     Router::with_path("gate/account/device-signing-keys/query").post(device_signing_keys_query)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.keys.upload.create", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.keys.upload.create"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.keys.upload.create.v1", tags("identity"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.upload.create.v1"))]
 async fn keys_upload(
     aa: AuthArgs,
     body: JsonBody<KeysUploadRequestBody>,
@@ -307,8 +307,8 @@ async fn attested_device_record(
     Ok(Some(record))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.keys.read.lookup", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.keys.read.lookup"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.keys.read.lookup.v1", tags("identity"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.read.lookup.v1"))]
 async fn keys_query(
     aa: AuthArgs,
     body: JsonBody<KeysQueryRequestBody>,
@@ -521,8 +521,8 @@ fn verify_keys_upload_device_signature(
         .map_err(|_| AppError::param_invalid("keys/upload signature verification failed"))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.keys.command.claim", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.keys.command.claim"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.keys.command.claim.v1", tags("identity"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.command.claim.v1"))]
 async fn keys_claim(
     aa: AuthArgs,
     body: JsonBody<KeysClaimRequestBody>,

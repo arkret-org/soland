@@ -81,7 +81,7 @@ fn parse_application_ref(value: String) -> Result<Hash, AppError> {
 
 // ── List-pagination cursor (api-conventions.md §7 / encoding.md §8) ─────────
 //
-// `ak.self.realm.join_application.read.list` paginates with the single opaque
+// `ak.self.realm.join_application.read.list.v1` paginates with the single opaque
 // `ak:cursor:` type. The continuation position (`after_application_ref`) is
 // bound server-side to the cursor's `h` handle; the wire body carries only the
 // canonical `{v, purpose, issued_at, expires_at, h}` fields.
@@ -111,7 +111,7 @@ fn join_application_list_cursor_context(
     device_id: &str,
 ) -> Result<CursorBindingContext, AppError> {
     let filter_digest = cursor_filter_digest(&json!({
-        "operation": "ak.self.realm.join_application.read.list",
+        "operation": "ak.self.realm.join_application.read.list.v1",
         "realm_id": realm_id.as_str(),
     }))
     .map_err(|error| AppError::internal(format!("cursor filter digest failed: {error}")))?;
@@ -300,7 +300,7 @@ fn response_from_value(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm.join_application.command.submit",
+    operation_id = "ak.self.realm.join_application.command.submit.v1",
     summary = "Submit a profile-private signed join application",
     tags("join_applications")
 )]
@@ -439,7 +439,7 @@ async fn submit_join_application(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm.join_application.command.review",
+    operation_id = "ak.self.realm.join_application.command.review.v1",
     summary = "Submit a reviewer-signed join-application decision",
     tags("join_applications")
 )]
@@ -515,7 +515,7 @@ async fn review_join_application(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm.join_application.command.cancel",
+    operation_id = "ak.self.realm.join_application.command.cancel.v1",
     summary = "Cancel a profile-private join application",
     tags("join_applications")
 )]
@@ -685,7 +685,7 @@ async fn audit_body_read(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm.join_application.read.list",
+    operation_id = "ak.self.realm.join_application.read.list.v1",
     summary = "List viewer-scoped join applications",
     tags("join_applications")
 )]
@@ -758,7 +758,7 @@ async fn list_join_applications(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm.join_application.resource.get",
+    operation_id = "ak.self.realm.join_application.resource.get.v1",
     summary = "Read one authorized join application",
     tags("join_applications")
 )]
@@ -792,7 +792,7 @@ async fn get_join_application(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm.join_application.audit.read.list",
+    operation_id = "ak.self.realm.join_application.audit.read.list.v1",
     summary = "Read one join application's audit trail",
     tags("join_applications")
 )]

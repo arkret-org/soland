@@ -7,19 +7,21 @@
 //!
 //! Surfaces:
 //! - `POST   /_arkret/gate/account/agent-key-pair`               —
-//!   `ak.gate.account.command.pair_agent_key`
-//! - `POST   /_arkret/self/agents`                             — `ak.self.agent.command.provision`
-//! - `GET    /_arkret/self/agents`                             — `ak.self.agent.read.list`
-//! - `GET    /_arkret/self/agents/{id}`                        — `ak.self.agent.resource.get`
-//! - `POST   /_arkret/self/agents/{id}/pause`                  — `ak.self.agent.command.pause`
-//! - `POST   /_arkret/self/agents/{id}/resume`                 — `ak.self.agent.command.resume`
-//! - `POST   /_arkret/self/agents/{id}/deactivate`             — `ak.self.agent.command.deactivate`
+//!   `ak.gate.account.command.pair_agent_key.v1`
+//! - `POST   /_arkret/self/agents`                             —
+//!   `ak.self.agent.command.provision.v1`
+//! - `GET    /_arkret/self/agents`                             — `ak.self.agent.read.list.v1`
+//! - `GET    /_arkret/self/agents/{id}`                        — `ak.self.agent.resource.get.v1`
+//! - `POST   /_arkret/self/agents/{id}/pause`                  — `ak.self.agent.command.pause.v1`
+//! - `POST   /_arkret/self/agents/{id}/resume`                 — `ak.self.agent.command.resume.v1`
+//! - `POST   /_arkret/self/agents/{id}/deactivate`             —
+//!   `ak.self.agent.command.deactivate.v1`
 //! - `POST   /_arkret/self/agents/{id}/grants`                 —
-//!   `ak.self.agent.grant.command.attach`
+//!   `ak.self.agent.grant.command.attach.v1`
 //! - `DELETE /_arkret/self/agents/{id}/grants/{grant_id}`      —
-//!   `ak.self.agent.grant.resource.delete`
+//!   `ak.self.agent.grant.resource.delete.v1`
 //! - `POST   /_arkret/self/agent-sidecars:ensure`              —
-//!   `ak.self.agent.sidecar.command.ensure`
+//!   `ak.self.agent.sidecar.command.ensure.v1`
 //! - `GET    /_arkret/self/agent-sidecars[/{sidecar_id}]`      — dedicated reads
 //!
 //! Controller operations enforce the persisted `agent_principals.controller_id`
@@ -236,9 +238,9 @@ mod tests {
     fn requested_agent_scope() -> Value {
         json!({
             "actions": [
-                "ak.self.events.stream.subscribe",
-                "ak.self.events.read.scan",
-                "ak.self.events.command.submit",
+                "ak.self.events.stream.subscribe.v1",
+                "ak.self.events.read.scan.v1",
+                "ak.self.events.command.submit.v1",
                 "ak.event.read",
                 "ak.message.create"
             ],
@@ -463,7 +465,7 @@ mod tests {
             "controller_id": controller_id.as_str(),
             "requested_scope": requested_scope,
             "verifier_service_id": service_id,
-            "audience": "ak.gate.account.command.pair_agent_key",
+            "audience": "ak.gate.account.command.pair_agent_key.v1",
             "challenge": "pairing-challenge-0001",
             "issued_at": "2026-07-06T00:00:00.000Z",
             "expires_at": "2026-07-06T00:05:00.000Z",
@@ -1286,7 +1288,7 @@ mod tests {
             "2999-01-01T00:00:00.000Z",
         );
         let weaker_scope = json!({
-            "actions": ["ak.self.events.stream.subscribe"],
+            "actions": ["ak.self.events.stream.subscribe.v1"],
             "resources": [{ "kind": "service", "service_id": service_id }]
         });
         let envelope = key_authorize_envelope(

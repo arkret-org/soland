@@ -19,13 +19,10 @@ async fn sync_and_directory_share_demo_realm_body() {
         .take_json()
         .await
         .unwrap();
-    assert!(
-        sync_describe["operation_bindings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|binding| binding["operation_id"] == "ak.self.account.stream.subscribe")
-    );
+    assert!(advertises_operation(
+        &sync_describe,
+        "ak.self.account.stream.subscribe.v1"
+    ));
 
     let invalid_profile =
         TestClient::post("http://server/_arkret/self/account/subscribe?catchup=true")
@@ -158,22 +155,10 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
         .take_json()
         .await
         .unwrap();
-    assert!(
-        describe["operation_bindings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|binding| binding["operation_id"]
-                == "ak.find.directory.read.list_handles_for_subject")
-    );
-    assert!(
-        describe["operation_bindings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|binding| binding["operation_id"]
-                == "ak.find.directory.read.private_contact_discovery")
-    );
+    assert!(advertises_operation(
+        &describe,
+        "ak.find.directory.read.list_handles_for_subject.v1"
+    ));
 
     let alice_core = fixture_actor_core_id("did:web:alice.example");
     let subject_handles: Value =

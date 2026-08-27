@@ -45,6 +45,7 @@ use crate::wire::{IdentityLogListOutcome, IdentityReceiptListOutcome, IdentityRe
 
 mod document;
 mod endpoints;
+pub(crate) use endpoints::IDENTITY_REGISTRY_OPERATION_BUNDLES;
 mod webvh;
 
 // Used by routing::tests and directory handle verification.

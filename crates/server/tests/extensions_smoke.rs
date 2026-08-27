@@ -999,16 +999,16 @@ async fn applet_protocol_describe_smoke() {
         .expect("Applet describe must be the canonical ServiceDescribe");
     assert_eq!(describe.protocol_version, arkret_wire::PROTOCOL_VERSION);
     for operation_id in [
-        arkret_wire::ServiceOperationId::EDGE_APPLET_READ_PING,
-        arkret_wire::ServiceOperationId::EDGE_APPLET_READ_DESCRIBE,
-        arkret_wire::ServiceOperationId::EDGE_APPLET_COMMAND_TRANSACTION,
-        arkret_wire::ServiceOperationId::SELF_APPLET_COMMAND_INSTALL,
+        arkret_wire::ServiceOperationId::EDGE_APPLET_READ_PING_V1,
+        arkret_wire::ServiceOperationId::EDGE_APPLET_READ_DESCRIBE_V1,
+        arkret_wire::ServiceOperationId::EDGE_APPLET_COMMAND_TRANSACTION_V1,
+        arkret_wire::ServiceOperationId::SELF_APPLET_COMMAND_INSTALL_V1,
     ] {
         assert!(
-            describe
-                .operation_bindings
-                .iter()
-                .any(|candidate| candidate.operation_id.as_str() == operation_id),
+            describe.supports_operation(
+                arkret_wire::ServiceOperationId::from_wire(operation_id)
+                    .expect("fixture operation must be registered")
+            ),
             "Applet describe must advertise {operation_id}"
         );
     }

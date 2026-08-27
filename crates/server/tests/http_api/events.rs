@@ -152,14 +152,14 @@ async fn seed_agent_grant_session(
         slug,
         serde_json::json!({
             "actions": [
-                "ak.self.events.stream.subscribe",
-                "ak.self.events.read.scan",
-                "ak.self.events.command.submit"
+                "ak.self.events.stream.subscribe.v1",
+                "ak.self.events.read.scan.v1",
+                "ak.self.events.command.submit.v1"
             ],
             "resources": [
-                {"kind": "operation", "operation": "ak.self.events.stream.subscribe"},
-                {"kind": "operation", "operation": "ak.self.events.read.scan"},
-                {"kind": "operation", "operation": "ak.self.events.command.submit"}
+                {"kind": "operation", "operation": "ak.self.events.stream.subscribe.v1"},
+                {"kind": "operation", "operation": "ak.self.events.read.scan.v1"},
+                {"kind": "operation", "operation": "ak.self.events.command.submit.v1"}
             ],
             "constraints": []
         }),
@@ -333,7 +333,7 @@ async fn seed_agent_grant_session(
     .unwrap();
     let paired_request_digest =
         arkret_models_collaboration::agent_operations::agent_key_pairing_request_binding_digest(
-            arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY,
+            arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY_V1,
             &controller_core,
             &outcome.agent_id,
             &outcome.pairing_request_id,
@@ -541,7 +541,7 @@ fn agent_session_without_stream_scope_cannot_subscribe_events() {
 
 async fn agent_session_without_stream_scope_cannot_subscribe_events_body() {
     let (state, presentation) =
-        seed_agent_grant_session("scope-denied-stream", &["ak.self.events.read.scan"]).await;
+        seed_agent_grant_session("scope-denied-stream", &["ak.self.events.read.scan.v1"]).await;
     let subscribe_url = format!(
         "http://server/_arkret/self/events/subscribe?realms={}&catchup=false&max_duration_ms=100",
         demo_realm_id()
@@ -574,7 +574,7 @@ async fn agent_session_without_stream_scope_cannot_subscribe_events_body() {
     let status = response.status_code.unwrap();
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(status, StatusCode::FORBIDDEN, "response body: {body}");
-    assert_agent_scope_denied(&body, "ak.self.events.stream.subscribe");
+    assert_agent_scope_denied(&body, "ak.self.events.stream.subscribe.v1");
 }
 
 #[test]
@@ -586,8 +586,11 @@ fn agent_session_without_query_scope_cannot_scan_events() {
 }
 
 async fn agent_session_without_query_scope_cannot_scan_events_body() {
-    let (state, presentation) =
-        seed_agent_grant_session("scope-denied-query", &["ak.self.events.stream.subscribe"]).await;
+    let (state, presentation) = seed_agent_grant_session(
+        "scope-denied-query",
+        &["ak.self.events.stream.subscribe.v1"],
+    )
+    .await;
 
     // Same 401 discriminator as the subscribe test: grant without DPoP.
     let unauthenticated = TestClient::query("http://server/_arkret/self/events")
@@ -613,7 +616,7 @@ async fn agent_session_without_query_scope_cannot_scan_events_body() {
     let status = response.status_code.unwrap();
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(status, StatusCode::FORBIDDEN, "response body: {body}");
-    assert_agent_scope_denied(&body, "ak.self.events.read.scan");
+    assert_agent_scope_denied(&body, "ak.self.events.read.scan.v1");
 }
 
 #[test]
@@ -626,7 +629,7 @@ fn agent_session_without_submit_scope_cannot_submit_events() {
 
 async fn agent_session_without_submit_scope_cannot_submit_events_body() {
     let (state, presentation) =
-        seed_agent_grant_session("scope-denied-submit", &["ak.self.events.read.scan"]).await;
+        seed_agent_grant_session("scope-denied-submit", &["ak.self.events.read.scan.v1"]).await;
     let event = signed_event_envelope(
         "ak:event:AfepkcDJ52VnnpuZZLL_gaOAp8uRP2_whpmBukWi9roZ",
         0,
@@ -657,7 +660,7 @@ async fn agent_session_without_submit_scope_cannot_submit_events_body() {
     let status = response.status_code.unwrap();
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(status, StatusCode::FORBIDDEN, "response body: {body}");
-    assert_agent_scope_denied(&body, "ak.self.events.command.submit");
+    assert_agent_scope_denied(&body, "ak.self.events.command.submit.v1");
 }
 
 #[test]
@@ -769,13 +772,10 @@ async fn events_describe_and_single_event_submit_work_body() {
         .await
         .unwrap();
     assert_eq!(describe["protocol_version"], "1.0");
-    assert!(
-        describe["operation_bindings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|binding| binding["operation_id"] == "ak.self.events.command.submit")
-    );
+    assert!(advertises_operation(
+        &describe,
+        "ak.self.events.command.submit.v1"
+    ));
     assert_eq!(describe["limits"]["max_event_bytes"], 1024 * 1024);
     assert_eq!(describe["limits"]["max_resolve"], 100);
 
@@ -1587,7 +1587,7 @@ async fn cursor_syntax_failures_pin_param_invalid_with_invalid_cursor_reason_bod
     let token = dev_token(state.clone()).await;
     let actor_core = fixture_actor_core_id("did:web:alice.example");
 
-    // ak.self.events.read.scan — `after` in canonical QUERY content.
+    // ak.self.events.read.scan.v1 — `after` in canonical QUERY content.
     let mut rejected = TestClient::query("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
@@ -1604,7 +1604,7 @@ async fn cursor_syntax_failures_pin_param_invalid_with_invalid_cursor_reason_bod
         "{body}"
     );
 
-    // ak.self.account.stream.subscribe — `after=` reconnect parameter.
+    // ak.self.account.stream.subscribe.v1 — `after=` reconnect parameter.
     let frame = account_subscribe_frame(
         state.clone(),
         Some(&token),

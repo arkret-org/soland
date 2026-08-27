@@ -1905,7 +1905,7 @@ fn warn_once_about_ephemeral_notary_key() {
 static EVENT_SEAL_MATERIALIZE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Current accepted Seal head for a Realm — the server side of the
-/// registered account-client Seal sourcing (`ak.self.seals.read.frontier`
+/// registered account-client Seal sourcing (`ak.self.seals.read.frontier.v1`
 /// returning the typed complete `RealmSealFrontierView`, see arkret-spec
 /// service-http-binding). Clients mint single-leaf
 /// Control Move `seal_basis` (`leaves=[seal_id]`) and DataEvent `seal_ref`

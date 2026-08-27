@@ -268,30 +268,25 @@ async fn peer_events_describe_advertises_formal_surface_body() {
         .unwrap();
 
     assert_eq!(describe["service_kind"], "principal_server");
-    let operations = describe["operation_bindings"].as_array().unwrap();
-    assert!(
-        operations
-            .iter()
-            .any(|binding| binding["operation_id"] == "ak.peer.events.command.submit")
-    );
-    assert!(
-        operations
-            .iter()
-            .any(|binding| binding["operation_id"] == "ak.peer.events.read.scan")
-    );
-    assert!(
-        operations
-            .iter()
-            .any(|binding| binding["operation_id"] == "ak.peer.events.read.frontier")
-    );
-    // `ak.peer.snapshot.read.manifest_head` MUST NOT be declared while soland cannot
+    assert!(advertises_operation(
+        &describe,
+        "ak.peer.events.command.submit.v1"
+    ));
+    assert!(advertises_operation(
+        &describe,
+        "ak.peer.events.read.scan.v1"
+    ));
+    assert!(advertises_operation(
+        &describe,
+        "ak.peer.events.read.frontier.v1"
+    ));
+    // `ak.peer.snapshot.read.manifest_head.v1` MUST NOT be declared while soland cannot
     // produce a signed ak.schema.snapshot.v1 manifest; the endpoint
     // answers `not_implemented` instead (service-surface.md §5.2).
-    assert!(
-        !operations
-            .iter()
-            .any(|binding| binding["operation_id"] == "ak.peer.snapshot.read.manifest_head")
-    );
+    assert!(!advertises_operation(
+        &describe,
+        "ak.peer.snapshot.read.manifest_head.v1"
+    ));
 }
 
 #[test]
@@ -408,7 +403,7 @@ fn peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason() {
 
 async fn peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason_body() {
     // encoding.md §8.3 closed set on the federation read path
-    // (`ak.peer.events.read.scan`): an `ak:cursor:`-prefixed token that fails
+    // (`ak.peer.events.read.scan.v1`): an `ak:cursor:`-prefixed token that fails
     // base64url/JSON/schema decoding MUST return top-level `param_invalid`
     // with reason `invalid_cursor`.
     let state = soland_test_support::app_state(test_config());

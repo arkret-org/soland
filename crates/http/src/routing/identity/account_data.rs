@@ -1,7 +1,7 @@
 //! Actor-private account data protocol handlers.
 //!
 //! Protocol writes use `ak.account_data.set` actor-private events and
-//! `ak.self.account.stream.subscribe` for sync/read. This module is mounted under
+//! `ak.self.account.stream.subscribe.v1` for sync/read. This module is mounted under
 //! `/_arkret/self/account_data*`.
 //!
 //! Spec: `discovery/client-preferences.md` §2 (storage model) plus the per-key
@@ -411,11 +411,11 @@ async fn admit_caller_signed_account_data_set(
 }
 
 #[endpoint(
-    operation_id = "ak.self.account_data.resource.replace",
+    operation_id = "ak.self.account_data.resource.replace.v1",
     summary = "Replace an account-data entry",
     tags("account_data")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.replace"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.replace.v1"))]
 async fn put_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -507,11 +507,11 @@ async fn put_account_data(
 }
 
 #[endpoint(
-    operation_id = "ak.self.account_data.resource.get",
+    operation_id = "ak.self.account_data.resource.get.v1",
     summary = "Get an account-data entry",
     tags("account_data")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.get"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.get.v1"))]
 async fn get_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -548,11 +548,11 @@ async fn get_account_data(
 }
 
 #[endpoint(
-    operation_id = "ak.self.account_data.read.list",
+    operation_id = "ak.self.account_data.read.list.v1",
     summary = "List account-data entries",
     tags("account_data")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.account_data.read.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account_data.read.list.v1"))]
 async fn list_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -587,11 +587,11 @@ pub(crate) fn is_service_internal_account_data_key(key: &str) -> bool {
 }
 
 #[endpoint(
-    operation_id = "ak.self.account_data.resource.delete",
+    operation_id = "ak.self.account_data.resource.delete.v1",
     summary = "Delete an account-data entry",
     tags("account_data")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.delete.v1"))]
 async fn delete_account_data(
     aa: AuthArgs,
     depot: &mut Depot,

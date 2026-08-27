@@ -72,9 +72,7 @@ mod snapshot;
 pub use events::sync::spawn_sync_cursor_ttl_sweeper;
 pub use governance_history::spawn_history_request_replica_reconciler;
 pub use interop::spawn_resumable_upload_ttl_sweeper;
-pub(crate) use interop::{
-    MAX_BLOB_UPLOAD_BYTES, TUS_EXTENSIONS, TUS_VERSIONS, push_target_privacy_derivation_claim,
-};
+pub(crate) use interop::{MAX_BLOB_UPLOAD_BYTES, push_target_privacy_derivation_claim};
 // CORS handler consumed by `crate::service`.
 pub(crate) use router_build::{cors_handler_for_origin_spec, openapi_surface_router};
 pub use router_build::{

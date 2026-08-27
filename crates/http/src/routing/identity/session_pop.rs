@@ -276,8 +276,8 @@ fn is_history_response_capability_request(req: &Request) -> bool {
             && path_template_matches(path, req.uri().path())
             && matches!(
                 operation_id.as_str(),
-                arkret_wire::ServiceOperationId::SELF_HISTORY_KEY_RESPONSES_READ_LIST
-                    | arkret_wire::ServiceOperationId::SELF_HISTORY_KEY_RESPONSES_COMMAND_ACK
+                arkret_wire::ServiceOperationId::SELF_HISTORY_KEY_RESPONSES_READ_LIST_V1
+                    | arkret_wire::ServiceOperationId::SELF_HISTORY_KEY_RESPONSES_COMMAND_ACK_V1
             )
     })
 }
@@ -471,17 +471,17 @@ mod tests {
         assert!(
             policy
                 .public_projection_operations
-                .contains("ak.self.events.read.describe")
+                .contains("ak.self.events.read.describe.v1")
         );
         assert!(
             policy
                 .public_projection_operations
-                .contains("ak.self.account.read.describe")
+                .contains("ak.self.account.read.describe.v1")
         );
         assert!(
             !policy
                 .public_projection_operations
-                .contains("ak.self.events.read.scan")
+                .contains("ak.self.events.read.scan.v1")
         );
     }
 }

@@ -745,7 +745,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
     }
 }
 
-/// A closed `ak.edge.push.command.notify` body built from the SDK types.
+/// A closed `ak.edge.push.command.notify.v1` body built from the SDK types.
 ///
 /// `blind_notification` requires `timing_profile_hint`; a device route is
 /// identified by `device_id` alone, and the request carries no provider payload.

@@ -1,12 +1,12 @@
 use super::*;
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.find.directory.read.private_contact_discovery",
+    operation_id = "ak.find.directory.read.private_contact_discovery.v1",
     tags("spaces")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.find.directory.read.private_contact_discovery")
+    fields(op = "ak.find.directory.read.private_contact_discovery.v1")
 )]
 pub(super) async fn private_contact_discovery(
     body: JsonBody<DirectoryPrivateContactDiscoveryRequestBody>,
@@ -31,8 +31,8 @@ pub(super) async fn private_contact_discovery(
     ))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.find.directory.command.announce", tags("spaces"))]
-#[tracing::instrument(skip_all, fields(op = "ak.find.directory.command.announce"))]
+#[salvo::oapi::endpoint(operation_id = "ak.find.directory.command.announce.v1", tags("spaces"))]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.command.announce.v1"))]
 pub(super) async fn directory_announce(
     body: JsonBody<DirectoryAnnounceRequestBody>,
     depot: &mut Depot,
@@ -100,8 +100,8 @@ fn directory_resource_identity(
     Ok((kind, resource_id.to_owned()))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.find.directory.command.withdraw", tags("spaces"))]
-#[tracing::instrument(skip_all, fields(op = "ak.find.directory.command.withdraw"))]
+#[salvo::oapi::endpoint(operation_id = "ak.find.directory.command.withdraw.v1", tags("spaces"))]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.command.withdraw.v1"))]
 pub(super) async fn directory_withdraw(
     body: JsonBody<DirectoryWithdrawRequestBody>,
     depot: &mut Depot,
@@ -127,10 +127,10 @@ pub(super) async fn directory_withdraw(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.find.directory.push.command.register",
+    operation_id = "ak.find.directory.push.command.register.v1",
     tags("spaces")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.find.directory.push.command.register"))]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.push.command.register.v1"))]
 pub(super) async fn directory_subscribe(
     body: JsonBody<DirectoryPushRegisterRequestBody>,
     depot: &mut Depot,

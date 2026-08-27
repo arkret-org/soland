@@ -71,11 +71,11 @@ struct IceConfigRequestContext {
 }
 
 #[endpoint(
-    operation_id = "ak.self.media.read.ice_config",
+    operation_id = "ak.self.media.read.ice_config.v1",
     summary = "Get media ICE configuration",
     tags("media")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.media.read.ice_config"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.media.read.ice_config.v1"))]
 async fn arkret_ice_config(
     aa: AuthArgs,
     body: JsonBody<MediaIceConfigRequestBody>,
@@ -1246,11 +1246,11 @@ fn focus_unavailable_error(message: impl Into<String>) -> AppError {
 }
 
 #[endpoint(
-    operation_id = "ak.self.call.media.exchange.issue_token",
+    operation_id = "ak.self.call.media.exchange.issue_token.v1",
     summary = "Exchange a call media token",
     tags("media")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.call.media.exchange.issue_token"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.call.media.exchange.issue_token.v1"))]
 async fn arkret_rtc_token(
     aa: AuthArgs,
     body: JsonBody<CallMediaTokenExchangeRequestBody>,

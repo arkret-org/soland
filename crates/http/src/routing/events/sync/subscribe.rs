@@ -1,11 +1,11 @@
 //! Account-aggregate describe + long-lived subscribe stream
-//! (`ak.self.account.stream.subscribe`): the timeline / account-data /
+//! (`ak.self.account.stream.subscribe.v1`): the timeline / account-data /
 //! to_device NDJSON delta machinery and its auth-material gate.
 
 use super::*;
 
-#[endpoint(operation_id = "ak.self.account.read.describe")]
-#[tracing::instrument(skip_all, fields(op = "ak.self.account.read.describe"))]
+#[endpoint(operation_id = "ak.self.account.read.describe.v1")]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account.read.describe.v1"))]
 pub(super) async fn account_describe(
     depot: &mut Depot,
 ) -> soland_http::result::JsonResult<arkret_models_discovery::ServiceDescribe> {
@@ -94,7 +94,7 @@ pub(crate) async fn account_subscribe_session_or_render(
 }
 
 #[handler]
-#[tracing::instrument(skip_all, fields(op = "ak.self.account.stream.subscribe"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account.stream.subscribe.v1"))]
 pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot
         .get_typed::<AppState>()
@@ -554,7 +554,7 @@ fn account_subscribe_scope_key(
 ) -> String {
     let filter_value = sync_filter_value(body.filter.as_ref());
     format!(
-        "ak.self.account.stream.subscribe|{}|filter={}",
+        "ak.self.account.stream.subscribe.v1|{}|filter={}",
         subscribe_subject(req, session),
         sync_filter_digest(filter_value.as_ref())
     )

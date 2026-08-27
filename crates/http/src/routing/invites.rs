@@ -58,7 +58,7 @@ use crate::wire::now;
 
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
 const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
-/// HTTP binding of `ak.peer.invites.command.submit` — the only endpoint a
+/// HTTP binding of `ak.peer.invites.command.submit.v1` — the only endpoint a
 /// remote private invite delivery is ever addressed to.
 const PEER_INVITES_ENDPOINT: &str = "/_arkret/peer/invites";
 const ACTIVE_LOCATOR_LIMIT: usize = 16;
@@ -230,11 +230,11 @@ async fn revoke_invite_locator(
 }
 
 #[endpoint(
-    operation_id = "ak.peer.invites.command.submit",
+    operation_id = "ak.peer.invites.command.submit.v1",
     summary = "Submit a peer invite delivery",
     tags("invites")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.invites.command.submit"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.invites.command.submit.v1"))]
 async fn peer_invites_submit(
     depot: &mut Depot,
     req: &mut Request,
@@ -245,7 +245,7 @@ async fn peer_invites_submit(
         .parse_json::<InviteDeliveryRequestBody>()
         .await
         .map_err(|_| {
-            AppError::json_invalid("invalid ak.peer.invites.command.submit request body")
+            AppError::json_invalid("invalid ak.peer.invites.command.submit.v1 request body")
         })?;
     let body = serde_json::to_value(&delivery).map_err(|error| {
         AppError::internal(format!("invite delivery request serialize: {error}"))
@@ -320,7 +320,7 @@ enum InvitePrivateProjection<'a> {
 
 /// Spec invite-addressing.md §7 steps 4-9 — the receive half of a private
 /// invite delivery, shared by the peer service-to-service ingress and the local
-/// `ak.self.invites.command.dispatch` branch.
+/// `ak.self.invites.command.dispatch.v1` branch.
 ///
 /// Steps 1-3 are the service-to-service binding and stay with the caller. The
 /// local branch substitutes "authenticated self session + the two
@@ -480,11 +480,11 @@ async fn receive_private_invite_delivery(
 }
 
 #[endpoint(
-    operation_id = "ak.self.invites.command.dispatch",
+    operation_id = "ak.self.invites.command.dispatch.v1",
     summary = "Dispatch a private invite delivery",
     tags("invites")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.invites.command.dispatch"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.invites.command.dispatch.v1"))]
 async fn self_invites_dispatch(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -496,11 +496,11 @@ async fn self_invites_dispatch(
         .payload()
         .await
         .map_err(|_| {
-            AppError::json_invalid("invalid ak.self.invites.command.dispatch request body")
+            AppError::json_invalid("invalid ak.self.invites.command.dispatch.v1 request body")
         })?
         .to_vec();
     let body: Value = serde_json::from_slice(&raw_body).map_err(|_| {
-        AppError::json_invalid("invalid ak.self.invites.command.dispatch request body")
+        AppError::json_invalid("invalid ak.self.invites.command.dispatch.v1 request body")
     })?;
     let dispatch: SelfInviteDispatchRequestBody =
         serde_json::from_value(body.clone()).map_err(|error| {
@@ -544,7 +544,7 @@ async fn self_invites_dispatch(
 }
 
 /// Spec invite-addressing.md §7 — the accepted Event preconditions
-/// of `ak.self.invites.command.dispatch`.
+/// of `ak.self.invites.command.dispatch.v1`.
 ///
 /// The order is closed: resolve the accepted Event by `event_id` first, then
 /// compare its stored signing actor.
@@ -591,7 +591,7 @@ fn invite_event_precondition(reason_code: &'static str, message: &'static str) -
 }
 
 /// Spec invite-addressing.md §7 — hand the exact canonical request body to the
-/// durable service-to-service outbox bound for `ak.peer.invites.command.submit`.
+/// durable service-to-service outbox bound for `ak.peer.invites.command.submit.v1`.
 ///
 /// The payload is the JCS form of the bytes the caller sent, never a
 /// re-encoding of the typed model, so every retry under the same
@@ -626,7 +626,7 @@ async fn enqueue_remote_invite_delivery(
     let payload_json =
         String::from_utf8(canonical::canonical_json_bytes(body).map_err(|error| {
             super::events::peer::schema_violation(format!(
-                "ak.self.invites.command.dispatch body is not canonicalizable: {error}"
+                "ak.self.invites.command.dispatch.v1 body is not canonicalizable: {error}"
             ))
         })?)
         .map_err(|error| {
@@ -971,11 +971,11 @@ fn invite_delivery_entry_active(
 }
 
 #[endpoint(
-    operation_id = "ak.open.invite_locator.read.resolve",
+    operation_id = "ak.open.invite_locator.read.resolve.v1",
     summary = "Resolve an invite locator",
     tags("invites")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.invite_locator.read.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.invite_locator.read.resolve.v1"))]
 async fn resolve_invite_locator(
     depot: &mut Depot,
     req: &mut Request,

@@ -225,8 +225,8 @@ pub(in crate::routing::events) fn router() -> Router {
         .push(Router::with_path("events/{event_id}").get(get_event))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.seals.command.submit", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.seals.command.submit"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.seals.command.submit.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.seals.command.submit.v1"))]
 async fn submit_event_seal(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -237,7 +237,7 @@ async fn submit_event_seal(
     let session = aa.authenticated_session(state, req).await?;
     super::super::require_agent_session_scope(
         &session,
-        arkret_wire::ServiceOperationId::SELF_SEALS_COMMAND_SUBMIT,
+        arkret_wire::ServiceOperationId::SELF_SEALS_COMMAND_SUBMIT_V1,
     )?;
     let seal = body.into_inner();
     let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
@@ -319,8 +319,8 @@ async fn submit_event_seal(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.describe", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.describe"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.describe.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.describe.v1"))]
 async fn events_describe(
     depot: &mut Depot,
     req: &mut Request,
@@ -329,7 +329,7 @@ async fn events_describe(
         req.parse_json::<arkret_models_collaboration::event_query::EventsDescribeRequestBody>()
             .await
             .map_err(|_| {
-                AppError::json_invalid("invalid ak.self.events.read.describe request body")
+                AppError::json_invalid("invalid ak.self.events.read.describe.v1 request body")
             })?;
     }
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -372,8 +372,8 @@ async fn events_describe(
     json_ok(description)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.command.submit", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.command.submit"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.command.submit.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.command.submit.v1"))]
 async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     // api-conventions.md §6 — read the generic `Idempotency-Key` header before
@@ -425,7 +425,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     };
     if let Err(error) = super::super::require_agent_session_scope(
         &session,
-        arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT,
+        arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
     ) {
         render_error(res, error.http_status(), error.wire_code(), &error.message);
         return;
@@ -745,8 +745,8 @@ fn envelope_operation_id(envelope: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.resource.get", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.resource.get"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.resource.get.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.resource.get.v1"))]
 async fn get_event(
     aa: AuthArgs,
     event_id: PathParam<String>,
@@ -769,8 +769,11 @@ async fn get_event(
     event_view_for_state(state, &record).await
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.delivery_status", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.delivery_status"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.events.read.delivery_status.v1",
+    tags("events")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.delivery_status.v1"))]
 async fn event_delivery_status(
     aa: AuthArgs,
     body: JsonBody<EventDeliveryStatusRequestBody>,
@@ -781,7 +784,7 @@ async fn event_delivery_status(
     let session = aa.authenticated_session(state, req).await?;
     super::super::require_agent_session_scope(
         &session,
-        arkret_wire::ServiceOperationId::SELF_EVENTS_READ_DELIVERY_STATUS,
+        arkret_wire::ServiceOperationId::SELF_EVENTS_READ_DELIVERY_STATUS_V1,
     )?;
     let body = body.into_inner();
     let event_id = body.event_id.as_str();
@@ -993,8 +996,8 @@ async fn verified_contact_mirror_event(
     Ok(Some((event, request_digest)))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.resolve", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.resolve"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.resolve.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.resolve.v1"))]
 async fn resolve_events(
     aa: AuthArgs,
     body: JsonBody<EventsResolveRequestBody>,
@@ -1172,8 +1175,8 @@ async fn resolve_events(
     json_ok(outcome)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.seals.read.frontier", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.seals.read.frontier"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.seals.read.frontier.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.seals.read.frontier.v1"))]
 async fn seals_frontier(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
@@ -1186,7 +1189,9 @@ async fn seals_frontier(
     let query_body = req
         .parse_json::<arkret_models_collaboration::event_query::SealFrontierRequestBody>()
         .await
-        .map_err(|_| AppError::json_invalid("invalid ak.self.seals.read.frontier request body"))?;
+        .map_err(|_| {
+            AppError::json_invalid("invalid ak.self.seals.read.frontier.v1 request body")
+        })?;
     let realm_id = query_body.realm_id;
     let own_pcr = state
         .projections()
@@ -1264,8 +1269,8 @@ async fn seals_frontier(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.frontier", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.frontier"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.frontier.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.frontier.v1"))]
 async fn events_frontier(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
@@ -1278,7 +1283,9 @@ async fn events_frontier(
     let query_body = req
         .parse_json::<arkret_models_collaboration::event_query::EventsFrontierRequestBody>()
         .await
-        .map_err(|_| AppError::json_invalid("invalid ak.self.events.read.frontier request body"))?;
+        .map_err(|_| {
+            AppError::json_invalid("invalid ak.self.events.read.frontier.v1 request body")
+        })?;
     let actor_id = query_body.actor_id.as_str().to_owned();
     let realm_selector = query_body
         .realm_id

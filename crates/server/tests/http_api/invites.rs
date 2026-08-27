@@ -1,6 +1,6 @@
 //! Integration tests — private invite delivery dispatch.
 //!
-//! `ak.self.invites.command.dispatch` (`POST /_arkret/self/invites/dispatch`)
+//! `ak.self.invites.command.dispatch.v1` (`POST /_arkret/self/invites/dispatch`)
 //! per `zh/sync/invite-addressing.md` §7: closed accepted-event lookup and actor
 //! preconditions, then a local target replays the peer receive chain from
 //! step 4 while a remote target enters the durable exact-body outbox.
@@ -232,7 +232,7 @@ fn shared_realm_evidence(realm_id: &str) -> IntroductionEvidence {
 }
 
 /// Seed an accepted local `ak.invite.create` for Bob and read it back through
-/// `ak.self.events.read.resolve`, which is the only way §7 lets a client fill
+/// `ak.self.events.read.resolve.v1`, which is the only way §7 lets a client fill
 /// `invite_event`.
 ///
 /// The evidence is chosen from the seeded Realm id because

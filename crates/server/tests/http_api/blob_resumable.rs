@@ -337,7 +337,7 @@ async fn describe_advertises_tus_binding_and_limits_body() {
                 "ak.feature.blob.resumable_upload.tus.v1".to_owned()
             ))
     );
-    let tus_binding = describe["supported_bindings"]
+    let tus_binding = describe["transport_bindings"]
         .as_array()
         .unwrap()
         .iter()
@@ -347,10 +347,7 @@ async fn describe_advertises_tus_binding_and_limits_body() {
         tus_binding["base_url"],
         "https://server.test/_arkret/self/blob/resumable"
     );
-    assert_eq!(
-        tus_binding["operations"],
-        serde_json::json!(["ak.self.blob.upload.create"])
-    );
+    assert!(tus_binding.get("operations").is_none());
     assert!(tus_binding["extension_profile_required"].is_null());
     assert_eq!(tus_binding["tus_version"], serde_json::json!(["1.0.0"]));
     assert_eq!(

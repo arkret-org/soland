@@ -221,7 +221,7 @@ pub(super) fn protocol_router() -> Router {
             Router::with_path("account")
                 .push(Router::with_path("viewer").get(account_viewer))
                 // spec `events_sync` surface group (core tier) binds
-                // `ak.self.account.command.update_profile` to POST /_arkret/self/account/profile;
+                // `ak.self.account.command.update_profile.v1` to POST /_arkret/self/account/profile;
                 // describe advertises it, so it MUST resolve on the protocol surface.
                 .push(Router::with_path("profile").post(update_profile)),
         )
@@ -423,7 +423,7 @@ async fn append_account_registration_audit(
         Some(did),
         "account.register",
         json!({
-            "operation_contract": arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_REGISTER,
+            "operation_contract": arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_REGISTER_V1,
             "principal_id": did,
             "handle_requested": handle,
             "via": "gate",
@@ -1040,8 +1040,8 @@ async fn delete_account_localpart(
     json_ok(AccountLocalpartDeleteOutcome { ok: true })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.account.read.viewer", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.account.read.viewer"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.account.read.viewer.v1", tags("identity"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account.read.viewer.v1"))]
 pub(crate) async fn account_viewer(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1231,10 +1231,10 @@ async fn gate_account_register(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.account.command.update_profile",
+    operation_id = "ak.self.account.command.update_profile.v1",
     tags("identity")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.account.command.update_profile"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account.command.update_profile.v1"))]
 async fn update_profile(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1570,8 +1570,11 @@ async fn resolved_actor_profile_evidence(
     Ok(None)
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.actor_profile.read.resolve", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.actor_profile.read.resolve"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.actor_profile.read.resolve.v1",
+    tags("identity")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.self.actor_profile.read.resolve.v1"))]
 async fn resolve_actor_profiles(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1626,10 +1629,10 @@ async fn resolve_actor_profiles(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.identity.read.resolution_audit",
+    operation_id = "ak.self.identity.read.resolution_audit.v1",
     tags("identity")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.identity.read.resolution_audit"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.identity.read.resolution_audit.v1"))]
 async fn read_principal_resolution_audit(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1751,10 +1754,10 @@ async fn read_principal_resolution_audit(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.direct_conversation.read.resolve",
+    operation_id = "ak.self.direct_conversation.read.resolve.v1",
     tags("identity")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.direct_conversation.read.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.direct_conversation.read.resolve.v1"))]
 async fn direct_conversation_resolve(
     aa: AuthArgs,
     depot: &mut Depot,

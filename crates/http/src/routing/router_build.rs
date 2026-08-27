@@ -8,6 +8,120 @@ use soland_http::ratelimit::{RateLimiter, RateLimiterConfig, RateLimiterMiddlewa
 use super::*;
 use crate::state::AppState;
 
+const ARKRET_OPERATION_HEADER: &str = "Arkret-Operation";
+
+#[derive(Clone, Copy)]
+enum OperationSelectorExpectation {
+    HttpFamily,
+    Exact(arkret_wire::ServiceOperationId),
+}
+
+#[derive(Clone)]
+struct OperationSelectorMiddleware;
+
+#[async_trait]
+impl Handler for OperationSelectorMiddleware {
+    async fn handle(
+        &self,
+        req: &mut Request,
+        depot: &mut Depot,
+        res: &mut Response,
+        ctrl: &mut FlowCtrl,
+    ) {
+        if req.method() == Method::OPTIONS {
+            ctrl.call_next(req, depot, res).await;
+            return;
+        }
+        let method = req.method().as_str();
+        let path = req.uri().path();
+        let expectation = if is_tus_operation_path(method, path) {
+            Some(OperationSelectorExpectation::Exact(
+                arkret_wire::ServiceOperationId::SelfBlobUploadCreateV1,
+            ))
+        } else if arkret_wire::ServiceOperationId::ALL
+            .iter()
+            .copied()
+            .any(|operation| operation.matches_http_request(method, path))
+        {
+            Some(OperationSelectorExpectation::HttpFamily)
+        } else {
+            None
+        };
+        let Some(expectation) = expectation else {
+            ctrl.call_next(req, depot, res).await;
+            return;
+        };
+
+        let mut header_values = req.headers().get_all(ARKRET_OPERATION_HEADER).iter();
+        let first = header_values.next();
+        if first.is_none() {
+            let error = soland_http::error::AppError::new(
+                soland_http::error::ErrorCode::OperationSelectorRequired,
+                "Arkret-Operation is required for registered operations",
+            );
+            error.write(req, depot, res).await;
+            ctrl.skip_rest();
+            return;
+        }
+        let selected = first
+            .and_then(|value| value.to_str().ok())
+            .and_then(arkret_wire::ServiceOperationId::from_wire);
+        let selector_matches = selected.is_some_and(|operation| match expectation {
+            OperationSelectorExpectation::HttpFamily => {
+                operation.matches_http_request(method, path)
+            }
+            OperationSelectorExpectation::Exact(expected) => operation == expected,
+        });
+        let binding_kind = match expectation {
+            OperationSelectorExpectation::HttpFamily => arkret_wire::BindingKind::HttpJson,
+            OperationSelectorExpectation::Exact(_) => arkret_wire::BindingKind::Tus,
+        };
+        let advertised = selected.is_some_and(|operation| {
+            depot
+                .get_typed::<AppState>()
+                .is_ok_and(|state| locally_advertises(state, operation, binding_kind))
+        });
+        if header_values.next().is_some() || !selector_matches || !advertised {
+            let error = soland_http::error::AppError::new(
+                soland_http::error::ErrorCode::UnsupportedOperationVersion,
+                "Arkret-Operation does not select this method and path",
+            );
+            error.write(req, depot, res).await;
+            ctrl.skip_rest();
+            return;
+        }
+        ctrl.call_next(req, depot, res).await;
+    }
+}
+
+fn is_tus_operation_path(method: &str, path: &str) -> bool {
+    matches!(method, "POST" | "PATCH" | "HEAD" | "DELETE")
+        && (path == "/_arkret/self/blob/resumable"
+            || path.starts_with("/_arkret/self/blob/resumable/"))
+}
+
+fn locally_advertises(
+    state: &AppState,
+    operation: arkret_wire::ServiceOperationId,
+    binding_kind: arkret_wire::BindingKind,
+) -> bool {
+    if crate::routing::system::describe::build_server_description(state)
+        .supports_operation_binding(operation, binding_kind)
+    {
+        return true;
+    }
+    crate::routing::spaces::directory::DIRECTORY_OPERATION_BUNDLES
+        .iter()
+        .chain(crate::routing::identity::did::IDENTITY_REGISTRY_OPERATION_BUNDLES.iter())
+        .any(|bundle_id| {
+            arkret_wire::operation_bundle_descriptor(bundle_id).is_some_and(|bundle| {
+                bundle.members.iter().any(|member| {
+                    member.operation_id == operation && member.binding_kind == binding_kind
+                })
+            })
+        })
+}
+
 pub fn router(state: AppState) -> Router {
     // Derive the limiter ceilings from the deployment posture (+ env overrides)
     // so the live `describe` policy and the enforced quota share one source.
@@ -160,7 +274,7 @@ fn mount_application_routes(router: Router, conformance_harness_enabled: bool) -
 /// API-URL trust-namespace migration: the historical `/api/v1/*` +
 /// `/arkret/v1/*` prefixes are gone. Every protocol path now lives under a
 /// single `/_arkret/` root with no version segment (version is negotiated
-/// via `*.describe` / exact `operation_bindings`). The first path segment names
+/// via `*.describe` / registered operation bundles). The first path segment names
 /// the trust concentric circle (self/gate/root/find/peer/open/edge); the
 /// deployment-local operator surface stays separate at `/_soland/admin/*`.
 ///
@@ -169,6 +283,7 @@ fn mount_application_routes(router: Router, conformance_harness_enabled: bool) -
 /// here only supplies the shared `_arkret` root.
 fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
     let mut router = Router::with_path("_arkret")
+        .hoop(OperationSelectorMiddleware)
         .hoop(wait_for_sync_token)
         // `/_arkret/describe` (root meta). Integration describe is mounted
         // under `/_soland/self/integration/describe`.
@@ -199,7 +314,7 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
                 .push(invites::self_router())
                 // self/realms/{realm_id}/policy-server (ak.self.realm_policy_server.*).
                 .push(realm_policy::router())
-                // self/realms/{realm_id}/organizations (ak.self.realm_organization.read.list).
+                // self/realms/{realm_id}/organizations (ak.self.realm_organization.read.list.v1).
                 .push(realm_organization::router())
                 .push(governance_history::self_router())
                 // G3.S1: MLS / keys lifecycle — spec-canonical path is
@@ -283,7 +398,7 @@ fn soland_local_router() -> Router {
                 .push(events::local_router())
                 // Owner-scoped policy document storage CRUD
                 // (`/_soland/self/policies*`). Deployment-local management
-                // capability backing `ak.self.policy.read.check`; kept off
+                // capability backing `ak.self.policy.read.check.v1`; kept off
                 // the `/_arkret/...` protocol root per
                 // `service-http-binding.md` §1007.
                 .push(access::product_router())
@@ -398,6 +513,9 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
         .allow_headers(vec![
             "authorization",
             "content-type",
+            // Every canonical Arkret HTTP request selects its exact
+            // versioned contract before body parsing.
+            "arkret-operation",
             // RFC 9421 message signatures ride on every `/_arkret/self/*` and
             // `/_arkret/root/*` request the SDK signs; without these three the
             // browser preflight rejects the request before it reaches us.

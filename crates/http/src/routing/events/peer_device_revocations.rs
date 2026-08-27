@@ -51,7 +51,7 @@ struct GateDecisionProjection {
     covering_seal_id: Option<String>,
 }
 
-/// `service-http-binding.md` §`ak.peer.device_revocations.command.check` —
+/// `service-http-binding.md` §`ak.peer.device_revocations.command.check.v1` —
 /// only `allow` carries the origin-derived selector. Every other decision,
 /// `authority_mismatch` included, MUST return no `derived_binding` so the
 /// receipt cannot be read as an oracle for "does this device exist".
@@ -106,10 +106,10 @@ fn current_binding_stable(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.peer.device_revocations.command.check",
+    operation_id = "ak.peer.device_revocations.command.check.v1",
     tags("events")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.device_revocations.command.check"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.device_revocations.command.check.v1"))]
 pub(super) async fn check_device_revocation_gate(
     depot: &mut Depot,
     req: &mut Request,
@@ -131,7 +131,9 @@ pub(super) async fn check_device_revocation_gate(
         .parse_json::<DeviceRevocationGateCheckRequestBody>()
         .await
         .map_err(|_| {
-            AppError::json_invalid("invalid ak.peer.device_revocations.command.check request body")
+            AppError::json_invalid(
+                "invalid ak.peer.device_revocations.command.check.v1 request body",
+            )
         })?;
     request
         .validate()

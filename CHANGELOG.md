@@ -12,7 +12,7 @@ and the project tracks Arkret v1 spec revisions.
 
 ## R3.3 — Spec sync 2026-05-28 (arkret-spec @ cced4b8)
 
-- R3.3 spec sync — pin to arkret-spec @ cced4b8 (AKP-0011 shareable object addressing / `ak.find.directory.read.resolve_target`: N/A for this service; object-address resolution belongs to the Directory Service).
+- R3.3 spec sync — pin to arkret-spec @ cced4b8 (AKP-0011 shareable object addressing / `ak.find.directory.read.resolve_target.v1`: N/A for this service; object-address resolution belongs to the Directory Service).
 
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
 ## R3.2 — Spec sync 2026-05-28 (arkret-spec @ b56cab1)
@@ -25,7 +25,7 @@ and the project tracks Arkret v1 spec revisions.
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
 ## R3 — Spec sync 2026-05-27 (arkret-spec @ b47ff6ec)
 
-- HTTP-1: `POST /api/v1/rtc/token` (ak.self.call.media.exchange.issue_token) mounted as a 501 stub in `src/routing/system/rtc.rs`; real TTL / participant_binding / service_signature issuer logic deferred to R3.1.
+- HTTP-1: `POST /api/v1/rtc/token` (ak.self.call.media.exchange.issue_token.v1) mounted as a 501 stub in `src/routing/system/rtc.rs`; real TTL / participant_binding / service_signature issuer logic deferred to R3.1.
 - HTTP-2: agent route canonicalised — `/agents/{id}/deactivate` only, no `/revoke` path remains.
 - HTTP-4: recovery policy / receipt endpoints (`POST /api/v1/identity/recovery-policy`, `POST /api/v1/identity/recovery-receipt`) mounted as 501 stubs in `src/routing/identity/recovery.rs`.
 - ERR-1: protocol reason codes are emitted from concrete validation and handler paths; obsolete round-scoped grouping helpers are not part of the runtime surface.
@@ -93,8 +93,8 @@ on the reducer / federation / state-machine surfaces. See
 - **BREAKING** `ak.realm.create` reducer now captures and locks `trust_domain`
   as immutable Realm state. Subsequent mismatching events reject with
   `cross_domain_replay_rejected`.
-- **BREAKING** `ServiceDescribe` v2: `ak.server.read.describe` /
-  `ak.self.account.read.describe` / `ak.self.events.read.describe` / `ak.edge.applet.read.describe` all return
+- **BREAKING** `ServiceDescribe` v2: `ak.server.read.describe.v1` /
+  `ak.self.account.read.describe.v1` / `ak.self.events.read.describe.v1` / `ak.edge.applet.read.describe.v1` all return
   the 17-field canonical envelope (including `trust_domain`,
   `plaintext_visibility`, `claimed_profiles`, `verified_profiles`,
   `development_mode`); `development_mode=true` with non-empty
@@ -233,7 +233,7 @@ below. Producers on the old wire MUST upgrade.
   `service_id`-derived default) before processing the removed legacy reset
   events. The boot path validates the value via the SDK
   `TrustDomainId` regex.
-- Producers MUST move ephemeral kinds off `ak.self.events.command.submit`; the
+- Producers MUST move ephemeral kinds off `ak.self.events.command.submit.v1`; the
   endpoint no longer accepts them under any compatibility flag.
 - Producers MUST add `trust_domain` and `reset_event_id` to every
   removed legacy reset payload (matching the enclosing

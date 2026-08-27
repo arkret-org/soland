@@ -19,16 +19,16 @@
 //! Trust + freshness:
 //! - **TTL freshness**: cache_hit reads check `freshness_at + push_bridge_cache_ttl_seconds`
 //!   (default 900s). Stale entries are downgraded to `trust_level=stale` and surface
-//!   `fetch_state=cache_hit_stale`, so downstream `ak.edge.push.command.notify` never delivers off
-//!   a stale snapshot without an explicit operator action (force_refresh on /fetch, or import).
+//!   `fetch_state=cache_hit_stale`, so downstream `ak.edge.push.command.notify.v1` never delivers
+//!   off a stale snapshot without an explicit operator action (force_refresh on /fetch, or import).
 //! - **Signed-service-DID trust**: snapshot imports / live fetches only promote
 //!   `trust_level=trusted` when the upstream contract's `service_id` matches
 //!   `AppConfig::push_bridge_trusted_service_ids` (or `development_mode=true`). Everything else
 //!   lands at `trust_level=pending` and outbound delivery treats it as unsigned-only.
 //! - **Auth modes / privacy descriptors**: `OutboundPushResolvedContract` surfaces the upstream
 //!   `auth_modes[]` and `privacy.*` fields so the delivery layer can bind outbound signing to
-//!   whatever the gateway advertised (instead of the fixed `ak.edge.push.command.notify` defaults).
-//!   Stays read-only here — the actual binding lives in the delivery loop.
+//!   whatever the gateway advertised (instead of the fixed `ak.edge.push.command.notify.v1`
+//!   defaults). Stays read-only here — the actual binding lives in the delivery loop.
 
 use std::time::Duration;
 
@@ -107,7 +107,7 @@ async fn outbound_push_bridge_describe(
             snapshot_store_mode: "durable_export_import_with_freshness_and_trust_level".to_owned(),
         },
         delivery: OutboundPushDeliveryDescriptor {
-            operation_id: arkret_wire::ServiceOperationId::EDGE_PUSH_COMMAND_NOTIFY.to_owned(),
+            operation_id: arkret_wire::ServiceOperationId::EDGE_PUSH_COMMAND_NOTIFY_V1.to_owned(),
             source_service_id_header: "Source-Service-ID".to_owned(),
             destination_service_id_header: "Destination-Service-ID".to_owned(),
             request_id_header: "X-Arkret-Request-Id".to_owned(),
@@ -146,7 +146,7 @@ async fn outbound_push_bridge_describe(
                         "contract": arkret_wire::ServiceContractId::PUSH_BRIDGE_V1,
                         "delivery": {
                             "notify_path": "/_arkret/edge/push/notify",
-                            "operation_id": arkret_wire::ServiceOperationId::EDGE_PUSH_COMMAND_NOTIFY
+                            "operation_id": arkret_wire::ServiceOperationId::EDGE_PUSH_COMMAND_NOTIFY_V1
                         }
                     }
                 }]
@@ -601,7 +601,8 @@ fn default_outbound_push_resolved_contract() -> OutboundPushResolvedContract {
     OutboundPushResolvedContract {
         contract: arkret_wire::ServiceContractId::PUSH_BRIDGE_V1.to_owned(),
         expected_notify_path: "/_arkret/edge/push/notify".to_owned(),
-        expected_operation_id: arkret_wire::ServiceOperationId::EDGE_PUSH_COMMAND_NOTIFY.to_owned(),
+        expected_operation_id: arkret_wire::ServiceOperationId::EDGE_PUSH_COMMAND_NOTIFY_V1
+            .to_owned(),
         expected_source_service_id_header: "Source-Service-ID".to_owned(),
         expected_destination_service_id_header: "Destination-Service-ID".to_owned(),
         expected_request_id_header: "X-Arkret-Request-Id".to_owned(),

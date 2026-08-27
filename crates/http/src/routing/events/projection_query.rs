@@ -867,8 +867,8 @@ fn document_projection_comments(
         .collect()
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.space.read.list", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.space.read.list"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.space.read.list.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.space.read.list.v1"))]
 async fn list_space_container_projections(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -949,8 +949,8 @@ async fn list_space_container_projections(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.strand.read.list", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.strand.read.list"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.strand.read.list.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.strand.read.list.v1"))]
 async fn list_strand_projections(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1337,8 +1337,8 @@ async fn list_relation_projections(
     json_ok(RelationEdgeList { items, total })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.morph.resource.get", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.morph.resource.get"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.morph.resource.get.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.morph.resource.get.v1"))]
 async fn get_document_projection(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1412,8 +1412,8 @@ async fn get_document_projection(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.morph.read.list", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.morph.read.list"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.morph.read.list.v1", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.morph.read.list.v1"))]
 async fn list_morph_projections(
     aa: AuthArgs,
     depot: &mut Depot,

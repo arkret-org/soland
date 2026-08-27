@@ -474,90 +474,6 @@ pub use arkret_models_identity::identity::{IdentityLogListOutcome, IdentityRecei
 // authoritative typed forms (`arkret_models_crypto::{RecoveryPolicy,
 // RecoveryReceipt}`) for clients; no soland-private mirror exists.
 
-const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
-    "service_discovery",
-    "identity_registry",
-    "identity_resolution",
-    "events_sync",
-    "peer_federation",
-    "directory_discovery",
-    "contact_lifecycle",
-    "consent_management",
-    "account_data",
-    "read_cursor",
-    "blob_storage",
-    "device_and_keys",
-    "realtime_media",
-    "authz_policy",
-    "moderation_reports",
-    "realm_object_read",
-    "realm_read",
-    "realm_governance_links",
-    "circle_management",
-    "push",
-    "applet",
-    "applet_install",
-    "applet_ghost",
-    "mimi_interop",
-    "agent_pairing_handoff",
-    "invite_locator_handoff",
-    "agent_runtime",
-];
-
-const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
-    arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_DEVICE,
-    arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_LOGOUT,
-    arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_REVOKE_SESSION,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_DESCRIBE,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_SEARCH_REALMS,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_REALM,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_TARGET,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_AGENT_SELECTOR,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_LIST_HANDLES_FOR_SUBJECT,
-    arkret_wire::ServiceOperationId::SELF_BLOB_UPLOAD_CREATE,
-    arkret_wire::ServiceOperationId::SELF_BLOB_RESOURCE_HEAD,
-    arkret_wire::ServiceOperationId::SELF_BLOB_RESOURCE_GET,
-    arkret_wire::ServiceOperationId::SELF_KEYS_BACKUPS_RESOURCE_REPLACE,
-    arkret_wire::ServiceOperationId::SELF_KEYS_BACKUPS_READ_LIST,
-    arkret_wire::ServiceOperationId::SELF_KEYS_BACKUPS_COMMAND_UNLOCK,
-    arkret_wire::ServiceOperationId::SELF_KEYS_BACKUPS_RESOURCE_DELETE,
-    arkret_wire::ServiceOperationId::PEER_INVITES_COMMAND_SUBMIT,
-    arkret_wire::ServiceOperationId::OPEN_INVITE_LOCATOR_READ_RESOLVE,
-];
-
-/// Spec operations soland deliberately does NOT declare even though their
-/// surface group is otherwise supported.
-const UNDECLARED_OPERATION_IDS: &[&str] =
-    &[arkret_wire::ServiceOperationId::FIND_DIRECTORY_COMMAND_TAKEDOWN_APPEAL];
-
-fn canonical_operation_ids() -> Vec<String> {
-    let missing_surfaces =
-        artifacts::missing_operation_surface_groups(SUPPORTED_OPERATION_SURFACES);
-    debug_assert!(
-        missing_surfaces.is_empty(),
-        "supported operation surface groups missing from artifact registry: {missing_surfaces:?}"
-    );
-    let missing = artifacts::missing_operation_ids(SUPPORTED_STANDALONE_OPERATION_IDS);
-    debug_assert!(
-        missing.is_empty(),
-        "standalone supported operation ids missing from artifact registry: {missing:?}"
-    );
-    let mut supported = artifacts::operation_ids_for_surface_groups(SUPPORTED_OPERATION_SURFACES);
-    for operation_id in artifacts::registered_operation_ids(SUPPORTED_STANDALONE_OPERATION_IDS) {
-        if !supported.contains(&operation_id) {
-            supported.push(operation_id);
-        }
-    }
-    supported.retain(|operation_id| !UNDECLARED_OPERATION_IDS.contains(&operation_id.as_str()));
-    debug_assert!(
-        supported
-            .iter()
-            .all(|operation_id| artifacts::operation_ids().contains(operation_id)),
-        "canonical_operation_ids must only contain spec operation ids"
-    );
-    supported
-}
-
 fn local_extension_operations() -> Vec<String> {
     crate::routing::soland_extension_operation_ids()
 }
@@ -638,14 +554,14 @@ fn profile_limitations() -> Vec<Value> {
         json!({
             "area": "snapshot.head",
             "status": "standard_self_supported",
-            "reason": "ak.self.snapshot.read.manifest_head returns a signed ak.schema.snapshot.v1 manifest; the /_soland dev bundle is development-only diagnostics"
+            "reason": "ak.self.snapshot.read.manifest_head.v1 returns a signed ak.schema.snapshot.v1 manifest; the /_soland dev bundle is development-only diagnostics"
         }),
         json!({
             "area": "account_auth.device_pair",
             "status": "standard_gate_supported",
-            "spec_operation": arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_DEVICE,
+            "spec_operation": arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_DEVICE_V1,
             "canonical_path": "/_arkret/gate/account/device-pair",
-            "reason": "ak.gate.account.command.pair_device is served on the spec path for existing-device-authorized sibling registration. The old soland-local device pairing scaffold and approval family are removed; v1 core does not define a self/devices pairing-requests approval surface (service-http-binding.md §85, key-management.md §384, device-lifecycle.md §499)."
+            "reason": "ak.gate.account.command.pair_device.v1 is served on the spec path for existing-device-authorized sibling registration. The old soland-local device pairing scaffold and approval family are removed; v1 core does not define a self/devices pairing-requests approval surface (service-http-binding.md §85, key-management.md §384, device-lifecycle.md §499)."
         }),
         json!({
             "area": "consent.scope_any_cross_service_cascade",
@@ -774,21 +690,6 @@ pub fn describe(
         read: None,
         extra: Default::default(),
     };
-    let supported_operation_ids = canonical_operation_ids();
-    let mut operation_bindings = supported_operation_ids
-        .iter()
-        .map(|operation| {
-            let operation_id = arkret_wire::ServiceOperationId::from_wire(operation)
-                .expect("canonical operation ids must be generated SDK ids");
-            arkret_models_discovery::service_description::OperationBinding::current_http_json(
-                operation_id,
-            )
-            .expect("current operation registry must map to a supported success shape")
-        })
-        .collect::<Vec<_>>();
-    operation_bindings.push(
-        arkret_models_discovery::service_description::OperationBinding::current_tus_blob_upload(),
-    );
     let local_extension_operations = local_extension_operations();
 
     // Round 4 (B1) — ServiceDescribe: 17 required top-level fields.
@@ -823,13 +724,6 @@ pub fn describe(
         },
     ];
     let verified_profiles = Vec::new();
-    let implemented_features_seed: Vec<String> = Vec::new();
-    let experimental_features = vec![
-        "federation.outbound_push.signed_intent".to_owned(),
-        "admin.bottom.manual_repair".to_owned(),
-        "index.query.local_projection".to_owned(),
-        "org.arkret.soland.profile.limited_server.v1".to_owned(),
-    ];
     let interop_surfaces = Vec::new();
     let service_id = arkret_wire::project_full_id_to_core_id(&service_resolution.full_id)
         .expect("service resolution DidFullId must project to a stable service id");
@@ -894,20 +788,55 @@ pub fn describe(
             ];
             // PROF-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) —
             // advertise `ak.profile.media_service_binding.v1` whenever the
-            // server exposes the `ak.self.call.media.exchange.issue_token`
+            // server exposes the `ak.self.call.media.exchange.issue_token.v1`
             // handler. soland mounts the handler unconditionally, and also
             // claims the required `ak.profile.webrtc_media.v1` dependency above.
             profiles.push(arkret_wire::ProfileId::MEDIA_SERVICE_BINDING_V1.to_owned());
             profiles
         },
         profile_bindings: Default::default(),
+        supported_operation_bundles: vec![
+            "ak.operation_bundle.principal_server.agent_pairing_handoff.v1".to_owned(),
+            "ak.operation_bundle.principal_server.agent_runtime.v1".to_owned(),
+            "ak.operation_bundle.principal_server.applet.v1".to_owned(),
+            "ak.operation_bundle.principal_server.applet_ghost.v1".to_owned(),
+            "ak.operation_bundle.principal_server.applet_install.v1".to_owned(),
+            "ak.operation_bundle.principal_server.describe.v1".to_owned(),
+            "ak.operation_bundle.principal_server.http_core.v1".to_owned(),
+            "ak.operation_bundle.principal_server.mimi_interop.v1".to_owned(),
+            "ak.operation_bundle.principal_server.push.v1".to_owned(),
+            "ak.operation_bundle.principal_server.tus_upload.v1".to_owned(),
+        ],
+        transport_bindings: vec![
+            arkret_models_discovery::TransportBinding::HttpJson {
+                base_url: format!("{}/", public_base_url.trim_end_matches('/')),
+                extension_profile_required: (),
+            },
+            arkret_models_discovery::TransportBinding::Tus {
+                base_url: format!(
+                    "{}/_arkret/self/blob/resumable",
+                    public_base_url.trim_end_matches('/')
+                ),
+                extension_profile_required: (),
+                tus_version: vec![
+                    arkret_models_discovery::service_description::TusVersion::V1_0_0,
+                ],
+                tus_extensions: vec![
+                    arkret_models_discovery::service_description::TusExtension::Creation,
+                    arkret_models_discovery::service_description::TusExtension::CreationWithUpload,
+                    arkret_models_discovery::service_description::TusExtension::Checksum,
+                    arkret_models_discovery::service_description::TusExtension::Expiration,
+                    arkret_models_discovery::service_description::TusExtension::Termination,
+                ],
+            },
+        ],
         plaintext_visibility,
         calendar_tzdb_versions: Vec::new(),
-        implemented_features: implemented_features_seed,
         claimed_profiles,
         verified_profiles,
-        experimental_features,
         interop_surfaces,
+        invite_addressing: None,
+        private_contact_discovery: None,
         development_mode,
         // service-describe.schema.json requires `rate_limit_policy` or
         // `rate_limit_policy_id`. Derive the advertised per-class policy from the SAME runtime
@@ -920,7 +849,6 @@ pub fn describe(
         rate_limit_policy_id: None,
         egress_network_policy: Some(arkret_models_discovery::service_description::EgressNetworkPolicy::deny_private_defaults()),
         resource_kinds: Vec::new(),
-        discovery_profiles: Vec::new(),
         restricted_query_proof: None,
         ingest_modes: Vec::new(),
         accept_policy_kind: None,
@@ -934,110 +862,10 @@ pub fn describe(
         rate_limits: None,
         supported_features: vec![
             arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_ROLE_FEATURE.to_owned(),
-            "org.arkret.soland.feature.auth.logout".to_owned(),
-            "org.arkret.soland.feature.contacts.request".to_owned(),
-            "org.arkret.soland.feature.contacts.respond".to_owned(),
-            "org.arkret.soland.feature.space.lifecycle".to_owned(),
-            "org.arkret.soland.feature.schema.registry".to_owned(),
-            "org.arkret.soland.feature.events.describe".to_owned(),
-            "org.arkret.soland.feature.events.submit".to_owned(),
-            "org.arkret.soland.feature.events.read".to_owned(),
-            "events_query_range_completeness".to_owned(),
-            "org.arkret.soland.feature.federation.transaction".to_owned(),
-            "org.arkret.soland.feature.federation.operations".to_owned(),
-            "org.arkret.soland.feature.sync.client_sync".to_owned(),
-            "org.arkret.soland.feature.sync.bound_cursor".to_owned(),
-            "org.arkret.soland.feature.sync.incremental_since".to_owned(),
-            "org.arkret.soland.feature.sync.typing".to_owned(),
-            arkret_wire::requirements_for(
-                arkret_wire::ProfileId::PERSONAL_AGENT_PROVISIONING_V1,
-            )
-            .and_then(|requirements| {
-                requirements
-                    .required_features
-                    .iter()
-                    .copied()
-                    .find(|feature| feature.starts_with("ak.feature."))
-            })
-            .expect("personal-agent provisioning profile must declare its protocol feature")
-            .to_owned(),
-            "org.arkret.soland.feature.personal_productivity.scheduled_send_wake_only".to_owned(),
-            "org.arkret.soland.feature.personal_productivity.reminder_snooze_private_wake"
-                .to_owned(),
-            "org.arkret.soland.feature.directory.search_realms".to_owned(),
-            "org.arkret.soland.feature.directory.resolve_realm".to_owned(),
-            "org.arkret.soland.feature.authz.check".to_owned(),
-            "org.arkret.soland.feature.authz.effective_grants".to_owned(),
-            "org.arkret.soland.feature.authz.invites".to_owned(),
-            "org.arkret.soland.feature.policy.check_signed_decision".to_owned(),
-            "org.arkret.soland.feature.profile.presence".to_owned(),
-            "org.arkret.soland.feature.push.register_device".to_owned(),
-            "org.arkret.soland.feature.push.target_id_hmac_rotation".to_owned(),
-            "org.arkret.soland.feature.push.rules".to_owned(),
-            "org.arkret.soland.feature.blob.upload".to_owned(),
-            // Spec crypto-media/media-and-blob.md §2.1 — protocol-level
-            // feature id for the resumable (tus) upload companion binding
-            // of ak.self.blob.upload. Pairs with the `kind="tus"` entry in
-            // supported_bindings below.
             "ak.feature.blob.resumable_upload.tus.v1".to_owned(),
+            "ak.feature.events_query_range_completeness.v1".to_owned(),
             "ak.feature.mls_last_resort_keypackage.v1".to_owned(),
-            // encryption-and-audit.md §2.10.7 — advertise support for the
-            // history-shareable `mls_exporter_aead_v1` content scheme so clients
-            // know late-joiner pre-join history decryption is reachable here.
             "ak.feature.mls_exporter_aead.v1".to_owned(),
-            "org.arkret.soland.feature.blob.authenticated_download".to_owned(),
-            "org.arkret.soland.feature.file_transfer".to_owned(),
-            "org.arkret.soland.feature.blob.presigned_download.local_direct_serve".to_owned(),
-            "org.arkret.soland.feature.blob.upload_policy".to_owned(),
-            "org.arkret.soland.feature.federation.transaction_idempotency".to_owned(),
-            "org.arkret.soland.feature.policy.documents".to_owned(),
-            "org.arkret.soland.feature.moderation.report".to_owned(),
-            "org.arkret.soland.feature.mimi.provider_facade".to_owned(),
-            "org.arkret.soland.feature.mimi.discovery".to_owned(),
-            "org.arkret.soland.feature.mimi.key_material_receipt".to_owned(),
-            "org.arkret.soland.feature.mimi.room_projection".to_owned(),
-            "org.arkret.soland.feature.mimi.identifier_privacy".to_owned(),
-            "org.arkret.soland.feature.mimi.proxy_download_policy".to_owned(),
-            "org.arkret.soland.feature.registry.artifacts".to_owned(),
-            "org.arkret.soland.feature.plaintext_visible_services".to_owned(),
-        ],
-        operation_bindings,
-        // service-surface.md §3 documents `base_url` (typed `format: uri` in
-        // service-describe.schema.json) as the connectable service base.
-        // Emit the same public base URL used by the HTTP describe handler so
-        // clients can build `base_url + operation_path` directly.
-        supported_bindings: vec![
-            arkret_models_discovery::service_description::SupportedBinding::new(
-                arkret_wire::BindingKind::HttpJson,
-            )
-                .with_base_url(format!("{}/", public_base_url.trim_end_matches('/')))
-                .with_extra("operations", serde_json::json!(supported_operation_ids))
-                .with_extra("extension_profile_required", serde_json::Value::Null),
-            // Per-operation HTTP companion binding (transport-bindings.md
-            // §6.1): tus 1.0.0 resumable upload for ak.self.blob.upload.
-            // Versions/extensions mirror the OPTIONS probe answers of
-            // routing::interop::blob_resumable — describe and wire MUST
-            // agree.
-            arkret_models_discovery::service_description::SupportedBinding::new(
-                arkret_wire::BindingKind::Tus,
-            )
-                .with_base_url(format!(
-                    "{}/_arkret/self/blob/resumable",
-                    public_base_url.trim_end_matches('/')
-                ))
-                .with_extra(
-                    "operations",
-                    serde_json::json!([arkret_wire::ServiceOperationId::SELF_BLOB_UPLOAD_CREATE]),
-                )
-                .with_extra("extension_profile_required", serde_json::Value::Null)
-                .with_extra(
-                    "tus_version",
-                    serde_json::json!(crate::routing::TUS_VERSIONS),
-                )
-                .with_extra(
-                    "tus_extensions",
-                    serde_json::json!(crate::routing::TUS_EXTENSIONS),
-                ),
         ],
         supported_reducer_profiles: SUPPORTED_REDUCER_PROFILES
             .iter()
@@ -1079,13 +907,13 @@ pub fn describe(
                 "error_mapping_source": "arkret-spec/spec/v1/artifacts/registry/operations-error-mapping.json",
                 "universal_error_codes_inherited": true,
                 "operations": [
-                    arkret_wire::ServiceOperationId::SELF_AUTHZ_READ_CHECK,
-                    arkret_wire::ServiceOperationId::SELF_AUTHZ_GRANTS_READ_EFFECTIVE,
-                    arkret_wire::ServiceOperationId::SELF_AUTHZ_INVITES_READ_LIST,
-                    arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK
+                    arkret_wire::ServiceOperationId::SELF_AUTHZ_READ_CHECK_V1,
+                    arkret_wire::ServiceOperationId::SELF_AUTHZ_GRANTS_READ_EFFECTIVE_V1,
+                    arkret_wire::ServiceOperationId::SELF_AUTHZ_INVITES_READ_LIST_V1,
+                    arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK_V1
                 ],
                 "authz_check": {
-                    "operation_id": arkret_wire::ServiceOperationId::SELF_AUTHZ_READ_CHECK,
+                    "operation_id": arkret_wire::ServiceOperationId::SELF_AUTHZ_READ_CHECK_V1,
                     "method": "POST",
                     "path": "/_arkret/self/authz/check",
                     "request_shape": "AuthzCheckRequestBody",
@@ -1106,12 +934,12 @@ pub fn describe(
                         "dynamic_claim_or_approval": false,
                         "usable_as_policy_obligation_proof": false,
                         "cross_service_signed_authorization_fact": false,
-                        "dynamic_or_auditable_decision_operation": arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK,
+                        "dynamic_or_auditable_decision_operation": arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK_V1,
                         "dynamic_or_auditable_decision_path": "/_arkret/self/policy/check"
                     }
                 },
                 "effective_grants": {
-                    "operation_id": arkret_wire::ServiceOperationId::SELF_AUTHZ_GRANTS_READ_EFFECTIVE,
+                    "operation_id": arkret_wire::ServiceOperationId::SELF_AUTHZ_GRANTS_READ_EFFECTIVE_V1,
                     "method": "GET",
                     "path": "/_arkret/self/authz/effective-grants",
                     "query": ["realm_id", "subject", "subject_principal_server_id", "at"],
@@ -1120,7 +948,7 @@ pub fn describe(
                     "operation_specific_error_codes": []
                 },
                 "invites": {
-                    "operation_id": arkret_wire::ServiceOperationId::SELF_AUTHZ_INVITES_READ_LIST,
+                    "operation_id": arkret_wire::ServiceOperationId::SELF_AUTHZ_INVITES_READ_LIST_V1,
                     "method": "GET",
                     "path": "/_arkret/self/authz/invites",
                     "query": ["realm_id", "subject", "cursor"],
@@ -1129,7 +957,7 @@ pub fn describe(
                     "operation_specific_error_codes": []
                 },
                 "policy_check": {
-                    "operation_id": arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK,
+                    "operation_id": arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK_V1,
                     "method": "POST",
                     "path": "/_arkret/self/policy/check",
                     "operation_specific_error_codes": ["policy_unavailable", "policy_stale"],
@@ -1230,11 +1058,6 @@ pub fn describe(
                     arkret_wire::ProfileId::BLOB_NODE_V1
                 ],
                 "principal_server_full_profile_gaps": full_principal_server_gap_summary(),
-                "supported_operation_catalog": {
-                    "source": "arkret-spec/spec/v1/artifacts/registry/operation-registry.json",
-                    "derived_surface_groups": SUPPORTED_OPERATION_SURFACES,
-                    "standalone_operations": SUPPORTED_STANDALONE_OPERATION_IDS
-                },
                 "local_extension_operations": local_extension_operations,
                 "local_extension_operation_source": "compact_registry+served_openapi",
                 "implemented_surfaces": [
@@ -1303,7 +1126,7 @@ mod tests {
     }
 
     #[test]
-    fn service_describe_supported_bindings_advertise_public_base_url() {
+    fn service_describe_advertises_bundles_and_transport_roots() {
         let description = describe(
             &fixture_service_resolution(),
             "memory",
@@ -1314,77 +1137,35 @@ mod tests {
             },
         );
         let value = serde_json::to_value(description).expect("description serializes");
-        assert_eq!(value["supported_bindings"][0]["kind"], "http_json");
+        assert_eq!(value["transport_bindings"][0]["kind"], "http_json");
         assert_eq!(
-            value["supported_bindings"][0]["base_url"],
+            value["transport_bindings"][0]["base_url"],
             "https://soland.example/"
         );
-        let http_operations = value["supported_bindings"][0]["operations"]
+        let bundles = value["supported_operation_bundles"]
             .as_array()
-            .expect("HTTP transport advertises its exact operation set");
-        let described_http_operations = value["operation_bindings"]
-            .as_array()
-            .expect("operation bindings array")
-            .iter()
-            .filter(|binding| binding["binding_kind"] == "http_json")
-            .map(|binding| binding["operation_id"].clone())
-            .collect::<Vec<_>>();
-        assert_eq!(http_operations, &described_http_operations);
-        assert!(value["supported_bindings"][0]["extension_profile_required"].is_null());
-        assert!(value["supported_bindings"][0].get("base_path").is_none());
-        // Spec media-and-blob.md §2.1 — the resumable upload binding is
-        // discoverable via feature id + tus binding entry + limits keys.
+            .expect("operation bundle ids are present");
+        assert!(bundles.contains(&json!("ak.operation_bundle.principal_server.describe.v1")));
+        assert!(bundles.contains(&json!("ak.operation_bundle.principal_server.http_core.v1")));
+        assert!(bundles.contains(&json!("ak.operation_bundle.principal_server.tus_upload.v1")));
+        assert!(value["transport_bindings"][0]["extension_profile_required"].is_null());
+        assert!(value["transport_bindings"][0].get("operations").is_none());
         assert_eq!(
-            value["supported_bindings"][1]["kind"],
+            value["transport_bindings"][1]["kind"],
             json!("tus"),
             "tus companion binding advertised"
         );
         assert_eq!(
-            value["supported_bindings"][1]["base_url"],
+            value["transport_bindings"][1]["base_url"],
             json!("https://soland.example/_arkret/self/blob/resumable")
         );
-        assert_eq!(
-            value["supported_bindings"][1]["operations"],
-            json!(["ak.self.blob.upload.create"])
-        );
-        assert!(value["supported_bindings"][1]["extension_profile_required"].is_null());
+        assert!(value["transport_bindings"][1].get("operations").is_none());
+        assert!(value["transport_bindings"][1]["extension_profile_required"].is_null());
         assert!(
             value["supported_features"]
                 .as_array()
                 .expect("features array")
                 .contains(&json!("ak.feature.blob.resumable_upload.tus.v1"))
-        );
-        assert!(
-            value["supported_features"]
-                .as_array()
-                .expect("features array")
-                .contains(&json!(
-                    "org.arkret.soland.feature.personal_productivity.scheduled_send_wake_only"
-                ))
-        );
-        assert!(
-            value["supported_features"]
-                .as_array()
-                .expect("features array")
-                .contains(&json!(
-                    "org.arkret.soland.feature.personal_productivity.reminder_snooze_private_wake"
-                ))
-        );
-        assert!(
-            value["supported_features"]
-                .as_array()
-                .expect("features array")
-                .contains(&json!(
-                    "org.arkret.soland.feature.policy.check_signed_decision"
-                ))
-        );
-        assert!(
-            value["supported_features"]
-                .as_array()
-                .expect("features array")
-                .contains(&json!(
-                    "org.arkret.soland.feature.push.target_id_hmac_rotation"
-                ))
         );
         assert_eq!(
             value["privacy_derivation"]["push_target_id"]["derivation_profile"],
@@ -1455,10 +1236,10 @@ mod tests {
         assert_eq!(
             value["limits"]["authz_policy"]["operations"],
             json!([
-                "ak.self.authz.read.check",
-                "ak.self.authz.grants.read.effective",
-                "ak.self.authz.invites.read.list",
-                "ak.self.policy.read.check"
+                "ak.self.authz.read.check.v1",
+                "ak.self.authz.grants.read.effective.v1",
+                "ak.self.authz.invites.read.list.v1",
+                "ak.self.policy.read.check.v1"
             ])
         );
         assert_eq!(

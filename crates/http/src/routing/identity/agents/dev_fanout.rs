@@ -433,9 +433,9 @@ mod tests {
     fn runtime_agent_key_scope_service_actions_are_registered() {
         let registry = soland_services::protocol_artifacts::operation_ids();
         for action in [
-            ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
-            ServiceOperationId::SELF_EVENTS_READ_SCAN,
-            ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT,
+            ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE_V1,
+            ServiceOperationId::SELF_EVENTS_READ_SCAN_V1,
+            ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
         ] {
             assert!(
                 registry.contains(action),

@@ -1,7 +1,7 @@
 //! Resumable (tus 1.0.0) blob upload binding.
 //!
 //! Spec: crypto-media/media-and-blob.md §2.1 — a per-operation HTTP
-//! companion binding of `ak.self.blob.upload.create`. tus carries the bytes
+//! companion binding of `ak.self.blob.upload.create.v1`. tus carries the bytes
 //! (create / PATCH / HEAD / DELETE with offset resume); a completed upload is
 //! finalized into a canonical blob with the same `blob_ref` /
 //! `content_digest` / `upload_receipt` the multipart path produces.
@@ -58,7 +58,7 @@ use crate::state::AppState;
 
 pub const TUS_VERSION: &str = "1.0.0";
 /// Protocol versions / extensions advertised both on the `OPTIONS` probe
-/// and in `/_arkret/describe` `supported_bindings[kind="tus"]` — the
+/// and in `/_arkret/describe` `transport_bindings[kind="tus"]` — the
 /// describe claim and the wire probe MUST agree.
 pub const TUS_VERSIONS: &[&str] = &["1.0.0"];
 pub const TUS_EXTENSIONS: &[&str] = &[
@@ -418,7 +418,7 @@ async fn tus_create(depot: &mut Depot, req: &mut Request, res: &mut Response) {
 
     // Relative Location — clients resolve it against the request URL. The
     // absolute base is already known from
-    // `describe.supported_bindings[kind="tus"].base_url`.
+    // `describe.transport_bindings[kind="tus"].base_url`.
     let location = format!("/_arkret/self/blob/resumable/{upload_id}");
     let headers = res.headers_mut();
     headers.insert(

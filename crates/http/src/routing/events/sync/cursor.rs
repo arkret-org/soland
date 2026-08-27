@@ -37,7 +37,7 @@ pub enum SyncCursorError {
     Mismatch(&'static str),
     Integrity(&'static str),
     Expired,
-    /// The cursor authority was revoked via `ak.self.account.command.revoke_cursor`.
+    /// The cursor authority was revoked via `ak.self.account.command.revoke_cursor.v1`.
     /// Surfaced as `cursor_revoked`; MUST be raised before any server-side
     /// state advancement (to-device ack, account-subscribe resume, wait-for
     /// barrier release, dropped/resync recovery).
@@ -864,7 +864,7 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
         .unwrap_or_else(|_| arkret_canonical::sha256_digest(binding.to_string().as_bytes()))
 }
 
-/// `POST /_arkret/self/account/cursor/revoke` — `ak.self.account.command.revoke_cursor`.
+/// `POST /_arkret/self/account/cursor/revoke` — `ak.self.account.command.revoke_cursor.v1`.
 ///
 /// High-assurance optional endpoint: record a previously issued cursor
 /// authority in the revocation set until its maximum TTL would have elapsed.
@@ -874,11 +874,11 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
 /// recovery state. `revoke_scope` controls breadth (`this_cursor` default,
 /// `same_device`, `same_session`).
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.account.command.revoke_cursor",
+    operation_id = "ak.self.account.command.revoke_cursor.v1",
     summary = "Revoke an account read cursor",
     tags("account")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.account.command.revoke_cursor"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account.command.revoke_cursor.v1"))]
 pub(super) async fn account_cursor_revoke(
     aa: crate::routing::system::extract::AuthArgs,
     body: salvo::oapi::extract::JsonBody<

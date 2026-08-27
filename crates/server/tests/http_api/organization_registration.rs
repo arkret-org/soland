@@ -173,27 +173,27 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable_bo
         (
             "/_arkret/root/identity/organization-registrations:prepare",
             "post",
-            "ak.root.identity.organization_registration.command.prepare",
+            "ak.root.identity.organization_registration.command.prepare.v1",
         ),
         (
             "/_arkret/root/identity/organization-registrations:ensure",
             "post",
-            "ak.root.identity.organization_registration.command.ensure",
+            "ak.root.identity.organization_registration.command.ensure.v1",
         ),
         (
             "/_arkret/root/identity/organization-registrations",
             "get",
-            "ak.root.identity.organization_registration.resource.get",
+            "ak.root.identity.organization_registration.resource.get.v1",
         ),
         (
             "/_arkret/root/identity/organization-registrations:refresh",
             "post",
-            "ak.root.identity.organization_registration.command.refresh",
+            "ak.root.identity.organization_registration.command.refresh.v1",
         ),
         (
             "/_arkret/root/identity/organization-registrations:revoke",
             "post",
-            "ak.root.identity.organization_registration.command.revoke",
+            "ak.root.identity.organization_registration.command.revoke.v1",
         ),
     ] {
         assert_eq!(

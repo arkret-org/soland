@@ -17,10 +17,10 @@ use super::*;
 const LEASE_TTL_MINUTES: i64 = 10;
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.authorization_leases.command.issue",
+    operation_id = "ak.self.authorization_leases.command.issue.v1",
     tags("events")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.authorization_leases.command.issue"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.authorization_leases.command.issue.v1"))]
 pub(super) async fn issue_authorization_leases(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -31,7 +31,7 @@ pub(super) async fn issue_authorization_leases(
     let session = aa.authenticated_session(state, req).await?;
     super::super::require_agent_session_scope(
         &session,
-        arkret_wire::ServiceOperationId::SELF_AUTHORIZATION_LEASES_COMMAND_ISSUE,
+        arkret_wire::ServiceOperationId::SELF_AUTHORIZATION_LEASES_COMMAND_ISSUE_V1,
     )?;
     let request = body.into_inner();
     let idempotency_key = req

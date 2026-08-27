@@ -665,8 +665,8 @@ async fn try_recover_profile_avatar_blob(
     Some(record)
 }
 
-#[endpoint(operation_id = "ak.self.blob.command.presign")]
-#[tracing::instrument(skip_all, fields(op = "ak.self.blob.command.presign"))]
+#[endpoint(operation_id = "ak.self.blob.command.presign.v1")]
+#[tracing::instrument(skip_all, fields(op = "ak.self.blob.command.presign.v1"))]
 async fn blob_presign(
     aa: crate::routing::system::extract::AuthArgs,
     body: JsonBody<BlobPresignRequestBody>,

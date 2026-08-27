@@ -94,11 +94,11 @@ pub(super) fn protocol_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ak.self.device_messages.command.send",
+    operation_id = "ak.self.device_messages.command.send.v1",
     summary = "Send device-to-device messages",
     tags("device_messages")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.command.send"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.command.send.v1"))]
 async fn send_device_messages(
     aa: AuthArgs,
     body: JsonBody<DeviceMessagesSendRequestBody>,
@@ -521,11 +521,11 @@ pub(crate) async fn fanout_actor_private_update(
 }
 
 #[endpoint(
-    operation_id = "ak.self.device_messages.read.list",
+    operation_id = "ak.self.device_messages.read.list.v1",
     summary = "List pending device messages",
     tags("device_messages")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.read.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.read.list.v1"))]
 async fn get_device_messages(
     aa: AuthArgs,
     after: QueryParam<String, false>,
@@ -654,11 +654,11 @@ async fn get_device_messages(
 }
 
 #[endpoint(
-    operation_id = "ak.self.device_messages.command.ack",
+    operation_id = "ak.self.device_messages.command.ack.v1",
     summary = "Acknowledge received device messages",
     tags("device_messages")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.command.ack"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.command.ack.v1"))]
 async fn ack_device_messages(
     aa: AuthArgs,
     body: JsonBody<DeviceMessagesAckRequestBody>,

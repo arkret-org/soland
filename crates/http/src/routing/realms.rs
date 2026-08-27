@@ -91,11 +91,11 @@ fn realm_link_entry_from(row: &RealmLinkState) -> Result<RealmLinkEntry, AppErro
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm_link.read.list",
+    operation_id = "ak.self.realm_link.read.list.v1",
     summary = "List typed cross-Realm links",
     tags("realm_links")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.read.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.read.list.v1"))]
 pub(crate) async fn list_realm_links(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -183,11 +183,11 @@ async fn list_realm_links_impl(
 /// `zh/extensions/capabilities.md` sections 118/361,
 /// `zh/security/key-management.md` section 411).
 #[endpoint(
-    operation_id = "ak.self.realm_link.command.create",
+    operation_id = "ak.self.realm_link.command.create.v1",
     summary = "Create a cross-Realm link",
     tags("realm_links")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.command.create"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.command.create.v1"))]
 async fn post_realm_link(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -324,16 +324,16 @@ fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
 /// flip replaces the previous status in place (spec §4).
 ///
 /// The DELETE carries a request body, the way
-/// `ak.self.keys.backups.resource.delete` already does: removing an edge is as
+/// `ak.self.keys.backups.resource.delete.v1` already does: removing an edge is as
 /// durable as creating one, and no signature fits in a bodyless request. That
 /// also retires the `link_kind` query parameter — a query parameter is outside
 /// the bytes the caller signs, so the kind travels in the signed payload.
 #[endpoint(
-    operation_id = "ak.self.realm_link.resource.delete",
+    operation_id = "ak.self.realm_link.resource.delete.v1",
     summary = "Tombstone a cross-Realm link",
     tags("realm_links")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.resource.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.resource.delete.v1"))]
 async fn delete_realm_link(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -383,11 +383,11 @@ async fn delete_realm_link(
 /// `effective_policy` collapses to the realm's own local policy in
 /// that case.
 #[endpoint(
-    operation_id = "ak.self.realm_link.read.effective_policy",
+    operation_id = "ak.self.realm_link.read.effective_policy.v1",
     summary = "Get a realm's merged effective policy",
     tags("realm_links")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.read.effective_policy"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.read.effective_policy.v1"))]
 async fn get_effective_policy(
     aa: AuthArgs,
     realm_id: PathParam<String>,

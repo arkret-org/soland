@@ -3,10 +3,13 @@
 use super::*;
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.control_proposal_acks.command.issue",
+    operation_id = "ak.self.control_proposal_acks.command.issue.v1",
     tags("events")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.control_proposal_acks.command.issue"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.self.control_proposal_acks.command.issue.v1")
+)]
 pub(super) async fn issue_control_proposal_ack(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -17,7 +20,7 @@ pub(super) async fn issue_control_proposal_ack(
     let session = aa.authenticated_session(state, req).await?;
     super::super::require_agent_session_scope(
         &session,
-        arkret_wire::ServiceOperationId::SELF_CONTROL_PROPOSAL_ACKS_COMMAND_ISSUE,
+        arkret_wire::ServiceOperationId::SELF_CONTROL_PROPOSAL_ACKS_COMMAND_ISSUE_V1,
     )?;
     let request = body.into_inner();
     request.validate_structural().map_err(|error| {

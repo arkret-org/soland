@@ -1,6 +1,6 @@
 //! Moderation user-facing endpoints.
 //!
-//! - `POST /_arkret/self/moderation/report` (`ak.self.moderation.command.report`) — submit the
+//! - `POST /_arkret/self/moderation/report` (`ak.self.moderation.command.report.v1`) — submit the
 //!   caller-authored signed report DataEvent through ordinary Event admission.
 //! - moderation appeals are durable `ak.moderation.appeal.*` events submitted through `POST
 //!   /_arkret/self/events`. The four-state appeal FSM and separation-of-duties enforcement are
@@ -950,11 +950,11 @@ const FRANKING_PROOF_FORBIDDEN_KEYS: &[&str] = &[
 ];
 
 #[endpoint(
-    operation_id = "ak.self.moderation.command.report",
+    operation_id = "ak.self.moderation.command.report.v1",
     summary = "File a content moderation report",
     tags("moderation")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.moderation.command.report"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.moderation.command.report.v1"))]
 async fn moderation_report(
     aa: AuthArgs,
     body: JsonBody<ModerationReportRequestBody>,

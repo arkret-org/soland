@@ -5,7 +5,7 @@
 //! `tombstoned`) are principal-scoped and cross-Realm. When the issuer and the
 //! target holder live on different Principal Servers, the issuer-side server
 //! federates the signed fact to the target holder's server via
-//! `ak.peer.contacts.command.submit` (`POST /_arkret/peer/contacts`); the recipient
+//! `ak.peer.contacts.command.submit.v1` (`POST /_arkret/peer/contacts`); the recipient
 //! projects the original signed envelope into the target holder's contact
 //! projection without re-signing it.
 //!
@@ -82,7 +82,7 @@ pub(crate) fn peer_router() -> Router {
     Router::new().push(Router::with_path("contacts").post(peer_contacts_submit))
 }
 
-/// Enqueue the exact typed `ak.peer.contacts.command.submit` carrier for a
+/// Enqueue the exact typed `ak.peer.contacts.command.submit.v1` carrier for a
 /// remote Principal Server. Same-server delivery is a no-op because the local
 /// Contact projection was already committed by the self operation.
 pub(crate) async fn enqueue_peer_contact_carrier(
@@ -208,8 +208,8 @@ fn peer_contact_delivery_address(
     }
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.contacts.command.submit", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.contacts.command.submit"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.contacts.command.submit.v1", tags("identity"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.contacts.command.submit.v1"))]
 async fn peer_contacts_submit(
     depot: &mut Depot,
     req: &mut Request,
@@ -220,7 +220,7 @@ async fn peer_contacts_submit(
         .parse_json::<PeerContactSubmitRequestBody>()
         .await
         .map_err(|_| {
-            AppError::json_invalid("invalid ak.peer.contacts.command.submit request body")
+            AppError::json_invalid("invalid ak.peer.contacts.command.submit.v1 request body")
         })?;
     let (_, carried_address) = peer_contact_delivery_address(&delivery);
     carried_address.validate_shape().map_err(|error| {

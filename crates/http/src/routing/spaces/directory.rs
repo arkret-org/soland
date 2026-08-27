@@ -125,24 +125,11 @@ const DIRECTORY_RESOURCE_KINDS: &[DirectoryResourceKind] = &[
     DirectoryResourceKind::Organization,
     DirectoryResourceKind::Actor,
 ];
-const DIRECTORY_DISCOVERY_PROFILES: &[&str] = &[arkret_wire::ProfileId::DIRECTORY_SERVICE_V1];
-const DIRECTORY_SUPPORTED_OPERATIONS: &[&str] = &[
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_DESCRIBE,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_SEARCH_REALMS,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_REALM,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_TARGET,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_SEARCH_ORGANIZATIONS,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_ORGANIZATION,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_SEARCH_ACTORS,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_SEARCH_USERS,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_HANDLE,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_RESOLVE_AGENT_SELECTOR,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_LIST_HANDLES_FOR_SUBJECT,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_COMMAND_ANNOUNCE,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_COMMAND_WITHDRAW,
-    arkret_wire::ServiceOperationId::FIND_DIRECTORY_PUSH_COMMAND_REGISTER,
+pub(crate) const DIRECTORY_OPERATION_BUNDLES: &[&str] = &[
+    "ak.operation_bundle.directory_service.describe.v1",
+    "ak.operation_bundle.directory_service.http_core.v1",
+    "ak.operation_bundle.directory_service.resolve_agent_selector.v1",
 ];
-
 pub(crate) fn protocol_router() -> Router {
     Router::new()
         .push(Router::with_path("directory/describe").get(directory_describe))
@@ -165,15 +152,15 @@ pub(crate) fn protocol_router() -> Router {
         .push(Router::with_path("directory/announce").post(directory_announce))
         .push(Router::with_path("directory/withdraw").post(directory_withdraw))
         // Spec-canonical directory push-webhook registration
-        // (`ak.find.directory.push.command.register`). The retired `/_soland/find/
+        // (`ak.find.directory.push.command.register.v1`). The retired `/_soland/find/
         // directory/subscribe` mirror used the same handler under the
         // historical `subscribe` path; the protocol surface mounts only the
         // canonical `push/register` path.
         .push(Router::with_path("directory/push/register").post(directory_subscribe))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.find.directory.read.describe", tags("spaces"))]
-#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.describe"))]
+#[salvo::oapi::endpoint(operation_id = "ak.find.directory.read.describe.v1", tags("spaces"))]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.describe.v1"))]
 async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let service_resolution = state.service_resolution_commitment();
@@ -182,62 +169,45 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
             AppError::internal(format!("service resolution projection failed: {error}"))
         })?;
     let trust_domain = state.config().trust_domain.clone();
-    let supported_profiles: Vec<String> = DIRECTORY_DISCOVERY_PROFILES
-        .iter()
-        .map(|profile| (*profile).to_owned())
-        .collect();
-    let supported_features = vec![
-        "directory.search".to_owned(),
-        "directory.resolve".to_owned(),
-        "directory.ingest_push".to_owned(),
-    ];
     let description = ServiceDescribe {
         service_id,
         service_resolution: service_resolution.as_ref().clone(),
         trust_domain,
         service_kind: arkret_wire::ServiceKind::DirectoryService,
         protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
-        supported_profiles: supported_profiles.clone(),
+        supported_profiles: vec![arkret_wire::ProfileId::DIRECTORY_SERVICE_V1.to_owned()],
         profile_bindings: Default::default(),
-        operation_bindings: DIRECTORY_SUPPORTED_OPERATIONS
+        supported_operation_bundles: DIRECTORY_OPERATION_BUNDLES
             .iter()
-            .map(|operation| {
-                arkret_models_discovery::service_description::OperationBinding::current_http_json(
-                    arkret_wire::ServiceOperationId::from_wire(operation)
-                        .expect("directory operation ids must be generated SDK ids"),
-                )
-                .expect("directory operations must have current HTTP JSON carriers")
-            })
+            .map(|bundle| (*bundle).to_owned())
             .collect(),
-        supported_bindings: vec![
-            arkret_models_discovery::service_description::SupportedBinding::new(
-                arkret_wire::BindingKind::HttpJson,
-            )
-                .with_base_url(state.config().public_base_url.trim_end_matches('/'))
-                .with_extra("operations", serde_json::json!(DIRECTORY_SUPPORTED_OPERATIONS))
-                .with_extra("extension_profile_required", serde_json::Value::Null),
+        transport_bindings: vec![
+            arkret_models_discovery::TransportBinding::HttpJson {
+                base_url: format!("{}/", state.config().public_base_url.trim_end_matches('/')),
+                extension_profile_required: (),
+            },
         ],
-        supported_features: supported_features.clone(),
+        supported_features: Vec::new(),
         calendar_tzdb_versions: Vec::new(),
         auth_metadata: arkret_models_discovery::service_description::AuthMetadata::minimal("public_no_auth"),
         limits: Default::default(),
         plaintext_visibility: arkret_models_discovery::service_description::PlaintextVisibility::none(),
         privacy_derivation: None,
         receive_policy_constraints: None,
-        implemented_features: supported_features,
-        claimed_profiles: supported_profiles
-            .iter()
-            .map(arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed)
-            .collect(),
+        claimed_profiles: vec![
+            arkret_models_discovery::ClaimedProfileEntry::self_claimed(
+                arkret_wire::ProfileId::DIRECTORY_SERVICE_V1,
+            ),
+        ],
         verified_profiles: Vec::new(),
-        experimental_features: Vec::new(),
         interop_surfaces: Vec::new(),
+        invite_addressing: None,
+        private_contact_discovery: None,
         development_mode: state.config().development_mode,
         rate_limit_policy: Some(arkret_models_discovery::service_description::RateLimitPolicy::unspecified()),
         rate_limit_policy_id: None,
         egress_network_policy: Some(arkret_models_discovery::service_description::EgressNetworkPolicy::deny_private_defaults()),
         resource_kinds: DIRECTORY_RESOURCE_KINDS.to_vec(),
-        discovery_profiles: supported_profiles,
         restricted_query_proof: Some(false),
         ingest_modes: vec![arkret_models_discovery::service_description::DirectoryIngestMode::Push],
         accept_policy_kind: Some(arkret_models_discovery::service_description::DirectoryAcceptPolicyKind::Open),
@@ -290,7 +260,5 @@ mod tests {
         assert!(DIRECTORY_RESOURCE_KINDS.contains(&DirectoryResourceKind::Realm));
         assert!(DIRECTORY_RESOURCE_KINDS.contains(&DirectoryResourceKind::Organization));
         assert!(DIRECTORY_RESOURCE_KINDS.contains(&DirectoryResourceKind::Actor));
-        assert!(!DIRECTORY_DISCOVERY_PROFILES.contains(&"ak.profile.search.client_index.v1"));
-        assert!(!DIRECTORY_DISCOVERY_PROFILES.contains(&"ak.profile.search.blind_index.v1"));
     }
 }

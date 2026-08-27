@@ -293,8 +293,8 @@ async fn database_ready(state: &AppState) -> bool {
     state.jobs().database_ready().await
 }
 
-#[endpoint(operation_id = "ak.server.read.describe")]
-#[tracing::instrument(skip_all, fields(op = "ak.server.read.describe"))]
+#[endpoint(operation_id = "ak.server.read.describe.v1")]
+#[tracing::instrument(skip_all, fields(op = "ak.server.read.describe.v1"))]
 async fn server_describe(
     service_kind: QueryParam<String, false>,
     depot: &mut Depot,
@@ -366,12 +366,8 @@ pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
             .to_limiter_config()
             .advertised_policy(),
     );
-    // T6.1 — claim-level partition of the describe response.
-    // See arkret-spec/spec/v1/zh/sync/service-surface.md §3.0 and
-    // `ak.schema.service_describe.v1`. `operation_bindings` is the exact
-    // wire-callable carrier set; this helper separates implementation state,
-    // self-claims, cotest-verified claims, and interop surfaces while the
-    // response is still the SDK's typed `ServiceDescribe`.
+    // Partition conformance claims while the response remains the SDK's
+    // closed ServiceDescribe type.
     apply_claim_level_partition(
         &mut description,
         state.verified_profiles(),
@@ -400,10 +396,7 @@ async fn build_server_description_resolved(
     Ok(description)
 }
 
-/// Inject the T6.1 claim-level partition fields (`implemented_features`,
-/// `claimed_profiles`, `verified_profiles`, `interop_surfaces`) into a
-/// describe response. `experimental_features` is already carried by the typed
-/// [`crate::wire::describe`] `ServiceDescribe`.
+/// Inject the conformance claim fields into a describe response.
 ///
 /// Invariants enforced here:
 /// - `verified_profiles` MUST be empty when `development_mode=true`. The loader
@@ -430,8 +423,9 @@ pub(crate) fn apply_claim_level_partition(
     // never disagree about what "complete" means.
     let join_requirements = requirements_for(ProfileId::CANDIDATE_JOIN_POLICY_V1)
         .expect("SDK-generated profile table must carry the candidate join-policy profile");
-    let join_operations = join_requirements.required_operations;
     let join_features = join_requirements.required_features;
+    const JOIN_POLICY_BUNDLE: &str =
+        "ak.operation_bundle.principal_server.candidate_join_policy.v1";
     if candidate_join_policy_enabled {
         description.profile_bindings.insert(
             ProfileId::CANDIDATE_JOIN_POLICY_V1.to_owned(),
@@ -448,17 +442,14 @@ pub(crate) fn apply_claim_level_partition(
                 .supported_profiles
                 .push(ProfileId::CANDIDATE_JOIN_POLICY_V1.to_owned());
         }
-        for operation in join_operations {
-            let operation_id = arkret_wire::ServiceOperationId::from_wire(operation)
-                .expect("profile operation requirements must be generated operation ids");
-            if !description.supports_operation(operation_id) {
-                description
-                    .operation_bindings
-                    .push(
-                        arkret_models_discovery::service_description::OperationBinding::current_http_json(operation_id)
-                            .expect("profile operation must have a current HTTP JSON carrier"),
-                    );
-            }
+        if !description
+            .supported_operation_bundles
+            .iter()
+            .any(|bundle| bundle == JOIN_POLICY_BUNDLE)
+        {
+            description
+                .supported_operation_bundles
+                .push(JOIN_POLICY_BUNDLE.to_owned());
         }
         for feature in join_features {
             if !description
@@ -477,8 +468,8 @@ pub(crate) fn apply_claim_level_partition(
             .supported_profiles
             .retain(|profile| profile != ProfileId::CANDIDATE_JOIN_POLICY_V1);
         description
-            .operation_bindings
-            .retain(|binding| !join_operations.contains(&binding.operation_id.as_str()));
+            .supported_operation_bundles
+            .retain(|bundle| bundle != JOIN_POLICY_BUNDLE);
         description
             .supported_features
             .retain(|feature| !join_features.contains(&feature.as_str()));
@@ -496,14 +487,10 @@ pub(crate) fn apply_claim_level_partition(
         .extend(profile_requirements.required_features);
     description.supported_profiles.sort();
     description.supported_profiles.dedup();
-    description.operation_bindings.sort();
-    description.operation_bindings.dedup();
-    synchronize_http_json_transport_operations(description);
+    description.supported_operation_bundles.sort();
+    description.supported_operation_bundles.dedup();
     description.supported_features.sort();
     description.supported_features.dedup();
-
-    // Every advertised feature corresponds to in-tree implementation code.
-    description.implemented_features = description.supported_features.clone();
 
     // claimed_profiles: self-claimed only. Serialise via the SDK's
     // typed `ClaimedProfileEntry` so the wire shape stays bound to
@@ -671,38 +658,6 @@ pub(crate) fn apply_claim_level_partition(
     description.interop_surfaces.clear();
 }
 
-/// Keep the transport carrier's operation set bidirectionally equal to the
-/// role-local HTTP/JSON operation bindings after feature-gated rows change.
-fn synchronize_http_json_transport_operations(
-    description: &mut arkret_models_discovery::ServiceDescribe,
-) {
-    let operations = description
-        .operation_bindings
-        .iter()
-        .filter(|binding| binding.binding_kind == arkret_wire::BindingKind::HttpJson)
-        .map(|binding| binding.operation_id)
-        .collect::<Vec<_>>();
-    if let Some(binding) = description
-        .supported_bindings
-        .iter_mut()
-        .find(|binding| binding.kind == arkret_wire::BindingKind::HttpJson)
-    {
-        binding
-            .extra
-            .insert("operations".to_owned(), serde_json::json!(operations));
-        binding
-            .extra
-            .entry("extension_profile_required".to_owned())
-            .or_insert(serde_json::Value::Null);
-    } else if !operations.is_empty() {
-        description.supported_bindings.push(
-            arkret_models_discovery::SupportedBinding::new(arkret_wire::BindingKind::HttpJson)
-                .with_extra("operations", serde_json::json!(operations))
-                .with_extra("extension_profile_required", serde_json::Value::Null),
-        );
-    }
-}
-
 #[endpoint(operation_id = "org.arkret.soland.auth.bridge.describe")]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.auth.bridge.describe"))]
 pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeDescribeOutcome> {
@@ -768,7 +723,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 service: "coauth".to_owned(),
                 purpose: "session_grant_introspection".to_owned(),
                 required_contract:
-                    arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT
+                    arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1
                         .to_owned(),
                 discovery_path: "/_arkret/gate/account/session-grants/introspect".to_owned(),
                 mode: "remote_service_contract".to_owned(),
@@ -834,7 +789,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "agent_runtime_attestation".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_arkret/gate/account/agent-key-pair".to_owned(),
-                contract: arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY.to_owned(),
+                contract: arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY_V1.to_owned(),
                 stability: "unsupported_fail_closed".to_owned(),
                 todo: "runtime_attestation verifier and controller approval ledger are not wired; requests carrying runtime_attestation are rejected.".to_owned(),
             },
@@ -850,7 +805,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "blob_presign".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_arkret/self/blob/presign".to_owned(),
-                contract: arkret_wire::ServiceOperationId::SELF_BLOB_COMMAND_PRESIGN.to_owned(),
+                contract: arkret_wire::ServiceOperationId::SELF_BLOB_COMMAND_PRESIGN_V1.to_owned(),
                 stability: "local_direct_serve".to_owned(),
                 todo: "issues soland-signed local /blob/get URLs; backend-native object-store presign is not claimed.".to_owned(),
             },
@@ -884,6 +839,14 @@ mod tests {
             DidFullId::new("did:web:soland.example".to_owned()).unwrap(),
             TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
             ServiceKind::PrincipalServer,
+            vec![
+                "ak.operation_bundle.principal_server.describe.v1".to_owned(),
+                "ak.operation_bundle.principal_server.http_core.v1".to_owned(),
+            ],
+            vec![arkret_models_discovery::TransportBinding::HttpJson {
+                base_url: "https://soland.example/".to_owned(),
+                extension_profile_required: (),
+            }],
         );
         apply_claim_level_partition(&mut description, &[], true, false);
         assert!(
@@ -897,12 +860,12 @@ mod tests {
             "profile_private_http_receipt_v1"
         );
         for operation in [
-            "ak.self.realm.join_application.command.submit",
-            "ak.self.realm.join_application.command.review",
-            "ak.self.realm.join_application.command.cancel",
-            "ak.self.realm.join_application.read.list",
-            "ak.self.realm.join_application.resource.get",
-            "ak.self.realm.join_application.audit.read.list",
+            "ak.self.realm.join_application.command.submit.v1",
+            "ak.self.realm.join_application.command.review.v1",
+            "ak.self.realm.join_application.command.cancel.v1",
+            "ak.self.realm.join_application.read.list.v1",
+            "ak.self.realm.join_application.resource.get.v1",
+            "ak.self.realm.join_application.audit.read.list.v1",
         ] {
             assert!(
                 arkret_wire::ServiceOperationId::from_wire(operation)
@@ -925,20 +888,25 @@ mod tests {
                 .profile_bindings
                 .contains_key(ProfileId::CANDIDATE_JOIN_POLICY_V1)
         );
-        assert!(
-            !description
-                .operation_bindings
-                .iter()
-                .any(|binding| binding.operation_id.as_str().contains("join_application"))
-        );
+        assert!(!description.supported_operation_bundles.iter().any(
+            |bundle| bundle == "ak.operation_bundle.principal_server.candidate_join_policy.v1"
+        ));
     }
 
     #[test]
-    fn advertised_profiles_include_sdk_generated_discovery_requirements() {
+    fn conformance_discovery_tokens_are_not_wire_features() {
         let mut description = ServiceDescribe::development(
             DidFullId::new("did:web:soland.example".to_owned()).unwrap(),
             TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
             ServiceKind::PrincipalServer,
+            vec![
+                "ak.operation_bundle.principal_server.describe.v1".to_owned(),
+                "ak.operation_bundle.principal_server.http_core.v1".to_owned(),
+            ],
+            vec![arkret_models_discovery::TransportBinding::HttpJson {
+                base_url: "https://soland.example/".to_owned(),
+                extension_profile_required: (),
+            }],
         );
         description
             .supported_profiles
@@ -950,11 +918,10 @@ mod tests {
             "supported_sync_profiles",
         ] {
             assert!(
-                description
+                !description
                     .supported_features
                     .iter()
-                    .any(|supported| supported == feature),
-                "profile discovery requirement {feature} was not advertised"
+                    .any(|supported| supported == feature)
             );
         }
     }

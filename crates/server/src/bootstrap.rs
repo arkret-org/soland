@@ -738,7 +738,7 @@ async fn restore_identity_bundle(
         seq: 1,
         method_evidence: json!({
             "mode": "service_identity_bundle_restore",
-            "operation": arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
+            "operation": arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE_V1,
             "service_kind": registration_key.service_kind().as_str(),
             "public_base": registration_key.public_base().as_str(),
             "version_id": outcome.version_id(),
@@ -1081,7 +1081,7 @@ async fn mint_local_service_identity(
         seq: 1,
         method_evidence: json!({
             "mode": "service_registration_provider",
-            "operation": arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
+            "operation": arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE_V1,
             "service_kind": registration_key.service_kind().as_str(),
             "public_base": registration_key.public_base().as_str(),
             "version_id": outcome.version_id(),

@@ -13,8 +13,7 @@
 //! frame pacing differs, because a WebSocket channel is long-lived where the
 //! HTTP surface is a bounded long poll.
 //!
-//! The discovery descriptor is produced from the SDK's closed
-//! `WebSocketBindingDescriptor` and is advertised only for deployments with a
+//! The closed WebSocket transport is advertised only for deployments with a
 //! canonical public `https` origin and at least one explicit browser Origin.
 //! The production path is covered by a live rustls peer test before this
 //! module adds the descriptor to ServiceDescribe (§10).
@@ -197,27 +196,22 @@ pub(crate) fn advertise_websocket_binding(
     let Some(base_url) = websocket_base_url(state) else {
         return;
     };
-    let descriptor = arkret_models_discovery::websocket_binding::WebSocketBindingDescriptor::new(
-        base_url,
-        WS_MAX_FRAME_BYTES,
-        WS_MAX_CHANNELS,
+    description.transport_bindings.push(
+        arkret_models_discovery::TransportBinding::Websocket {
+            base_url,
+            extension_profile_required:
+                arkret_models_discovery::websocket_binding::WebSocketBindingProfile::BindingWebsocketV1,
+            subprotocol:
+                arkret_models_discovery::websocket_binding::WebSocketBindingSubprotocol::ArkretV1,
+            authentication:
+                arkret_models_discovery::websocket_binding::WebSocketBindingAuthentication::ChallengeDpopSessionV1,
+            max_frame_bytes: WS_MAX_FRAME_BYTES,
+            max_channels: WS_MAX_CHANNELS,
+        },
     );
-    let Ok(binding) = descriptor.to_supported_binding() else {
-        return;
-    };
-    description.supported_bindings.push(binding);
-    for operation_id in [
-        arkret_wire::ServiceOperationId::SelfAccountStreamSubscribe,
-        arkret_wire::ServiceOperationId::SelfEventsStreamSubscribe,
-        arkret_wire::ServiceOperationId::SelfSignalStreamSubscribe,
-    ] {
-        description.operation_bindings.push(
-            arkret_models_discovery::service_description::OperationBinding::current_websocket(
-                operation_id,
-            )
-            .expect("WebSocket operation must have a current-v1 carrier"),
-        );
-    }
+    description
+        .supported_operation_bundles
+        .push("ak.operation_bundle.principal_server.websocket.v1".to_owned());
     if !description
         .supported_profiles
         .iter()
@@ -1319,13 +1313,13 @@ async fn handle_client_frame(
 fn operation_scope(operation: WebSocketOperationId) -> &'static str {
     match operation {
         WebSocketOperationId::AccountStreamSubscribe => {
-            ServiceOperationId::SELF_ACCOUNT_STREAM_SUBSCRIBE
+            ServiceOperationId::SELF_ACCOUNT_STREAM_SUBSCRIBE_V1
         }
         WebSocketOperationId::EventsStreamSubscribe => {
-            ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE
+            ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE_V1
         }
         WebSocketOperationId::SignalStreamSubscribe => {
-            ServiceOperationId::SELF_SIGNAL_STREAM_SUBSCRIBE
+            ServiceOperationId::SELF_SIGNAL_STREAM_SUBSCRIBE_V1
         }
     }
 }
@@ -1827,7 +1821,7 @@ fn websocket_events_filter_digest(
         .into_iter()
         .collect::<Vec<_>>();
     sync_filter_digest(Some(&json!({
-        "operation_id": arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
+        "operation_id": arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE_V1,
         "realms": realms,
         "actors": actors,
     })))

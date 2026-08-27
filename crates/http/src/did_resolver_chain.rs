@@ -469,7 +469,7 @@ fn method_allowed(config: &AppConfig, method: &str) -> bool {
 
 /// STA-07-002 — the canonical generic server-describe path. The resolver
 /// freshness probe targets this endpoint (operation_id
-/// `ak.server.read.describe`, schema `service-describe.schema.json`).
+/// `ak.server.read.describe.v1`, schema `service-describe.schema.json`).
 pub const CANONICAL_DESCRIBE_PATH: &str = "/_arkret/describe";
 
 /// Probe an external webvh provider's canonical describe endpoint
@@ -555,15 +555,10 @@ fn validate_webvh_provider_describe(
     if description.development_mode {
         return Err("webvh provider is in development_mode".to_owned());
     }
-    let operation_id = arkret_wire::ServiceOperationId::ServerReadDescribe;
-    let local = arkret_models_discovery::OperationBinding::current_http_json(operation_id)
-        .map_err(|error| error.to_string())?;
-    if description
-        .select_operation_binding(operation_id, &[local])
-        .is_none()
-    {
+    let operation_id = arkret_wire::ServiceOperationId::ServerReadDescribeV1;
+    if !description.supports_operation_binding(operation_id, arkret_wire::BindingKind::HttpJson) {
         return Err(
-            "webvh provider describe does not advertise ak.server.read.describe".to_owned(),
+            "webvh provider describe does not advertise ak.server.read.describe.v1".to_owned(),
         );
     }
     Ok(())
@@ -920,22 +915,17 @@ mod tests {
     }
 
     fn provider_describe_fixture() -> Value {
-        let operation_id = arkret_wire::ServiceOperationId::ServerReadDescribe;
         let mut description = arkret_models_discovery::ServiceDescribe::development(
             arkret_wire::DidFullId::new("did:web:webvh-provider.example").unwrap(),
             arkret_wire::TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
             arkret_wire::ServiceKind::IdentityRegistry,
+            vec!["ak.operation_bundle.identity_registry.describe.v1".to_owned()],
+            vec![arkret_models_discovery::TransportBinding::HttpJson {
+                base_url: "https://webvh-provider.example/".to_owned(),
+                extension_profile_required: (),
+            }],
         );
         description.development_mode = false;
-        description.operation_bindings = vec![
-            arkret_models_discovery::OperationBinding::current_http_json(operation_id).unwrap(),
-        ];
-        description.supported_bindings = vec![
-            arkret_models_discovery::SupportedBinding::new(arkret_wire::BindingKind::HttpJson)
-                .with_base_url("https://webvh-provider.example")
-                .with_extra("operations", json!([operation_id]))
-                .with_extra("extension_profile_required", Value::Null),
-        ];
         serde_json::to_value(description).unwrap()
     }
 }
