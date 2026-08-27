@@ -1,3 +1,5 @@
+use serde_json::Value;
+
 use super::{
     Arc, BTreeMap, BTreeSet, CanonicalEventRecord, DeviceInventoryRecord,
     DirectConversationFoundingCommitOutcome, DirectConversationFoundingSlotRecord,
@@ -9,7 +11,6 @@ use super::{
     identity_anchor_slot_conflicts, ids, peer_page_record_after_cursor, peer_page_record_matches,
     receipt_covers_event, record_is_peer_authz_state_record, stage_identity_anchor_events,
 };
-use serde_json::Value;
 // In-memory message store
 pub(crate) struct MemoryMessageStore {
     data: Arc<Mutex<Vec<MessageRecord>>>,

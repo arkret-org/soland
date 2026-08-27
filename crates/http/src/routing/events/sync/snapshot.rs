@@ -1173,14 +1173,12 @@ async fn state_events_for_realm(
             tracing::error!(%error, realm_id, "failed to load Realm projection events for sync");
             Vec::new()
         });
-    // `history_access=since_join` limits historical data-plane Events.  It
-    // must not hide the current encryption contract from an active member:
-    // without the create-locked mechanism and effective policy-components
-    // event a late joiner cannot validate the Realm's content scheme or emit
-    // a policy-bound MLS message after reload.  Initial account sync therefore
-    // carries the newest accepted event for these two singleton security
-    // facets even when the event predates the member's join boundary.
-    let member_may_receive_security_baseline = if include_current_security_baseline {
+    // `history_access=since_join` limits historical data-plane Events, but it
+    // must not hide the current object/control baseline from an active member.
+    // Initial account sync therefore carries the newest accepted Event for
+    // each required singleton plus the exact Strand named by the current
+    // default-Strand pointer. Other pre-join Strand objects remain hidden.
+    let member_may_receive_current_baseline = if include_current_security_baseline {
         match session {
             Some(session) => realm_has_member(state, realm_id, &session.actor).await,
             None => false,
@@ -1188,9 +1186,18 @@ async fn state_events_for_realm(
     } else {
         false
     };
-    let newest_security_baseline = events
+    let projection = state.projections().snapshot();
+    let default_strand_id = projection
+        .realm_states
+        .get(realm_id)
+        .and_then(|realm| realm.default_strand_id.as_deref());
+    let newest_current_baseline = events
         .iter()
-        .filter(|event| required_security_baseline_kind(&event.event_kind))
+        .filter(|event| {
+            required_current_baseline_kind(&event.event_kind)
+                && (event.event_kind != arkret_wire::EventKind::StrandCreate
+                    || event.payload.get("strand_id").and_then(Value::as_str) == default_strand_id)
+        })
         .fold(
             std::collections::HashMap::<arkret_wire::EventKind, (i64, String)>::new(),
             |mut newest, event| {
@@ -1218,11 +1225,11 @@ async fn state_events_for_realm(
             continue;
         }
         let visible_by_history = projection_record_visible_to_session(state, &event, session).await;
-        let visible_as_security_baseline = member_may_receive_security_baseline
-            && newest_security_baseline
+        let visible_as_current_baseline = member_may_receive_current_baseline
+            && newest_current_baseline
                 .get(&event.event_kind)
                 .is_some_and(|(_, event_id)| event_id == &event.event_id);
-        if !visible_by_history && !visible_as_security_baseline {
+        if !visible_by_history && !visible_as_current_baseline {
             continue;
         }
         if let Some(event) = accepted_event(state, &event.event_id).await {
@@ -1236,10 +1243,20 @@ async fn state_events_for_realm(
     )
 }
 
-pub(crate) fn required_security_baseline_kind(kind: &arkret_wire::EventKind) -> bool {
+pub(crate) fn required_current_baseline_kind(kind: &arkret_wire::EventKind) -> bool {
     matches!(
         kind,
-        arkret_wire::EventKind::RealmCreate | arkret_wire::EventKind::RealmPolicyBundle
+        arkret_wire::EventKind::RealmCreate
+            | arkret_wire::EventKind::RealmProfile
+            | arkret_wire::EventKind::RealmPolicyBundle
+            | arkret_wire::EventKind::RealmJoinRule
+            | arkret_wire::EventKind::RealmHistoryAccess
+            | arkret_wire::EventKind::RealmDiscovery
+            | arkret_wire::EventKind::RealmAlias
+            | arkret_wire::EventKind::RealmPlaintextVisibleServices
+            | arkret_wire::EventKind::RealmDeliveryBindingPolicy
+            | arkret_wire::EventKind::RealmSetDefaultStrand
+            | arkret_wire::EventKind::StrandCreate
     )
 }
 

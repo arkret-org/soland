@@ -105,7 +105,14 @@ pub(super) async fn logout(
         revoke_sessions_for_actor_device(state, &session.actor, &session.device_id).await?;
     let delivery_purge =
         purge_device_delivery_state(state, &session.actor, &session.device_id).await;
-    let revoked = revoked_count > 0;
+    // Reaching this branch proves that introspection observed a live grant for
+    // the exact principal/device and the Auth-side step has now terminated its
+    // rotation chain. In the direct session-grant model there is deliberately
+    // no second Principal-local bearer row, so `revoked_count == 0` does not
+    // mean that no live device session was revoked. The typed outcome reports
+    // the logical hard-logout transition; an already-gone/not-found retry is
+    // handled above and remains `revoked: false`.
+    let revoked = true;
     append_audit_log(
         state,
         Some(&session.actor),

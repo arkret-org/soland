@@ -768,6 +768,58 @@ fn is_governance_replay_input(record: &AcceptedEvent) -> bool {
             && record.envelope.get("auth_context").is_none())
 }
 
+async fn is_validated_realm_bootstrap_member(state: &AppState, record: &AcceptedEvent) -> bool {
+    if record.actor_seq > 9
+        || !matches!(
+            record.kind.as_str(),
+            arkret_wire::event_kind_str::REALM_CREATE
+                | arkret_wire::event_kind_str::REALM_PROFILE
+                | arkret_wire::event_kind_str::REALM_POLICY_BUNDLE
+                | arkret_wire::event_kind_str::REALM_JOIN_RULE
+                | arkret_wire::event_kind_str::REALM_HISTORY_ACCESS
+                | arkret_wire::event_kind_str::REALM_DISCOVERY
+                | arkret_wire::event_kind_str::REALM_ALIAS
+                | arkret_wire::event_kind_str::REALM_PLAINTEXT_VISIBLE_SERVICES
+                | arkret_wire::event_kind_str::REALM_DELIVERY_BINDING_POLICY
+                | arkret_wire::event_kind_str::MEMBER_STATE
+        )
+    {
+        return false;
+    }
+    let Ok(event_digest) = Hash::new(record.canonical_digest.clone()) else {
+        return false;
+    };
+    let Ok(covering_seals) = state.projections().seals_covering_event(&event_digest) else {
+        return false;
+    };
+    let genesis_seals = covering_seals
+        .into_iter()
+        .filter(|seal| seal.predecessor_refs.is_empty())
+        .collect::<Vec<_>>();
+    if genesis_seals.is_empty() {
+        return false;
+    }
+    let Ok(records) = state.event_queries().canonical_events().await else {
+        return false;
+    };
+    genesis_seals.into_iter().any(|seal| {
+        let delta = seal.delta.iter().map(Hash::as_str).collect::<BTreeSet<_>>();
+        let mut events = records
+            .iter()
+            .filter(|candidate| delta.contains(candidate.canonical_digest.as_str()))
+            .filter_map(|candidate| sdk_event_from_record(candidate, None, false).ok())
+            .collect::<Vec<_>>();
+        if events.len() != delta.len() {
+            return false;
+        }
+        events.sort_by_key(|event| event.actor_seq);
+        events
+            .iter()
+            .any(|event| event.event_id.as_str() == record.event_id)
+            && arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&events).is_ok()
+    })
+}
+
 pub(crate) async fn event_visible_to_session(
     state: &AppState,
     record: &AcceptedEvent,
@@ -785,7 +837,9 @@ pub(crate) async fn event_visible_to_session(
             // Move named by the Realm Seal closure so a new member can perform
             // the T1/T3 replay required by encryption-and-audit.md §2.5.4.
             // `since_join` continues to crop DataEvents below.
-            let realm_visible = if is_governance_replay_input(record) {
+            let realm_visible = if is_governance_replay_input(record)
+                || is_validated_realm_bootstrap_member(state, record).await
+            {
                 crate::routing::realm_has_member(state, &realm_id, &session.actor).await
             } else {
                 realm_event_visible_to_session(

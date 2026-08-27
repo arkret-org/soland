@@ -140,10 +140,6 @@ pub struct AuthBridgeExamples {
 // Shared `/_floria/integration/describe` manifest shape: re-exported from
 // the SDK contracts crate (the authoritative definition shared by floria,
 // soland, and coauth) instead of a local copy.
-pub use arkret_models_integration::integration::{
-    IntegrationDependencyDescriptor, IntegrationDescribeOutcome, IntegrationSurfaceDescriptor,
-};
-
 // Client-sync family DTOs come straight from the SDK (`ServiceDescribe`
 // answers `account/describe`, `SyncRequestBody` carries the subscribe/sync
 // request); both are shared SDK wire types, so soland keeps
@@ -170,6 +166,9 @@ pub use arkret_models_collaboration::governance::moderation::{
     ModerationReportOutcome, ModerationReportRequestBody,
 };
 pub use arkret_models_collaboration::sync_frames::client_sync::SyncRequestBody;
+pub use arkret_models_integration::integration::{
+    IntegrationDependencyDescriptor, IntegrationDescribeOutcome, IntegrationSurfaceDescriptor,
+};
 pub use arkret_models_integration::{
     PushRegisterDeviceRequestBody, PushUnregisterDeviceRequestBody,
 };

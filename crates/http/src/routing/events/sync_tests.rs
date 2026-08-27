@@ -184,18 +184,24 @@ fn sync_cursor_decode_rejects_low_entropy_or_padded_handles() {
 }
 
 #[test]
-fn initial_security_baseline_is_limited_to_current_create_and_policy_facets() {
-    assert!(required_security_baseline_kind(
+fn initial_current_baseline_contains_required_control_and_default_strand_facets() {
+    assert!(required_current_baseline_kind(
         &arkret_wire::EventKind::RealmCreate
     ));
-    assert!(required_security_baseline_kind(
+    assert!(required_current_baseline_kind(
         &arkret_wire::EventKind::RealmPolicyBundle
     ));
-    assert!(!required_security_baseline_kind(
-        &arkret_wire::EventKind::MessageCreate
-    ));
-    assert!(!required_security_baseline_kind(
+    assert!(required_current_baseline_kind(
         &arkret_wire::EventKind::RealmHistoryAccess
+    ));
+    assert!(required_current_baseline_kind(
+        &arkret_wire::EventKind::RealmSetDefaultStrand
+    ));
+    assert!(required_current_baseline_kind(
+        &arkret_wire::EventKind::StrandCreate
+    ));
+    assert!(!required_current_baseline_kind(
+        &arkret_wire::EventKind::MessageCreate
     ));
 }
 

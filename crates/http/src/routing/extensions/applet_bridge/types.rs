@@ -1,6 +1,7 @@
 //! Wire and storage types for the applet bridge surface.
 
 use std::collections::BTreeSet;
+use std::ops::Deref;
 
 use arkret_models_collaboration::governance::accountability::{
     AccountabilityGrantPayload, AccountabilityGrantStatus, AccountabilityScope,
@@ -19,7 +20,6 @@ use arkret_wire::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::ops::Deref;
 
 pub(super) const SOLAND_EDGE_APPLET_ID: &str = "ak:applet:00000000-0000-7000-8000-000000000000";
 

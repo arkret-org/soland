@@ -14,7 +14,7 @@
 //! The validator block (`validate_event_envelope` + helpers) lives in the
 //! `validation` submodule.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_canonical as canonical;
 use arkret_event_draft::ProjectedEventOperation as Operation;
