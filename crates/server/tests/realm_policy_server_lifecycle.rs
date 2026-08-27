@@ -633,6 +633,7 @@ async fn control_seal_coordinator_drains_multiple_bounded_concurrency_waves() {
         "the coordinator must survive every bounded concurrency wave"
     );
     control_seal_coordinator.abort();
+    let _ = control_seal_coordinator.await;
 }
 
 async fn postgres_release_state() -> AppState {
@@ -753,6 +754,7 @@ async fn control_seal_postgres_release_drains_1025_realms_with_bounded_claims() 
     );
     assert!(!control_seal_coordinator.is_finished());
     control_seal_coordinator.abort();
+    let _ = control_seal_coordinator.await;
 }
 
 #[test]
