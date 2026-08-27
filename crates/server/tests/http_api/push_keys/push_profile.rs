@@ -13,6 +13,24 @@ fn canonical_body(value: &impl serde::Serialize) -> Vec<u8> {
     arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
 }
 
+fn push_gateway_description() -> serde_json::Value {
+    let description = arkret_models_discovery::ServiceDescribe::development(
+        arkret_wire::DidFullId::new("did:webvh:z6mkfixture:push.example").unwrap(),
+        arkret_wire::TrustDomainId::new("ak:trust_domain:push.example").unwrap(),
+        arkret_wire::ServiceKind::PushGateway,
+        vec![
+            "ak.operation_bundle.push_gateway.describe.v1".to_owned(),
+            "ak.operation_bundle.push_gateway.http_notify.v1".to_owned(),
+        ],
+        vec![arkret_models_discovery::TransportBinding::HttpJson {
+            base_url: "https://push.example".to_owned(),
+            extension_profile_required: (),
+        }],
+    );
+    description.validate().unwrap();
+    serde_json::to_value(description).unwrap()
+}
+
 /// A `session`-class Realm-scoped Signal from Alice's seeded device.
 ///
 /// `profiles-presence.md` §3.4/§3.5 put presence and typing on exactly this
@@ -1313,41 +1331,36 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify_
     let service = app_from_state(state.clone());
     let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let push_gateway = "https://push.example/_arkret/edge/push/notify";
-    let bridge_describe = "https://push.example/_floria/push/bridge/describe";
+    let bridge_describe = "https://push.example/_arkret/describe";
     let stale_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
         (chrono::Utc::now() - chrono::Duration::hours(25)).timestamp_millis(),
     )
     .unwrap();
 
-    let stale_import: Value = TestClient::post(
-        "http://server/_soland/edge/push/outbound/bridge/cache/import",
-    )
-    .add_header("content-type", "application/json", true)
-    .body(canonical_body(&serde_json::json!({
-        "replace_existing": true,
-        "entries": [{
-            "push_gateway_url": push_gateway,
-            "service_base_url": "https://push.example",
-            "bridge_describe_url": bridge_describe,
-            "fetch_state": "cotest_seed",
-            "cache_state": "imported_replace_existing",
-            "contract_digest": "sha256:stale",
-            "fetched_at": stale_at,
-            "remote_contract": {
-                "contract": "ak.push.bridge.v1",
-                "service_id": "did:web:push.example",
-                "delivery": {"notify_path": "/_arkret/edge/push/notify", "operation_id": "ak.edge.push.command.notify.v1"}
-            },
-            "trust_level": "trusted",
-            "freshness_at": stale_at,
-            "etag": "stale"
-        }]
-    })))
-    .send(&service)
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let stale_import: Value =
+        TestClient::post("http://server/_soland/edge/push/outbound/bridge/cache/import")
+            .add_header("content-type", "application/json", true)
+            .body(canonical_body(&serde_json::json!({
+                "replace_existing": true,
+                "entries": [{
+                    "push_gateway_url": push_gateway,
+                    "service_base_url": "https://push.example",
+                    "bridge_describe_url": bridge_describe,
+                    "fetch_state": "cotest_seed",
+                    "cache_state": "imported_replace_existing",
+                    "contract_digest": "sha256:stale",
+                    "fetched_at": stale_at,
+                    "remote_contract": push_gateway_description(),
+                    "trust_level": "trusted",
+                    "freshness_at": stale_at,
+                    "etag": "stale"
+                }]
+            })))
+            .send(&service)
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(stale_import["imported_count"], 1);
 
     let registered: Value = TestClient::post("http://server/_arkret/edge/push/register-device")
@@ -1365,7 +1378,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify_
         .take_json()
         .await
         .unwrap();
-    assert_eq!(registered["ok"], true);
+    assert!(registered["push_target_id"].is_string());
     // push-notifications.md §3.1: the registration response carries the
     // HMAC-derived pairwise pseudonym notify MUST target; cross-check it
     // against the stored registration.
@@ -1405,35 +1418,30 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify_
         chrono::Utc::now().timestamp_millis(),
     )
     .unwrap();
-    let fresh_import: Value = TestClient::post(
-        "http://server/_soland/edge/push/outbound/bridge/cache/import",
-    )
-    .add_header("content-type", "application/json", true)
-    .body(canonical_body(&serde_json::json!({
-        "replace_existing": true,
-        "entries": [{
-            "push_gateway_url": push_gateway,
-            "service_base_url": "https://push.example",
-            "bridge_describe_url": bridge_describe,
-            "fetch_state": "cotest_seed",
-            "cache_state": "imported_replace_existing",
-            "contract_digest": "sha256:fresh",
-            "fetched_at": now,
-            "remote_contract": {
-                "contract": "ak.push.bridge.v1",
-                "service_id": "did:web:push.example",
-                "delivery": {"notify_path": "/_arkret/edge/push/notify", "operation_id": "ak.edge.push.command.notify.v1"}
-            },
-            "trust_level": "trusted",
-            "freshness_at": now,
-            "etag": "fresh"
-        }]
-    })))
-    .send(&service)
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let fresh_import: Value =
+        TestClient::post("http://server/_soland/edge/push/outbound/bridge/cache/import")
+            .add_header("content-type", "application/json", true)
+            .body(canonical_body(&serde_json::json!({
+                "replace_existing": true,
+                "entries": [{
+                    "push_gateway_url": push_gateway,
+                    "service_base_url": "https://push.example",
+                    "bridge_describe_url": bridge_describe,
+                    "fetch_state": "cotest_seed",
+                    "cache_state": "imported_replace_existing",
+                    "contract_digest": "sha256:fresh",
+                    "fetched_at": now,
+                    "remote_contract": push_gateway_description(),
+                    "trust_level": "trusted",
+                    "freshness_at": now,
+                    "etag": "fresh"
+                }]
+            })))
+            .send(&service)
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(fresh_import["total_entries"], 1);
 
     let fresh_notify: arkret_models_integration::models_push::PushNotifyOutcome =
@@ -1459,7 +1467,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify_
             .all(|outcome| outcome.reason_code.is_none())
     );
 
-    let unregistered: Value = TestClient::post("http://server/_arkret/edge/push/unregister-device")
+    let unregistered = TestClient::post("http://server/_arkret/edge/push/unregister-device")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
         .body(canonical_body(&serde_json::json!({
@@ -1468,11 +1476,8 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify_
             "app_id": "inkson"
         })))
         .send(&service)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(unregistered["ok"], true);
+        .await;
+    assert_eq!(unregistered.status_code, Some(StatusCode::NO_CONTENT));
 
     let after_unregister: arkret_models_integration::models_push::PushNotifyOutcome =
         TestClient::post("http://server/_arkret/edge/push/notify")

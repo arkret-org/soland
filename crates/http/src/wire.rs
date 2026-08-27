@@ -157,9 +157,9 @@ pub struct OutboundPushGatewayContractDescriptor {
     pub cache_invalidate_path: String,
     pub cache_export_path: String,
     pub cache_import_path: String,
-    pub bridge_describe_path: String,
+    pub service_describe_path: String,
     pub notify_path: String,
-    pub accepted_contracts: Vec<String>,
+    pub required_operations: Vec<String>,
     pub fetch_mode: String,
     pub cache_mode: String,
     pub snapshot_store_mode: String,
@@ -277,35 +277,10 @@ pub struct OutboundPushBridgeResolveOutcome {
     pub fetch_state: String,
     pub cache_state: String,
     pub contract_digest: String,
-    pub fetched_contract: OutboundPushResolvedContract,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched_contract: Option<arkret_models_discovery::ServiceDescribe>,
     #[serde(default)]
     pub todos: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct OutboundPushResolvedContract {
-    pub contract: String,
-    pub expected_notify_path: String,
-    pub expected_operation_id: String,
-    pub expected_source_service_id_header: String,
-    pub expected_destination_service_id_header: String,
-    pub expected_request_id_header: String,
-    pub expected_idempotency_key_header: String,
-    /// Upstream-advertised authentication modes (`bearer`, `signed_request`,
-    /// `mtls`, …). Outbound delivery binds its signing posture to this list
-    /// instead of assuming a fixed mode.
-    #[serde(default)]
-    pub auth_modes: Vec<String>,
-    /// Upstream-advertised privacy mode for the notify payload (`blind_wakeup`,
-    /// `event_summary`, …). Used by the delivery loop to know whether the
-    /// payload must remain opaque.
-    #[serde(default)]
-    pub privacy_mode: String,
-    /// The upstream service DID. Required for trust-level promotion: imports
-    /// only land at `trust_level=trusted` if this DID is in the operator's
-    /// `push_bridge_trusted_service_ids` allowlist.
-    #[serde(default)]
-    pub service_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -322,7 +297,8 @@ pub struct OutboundPushBridgeFetchOutcome {
         with = "arkret_canonical::serde_helpers::optional_canonical_timestamp"
     )]
     pub fetched_at: Option<DateTime<Utc>>,
-    pub fetched_contract: OutboundPushResolvedContract,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched_contract: Option<arkret_models_discovery::ServiceDescribe>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_contract: Option<Value>,
     /// C33.1: trust state of the cached snapshot returned by the fetch path.
@@ -356,7 +332,8 @@ pub struct OutboundPushBridgeCacheEntry {
     pub contract_digest: String,
     #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
     pub fetched_at: DateTime<Utc>,
-    pub fetched_contract: OutboundPushResolvedContract,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched_contract: Option<arkret_models_discovery::ServiceDescribe>,
     /// C33.1: trust state surfaced to status callers so dashboards can flag
     /// `pending` / `revoked` snapshots without round-tripping the export API.
     pub trust_level: String,

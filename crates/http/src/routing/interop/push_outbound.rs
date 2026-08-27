@@ -9,7 +9,7 @@
 //! - `POST /_soland/edge/push/outbound/bridge/cache/import`    — restore snapshots
 //! - `POST /_soland/edge/push/outbound/bridge/cache/invalidate`— invalidate one entry
 //!
-//! Implemented: live remote `bridge/describe` fetch with `Etag`/freshness
+//! Implemented: live canonical `ServiceDescribe` fetch with `Etag`/freshness
 //! metadata stamped per entry; durable cache via
 //! the delivery application cache port (PostgreSQL when configured,
 //! in-memory when not); contract-digest drift fails closed unless the caller
@@ -25,13 +25,14 @@
 //!   `trust_level=trusted` when the upstream contract's `service_id` matches
 //!   `AppConfig::push_bridge_trusted_service_ids` (or `development_mode=true`). Everything else
 //!   lands at `trust_level=pending` and outbound delivery treats it as unsigned-only.
-//! - **Auth modes / privacy descriptors**: `OutboundPushResolvedContract` surfaces the upstream
-//!   `auth_modes[]` and `privacy.*` fields so the delivery layer can bind outbound signing to
-//!   whatever the gateway advertised (instead of the fixed `ak.edge.push.command.notify.v1`
-//!   defaults). Stays read-only here — the actual binding lives in the delivery loop.
+//! The cached object is the SDK-owned canonical `ServiceDescribe`; this module
+//! does not project it into a second, product-local contract or synthesize
+//! fallback capabilities when discovery is unavailable.
 
 use std::time::Duration;
 
+use arkret_models_discovery::ServiceDescribe;
+use arkret_wire::{BindingKind, ServiceKind, ServiceOperationId};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -50,7 +51,7 @@ use crate::wire::{
     OutboundPushBridgeDescribeOutcome, OutboundPushBridgeExamples, OutboundPushBridgeFetchOutcome,
     OutboundPushBridgeFetchRequestBody, OutboundPushBridgeResolveOutcome,
     OutboundPushBridgeResolveRequestBody, OutboundPushDeliveryDescriptor,
-    OutboundPushGatewayContractDescriptor, OutboundPushResolvedContract,
+    OutboundPushGatewayContractDescriptor,
 };
 
 pub(super) fn router() -> Router {
@@ -96,11 +97,11 @@ async fn outbound_push_bridge_describe(
             cache_invalidate_path: "/_soland/edge/push/outbound/bridge/cache/invalidate".to_owned(),
             cache_export_path: "/_soland/edge/push/outbound/bridge/cache/export".to_owned(),
             cache_import_path: "/_soland/edge/push/outbound/bridge/cache/import".to_owned(),
-            bridge_describe_path: "/_floria/push/bridge/describe".to_owned(),
+            service_describe_path: "/_arkret/describe".to_owned(),
             notify_path: "/_arkret/edge/push/notify".to_owned(),
-            accepted_contracts: vec![
-                arkret_wire::ServiceContractId::PUSH_BRIDGE_V1.to_owned(),
-                arkret_wire::ProfileId::PUSH_GATEWAY_V1.to_owned(),
+            required_operations: vec![
+                ServiceOperationId::SERVER_READ_DESCRIBE_V1.to_owned(),
+                ServiceOperationId::EDGE_PUSH_COMMAND_NOTIFY_V1.to_owned(),
             ],
             fetch_mode: "live_http_fetch_with_durable_cache_fallback".to_owned(),
             cache_mode: "durable_snapshot_cache_with_drift_check".to_owned(),
@@ -137,31 +138,23 @@ async fn outbound_push_bridge_describe(
                 "entries": [{
                     "push_gateway_url": "https://floria.example/_arkret/edge/push/notify",
                     "service_base_url": "https://floria.example",
-                    "bridge_describe_url": "https://floria.example/_floria/push/bridge/describe",
+                    "bridge_describe_url": "https://floria.example/_arkret/describe",
                     "fetch_state": "seed_import",
                     "cache_state": "imported_replace_existing",
                     "contract_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
                     "fetched_at": now(),
-                    "remote_contract": {
-                        "contract": arkret_wire::ServiceContractId::PUSH_BRIDGE_V1,
-                        "delivery": {
-                            "notify_path": "/_arkret/edge/push/notify",
-                            "operation_id": arkret_wire::ServiceOperationId::EDGE_PUSH_COMMAND_NOTIFY_V1
-                        }
-                    }
+                    "remote_contract": {"service_kind": "push_gateway"}
                 }]
             }),
             cache_export_response: json!({
                 "entries": [{
                     "push_gateway_url": "https://floria.example/_arkret/edge/push/notify",
                     "service_base_url": "https://floria.example",
-                    "bridge_describe_url": "https://floria.example/_floria/push/bridge/describe",
+                    "bridge_describe_url": "https://floria.example/_arkret/describe",
                     "fetch_state": "cache_hit",
                     "cache_state": "memory_cached",
                     "contract_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-                    "remote_contract": {
-                        "contract": arkret_wire::ServiceContractId::PUSH_BRIDGE_V1
-                    }
+                    "remote_contract": {"service_kind": "push_gateway"}
                 }],
                 "snapshot_store_kind": "durable_push_bridge_cache"
             }),
@@ -195,8 +188,7 @@ async fn outbound_push_bridge_resolve(
         derive_push_gateway_service_base_url(&push_gateway_url).ok_or_else(|| {
             AppError::param_invalid("push_gateway_url must be an absolute push gateway URL")
         })?;
-    let bridge_describe_url =
-        join_push_gateway_url(&service_base_url, "/_floria/push/bridge/describe");
+    let bridge_describe_url = join_push_gateway_url(&service_base_url, "/_arkret/describe");
     let cached = state
         .deliveries()
         .push_bridge_cache_entry(&bridge_describe_url)
@@ -205,8 +197,7 @@ async fn outbound_push_bridge_resolve(
         .flatten();
     let fetched_contract = cached
         .as_ref()
-        .map(|record| outbound_push_resolved_contract_from_remote(&record.remote_contract))
-        .unwrap_or_else(default_outbound_push_resolved_contract);
+        .and_then(|record| service_describe_from_remote(&record.remote_contract));
 
     json_ok(OutboundPushBridgeResolveOutcome {
         push_gateway_url,
@@ -233,7 +224,7 @@ async fn outbound_push_bridge_resolve(
         contract_digest: cached
             .as_ref()
             .map(|record| record.contract_digest.clone())
-            .unwrap_or_else(|| "scaffold-static".to_owned()),
+            .unwrap_or_default(),
         fetched_contract,
         todos: Vec::new(),
     })
@@ -260,8 +251,7 @@ async fn outbound_push_bridge_fetch(
         derive_push_gateway_service_base_url(&push_gateway_url).ok_or_else(|| {
             AppError::param_invalid("push_gateway_url must be an absolute push gateway URL")
         })?;
-    let bridge_describe_url =
-        join_push_gateway_url(&service_base_url, "/_floria/push/bridge/describe");
+    let bridge_describe_url = join_push_gateway_url(&service_base_url, "/_arkret/describe");
     let (bridge_describe_target, client) =
         crate::security::validate_http_url_for_egress_with_pinned_client(
             &bridge_describe_url,
@@ -301,8 +291,22 @@ async fn outbound_push_bridge_fetch(
                 .and_then(|value| value.to_str().ok())
                 .map(ToOwned::to_owned)
                 .unwrap_or_default();
-            match response.json::<Value>().await {
-                Ok(remote_contract) => {
+            match response.json::<ServiceDescribe>().await {
+                Ok(description) => {
+                    if let Err(error) =
+                        validate_push_gateway_description(&description, &service_base_url)
+                    {
+                        return json_ok(outbound_push_bridge_fetch_fallback(
+                            existing_cache,
+                            push_gateway_url,
+                            service_base_url,
+                            bridge_describe_url,
+                            format!("live_remote_fetch_invalid_service_describe:{error}"),
+                        ));
+                    }
+                    let remote_contract = serde_json::to_value(&description).map_err(|error| {
+                        AppError::internal(format!("serialize canonical ServiceDescribe: {error}"))
+                    })?;
                     let contract_digest = sha256_hex(
                         &serde_json::to_vec(&remote_contract).unwrap_or_else(|_| b"{}".to_vec()),
                     );
@@ -319,9 +323,7 @@ async fn outbound_push_bridge_fetch(
                         ));
                     }
                     let fetched_at = now();
-                    let fetched_contract =
-                        outbound_push_resolved_contract_from_remote(&remote_contract);
-                    let trust_level = resolve_trust_level(state, &fetched_contract);
+                    let trust_level = resolve_trust_level(state, &description);
                     let record = OutboundPushBridgeCacheRecord {
                         push_gateway_url: push_gateway_url.clone(),
                         service_base_url: service_base_url.clone(),
@@ -350,9 +352,7 @@ async fn outbound_push_bridge_fetch(
                         cache_state: record.cache_state.clone(),
                         contract_digest,
                         fetched_at: Some(record.fetched_at),
-                        fetched_contract: outbound_push_resolved_contract_from_remote(
-                            &record.remote_contract,
-                        ),
+                        fetched_contract: Some(description),
                         remote_contract: Some(remote_contract),
                         trust_level: record.trust_level.clone(),
                         freshness_at: Some(record.freshness_at),
@@ -457,6 +457,23 @@ async fn outbound_push_bridge_cache_import(
     let mut imported_count = 0usize;
     let mut skipped_count = 0usize;
     for snapshot in body.entries {
+        let Some(service_base_url) =
+            derive_push_gateway_service_base_url(&snapshot.push_gateway_url)
+        else {
+            skipped_count += 1;
+            continue;
+        };
+        let Some(description) = service_describe_from_remote(&snapshot.remote_contract) else {
+            skipped_count += 1;
+            continue;
+        };
+        if validate_push_gateway_description(&description, &service_base_url).is_err()
+            || snapshot.bridge_describe_url
+                != join_push_gateway_url(&service_base_url, "/_arkret/describe")
+        {
+            skipped_count += 1;
+            continue;
+        }
         let exists = service
             .push_bridge_cache_entry(&snapshot.bridge_describe_url)
             .await
@@ -476,8 +493,7 @@ async fn outbound_push_bridge_cache_import(
         // `trust_level=trusted` without satisfying either are demoted to
         // `pending` so the outbound delivery loop refuses to bind signed
         // delivery off them.
-        let resolved = outbound_push_resolved_contract_from_remote(&record.remote_contract);
-        let resolved_trust = resolve_trust_level(state, &resolved);
+        let resolved_trust = resolve_trust_level(state, &description);
         if resolved_trust != "trusted" && record.trust_level == "trusted" {
             record.trust_level = "pending".to_owned();
         }
@@ -527,8 +543,7 @@ async fn outbound_push_bridge_cache_invalidate(
         .filter(|value| !value.is_empty())
     {
         if let Some(service_base_url) = derive_push_gateway_service_base_url(push_gateway_url) {
-            let bridge_describe_url =
-                join_push_gateway_url(&service_base_url, "/_floria/push/bridge/describe");
+            let bridge_describe_url = join_push_gateway_url(&service_base_url, "/_arkret/describe");
             usize::from(
                 service
                     .delete_push_bridge_cache_entry(&bridge_describe_url)
@@ -560,12 +575,9 @@ pub(super) fn derive_push_gateway_service_base_url(push_gateway_url: &str) -> Op
     }
 
     for suffix in [
-        "/_floria/push/bridge/describe",
-        "/arkret/push/v1/bridge/describe",
+        "/_arkret/describe",
         "/_arkret/edge/push/notify",
-        "/arkret/push/v1/notify",
         "/_arkret/edge/push",
-        "/arkret/push/v1",
     ] {
         if let Some(prefix) = value.strip_suffix(suffix) {
             value = prefix.trim_end_matches('/').to_owned();
@@ -579,127 +591,48 @@ pub(super) fn derive_push_gateway_service_base_url(push_gateway_url: &str) -> Op
 pub(super) fn join_push_gateway_url(base: &str, path: &str) -> String {
     let base = base.trim_end_matches('/');
     let path = path.trim_start_matches('/');
-
-    if path.starts_with("_floria/") {
-        let base = base.strip_suffix("/_arkret/edge").unwrap_or(base);
-        return format!("{base}/{path}");
-    }
-
-    let path = path.strip_prefix("_arkret/edge/").unwrap_or(path);
-    if base.ends_with("/_arkret/edge") {
-        format!("{base}/{path}")
-    } else {
-        let mut url = String::with_capacity(base.len() + "/_arkret/edge/".len() + path.len());
-        url.push_str(base);
-        url.push_str("/_arkret/edge/");
-        url.push_str(path);
-        url
-    }
+    format!("{base}/{path}")
 }
 
-fn default_outbound_push_resolved_contract() -> OutboundPushResolvedContract {
-    OutboundPushResolvedContract {
-        contract: arkret_wire::ServiceContractId::PUSH_BRIDGE_V1.to_owned(),
-        expected_notify_path: "/_arkret/edge/push/notify".to_owned(),
-        expected_operation_id: arkret_wire::ServiceOperationId::EDGE_PUSH_COMMAND_NOTIFY_V1
-            .to_owned(),
-        expected_source_service_id_header: "Source-Service-ID".to_owned(),
-        expected_destination_service_id_header: "Destination-Service-ID".to_owned(),
-        expected_request_id_header: "X-Arkret-Request-Id".to_owned(),
-        expected_idempotency_key_header: "Idempotency-Key".to_owned(),
-        auth_modes: vec!["bearer".to_owned()],
-        privacy_mode: "blind_wakeup".to_owned(),
-        service_id: String::new(),
-    }
+fn service_describe_from_remote(remote_contract: &Value) -> Option<ServiceDescribe> {
+    serde_json::from_value(remote_contract.clone()).ok()
 }
 
-fn outbound_push_resolved_contract_from_remote(
-    remote_contract: &Value,
-) -> OutboundPushResolvedContract {
-    let fallback = default_outbound_push_resolved_contract();
-    let auth_modes = remote_contract
-        .pointer("/auth_modes")
-        .or_else(|| remote_contract.pointer("/delivery/auth_modes"))
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-                .collect()
-        })
-        .unwrap_or(fallback.auth_modes);
-    let privacy_mode = remote_contract
-        .pointer("/privacy/mode")
-        .or_else(|| remote_contract.pointer("/privacy_mode"))
-        .or_else(|| remote_contract.pointer("/delivery/privacy_mode"))
-        .and_then(Value::as_str)
-        .unwrap_or(&fallback.privacy_mode)
-        .to_owned();
-    let service_id = remote_contract
-        .pointer("/service_id")
-        .or_else(|| remote_contract.pointer("/origin/service_id"))
-        .and_then(Value::as_str)
-        .unwrap_or(&fallback.service_id)
-        .to_owned();
-    OutboundPushResolvedContract {
-        contract: remote_contract
-            .get("contract")
-            .and_then(Value::as_str)
-            .unwrap_or(&fallback.contract)
-            .to_owned(),
-        expected_notify_path: remote_contract
-            .pointer("/delivery/notify_path")
-            .or_else(|| remote_contract.get("notify_path"))
-            .and_then(Value::as_str)
-            .unwrap_or(&fallback.expected_notify_path)
-            .to_owned(),
-        expected_operation_id: remote_contract
-            .pointer("/delivery/operation_id")
-            .and_then(Value::as_str)
-            .unwrap_or(&fallback.expected_operation_id)
-            .to_owned(),
-        expected_source_service_id_header: remote_contract
-            .pointer("/delivery/source_service_id_header")
-            .and_then(Value::as_str)
-            .unwrap_or(&fallback.expected_source_service_id_header)
-            .to_owned(),
-        expected_destination_service_id_header: remote_contract
-            .pointer("/delivery/destination_service_id_header")
-            .and_then(Value::as_str)
-            .unwrap_or(&fallback.expected_destination_service_id_header)
-            .to_owned(),
-        expected_request_id_header: remote_contract
-            .pointer("/delivery/request_id_header")
-            .and_then(Value::as_str)
-            .unwrap_or(&fallback.expected_request_id_header)
-            .to_owned(),
-        expected_idempotency_key_header: remote_contract
-            .pointer("/delivery/idempotency_key_header")
-            .and_then(Value::as_str)
-            .unwrap_or(&fallback.expected_idempotency_key_header)
-            .to_owned(),
-        auth_modes,
-        privacy_mode,
-        service_id,
+fn validate_push_gateway_description(
+    description: &ServiceDescribe,
+    service_base_url: &str,
+) -> Result<(), String> {
+    description.validate().map_err(|error| error.to_string())?;
+    if description.service_kind != ServiceKind::PushGateway {
+        return Err("service_kind must be push_gateway".to_owned());
     }
+    let Some(binding) = description.select_transport_binding(
+        ServiceOperationId::EdgePushCommandNotifyV1,
+        &[BindingKind::HttpJson],
+    ) else {
+        return Err("canonical HTTP push notify operation is not advertised".to_owned());
+    };
+    let advertised_base = derive_push_gateway_service_base_url(binding.base_url())
+        .ok_or_else(|| "push gateway HTTP binding is not an absolute URL".to_owned())?;
+    if advertised_base != service_base_url {
+        return Err("push gateway HTTP binding origin does not match requested gateway".to_owned());
+    }
+    Ok(())
 }
 
 /// Promote a contract to `trust_level=trusted` only when the upstream service
 /// DID is in the operator's allowlist (or development_mode is on).
 /// Otherwise stay at `pending` and let the outbound delivery loop decide
 /// whether to fall back to unsigned delivery or refuse.
-fn resolve_trust_level(state: &AppState, contract: &OutboundPushResolvedContract) -> String {
+fn resolve_trust_level(state: &AppState, contract: &ServiceDescribe) -> String {
     if state.config().development_mode {
         return "trusted".to_owned();
-    }
-    if contract.service_id.is_empty() {
-        return "pending".to_owned();
     }
     if state
         .settings()
         .push_bridge_trusted_service_ids
         .iter()
-        .any(|allowed| allowed == &contract.service_id)
+        .any(|allowed| allowed == contract.service_id.as_str())
     {
         "trusted".to_owned()
     } else {
@@ -733,7 +666,7 @@ fn outbound_push_bridge_cache_entry(
         cache_state: record.cache_state,
         contract_digest: record.contract_digest,
         fetched_at: record.fetched_at,
-        fetched_contract: outbound_push_resolved_contract_from_remote(&record.remote_contract),
+        fetched_contract: service_describe_from_remote(&record.remote_contract),
         trust_level: record.trust_level,
         freshness_at: record.freshness_at,
         etag: record.etag,
@@ -780,7 +713,7 @@ fn outbound_push_bridge_cache_record(
 fn outbound_push_bridge_fetch_response_from_cache(
     record: OutboundPushBridgeCacheRecord,
 ) -> OutboundPushBridgeFetchOutcome {
-    let fetched_contract = outbound_push_resolved_contract_from_remote(&record.remote_contract);
+    let fetched_contract = service_describe_from_remote(&record.remote_contract);
     OutboundPushBridgeFetchOutcome {
         push_gateway_url: record.push_gateway_url,
         service_base_url: record.service_base_url,
@@ -817,9 +750,9 @@ fn outbound_push_bridge_fetch_fallback(
         bridge_describe_url,
         fetch_state,
         cache_state: "not_cached".to_owned(),
-        contract_digest: "scaffold-static".to_owned(),
+        contract_digest: String::new(),
         fetched_at: None,
-        fetched_contract: default_outbound_push_resolved_contract(),
+        fetched_contract: None,
         remote_contract: None,
         trust_level: "pending".to_owned(),
         freshness_at: None,

@@ -504,7 +504,7 @@ pub(super) async fn push_notify(
     })
 }
 
-/// Resolve the gateway URL of a registered device into a `bridge_describe_url`
+/// Resolve the gateway URL of a registered device into its canonical describe URL
 /// and ask `PushBridgeCacheStore::verify_contract_freshness` whether the
 /// persisted snapshot is trusted + fresh + matches its own digest. Returns
 /// `Unknown` (fail-closed) when the gateway URL is empty or doesn't parse,
@@ -521,8 +521,7 @@ async fn verify_push_gateway_contract_drift(
     let Some(service_base_url) = derive_push_gateway_service_base_url(trimmed) else {
         return PushContractDrift::Unknown;
     };
-    let bridge_describe_url =
-        join_push_gateway_url(&service_base_url, "/_floria/push/bridge/describe");
+    let bridge_describe_url = join_push_gateway_url(&service_base_url, "/_arkret/describe");
     let service = state.deliveries();
     let snapshot_digest = match service
         .current_push_bridge_contract(&bridge_describe_url)

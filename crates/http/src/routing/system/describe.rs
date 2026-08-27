@@ -731,9 +731,10 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
             IntegrationDependencyDescriptor {
                 service: "floria".to_owned(),
                 purpose: "push_gateway_delivery".to_owned(),
-                required_contract: arkret_wire::ServiceContractId::PUSH_BRIDGE_V1.to_owned(),
-                discovery_path: "/_floria/push/bridge/describe".to_owned(),
-                mode: "remote_gateway_contract".to_owned(),
+                required_contract:
+                    arkret_wire::ServiceOperationId::SERVER_READ_DESCRIBE_V1.to_owned(),
+                discovery_path: "/_arkret/describe".to_owned(),
+                mode: "canonical_service_describe".to_owned(),
             },
         ],
         surfaces: vec![
