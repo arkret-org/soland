@@ -687,9 +687,9 @@ async fn peer_events_describe(
     ];
     let mut description = crate::routing::system::describe::build_server_description(state);
     description.supported_profiles = vec![
-            arkret_wire::ProfileId::FEDERATION_MINIMAL_V1.to_owned(),
-            arkret_wire::ProfileId::SIGNAL_PEER_RELAY_V1.to_owned(),
-        ];
+        arkret_wire::ProfileId::FEDERATION_MINIMAL_V1.to_owned(),
+        arkret_wire::ProfileId::SIGNAL_PEER_RELAY_V1.to_owned(),
+    ];
     description.operation_bindings = operation_ids
         .iter()
         .copied()

@@ -150,21 +150,26 @@ async fn health_and_describe_work_body() {
             .iter()
             .any(|profile| profile == "ak.profile.media_service_binding.v1")
     );
-    assert!(
-        advertises_operation(&describe, "ak.open.mimi.command.submit_message")
-    );
-    assert!(
-        advertises_operation(&describe, "ak.self.events.command.submit")
-    );
-    assert!(
-        advertises_operation(&describe, "ak.self.blob.upload.create")
-    );
-    assert!(
-        advertises_operation(&describe, "ak.self.keys.backups.resource.replace")
-    );
-    assert!(
-        advertises_operation(&describe, "ak.self.circle.command.restore")
-    );
+    assert!(advertises_operation(
+        &describe,
+        "ak.open.mimi.command.submit_message"
+    ));
+    assert!(advertises_operation(
+        &describe,
+        "ak.self.events.command.submit"
+    ));
+    assert!(advertises_operation(
+        &describe,
+        "ak.self.blob.upload.create"
+    ));
+    assert!(advertises_operation(
+        &describe,
+        "ak.self.keys.backups.resource.replace"
+    ));
+    assert!(advertises_operation(
+        &describe,
+        "ak.self.circle.command.restore"
+    ));
     for operation_id in [
         "ak.self.authz.read.check",
         "ak.self.authz.grants.read.effective",

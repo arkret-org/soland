@@ -1537,11 +1537,8 @@ pub(super) async fn lifecycle_transition(
         .await?;
     }
     // spec `agent_lifecycle_state` = `operation_status_outcome` =
-    // `{ok: true, status}` (status is the post-transition `agent_status`).
-    Ok(AgentLifecycleOutcome {
-        ok: true,
-        status: new_state,
-    })
+    // `{status}` (status is the post-transition `agent_status`).
+    Ok(AgentLifecycleOutcome { status: new_state })
 }
 
 #[endpoint(
@@ -1716,7 +1713,7 @@ pub(super) async fn attach_agent_grant(
     .await;
     res.status_code(StatusCode::CREATED);
     // spec `agent_grant_attach_outcome` = `{ok, grant_id}`.
-    json_ok(AgentGrantAttachOutcome { ok: true, grant_id })
+    json_ok(AgentGrantAttachOutcome { grant_id })
 }
 
 #[endpoint(
@@ -1798,10 +1795,7 @@ pub(super) async fn detach_agent_grant(
     )
     .await;
     // spec `agent_grant_detach_outcome` = `{ok, revoked_at}`.
-    json_ok(AgentGrantDetachOutcome {
-        ok: true,
-        revoked_at,
-    })
+    json_ok(AgentGrantDetachOutcome { revoked_at })
 }
 
 #[cfg(test)]

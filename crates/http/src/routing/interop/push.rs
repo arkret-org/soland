@@ -226,7 +226,6 @@ pub(super) async fn push_register(
     }
     json_ok(
         arkret_models_integration::models_push::PushRegisterDeviceOutcome {
-            ok: true,
             push_target_id,
             registration_id: Some(registration_id),
             expires_at: None,
@@ -354,7 +353,8 @@ pub(super) async fn push_unregister(
     body: JsonBody<PushUnregisterDeviceRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<arkret_models_integration::models_push::PushUnregisterDeviceOutcome> {
+    res: &mut Response,
+) -> Result<(), AppError> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -383,7 +383,8 @@ pub(super) async fn push_unregister(
         if removed == 0 { "no_match" } else { "accepted" },
     )
     .await;
-    json_ok(arkret_models_integration::models_push::PushUnregisterDeviceOutcome { ok: true })
+    res.status_code(StatusCode::NO_CONTENT);
+    Ok(())
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.edge.push.command.notify", tags("interop"))]

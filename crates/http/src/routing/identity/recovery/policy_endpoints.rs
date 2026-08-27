@@ -86,7 +86,6 @@ fn recovery_policy_publish_outcome(
     record: &RecoveryPolicyState,
 ) -> Result<RecoveryPolicyPublishOutcome, AppError> {
     Ok(RecoveryPolicyPublishOutcome {
-        ok: true,
         policy_id: PolicyId::new(record.policy_id.clone())
             .map_err(|error| stored_recovery_type_error("policy id", error))?,
         principal_id: arkret_identifiers::DidCoreId::new(record.principal_id.clone())

@@ -609,7 +609,7 @@ async fn list_consent_cells(
         .map(|cell| consent_response(cell, now))
         .collect::<Result<Vec<_>, _>>()?;
     cells.sort_by(|a, b| a.cell_id.cmp(&b.cell_id));
-    json_ok(ConsentCellList { ok: true, cells })
+    json_ok(ConsentCellList { cells })
 }
 
 #[endpoint(
@@ -733,7 +733,6 @@ async fn request_consent_cell(
     let _ = normalize_scope(body.consent_scope.as_ref().map(|scope| scope.as_str()))?;
     let _ = body.holder_principal_id;
     json_ok(ConsentRequestOutcome {
-        ok: true,
         accepted_for_processing: true,
     })
 }
@@ -1030,7 +1029,6 @@ fn consent_response(
 ) -> Result<ConsentCellView, AppError> {
     let active_grant_dots = active_grant_dots(cell, at);
     Ok(ConsentCellView {
-        ok: true,
         cell_id: cell.cell_id.clone(),
         holder_principal_id: DidCoreId::new(cell.holder.clone())
             .map_err(|e| AppError::internal(format!("stored consent holder_principal_id: {e}")))?,

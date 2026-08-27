@@ -272,7 +272,6 @@ pub(super) async fn submit_agent_runtime_key_request(
         state.service_id().clone(),
     ));
     json_ok(AgentRuntimeApprovalOutcome {
-        ok: true,
         approval_request_id,
         status: agent_lifecycle_from_record(&stored),
     })
@@ -606,7 +605,6 @@ pub(super) fn agent_runtime_key_request_status_outcome(
     let authorized_signing_key_binding =
         completed_binding.map(|binding| binding.signing_key_binding.clone());
     Ok(AgentRuntimeApprovalStatusOutcome {
-        ok: true,
         status,
         runtime_state,
         approval_request_id,
@@ -707,7 +705,6 @@ pub(super) async fn agent_key_pair(
             .await?;
         }
         return json_ok(AgentKeyPairOutcome {
-            ok: true,
             activation_state: AgentKeyPairActivationState::Active,
             authorize_event_ref: body.authorize_event.event.event_id.clone(),
             signing_key_binding: body.signing_key_binding,
@@ -811,7 +808,6 @@ pub(super) async fn agent_key_pair(
     // retry this exact idempotent request. Reconciliation above performs the
     // only pending->active transition after portable evidence materializes.
     json_ok(AgentKeyPairOutcome {
-        ok: true,
         activation_state: AgentKeyPairActivationState::AwaitingAcceptedFrontier,
         authorize_event_ref: authorized_event_ref,
         signing_key_binding: body.signing_key_binding,

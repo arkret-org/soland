@@ -546,6 +546,12 @@ fn submit_event_authenticated<'a>(
                 .await;
             }
             res.status_code(status);
+            if status.is_client_error() || status.is_server_error() {
+                res.headers_mut().insert(
+                    salvo::http::header::CONTENT_TYPE,
+                    salvo::http::HeaderValue::from_static("application/problem+json"),
+                );
+            }
             res.render(Json(body));
             return;
         }
@@ -673,12 +679,9 @@ fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
             .with_request_id(crate::ids::generate_request_id())
     );
     if let Some(details) = error.details.as_ref().and_then(Value::as_object)
-        && let Some(error_body) = body
-            .as_object_mut()
-            .and_then(|object| object.get_mut("error"))
-            .and_then(Value::as_object_mut)
+        && let Some(problem) = body.as_object_mut()
     {
-        error_body.insert("details".to_owned(), Value::Object(details.clone()));
+        problem.extend(details.clone());
     }
     if error.status == StatusCode::PRECONDITION_FAILED
         && error.code == "failed_precondition"
@@ -686,9 +689,6 @@ fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
         && let Some(object) = body.as_object_mut()
     {
         object.insert("reason".to_owned(), json!(error.message.clone()));
-        if let Some(error_body) = object.get_mut("error").and_then(Value::as_object_mut) {
-            error_body.insert("reason".to_owned(), json!(error.message.clone()));
-        }
     }
     (error.status, body)
 }

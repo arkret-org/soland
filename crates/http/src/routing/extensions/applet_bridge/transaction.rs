@@ -1,7 +1,8 @@
 use arkret_identifiers::EventId;
 use arkret_models_collaboration::http_bodies::AppletTransactionRequestBody;
 use arkret_models_integration::{
-    AppletNamespaceDomain, AppletTransactionOutcome, RejectedItem, namespace_pattern_matches,
+    AppletNamespaceDomain, AppletTransactionOutcome, AppletTransactionStatus, RejectedItem,
+    namespace_pattern_matches,
 };
 use arkret_wire::Event;
 use salvo::http::StatusCode;
@@ -48,6 +49,7 @@ pub(super) async fn process_verified_transaction(
         }
     }
 
+    let event_count = transaction.events.len();
     let mut rejected = Vec::new();
     for event in transaction.events {
         let event_id = event.event_id.to_string();
@@ -91,7 +93,13 @@ pub(super) async fn process_verified_transaction(
     }
 
     let outcome = AppletTransactionOutcome {
-        ok: rejected.is_empty(),
+        status: if rejected.is_empty() {
+            AppletTransactionStatus::Accepted
+        } else if rejected.len() == event_count {
+            AppletTransactionStatus::Rejected
+        } else {
+            AppletTransactionStatus::Partial
+        },
         rejected,
         retry_after_ms: None,
     };

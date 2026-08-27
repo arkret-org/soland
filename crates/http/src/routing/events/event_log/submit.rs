@@ -1048,8 +1048,7 @@ pub(super) fn render_submit_one_error(res: &mut Response, error: SubmitOneError)
                 envelope = envelope.with_detail(key.clone(), value.clone());
             }
         }
-        res.status_code(error.status);
-        res.render(Json(envelope));
+        crate::error::render_problem_envelope(res, error.status, envelope);
     } else if error.status == StatusCode::PRECONDITION_FAILED
         && error.code == "failed_precondition"
         && error.message != error.code

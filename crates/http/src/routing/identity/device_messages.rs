@@ -372,7 +372,6 @@ fn device_message_send_outcome(
         .map(|(recipient, devices)| (recipient, json!(devices)))
         .collect();
     Ok(DeviceMessagesSendOutcome {
-        ok: true,
         delivered,
         unknown_devices,
     })
@@ -682,8 +681,7 @@ async fn ack_device_messages(
         return Err(AppError::param_invalid("invalid_ack_token"));
     };
     json_ok(DeviceMessagesAckOutcome {
-        ok: true,
-        pruned_count: Some(pruned_count as u64),
+        pruned_count: pruned_count as u64,
     })
 }
 

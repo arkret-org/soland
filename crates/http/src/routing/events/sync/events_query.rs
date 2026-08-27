@@ -535,14 +535,16 @@ fn render_subscribe_rate_limited(res: &mut Response, retry_after_ms: u64) {
     res.status_code(StatusCode::TOO_MANY_REQUESTS);
     res.headers_mut()
         .insert(header::RETRY_AFTER, retry_after_seconds.into());
-    res.render(Json(
+    crate::error::render_problem_envelope(
+        res,
+        StatusCode::TOO_MANY_REQUESTS,
         arkret_wire::problem_details::ErrorEnvelope::new(
             "rate_limited",
             "Subscribe reconnect window is still active.",
         )
         .with_request_id(ids::generate_request_id())
         .with_retry_after_ms(Some(retry_after_ms)),
-    ));
+    );
 }
 
 #[derive(Clone, Debug)]

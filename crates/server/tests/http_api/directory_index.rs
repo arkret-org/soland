@@ -163,14 +163,16 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|binding| binding["operation_id"] == "ak.find.directory.read.list_handles_for_subject")
+            .any(|binding| binding["operation_id"]
+                == "ak.find.directory.read.list_handles_for_subject")
     );
     assert!(
         describe["operation_bindings"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|binding| binding["operation_id"] == "ak.find.directory.read.private_contact_discovery")
+            .any(|binding| binding["operation_id"]
+                == "ak.find.directory.read.private_contact_discovery")
     );
 
     let alice_core = fixture_actor_core_id("did:web:alice.example");

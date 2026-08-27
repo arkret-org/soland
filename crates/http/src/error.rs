@@ -60,12 +60,36 @@ fn request_id() -> String {
     arkret_identifiers::new_prefixed_uuid7("ak:request:")
 }
 
+pub(crate) fn render_problem_envelope(
+    res: &mut Response,
+    status: StatusCode,
+    envelope: arkret_wire::problem_details::ErrorEnvelope,
+) {
+    let problem =
+        arkret_wire::problem_details::Problem::from_error_envelope(&envelope, status.as_u16());
+    let mut salvo_problem = salvo::http::Problem::new(status)
+        .kind(problem.problem_type)
+        .title(problem.title)
+        .detail(problem.detail)
+        .with_extensions(
+            problem
+                .extensions
+                .into_iter()
+                .collect::<serde_json::Map<_, _>>(),
+        );
+    if let Some(instance) = problem.instance {
+        salvo_problem = salvo_problem.instance(instance);
+    }
+    res.render(salvo_problem);
+}
+
 pub fn render_error(res: &mut Response, status: StatusCode, code: &str, message: &str) {
-    res.status_code(status);
-    res.render(Json(
+    render_problem_envelope(
+        res,
+        status,
         arkret_wire::problem_details::ErrorEnvelope::new(code, message)
             .with_request_id(request_id()),
-    ));
+    );
 }
 
 pub fn render_error_with_detail(
@@ -75,15 +99,16 @@ pub fn render_error_with_detail(
     message: &str,
     reason_detail: &str,
 ) {
-    res.status_code(status);
-    res.render(Json(
+    render_problem_envelope(
+        res,
+        status,
         arkret_wire::problem_details::ErrorEnvelope::new(code, message)
             .with_request_id(request_id())
             .with_detail(
                 "reason_detail",
                 serde_json::Value::String(reason_detail.to_owned()),
             ),
-    ));
+    );
 }
 
 pub fn render_error_with_reason_code(
@@ -106,8 +131,7 @@ pub fn render_error_with_reason_code(
             serde_json::Value::String(reason_detail.to_owned()),
         );
     }
-    res.status_code(status);
-    res.render(Json(envelope));
+    render_problem_envelope(res, status, envelope);
 }
 
 pub fn render_error_with_top_level_reason(
@@ -126,29 +150,8 @@ pub fn render_error_with_top_level_reason(
             serde_json::Value::String(reason_detail.to_owned()),
         );
     }
-    let mut body = serde_json::to_value(&envelope).unwrap_or_else(|_| {
-        serde_json::json!({
-            "ok": false,
-            "error": { "code": code, "message": message },
-        })
-    });
-    if let Some(object) = body.as_object_mut() {
-        object.insert(
-            "reason".to_owned(),
-            serde_json::Value::String(reason.to_owned()),
-        );
-        if let Some(error) = object
-            .get_mut("error")
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            error.insert(
-                "reason".to_owned(),
-                serde_json::Value::String(reason.to_owned()),
-            );
-        }
-    }
-    res.status_code(status);
-    res.render(Json(body));
+    envelope = envelope.with_detail("reason", serde_json::Value::String(reason.to_owned()));
+    render_problem_envelope(res, status, envelope);
 }
 
 /// Render an SDK-owned error code through soland's standard error envelope.
@@ -449,8 +452,7 @@ impl Writer for AppError {
                     serde_json::Value::String(reason_detail.to_owned()),
                 );
             }
-            res.status_code(status);
-            res.render(Json(envelope));
+            render_problem_envelope(res, status, envelope);
         } else if let Some(reason) = self.top_level_reason.as_deref() {
             render_error_with_top_level_reason(
                 res,
@@ -480,19 +482,17 @@ impl Writer for AppError {
 // `#[endpoint]` handlers return `Result<Json<T>, AppError>`; salvo-oapi already
 // registers the `Ok` arm through `Json<T>`, and calls `EndpointOutRegister` on
 // the error arm so the generated document advertises the failure shape. Every
-// handler renders the same canonical [`ErrorEnvelope`], so a single `default`
+// handler renders the same canonical RFC 9457 [`Problem`], so a single `default`
 // response carrying that schema is the accurate contract regardless of which
 // `ErrorCode` fired at runtime.
 impl salvo::oapi::EndpointOutRegister for AppError {
     fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
         let schema =
-            <arkret_wire::problem_details::ErrorEnvelope as salvo::oapi::ToSchema>::to_schema(
-                components,
-            );
+            <arkret_wire::problem_details::Problem as salvo::oapi::ToSchema>::to_schema(components);
         operation.responses.insert(
             "default",
-            salvo::oapi::Response::new("Arkret error envelope")
-                .add_content("application/json", schema),
+            salvo::oapi::Response::new("Arkret RFC 9457 Problem Details")
+                .add_content("application/problem+json", schema),
         );
     }
 }

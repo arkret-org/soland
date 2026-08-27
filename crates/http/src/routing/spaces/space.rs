@@ -556,7 +556,6 @@ pub async fn realm_lifecycle_response(
         AppError::internal(format!("stored realm owner DID is invalid: {error}"))
     })?;
     Ok(RealmLifecycleView {
-        ok: true,
         realm_id: realm_id_value,
         owner_id,
         members,

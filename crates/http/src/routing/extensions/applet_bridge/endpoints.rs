@@ -112,7 +112,6 @@ async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutco
             AppError::internal(format!("configured service_id is invalid: {error}"))
         })?;
     json_ok(AppletPingOutcome {
-        ok: true,
         applet_id: arkret_identifiers::AppletId::new(SOLAND_EDGE_APPLET_ID.to_owned()).map_err(
             |error| AppError::internal(format!("configured applet_id is invalid: {error}")),
         )?,
@@ -673,7 +672,6 @@ async fn revoke_install_endpoint(
                 });
             }
             let mut outcome = AppletRevokeOutcome {
-                ok: false,
                 operation_id,
                 revoke_plan_digest: revoke.revoke_plan_digest.clone(),
                 status: AppletRevokeSagaStatus::InProgress,
@@ -783,7 +781,6 @@ async fn revoke_install_endpoint(
     }
     outcome.revoked_refs.sort();
     outcome.revoked_refs.dedup();
-    outcome.ok = true;
     outcome.status = AppletRevokeSagaStatus::Complete;
     if let Some(step) = outcome
         .steps

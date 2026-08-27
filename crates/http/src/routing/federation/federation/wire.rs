@@ -148,12 +148,11 @@ fn error_envelope_with_details(
     }
     serde_json::to_value(envelope).unwrap_or_else(|_| {
         json!({
-            "ok": false,
-            "error": {
-                "code": code,
-                "message": message,
-            },
-            "request_id": "unknown",
+            "type": format!("https://arkret.org/problems/{code}"),
+            "title": code.replace('_', " "),
+            "status": arkret_wire::ErrorCode::from_wire(code)
+                .map_or(500, |entry| entry.http_status()),
+            "detail": message,
         })
     })
 }

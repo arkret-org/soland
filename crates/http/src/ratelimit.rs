@@ -411,14 +411,16 @@ impl Handler for RateLimiterMiddleware {
             res.status_code(StatusCode::TOO_MANY_REQUESTS);
             res.headers_mut()
                 .insert(salvo::http::header::RETRY_AFTER, retry_after_seconds.into());
-            res.render(Json(
+            crate::error::render_problem_envelope(
+                res,
+                StatusCode::TOO_MANY_REQUESTS,
                 arkret_wire::problem_details::ErrorEnvelope::new(
                     "rate_limited",
                     "Too many requests. Please try again later.",
                 )
                 .with_request_id(request_id)
                 .with_retry_after_ms(Some(retry_after_ms)),
-            ));
+            );
             return;
         }
 

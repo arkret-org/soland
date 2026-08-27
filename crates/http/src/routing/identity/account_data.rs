@@ -642,7 +642,6 @@ async fn delete_account_data(
     )
     .await;
     json_ok(AccountDataDeleteOutcome {
-        ok: true,
         account_data_key,
         revision,
     })

@@ -220,8 +220,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                 "frontier",
                 current.cursor.map(Value::String).unwrap_or(Value::Null),
             );
-            res.status_code(StatusCode::SERVICE_UNAVAILABLE);
-            res.render(Json(envelope));
+            crate::error::render_problem_envelope(res, StatusCode::SERVICE_UNAVAILABLE, envelope);
             return;
         }
         res.headers_mut().insert(

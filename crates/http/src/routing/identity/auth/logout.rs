@@ -108,7 +108,6 @@ pub(super) async fn logout(
     .await;
 
     json_ok(AccountLogoutOutcome {
-        ok: true,
         revoked: revoked || auth_side_revoked,
     })
 }
@@ -165,7 +164,7 @@ async fn dev_mode_local_logout(
         )
         .await;
     }
-    Ok(AccountLogoutOutcome { ok: true, revoked })
+    Ok(AccountLogoutOutcome { revoked })
 }
 
 /// Server-to-server introspection of a presented `ak.session.grant` for the
@@ -308,7 +307,7 @@ async fn trigger_auth_side_auth_session_logout(
                 format!("invalid Auth-side session logout response: {error}"),
             )
         })?;
-    Ok(body.ok && body.grant_chain_terminated && body.auth_session_logged_out)
+    Ok(body.grant_chain_terminated && body.auth_session_logged_out)
 }
 
 /// Revoke every active soland bearer session for a specific (actor, device).
