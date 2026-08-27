@@ -48,10 +48,10 @@ jobs:
           path: arkret-rust-sdk
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
-      - name: Install Rust 1.97
+      - name: Install Rust 1.98
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.97"
+          toolchain: "1.98"
           components: clippy
 
       - name: Install nightly rustfmt
