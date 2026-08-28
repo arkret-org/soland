@@ -131,7 +131,7 @@ impl FrontierExchangeWorker {
         ) {
             return Err(format!("trust_domain_policy_denied:{reason}"));
         }
-        let peer_url = route.cache_entry.base_url.trim_end_matches('/');
+        let peer_url = route.cache_entry.base_uri.trim_end_matches('/');
         let canonical_target = format!("{}/_arkret/peer/events/frontier", peer_url);
         let request = arkret_models_collaboration::event_query::PeerEventsFrontierRequestBody {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
@@ -303,7 +303,7 @@ fn validate_frontier_response(
     if state.realm_id.as_str() != realm_id {
         return Err("realm_id_mismatch".to_owned());
     }
-    if state.issuer.as_str() != peer_id {
+    if state.issuer_id.as_str() != peer_id {
         return Err("issuer_mismatch".to_owned());
     }
     if state.signature.is_empty() {

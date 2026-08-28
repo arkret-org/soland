@@ -53,19 +53,26 @@ impl AdminNotaryValue {
                 format!("single_signer({})", signer.actor_id)
             }
             arkret_wire::NotaryValue::Threshold {
-                threshold, members, ..
-            } => format!("threshold({threshold}/{})", members.len()),
-            arkret_wire::NotaryValue::OpenSet { members } => {
-                format!("open_set(n={})", members.len())
+                threshold,
+                notary_signer_descriptors,
+                ..
+            } => format!(
+                "threshold({threshold}/{})",
+                notary_signer_descriptors.len()
+            ),
+            arkret_wire::NotaryValue::OpenSet {
+                notary_signer_descriptors,
+            } => {
+                format!("open_set(n={})", notary_signer_descriptors.len())
             }
             arkret_wire::NotaryValue::Mixed {
                 signer,
-                recovery_members,
+                recovery_notary_signer_descriptors,
                 ..
             } => format!(
                 "mixed(primary={}, recovery_n={})",
                 signer.actor_id,
-                recovery_members.len()
+                recovery_notary_signer_descriptors.len()
             ),
         }
     }

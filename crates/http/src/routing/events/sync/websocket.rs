@@ -198,7 +198,7 @@ pub(crate) fn advertise_websocket_binding(
     };
     description.transport_bindings.push(
         arkret_models_discovery::TransportBinding::Websocket {
-            base_url,
+            base_uri: base_url,
             extension_profile_required:
                 arkret_models_discovery::websocket_binding::WebSocketBindingProfile::BindingWebsocketV1,
             subprotocol:
@@ -736,7 +736,7 @@ async fn verify_authenticate(
     else {
         return Err("grant");
     };
-    if grant.audience.as_str() != state.service_id() || grant.expires_at <= chrono::Utc::now() {
+    if grant.audience_id.as_str() != state.service_id() || grant.expires_at <= chrono::Utc::now() {
         return Err("grant");
     }
     let cnf_jkt = grant.cnf_jkt.clone();
@@ -1068,9 +1068,9 @@ async fn run_multiplex(
                     close_code = Some(WebSocketCloseCode::PolicyViolation);
                     break;
                 };
-                if grant.subject.as_str() != session.actor
+                if grant.subject_id.as_str() != session.actor
                     || device_id != session.device_id
-                    || grant.audience.as_str() != session.audience
+                    || grant.audience_id.as_str() != session.audience
                     || grant.expires_at <= chrono::Utc::now()
                 {
                     close_code = Some(WebSocketCloseCode::PolicyViolation);
@@ -1530,7 +1530,7 @@ fn websocket_account_filter(
     filter: arkret_models_collaboration::sync_frames::websocket_binding::WebSocketAccountFilter,
 ) -> arkret_models_collaboration::sync_frames::client_sync::SyncFilter {
     arkret_models_collaboration::sync_frames::client_sync::SyncFilter {
-        realms: filter.realms.unwrap_or_default(),
+        realm_ids: filter.realm_ids.unwrap_or_default(),
         timeline_limit: filter.timeline_limit,
         lazy_load_members: filter.lazy_load_members.unwrap_or(false),
         include_redundant_members: filter.include_redundant_members.unwrap_or(false),
@@ -1555,13 +1555,13 @@ async fn run_events_channel(
     mut notifications: tokio::sync::broadcast::Receiver<crate::state::EventNotification>,
 ) -> WebSocketClosedReason {
     let actor_filter = parameters
-        .actors
+        .actor_ids
         .into_iter()
         .flatten()
         .map(|actor| actor.as_str().to_owned())
         .collect::<BTreeSet<_>>();
     let mut accessible: Vec<String> = Vec::new();
-    let requested_realms = match parameters.realms.filter(|realms| !realms.is_empty()) {
+    let requested_realms = match parameters.realm_ids.filter(|realms| !realms.is_empty()) {
         Some(realms) => realms,
         None => state
             .realm_directory()
@@ -2069,7 +2069,7 @@ mod tests {
                 .expect("realm id");
         let filter = websocket_account_filter(
             arkret_models_collaboration::sync_frames::websocket_binding::WebSocketAccountFilter {
-                realms: Some(vec![realm.clone()]),
+                realm_ids: Some(vec![realm.clone()]),
                 timeline_limit: Some(42),
                 lazy_load_members: Some(true),
                 include_redundant_members: Some(true),
@@ -2077,7 +2077,7 @@ mod tests {
                 not_event_kinds: Some(vec!["ak.message.redact".to_owned()]),
             },
         );
-        assert_eq!(filter.realms, vec![realm]);
+        assert_eq!(filter.realm_ids, vec![realm]);
         assert_eq!(filter.timeline_limit, Some(42));
         assert!(filter.lazy_load_members);
         assert!(filter.include_redundant_members);

@@ -46,7 +46,7 @@ pub(super) async fn resolve_agent_pairing(
     let agent_id = record.id.as_str();
     let pairing_expires_at = required_pairing_expires_at(&record)?;
     let bootstrap = AgentPairingBootstrap {
-        arkret_base_url: state
+        arkret_base_uri: state
             .config()
             .public_base_url
             .trim_end_matches('/')
@@ -241,7 +241,7 @@ pub(super) async fn submit_agent_runtime_key_request(
             soland_services::delivery::StoreAccountNotificationDeltaCommand {
                 record: soland_services::delivery::AccountNotificationDeltaWrite {
                     delta,
-                    recipient_id: arkret_identifiers::DidCoreId::new(controller_id).map_err(
+                    recipient_actor_id: arkret_identifiers::DidCoreId::new(controller_id).map_err(
                         |error| {
                             AppError::internal(format!(
                                 "approval notification recipient is invalid: {error}"
@@ -923,7 +923,7 @@ fn validate_agent_key_authorize_effects(event: &arkret_wire::Event) -> Result<()
                 ))
             })?;
     let expected_cell = agent_key_cell_ref(&payload.agent_id, &payload.key_id)?;
-    if derived.len() != 2 || derived.iter().any(|write| write.cell != expected_cell) {
+    if derived.len() != 2 || derived.iter().any(|write| write.cell_id != expected_cell) {
         return Err(AppError::param_invalid(
             "authorize_event must derive the atomic Agent key re-authorization pair on its own key cell",
         ));
@@ -1255,7 +1255,7 @@ fn ensure_current_runtime_key_request_matches(
 
 pub(super) struct AccountNotificationContext {
     notification_id: arkret_wire::NotificationId,
-    recipient_id: arkret_wire::DidCoreId,
+    recipient_actor_id: arkret_wire::DidCoreId,
     controller_account_id: String,
     recipient_id: arkret_wire::DidCoreId,
     approval_request_id: arkret_wire::OpaqueLocalId,
@@ -1270,7 +1270,7 @@ pub(super) fn account_notification_context(
             &agent_record.approval_notification_id?,
         ))
         .ok()?,
-        recipient_id: arkret_identifiers::DidCoreId::new(agent_record.controller_id.clone())
+        recipient_actor_id: arkret_identifiers::DidCoreId::new(agent_record.controller_id.clone())
             .ok()?,
         controller_account_id: ids::format_typed_uuid(
             "account",
@@ -1308,7 +1308,7 @@ pub(super) async fn persist_terminal_account_notification(
             soland_services::delivery::StoreAccountNotificationDeltaCommand {
                 record: soland_services::delivery::AccountNotificationDeltaWrite {
                     delta,
-                    recipient_id: context.recipient_id,
+                    recipient_actor_id: context.recipient_actor_id,
                     controller_account_id: context.controller_account_id.clone(),
                     recipient_id: context.recipient_id.clone(),
                     source_account_artifact_id: context.approval_request_id.to_string(),
@@ -1706,9 +1706,9 @@ fn verify_runtime_key_proof_of_possession(
     let service_id = arkret_wire::DidCoreId::new(service_id.to_owned())
         .map_err(|error| AppError::internal(format!("configured service_id invalid: {error}")))?;
     let public_key_bytes = runtime_ed25519_public_key(public_key, verification_method)?;
-    if proof_of_possession.audience != service_id {
+    if proof_of_possession.audience_id != service_id {
         return Err(AppError::param_invalid(
-            "proof_of_possession.audience must match this principal server",
+            "proof_of_possession.audience_id must match this principal server",
         ));
     }
     let expected_binding =

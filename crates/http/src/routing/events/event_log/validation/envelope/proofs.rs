@@ -139,7 +139,7 @@ pub(crate) async fn validate_event_proofs(
             (context.actor_id == actor_id
                 && candidate.principal_id == payload.principal_id
                 && candidate.device_id == payload.device_id
-                && candidate.device_public_key == payload.device_public_key
+                && candidate.device_public_key_did == payload.device_public_key_did
                 && candidate.hpke_key == payload.hpke_key
                 && candidate.algorithms == payload.algorithms
                 && candidate.authorization_binding_kind == payload.authorization_binding_kind)
@@ -355,7 +355,7 @@ pub(crate) async fn validate_event_proofs(
             // succeeded; never reinterpret the did:key as the proof method.
             if let Some((candidate, _)) = root_anchored_candidate.as_ref() {
                 let multibase = candidate
-                    .device_public_key
+                    .device_public_key_did
                     .as_str()
                     .strip_prefix("did:key:")
                     .ok_or_else(|| {

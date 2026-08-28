@@ -713,12 +713,12 @@ pub(crate) async fn events_read_body(
     let body = body.into_inner();
     let parts = EventsQueryParts {
         realms: body
-            .realms
+            .realm_ids
             .into_iter()
             .map(|realm| realm.into_string())
             .collect(),
         actors: body
-            .actors
+            .actor_ids
             .into_iter()
             .map(|actor| actor.into_string())
             .collect(),
@@ -904,7 +904,7 @@ async fn events_query_impl(
                 };
                 let events = full_events_from_projection_json(state, &events).await;
                 return soland_http::result::json_ok(EventsQueryOutcome {
-                    events,
+                    event_read_rows: events,
                     snapshot_bootstrap: None,
                     prev_cursor: cursor_token.clone(),
                     next_cursor,
@@ -924,7 +924,7 @@ async fn events_query_impl(
             }
         }
         return soland_http::result::json_ok(EventsQueryOutcome {
-            events: Vec::new(),
+            event_read_rows: Vec::new(),
             snapshot_bootstrap: None,
             prev_cursor: cursor_token.clone(),
             next_cursor: None,
@@ -954,7 +954,7 @@ async fn events_query_impl(
     })?;
     let Some(page) = page else {
         return soland_http::result::json_ok(EventsQueryOutcome {
-            events: Vec::new(),
+            event_read_rows: Vec::new(),
             snapshot_bootstrap: None,
             prev_cursor: cursor_token,
             next_cursor: None,
@@ -983,7 +983,7 @@ async fn events_query_impl(
     };
     let events = full_events_from_projection_json(state, &page_events).await;
     soland_http::result::json_ok(EventsQueryOutcome {
-        events,
+        event_read_rows: events,
         snapshot_bootstrap: None,
         prev_cursor: cursor_token.clone(),
         next_cursor,
@@ -1086,7 +1086,7 @@ async fn range_completeness_for_query(
     let mut payload = RangeCompletenessAttestation {
         attestation_id,
         schema: arkret_wire::SchemaId::RANGE_COMPLETENESS_ATTESTATION_V1.to_owned(),
-        issuer: issuer_actor.clone(),
+        issuer_id: issuer_actor.clone(),
         issuer_role: "events_api".to_owned(),
         realm_id: realm_id.clone(),
         event_range: RangeCompletenessAttestationEventRange {
@@ -1957,7 +1957,7 @@ async fn durable_events_query_from_parts(
         .map(Into::into)
         .collect();
     EventsQueryOutcome {
-        events,
+        event_read_rows: events,
         snapshot_bootstrap: None,
         next_cursor,
         prev_cursor: cursor_token,

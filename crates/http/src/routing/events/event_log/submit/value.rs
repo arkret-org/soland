@@ -1582,7 +1582,7 @@ pub(super) async fn accepted_event_envelope(
             )
         })?,
         producer_verification_method: producer.verification_method.clone(),
-        producer_signing_key,
+        producer_signing_key_did: producer_signing_key,
         producer_signer_resolution_evidence_ref: producer_signer_evidence
             .as_ref()
             .map(|(reference, _)| reference.clone()),
@@ -3747,7 +3747,7 @@ mod local_device_authorization_tests {
             producer_proof_digest: arkret_wire::Hash::new(format!("sha256:{}", "22".repeat(32)))
                 .unwrap(),
             producer_verification_method: producer.verification_method.clone(),
-            producer_signing_key: arkret_wire::DidKey::new(
+            producer_signing_key_did: arkret_wire::DidKey::new(
                 "did:key:z6MkvLM6yK9N3Z1GYikAQLnhdjZoFQv4u4sRZNzgmwLkYsXx",
             )
             .unwrap(),

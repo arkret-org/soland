@@ -199,7 +199,7 @@ pub(crate) async fn validate_direct_binding_operation(
     })?;
     let issuer = operation.context.sender.as_str();
     if !payload
-        .participants_unordered
+        .unordered_participant_ids
         .iter()
         .any(|participant| participant.as_str() == issuer)
     {
@@ -207,7 +207,7 @@ pub(crate) async fn validate_direct_binding_operation(
             target: "soland_http::error",
             stage = "issuer_participant",
             issuer,
-            participants = ?payload.participants_unordered,
+            participants = ?payload.unordered_participant_ids,
             "direct conversation binding validation failed"
         );
         return Err("direct_conversation_binding_invalid");
@@ -218,7 +218,7 @@ pub(crate) async fn validate_direct_binding_operation(
             target: "soland_http::error",
             stage = "pair_key",
             pair_key = %payload.pair_key,
-            participants = ?payload.participants_unordered,
+            participants = ?payload.unordered_participant_ids,
             "direct conversation binding validation failed"
         );
         "direct_conversation_binding_invalid"
@@ -241,9 +241,9 @@ pub(crate) async fn validate_direct_binding_operation(
     if payload.authorization_basis.kind
         == arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind::AcceptedContact
     {
-        let left = payload.participants_unordered[0].as_str();
-        let right = payload.participants_unordered[1].as_str();
-        // `participants_unordered` is canonical pair-key order, not contact
+        let left = payload.unordered_participant_ids[0].as_str();
+        let right = payload.unordered_participant_ids[1].as_str();
+        // `unordered_participant_ids` is canonical pair-key order, not contact
         // request direction. Resolve both directions or a random DID ordering
         // can make the same accepted contact intermittently disappear.
         let contact = accepted_contact_for_pair(state, left, right, "direct_message")
@@ -356,7 +356,7 @@ async fn validate_direct_binding_event_refs(
 
     let creator = realm_create.actor_id.as_str();
     let participants: Vec<&str> = payload
-        .participants_unordered
+        .unordered_participant_ids
         .iter()
         .map(arkret_identifiers::DidCoreId::as_str)
         .collect();
@@ -525,7 +525,7 @@ async fn validate_direct_founder(
     };
 
     let [left, right]: [arkret_identifiers::DidCoreId; 2] = payload
-        .participants_unordered
+        .unordered_participant_ids
         .clone()
         .try_into()
         .map_err(|_| "direct_conversation_binding_invalid")?;
@@ -590,7 +590,7 @@ pub(crate) async fn project_canonical_direct_binding(
         digest,
         soland_services::identity::DirectConversationCoordinatesRecord {
             participants_unordered: payload
-                .participants_unordered
+                .unordered_participant_ids
                 .iter()
                 .map(ToString::to_string)
                 .collect(),

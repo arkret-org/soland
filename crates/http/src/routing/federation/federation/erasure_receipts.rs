@@ -35,7 +35,7 @@ async fn submit(
         .map_err(|error| AppError::param_invalid(format!("Source-Service-ID invalid: {error}")))?;
     let key = required_header(req, "idempotency-key")?;
     let body = body.into_inner();
-    if body.package.receipt.issuer.as_str() != source {
+    if body.package.receipt.issuer_id.as_str() != source {
         return Err(AppError::capability_denied(
             "erasure receipt issuer must equal Source-Service-ID",
         )
@@ -95,7 +95,7 @@ async fn submit(
             .with_wire_code("erasure_receipt_proof_invalid")
         })?;
         issuer_signed |= crate::jws_verify::validate_verification_method_controller(
-            body.package.receipt.issuer.as_str(),
+            body.package.receipt.issuer_id.as_str(),
             proof.verification_method.as_str(),
         )
         .is_ok();
@@ -205,7 +205,7 @@ async fn get(
         .ok_or_else(|| AppError::not_found("erasure receipt not found"))?;
     let stored: StoredReceipt = serde_json::from_value(stored.response_body)
         .map_err(|error| AppError::internal(format!("stored erasure package: {error}")))?;
-    if source != stored.package.receipt.issuer.as_str()
+    if source != stored.package.receipt.issuer_id.as_str()
         && source != stored.acceptance.receiver_id.as_str()
         && stored
             .authorized_requester_id
@@ -303,7 +303,7 @@ async fn signed_acceptance(
         receipt_digest: package
             .computed_receipt_digest()
             .map_err(|error| AppError::internal(error.to_string()))?,
-        issuer_id: package.receipt.issuer.clone(),
+        issuer_id: package.receipt.issuer_id.clone(),
         receiver_id: arkret_identifiers::DidCoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(error.to_string()))?,
         accepted_at,

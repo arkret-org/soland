@@ -150,7 +150,7 @@ pub(super) async fn resolve_target(
     if !super::requester_proof::directory_requester_proofs_verified(
         state,
         &body.proofs,
-        body.requester.as_ref().map(DidCoreId::as_str),
+        body.requester_id.as_ref().map(DidCoreId::as_str),
         |proof| body.proof_binding_bytes(proof).ok(),
     )
     .await
@@ -377,7 +377,7 @@ fn realm_preview_from_directory_entry_with_alias(
             .filter(|count| *count > 0)
             .map(member_count_bucket),
         summary: entry.description.clone(),
-        owning_organizations: Vec::new(),
+        owning_organization_ids: Vec::new(),
         preview_ref: None,
         discoverability: Some(discoverability.to_owned()),
         history_access: None,
@@ -508,7 +508,7 @@ pub(super) fn organization_preview_from_value(
             .or_else(|| organization.get("verified"))
             .and_then(Value::as_bool),
         member_count: organization.get("member_count").and_then(Value::as_u64),
-        realms,
+        realm_ids: realms,
         realm_count,
         as_of,
         source_refs: organization_source_refs(organization),

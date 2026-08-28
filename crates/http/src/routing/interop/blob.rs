@@ -729,14 +729,14 @@ async fn blob_presign(
         expires_at,
     )?;
     let base = state.config().public_base_url.trim_end_matches('/');
-    let url = format!(
+    let uri = format!(
         "{base}/_arkret/self/blob/get?blob_ref={}&purpose={}&presign={}",
         query_escape(blob_ref),
         query_escape(purpose),
         query_escape(&presign.token),
     );
     json_ok(BlobPresignOutcome {
-        url,
+        uri,
         expires_at,
         purpose: Some(purpose.to_owned()),
         realm_id: presign.payload.realm_id,

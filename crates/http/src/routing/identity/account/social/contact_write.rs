@@ -230,7 +230,7 @@ pub(crate) fn validate_request_receipt_cryptography(
     }
     verify_contact_service_signature(
         state,
-        receipt.core.issuer.as_str(),
+        receipt.core.issuer_id.as_str(),
         &receipt.signature,
         &json!({"core": receipt.core, "receipt_digest": receipt.receipt_digest}),
         evidence_field,
@@ -288,7 +288,7 @@ async fn validate_request_acceptance_receipt(
         .peer_id
         .as_deref()
         .unwrap_or_else(|| state.service_id());
-    if receipt.core.issuer.as_str() != expected_issuer {
+    if receipt.core.issuer_id.as_str() != expected_issuer {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "request_receipt.core.issuer does not match the durable request source service",
@@ -855,7 +855,7 @@ fn sorted_pair(left: &DidCoreId, right: &DidCoreId) -> [DidCoreId; 2] {
 
 fn normal_basis(receipt: &RequestAcceptanceReceipt) -> Result<(ContactRound, Hash), AppError> {
     let contact_round = ContactRound::Normal {
-        sorted_pair_members: sorted_pair(
+        sorted_pair_member_ids: sorted_pair(
             &receipt.core.holder.contact_actor_id(),
             &receipt.core.peer.contact_actor_id(),
         ),
@@ -896,7 +896,7 @@ fn sign_request_receipt(
             &json!({"event_ref": event.event_id, "event_digest": request_digest}),
         )?,
         accepted_at: now(),
-        issuer: arkret_identifiers::DidCoreId::new(state.service_id().clone())
+        issuer_id: arkret_identifiers::DidCoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?,
     };
     let receipt_digest = contact_hash(
@@ -983,7 +983,7 @@ fn signed_current_proof(
     let fresh_until = now() + chrono::Duration::minutes(10);
     let unsigned = json!({
         "contact_round_id": contact_round_id,
-        "issuer": issuer,
+        "issuer_id": issuer,
         "terminal": terminal,
         "head_event_ref": event.event_id,
         "accepted_frontier": [event.event_id.clone()],
@@ -992,7 +992,7 @@ fn signed_current_proof(
     });
     Ok(ContactCurrentProof {
         contact_round_id,
-        issuer,
+        issuer_id: issuer,
         terminal,
         head_event_ref: event.event_id.clone(),
         accepted_frontier: vec![event.event_id.clone()],
@@ -1458,7 +1458,7 @@ async fn plan_contact_commit(
                 "response_event_ref": event.event_id,
                 "outgoing_slot_absence_digest": outgoing_slot_absence_digest,
                 "accepted_at": arkret_canonical::format_timestamp_canonical(accepted_at),
-                "issuer": issuer,
+                "issuer_id": issuer,
             });
             let response_receipt = NormalResponseAcceptanceReceipt {
                 contact_round_id: contact_round_id.clone(),
@@ -1466,7 +1466,7 @@ async fn plan_contact_commit(
                 response_event_ref: event.event_id.clone(),
                 outgoing_slot_absence_digest,
                 accepted_at,
-                issuer,
+                issuer_id: issuer,
                 signature: service_signature(state, &unsigned_receipt)?,
             };
             let current_proof =
@@ -1583,7 +1583,7 @@ async fn plan_contact_commit(
                         request_receipt: request_receipt.clone(),
                         reject_event_ref: event.event_id.clone(),
                         accepted_at,
-                        issuer,
+                        issuer_id: issuer,
                         signature: service_signature(state, &unsigned)?,
                     },
                 },
@@ -1624,13 +1624,13 @@ async fn plan_contact_commit(
             if let Some(bundle) = record.contact_round_evidence.as_mut() {
                 bundle
                     .current_proofs
-                    .retain(|proof| proof.issuer != current_proof.issuer);
+                    .retain(|proof| proof.issuer_id != current_proof.issuer_id);
                 bundle.current_proofs.push(current_proof.clone());
                 bundle.current_proofs.sort_by(|left, right| {
-                    left.issuer
+                    left.issuer_id
                         .as_str()
                         .as_bytes()
-                        .cmp(right.issuer.as_str().as_bytes())
+                        .cmp(right.issuer_id.as_str().as_bytes())
                 });
             }
             projection = Some(soland_services::events::CommitContactProjection {
@@ -1687,13 +1687,13 @@ async fn plan_contact_commit(
             if let Some(bundle) = record.contact_round_evidence.as_mut() {
                 bundle
                     .current_proofs
-                    .retain(|proof| proof.issuer != current_proof.issuer);
+                    .retain(|proof| proof.issuer_id != current_proof.issuer_id);
                 bundle.current_proofs.push(current_proof.clone());
                 bundle.current_proofs.sort_by(|left, right| {
-                    left.issuer
+                    left.issuer_id
                         .as_str()
                         .as_bytes()
-                        .cmp(right.issuer.as_str().as_bytes())
+                        .cmp(right.issuer_id.as_str().as_bytes())
                 });
             }
             projection = Some(soland_services::events::CommitContactProjection {
@@ -1731,7 +1731,9 @@ fn imported_contact_continuity_history(
     evidence: &ContactContinuityEvidence,
     previous_terminal_contact_round_id: Option<&Hash>,
 ) -> Result<Vec<ContactRoundEvidenceBundle>, AppError> {
-    if evidence.uncompressed_tail.is_empty() || evidence.uncompressed_tail.len() > 64 {
+    if evidence.uncompressed_tail_entries.is_empty()
+        || evidence.uncompressed_tail_entries.len() > 64
+    {
         return Err(AppError::new(
             ErrorCode::ContinuityEvidenceUnavailable,
             "portable Contact continuity tail is unavailable",
@@ -1768,7 +1770,7 @@ fn imported_contact_continuity_history(
             .with_status(StatusCode::CONFLICT)
         })?;
     }
-    let mut tail = evidence.uncompressed_tail.clone();
+    let mut tail = evidence.uncompressed_tail_entries.clone();
     if previous_terminal_contact_round_id != Some(&tail[0].contact_round_id) {
         return Err(AppError::new(
             ErrorCode::ContinuityInvalid,
@@ -2045,7 +2047,7 @@ fn validate_lineage_head(
     let proof_issuers = bundle
         .current_proofs
         .iter()
-        .map(|proof| proof.issuer.as_str())
+        .map(|proof| proof.issuer_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     if bundle.contact_round_id != *contact_round_id
         || bundle.current_proofs.len() != 2

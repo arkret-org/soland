@@ -1331,7 +1331,10 @@ pub(super) async fn list_sidecars(
     for record in records {
         items.push(sidecar_view(state, &record, &session.device_id).await?);
     }
-    json_ok(AgentSidecarList { items, next_cursor })
+    json_ok(AgentSidecarList {
+        agent_sidecar_views: items,
+        next_cursor,
+    })
 }
 
 #[cfg(test)]

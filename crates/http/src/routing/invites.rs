@@ -639,7 +639,7 @@ async fn enqueue_remote_invite_delivery(
             delivery: FederationDeliveryRecord {
                 id: enqueued_id.clone(),
                 peer_id: recipient_id.clone(),
-                peer_url: Some(entry.base_url.trim_end_matches('/').to_owned()),
+                peer_url: Some(entry.base_uri.trim_end_matches('/').to_owned()),
                 endpoint: PEER_INVITES_ENDPOINT.to_owned(),
                 idempotency_key: delivery.idempotency_key.clone(),
                 payload_json,
@@ -948,14 +948,14 @@ fn merge_invite_delivery_cell(
     received_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<InviteDelivery, AppError> {
     let mut cell = existing.unwrap_or_else(|| InviteDelivery::new(received_at, Vec::new()));
-    cell.entries.retain(|candidate| {
+    cell.delivery_entries.retain(|candidate| {
         invite_delivery_entry_active(candidate, received_at)
             && candidate.invite_id != new_entry.invite_id
     });
-    cell.entries.push(new_entry);
-    if cell.entries.len() > InviteDelivery::MAX_ENTRIES {
-        let excess = cell.entries.len() - InviteDelivery::MAX_ENTRIES;
-        cell.entries.drain(0..excess);
+    cell.delivery_entries.push(new_entry);
+    if cell.delivery_entries.len() > InviteDelivery::MAX_ENTRIES {
+        let excess = cell.delivery_entries.len() - InviteDelivery::MAX_ENTRIES;
+        cell.delivery_entries.drain(0..excess);
     }
     cell.updated_at = received_at;
     cell.validate()
@@ -1395,7 +1395,7 @@ fn evaluate_invite_receive(
     // §5 — `denied_subjects` hit: MUST drop and force opaque disclosure so
     // the blocklist cannot leak through the response side channel.
     if policy
-        .denied_subjects
+        .denied_subject_ids
         .iter()
         .any(|did| did.as_str() == inviter_id)
     {
@@ -1614,7 +1614,7 @@ pub(crate) fn evaluate_contact_receive(
     };
 
     if policy
-        .denied_subjects
+        .denied_subject_ids
         .iter()
         .any(|did| did.as_str() == requester)
         || principal_service_blocked(policy, constraints, source_id)
@@ -1812,11 +1812,11 @@ fn principal_service_blocked(
     source_id: &str,
 ) -> bool {
     policy
-        .denied_principal_services
+        .denied_principal_ids
         .iter()
         .any(|did| did.as_str() == source_id)
         || constraints
-            .and_then(|constraints| constraints.denied_principal_services.as_ref())
+            .and_then(|constraints| constraints.denied_principal_ids.as_ref())
             .is_some_and(|blocked| did_in_list(source_id, blocked))
 }
 
@@ -1825,13 +1825,13 @@ fn principal_service_trusted(
     constraints: Option<&ReceivePolicyConstraints>,
     source_id: &str,
 ) -> bool {
-    if !policy.trusted_principal_services.is_empty()
-        && !did_in_list(source_id, &policy.trusted_principal_services)
+    if !policy.trusted_principal_ids.is_empty()
+        && !did_in_list(source_id, &policy.trusted_principal_ids)
     {
         return false;
     }
     constraints
-        .and_then(|constraints| constraints.trusted_principal_services.as_ref())
+        .and_then(|constraints| constraints.trusted_principal_ids.as_ref())
         .is_none_or(|trusted| did_in_list(source_id, trusted))
 }
 
@@ -1876,7 +1876,7 @@ fn handle_claim_evidence_valid(
     if handle_claim.handle.as_ref() != Some(handle) {
         return false;
     }
-    if handle_claim.subject.as_ref().map(DidCoreId::as_str) != Some(subject) {
+    if handle_claim.subject_id.as_ref().map(DidCoreId::as_str) != Some(subject) {
         return false;
     }
     if handle_claim.binding_state != Some(HandleBindingState::Verified) {
@@ -1948,13 +1948,13 @@ fn handle_claim_issuer_allowed(
     constraints: Option<&ReceivePolicyConstraints>,
     handle_claim: &HandleClaim,
 ) -> bool {
-    if !policy.trusted_handle_issuers.is_empty()
-        && !handle_claim_matches_did_list(handle_claim, &policy.trusted_handle_issuers)
+    if !policy.trusted_handle_issuer_ids.is_empty()
+        && !handle_claim_matches_did_list(handle_claim, &policy.trusted_handle_issuer_ids)
     {
         return false;
     }
     constraints
-        .and_then(|constraints| constraints.trusted_handle_issuers.as_ref())
+        .and_then(|constraints| constraints.trusted_handle_issuer_ids.as_ref())
         .is_none_or(|trusted| handle_claim_matches_did_list(handle_claim, trusted))
 }
 
@@ -1962,15 +1962,8 @@ fn handle_claim_matches_did_list(handle_claim: &HandleClaim, trusted: &[DidCoreI
     if trusted.is_empty() {
         return false;
     }
-    if handle_claim
-        .issuer_id
-        .as_ref()
-        .is_some_and(|issuer| trusted.iter().any(|did| did == issuer))
-    {
-        return true;
-    }
     handle_claim
-        .issuer
+        .issuer_id
         .as_ref()
         .is_some_and(|issuer| trusted.iter().any(|did| did == issuer))
 }
@@ -1980,14 +1973,14 @@ fn resolved_by_allowed(
     constraints: Option<&ReceivePolicyConstraints>,
     resolved_by: Option<&DidCoreId>,
 ) -> bool {
-    if !policy.trusted_directory_services.is_empty()
+    if !policy.trusted_directory_ids.is_empty()
         && !resolved_by
-            .is_some_and(|did| policy.trusted_directory_services.iter().any(|v| v == did))
+            .is_some_and(|did| policy.trusted_directory_ids.iter().any(|v| v == did))
     {
         return false;
     }
     constraints
-        .and_then(|constraints| constraints.trusted_directory_services.as_ref())
+        .and_then(|constraints| constraints.trusted_directory_ids.as_ref())
         .is_none_or(|trusted| {
             !trusted.is_empty()
                 && resolved_by.is_some_and(|did| trusted.iter().any(|candidate| candidate == did))
@@ -2366,8 +2359,8 @@ mod invite_locator_security_tests {
             at,
         )
         .expect("merge into a cell holding only a stale entry");
-        assert_eq!(merged.entries.len(), 1);
-        assert_eq!(merged.entries[0].invite_token, "fresh-token");
+        assert_eq!(merged.delivery_entries.len(), 1);
+        assert_eq!(merged.delivery_entries[0].invite_token, "fresh-token");
         assert_eq!(merged.updated_at, at);
         assert_eq!(merged.schema, InviteDelivery::SCHEMA);
         merged.validate().expect("merged cell validates");
@@ -2393,10 +2386,10 @@ mod invite_locator_security_tests {
         new_entry.invite_id = invite_id_for(u8::MAX);
         let merged =
             merge_invite_delivery_cell(Some(full), new_entry, at).expect("merge into a full cell");
-        assert_eq!(merged.entries.len(), InviteDelivery::MAX_ENTRIES);
+        assert_eq!(merged.delivery_entries.len(), InviteDelivery::MAX_ENTRIES);
         assert_eq!(
             merged
-                .entries
+                .delivery_entries
                 .last()
                 .map(|entry| entry.invite_token.as_str()),
             Some("fresh-token")

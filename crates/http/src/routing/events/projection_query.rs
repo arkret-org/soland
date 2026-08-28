@@ -950,7 +950,7 @@ async fn list_space_container_projections(
     let total = total_count(spaces.len())?;
     json_ok(ProjectionSpaceList {
         realm_id: response_realm_id,
-        spaces,
+        projection_space_rows: spaces,
         total,
         next_cursor: None,
         has_more: false,
@@ -1039,7 +1039,7 @@ async fn list_strand_projections(
     let total = total_count(strands.len())?;
     json_ok(ProjectionStrandList {
         realm_id: response_realm_id,
-        strands,
+        projection_strand_rows: strands,
         total,
         next_cursor: None,
         has_more: false,
@@ -1408,7 +1408,7 @@ async fn get_document_projection(
         versions,
         relations,
         comments,
-        cursor_presence: Vec::new(),
+        cursor_presence_entries: Vec::new(),
         frontier: None,
     })
 }
@@ -1476,7 +1476,7 @@ async fn list_morph_projections(
     let total = total_count(morphs.len())?;
     json_ok(ProjectionMorphList {
         realm_id: response_realm_id,
-        morphs,
+        projection_morph_rows: morphs,
         total,
         next_cursor: None,
         has_more: false,

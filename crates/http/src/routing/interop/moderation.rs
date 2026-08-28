@@ -84,7 +84,7 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
         != Some(
             arkret_models_collaboration::events_payloads::moderation::ModerationReportProvenance::MimiFacade,
         )
-        || typed_payload.source_provider.is_none()
+        || typed_payload.source_provider_id.is_none()
     {
         return Err(AppError::param_invalid(
             "service-authored moderation report requires MIMI facade provenance",
@@ -97,7 +97,7 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
             .unwrap_or_else(|| arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             });
-    let reporter = typed_payload.reporter.as_str().to_owned();
+    let reporter = typed_payload.reporter_id.as_str().to_owned();
     let target_ref = typed_payload.target_ref.clone();
     // Actor frontier and CBA basis are producer-signed envelope members, so
     // they are resolved before authoring rather than written onto an Event that
@@ -1221,7 +1221,7 @@ async fn moderation_report(
         validate_signed_moderation_report_safety(
             state,
             event.realm_id.as_str(),
-            payload.reporter.as_str(),
+            payload.reporter_id.as_str(),
             payload.target_ref.as_str(),
             payload.effective_scope.as_ref(),
             &evidence_package,
@@ -1257,7 +1257,7 @@ async fn moderation_report(
         report_id,
         status:
             arkret_models_collaboration::governance::moderation::ModerationReportStatus::Submitted,
-        routed_to: Vec::new(),
+        routed_to_ids: Vec::new(),
     })
 }
 

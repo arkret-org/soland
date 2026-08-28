@@ -430,9 +430,9 @@ pub fn describe(
         let openid_configuration = format!("{issuer}/.well-known/openid-configuration");
         methods.push(AuthMethod {
             method: AuthMethodKind::Oidc,
-            issuer: Some(issuer.clone()),
-            provider: None,
-            openid_configuration: Some(openid_configuration.clone()),
+            issuer_uri: Some(issuer.clone()),
+            provider_uri: None,
+            openid_configuration_uri: Some(openid_configuration.clone()),
             // Registered OAuth `client_id` (coauth keys clients by ULID). The
             // web client uses this verbatim; absent it, it has no valid id to
             // fall back to and coauth answers `could not find client`.
@@ -450,7 +450,7 @@ pub fn describe(
     // this fact; auth_metadata MUST NOT carry a second unregistered copy.
     let auth_metadata = AuthMetadata {
         account_authority: Some(AccountAuthority {
-            origin: account_origin,
+            origin_uri: account_origin,
             gate_account_base,
         }),
         methods,
@@ -577,11 +577,11 @@ pub fn describe(
         ],
         transport_bindings: vec![
             arkret_models_discovery::TransportBinding::HttpJson {
-                base_url: format!("{}/", public_base_url.trim_end_matches('/')),
+                base_uri: format!("{}/", public_base_url.trim_end_matches('/')),
                 extension_profile_required: (),
             },
             arkret_models_discovery::TransportBinding::Tus {
-                base_url: format!(
+                base_uri: format!(
                     "{}/_arkret/self/blob/resumable",
                     public_base_url.trim_end_matches('/')
                 ),
@@ -933,19 +933,19 @@ mod tests {
                 .contains(&json!("ak.feature.blob.resumable_upload.tus.v1"))
         );
         assert_eq!(
-            value["privacy_derivation"]["push_target_id"]["derivation_profile"],
+            value["privacy_derivation"]["push_target_id_derivation"]["derivation_profile"],
             json!("ak.push_target_id.hmac_sha256.v1")
         );
         assert_eq!(
-            value["privacy_derivation"]["push_target_id"]["secret_scope"],
+            value["privacy_derivation"]["push_target_id_derivation"]["secret_scope"],
             json!("per_service")
         );
         assert_eq!(
-            value["privacy_derivation"]["push_target_id"]["salt_rotation_seconds"],
+            value["privacy_derivation"]["push_target_id_derivation"]["salt_rotation_seconds"],
             json!(30 * 24 * 60 * 60)
         );
         assert_eq!(
-            value["privacy_derivation"]["push_target_id"]["input_binding"],
+            value["privacy_derivation"]["push_target_id_derivation"]["input_binding"],
             json!([
                 "recipient_did_core_id",
                 "did_core_id",

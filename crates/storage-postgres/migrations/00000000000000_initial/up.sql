@@ -2052,7 +2052,7 @@ CREATE SEQUENCE public.notification_projection_position_seq AS bigint;
 
 CREATE TABLE public.notifications (
     id uuid PRIMARY KEY,
-    recipient_id text NOT NULL,
+    recipient_actor_id text NOT NULL,
     realm_id text,
     -- Still `text`, and deliberately not yet an Event identity column: the
     -- producers in `routing/events/notify.rs` and `reducer/apply_messages.rs`
@@ -2084,9 +2084,9 @@ CREATE TABLE public.notifications (
     CONSTRAINT notifications_projection_action_check CHECK ((projection_action IS NULL) OR (projection_action = ANY (ARRAY['upsert'::text, 'remove'::text])))
 );
 
-CREATE INDEX notifications_recipient_idx ON public.notifications USING btree (recipient_id, created_at DESC);
+CREATE INDEX notifications_recipient_idx ON public.notifications USING btree (recipient_actor_id, created_at DESC);
 
-CREATE UNIQUE INDEX notifications_event_source_key ON public.notifications USING btree (recipient_id, source_event_id, notification_kind) WHERE (source_event_id IS NOT NULL);
+CREATE UNIQUE INDEX notifications_event_source_key ON public.notifications USING btree (recipient_actor_id, source_event_id, notification_kind) WHERE (source_event_id IS NOT NULL);
 
 CREATE UNIQUE INDEX notifications_account_artifact_key ON public.notifications USING btree (controller_account_id, recipient_id, source_account_artifact_kind, source_account_artifact_id) WHERE (controller_account_id IS NOT NULL);
 
@@ -2151,7 +2151,7 @@ BEGIN
     END IF;
 
     INSERT INTO public.notifications (
-        id, recipient_id, controller_account_id, recipient_id,
+        id, recipient_actor_id, controller_account_id, recipient_id,
         source_account_artifact_kind, source_account_artifact_id,
         priority, state, projection_action,
         projection_data, created_at, updated_at

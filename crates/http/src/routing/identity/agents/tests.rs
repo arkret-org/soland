@@ -274,7 +274,7 @@ fn key_pair_request_body(
             verification_method: verification_method.clone(),
             signature_algorithm: arkret_models_collaboration::agent_operations::AgentRuntimeKeyAlgorithm::Ed25519,
             challenge: pairing_request_id.clone(),
-            audience: arkret_wire::DidCoreId::new(service_id).unwrap(),
+            audience_id: arkret_wire::DidCoreId::new(service_id).unwrap(),
             created_at,
             expires_at,
             runtime_key_binding_digest,

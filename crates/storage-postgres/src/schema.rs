@@ -883,7 +883,7 @@ diesel::table! {
 diesel::table! {
     notifications (id) {
         id -> Uuid,
-        recipient_id -> Text,
+        recipient_actor_id -> Text,
         realm_id -> Nullable<Text>,
         source_event_id -> Nullable<Text>,
         controller_account_id -> Nullable<Uuid>,

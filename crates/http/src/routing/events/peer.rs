@@ -119,7 +119,7 @@ async fn peer_principal_genesis(
     if let Some(authority_url) = state.config().account_authority_url.as_deref()
         && request
             .identity_creation_control_proof
-            .origin
+            .origin_uri
             .trim_end_matches('/')
             != authority_url.trim_end_matches('/')
     {
@@ -1101,7 +1101,7 @@ async fn peer_events_frontier(
     .map_err(|error| AppError::internal(format!("frontier signature: {error}")))?;
     json_ok(EventsFrontierFederationPeerState {
         realm_id,
-        heads: typed_heads,
+        head_ids: typed_heads,
         frontier_root,
         auth_state_root,
         policy_frontier_root,
@@ -1109,7 +1109,7 @@ async fn peer_events_frontier(
         actor_seq_upper_bounds: typed_actor_frontier,
         witness_receipts: Vec::new(),
         observed_at: arkret_canonical::format_timestamp_canonical(observed_at),
-        issuer: service_id,
+        issuer_id: service_id,
         signature: signature
             .as_object()
             .expect("frontier signature must be an object")
@@ -1234,12 +1234,12 @@ impl PeerEventsQueryParts {
         let kind_filter = parse_kind_filter(filters.as_ref())?;
         let parts = Self {
             realms: body
-                .realms
+                .realm_ids
                 .into_iter()
                 .map(|realm| realm.into_string())
                 .collect(),
             actors: body
-                .actors
+                .actor_ids
                 .into_iter()
                 .map(|actor| actor.into_string())
                 .collect(),
@@ -1814,7 +1814,7 @@ async fn peer_events_query_response(
     };
     if query_realms.is_empty() {
         return json_ok(EventsQueryOutcome {
-            events: Vec::new(),
+            event_read_rows: Vec::new(),
             snapshot_bootstrap: None,
             next_cursor: None,
             prev_cursor: None,
@@ -1886,7 +1886,7 @@ async fn peer_events_query_response(
         .map(|event| event.map(Into::into))
         .collect::<Result<Vec<_>, _>>()?;
     json_ok(EventsQueryOutcome {
-        events,
+        event_read_rows: events,
         snapshot_bootstrap: None,
         next_cursor,
         prev_cursor,

@@ -1741,7 +1741,7 @@ async fn events_frontier(
     let aggregate = ActorAggregateFrontierView {
         kind: ActorAggregateFrontierKind::ActorAggregate,
         actor_id,
-        realms,
+        realm_actor_frontier_views: realms,
     };
     aggregate
         .validate()

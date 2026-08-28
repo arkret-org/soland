@@ -58,7 +58,7 @@ fn canonical_policy_server_value(payload: &Value) -> Option<Value> {
 /// initial write against the never-written cell.
 fn policy_server_move_basis(preconditions: &[arkret_wire::Precondition]) -> Option<Value> {
     preconditions.iter().find_map(|precondition| {
-        if precondition.cell.as_str() != POLICY_SERVER_CELL_ID {
+        if precondition.cell_id.as_str() != POLICY_SERVER_CELL_ID {
             return None;
         }
         if precondition.predicate.op != arkret_wire::cba::PredicateOp::HeadEq {
@@ -113,13 +113,13 @@ fn join_policy_server_cell_bottom(
         .expect("sibling conflict requires an accepted head");
     let bottom = arkret_wire::Bottom {
         kind: arkret_wire::BottomKind::Conflict,
-        cells: vec![
+        cell_ids: vec![
             arkret_identifiers::CellRef::new(POLICY_SERVER_CELL_ID.to_owned())
                 .expect("policy-server cell id is a valid CellRef"),
         ],
         move_ids: Vec::new(),
         seal_view: None,
-        heads: vec![
+        head_ids: vec![
             serde_json::json!({
                 "move_id": head.operation_id.as_str(),
                 "value": head.value,

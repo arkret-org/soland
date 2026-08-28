@@ -56,7 +56,7 @@ pub fn did_resolver_policy(config: &AppConfig) -> ResolverPolicy {
     ResolverPolicy {
         allowed_methods: config.did_resolver_allow_methods.clone(),
         default_principal_method: Some("did:webvh:".to_owned()),
-        trust_roots: Vec::new(),
+        trust_root_ids: Vec::new(),
         ttl: Some(chrono::Duration::days(7)),
         fail_mode: ResolverFailMode::FailClosed,
     }
@@ -944,7 +944,7 @@ mod tests {
             arkret_wire::ServiceKind::IdentityRegistry,
             vec!["ak.operation_bundle.identity_registry.describe.v1".to_owned()],
             vec![arkret_models_discovery::TransportBinding::HttpJson {
-                base_url: "https://webvh-provider.example/".to_owned(),
+                base_uri: "https://webvh-provider.example/".to_owned(),
                 extension_profile_required: (),
             }],
         );

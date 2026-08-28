@@ -1122,7 +1122,8 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
             ));
         }
         if token.write.claims.high_water_cursor != request.high_water_cursor
-            || token.write.claims.ordered_ack_entries.len() != request.ack_entries.len()
+            || token.write.claims.ordered_ack_entries.len()
+                != request.history_response_ack_entries.len()
         {
             return Err(PersistenceError::Conflict(
                 "duplicate_conflict: history ack request differs from token".to_owned(),
@@ -1133,7 +1134,7 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
             .claims
             .ordered_ack_entries
             .iter()
-            .zip(&request.ack_entries)
+            .zip(&request.history_response_ack_entries)
         {
             let ack = ack_binding(ack_entry);
             let kind = match claim.kind {
@@ -1182,7 +1183,7 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
             ));
         }
         let mut released_bytes = 0_u64;
-        for ack_entry in &request.ack_entries {
+        for ack_entry in &request.history_response_ack_entries {
             let sequence = ack_entry.sequence();
             let row = stream
                 .responses

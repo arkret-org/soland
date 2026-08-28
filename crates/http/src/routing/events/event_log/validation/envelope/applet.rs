@@ -206,7 +206,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
             "authorization_ref grant does not cover this Event resource",
         ));
     }
-    if !actor_is_managed && grant.issuer.as_str() != actor_id {
+    if !actor_is_managed && grant.issuer_id.as_str() != actor_id {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "authorization_ref_scope",
@@ -525,7 +525,12 @@ pub(super) fn applet_actor_matches_exact_namespace(
     record: &crate::routing::extensions::applet_bridge::AppletRecord,
     actor_id: &str,
 ) -> bool {
-    record.package.namespaces.actors.iter().any(|entry| {
+    record
+        .package
+        .namespaces
+        .actor_namespace_entries
+        .iter()
+        .any(|entry| {
         !applet_namespace_pattern_is_wildcard(&entry.pattern)
             && arkret_models_integration::namespace_pattern_matches(
                 arkret_models_integration::AppletNamespaceDomain::Actors,

@@ -926,8 +926,9 @@ fn registration_challenge(
         did: organization_did.clone(),
         purpose: ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1.to_owned(),
         nonce: challenge_hash[..32].to_owned(),
-        audience: DidCoreId::new("ak:did_core:webvh:zService").expect("valid service core id"),
-        origin: "https://service.example/".to_owned(),
+        audience_id: DidCoreId::new("ak:did_core:webvh:zService")
+            .expect("valid service core id"),
+        origin_uri: "https://service.example/".to_owned(),
         trust_domain: arkret_wire::TrustDomainId::new("ak:trust_domain:service.example")
             .expect("valid service trust domain"),
         local_admin_subject_id: local_admin_subject_id.clone(),

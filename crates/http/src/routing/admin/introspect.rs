@@ -115,7 +115,7 @@ fn admin_grant_from_introspection_outcome(
         )
         .with_status(StatusCode::FORBIDDEN)
     })?;
-    let principal_id = grant.subject;
+    let principal_id = grant.subject_id;
 
     Ok(SessionGrantIntrospection {
         active: true,
@@ -131,7 +131,7 @@ fn admin_grant_from_introspection_outcome(
         audit_context: serde_json::json!({
             "source": arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
             "grant_id": grant.id.as_str(),
-            "audience": grant.audience,
+            "audience": grant.audience_id,
         }),
     })
 }
@@ -223,7 +223,7 @@ pub(crate) async fn introspect_admin_scopes(
     let request = SessionGrantIntrospectRequestBody::ByJwt(
         arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectByJwt {
             grant_jwt: token,
-            audience: Some(audience),
+            audience_id: Some(audience),
             proof: None,
         },
     );

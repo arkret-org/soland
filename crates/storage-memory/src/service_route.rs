@@ -540,7 +540,7 @@ mod tests {
                 previous_record_digest: None,
                 current_record_url: "https://route.example/_arkret/open/services/id/resolution"
                     .to_owned(),
-                base_url: "https://route.example/".to_owned(),
+                base_uri: "https://route.example/".to_owned(),
                 describe_digest: hash('d'),
                 issued_at,
                 refresh_after: issued_at + Duration::minutes(5),
@@ -717,7 +717,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .record
-            .base_url = "https://conflicting-route.example/".to_owned();
+            .base_uri = "https://conflicting-route.example/".to_owned();
         let conflicting_artifact_digest = Hash::new(
             arkret_canonical::canonical_sha256(
                 transport_conflict

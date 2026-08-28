@@ -448,7 +448,7 @@ async fn device_generation_event_seal_context(
         generation_fence,
         bootstrap_required_delta,
         bootstrap_device_id: bootstrap_payload.device_id.as_str().to_owned(),
-        bootstrap_device_public_key: bootstrap_payload.device_public_key.to_string(),
+        bootstrap_device_public_key: bootstrap_payload.device_public_key_did.to_string(),
     }))
 }
 

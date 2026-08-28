@@ -1431,7 +1431,7 @@ mod tests {
                 arkret_wire::PrincipalServerAdmissionProof::producer_proof_digest(&producer)
                     .unwrap(),
             producer_verification_method: producer.verification_method.clone(),
-            producer_signing_key: arkret_wire::DidKey::new("did:key:z6Mkhfixture").unwrap(),
+            producer_signing_key_did: arkret_wire::DidKey::new("did:key:z6Mkhfixture").unwrap(),
             producer_signer_resolution_evidence_ref: None,
             producer_signer_resolution_evidence_digest: None,
             signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
@@ -2434,7 +2434,7 @@ mod tests {
             principal_server_id: "ak:did_core:web:soland.example".to_owned(),
         };
         let namespaces = arkret_models_integration::AppletWireNamespaces {
-            realms: vec![arkret_models_integration::AppletNamespaceEntry::exclusive(
+            realm_namespace_entries: vec![arkret_models_integration::AppletNamespaceEntry::exclusive(
                 "bridge:workspace:*",
             )],
             ..Default::default()

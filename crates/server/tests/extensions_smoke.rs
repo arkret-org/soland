@@ -2344,11 +2344,11 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         bot_actor_id,
         vec!["arkret.portal".to_owned()],
         AppletWireNamespaces {
-            actors: vec![AppletNamespaceEntry::exclusive(format!(
+            actor_namespace_entries: vec![AppletNamespaceEntry::exclusive(format!(
                 "did:webvh:*:managed-{}.applet.example:webvh:*",
                 safe_did_token(namespace)
             ))],
-            handles: vec![AppletNamespaceEntry::exclusive(namespace.to_owned())],
+            handle_namespace_entries: vec![AppletNamespaceEntry::exclusive(namespace.to_owned())],
             ..Default::default()
         },
     );
@@ -2375,7 +2375,7 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         "ak.profile.applet_service.v1".to_owned(),
     ];
     package.endpoint_policy = AppletEndpointPolicy {
-        endpoints: [
+        endpoint_entries: [
             "/_arkret/edge/applet/transactions",
             "/_arkret/edge/applet/actors/{actor_id}",
             "/_arkret/edge/applet/realms/{realm_id_or_alias}",

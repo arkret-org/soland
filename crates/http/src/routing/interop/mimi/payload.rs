@@ -310,7 +310,7 @@ pub(super) fn mimi_provider_directory_value(
             content_draft: "draft-ietf-mimi-content-08".to_owned(),
             room_policy_draft: "draft-ietf-mimi-room-policy-03".to_owned(),
             identifier_draft: "draft-kohbrok-mimi-identifiers-01".to_owned(),
-            base_url: mimi_base_url(state),
+            base_uri: mimi_base_url(state),
             provider_id: MimiUri::new(mimi_provider_id(state)).map_err(|error| {
                 AppError::internal(format!("derived MIMI provider id is invalid: {error}"))
             })?,

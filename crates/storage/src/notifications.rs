@@ -15,7 +15,7 @@ pub struct RecipientNotificationRecord {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AccountNotificationDeltaWrite {
     pub delta: NotificationDelta,
-    pub recipient_id: DidCoreId,
+    pub recipient_actor_id: DidCoreId,
     pub controller_account_id: String,
     pub recipient_id: DidCoreId,
     pub source_account_artifact_id: String,

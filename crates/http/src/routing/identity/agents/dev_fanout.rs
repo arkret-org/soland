@@ -262,7 +262,7 @@ pub(super) fn validate_durable_agent_lifecycle(
                 ))
             })?;
     let matches_transition = derived.len() == 1
-        && derived[0].cell.as_str() == expected_cell
+        && derived[0].cell_id.as_str() == expected_cell
         && matches!(
             &derived[0].op,
             arkret_wire::cba::ProjectedOp::Direct(op)

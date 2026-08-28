@@ -1372,7 +1372,7 @@ async fn continue_issue_terminal_receipt(
         .with_wire_code("security_transaction_failed_precondition"));
     }
     let recovery_device_key = crate::routing::identity::device_signing::decode_ed25519_key(
-        authorization_payload.device_public_key.as_str(),
+        authorization_payload.device_public_key_did.as_str(),
         "multibase",
     )
     .map_err(|error| {

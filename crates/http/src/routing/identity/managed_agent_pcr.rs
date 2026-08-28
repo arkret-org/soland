@@ -644,7 +644,7 @@ fn validate_agent_pcr_genesis_effect(
     let expected = arkret_bootstrap::expected_realm_create_cells(&event);
     let actual: std::collections::BTreeSet<String> = derived
         .iter()
-        .map(|write| write.cell.as_str().to_owned())
+        .map(|write| write.cell_id.as_str().to_owned())
         .collect();
     if derived.len() != expected.len() || actual != expected {
         return Err(failed_precondition(
@@ -1022,10 +1022,10 @@ mod tests {
         assert!(
             derived
                 .iter()
-                .any(|write| write.cell.as_str() == arkret_wire::REALM_CREATE_CELL)
+                .any(|write| write.cell_id.as_str() == arkret_wire::REALM_CREATE_CELL)
         );
         assert!(!derived.iter().any(|write| {
-            write.cell.as_str() == format!("ak:cell:ak.component.realm.create.v1:{PCR}")
+            write.cell_id.as_str() == format!("ak:cell:ak.component.realm.create.v1:{PCR}")
         }));
 
         let mut unprojectable = envelope;

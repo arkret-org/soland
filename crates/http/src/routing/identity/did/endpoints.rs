@@ -39,7 +39,7 @@ pub(crate) async fn identity_describe(
         .map(|bundle| (*bundle).to_owned())
         .collect();
     description.transport_bindings = vec![arkret_models_discovery::TransportBinding::HttpJson {
-        base_url: format!("{}/", state.config().public_base_url.trim_end_matches('/')),
+        base_uri: format!("{}/", state.config().public_base_url.trim_end_matches('/')),
         extension_profile_required: (),
     }];
     description.supported_features.clear();

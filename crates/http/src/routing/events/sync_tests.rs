@@ -585,7 +585,7 @@ fn roster_body(audience: &str) -> SyncRequestBody {
         catchup: None,
         filter: Some(
             arkret_models_collaboration::sync_frames::client_sync::SyncFilter {
-                realms: Vec::new(),
+                realm_ids: Vec::new(),
                 timeline_limit: None,
                 lazy_load_members: false,
                 include_redundant_members: false,
@@ -1793,7 +1793,7 @@ async fn membership_only_projection_advances_incremental_roster() {
         "ak.member.state(join) must wake account sync and expose the joined member without a timeline message"
     );
     assert_eq!(
-        value["realms"][ROSTER_REALM]["members_limited"],
+        value["realms"][ROSTER_REALM]["member_roster_entries_limited"],
         json!(false)
     );
 }

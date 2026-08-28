@@ -257,9 +257,9 @@ impl NotaryWorker {
                         .resolve_projected_cell_write(&effect, realm_id, &BTreeMap::new())
                         .map_err(|error| NotaryError::Construction(error.to_string()))?
                     {
-                        if resolved.cell == notary_cell {
+                        if resolved.cell_id == notary_cell {
                             event_ops.push(IssuedOp {
-                                issuer: event.actor_id.clone(),
+                                issuer_id: event.actor_id.clone(),
                                 op: SealedOp::from_projection(digest.clone(), &resolved),
                             });
                         }
@@ -282,15 +282,18 @@ impl NotaryWorker {
             arkret_wire::notary::NotaryValue::SingleSigner { signer, .. } if signer == local => {
                 Ok(SigningLeaseSlotResolution::Ready("single_chain".to_owned()))
             }
-            arkret_wire::notary::NotaryValue::OpenSet { members } if members.contains(&local) => {
+            arkret_wire::notary::NotaryValue::OpenSet {
+                notary_signer_descriptors,
+            } if notary_signer_descriptors.contains(&local) => {
                 Ok(SigningLeaseSlotResolution::Ready(self.service_id.clone()))
             }
             arkret_wire::notary::NotaryValue::Mixed { signer, .. } if signer == local => {
                 Ok(SigningLeaseSlotResolution::Ready("single_chain".to_owned()))
             }
             arkret_wire::notary::NotaryValue::Mixed {
-                recovery_members, ..
-            } if recovery_members.contains(&local) => {
+                recovery_notary_signer_descriptors,
+                ..
+            } if recovery_notary_signer_descriptors.contains(&local) => {
                 let recovery_window_ms = envelope
                     .get("revocation_freshness_window_ms")
                     .and_then(serde_json::Value::as_u64);
@@ -332,7 +335,9 @@ impl NotaryWorker {
         let local = local_notary_signer_descriptor(state)?;
         let locally_signable = match &profile {
             arkret_wire::notary::NotaryValue::SingleSigner { signer, .. } => signer == &local,
-            arkret_wire::notary::NotaryValue::OpenSet { members } => members.contains(&local),
+            arkret_wire::notary::NotaryValue::OpenSet {
+                notary_signer_descriptors,
+            } => notary_signer_descriptors.contains(&local),
             arkret_wire::notary::NotaryValue::Mixed { signer, .. } => signer == &local,
             arkret_wire::notary::NotaryValue::Threshold { .. } => false,
         };
@@ -378,9 +383,9 @@ impl NotaryWorker {
                         .resolve_projected_cell_write(&effect, realm_id, &BTreeMap::new())
                         .map_err(|error| NotaryError::Construction(error.to_string()))?
                     {
-                        if resolved.cell == notary_cell {
+                        if resolved.cell_id == notary_cell {
                             projected.push(IssuedOp {
-                                issuer: event.actor_id.clone(),
+                                issuer_id: event.actor_id.clone(),
                                 op: SealedOp::from_projection(digest.clone(), &resolved),
                             });
                         }
@@ -494,9 +499,9 @@ impl NotaryWorker {
                         .map_err(|error| NotaryError::Construction(error.to_string()))?
                     {
                         event_ops.push((
-                            resolved.cell.clone(),
+                            resolved.cell_id.clone(),
                             IssuedOp {
-                                issuer: event.actor_id.clone(),
+                                issuer_id: event.actor_id.clone(),
                                 op: SealedOp::from_projection(digest.clone(), &resolved),
                             },
                         ));
@@ -683,23 +688,23 @@ impl NotaryWorker {
                     if leaves.is_empty() {
                         for effect in &effects {
                             let cell_ops =
-                                staged_anchor_ops.entry(effect.cell.clone()).or_default();
+                                staged_anchor_ops.entry(effect.cell_id.clone()).or_default();
                             cell_ops.push(IssuedOp {
-                                issuer: event.actor_id.clone(),
+                                issuer_id: event.actor_id.clone(),
                                 op: SealedOp::from_projection(digest.clone(), effect),
                             });
                             let binding = state
                                 .projections()
-                                .resolve_cell(realm_id, &effect.cell)
+                                .resolve_cell(realm_id, &effect.cell_id)
                                 .map_err(|error| {
                                     NotaryError::Store(format!(
                                         "resolve staged bootstrap cell {}: {error}",
-                                        effect.cell
+                                        effect.cell_id
                                     ))
                                 })?;
                             staged_anchor_state.insert(
-                                effect.cell.clone(),
-                                join_cell(binding.lattice.as_ref(), &effect.cell, cell_ops),
+                                effect.cell_id.clone(),
+                                join_cell(binding.lattice.as_ref(), &effect.cell_id, cell_ops),
                             );
                         }
                     }
@@ -895,9 +900,9 @@ impl NotaryWorker {
             .flat_map(|entry| {
                 entry.effects.iter().map(|effect| {
                     (
-                        effect.cell.clone(),
+                        effect.cell_id.clone(),
                         IssuedOp {
-                            issuer: entry.actor_id.clone(),
+                            issuer_id: entry.actor_id.clone(),
                             op: SealedOp::from_projection(entry.event_digest.clone(), effect),
                         },
                     )
@@ -1074,9 +1079,9 @@ impl NotaryWorker {
                         .map_err(|error| NotaryError::Construction(error.to_string()))?
                     {
                         event_ops.push((
-                            resolved.cell.clone(),
+                            resolved.cell_id.clone(),
                             IssuedOp {
-                                issuer: event.actor_id.clone(),
+                                issuer_id: event.actor_id.clone(),
                                 op: SealedOp::from_projection(digest.clone(), &resolved),
                             },
                         ));
@@ -1209,7 +1214,9 @@ impl NotaryWorker {
         match notary_value {
             arkret_wire::notary::NotaryValue::SingleSigner { signer, .. } => Ok(signer == local),
             arkret_wire::notary::NotaryValue::Threshold { .. } => Ok(false),
-            arkret_wire::notary::NotaryValue::OpenSet { members } => Ok(members.contains(&local)),
+            arkret_wire::notary::NotaryValue::OpenSet {
+                notary_signer_descriptors,
+            } => Ok(notary_signer_descriptors.contains(&local)),
             arkret_wire::notary::NotaryValue::Mixed { signer, .. } => Ok(signer == local),
         }
     }
@@ -1430,11 +1437,11 @@ impl NotaryWorker {
         for entry in accepted {
             for effect in &entry.effects {
                 let aop = IssuedOp {
-                    issuer: entry.actor_id.clone(),
+                    issuer_id: entry.actor_id.clone(),
                     op: SealedOp::from_projection(entry.event_digest.clone(), effect),
                 };
                 candidate_ops
-                    .entry(effect.cell.clone())
+                    .entry(effect.cell_id.clone())
                     .or_default()
                     .push(aop);
             }
@@ -2392,7 +2399,7 @@ mod tests {
         // before the strict (`deny_unknown_fields`) `NotaryValue` parse.
         let mut v = serde_json::to_value(arkret_wire::NotaryValue::Threshold {
             threshold: 2,
-            members: vec![
+            notary_signer_descriptors: vec![
                 test_signer_descriptor("did:web:a.example", 1),
                 test_signer_descriptor("did:web:b.example", 2),
                 test_signer_descriptor("did:web:c.example", 3),
@@ -2410,10 +2417,12 @@ mod tests {
             serde_json::from_value(notary_value_wire(&v)).unwrap();
         match parsed {
             arkret_wire::notary::NotaryValue::Threshold {
-                threshold, members, ..
+                threshold,
+                notary_signer_descriptors,
+                ..
             } => {
                 assert_eq!(threshold, 2);
-                assert_eq!(members.len(), 3);
+                assert_eq!(notary_signer_descriptors.len(), 3);
             }
             other => panic!("expected Threshold, got {other:?}"),
         }
@@ -2436,7 +2445,7 @@ mod tests {
         let event_ops = vec![(
             notary_cell.clone(),
             IssuedOp {
-                issuer: crate::test_actor_id_str("did:web:alice.example"),
+                issuer_id: crate::test_actor_id_str("did:web:alice.example"),
                 op: SealedOp::new(
                     move_id.clone(),
                     arkret_wire::cba::LatticeOp {
@@ -2465,7 +2474,7 @@ mod tests {
         let remote_event_ops = vec![(
             notary_cell,
             IssuedOp {
-                issuer: crate::test_actor_id_str("did:web:alice.example"),
+                issuer_id: crate::test_actor_id_str("did:web:alice.example"),
                 op: SealedOp::new(
                     move_id,
                     arkret_wire::cba::LatticeOp {

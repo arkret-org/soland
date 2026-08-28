@@ -53,7 +53,7 @@ pub(crate) async fn validate_device_authorization_binding(
                         .is_some_and(|candidate| {
                             candidate.principal_id == payload.principal_id
                                 && candidate.device_id == payload.device_id
-                                && candidate.device_public_key == payload.device_public_key
+                                && candidate.device_public_key_did == payload.device_public_key_did
                                 && candidate.hpke_key == payload.hpke_key
                                 && candidate.algorithms == payload.algorithms
                                 && candidate.authorization_binding_kind

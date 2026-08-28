@@ -244,7 +244,7 @@ fn caller_signed_policy_server_payload(
 /// requires. Whether the guarded value actually matches is admission's check.
 fn require_head_eq_precondition(field: &str, event: &arkret_wire::Event) -> Result<(), AppError> {
     let guarded = event.preconditions.iter().any(|precondition| {
-        precondition.cell.as_str() == POLICY_SERVER_CELL
+        precondition.cell_id.as_str() == POLICY_SERVER_CELL
             && precondition.predicate.op == arkret_wire::PredicateOp::HeadEq
     });
     if guarded {

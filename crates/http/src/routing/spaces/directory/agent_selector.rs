@@ -31,10 +31,10 @@ pub(super) async fn selector_resolution_allowed(
     let Some(session) = session else {
         return false;
     };
-    if request.requester.as_str() != session.actor {
+    if request.requester_id.as_str() != session.actor {
         return false;
     }
-    if request.requester.as_str() == controller_subject {
+    if request.requester_id.as_str() == controller_subject {
         return true;
     }
     let Some(realm_id) = request.realm_id.as_ref().map(RealmId::as_str) else {
@@ -51,7 +51,7 @@ pub(super) fn selector_claim_audience(
         .realm_id
         .as_ref()
         .map(RealmId::as_str)
-        .unwrap_or_else(|| request.requester.as_str())
+        .unwrap_or_else(|| request.requester_id.as_str())
         .to_owned()
 }
 
@@ -80,11 +80,11 @@ pub(super) fn signed_agent_selector_claim(
     }
     let unsigned = json!({
         "schema": SchemaId::AGENT_SELECTOR_CLAIM_V1,
-        "controller_subject": controller_subject.as_str(),
+        "controller_subject_id": controller_subject.as_str(),
         "agent_slug": agent_slug,
-        "subject": subject.as_str(),
-        "issuer": issuer.as_str(),
-        "issuer_id": service_id.as_str(),
+        "subject_id": subject.as_str(),
+        "issuer_id": issuer.as_str(),
+        "vouching_id": service_id.as_str(),
         "binding_state": "verified",
         "visibility": "restricted",
         "audience": audience,
@@ -123,11 +123,11 @@ pub(super) fn signed_agent_selector_claim(
     };
     Ok(AgentSelectorClaim {
         schema: SchemaId::AGENT_SELECTOR_CLAIM_V1.to_owned(),
-        controller_subject,
+        controller_subject_id: controller_subject,
         agent_slug: agent_slug.to_owned(),
-        subject,
-        issuer,
-        issuer_id: Some(service_id),
+        subject_id: subject,
+        issuer_id: issuer,
+        vouching_id: Some(service_id),
         binding_state: HandleBindingState::Verified,
         visibility: HandleVisibility::Restricted,
         audience: Some(selector_claim_audience(request)),
@@ -160,7 +160,7 @@ pub(super) async fn resolve_agent_selector(
     if !super::requester_proof::directory_requester_proofs_verified(
         state,
         &body.proofs,
-        Some(body.requester.as_str()),
+        Some(body.requester_id.as_str()),
         |proof| body.proof_binding_bytes(proof).ok(),
     )
     .await
@@ -215,8 +215,8 @@ pub(super) async fn resolve_agent_selector(
     let selector_claim =
         signed_agent_selector_claim(state, controller_subject, &body.agent_slug, subject, &body)?;
     let response = DirectoryAgentSelectorResolutionOutcome {
-        controller_subject: selector_claim.controller_subject.clone(),
-        subject: selector_claim.subject.clone(),
+        controller_subject_id: selector_claim.controller_subject_id.clone(),
+        subject_id: selector_claim.subject_id.clone(),
         agent_slug: body.agent_slug,
         verified: true,
         expires_at: selector_claim.expires_at,

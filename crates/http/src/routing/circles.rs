@@ -325,7 +325,10 @@ async fn list_circles(
         .filter(|c| circle_directory_visible_to_actor(&projection, c, &session.actor))
         .map(|c| circle_view_from_projection(&projection, c, &session.actor))
         .collect::<Result<Vec<_>, _>>()?;
-    json_ok(CircleList { realm_id, circles })
+    json_ok(CircleList {
+        realm_id,
+        circle_views: circles,
+    })
 }
 
 #[endpoint(

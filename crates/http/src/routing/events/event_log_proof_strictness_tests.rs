@@ -686,9 +686,9 @@ async fn applet_registration_requires_realm_admin() {
         .upsert_projected_grant(arkret_policy::authz::authority::Grant {
             grant_id: "ak:grant:AalTkzF6-XUhCWUy_4kjpVH_cPBfisUGqmSjxDr-hwGb".to_owned(),
             realm_id: realm_id.to_owned(),
-            issuer: arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
+            issuer_id: arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
             issuer_principal_server_id: arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
-            subject: arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
+            subject_id: arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
             subject_principal_server_id: Some(
                 arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
             ),
@@ -1357,12 +1357,12 @@ fn data_event_grant(grant_id: &str, action: &str, revoked: bool) -> crate::authz
     crate::authz::Grant {
         grant_id: grant_id.to_owned(),
         realm_id: DATA_EVENT_REALM.to_owned(),
-        issuer: arkret_wire::DidCoreId::new("ak:did_core:web:owner.example".to_owned()).unwrap(),
+        issuer_id: arkret_wire::DidCoreId::new("ak:did_core:web:owner.example".to_owned()).unwrap(),
         issuer_principal_server_id: arkret_wire::DidCoreId::new(
             DATA_EVENT_PRINCIPAL_SERVER.to_owned(),
         )
         .unwrap(),
-        subject: arkret_wire::DidCoreId::new(DATA_EVENT_ACTOR.to_owned()).unwrap(),
+        subject_id: arkret_wire::DidCoreId::new(DATA_EVENT_ACTOR.to_owned()).unwrap(),
         subject_principal_server_id: Some(
             arkret_wire::DidCoreId::new(DATA_EVENT_PRINCIPAL_SERVER.to_owned()).unwrap(),
         ),
@@ -2040,7 +2040,7 @@ fn strictness_issued(
     op: arkret_state::lattice::SealedOp,
 ) -> arkret_state::lattice::ordered_log::IssuedOp {
     arkret_state::lattice::ordered_log::IssuedOp {
-        issuer: crate::test_actor_id_str("did:webvh:z6mkfixture:alice.example"),
+        issuer_id: crate::test_actor_id_str("did:webvh:z6mkfixture:alice.example"),
         op,
     }
 }

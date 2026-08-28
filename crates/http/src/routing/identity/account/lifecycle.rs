@@ -768,7 +768,7 @@ fn build_erasure_receipt_package(
             account_status_record_id: triggering_status_record_id.clone(),
         },
         schema: ErasureReceipt::SCHEMA.to_owned(),
-        issuer,
+        issuer_id: issuer,
         subject,
         scope,
         outcome: ErasureOutcome::Completed,

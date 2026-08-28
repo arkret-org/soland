@@ -1706,13 +1706,13 @@ fn load_receive_policy_constraints(
                 .map(|domain| domain.to_ascii_lowercase())
                 .collect()
         });
-    let trusted_handle_issuers =
+    let trusted_handle_issuer_ids =
         env_did_csv_cap(values, "SOLAND_RECEIVE_POLICY_TRUSTED_HANDLE_ISSUERS")?;
-    let trusted_directory_services =
+    let trusted_directory_ids =
         env_did_csv_cap(values, "SOLAND_RECEIVE_POLICY_TRUSTED_DIRECTORY_SERVICES")?;
-    let trusted_principal_services =
+    let trusted_principal_ids =
         env_did_csv_cap(values, "SOLAND_RECEIVE_POLICY_TRUSTED_PRINCIPAL_SERVICES")?;
-    let denied_principal_services =
+    let denied_principal_ids =
         env_did_csv_cap(values, "SOLAND_RECEIVE_POLICY_BLOCKED_PRINCIPAL_SERVICES")?;
     let accepted_subject_did_methods =
         env_csv_cap(values, "SOLAND_RECEIVE_POLICY_ACCEPTED_SUBJECT_DID_METHODS");
@@ -1725,10 +1725,10 @@ fn load_receive_policy_constraints(
         || unknown_invites_max_behavior.is_some()
         || disclosure_max.is_some()
         || allowed_handle_domains.is_some()
-        || trusted_handle_issuers.is_some()
-        || trusted_directory_services.is_some()
-        || trusted_principal_services.is_some()
-        || denied_principal_services.is_some()
+        || trusted_handle_issuer_ids.is_some()
+        || trusted_directory_ids.is_some()
+        || trusted_principal_ids.is_some()
+        || denied_principal_ids.is_some()
         || accepted_subject_did_methods.is_some();
     if !has_any_constraint {
         return Ok(None);
@@ -1745,10 +1745,10 @@ fn load_receive_policy_constraints(
             unknown_invites_max_behavior,
             disclosure_max,
             allowed_handle_domains,
-            trusted_handle_issuers,
-            trusted_directory_services,
-            trusted_principal_services,
-            denied_principal_services,
+            trusted_handle_issuer_ids,
+            trusted_directory_ids,
+            trusted_principal_ids,
+            denied_principal_ids,
             accepted_subject_did_methods,
         },
     ))

@@ -685,7 +685,7 @@ async fn revoke_install_endpoint(
                 status: AppletRevokeSagaStatus::InProgress,
                 steps,
                 revoked_refs: Vec::new(),
-                rejected: Vec::new(),
+                rejections: Vec::new(),
             };
             persist_revoke_execution(
                 state,
@@ -720,7 +720,7 @@ async fn revoke_install_endpoint(
         }
         let effect_ref = outcome.steps[index].effect_ref.clone();
         outcome
-            .rejected
+            .rejections
             .retain(|item| item.requested_scope.as_deref() != Some(effect_ref.as_str()));
         outcome.steps[index].reason_code = None;
         match crate::routing::events::event_log::submit_initial_event_submission(
@@ -748,7 +748,7 @@ async fn revoke_install_endpoint(
                 outcome.steps[index].reason_code =
                     Some(arkret_wire::ReasonCode::from_wire(&error.code));
                 outcome
-                    .rejected
+                    .rejections
                     .push(arkret_models_integration::AppletRejectedItem {
                         requested_scope: Some(outcome.steps[index].effect_ref.clone()),
                         reason_code: arkret_wire::ReasonCode::from_wire(&error.code),
@@ -1727,7 +1727,7 @@ async fn resolve_realm_endpoint(
         .ok_or_else(|| AppError::param_missing("realm_id_or_alias path segment required"))?;
     let record = applet_records(state).await?.into_iter().find(|record| {
         record.portal_realm_id.as_str() == realm_id_or_alias
-            || record.package.namespaces.realms.iter().any(|claim| {
+            || record.package.namespaces.realm_namespace_entries.iter().any(|claim| {
                 namespace_pattern_matches(
                     AppletNamespaceDomain::Realms,
                     &claim.pattern,
@@ -1891,7 +1891,7 @@ async fn third_party_locations_endpoint(
     if let Some(location) = location
         && let Some(record) = applet_records(state).await?.into_iter().find(|record| {
             record.portal_realm_id.as_str() == location
-                || record.package.namespaces.realms.iter().any(|claim| {
+                || record.package.namespaces.realm_namespace_entries.iter().any(|claim| {
                     namespace_pattern_matches(
                         AppletNamespaceDomain::Realms,
                         &claim.pattern,

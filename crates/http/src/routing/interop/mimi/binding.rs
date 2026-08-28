@@ -368,10 +368,10 @@ pub(super) fn mimi_room_projection(
                 AppError::internal(format!("MIMI bound Strand id invalid: {error}"))
             })?,
         },
-        hub_provider: arkret_wire::DidCoreId::new(state.service_id().clone())
+        hub_provider_id: arkret_wire::DidCoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(format!("MIMI hub id invalid: {error}")))?,
         local_provider_role: MimiLocalProviderRole::Hub,
-        follower_providers: None,
+        follower_provider_ids: None,
         mls_group_id: Some(
             MlsGroupId::new(format!("mls:{room_id}"))
                 .map_err(|error| AppError::internal(format!("MIMI group id invalid: {error}")))?,

@@ -140,7 +140,7 @@ pub(super) async fn membership_builder_resolve_allowed(
     ) {
         return false;
     }
-    match request.requester.as_ref().map(DidCoreId::as_str) {
+    match request.requester_id.as_ref().map(DidCoreId::as_str) {
         Some(requester) if requester == session.actor => {}
         _ => return false,
     }
@@ -161,7 +161,7 @@ pub(super) async fn contact_request_resolve_allowed(
         return false;
     }
     matches!(
-        request.requester.as_ref().map(DidCoreId::as_str),
+        request.requester_id.as_ref().map(DidCoreId::as_str),
         Some(requester) if requester == session.actor
     )
 }
@@ -195,7 +195,7 @@ pub(super) fn resolve_handle_audience(
                 .as_ref()
                 .map(|realm_id| realm_id.as_str().to_owned())
         })
-        .or_else(|| body.requester.as_ref().map(|did| did.as_str().to_owned()))
+        .or_else(|| body.requester_id.as_ref().map(|did| did.as_str().to_owned()))
         .unwrap_or_else(|| default_audience.to_owned())
 }
 
@@ -212,6 +212,9 @@ pub(super) fn local_handle_resolution_outcome(
     Ok(DirectoryHandleResolutionOutcome {
         principal_id: DidCoreId::new(principal_id).map_err(|err| {
             AppError::param_invalid(format!("invalid resolved actor principal id: {err}"))
+        })?,
+        subject_id: handle_claim.subject_id.clone().ok_or_else(|| {
+            AppError::internal("resolved handle claim is missing subject_id")
         })?,
         handle: canonical_handle,
         verified: true,
@@ -397,7 +400,7 @@ async fn validate_remote_handle_resolution(
     if claim.handle_canonical() != Some(lookup.canonical.as_str()) {
         return Err("remote handle claim handle mismatch".to_owned());
     }
-    if claim.subject.as_ref() != Some(&outcome.principal_id) {
+    if claim.subject_id.as_ref() != Some(&outcome.principal_id) {
         return Err("remote handle claim subject mismatch".to_owned());
     }
     if claim
@@ -511,7 +514,7 @@ pub(super) async fn resolve_handle(
     if !super::requester_proof::directory_requester_proofs_verified(
         state,
         &body.proofs,
-        body.requester.as_ref().map(DidCoreId::as_str),
+        body.requester_id.as_ref().map(DidCoreId::as_str),
         |proof| body.proof_binding_bytes(proof).ok(),
     )
     .await
@@ -557,7 +560,7 @@ pub(super) async fn resolve_handle(
             if !crate::routing::invites::directory_handle_claim_resolve_allowed(
                 state,
                 body.intent,
-                body.requester.as_ref(),
+                body.requester_id.as_ref(),
                 &principal_id,
                 recipient_id,
                 state.service_id().as_str(),
@@ -688,9 +691,9 @@ pub(super) async fn signed_handle_claim(
         schema: SchemaId::HANDLE_CLAIM_V1.to_owned(),
         handle: Some(handle),
         handle_aliases: vec![handle_alias],
-        subject: Some(subject),
-        issuer: Some(signer_id.clone()),
+        subject_id: Some(subject),
         issuer_id: Some(signer_id),
+        vouching_id: None,
         binding_state: Some(HandleBindingState::Verified),
         claim_kind: Some(HandleClaimKind::HandleBinding),
         visibility: Some(HandleVisibility::Public),
@@ -759,14 +762,14 @@ pub(super) async fn list_handles_for_subject(
     if !super::requester_proof::directory_requester_proofs_verified(
         state,
         &body.proofs,
-        body.requester.as_ref().map(DidCoreId::as_str),
+        body.requester_id.as_ref().map(DidCoreId::as_str),
         |proof| body.proof_binding_bytes(proof).ok(),
     )
     .await
     {
         return Err(AppError::not_found("not found"));
     }
-    let subject_did = body.subject.clone();
+    let subject_did = body.subject_id.clone();
     let subject = subject_did.as_str().to_owned();
     if subject.is_empty() {
         return Err(AppError::param_missing("subject is required"));
@@ -785,7 +788,7 @@ pub(super) async fn list_handles_for_subject(
         "operation": arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_LIST_HANDLES_FOR_SUBJECT_V1,
         "realm_id": body.realm_id.as_ref(),
         "intent": body.intent.as_deref(),
-        "requester": body.requester.as_ref(),
+        "requester_id": body.requester_id.as_ref(),
         "as_of": body.as_of,
     }))
     .map_err(|error| AppError::internal(format!("cursor filter digest failed: {error}")))?;
@@ -812,7 +815,7 @@ pub(super) async fn list_handles_for_subject(
                 .realm_id
                 .as_ref()
                 .map(RealmId::as_str)
-                .or_else(|| body.requester.as_ref().map(DidCoreId::as_str))
+                .or_else(|| body.requester_id.as_ref().map(DidCoreId::as_str))
                 .unwrap_or(state.service_id().as_str());
             let default_domain = service_handle_domain(state);
             if let Some(lookup) = handle_lookup(handle, &default_domain)
@@ -842,7 +845,7 @@ pub(super) async fn list_handles_for_subject(
                 .realm_id
                 .as_ref()
                 .map(RealmId::as_str)
-                .or_else(|| body.requester.as_ref().map(DidCoreId::as_str))
+                .or_else(|| body.requester_id.as_ref().map(DidCoreId::as_str))
                 .unwrap_or(state.service_id().as_str());
             crate::routing::identity::account::local_account_primary_handle_claim(
                 state, &subject, audience,
@@ -901,7 +904,7 @@ pub(super) async fn list_handles_for_subject(
         .transpose()
         .map_err(|err| AppError::internal(format!("primary handle is invalid: {err}")))?;
     let response = DirectorySubjectHandleList {
-        subject: subject_did,
+        subject_id: subject_did,
         claims,
         primary_handle,
         as_of,
@@ -1060,7 +1063,7 @@ pub(super) fn subject_handle_claim_visible(
     if let Some(realm_id) = request.realm_id.as_ref() {
         allowed_audiences.insert(realm_id.as_str());
     }
-    if let Some(requester) = request.requester.as_ref() {
+    if let Some(requester) = request.requester_id.as_ref() {
         allowed_audiences.insert(requester.as_str());
     }
     allowed_audiences.contains(audience)

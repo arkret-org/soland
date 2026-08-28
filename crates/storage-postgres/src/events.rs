@@ -210,7 +210,7 @@ impl TryFrom<EventBatchReceiptRow> for EventBatchReceipt {
                 "receipt", &row.id,
             )))
             .map_err(invalid)?,
-            issuer: serde_json::from_value(Value::String(row.issuer)).map_err(invalid)?,
+            issuer_id: serde_json::from_value(Value::String(row.issuer)).map_err(invalid)?,
             scope: serde_json::from_value(row.scope).map_err(invalid)?,
             events: serde_json::from_value(row.events).map_err(invalid)?,
             created_at: row.created_at,
@@ -714,7 +714,7 @@ async fn insert_event_batch_receipt(
     .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
         receipt.receipt_id.as_str(),
     ))
-    .bind::<Text, _>(receipt.issuer.as_str())
+    .bind::<Text, _>(receipt.issuer_id.as_str())
     .bind::<Jsonb, _>(scope)
     .bind::<Jsonb, _>(events)
     .bind::<Timestamptz, _>(arkret_canonical::normalize_timestamp_canonical(

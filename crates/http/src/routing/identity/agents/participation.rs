@@ -175,6 +175,6 @@ async fn load_agent_participation_outcome(
     }
     Ok(AgentParticipationOutcome {
         agent_id: agent_id.to_owned(),
-        entries,
+        agent_participation_entries: entries,
     })
 }

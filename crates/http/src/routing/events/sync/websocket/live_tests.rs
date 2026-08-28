@@ -515,7 +515,7 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
     )
     .expect("the live-tested deployment advertises its WebSocket binding");
     let arkret_models_discovery::TransportBinding::Websocket {
-        base_url: advertised_base_url,
+        base_uri: advertised_base_url,
         max_channels,
         ..
     } = advertised
@@ -637,10 +637,10 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
         WebSocketClientFrame::open(
             "events-1",
             &WebSocketOpenParameters::Events(WebSocketEventsOpenParameters {
-                realms: Some(vec![
+                realm_ids: Some(vec![
                     arkret_identifiers::RealmId::new(realm_id_str.clone()).unwrap(),
                 ]),
-                actors: Some(vec![
+                actor_ids: Some(vec![
                     arkret_identifiers::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
                         .unwrap(),
                 ]),

@@ -109,7 +109,7 @@ impl SolandAuthzEngine {
         let mut count = 0usize;
         let mut grants = self.grants.lock();
         for grant in grants.values_mut() {
-            if grant.subject.as_str() == subject
+            if grant.subject_id.as_str() == subject
                 && grant
                     .subject_principal_server_id
                     .as_ref()
@@ -158,7 +158,7 @@ impl SolandAuthzEngine {
         snapshot
             .iter()
             .filter(|g| {
-                g.subject.as_str() == subject
+                g.subject_id.as_str() == subject
                     && g.subject_principal_server_id
                         .as_ref()
                         .map(arkret_wire::DidCoreId::as_str)
@@ -188,7 +188,7 @@ impl SolandAuthzEngine {
         snapshot
             .iter()
             .filter(|g| {
-                g.subject.as_str() == subject
+                g.subject_id.as_str() == subject
                     && g.subject_principal_server_id
                         .as_ref()
                         .map(arkret_wire::DidCoreId::as_str)
@@ -263,7 +263,7 @@ impl SolandAuthzEngine {
             .filter(|g| {
                 !g.revoked
                     && g.realm_id == realm_id
-                    && g.subject.as_str() == actor
+                    && g.subject_id.as_str() == actor
                     && g.subject_principal_server_id
                         .as_ref()
                         .map(arkret_wire::DidCoreId::as_str)
@@ -408,8 +408,8 @@ pub fn projected_grant_fixture(
         },
         realm_id,
         issuer_principal_server_id: arkret_wire::DidCoreId::new(issuer.clone()).unwrap(),
-        issuer: arkret_wire::DidCoreId::new(issuer).unwrap(),
-        subject: arkret_wire::DidCoreId::new(subject).unwrap(),
+        issuer_id: arkret_wire::DidCoreId::new(issuer).unwrap(),
+        subject_id: arkret_wire::DidCoreId::new(subject).unwrap(),
         subject_principal_server_id: None,
         resource,
         actions,
@@ -503,7 +503,7 @@ fn matching_request_has_revoked_upstream_grant(
 ) -> bool {
     snapshot.iter().any(|grant| {
         grant.realm_id == realm_id
-            && grant.subject.as_str() == actor
+            && grant.subject_id.as_str() == actor
             && grant
                 .subject_principal_server_id
                 .as_ref()

@@ -33,7 +33,7 @@ pub(crate) async fn build_sync_snapshot(
         .as_ref()
         .map(|filter| {
             filter
-                .realms
+                .realm_ids
                 .iter()
                 .map(|realm_id| realm_id.as_str())
                 .collect::<BTreeSet<_>>()
@@ -215,7 +215,7 @@ pub(crate) async fn build_sync_snapshot(
                 hero_ids: (!hero_ids.is_empty()).then_some(hero_ids),
             });
             entry.member_roster_entries = Some(roster);
-            entry.members_limited = Some(false);
+            entry.member_roster_entries_limited = Some(false);
             entry.unread_notifications = Some(arkret_models_collaboration::sync_frames::account_sync::AccountSubscribeUnreadCounts {
                 notification_count: Some(0),
                 highlight_count: Some(0),
@@ -510,7 +510,7 @@ async fn agent_signer_evidence_bundle_for_sync(
         arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceBundle {
             schema:
                 arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceBundle::SCHEMA,
-            evidence,
+            evidence_items: evidence,
         },
     )
 }
@@ -1137,8 +1137,8 @@ pub(crate) fn annotate_message_ordered_log_siblings(
         });
         siblings.push(
             arkret_models_collaboration::sync_frames::account_sync::OrderedLogSiblingDiagnostic {
-                cell: format!("ak:cell:ak.component.strand.discussion.timeline.v1:{strand_id}"),
-                issuer: arkret_wire::DidCoreId::new(issuer)
+                cell_id: format!("ak:cell:ak.component.strand.discussion.timeline.v1:{strand_id}"),
+                issuer_id: arkret_wire::DidCoreId::new(issuer)
                     .expect("accepted Event actor_id is a valid core DID"),
                 issuer_seq,
                 reason: "actor_seq_siblings".to_owned(),
@@ -1281,8 +1281,8 @@ async fn device_lists_for_actors(
     if session.is_none() {
         return (
             arkret_models_collaboration::sync_frames::account_sync::AccountSubscribeDeviceListChanges {
-                changed: Vec::new(),
-                left: Vec::new(),
+                changed_ids: Vec::new(),
+                left_ids: Vec::new(),
             },
             BTreeMap::new(),
         );
@@ -1338,8 +1338,8 @@ async fn device_lists_for_actors(
         .collect();
     (
         arkret_models_collaboration::sync_frames::account_sync::AccountSubscribeDeviceListChanges {
-            changed,
-            left,
+            changed_ids: changed,
+            left_ids: left,
         },
         positions,
     )

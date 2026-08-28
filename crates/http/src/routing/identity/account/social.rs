@@ -347,7 +347,7 @@ pub(crate) async fn list_contacts(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let contacts = contact_list_rows(state, &session.actor, records).await?;
     json_ok(ContactList {
-        contacts,
+        contact_list_rows: contacts,
         has_more: false,
         next_cursor: None,
     })
@@ -474,14 +474,14 @@ async fn contact_list_rows(
             .collect(),
             bidirectional_scopes: Vec::new(),
             effective_scopes: None,
-            peer_id: record
+            peer_host_id: record
                 .peer_id
                 .as_deref()
                 .and_then(|did| arkret_identifiers::DidCoreId::new(did.to_owned()).ok()),
             continuity_evidence:
                 crate::routing::identity::contact_federation::committed_continuity_evidence(&record),
             direct_conversation: None,
-            agents: Vec::new(),
+            contact_agent_projections: Vec::new(),
         };
         let candidate_order = (row_state, record.updated_at);
         if selected
@@ -587,10 +587,10 @@ async fn contact_list_rows(
     }
     out.retain(|row| !agent_peers.contains(row.peer.contact_actor_id().as_str()));
     for row in &mut out {
-        row.agents = agents_by_controller
+        row.contact_agent_projections = agents_by_controller
             .remove(row.peer.contact_actor_id().as_str())
             .unwrap_or_default();
-        row.agents.sort_by(|left, right| {
+        row.contact_agent_projections.sort_by(|left, right| {
             left.display_name
                 .as_deref()
                 .unwrap_or(left.agent_id.as_str())

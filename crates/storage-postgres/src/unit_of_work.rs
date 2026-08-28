@@ -530,7 +530,7 @@ async fn commit_contact_projection(
             PersistenceError::Internal(format!("invite_receive_policy payload encode: {error}"))
         })?;
         let denied_subjects = policy
-            .denied_subjects
+            .denied_subject_ids
             .iter()
             .map(|did| did.as_str().to_owned())
             .collect::<Vec<_>>();
@@ -1304,17 +1304,17 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     (
                         arkret_models_integration::AppletNamespaceDomain::Actors,
                         "actors",
-                        canonical_namespaces.actors,
+                        canonical_namespaces.actor_namespace_entries,
                     ),
                     (
                         arkret_models_integration::AppletNamespaceDomain::Realms,
                         "realms",
-                        canonical_namespaces.realms,
+                        canonical_namespaces.realm_namespace_entries,
                     ),
                     (
                         arkret_models_integration::AppletNamespaceDomain::Handles,
                         "handles",
-                        canonical_namespaces.handles,
+                        canonical_namespaces.handle_namespace_entries,
                     ),
                 ];
                 if !replacing && namespace_claims.iter().any(|(_, _, claims)| !claims.is_empty()) {

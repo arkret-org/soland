@@ -341,7 +341,7 @@ pub(super) async fn mimi_room_message(
         event_ref: Some(event_ref),
         delivery: MimiDelivery {
             status: MimiDeliveryStatus::Accepted,
-            delivered_to: Vec::new(),
+            delivered_to_ids: Vec::new(),
         },
         rejected: Vec::new(),
     })
@@ -633,7 +633,7 @@ async fn verify_mimi_key_material_request_proofs(
     state: &AppState,
     body: &MimiKeyMaterialRequestBody,
 ) -> Result<(), AppError> {
-    let issuer = body.requester.to_string();
+    let issuer = body.requester_id.to_string();
     for proof in &body.proofs {
         let binding = body.proof_binding_bytes(proof).map_err(|error| {
             AppError::param_invalid(format!(
@@ -694,7 +694,7 @@ async fn verify_mimi_identifier_query_proofs(
     source_id: &str,
 ) -> Result<(), AppError> {
     let issuer = body
-        .requester
+        .requester_id
         .as_ref()
         .map_or_else(|| source_id.to_owned(), ToString::to_string);
     for proof in &body.proofs {
@@ -967,7 +967,7 @@ pub(super) async fn mimi_identifiers_query(
                 .map_err(|_| AppError::param_invalid("identifier_commitment must be a hash"))?,
             matched: false,
             mimi_uri: None,
-            subject: None,
+            subject_id: None,
         });
     }
     let _receipt = mimi_receipt(
@@ -1107,11 +1107,11 @@ pub(super) async fn mimi_report_abuse(
             target_ref: target_ref.to_owned(),
             report_reason_code: canonical_reason.to_owned(),
             description,
-            reporter: arkret_wire::DidCoreId::new(reporter.to_owned()).map_err(|error| {
+            reporter_id: arkret_wire::DidCoreId::new(reporter.to_owned()).map_err(|error| {
                 AppError::param_invalid(format!("mimi report reporter invalid: {error}"))
             })?,
             provenance: Some(ModerationReportProvenance::MimiFacade),
-            source_provider: Some(arkret_wire::DidCoreId::new(source_provider).map_err(
+            source_provider_id: Some(arkret_wire::DidCoreId::new(source_provider).map_err(
                 |error| AppError::internal(format!("MIMI source provider id invalid: {error}")),
             )?),
             evidence_refs: None,
@@ -1137,7 +1137,7 @@ pub(super) async fn mimi_report_abuse(
         &body,
         json!({
             "e2ee_evidence_plaintext_required": false,
-            "routed_to": [format!("{}#moderation", state.service_id())],
+            "routed_to_ids": [format!("{}#moderation", state.service_id())],
             "moderation_event_emitted": true,
             "report_event_id": report_event_id,
             "reporter_resolution": "holder_claim_or_consent",
@@ -1146,7 +1146,7 @@ pub(super) async fn mimi_report_abuse(
     json_ok(MimiReportAbuseOutcome {
         report_id,
         status: MimiReportAbuseStatus::Queued,
-        routed_to,
+        routed_to_ids: routed_to,
     })
 }
 
@@ -1714,7 +1714,7 @@ mod consent_proof_tests {
         method: &arkret_wire::DidUrl,
     ) -> MimiKeyMaterialRequestBody {
         MimiKeyMaterialRequestBody {
-            requester: requester.clone(),
+            requester_id: requester.clone(),
             strand_id: fixture_strand_id(),
             device_id: DeviceId::new("ak:device:01964137-0000-7000-8000-000000000901".to_owned())
                 .unwrap(),
@@ -1784,7 +1784,7 @@ mod consent_proof_tests {
                 kind: MimiIdentifierKind::Handle,
                 identifier_commitment: Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
             }],
-            requester: Some(requester.clone()),
+            requester_id: Some(requester.clone()),
             privacy_profile: None,
             proofs: vec![unsigned_request_proof(state, method)],
         }

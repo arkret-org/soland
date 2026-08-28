@@ -551,7 +551,7 @@ fn or_set_add(tag: &str, value: Value) -> arkret_wire::LatticeOp {
 
 fn issued_op(issuer: &DidCoreId, move_id: &Hash, op: arkret_wire::LatticeOp) -> IssuedOp {
     IssuedOp {
-        issuer: issuer.clone(),
+        issuer_id: issuer.clone(),
         op: arkret_state::lattice::SealedOp::new(move_id.clone(), op),
     }
 }

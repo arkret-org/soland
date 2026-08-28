@@ -847,11 +847,11 @@ fn validate_identity_anchor_candidate_preconditions(
             .map_err(|error| unit_error(format!("invalid founding device descriptor: {error}")))?;
         let device_key_digest = format!(
             "sha256:{}",
-            sha256_hex(descriptor.device_public_key.as_bytes())
+            sha256_hex(descriptor.device_public_key_did.as_bytes())
         );
         let hpke_key_digest = format!("sha256:{}", sha256_hex(descriptor.hpke_key.as_bytes()));
         if descriptor.device_id != authorize.device_id
-            || descriptor.device_public_key != authorize.device_public_key
+            || descriptor.device_public_key_did != authorize.device_public_key_did
             || descriptor.hpke_key != authorize.hpke_key
             || descriptor.algorithms != authorize.algorithms
             || descriptor.founding_authorize_payload_digest != authorize_payload_digest
@@ -1260,7 +1260,7 @@ async fn validate_unit_relationships(
             })?;
         let device_key_digest = format!(
             "sha256:{}",
-            sha256_hex(descriptor.device_public_key.as_bytes())
+            sha256_hex(descriptor.device_public_key_did.as_bytes())
         );
         let hpke_key_digest = format!("sha256:{}", sha256_hex(descriptor.hpke_key.as_bytes()));
         let authorized_by_root = matches!(
@@ -1274,7 +1274,7 @@ async fn validate_unit_relationships(
             || !authorized_by_root
             || authorize.recovery_session_id.is_some()
             || descriptor.device_id != authorize.device_id
-            || descriptor.device_public_key != authorize.device_public_key
+            || descriptor.device_public_key_did != authorize.device_public_key_did
             || descriptor.hpke_key != authorize.hpke_key
             || descriptor.algorithms != authorize.algorithms
             || descriptor.founding_authorize_payload_digest != authorize_payload_digest
@@ -1723,8 +1723,8 @@ async fn identity_anchor_device_projection(
         .expect("device payload is an object");
     payload_object.insert("device_id".to_owned(), Value::String(device_id.to_owned()));
     payload_object.insert(
-        "device_public_key".to_owned(),
-        Value::String(typed.device_public_key.to_string()),
+        "device_public_key_did".to_owned(),
+        Value::String(typed.device_public_key_did.to_string()),
     );
     payload_object.insert(
         "hpke_key".to_owned(),
@@ -1812,7 +1812,7 @@ fn build_pcr_genesis_batch_receipt(
                 )
             },
         )?,
-        issuer: DidCoreId::new(state.service_id().clone()).map_err(|error| {
+        issuer_id: DidCoreId::new(state.service_id().clone()).map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -1832,7 +1832,7 @@ fn build_pcr_genesis_batch_receipt(
                 device_key_digest: descriptor.device_key_digest,
                 hpke_key_digest: descriptor.hpke_key_digest,
                 accepted_at: created_at,
-                audience: audience.clone(),
+                audience_id: audience.clone(),
             },
         ),
         events: vec![
@@ -1889,7 +1889,7 @@ async fn build_reanchor_batch_receipt(
                 )
             },
         )?,
-        issuer: DidCoreId::new(state.service_id().clone()).map_err(|error| {
+        issuer_id: DidCoreId::new(state.service_id().clone()).map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -2085,7 +2085,7 @@ mod tests {
                 "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
             )
             .unwrap(),
-            device_public_key: arkret_wire::NonEmptyString::new(
+            device_public_key_did: arkret_wire::NonEmptyString::new(
                 "did:key:z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ".to_owned(),
             )
             .unwrap(),
@@ -2119,10 +2119,10 @@ mod tests {
             descriptor_version: 1,
             device_id: payload.device_id.clone(),
             device_key_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(
-                payload.device_public_key.as_bytes(),
+                payload.device_public_key_did.as_bytes(),
             ))
             .unwrap(),
-            device_public_key: payload.device_public_key.clone(),
+            device_public_key_did: payload.device_public_key_did.clone(),
             device_key_algorithm: arkret_models_collaboration::events_payloads::FoundingDeviceKeyAlgorithm::Ed25519,
             device_key_purpose: arkret_models_collaboration::events_payloads::FoundingDeviceKeyPurpose::EventSigningAndMlsIdentity,
             hpke_key_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(

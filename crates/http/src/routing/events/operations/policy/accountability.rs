@@ -36,8 +36,8 @@ pub(super) async fn validate_accountability_profile_policy(
     merge_atomic_accountability_grants(&mut grants, operations, operation.realm_id.as_str());
     for issuer in accountable_principal_ids {
         let active = grants.values().any(|grant| {
-            grant.issuer.as_str() == issuer
-                && grant.subject.as_str() == principal_id
+            grant.issuer_id.as_str() == issuer
+                && grant.subject_id.as_str() == principal_id
                 && grant.validate_lifecycle_at(frozen_at).is_ok()
         });
         if !active {
@@ -103,7 +103,7 @@ async fn accountability_grants_at_frozen_basis(
         let Some(grant) = parse_accountability_grant(payload) else {
             continue;
         };
-        if !accountability_grant_envelope_signed_by(&record, grant.issuer.as_str())
+        if !accountability_grant_envelope_signed_by(&record, grant.issuer_id.as_str())
             || grant.proof.created_at > operation.created_at
         {
             continue;
@@ -144,7 +144,7 @@ fn merge_atomic_accountability_grants(
         let Some(grant) = parse_accountability_grant(&operation.payload) else {
             continue;
         };
-        if !accountability_grant_operation_signed_by(operation, grant.issuer.as_str()) {
+        if !accountability_grant_operation_signed_by(operation, grant.issuer_id.as_str()) {
             continue;
         }
         if let Some(key) = accountability_grant_key(&grant) {
@@ -171,8 +171,8 @@ fn insert_accountability_grant_revoke_wins(
 
 fn accountability_grant_key(grant: &AccountabilityGrant) -> Option<AccountabilityGrantKey> {
     Some((
-        grant.issuer.as_str().to_owned(),
-        grant.subject.as_str().to_owned(),
+        grant.issuer_id.as_str().to_owned(),
+        grant.subject_id.as_str().to_owned(),
         grant.accountability_scope.scope_set_component().ok()?,
     ))
 }
@@ -252,7 +252,7 @@ pub(super) fn accountability_grant_value_active_for(
     let Some(grant) = parse_accountability_grant(value) else {
         return false;
     };
-    grant.issuer.as_str() == issuer
-        && grant.subject.as_str() == subject
+    grant.issuer_id.as_str() == issuer
+        && grant.subject_id.as_str() == subject
         && grant.validate_lifecycle_at(now).is_ok()
 }

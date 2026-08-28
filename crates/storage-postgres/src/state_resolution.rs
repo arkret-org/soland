@@ -728,7 +728,7 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     Ok(IssuedOp {
-        issuer,
+        issuer_id: issuer,
         op: SealedOp {
             move_id,
             op,
@@ -739,7 +739,7 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
 
 fn sealed_op_to_value(issued: &IssuedOp) -> StoreResult<Value> {
     Ok(serde_json::json!({
-        "issuer": issued.issuer.as_str(),
+        "issuer_id": issued.issuer_id.as_str(),
         "move_id": issued.op.move_id.as_str(),
         "op": serde_json::to_value(&issued.op.op).map_err(serde_to_store)?,
         "recovery_reset": issued.op.recovery_reset,
@@ -2483,7 +2483,7 @@ mod event_seal_commit_tests {
     /// fsm cells, where the issuer travels but is not part of the slot key.
     fn test_issued(op: super::SealedOp) -> super::IssuedOp {
         super::IssuedOp {
-            issuer: arkret_wire::project_did_to_core_id(
+            issuer_id: arkret_wire::project_did_to_core_id(
                 &arkret_wire::Did::new("did:webvh:z6mkfixture:alice.example".to_owned()).unwrap(),
             )
             .unwrap(),

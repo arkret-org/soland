@@ -207,7 +207,7 @@ pub fn effective_policy_for_realm(
         realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
             .expect("projected realm ids are validated"),
         effective_policy,
-        inheritance_chain: chain
+        inheritance_chain_ids: chain
             .into_iter()
             .map(|realm_id| {
                 arkret_identifiers::RealmId::new(realm_id)
@@ -630,18 +630,18 @@ mod tests {
         // Chain must include C (declared parent) and walk through B
         // (C's declared parent reachable via the governed_by edge).
         assert!(
-            ep.inheritance_chain
+            ep.inheritance_chain_ids
                 .iter()
                 .any(|realm_id| realm_id.as_str() == REALM_C),
             "expected REALM_C in chain: {:?}",
-            ep.inheritance_chain
+            ep.inheritance_chain_ids
         );
         assert!(
-            ep.inheritance_chain
+            ep.inheritance_chain_ids
                 .iter()
                 .any(|realm_id| realm_id.as_str() == REALM_B),
             "expected REALM_B in chain (2-level walk): {:?}",
-            ep.inheritance_chain
+            ep.inheritance_chain_ids
         );
         let allow = ep
             .effective_policy
@@ -677,11 +677,11 @@ mod tests {
             RealmEffectivePolicyInheritanceMode::Explicit
         );
         assert!(
-            ep.inheritance_chain
+            ep.inheritance_chain_ids
                 .iter()
                 .any(|realm_id| realm_id.as_str() == REALM_C),
             "expected REALM_C in chain: {:?}",
-            ep.inheritance_chain
+            ep.inheritance_chain_ids
         );
         let allow = ep
             .effective_policy
@@ -702,7 +702,7 @@ mod tests {
         state.apply(&link_op(REALM_D, REALM_C, "governed_by", "rejected"), &hlc);
 
         let ep = effective_policy_for_realm(&state, REALM_D);
-        assert!(ep.inheritance_chain.is_empty());
+        assert!(ep.inheritance_chain_ids.is_empty());
         assert_eq!(
             ep.effective_policy.get("allowed_policies"),
             Some(&serde_json::json!([]))
@@ -728,9 +728,9 @@ mod tests {
             "no inheritance_policy declared on D: {ep:?}"
         );
         assert!(
-            ep.inheritance_chain.is_empty(),
+            ep.inheritance_chain_ids.is_empty(),
             "chain must be empty when mode=none: {:?}",
-            ep.inheritance_chain
+            ep.inheritance_chain_ids
         );
         let allow = ep
             .effective_policy

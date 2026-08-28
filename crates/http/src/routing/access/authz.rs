@@ -136,7 +136,7 @@ async fn authz_check(
         .map(|g| {
             json!({
                 "grant_id": g.grant_id,
-                "subject": g.subject,
+                "subject": g.subject_id,
                 "actions": g.actions,
                 "resource": g.resource
             })
@@ -426,8 +426,8 @@ fn capability_grant_from_authz_grant(
 ) -> Result<CapabilityGrant, AppError> {
     let realm_id = RealmId::new(grant.realm_id.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let issuer = grant.issuer.clone();
-    let subject = CapabilitySubject::CoreDid(grant.subject.clone());
+    let issuer = grant.issuer_id.clone();
+    let subject = CapabilitySubject::CoreDid(grant.subject_id.clone());
     let resource_selector = capability_resource_selector(&grant.realm_id, &grant.resource)?;
     let constraints = grant
         .constraints
@@ -439,7 +439,7 @@ fn capability_grant_from_authz_grant(
             .map_err(|error| AppError::internal(error.to_string()))?,
         schema: arkret_wire::SchemaId::CAPABILITY_V1.to_owned(),
         realm_id: Some(realm_id),
-        issuer,
+        issuer_id: issuer,
         issuer_principal_server_id: grant.issuer_principal_server_id,
         subject,
         subject_principal_server_id: grant.subject_principal_server_id,
@@ -741,7 +741,7 @@ async fn invites(
         Some(
             delivery
                 .into_iter()
-                .flat_map(|delivery| delivery.entries)
+                .flat_map(|delivery| delivery.delivery_entries)
                 .map(|entry| entry.invite_id.to_string())
                 .collect::<std::collections::BTreeSet<_>>(),
         )

@@ -94,7 +94,7 @@ pub(crate) async fn resolved_peer_target(
 ) -> Result<ResolvedFederationPeerTarget, String> {
     let route = resolved_peer_route(state, service_id, service_kind, force_refresh).await?;
     Ok(ResolvedFederationPeerTarget {
-        base_url: route.cache_entry.base_url.trim_end_matches('/').to_owned(),
+        base_url: route.cache_entry.base_uri.trim_end_matches('/').to_owned(),
         trust_domain: route.trust_domain.to_string(),
     })
 }

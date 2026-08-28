@@ -207,9 +207,9 @@ pub fn engine_grant_from_cell_body(
     Some(crate::capability::Grant {
         grant_id: grant_id.to_owned(),
         realm_id,
-        issuer,
+        issuer_id: issuer,
         issuer_principal_server_id,
-        subject,
+        subject_id: subject,
         subject_principal_server_id,
         resource,
         actions,
@@ -708,7 +708,7 @@ impl ProjectionState {
     ) -> bool {
         let resource_expr = self.authz_resource_expr(realm_id, resource);
         self.projected_capability_grants().any(|grant| {
-            grant.subject.as_str() == issuer
+            grant.subject_id.as_str() == issuer
                 && grant
                     .subject_principal_server_id
                     .as_ref()
@@ -752,7 +752,7 @@ impl ProjectionState {
     ) -> bool {
         let resource_expr = self.authz_resource_expr(realm_id, resource);
         self.projected_capability_grants().any(|grant| {
-            grant.subject.as_str() == issuer
+            grant.subject_id.as_str() == issuer
                 && grant
                     .subject_principal_server_id
                     .as_ref()
@@ -791,7 +791,7 @@ impl ProjectionState {
             return false;
         };
         let resource_expr = self.authz_resource_expr(realm_id, resource);
-        grant.subject.as_str() == subject
+        grant.subject_id.as_str() == subject
             && grant
                 .subject_principal_server_id
                 .as_ref()
@@ -837,7 +837,7 @@ impl ProjectionState {
                     evaluation_basis,
                 )
             })
-            .map(|grant| grant.subject)
+            .map(|grant| grant.subject_id)
             .collect::<std::collections::BTreeSet<_>>()
             .len()
     }
@@ -1183,7 +1183,7 @@ impl ProjectionState {
         if parent.revoked || crate::capability::is_grant_expired(parent, operation.created_at) {
             return Err("grant_revoked_upstream");
         }
-        if issuer != parent.subject.as_str()
+        if issuer != parent.subject_id.as_str()
             || parent
                 .subject_principal_server_id
                 .as_ref()
@@ -1341,7 +1341,7 @@ impl ProjectionState {
                     let Some(parent) = self.effective_engine_grant(grant_id) else {
                         return false;
                     };
-                    parent.subject == grant.issuer
+                    parent.subject_id == grant.issuer_id
                         && parent
                             .subject_principal_server_id
                             .as_ref()
@@ -1506,7 +1506,7 @@ impl ProjectionState {
         let Some(target) = self.effective_engine_grant(&grant_id) else {
             return self.queue_pending_replay(grant_id, operation, "capability_target_unresolved");
         };
-        let actor_is_target_issuer = operation.context.sender.as_str() == target.issuer.as_str();
+        let actor_is_target_issuer = operation.context.sender.as_str() == target.issuer_id.as_str();
         let actor_is_target_realm_controller = self
             .realm_authority_root(&target.realm_id)
             .is_some_and(|root| root.controller_id.as_str() == operation.context.sender.as_str());
@@ -1539,7 +1539,7 @@ impl ProjectionState {
         let Some(target) = self.effective_engine_grant(&grant_id) else {
             return self.queue_pending_replay(grant_id, operation, "capability_target_unresolved");
         };
-        if operation.context.sender.as_str() != target.subject.as_str() {
+        if operation.context.sender.as_str() != target.subject_id.as_str() {
             return ProjectionEffect::Rejected {
                 reason: "grant_relinquish_not_subject".to_owned(),
             };

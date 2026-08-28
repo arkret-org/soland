@@ -296,8 +296,8 @@ pub(super) async fn validate_signed_ghost_provision_events(
             "accountability_grant_event payload invalid: {error}"
         ))
     })?;
-    if grant.issuer != basis.service_id
-        || grant.subject != ghost_actor_id
+    if grant.issuer_id != basis.service_id
+        || grant.subject_id != ghost_actor_id
         || grant.accountability_scope
             != AccountabilityScope::Single(AccountabilityScopeKind::ContractedService)
         || !matches!(
@@ -431,8 +431,13 @@ async fn validate_ghost_managed_actor_unit(
     }
     super::install::validate_managed_actor_method_evidence(&payload)?;
     super::install::validate_managed_actor_current_method_evidence(state, &payload).await?;
-    if !record.package.namespaces.actors.is_empty()
-        && !record.package.namespaces.actors.iter().any(|entry| {
+    if !record.package.namespaces.actor_namespace_entries.is_empty()
+        && !record
+            .package
+            .namespaces
+            .actor_namespace_entries
+            .iter()
+            .any(|entry| {
             namespace_pattern_matches(
                 AppletNamespaceDomain::Actors,
                 &entry.pattern,

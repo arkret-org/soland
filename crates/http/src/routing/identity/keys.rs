@@ -276,7 +276,7 @@ async fn attested_device_record(
                 |error| AppError::internal(format!("service id is not a did_core_id: {error}")),
             )?,
             device_id: device_id.clone(),
-            device_signing_key: device_signing_key.clone(),
+            device_signing_key_did: device_signing_key.clone(),
             hpke_key: hpke_key.clone(),
             device_authorize_event_id: device_authorize_event_id.clone(),
             authorized_generation_ref,

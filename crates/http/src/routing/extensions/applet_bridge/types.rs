@@ -323,8 +323,8 @@ fn validate_managed_actor_unit(
         || accountability_event.authorization_ref.as_deref()
             != Some(provision.applet_authority_ref.as_str())
         || accountability.schema != AccountabilityGrantPayload::SCHEMA
-        || accountability.issuer != authority_package.service_id
-        || &accountability.subject != actor_id
+        || accountability.issuer_id != authority_package.service_id
+        || &accountability.subject_id != actor_id
         || accountability.accountability_scope
             != AccountabilityScope::Single(AccountabilityScopeKind::ContractedService)
         || accountability.grant_status != AccountabilityGrantStatus::Active
@@ -564,7 +564,7 @@ impl AppletRecord {
                     if realm_id == &self.portal_realm_id
             );
             if grant.schema != "ak.schema.capability.v1"
-                || grant.issuer != self.owner_actor_id
+                || grant.issuer_id != self.owner_actor_id
                 || grant.realm_id.as_ref() != Some(&self.portal_realm_id)
                 || !matches!(&grant.subject, CapabilitySubject::CoreDid(subject)
                     if subject == &self.package.service_id)

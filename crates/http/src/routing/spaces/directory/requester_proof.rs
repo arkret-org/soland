@@ -147,7 +147,7 @@ mod tests {
     fn target_body(proofs: Vec<PayloadProof>) -> DirectoryResolveTargetRequestBody {
         DirectoryResolveTargetRequestBody {
             address: "ak://realm/release".to_owned(),
-            requester: Some(requester()),
+            requester_id: Some(requester()),
             proof_challenge: None,
             claim_presentations: Vec::new(),
             proofs,
@@ -162,7 +162,7 @@ mod tests {
             proof_challenge: None,
             claim_presentations: Vec::new(),
             intent: None,
-            requester: Some(requester()),
+            requester_id: Some(requester()),
             audience: None,
             realm_id: None,
             proofs,
@@ -290,7 +290,7 @@ mod tests {
             !directory_requester_proofs_verified(
                 &state,
                 &body.proofs,
-                body.requester.as_ref().map(DidCoreId::as_str),
+                body.requester_id.as_ref().map(DidCoreId::as_str),
                 |proof| body.proof_binding_bytes(proof).ok(),
             )
             .await
@@ -312,7 +312,7 @@ mod tests {
             !directory_requester_proofs_verified(
                 &state,
                 &body.proofs,
-                body.requester.as_ref().map(DidCoreId::as_str),
+                body.requester_id.as_ref().map(DidCoreId::as_str),
                 |proof| body.proof_binding_bytes(proof).ok(),
             )
             .await
@@ -329,7 +329,7 @@ mod tests {
             directory_requester_proofs_verified(
                 &state,
                 &body.proofs,
-                body.requester.as_ref().map(DidCoreId::as_str),
+                body.requester_id.as_ref().map(DidCoreId::as_str),
                 |proof| body.proof_binding_bytes(proof).ok(),
             )
             .await

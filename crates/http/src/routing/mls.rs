@@ -596,7 +596,7 @@ async fn claim_keypackage_at_destination(
     if !policy_authorized || !participant_authorized {
         tracing::warn!(
             %source_id,
-            requester = %body.requester,
+            requester = %body.requester_id,
             target_principal_id = %body.target_principal_id,
             policy_authorized,
             participant_authorized,
@@ -1023,7 +1023,7 @@ async fn verify_peer_claim_participant_authorization(
     let authorization = &body.requester_authorization;
     let reject = |reason: &'static str| {
         tracing::warn!(
-            requester = %body.requester,
+            requester = %body.requester_id,
             target_principal_id = %body.target_principal_id,
             reason,
             "peer KeyPackage participant authorization rejected"
@@ -1042,13 +1042,13 @@ async fn verify_peer_claim_participant_authorization(
                 .as_ref()
                 .is_some_and(|algorithm| algorithm.as_str() != "Ed25519")
             || arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(
-                body.requester.clone(),
+                body.requester_id.clone(),
                 verification_method.clone(),
             )
             .is_err()
             || ensure_pairwise_realm_affinity(
                 state,
-                &body.requester,
+                &body.requester_id,
                 verification_method,
                 &body.intended_realm_id,
                 body.service_binding.source_id.as_str(),
@@ -1100,7 +1100,7 @@ async fn verify_peer_claim_participant_authorization(
                 verification_method.as_str(),
             )
             .await
-            || requester_agent_id != &body.requester
+            || requester_agent_id != &body.requester_id
         {
             return reject("native_agent_authorization_stale");
         }
@@ -1165,7 +1165,7 @@ async fn verify_peer_claim_participant_authorization(
         let facet =
             crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
                 state,
-                body.requester.as_str(),
+                body.requester_id.as_str(),
                 device_id.as_str(),
             )
             .await
@@ -1181,7 +1181,7 @@ async fn verify_peer_claim_participant_authorization(
             != Some(device_authorize_event_id.as_str())
             || !verification_method_binds_core_device(
                 verification_method,
-                &body.requester,
+                &body.requester_id,
                 device_id,
             )
         {
@@ -1251,7 +1251,7 @@ async fn peer_claim_policy_authorized(
         PeerKeyPackageClaimPurpose::RealmMembership => {
             if !crate::routing::federation::federation::federation_actor_origin_acceptable(
                 state,
-                body.requester.as_str(),
+                body.requester_id.as_str(),
                 source_id,
                 None,
                 body.intended_realm_id.as_str(),
@@ -1263,7 +1263,7 @@ async fn peer_claim_policy_authorized(
             }
             let projection = state.projections().snapshot();
             if projection
-                .member(body.intended_realm_id.as_str(), body.requester.as_str())
+                .member(body.intended_realm_id.as_str(), body.requester_id.as_str())
                 .filter(|member| member.state == "join")
                 .and_then(|member| member.recipient_id.as_deref())
                 != Some(source_id)
@@ -1280,7 +1280,7 @@ async fn peer_claim_policy_authorized(
                         .and_then(|realm| realm.owner.as_deref())
                         == Some(actor_id)
             };
-            if !is_participant(body.requester.as_str())
+            if !is_participant(body.requester_id.as_str())
                 || !is_participant(body.target_principal_id.as_str())
             {
                 return Ok(false);
@@ -1291,7 +1291,7 @@ async fn peer_claim_policy_authorized(
             let contact = crate::routing::identity::account::accepted_contact_for_pair(
                 state,
                 body.target_principal_id.as_str(),
-                body.requester.as_str(),
+                body.requester_id.as_str(),
                 scope,
             )
             .await?;
@@ -1305,7 +1305,7 @@ async fn peer_claim_policy_authorized(
             let expected_pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
                 trust_domain,
                 arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
-                    body.requester.clone(),
+                    body.requester_id.clone(),
                 ),
                 arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
                     body.target_principal_id.clone(),
@@ -1499,14 +1499,14 @@ async fn validate_welcome_peer_claim_ledger(
         || receipt.source_id.as_str() != source_id
         || required_destination_service_id
             .is_some_and(|expected| receipt.destination_id.as_str() != expected)
-        || request.requester.as_str() != actor_id
+        || request.requester_id.as_str() != actor_id
         || &request.target_principal_id != recipient_actor_id
         || request.intended_realm_id.as_str() != realm_id
         || request.mls_group_id.as_str() != welcome.mls_group_id.as_str()
         || request.expires_at != receipt.expires_at
         || receipt.expires_at <= now()
         || welcome.claim_envelope.intended_realm_id != request.intended_realm_id
-        || welcome.claim_envelope.requester_actor_id != request.requester
+        || welcome.claim_envelope.requester_actor_id != request.requester_id
     {
         return Err("peer_claim_welcome_invalid");
     }
@@ -1837,7 +1837,7 @@ async fn claim_keypackage(
     if !matches!(
         &body.requester_authorization,
         PeerKeyPackageRequesterAuthorization::MinimalMetadataPairwise { .. }
-    ) && body.requester.as_str() != session.actor
+    ) && body.requester_id.as_str() != session.actor
     {
         return Err(AppError::capability_denied(
             "requester must match the calling session",
@@ -1877,7 +1877,7 @@ async fn claim_keypackage(
         let requester_is_current_member = state
             .projections()
             .snapshot()
-            .member(body.intended_realm_id.as_str(), body.requester.as_str())
+            .member(body.intended_realm_id.as_str(), body.requester_id.as_str())
             .is_some_and(|member| {
                 member.state == "join" && member.recipient_id.as_deref() == Some(local_service_id)
             });

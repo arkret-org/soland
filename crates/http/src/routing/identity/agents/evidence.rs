@@ -67,7 +67,7 @@ pub(super) async fn query_agent_signer_evidence(
         }
     }
     let outcome = AgentSignerEvidenceQueryOutcome {
-        evidence,
+        evidence_items: evidence,
         failures: (!failures.is_empty()).then_some(failures),
     };
     outcome
@@ -1023,7 +1023,7 @@ async fn produce_current_agent_signer_evidence(
             leaf_count: lifecycle_proof.leaf_count,
             inclusion_proof: lifecycle_proof.inclusion_proof,
         },
-        seal_lineage,
+        seal_lineages: seal_lineage,
     };
     let snapshot_digest = canonical_digest(&core)?;
     let expires_at = now + chrono::Duration::minutes(2);
@@ -1061,7 +1061,7 @@ async fn produce_current_agent_signer_evidence(
             operation_id: operation_id.clone(),
             request_digest: request_digest.clone(),
             verifier_id: verifier_id.clone(),
-            audience: audience.clone(),
+            audience_id: audience.clone(),
             challenge: challenge.clone(),
             agent_snapshot_digest: snapshot_digest,
             agent_key_seal_id: key_seal_id,
@@ -1342,7 +1342,7 @@ async fn verify_current_evidence(
         bytes: account_authority_key.to_bytes().to_vec(),
     };
     let mut seal_keys = std::collections::BTreeMap::new();
-    for seal in &snapshot.core.seal_lineage {
+    for seal in &snapshot.core.seal_lineages {
         for method in seal_signature_methods(seal) {
             if seal_keys.contains_key(method.as_str()) {
                 continue;
@@ -1381,9 +1381,9 @@ async fn verify_current_evidence(
         agent_key_authorize_event_id: &binding.agent_key_authorize_event_id,
         authorize_public_key_digest: &binding.public_key_digest,
         authorize_signing_key_binding_digest: &binding_digest,
-        expected_authority_service_id: &snapshot.core.authority_id,
+        expected_authority_id: &snapshot.core.authority_id,
         expected_authority_verification_method: &outer_attestation.verification_method,
-        expected_account_authority_service_id: &gate.authority_id,
+        expected_account_authority_id: &gate.authority_id,
         expected_account_authority_verification_method: &gate.verification_method,
         controller_public_key: &controller_material,
         authority_public_key: &authority_material,

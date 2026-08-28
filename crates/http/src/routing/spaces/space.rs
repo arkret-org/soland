@@ -378,7 +378,7 @@ fn caller_signed_realm_moderation_policy(
         .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
         .with_wire_code("failed_precondition"));
     };
-    if precondition.cell.as_str() != "ak:cell:ak.component.realm.moderation_policy.v1:null"
+    if precondition.cell_id.as_str() != "ak:cell:ak.component.realm.moderation_policy.v1:null"
         || precondition.predicate.op != arkret_wire::PredicateOp::HeadEq
     {
         return Err(

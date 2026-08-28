@@ -755,7 +755,7 @@ impl ProjectionState {
             };
             if !self.head_eq_holds(
                 operation.realm_id.as_str(),
-                precondition.cell.as_str(),
+                precondition.cell_id.as_str(),
                 expected,
             ) {
                 return Err("failed_precondition");

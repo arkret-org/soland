@@ -712,12 +712,12 @@ async fn handle_rtc_token(
     .map_err(|error| AppError::internal(format!("participant binding signing input: {error}")))?;
     participant_binding.sig = URL_SAFE_NO_PAD.encode(signing_key.sign(&signing_input).to_bytes());
 
-    let connect_url = issued_token.connect_url;
+    let connect_uri = issued_token.connect_url;
 
     json_ok(CallMediaTokenExchangeOutcome {
         focus_id: body.focus_id,
         backend_kind: focus.provider.backend_kind(),
-        connect_url,
+        connect_uri,
         backend_token: issued_token.backend_token,
         participant_identity,
         participant_binding,
@@ -1016,7 +1016,7 @@ fn media_service_epoch_from_descriptor(
             provider,
             focus_id: focus.focus_id.into_string(),
             token_endpoint: focus.token_endpoint,
-            connect_url: focus.connect_url,
+            connect_url: focus.connect_uri,
         });
     }
     Ok(MediaServiceEpoch {

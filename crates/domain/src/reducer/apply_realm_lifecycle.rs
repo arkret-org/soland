@@ -85,7 +85,7 @@ fn genesis_authority_root_value(
 fn registered_authority_root_write(writes: &[ProjectedCellWrite]) -> Option<Value> {
     writes
         .iter()
-        .find(|write| write.cell.as_str() == arkret_wire::REALM_AUTHORITY_ROOT_CELL)
+        .find(|write| write.cell_id.as_str() == arkret_wire::REALM_AUTHORITY_ROOT_CELL)
         .and_then(|write| write.as_direct())
         .and_then(|effect| effect.op.value)
 }
@@ -93,7 +93,7 @@ fn registered_authority_root_write(writes: &[ProjectedCellWrite]) -> Option<Valu
 fn registered_principal_resolution_write(writes: &[ProjectedCellWrite]) -> Option<Value> {
     writes
         .iter()
-        .find(|write| write.cell.as_str() == PRINCIPAL_RESOLUTION_CELL)
+        .find(|write| write.cell_id.as_str() == PRINCIPAL_RESOLUTION_CELL)
         .and_then(|write| write.as_direct())
         .and_then(|effect| effect.op.value)
 }
@@ -460,7 +460,7 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
             };
         };
-        let Ok(cell_id) = arkret_wire::CellId::from_ref(&write.cell) else {
+        let Ok(cell_id) = arkret_wire::CellId::from_ref(&write.cell_id) else {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
             };
@@ -526,7 +526,7 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
             };
         };
-        let Ok(cell_id) = arkret_wire::CellId::from_ref(&write.cell) else {
+        let Ok(cell_id) = arkret_wire::CellId::from_ref(&write.cell_id) else {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
             };
@@ -1148,7 +1148,7 @@ impl ProjectionState {
             let projected_transition = self
                 .projected_cell_writes()
                 .iter()
-                .find(|write| write.cell == cell)
+                .find(|write| write.cell_id == cell)
                 .and_then(ProjectedCellWrite::as_direct)
                 .map(|effect| effect.op);
             let Some(projected_transition) = projected_transition else {

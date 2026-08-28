@@ -47,7 +47,7 @@ pub(crate) fn push_target_privacy_derivation_claim(
     now: chrono::DateTime<chrono::Utc>,
 ) -> arkret_models_discovery::service_description::PrivacyDerivation {
     arkret_models_discovery::service_description::PrivacyDerivation {
-        push_target_id: Some(arkret_models_discovery::service_description::PushTargetPrivacyDerivation {
+        push_target_id_derivation: Some(arkret_models_discovery::service_description::PushTargetPrivacyDerivation {
             derivation_profile: arkret_models_discovery::service_description::PushTargetDerivationProfile::HmacSha256V1,
             secret_scope: arkret_models_discovery::service_description::PushTargetSecretScope::PerService,
             salt_epoch_id: push_target_salt_epoch_id_at(now),
@@ -154,7 +154,7 @@ pub(super) async fn push_register(
     let device_id = body.device_id.as_str().to_owned();
     let platform = body.platform.clone();
     let app_id = body.app_id.clone();
-    let push_gateway = body.push_gateway.clone();
+    let push_gateway = body.push_gateway_uri.clone();
     let push_key = body.push_key.clone();
     let recipient_id = body
         .recipient_id
@@ -263,7 +263,7 @@ fn push_route_id_for_registration(body: &PushRegisterDeviceRequestBody) -> Strin
         })
         .unwrap_or_else(|| {
             let route_digest =
-                sha256_hex(format!("{}|{}", body.push_gateway, body.push_key).as_bytes());
+                sha256_hex(format!("{}|{}", body.push_gateway_uri, body.push_key).as_bytes());
             format!("gateway:{route_digest}")
         })
 }

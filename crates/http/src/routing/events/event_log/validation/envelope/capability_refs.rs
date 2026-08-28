@@ -188,7 +188,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 ),
             )
         })?;
-        if stored.subject.as_str() != capability_subject
+        if stored.subject_id.as_str() != capability_subject
             || stored
                 .subject_principal_server_id
                 .as_ref()
@@ -271,7 +271,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 format!("DataEvent authorized_by grant {grant_id} is revoked"),
             ));
         }
-        if stored.subject.as_str() != capability_subject || stored.realm_id != realm_id {
+        if stored.subject_id.as_str() != capability_subject || stored.realm_id != realm_id {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
@@ -663,7 +663,7 @@ pub(super) fn effective_historical_grants_for_subject(
     snapshot
         .iter()
         .filter(|grant| {
-            grant.subject.as_str() == actor_id
+            grant.subject_id.as_str() == actor_id
                 && grant
                     .subject_principal_server_id
                     .as_ref()
@@ -1065,7 +1065,7 @@ mod constraint_tests {
         const SERVICE: &str = "ak:did_core:web:applet.example";
         const TARGET_PS: &str = "ak:did_core:web:principal.example";
         let mut applet_grant = grant(Vec::new());
-        applet_grant.subject = arkret_wire::DidCoreId::new(SERVICE.to_owned()).unwrap();
+        applet_grant.subject_id = arkret_wire::DidCoreId::new(SERVICE.to_owned()).unwrap();
         applet_grant.subject_principal_server_id =
             Some(arkret_wire::DidCoreId::new(TARGET_PS.to_owned()).unwrap());
         let grant_id = applet_grant.grant_id.clone();

@@ -1157,8 +1157,8 @@ fn active_agent_accountability(
                 .unwrap_or(&candidate.envelope);
             let grant =
                 serde_json::from_value::<AccountabilityGrantPayload>(payload.clone()).ok()?;
-            (grant.issuer.as_str() == query.controller_id
-                && grant.subject.as_str() == query.agent_id
+            (grant.issuer_id.as_str() == query.controller_id
+                && grant.subject_id.as_str() == query.agent_id
                 && grant.cell_subject().ok().as_deref() == Some(original_cell_subject.as_str()))
             .then_some((candidate.actor_seq, grant))
         })
@@ -1179,8 +1179,8 @@ fn active_agent_accountability(
     );
     original_event.kind == arkret_wire::event_kind_str::IDENTITY_ACCOUNTABILITY_GRANT
         && signed_by_controller
-        && original_grant.issuer.as_str() == query.controller_id
-        && original_grant.subject.as_str() == query.agent_id
+        && original_grant.issuer_id.as_str() == query.controller_id
+        && original_grant.subject_id.as_str() == query.agent_id
         && !projected_scopes.is_empty()
         && current_grant.is_some_and(|grant| grant.validate_lifecycle_at(query.accepted_at).is_ok())
 }
@@ -1212,7 +1212,7 @@ fn active_accountability_scopes(
         else {
             continue;
         };
-        if grant.issuer.as_str() != issuer || grant.subject.as_str() != subject {
+        if grant.issuer_id.as_str() != issuer || grant.subject_id.as_str() != subject {
             continue;
         }
         let Ok(cell_subject) = grant.cell_subject() else {

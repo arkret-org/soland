@@ -59,7 +59,7 @@ mod cba_capability_cell_tests {
             .expect("the CBA registry wrapper must resolve to an effective grant");
         assert_eq!(grant.grant_id, grant_id);
         assert_eq!(grant.realm_id, realm_id);
-        assert_eq!(grant.subject.as_str(), "ak:did_core:web:owner.example");
+        assert_eq!(grant.subject_id.as_str(), "ak:did_core:web:owner.example");
         assert!(
             grant
                 .actions
@@ -1674,7 +1674,7 @@ mod realm_owner_authority_tests {
         if current_controller.as_deref() != Some(issuer.as_str())
             && let Some(parent) = state
                 .projected_capability_grants()
-                .find(|grant| grant.subject.as_str() == issuer && !grant.revoked)
+                .find(|grant| grant.subject_id.as_str() == issuer && !grant.revoked)
         {
             operation.payload["grant"]["issuer_authority_refs"] = serde_json::json!([{
                 "kind": "grant",

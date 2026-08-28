@@ -49,12 +49,12 @@ pub(super) fn typed_recovery_policy_summary(
         principal_id: DidCoreId::new(record.principal_id.clone())
             .map_err(|error| stored_recovery_type_error("policy principal id", error))?,
         version: u64::from(record.version),
-        acceptance_basis: record.acceptance_basis.clone(),
+        acceptance_basis_ref: record.acceptance_basis.clone(),
         recovery_policy_ref: None,
         trust_domain: TrustDomainId::new(record.trust_domain.clone())
             .map_err(|error| stored_recovery_type_error("policy trust domain", error))?,
         allowed_proof_kinds,
-        supersedes: record
+        supersedes_id: record
             .supersedes
             .as_ref()
             .map(|value| PolicyId::new(value.clone()))
@@ -91,7 +91,7 @@ fn recovery_policy_publish_outcome(
         principal_id: arkret_identifiers::DidCoreId::new(record.principal_id.clone())
             .map_err(|error| stored_recovery_type_error("policy principal id", error))?,
         version: u64::from(record.version),
-        acceptance_basis: record.acceptance_basis.clone(),
+        acceptance_basis_ref: record.acceptance_basis.clone(),
         accepted_at: record.accepted_at,
     })
 }

@@ -254,7 +254,7 @@ async fn plan_consent_grant(
         .map_err(|error| {
             ConsentRejection::schema(format!("ak.consent.grant payload is invalid: {error}"))
         })?;
-    let peer = payload.peer.to_string();
+    let peer = payload.peer_id.to_string();
     let consent_scope = payload.consent_scope.as_str().to_owned();
     validate_consent_intent(&holder, &peer)?;
     let consent_id = payload.consent_id.to_string();
@@ -334,7 +334,7 @@ async fn plan_consent_revoke(
     let consent_id = payload.consent_id.to_string();
     let cell_id = consent_cell_id_for_consent_id(&consent_id)?;
     let observed_dots = payload
-        .observed_dots
+        .observed_dot_ids
         .iter()
         .map(|dot| dot.as_str().to_owned())
         .collect::<Vec<_>>();
@@ -543,7 +543,7 @@ fn projected_consent_remove_dots(
         })?;
     let mut dots = BTreeSet::new();
     for write in writes {
-        if write.cell.as_str() != cell_id {
+        if write.cell_id.as_str() != cell_id {
             return Err(ConsentRejection::new(
                 StatusCode::BAD_REQUEST,
                 "reducer_projection_failed",
@@ -609,7 +609,9 @@ async fn list_consent_cells(
         .map(|cell| consent_response(cell, now))
         .collect::<Result<Vec<_>, _>>()?;
     cells.sort_by(|a, b| a.cell_id.cmp(&b.cell_id));
-    json_ok(ConsentCellList { cells })
+    json_ok(ConsentCellList {
+        consent_cell_views: cells,
+    })
 }
 
 #[endpoint(

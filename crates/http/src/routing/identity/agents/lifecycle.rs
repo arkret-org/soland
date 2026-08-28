@@ -1320,7 +1320,7 @@ pub(super) async fn list_agents(
     }
     // spec `agent_list` = `{agents: [agent_projection], next_cursor?, has_more}`.
     json_ok(AgentList {
-        agents,
+        agent_projections: agents,
         next_cursor: None,
         has_more: false,
     })

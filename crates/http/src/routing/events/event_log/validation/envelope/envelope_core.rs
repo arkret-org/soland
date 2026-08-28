@@ -1213,7 +1213,7 @@ fn derived_data_event_cells(
         })?;
     Ok(projected
         .into_iter()
-        .map(|write| write.cell.as_str().to_owned())
+        .map(|write| write.cell_id.as_str().to_owned())
         .collect())
 }
 
@@ -1286,7 +1286,7 @@ fn enforce_registered_cell_contract(
         let expected = arkret_bootstrap::expected_realm_create_cells(&event);
         let actual: std::collections::BTreeSet<String> = derived
             .iter()
-            .map(|write| write.cell.as_str().to_owned())
+            .map(|write| write.cell_id.as_str().to_owned())
             .collect();
         if derived.len() != expected.len() || actual != expected {
             return Err(event_validation_error(

@@ -42,7 +42,7 @@ pub(super) async fn enforce_key_backup_series_chain_typed(
     let mut max_existing_seq: Option<u64> = None;
     let mut predecessor: Option<Value> = None;
     let supersedes = backup
-        .supersedes
+        .supersedes_id
         .as_ref()
         .map(|backup_id| backup_id.as_str().to_owned());
     let snapshot = state

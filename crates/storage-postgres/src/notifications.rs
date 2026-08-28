@@ -19,7 +19,7 @@ struct NotificationRow {
     #[diesel(sql_type = sql_types::Uuid)]
     notification_id: Uuid,
     #[diesel(sql_type = Text)]
-    recipient_id: DidCoreId,
+    recipient_actor_id: DidCoreId,
     #[diesel(sql_type = Nullable<Text>)]
     realm_id: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -123,7 +123,7 @@ impl NotificationRow {
                 PersistenceError::Internal(format!("recipient notification id is invalid: {error}"))
             })?,
             schema: NotificationSchema::V1,
-            actor_id: self.recipient_id,
+            actor_id: self.recipient_actor_id,
             source: NotificationSource::Event(NotificationEventSource {
                 source_event_id,
                 realm_id,
@@ -219,7 +219,7 @@ impl NotificationRow {
         Ok(StoredAccountNotificationDelta {
             record: AccountNotificationDeltaWrite {
                 delta,
-                recipient_id: self.recipient_id,
+                recipient_actor_id: self.recipient_actor_id,
                 controller_account_id: ids::format_typed_uuid("account", &controller_account_id),
                 recipient_id,
                 source_account_artifact_id,
@@ -273,11 +273,11 @@ impl NotificationStore for PgNotificationStore {
         let state = encode_enum("state", &record.notification.state)?;
         sql_query(
             "INSERT INTO notifications \
-             (id, recipient_id, realm_id, source_event_id, source_ref, strand_id, track_name, \
+             (id, recipient_actor_id, realm_id, source_event_id, source_ref, strand_id, track_name, \
               notification_kind, event_kind, source_actor_id, priority, state, preview, \
               created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
-             ON CONFLICT (recipient_id, source_event_id, notification_kind) \
+             ON CONFLICT (recipient_actor_id, source_event_id, notification_kind) \
               WHERE source_event_id IS NOT NULL DO UPDATE SET \
               source_ref = EXCLUDED.source_ref, \
               strand_id = EXCLUDED.strand_id, \
@@ -342,7 +342,7 @@ impl NotificationStore for PgNotificationStore {
             })?;
         sql_query(
             "INSERT INTO notifications \
-             (id, recipient_id, controller_account_id, recipient_id, \
+             (id, recipient_actor_id, controller_account_id, recipient_id, \
               source_account_artifact_kind, source_account_artifact_id, \
               priority, state, projection_action, projection_data, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, 'agent_runtime_approval', $5, \
@@ -363,7 +363,7 @@ impl NotificationStore for PgNotificationStore {
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
             record.delta.id.as_str(),
         ))
-        .bind::<Text, _>(record.recipient_id.as_str())
+        .bind::<Text, _>(record.recipient_actor_id.as_str())
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
             &record.controller_account_id,
         ))
@@ -385,14 +385,14 @@ impl NotificationStore for PgNotificationStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS notification_id, recipient_id, realm_id, source_event_id, \
+            "SELECT id AS notification_id, recipient_actor_id, realm_id, source_event_id, \
              controller_account_id, recipient_id, source_account_artifact_kind, \
              source_account_artifact_id, source_ref, \
              strand_id, track_name, notification_kind, event_kind, source_actor_id, priority, \
              state, preview, projection_action, projection_data, projection_position, \
              created_at, updated_at \
              FROM notifications \
-             WHERE recipient_id = $1 AND source_event_id IS NOT NULL \
+             WHERE recipient_actor_id = $1 AND source_event_id IS NOT NULL \
              ORDER BY created_at DESC",
         )
         .bind::<Text, _>(recipient_id)
@@ -414,7 +414,7 @@ impl NotificationStore for PgNotificationStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS notification_id, recipient_id, realm_id, source_event_id, \
+            "SELECT id AS notification_id, recipient_actor_id, realm_id, source_event_id, \
              controller_account_id, recipient_id, source_account_artifact_kind, \
              source_account_artifact_id, source_ref, strand_id, track_name, notification_kind, \
              event_kind, source_actor_id, priority, state, preview, projection_action, \

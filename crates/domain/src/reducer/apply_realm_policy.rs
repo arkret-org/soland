@@ -26,13 +26,13 @@ impl ProjectionState {
         let projected = self.projected_cell_writes();
         let config_value = projected
             .iter()
-            .find(|write| write.cell == config_cell)
+            .find(|write| write.cell_id == config_cell)
             .and_then(ProjectedCellWrite::as_direct)
             .filter(|direct| direct.op.op_type == arkret_wire::cba::LatticeOpType::Set)
             .and_then(|direct| direct.op.value.clone());
         let state_transition = projected
             .iter()
-            .find(|write| write.cell == state_cell)
+            .find(|write| write.cell_id == state_cell)
             .and_then(ProjectedCellWrite::as_direct)
             .map(|direct| direct.op);
         let (Some(config_value), Some(state_transition)) = (config_value, state_transition) else {
@@ -110,7 +110,7 @@ impl ProjectionState {
         let Some(op) = self
             .projected_cell_writes()
             .iter()
-            .find(|write| write.cell == state_cell)
+            .find(|write| write.cell_id == state_cell)
             .and_then(ProjectedCellWrite::as_direct)
             .map(|direct| direct.op)
         else {
@@ -207,7 +207,7 @@ impl ProjectionState {
             canonical.payload = value;
             return self.apply_realm_policy_bundle(&canonical);
         }
-        let wire_cell = direct.cell.clone();
+        let wire_cell = direct.cell_id.clone();
         let Ok(cell_id) = arkret_wire::CellId::from_ref(&wire_cell) else {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
@@ -530,7 +530,7 @@ impl ProjectionState {
         let projected = self.projected_cell_writes();
         let Some(state_write) = projected
             .iter()
-            .find(|write| write.cell == state_cell)
+            .find(|write| write.cell_id == state_cell)
             .and_then(ProjectedCellWrite::as_direct)
         else {
             return ProjectionEffect::Rejected {
@@ -657,7 +657,7 @@ impl ProjectionState {
         }
         let mut updates = Vec::with_capacity(projected.len());
         for write in &projected {
-            let cell_id = write.cell.clone();
+            let cell_id = write.cell_id.clone();
             let Some(family) = cell_id
                 .as_str()
                 .strip_prefix("ak:cell:")
@@ -1292,10 +1292,10 @@ fn project_call_fsm_transition(
         }
         let bottom = arkret_wire::Bottom {
             kind: arkret_wire::BottomKind::Conflict,
-            cells: vec![cell_id.clone()],
+            cell_ids: vec![cell_id.clone()],
             move_ids: Vec::new(),
             seal_view: None,
-            heads: vec![
+            head_ids: vec![
                 serde_json::json!({
                     "move_id": head.operation_id.as_str(),
                     "to": head.value.as_str(),

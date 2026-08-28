@@ -109,7 +109,7 @@ pub(super) async fn process_verified_transaction(
         } else {
             AppletTransactionStatus::Partial
         },
-        rejected,
+        rejections: rejected,
         retry_after_ms: None,
     };
     let outcome_value = serde_json::to_value(&outcome).map_err(|error| {
@@ -217,7 +217,12 @@ fn validate_transaction_event_binding(
     {
         return Ok(());
     }
-    let matched = install.package.namespaces.actors.iter().any(|entry| {
+    let matched = install
+        .package
+        .namespaces
+        .actor_namespace_entries
+        .iter()
+        .any(|entry| {
         !namespace_pattern_is_wildcard(&entry.pattern)
             && namespace_pattern_matches(AppletNamespaceDomain::Actors, &entry.pattern, actor_id)
     });

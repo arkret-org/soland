@@ -366,7 +366,7 @@ pub(super) fn validate_key_backup_auth_data_typed(backup: &KeyBackup) -> Result<
 }
 
 pub(super) fn validate_series_genesis_shape_typed(backup: &KeyBackup) -> Result<(), AppError> {
-    if backup.supersedes.is_some() {
+    if backup.supersedes_id.is_some() {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
             "series_chain_broken: genesis envelope (series_seq=0) must not carry `supersedes`",
@@ -435,7 +435,7 @@ pub(super) async fn validate_current_recovery_recipient(
             )
         })?;
     let agreements = policy
-        .recovery_key_agreements
+        .recovery_key_agreement_entries
         .as_deref()
         .unwrap_or_default();
     let matching_recipient = agreements

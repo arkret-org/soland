@@ -955,7 +955,7 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_
     };
     let write = |delta| AccountNotificationDeltaWrite {
         delta,
-        recipient_id: recipient_id.clone(),
+        recipient_actor_id: recipient_id.clone(),
         controller_account_id: controller_account_id.clone(),
         recipient_id: recipient_id.clone(),
         source_account_artifact_id: artifact_id.clone(),

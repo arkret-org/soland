@@ -2586,7 +2586,7 @@ mod tests {
                     event_digest: producer_proof.event_digest.clone(),
                     producer_proof_digest: arkret_wire::primitives::PrincipalServerAdmissionProof::producer_proof_digest(&producer_proof).unwrap(),
                     producer_verification_method: producer_proof.verification_method.clone(),
-                    producer_signing_key: arkret_wire::DidKey::new(
+                    producer_signing_key_did: arkret_wire::DidKey::new(
                         "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuVkhY7g94pVQyG98x",
                     )
                     .unwrap(),

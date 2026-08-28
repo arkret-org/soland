@@ -1666,7 +1666,12 @@ async fn submit_event_batch_outcome_with_leases(
         .await
         {
             Ok(response) => {
-                for frontier in response.outcome.realm_actor_frontiers.iter().cloned() {
+                for frontier in response
+                    .outcome
+                    .realm_actor_frontier_views
+                    .iter()
+                    .cloned()
+                {
                     realm_actor_frontiers.insert(
                         (
                             frontier.realm_id.as_str().to_owned(),
@@ -1728,7 +1733,7 @@ async fn submit_event_batch_outcome_with_leases(
         events_submit_outcome(status, accepted, duplicate, rejected, quarantine, cursor);
     outcome.ingress_receipts = ingress_receipts;
     outcome.pending_delivery_count = pending_delivery_count;
-    outcome.realm_actor_frontiers = realm_actor_frontiers.into_values().collect();
+    outcome.realm_actor_frontier_views = realm_actor_frontiers.into_values().collect();
     Ok(outcome)
 }
 
@@ -1912,11 +1917,11 @@ async fn existing_pcr_genesis_outcome(
         })?
         .into_iter()
         .find(|receipt| {
-            receipt.issuer.as_str() == state.service_id()
+            receipt.issuer_id.as_str() == state.service_id()
                 && receipt.pcr_genesis_scope().is_ok_and(|scope| {
                     scope.principal_id == request.principal_id
                         && scope.realm_id == request.pcr_realm_id
-                        && scope.audience == request.account_authority_id
+                        && scope.audience_id == request.account_authority_id
                         && scope.did_version_id == request.did_version_id
                         && scope.log_head_digest == request.log_head_digest
                         && scope.control_key_digest == request.control_key_digest
@@ -1954,7 +1959,7 @@ async fn validate_identity_creation_control_proof(
     if proof.issued_at > now
         || proof.expires_at <= now
         || proof.expires_at - proof.issued_at > Duration::minutes(5)
-        || proof.audience.as_str() != state.service_id().as_str()
+        || proof.audience_id.as_str() != state.service_id().as_str()
         || request.registration_did_evidence.accepted_at > now
     {
         return Err(SubmitOneError::new(
@@ -2248,7 +2253,7 @@ async fn verify_federated_event_admission(
         );
     }
     let producer_multibase = admission
-        .producer_signing_key
+        .producer_signing_key_did
         .as_str()
         .strip_prefix("did:key:")
         .ok_or_else(|| "admitted producer key is not an Ed25519 did:key".to_owned())?;
@@ -2268,7 +2273,7 @@ async fn verify_federated_event_admission(
     .await?;
     Ok((
         producer.verification_method.clone(),
-        admission.producer_signing_key.clone(),
+        admission.producer_signing_key_did.clone(),
     ))
 }
 

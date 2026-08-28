@@ -125,7 +125,7 @@ async fn authorize_account_device_pair(
                 })?,
                 device_pairing_request_id: request_id.clone(),
                 expires_at: record.expires_at,
-                gate_audience: record.gate_audience,
+                gate_audience_uri: record.gate_audience,
                 pairing_code: body.pairing_code.clone(),
                 server_nonce: arkret_models_collaboration::http_bodies::DevicePairingNonce::new(
                     record.server_nonce,
@@ -170,7 +170,7 @@ async fn authorize_account_device_pair(
         })?;
     if authorize_payload.principal_id.as_str() != session.actor
         || authorize_payload.device_id.as_str() != device_id
-        || authorize_payload.device_public_key.as_str() != pair_pubkey.device_public_key
+        || authorize_payload.device_public_key_did.as_str() != pair_pubkey.device_public_key
         || !matches!(
             authorize_payload.authorized_by,
             arkret_models_collaboration::events_payloads::DeviceOrPrincipalRef::DeviceId(ref id)
@@ -185,8 +185,8 @@ async fn authorize_account_device_pair(
     let target_attestation =
         arkret_models_collaboration::http_bodies::DevicePairingTargetAttestation {
             device_id: authorize_payload.device_id.clone(),
-            device_public_key: arkret_wire::DidKey::new(
-                authorize_payload.device_public_key.as_str().to_owned(),
+            device_public_key_did: arkret_wire::DidKey::new(
+                authorize_payload.device_public_key_did.as_str().to_owned(),
             )
             .map_err(|error| {
                 AppError::param_invalid(format!(

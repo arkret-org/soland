@@ -90,7 +90,7 @@ impl HeaderViolation {
 pub(crate) fn delivery_binding_stale_response(
     new_recipient_id: &arkret_wire::DidCoreId,
     actor_id: &arkret_wire::DidCoreId,
-    new_service_resolution: &arkret_models_identity::ServiceResolutionCarrier,
+    new_recipient_resolution: &arkret_models_identity::ServiceResolutionCarrier,
     handover_frontier: &[arkret_identifiers::EventId],
     witness: Value,
 ) -> Value {
@@ -100,7 +100,7 @@ pub(crate) fn delivery_binding_stale_response(
     };
     let details = arkret_models_identity::artifacts_device_identity::DeliveryBindingStale {
         new_recipient_id: new_recipient_id.clone(),
-        new_service_resolution: new_service_resolution.clone(),
+        new_recipient_resolution: new_recipient_resolution.clone(),
         handover_frontier: handover_frontier.to_vec(),
         handover_proof:
             arkret_models_identity::artifacts_device_identity::DeliveryBindingStaleHandoverProof {

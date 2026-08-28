@@ -1530,7 +1530,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
             required_delta,
             principal_id: actor.to_owned(),
             replacement_device_id: authorize_payload.device_id.as_str().to_owned(),
-            replacement_device_public_key: authorize_payload.device_public_key.to_string(),
+            replacement_device_public_key: authorize_payload.device_public_key_did.to_string(),
         });
     }
     Ok(requirement)
@@ -1638,7 +1638,7 @@ pub(crate) fn canonical_event_ops(
         (
             cell,
             IssuedOp {
-                issuer: event.actor_id.clone(),
+                issuer_id: event.actor_id.clone(),
                 op,
             },
         )
@@ -1719,13 +1719,13 @@ fn canonical_event_sealed_ops(
                     ErrorCode::StateMismatch,
                     format!(
                         "stored Event {} cannot resolve its registered write on {}: {error:?}",
-                        event.event_id, write.cell
+                        event.event_id, write.cell_id
                     ),
                 )
             })?;
         for effect in effects {
             resolved.push((
-                effect.cell.clone(),
+                effect.cell_id.clone(),
                 SealedOp::from_projection(move_id.clone(), &effect),
             ));
         }
@@ -1813,7 +1813,7 @@ mod tests {
 
     fn issued_set(move_byte: u8, value: serde_json::Value) -> IssuedOp {
         IssuedOp {
-            issuer: crate::test_actor_id_str("did:web:alice.example"),
+            issuer_id: crate::test_actor_id_str("did:web:alice.example"),
             op: SealedOp::new(
                 Hash::new(format!("sha256:{}", format!("{move_byte:02x}").repeat(32))).unwrap(),
                 LatticeOp {
@@ -2058,7 +2058,7 @@ mod tests {
         assert_eq!(projected.len(), 2);
         let member_write = projected
             .iter()
-            .find(|write| write.cell == member_cell)
+            .find(|write| write.cell_id == member_cell)
             .expect("invite accept writes the member state cell");
         assert!(matches!(
             &member_write.op,
@@ -2076,7 +2076,7 @@ mod tests {
                 Vec::new()
             } else {
                 vec![IssuedOp {
-                    issuer: crate::test_actor_id(&actor_did),
+                    issuer_id: crate::test_actor_id(&actor_did),
                     op: SealedOp::new(
                         move_id.clone(),
                         LatticeOp {

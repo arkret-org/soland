@@ -576,7 +576,9 @@ async fn list_account_data(
         })
         .map(entry_from)
         .collect();
-    json_ok(AccountDataList { entries })
+    json_ok(AccountDataList {
+        account_data_entries: entries,
+    })
 }
 
 /// Service-owned coordination rows share the AccountData storage primitive so

@@ -25,10 +25,10 @@ fn cell_value_returns_none_for_bottom_state() {
     // Manually insert a Bottom state — represents concurrent conflict.
     let bottom = arkret_wire::Bottom {
         kind: arkret_wire::BottomKind::Conflict,
-        cells: vec![cell_id.clone()],
+        cell_ids: vec![cell_id.clone()],
         move_ids: vec![],
         seal_view: None,
-        heads: vec![],
+        head_ids: vec![],
         details: Some(arkret_wire::bottom_details([(
             "reason",
             serde_json::json!("concurrent set"),
@@ -74,7 +74,7 @@ fn bootstrap_singleton_cells_are_internally_scoped_per_realm() {
             "delivery_binding_policy registers exactly one cell write"
         );
         assert_eq!(
-            cell_writes[0].cell.as_str(),
+            cell_writes[0].cell_id.as_str(),
             format!("ak:cell:{FAMILY}:{}", arkret_wire::NULL_SUBJECT)
         );
         assert!(matches!(
@@ -526,10 +526,10 @@ fn authoritative_realm_profile_bottom_blocks_profile_write() {
         realm.to_owned(),
         CellState::Bottom(arkret_wire::Bottom {
             kind: arkret_wire::BottomKind::Conflict,
-            cells: vec![cell.clone()],
+            cell_ids: vec![cell.clone()],
             move_ids: Vec::new(),
             seal_view: None,
-            heads: vec![
+            head_ids: vec![
                 serde_json::json!({"move_id": first_id, "value": {"title": "renamed by alice"}}),
                 serde_json::json!({"move_id": second_id, "value": {"title": "renamed by bob"}}),
             ],

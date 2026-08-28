@@ -442,8 +442,8 @@ fn capability_summary(grant: &crate::authz::Grant) -> CapabilitySummary {
     CapabilitySummary {
         grant_id: grant.grant_id.clone(),
         realm_id: (!grant.realm_id.is_empty()).then(|| grant.realm_id.clone()),
-        issuer: grant.issuer.to_string(),
-        subject: grant.subject.to_string(),
+        issuer: grant.issuer_id.to_string(),
+        subject: grant.subject_id.to_string(),
         resource: (!grant.resource.is_empty()).then(|| grant.resource.clone()),
         actions: grant.actions.clone(),
         constraints: grant

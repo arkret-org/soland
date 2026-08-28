@@ -986,7 +986,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
     };
     let principal_id = typed.principal_id.as_str();
     let device_id = typed.device_id.as_str();
-    let device_public_key = typed.device_public_key.trim();
+    let device_public_key = typed.device_public_key_did.trim();
     if device_public_key.is_empty() {
         // No key to project; nothing the directory needs from this event.
         return;

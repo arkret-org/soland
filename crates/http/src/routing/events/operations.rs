@@ -77,7 +77,7 @@ pub(crate) async fn lock_active_series_operations(
             .context
             .preconditions
             .iter()
-            .map(|precondition| precondition.cell.as_str())
+            .map(|precondition| precondition.cell_id.as_str())
         {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             format!("cell-cas\0{}\0{cell}", operation.realm_id).hash(&mut hasher);

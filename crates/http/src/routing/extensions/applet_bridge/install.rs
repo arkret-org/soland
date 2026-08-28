@@ -219,7 +219,7 @@ pub(super) fn validate_admin_install_events(
                 .with_wire_code("applet_install_plan_mismatch")
             })?;
         let grant = payload.grant;
-        if grant.issuer.as_str() != install_actor
+        if grant.issuer_id.as_str() != install_actor
             || grant.realm_id.as_ref() != Some(realm_id)
             || !matches!(
                 &grant.subject,
@@ -435,8 +435,8 @@ fn validate_bot_managed_actor_unit(
         AppError::param_invalid(format!("Bot accountability payload is invalid: {error}"))
             .with_wire_code("applet_managed_actor_profile_invalid")
     })?;
-    if grant.issuer != package.service_id
-        || grant.subject != package.bot_actor_id
+    if grant.issuer_id != package.service_id
+        || grant.subject_id != package.bot_actor_id
         || grant.accountability_scope
             != AccountabilityScope::Single(AccountabilityScopeKind::ContractedService)
         || grant.grant_status != AccountabilityGrantStatus::Active
@@ -817,7 +817,7 @@ pub(super) async fn register_package_install(
         e2ee_authorization_refs,
         widget_policy_ref: None,
         effective_status,
-        rejected: denied_scope_values(&package, &approved_actions)
+        rejections: denied_scope_values(&package, &approved_actions)
             .into_iter()
             .map(|scope| AppletRejectedItem {
                 requested_scope: Some(scope.requested_scope),
@@ -1334,7 +1334,7 @@ pub(super) async fn build_install_plan(
         requested_scopes: package.requested_scopes.clone(),
         approved_scopes,
         denied_scopes,
-        events_to_submit: vec![EventSubmission {
+        event_submissions: vec![EventSubmission {
             event_kind: arkret_wire::EventKind::AppletRegistration
                 .as_str()
                 .to_owned(),
@@ -1361,7 +1361,7 @@ pub(super) fn registration_payload_from_package(
         "applet_id": package.applet_id,
         "service_id": package.service_id,
         "controller_id": package.controller_id,
-        "base_url": package.base_url,
+        "base_uri": package.base_uri,
         "bot_actor_id": package.bot_actor_id,
         "claimed_profiles": package.claimed_profiles,
         "protocols": package.protocols,
@@ -1680,12 +1680,12 @@ mod tests {
             DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
             vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
-                handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
+                handle_namespace_entries: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
                 ..Default::default()
             },
         );
         package.requested_scopes = vec!["ak.message.create".to_owned()];
-        package.endpoint_policy.endpoints = vec![AppletEndpointEntry {
+        package.endpoint_policy.endpoint_entries = vec![AppletEndpointEntry {
             method: AppletEndpointMethod::Post,
             path: "/events".to_owned(),
             auth: Some(AppletEndpointAuth::WebhookSignature),
@@ -1805,7 +1805,7 @@ mod tests {
             DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
             vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
-                handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
+                handle_namespace_entries: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
                 ..Default::default()
             },
         )

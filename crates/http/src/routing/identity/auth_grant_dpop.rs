@@ -290,7 +290,7 @@ async fn introspect_session_grant_remote(
     };
     let request = SessionGrantIntrospectRequestBody::ByJwt(SessionGrantIntrospectByJwt {
         grant_jwt: grant_jwt.to_owned(),
-        audience: Some(configured_service_audience(state)?),
+        audience_id: Some(configured_service_audience(state)?),
         // The Account Authority returns non-secret grant metadata over this
         // authenticated S2S channel; holder possession is verified below by the
         // request's DPoP proof against the returned `cnf_jkt`.
@@ -460,7 +460,7 @@ fn session_binding_from_introspection(
     grant: &SessionGrantIntrospectGrant,
 ) -> Result<(String, Option<AgentSessionRecord>), AuthError> {
     let authority = grant.principal_authority_key();
-    if authority.principal_id != grant.subject || authority.principal_server_id != grant.audience {
+    if authority.principal_id != grant.subject_id || authority.principal_server_id != grant.audience_id {
         return Err(unauthenticated(
             "session grant authority context does not match its subject/audience",
         ));
@@ -476,7 +476,7 @@ fn session_binding_from_introspection(
         // binding: top-level `device_id`/`device_binding` are the human-device
         // shape and MUST be absent, so the binding itself is the only device
         // authority to check.
-        if agent_id != &grant.subject {
+        if agent_id != &grant.subject_id {
             return Err(unauthenticated(
                 "agent holder binding does not match the introspected subject",
             ));
@@ -543,7 +543,7 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
     grant_jwt: &str,
     grant: &SessionGrantIntrospectGrant,
 ) -> Result<SessionRecord, AuthError> {
-    if grant.audience.as_str() != state.service_id() {
+    if grant.audience_id.as_str() != state.service_id() {
         return Err(unauthenticated(
             "session grant audience does not match this principal server",
         ));
@@ -553,14 +553,14 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
         crate::routing::identity::auth::session_credential_hash(grant_jwt, state.service_id());
     Ok(SessionRecord {
         token_hash,
-        actor: grant.subject.to_string(),
+        actor: grant.subject_id.to_string(),
         device_id,
         audience: state.service_id().clone(),
         session_public_key: Some(grant.session_public_key.as_str().to_owned()),
         agent_session,
         session_grant: Some(SessionGrantAuthorizationState {
             grant_id: grant.id.clone(),
-            issuer: grant.issuer.clone(),
+            issuer: grant.issuer_id.clone(),
             scopes: grant.scopes.clone(),
             credential_class: grant.credential_class,
             holder_binding: grant.holder_binding.clone(),
@@ -645,7 +645,7 @@ pub(crate) async fn grant_dpop_session(
     let grant = introspect_session_grant_cached(state, grant_jwt, force_fresh).await?;
 
     // 5. audience == this service's service_id.
-    if grant.audience.as_str() != state.service_id() {
+    if grant.audience_id.as_str() != state.service_id() {
         return Err(unauthenticated(
             "session grant audience does not match this principal server",
         ));
@@ -690,7 +690,7 @@ pub(crate) fn session_from_verified_grant(
 ) -> SessionRecord {
     let grant_context = SessionGrantAuthorizationState {
         grant_id: grant.id.clone(),
-        issuer: grant.issuer.clone(),
+        issuer: grant.issuer_id.clone(),
         scopes: grant.scopes.clone(),
         credential_class: grant.credential_class,
         holder_binding: grant.holder_binding.clone(),
@@ -702,7 +702,7 @@ pub(crate) fn session_from_verified_grant(
             grant_jwt,
             state.service_id(),
         ),
-        actor: grant.subject.to_string(),
+        actor: grant.subject_id.to_string(),
         device_id,
         audience: state.service_id().clone(),
         session_public_key: Some(grant.session_public_key.into_string()),
@@ -836,8 +836,8 @@ mod tests {
                 "ak:session_grant:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-",
             )
             .unwrap(),
-            issuer: "did:web:coauth.local".to_owned(),
-            subject: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            issuer_id: "did:web:coauth.local".to_owned(),
+            subject_id: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
             service_account_id: "alice".to_owned(),
             device_id: Some(
                 DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap(),
@@ -855,7 +855,7 @@ mod tests {
                     model_generation_ref: 1,
                 },
             ),
-            audience: arkret_wire::project_did_to_core_id(
+            audience_id: arkret_wire::project_did_to_core_id(
                     &arkret_wire::Did::new("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service").unwrap(),
                 )
                 .unwrap(),
@@ -900,7 +900,7 @@ mod tests {
         // the typed holder binding is self-contained.
         grant.device_id = None;
         grant.device_binding = None;
-        grant.subject = DidCoreId::new("ak:did_core:web:agent.example").unwrap();
+        grant.subject_id = DidCoreId::new("ak:did_core:web:agent.example").unwrap();
         grant.scopes = vec!["ak.self.events.read.scan.v1".to_owned()];
         grant.holder_binding = SessionGrantHolderBinding::AgentRuntime {
             agent_id: DidCoreId::new("ak:did_core:web:agent.example").unwrap(),

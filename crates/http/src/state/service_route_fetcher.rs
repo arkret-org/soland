@@ -256,7 +256,7 @@ impl VerifiedBindingRouteFetcher {
             })?;
         let description = self
             .transport
-            .fetch_describe(&record.record.base_url, registered_kind)
+            .fetch_describe(&record.record.base_uri, registered_kind)
             .await
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let description = validate_service_describe(&record, description, registered_kind)?;
@@ -309,11 +309,11 @@ fn validate_service_describe(
             "ServiceDescribe has multiple http_json bindings".to_owned(),
         ));
     }
-    let advertised_base_raw = binding.base_url();
+    let advertised_base_raw = binding.base_uri();
     let advertised_base = CanonicalServiceUrl::canonicalize(advertised_base_raw)
         .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
     if advertised_base.as_str() != advertised_base_raw
-        || advertised_base.as_str() != record.record.base_url
+        || advertised_base.as_str() != record.record.base_uri
     {
         return Err(ServiceError::SchemaViolation(
             "ServiceDescribe http_json base does not match the signed record target".to_owned(),
@@ -357,9 +357,9 @@ fn validate_route_binding(
 ) -> ServiceResult<()> {
     use arkret_models_identity::service_identity::CanonicalServiceUrl;
 
-    let base = CanonicalServiceUrl::canonicalize(&record.record.base_url)
+    let base = CanonicalServiceUrl::canonicalize(&record.record.base_uri)
         .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-    if base.to_string() != record.record.base_url {
+    if base.to_string() != record.record.base_uri {
         return Err(ServiceError::SchemaViolation(
             "service resolution base_url is not canonical".to_owned(),
         ));
@@ -387,7 +387,7 @@ fn validate_route_binding(
             method_history_head: record.record.method_history_head.clone(),
             version_id: record.record.version_id.clone(),
         },
-        &record.record.base_url,
+        &record.record.base_uri,
     )
     .map_err(|error| ServiceError::Internal(error.to_string()))?;
     if digest != record.record.describe_digest {
@@ -590,7 +590,7 @@ mod tests {
             ServiceKind::PrincipalServer,
             vec!["ak.operation_bundle.principal_server.describe.v1".to_owned()],
             vec![TransportBinding::HttpJson {
-                base_url: base_url.to_owned(),
+                base_uri: base_url.to_owned(),
                 extension_profile_required: (),
             }],
         );
@@ -624,7 +624,7 @@ mod tests {
                 record_sequence: 0,
                 previous_record_digest: None,
                 current_record_url: format!("{base_url}_arkret/open/services/fixture/resolution"),
-                base_url: base_url.to_owned(),
+                base_uri: base_url.to_owned(),
                 describe_digest,
                 issued_at,
                 refresh_after: issued_at + Duration::minutes(5),
@@ -653,11 +653,11 @@ mod tests {
         );
 
         let mut wrong_base = description;
-        let TransportBinding::HttpJson { base_url, .. } = &mut wrong_base.transport_bindings[0]
+        let TransportBinding::HttpJson { base_uri, .. } = &mut wrong_base.transport_bindings[0]
         else {
             panic!("fixture transport must be HTTP JSON")
         };
-        *base_url = "https://other.example/".to_owned();
+        *base_uri = "https://other.example/".to_owned();
         assert!(
             validate_service_describe(&record, wrong_base, ServiceKind::PrincipalServer).is_err()
         );

@@ -605,7 +605,7 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
             PersistenceError::Internal(format!("invite_receive_policy payload encode: {error}"))
         })?;
         let denied_subjects = policy
-            .denied_subjects
+            .denied_subject_ids
             .iter()
             .map(|did| did.as_str().to_owned())
             .collect::<Vec<_>>();

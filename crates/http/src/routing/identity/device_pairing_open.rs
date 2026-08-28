@@ -125,7 +125,7 @@ pub(super) async fn stage_device_pairing(
     json_ok(DevicePairingStageOutcome {
         device_pairing_request_id,
         pairing_code,
-        gate_audience,
+        gate_audience_uri: gate_audience,
         server_nonce,
         expires_at,
     })
@@ -194,7 +194,7 @@ pub(super) async fn resolve_device_pairing(
         .map_err(|error| AppError::internal(format!("stored device_metadata invalid: {error}")))?;
 
     json_ok(DevicePairingBootstrap {
-        arkret_base_url: state
+        arkret_base_uri: state
             .config()
             .public_base_url
             .trim_end_matches('/')
@@ -207,7 +207,7 @@ pub(super) async fn resolve_device_pairing(
             .map_err(|error| AppError::internal(format!("stored pairing_code invalid: {error}")))?,
         new_device_pubkey,
         client_nonce,
-        gate_audience: record.gate_audience,
+        gate_audience_uri: record.gate_audience,
         server_nonce,
         display_name,
         device_metadata,

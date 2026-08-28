@@ -213,7 +213,7 @@ async fn introspect_session_grant_for_logout(
     let request = SessionGrantIntrospectRequestBody::ByJwt(
         arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectByJwt {
             grant_jwt: grant_jwt.to_owned(),
-            audience: Some(audience),
+            audience_id: Some(audience),
             proof: None,
         },
     );
@@ -614,7 +614,7 @@ async fn verify_cross_session_revoke_proof(
     })?;
     let service_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service core id is invalid: {error}")))?;
-    if proof.audience != service_id {
+    if proof.audience_id != service_id {
         return Err(session_revoke_proof_invalid(
             "session revoke lifecycle proof audience does not match this service",
         ));
