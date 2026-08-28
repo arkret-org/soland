@@ -410,7 +410,6 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
         .take_json()
         .await
         .unwrap();
-    assert_eq!(sent["ok"], true, "{sent}");
     assert_eq!(sent["delivered"][&actor_core][0], existing_device);
 
     let subscribe =
@@ -528,7 +527,6 @@ async fn to_device_capacity_eviction_sets_lost_watermark_body() {
             .take_json()
             .await
             .unwrap();
-        assert_eq!(sent["ok"], true);
         assert_eq!(sent["delivered"][&bob_core][0], bob_device);
     }
 

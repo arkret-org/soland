@@ -11,7 +11,7 @@ use arkret_signatures::{Ed25519DetachedJwsSigner, EventSigner};
 use arkret_wire::{PayloadProof, ProofContextId};
 use chrono::Duration;
 use parking_lot::RwLock;
-use salvo::test::{ResponseExt, TestClient};
+use salvo::test::ResponseExt;
 use soland_services::identity::{PinnedDidDocumentState, PinnedDidVersionStatus};
 use soland_services::organization_registration::{
     OrganizationDidResolutionPort, OrganizationRegistrationService,
@@ -215,7 +215,10 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable_bo
             .send(&app)
             .await;
     let unsupported_scope_body: serde_json::Value = unsupported_scope.take_json().await.unwrap();
-    assert_eq!(unsupported_scope_body["status"], 422);
+    assert_eq!(
+        unsupported_scope_body["status"], 422,
+        "{unsupported_scope_body}"
+    );
     assert_eq!(
         unsupported_scope_body["type"],
         "https://arkret.org/problems/unsupported_organization_registration_scope"

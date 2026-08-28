@@ -1903,6 +1903,14 @@ async fn durable_events_query_from_parts(
         if !super::super::event_log::event_visible_to_session(state, &record, session).await {
             continue;
         }
+        // Projection failures (notably historical records without the
+        // mandatory producer verification_method) are already omitted from
+        // the closed read response. Exclude them before applying the cursor
+        // window so an unreadable record cannot consume a page slot and yield
+        // an empty page with `has_more=true`.
+        if super::super::event_log::sdk_event_for_state(state, &record).is_err() {
+            continue;
+        }
         // Personal blocklists are encrypted actor-private presentation state.
         // They must not remove accepted Operations from the canonical query;
         // clients apply the holder's filter after sync.

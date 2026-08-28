@@ -309,7 +309,7 @@ async fn rate_limit_errors_use_problem_details_with_retry_after_body() {
     assert_eq!(problem_code(&limited), "rate_limited");
     assert!(limited["retry_after_ms"].as_u64().unwrap() > 0);
     assert!(
-        limited["request_id"]
+        limited["instance"]
             .as_str()
             .unwrap()
             .starts_with("ak:request:")
@@ -495,7 +495,6 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device_bo
         .await;
     assert_eq!(response.status_code.unwrap(), StatusCode::OK);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["ok"], true);
     assert_eq!(body["revoked"], true);
 
     let push_devices = state

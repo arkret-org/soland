@@ -83,7 +83,11 @@ async fn recovery_policy_production_accepts_verified_payload_body() {
     let policy = signed_recovery_policy(&signing, &principal_id, &verification_method, 1, None);
 
     let body = post_recovery_policy(state, token, &policy, &signing, StatusCode::CREATED).await;
-    assert_eq!(body["ok"], true);
+    assert_eq!(
+        body["principal_id"],
+        fixture_actor_core_id(&principal_id).as_str()
+    );
+    assert_eq!(body["version"], 1);
 }
 
 #[test]
@@ -145,7 +149,11 @@ async fn recovery_policy_accepts_genesis_session_device_signature_body() {
 
     let body =
         post_recovery_policy(state, token, &policy, &device_signing, StatusCode::CREATED).await;
-    assert_eq!(body["ok"], true);
+    assert_eq!(
+        body["principal_id"],
+        fixture_actor_core_id(&principal_id).as_str()
+    );
+    assert_eq!(body["version"], 1);
 }
 
 #[test]

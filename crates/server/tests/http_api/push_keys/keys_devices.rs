@@ -118,7 +118,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "one_time_keys": {
-                "did:web:alice.example": {
+                (alice_core.as_str()): {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001": "signed_curve25519"
                 }
             }
@@ -129,7 +129,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
         .await
         .unwrap();
     assert_eq!(
-        claimed_once["one_time_keys"]["did:web:alice.example"]["ak:device:01904100-0000-7000-8000-a11ce0000001"]
+        claimed_once["one_time_keys"][alice_core.as_str()]["ak:device:01904100-0000-7000-8000-a11ce0000001"]
             ["signed_curve25519"]["key"],
         "one-time"
     );
@@ -137,7 +137,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "one_time_keys": {
-                "did:web:alice.example": {
+                (alice_core.as_str()): {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001": "signed_curve25519"
                 }
             }
@@ -148,7 +148,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
         .await
         .unwrap();
     assert!(
-        claimed_replay["one_time_keys"]["did:web:alice.example"]["ak:device:01904100-0000-7000-8000-a11ce0000001"].is_null(),
+        claimed_replay["one_time_keys"][alice_core.as_str()]["ak:device:01904100-0000-7000-8000-a11ce0000001"].is_null(),
         "one-time key claim must be single-use"
     );
 
@@ -199,7 +199,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(send["ok"], true);
+    assert_eq!(send["delivered"][alice_core.as_str()][0], alice_device);
 
     let duplicate: Value = TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -629,7 +629,6 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
             .take_json()
             .await
             .unwrap();
-    assert_eq!(push_registration["ok"], true);
     assert!(
         push_registration["registration_id"]
             .as_str()

@@ -467,7 +467,6 @@ async fn push_profile_and_moderation_contracts_work_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(push["ok"], true);
     // push-notifications.md §3.1: the registration response MUST carry the
     // HMAC-derived pairwise pseudonym (ak:pseudonym:push:...) — it is the only
     // contractual path a caller gets it from. Cross-check it against the
