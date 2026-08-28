@@ -442,7 +442,7 @@ pub(crate) async fn validate_event_proofs(
                 .await;
             }
             if internal_admission
-                .is_some_and(|admission| admission.is_mimi_provider(session, object))
+                .is_some_and(|admission| admission.is_local_service_producer(session, object))
             {
                 let expected_method =
                     state
@@ -452,7 +452,7 @@ pub(crate) async fn validate_event_proofs(
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 "internal_error",
                                 format!(
-                                    "local MIMI service signing method is unavailable: {error}"
+                                    "local service Event signing method is unavailable: {error}"
                                 ),
                             )
                         })?;
@@ -460,7 +460,7 @@ pub(crate) async fn validate_event_proofs(
                     return Err(event_validation_error(
                         StatusCode::BAD_REQUEST,
                         "invalid_proof",
-                        "MIMI Event proof does not use the local service notary key",
+                        "local service Event proof does not use the local service notary key",
                     ));
                 }
                 let public_key = state.notary_signing_key().verifying_key();
@@ -475,11 +475,11 @@ pub(crate) async fn validate_event_proofs(
                     digest_suite,
                 )
                 .map_err(|error| {
-                    tracing::debug!(%error, "local MIMI Event proof signature failed");
+                    tracing::debug!(%error, "local service Event proof signature failed");
                     event_validation_error(
                         StatusCode::BAD_REQUEST,
                         "invalid_proof",
-                        "MIMI Event proof signature is invalid",
+                        "local service Event proof signature is invalid",
                     )
                 })?;
                 return did_key_from_ed25519_bytes(public_key.as_bytes());
@@ -1162,6 +1162,68 @@ mod tests {
         }
     }
 
+    fn signed_service_franking_event(
+        state: &AppState,
+    ) -> (arkret_wire::AuthoredEvent, SessionRecord, String, String) {
+        let realm_id = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned();
+        let target_event_id = "ak:event:AQsHmGu_9sPOyJ4aG8VlWQBp8wGGhdC-BjfAaXqrIbk-".to_owned();
+        let actor_id = arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap();
+        let service_full_id = state.service_resolution_commitment().full_id.clone();
+        let verification_method = state.service_verification_method("notary-key").unwrap();
+        let created_at = chrono::Utc::now();
+        let event = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::ModerationFrankingProof.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
+            },
+            actor_id.clone(),
+            actor_id.clone(),
+            0,
+            arkret_wire::Hlc::new("019041000000-0000-00000000".to_owned()).unwrap(),
+            json!({
+                "realm_id": realm_id,
+                "event_id": target_event_id,
+                "received_by": actor_id,
+                "verification_method": verification_method,
+                "received_at": "2026-08-28T00:00:00.000Z",
+                "replay_nonce": "0123456789abcdef",
+                "signature": "c2lnbmF0dXJl"
+            }),
+            created_at,
+        )
+        .unwrap();
+        let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+            event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+        let signer = arkret_signatures::Ed25519PayloadSigner::new(
+            state.notary_signing_key().as_ref().clone(),
+            service_full_id,
+            verification_method.clone(),
+        );
+        arkret_signatures::sign_event(
+            &mut event,
+            &signer,
+            &verification_method,
+            arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+        )
+        .unwrap();
+        let session = SessionRecord {
+            token_hash: "franking-proof-service-test".to_owned(),
+            actor: state.service_id().clone(),
+            device_id: String::new(),
+            audience: state.service_id().clone(),
+            session_public_key: None,
+            agent_session: None,
+            session_grant: None,
+            expires_at: created_at + chrono::Duration::minutes(1),
+            created_at,
+            revoked_at: None,
+        };
+        (event, session, realm_id, target_event_id)
+    }
+
     /// These fixtures never reach the signature check, so the envelope bytes
     /// only have to be non-empty.
     const ENVELOPE_BYTES: &[u8] = br#"{"kind":"ak.test.event"}"#;
@@ -1266,5 +1328,81 @@ mod tests {
             "a rooted DID URL must not be rejected by the rooting gate: {}",
             error.message
         );
+    }
+
+    /// `event-and-patch.md` sections 2.4 and 3.1 plus
+    /// `content-moderation.md` section 3.4: a receiving service directly
+    /// authors the durable franking-proof Event as its own service principal.
+    /// Its producer proof therefore resolves through the exact local service
+    /// DID method, never through the development-device proof branch.
+    #[tokio::test]
+    async fn accepts_exactly_bound_service_franking_event_producer_proof() {
+        let state = state();
+        let (event, session, realm_id, target_event_id) = signed_service_franking_event(&state);
+        let envelope_bytes =
+            arkret_canonical::canonical_json_bytes(&event.event().digest_payload().unwrap())
+                .unwrap();
+        let event_digest = event.event().proofs[0]
+            .as_producer()
+            .unwrap()
+            .event_digest
+            .to_string();
+        let object = serde_json::to_value(event.event()).unwrap();
+        let object = object.as_object().unwrap();
+        let admission = InternalEventAdmission::service_franking_proof(
+            &realm_id,
+            state.service_id().as_str(),
+            &target_event_id,
+        );
+
+        validate_event_proofs(
+            object,
+            &state,
+            &session,
+            state.service_id().as_str(),
+            &event_digest,
+            arkret_canonical::DigestSuite::Sha256,
+            &envelope_bytes,
+            &[],
+            Some(&admission),
+        )
+        .await
+        .expect("an exactly bound service-authored franking Event must verify with the notary key");
+    }
+
+    #[tokio::test]
+    async fn service_franking_producer_branch_rejects_a_different_target_binding() {
+        let state = state();
+        let (event, session, realm_id, _) = signed_service_franking_event(&state);
+        let envelope_bytes =
+            arkret_canonical::canonical_json_bytes(&event.event().digest_payload().unwrap())
+                .unwrap();
+        let event_digest = event.event().proofs[0]
+            .as_producer()
+            .unwrap()
+            .event_digest
+            .to_string();
+        let object = serde_json::to_value(event.event()).unwrap();
+        let object = object.as_object().unwrap();
+        let admission = InternalEventAdmission::service_franking_proof(
+            &realm_id,
+            state.service_id().as_str(),
+            "ak:event:AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        );
+
+        let error = validate_event_proofs(
+            object,
+            &state,
+            &session,
+            state.service_id().as_str(),
+            &event_digest,
+            arkret_canonical::DigestSuite::Sha256,
+            &envelope_bytes,
+            &[],
+            Some(&admission),
+        )
+        .await
+        .expect_err("a service admission for another target must not authorize the producer key");
+        assert_eq!(error.code, "invalid_proof");
     }
 }

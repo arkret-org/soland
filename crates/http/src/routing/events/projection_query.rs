@@ -156,6 +156,21 @@ fn projection_row_visible_to_session(
     })
 }
 
+/// Current object projections are a baseline, not an Event-history window.
+///
+/// `history_access=since_join` limits historical Event bodies and old object
+/// revisions. It must not hide the current Space/Strand row from an active
+/// Realm member merely because the object was created before that member
+/// joined. Circle-scoped rows still require current Circle visibility.
+fn current_projection_scope_visible_to_session(
+    projection: &ProjectionState,
+    session: &SessionRecord,
+    scope_circle_id: Option<&str>,
+) -> bool {
+    scope_circle_id
+        .is_none_or(|circle_id| projection.circle_scope_visible_to_actor(circle_id, &session.actor))
+}
+
 fn projection_realm_history_allows(
     projection: &ProjectionState,
     realm_id: &str,
@@ -889,23 +904,16 @@ async fn list_space_container_projections(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
-    let history_access = realm_history_access(state, &realm_id).await;
     let proj = state.projections().snapshot();
     let spaces: Vec<ProjectionSpaceRow> = proj
         .space_containers
         .values()
         .filter(|p| p.realm_id == realm_id)
         .filter(|p| {
-            projection_row_visible_to_session(
-                state,
+            current_projection_scope_visible_to_session(
                 &proj,
-                &realm_id,
                 &session,
-                &p.created_by,
-                p.created_at,
-                &p.history_basis_seals,
                 p.scope_circle_id.as_deref(),
-                &history_access,
             )
         })
         .filter(|p| include_terminal || p.state != SpaceContainerLifecycleState::Tombstoned)
@@ -971,7 +979,6 @@ async fn list_strand_projections(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
-    let history_access = realm_history_access(state, &realm_id).await;
     let proj = state.projections().snapshot();
     // COT-06-004 — the Realm's default-Strand pointer drives each row's
     // derived `is_default` flag (no per-Strand stored column).
@@ -984,16 +991,10 @@ async fn list_strand_projections(
         .values()
         .filter(|f| f.realm_id == realm_id)
         .filter(|f| {
-            projection_row_visible_to_session(
-                state,
+            current_projection_scope_visible_to_session(
                 &proj,
-                &realm_id,
                 &session,
-                &f.created_by,
-                f.created_at,
-                &f.history_basis_seals,
                 f.scope_circle_id.as_deref(),
-                &history_access,
             )
         })
         .filter(|f| include_terminal || !is_object_terminal(f.state))

@@ -825,13 +825,24 @@ impl InternalEventAdmission {
         }
     }
 
-    pub(in crate::routing::events::event_log) fn is_mimi_provider(
+    /// Return whether this is one of the closed internal adapters whose
+    /// producer is the local service principal itself.
+    ///
+    /// This is deliberately an exact binding allowlist, not a session-shape
+    /// shortcut: service-authored Events use the service DID's notary method
+    /// as their producer proof authority, while user/device, Applet, Agent and
+    /// federated Events must continue through their own proof branches.
+    pub(in crate::routing::events::event_log) fn is_local_service_producer(
         &self,
         session: &SessionRecord,
         object: &serde_json::Map<String, Value>,
     ) -> bool {
-        matches!(self.binding, InternalEventBinding::MimiProvider { .. })
-            && self.matches(session, object)
+        matches!(
+            self.binding,
+            InternalEventBinding::MimiProvider { .. }
+                | InternalEventBinding::MimiModerationReport { .. }
+                | InternalEventBinding::ServiceFrankingProof { .. }
+        ) && self.matches(session, object)
     }
 
     pub(in crate::routing::events::event_log) fn authorizes_realm_membership_bypass(

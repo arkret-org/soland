@@ -138,6 +138,114 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state_body() {
 }
 
 #[test]
+fn current_board_and_strand_projection_survives_since_join_history_cut() {
+    run_on_deep_stack(
+        "current_board_and_strand_projection_survives_since_join_history_cut",
+        current_board_and_strand_projection_survives_since_join_history_cut_body,
+    );
+}
+
+async fn current_board_and_strand_projection_survives_since_join_history_cut_body() {
+    let state = soland_test_support::app_state(test_config());
+    let alice = dev_token(state.clone()).await;
+    seed_demo_realm_basis(&state).await;
+    let realm_id = demo_realm_id();
+
+    let board_create = signed_space_event(
+        "ak:event:AfDT9W9G2btP1vV9vyBWqRVVC3v3VBEA2lBTMtMJn5xo",
+        1,
+        "ak.space.create",
+        serde_json::json!({
+            "object": {
+                "realm_id": realm_id,
+                "kind": "board",
+                "title": "Pre-join release board",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
+            }
+        }),
+        Vec::new(),
+    );
+    let board_id = authored_space_id(&board_create).to_string();
+    let board_event_id = authored_event_id(&board_create).to_string();
+    let response: Value = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&board_create)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(response["status"], "accepted", "board create: {response}");
+
+    let strand_create = signed_strand_event(
+        "ak:event:AZnjKqvxd4P1vCU8AkgNMe-GNZRVm_pUFmuBAggKXZcp",
+        2,
+        "ak.strand.create",
+        serde_json::json!({
+            "object": {
+                "realm_id": realm_id,
+                "metadata": { "title": "Pre-join current card" },
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
+            }
+        }),
+        vec![board_event_id.as_str()],
+    );
+    let strand_id = authored_strand_id(&strand_create).to_string();
+    let response: Value = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&strand_create)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(response["status"], "accepted", "strand create: {response}");
+
+    let bob = register_account(
+        state.clone(),
+        "did:web:bob.example",
+        "@bob",
+        "ak:device:01904100-0000-7000-8000-b0b0b0002201",
+    )
+    .await;
+    add_test_realm_member(&state, realm_id, "did:web:bob.example");
+
+    let spaces: Value = TestClient::get(format!(
+        "http://server/_arkret/self/realms/{realm_id}/spaces"
+    ))
+    .add_header("authorization", format!("Bearer {bob}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let board = spaces["spaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["space_id"] == board_id)
+        .expect("current pre-join Board must remain in the active member baseline");
+    assert_eq!(board["title"], "Pre-join release board");
+
+    let strands: Value = TestClient::get(format!(
+        "http://server/_arkret/self/realms/{realm_id}/strands"
+    ))
+    .add_header("authorization", format!("Bearer {bob}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let strand = strands["strands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["strand_id"] == strand_id)
+        .expect("current pre-join Strand must remain in the active member baseline");
+    assert_eq!(strand["title"], "Pre-join current card");
+}
+
+#[test]
 fn projection_strands_endpoint_reports_lifecycle_state() {
     run_on_deep_stack(
         "projection_strands_endpoint_reports_lifecycle_state",

@@ -36,6 +36,12 @@ pub(super) fn protocol_router() -> Router {
         )
 }
 
+fn authored_event_wire_value(
+    event: &arkret_wire::AuthoredEvent,
+) -> Result<Value, serde_json::Error> {
+    serde_json::to_value(event.event())
+}
+
 pub(crate) async fn persist_mimi_facade_moderation_report_event(
     state: &AppState,
     payload: ModerationReportPayload,
@@ -175,7 +181,7 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
         created_at,
         revoked_at: None,
     };
-    let envelope = serde_json::to_value(event).map_err(|error| {
+    let envelope = authored_event_wire_value(&event).map_err(|error| {
         AppError::internal(format!("moderation Event serialize failed: {error}"))
     })?;
     crate::routing::events::event_log::submit_mimi_moderation_report_event_value(
@@ -334,7 +340,7 @@ pub(crate) async fn prepare_franking_proof_event(
         created_at,
         revoked_at: None,
     };
-    let envelope = serde_json::to_value(event)
+    let envelope = authored_event_wire_value(&event)
         .map_err(|error| AppError::internal(format!("franking Event serialize failed: {error}")))?;
     crate::routing::events::event_log::prepare_service_franking_proof_event_value(
         state,
@@ -1353,7 +1359,6 @@ async fn moderation_routing_visible_to_actor(
 
 #[cfg(test)]
 mod report_safety_tests {
-    use ed25519_dalek::Signer as _;
     use serde_json::{Value, json};
     use soland_storage_postgres::Db;
 
@@ -1475,6 +1480,39 @@ mod report_safety_tests {
         )
         .unwrap();
         serde_json::to_value(proof).unwrap()
+    }
+
+    #[test]
+    fn authored_event_wire_value_is_the_bare_event_envelope() {
+        let realm_id = RealmId::new(REALM.to_owned()).unwrap();
+        let event = crate::test_event::raw_event(
+            arkret_wire::EventKind::MessageCreate.as_str(),
+            ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            crate::test_actor_id_str("did:web:alice.example"),
+            0,
+            arkret_wire::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
+            json!({
+                "strand_id": arkret_wire::StrandId::from_event_id(
+                    &EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x31; 32]),
+                ),
+                "track_name": "discussion",
+                "content": {"kind": "ak.content.text", "body": "hello"},
+            }),
+        )
+        .unwrap();
+        let authored = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+            event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+
+        let wire = authored_event_wire_value(&authored).unwrap();
+
+        assert_eq!(wire["event_id"], json!(authored.event_id()));
+        assert!(wire.get("digest_suite").is_none());
+        assert!(wire.get("event").is_none());
     }
 
     #[test]
