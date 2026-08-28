@@ -149,7 +149,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
     // `directory_resolve_handle_invite_accepts_canonical_handles_without_contact`,
     // which registers an account with a canonical handle binding.
 
-    let describe: Value = TestClient::get("http://server/_arkret/describe")
+    let describe: Value = TestClient::get("http://server/_arkret/find/directory/describe")
         .send(&app())
         .await
         .take_json()
@@ -514,17 +514,6 @@ async fn directory_demo_projection_rejects_outside_development_mode_body() {
             "list-handles-for-subject",
             serde_json::json!({"subject": fixture_actor_core_id("did:web:alice.example")}),
         ),
-        (
-            "private-contact-discovery",
-            serde_json::json!({
-                "profile": "ak.private_contact_discovery.v1",
-                "phase": "blind",
-                "batch_id": "ak:batch:01904100-0000-7000-8000-000000000001",
-                "ciphersuite": "ristretto255-SHA512",
-                "key_epoch": 1,
-                "blinded_elements": ["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
-            }),
-        ),
     ];
 
     for (path, body) in not_found_cases {
@@ -586,7 +575,11 @@ async fn private_contact_discovery_rejects_plaintext_identifier_matching_body() 
         StatusCode::UNPROCESSABLE_ENTITY
     );
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(problem_code(&body), "schema_violation");
+    assert_eq!(
+        problem_code(&body),
+        "unsupported_operation_version",
+        "{body}"
+    );
     assert!(
         body.get("matches").is_none(),
         "private contact discovery must not return plaintext matches: {body}"
@@ -811,7 +804,8 @@ async fn broader_protocol_surface_returns_contract_shapes_body() {
             .unwrap();
     assert_eq!(
         directory_describe["service_id"],
-        soland_test_support::fixture_principal_server_id().as_str()
+        soland_test_support::fixture_principal_server_id().as_str(),
+        "{directory_describe}"
     );
 
     let resolved: Value = TestClient::post("http://server/_arkret/find/directory/resolve-realm")

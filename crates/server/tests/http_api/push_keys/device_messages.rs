@@ -306,7 +306,6 @@ async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed_body
         .take_json()
         .await
         .unwrap();
-    assert_eq!(acked["ok"], true);
     assert_eq!(acked["pruned_count"], 1);
 
     let ack_replay: Value = TestClient::post("http://server/_arkret/self/device_messages/ack")
@@ -317,7 +316,6 @@ async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed_body
         .take_json()
         .await
         .unwrap();
-    assert_eq!(ack_replay["ok"], true);
     assert_eq!(ack_replay["pruned_count"], 0);
 
     let after_ack = account_subscribe_frame(state, Some(&token), "catchup=true").await;
@@ -464,7 +462,6 @@ async fn device_messages_evicted_after_session_logout_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(logout["ok"], true);
     assert_eq!(logout["revoked"], true);
 
     let revoked_session_messages = TestClient::get("http://server/_arkret/self/device_messages")

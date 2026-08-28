@@ -1011,12 +1011,12 @@ async fn events_describe_and_single_event_submit_work_body() {
         .take_json()
         .await
         .unwrap();
-    // Alice authored three Events here after the ordinary Realm's eight-Event
-    // closed bootstrap unit and the PCR create/authorize pair projected by
-    // `dev_token` for strict principal-device proof verification.
+    // The stable principal selector returns the three Events authored by this
+    // test; bootstrap records without complete producer proof evidence are not
+    // part of the readable event page.
     let listed_events = listed["events"].as_array().unwrap();
-    assert_eq!(listed_events.len(), 13);
-    assert_eq!(listed_events[0]["kind"], "ak.realm.create");
+    assert_eq!(listed_events.len(), 3);
+    assert_eq!(listed_events[0]["kind"], "ak.message.create");
     assert!(!listed["has_more"].as_bool().unwrap_or(false));
     assert_eq!(
         listed_events.last().unwrap()["event_id"],
