@@ -107,7 +107,7 @@ fn federation_batch_establishes_local_binding(
 ) -> bool {
     if binding.delivery_binding_frontier.is_empty()
         || binding.membership_frontier.is_empty()
-        || binding.destination_service_kind != "principal_server"
+        || binding.destination_kind != "principal_server"
         || submissions.len() != binding.delivery_binding_frontier.len()
     {
         return false;

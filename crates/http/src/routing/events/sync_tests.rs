@@ -1784,7 +1784,7 @@ async fn membership_only_projection_advances_incremental_roster() {
     let incremental =
         build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
     let value = serde_json::to_value(&incremental).unwrap();
-    let members = value["realms"][ROSTER_REALM]["members"]
+    let members = value["realms"][ROSTER_REALM]["member_roster_entries"]
         .as_array()
         .expect("membership-only delta must include the current roster projection");
     assert_eq!(

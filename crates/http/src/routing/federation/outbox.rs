@@ -2697,7 +2697,7 @@ mod tests {
                         .unwrap(),
                         membership_frontier: Vec::new(),
                         delivery_binding_frontier: Vec::new(),
-                        destination_service_kind: "principal_server".to_owned(),
+                        destination_kind: "principal_server".to_owned(),
                     },
                 events: vec![
                     submission("000000000001", "00000000ae01", "00000000ce01"),

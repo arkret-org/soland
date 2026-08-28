@@ -153,7 +153,7 @@ async fn peer_resolve(
     }
     if state
         .persistence()
-        .service_route_is_quarantined(&request.target_id, &request.target_service_kind)
+        .service_route_is_quarantined(&request.target_id, &request.target_kind)
         .await
         .map_err(route_service_error)?
     {
@@ -171,7 +171,7 @@ async fn peer_resolve(
             &source,
             &request.realm_id,
             &request.target_id,
-            &request.target_service_kind,
+            &request.target_kind,
             request.known_record_sequence,
             record_limit.saturating_add(1),
         )
@@ -196,7 +196,7 @@ async fn peer_resolve(
             &source,
             &request.realm_id,
             &request.target_id,
-            &request.target_service_kind,
+            &request.target_kind,
         )
         .await
         .map_err(route_service_error)?;

@@ -1483,7 +1483,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
 
     let sync_with_message =
         account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
-    let synced_members = sync_with_message["realms"][&realm_id]["members"]
+    let synced_members = sync_with_message["realms"][&realm_id]["member_roster_entries"]
         .as_array()
         .unwrap();
     assert!(

@@ -1199,7 +1199,7 @@ fn service_binding_ref_for_realm_target(
             realm_policy_digest: Hash::new(canonical_json_hash(binding_payload)?).ok()?,
             membership_frontier,
             delivery_binding_frontier,
-            destination_service_kind: "principal_server".to_owned(),
+            destination_kind: "principal_server".to_owned(),
         },
     )
 }

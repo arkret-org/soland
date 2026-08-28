@@ -23,7 +23,7 @@ pub(crate) struct InviteClaimProofVerification<'a> {
     pub binding_proof: &'a Value,
     pub subject_proof: &'a Value,
     pub expected_verification_public_key: &'a str,
-    pub expected_verification_service_id: &'a str,
+    pub expected_verification_id: &'a str,
     pub invite_digest: &'a str,
 }
 
@@ -70,7 +70,7 @@ pub(crate) async fn verify_invite_claim_proofs_for_operation(
         binding_proof,
         subject_proof,
         expected_verification_public_key: &context.expected_verification_public_key,
-        expected_verification_service_id: &context.expected_verification_service_id,
+        expected_verification_id: &context.expected_verification_id,
         invite_digest: &context.invite_digest,
     };
     verify_invite_claim_proofs_for_state(state, &verification).await
@@ -100,7 +100,7 @@ fn verify_binding_proof_signature(
 ) -> Result<String, &'static str> {
     let binding_proof = parse_binding_proof(verification.binding_proof)?;
     let service_id = binding_proof.verification_id.as_str();
-    if service_id != verification.expected_verification_service_id {
+    if service_id != verification.expected_verification_id {
         return Err("verification_service_not_authorized");
     }
     let method = binding_proof.verification_method.as_str();
@@ -154,7 +154,7 @@ async fn verify_binding_proof_signature_for_state(
 ) -> Result<String, &'static str> {
     let binding_proof = parse_binding_proof(verification.binding_proof)?;
     let service_id = binding_proof.verification_id.as_str();
-    if service_id != verification.expected_verification_service_id {
+    if service_id != verification.expected_verification_id {
         return Err("verification_service_not_authorized");
     }
     let method = binding_proof.verification_method.as_str();
@@ -481,7 +481,7 @@ mod tests {
             binding_proof,
             subject_proof,
             expected_verification_public_key: SERVICE_METHOD,
-            expected_verification_service_id: SERVICE,
+            expected_verification_id: SERVICE,
             invite_digest: INVITE_DIGEST,
         }
     }

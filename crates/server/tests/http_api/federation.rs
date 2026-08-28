@@ -1317,7 +1317,7 @@ fn peer_submit_body(event: &Value) -> Value {
             delivery_binding_frontier: vec![
                 arkret_wire::EventId::new(PEER_DELIVERY_FRONTIER.to_owned()).unwrap(),
             ],
-            destination_service_kind: "principal_server".to_owned(),
+            destination_kind: "principal_server".to_owned(),
         },
         events: vec![peer_event_submission(event)],
         // The DataEvent's `seal_ref` is a receiver-side prerequisite: a peer

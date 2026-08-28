@@ -132,10 +132,10 @@ impl SolandEventsSubmitRequestBody {
                 }
             }
         }
-        if binding.destination_service_kind.trim().is_empty() {
+        if binding.destination_kind.trim().is_empty() {
             return Err((
                 arkret_wire::ErrorCode::SCHEMA_VIOLATION,
-                "service_binding_ref.destination_service_kind MUST be a non-empty string"
+                "service_binding_ref.destination_kind MUST be a non-empty string"
                     .to_owned(),
             ));
         }

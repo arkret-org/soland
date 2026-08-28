@@ -41,7 +41,7 @@ pub struct DeliveryBindingHandoverRow {
     pub realm_id: String,
     pub actor_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub previous_recipient_service_id: Option<String>,
+    pub previous_recipient_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new_recipient_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

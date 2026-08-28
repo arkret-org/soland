@@ -172,7 +172,7 @@ pub(crate) async fn build_sync_snapshot(
                 .into_iter()
                 .filter_map(|member| serde_json::from_value(member).ok())
                 .collect::<Vec<arkret_models_collaboration::sync_frames::account_sync::MemberRosterEntry>>();
-            let heroes = roster
+            let hero_ids = roster
                 .iter()
                 .take(5)
                 .map(|member| member.actor_id.clone())
@@ -212,9 +212,9 @@ pub(crate) async fn build_sync_snapshot(
             entry.summary = Some(arkret_models_collaboration::sync_frames::account_sync::AccountSubscribeRealmSummary {
                 joined_member_count: Some(roster.len() as u64),
                 invited_member_count: None,
-                heroes: (!heroes.is_empty()).then_some(heroes),
+                hero_ids: (!hero_ids.is_empty()).then_some(hero_ids),
             });
-            entry.members = Some(roster);
+            entry.member_roster_entries = Some(roster);
             entry.members_limited = Some(false);
             entry.unread_notifications = Some(arkret_models_collaboration::sync_frames::account_sync::AccountSubscribeUnreadCounts {
                 notification_count: Some(0),

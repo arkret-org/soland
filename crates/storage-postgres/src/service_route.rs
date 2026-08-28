@@ -470,7 +470,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
             .map_err(PersistenceError::database)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             let artifact_key = key_json(&entry.artifact_key)?;
-            let (target_id, target_service_kind) =
+            let (target_id, target_kind) =
                 if let Some(record) = entry.request.service_resolution_record.as_ref() {
                     (&record.record.service_id, record.record.service_kind.as_str())
                 } else if let Some(notice) =
@@ -483,7 +483,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
             // Serialize both initial inserts and successors before inspecting
             // either idempotency index. This makes concurrent exact requests
             // deterministically observe and replay the first durable ACK.
-            lock_route_sequence(conn, target_id, target_service_kind).await?;
+            lock_route_sequence(conn, target_id, target_kind).await?;
             let mut idempotency_locks = [
                 format!(
                     "service-route-artifact:{}:{}:{artifact_key}",

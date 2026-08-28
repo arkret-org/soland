@@ -323,7 +323,7 @@ fn handover_row_from_audit(realm_id: &str, entry: Value) -> DeliveryBindingHando
                     .map(str::to_owned)
             })
             .unwrap_or_default(),
-        previous_recipient_service_id: str_field("previous_recipient_service_id"),
+        previous_recipient_id: str_field("previous_recipient_id"),
         new_recipient_id: str_field("new_recipient_id"),
         handover_frontier: frontier,
         reason_code: str_field("reason_code"),
