@@ -22,7 +22,7 @@ fn third_party_invite(expires_at: &str) -> Value {
             "token_commitment": TOKEN_COMMITMENT,
             "token_salt_id": "salt-1",
             "token_entropy_bits": 128,
-            "verification_service_id": SERVICE,
+            "verification_id": SERVICE,
             "verification_public_key": VERIFICATION_METHOD,
             "max_claims": 1
         }
@@ -31,7 +31,7 @@ fn third_party_invite(expires_at: &str) -> Value {
 
 fn claim_payload(nonce: &str, token_commitment: &str, service_id: &str) -> Value {
     let binding_proof = json!({
-        "verification_service_id": service_id,
+        "verification_id": service_id,
         "verification_method": VERIFICATION_METHOD,
         "subject_id": SUBJECT,
         "realm_id": REALM,
@@ -89,7 +89,7 @@ fn seed_realm_policy_allowlist(state: &mut ProjectionState, hlc: &ServerHlc, ser
             REALM,
             json!({
                 "policy_revision": 1,
-                "allowed_third_party_invite_verification_service_ids": services
+                "allowed_third_party_invite_verification_ids": services
             }),
         ),
         hlc,
@@ -121,13 +121,13 @@ fn invite_claim_converts_third_party_invite_to_claimed_invite() {
         ProjectionEffect::InviteStateChanged {
             ref invite_id,
             ref state,
-            ref invitee,
+            ref invitee_id,
             ..
-        } if invite_id == INVITE && state == "claimed" && invitee.as_deref() == Some(SUBJECT)
+        } if invite_id == INVITE && state == "claimed" && invitee_id.as_deref() == Some(SUBJECT)
     ));
     let invite = state.invites.get(INVITE).expect("invite projected");
     assert_eq!(invite.state, "claimed");
-    assert_eq!(invite.invitee.as_deref(), Some(SUBJECT));
+    assert_eq!(invite.invitee_id.as_deref(), Some(SUBJECT));
     assert!(
         invite
             .claim_nonces
@@ -304,7 +304,7 @@ fn invite_claim_rejects_empty_policy_allowlist() {
 }
 
 /// Only the normative top-level
-/// `allowed_third_party_invite_verification_service_ids` component grants
+/// `allowed_third_party_invite_verification_ids` component grants
 /// claim authority. Any other spelling, and any nested occurrence of the
 /// normative name, is inert data.
 #[test]
@@ -316,12 +316,12 @@ fn invite_claim_ignores_non_normative_allowlist_spellings() {
         }),
         json!({
             "policy_revision": 1,
-            "allowed_verification_service_ids": [SERVICE]
+            "allowed_verification_ids": [SERVICE]
         }),
         json!({
             "policy_revision": 1,
             "join_policy": {
-                "allowed_third_party_invite_verification_service_ids": [SERVICE]
+                "allowed_third_party_invite_verification_ids": [SERVICE]
             }
         }),
     ] {

@@ -491,7 +491,7 @@ async fn permanent_4xx_routes_to_dead_letter() {
     );
     let dead = &dead_letters[0];
     assert_eq!(dead.outbox_id, row.id);
-    assert_eq!(dead.peer_service_id.as_str(), PEER_SERVICE_ID);
+    assert_eq!(dead.peer_id.as_str(), PEER_SERVICE_ID);
     assert_eq!(dead.last_http_status, Some(404));
     assert_eq!(dead.reason, "terminal_http_status");
     assert!(
@@ -1409,8 +1409,8 @@ fn http_signature_verifies_with_headers(
 
     let (
         Some(content_digest),
-        Some(source_service_id),
-        Some(destination_service_id),
+        Some(source_id),
+        Some(destination_id),
         Some(source_trust_domain),
         Some(destination_trust_domain),
     ) = (
@@ -1430,8 +1430,8 @@ fn http_signature_verifies_with_headers(
          \"@target-uri\": {target_uri}\n\
          \"@authority\": {authority}\n\
          \"content-digest\": {content_digest}\n\
-         \"source-service-id\": {source_service_id}\n\
-         \"destination-service-id\": {destination_service_id}\n\
+         \"source-service-id\": {source_id}\n\
+         \"destination-service-id\": {destination_id}\n\
          \"source-trust-domain\": {source_trust_domain}\n\
          \"destination-trust-domain\": {destination_trust_domain}",
     );

@@ -59,14 +59,14 @@ pub(super) fn blob_upload_outcome(
     let content_digest = Hash::new(content_digest).map_err(|error| {
         AppError::internal(format!("content_digest construction failed: {error}"))
     })?;
-    let issuer_service_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
+    let issuer_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
     let signing_payload = json!({
         "blob_ref": blob_ref.as_str(),
         "content_digest": content_digest.as_str(),
         "size_bytes": size_bytes,
         "received_at": received_at,
-        "issuer_service_id": issuer_service_id.as_str(),
+        "issuer_id": issuer_id.as_str(),
     });
     let canonical_bytes = canonical::canonical_json_bytes(&signing_payload).map_err(|error| {
         AppError::internal(format!("upload receipt canonicalization failed: {error}"))
@@ -77,9 +77,9 @@ pub(super) fn blob_upload_outcome(
         content_digest: content_digest.clone(),
         size_bytes,
         received_at,
-        issuer_service_id: issuer_service_id.clone(),
+        issuer_id: issuer_id.clone(),
         signature: SignatureValue {
-            kid: issuer_service_id,
+            kid: issuer_id,
             signature_algorithm: "Ed25519".to_owned(),
             sig: URL_SAFE_NO_PAD.encode(signature.to_bytes()),
         },
@@ -767,7 +767,7 @@ fn issue_presign_envelope(
 ) -> Result<IssuedBlobPresign, AppError> {
     let blob_ref = BlobRef::new(blob_ref.to_owned())
         .map_err(|error| AppError::internal(format!("blob_ref is invalid: {error}")))?;
-    let issuer_service_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
+    let issuer_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
     let realm_id = realm_id
         .map(|value| {
@@ -786,7 +786,7 @@ fn issue_presign_envelope(
         scheme: BLOB_PRESIGN_SCHEME.to_owned(),
         blob_ref,
         realm_id,
-        issuer_service_id: issuer_service_id.clone(),
+        issuer_id: issuer_id.clone(),
         issued_at,
         expires_at,
         purpose: purpose.to_owned(),
@@ -846,7 +846,7 @@ fn validate_presign_query(
     if payload.scheme != BLOB_PRESIGN_SCHEME
         || payload.blob_ref.as_str() != blob_ref
         || payload.purpose != purpose
-        || payload.issuer_service_id.as_str() != state.service_id().as_str()
+        || payload.issuer_id.as_str() != state.service_id().as_str()
         || payload.nonce.len() < 16
     {
         return Err(());

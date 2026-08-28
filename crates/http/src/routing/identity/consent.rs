@@ -951,15 +951,15 @@ fn active_grant_dots(cell: &ConsentCellRecord, at: DateTime<Utc>) -> Vec<String>
 
 /// Spec `sync/invite-addressing.md` section 2 — verify a `consent_grant`
 /// introduction evidence. The `consent_grant_ref` (and optional `consent_id`)
-/// MUST resolve to an **active** grant dot in `subject`'s (the invitee's)
-/// consent cell with `peer == inviter` and `consent_scope` in
+/// MUST resolve to an **active** grant dot in `subject`'s (the invitee_id's)
+/// consent cell with `peer == inviter_id` and `consent_scope` in
 /// `{invite, any}`, unrevoked and unexpired. Returns `true` only when such a
 /// dot exists. On any mismatch the caller MUST downgrade the delivery to the
 /// low-trust `explicit_address` path.
 pub(crate) fn has_active_consent_grant_evidence(
     state: &AppState,
     subject: &str,
-    inviter: &str,
+    inviter_id: &str,
     consent_grant_ref: &str,
     consent_id: Option<&str>,
     at: DateTime<Utc>,
@@ -977,7 +977,7 @@ pub(crate) fn has_active_consent_grant_evidence(
     };
     state
         .consents()
-        .cells_for_pair(subject, inviter)
+        .cells_for_pair(subject, inviter_id)
         .iter()
         .any(|cell| {
             if !matches!(cell.consent_scope.as_str(), "invite" | "any") {
@@ -1177,8 +1177,7 @@ async fn emit_consent_revoke_invalidation(
     } else {
         vec![cell.consent_scope.as_str()]
     };
-    let target_peer_service_ids =
-        consent_invalidation_peer_service_ids(state, &cell.holder, &cell.peer).await;
+    let target_peer_ids = consent_invalidation_peer_ids(state, &cell.holder, &cell.peer).await;
     let payload = json!({
         "schema": "ak.vector.consent.cache_invalidation.v1",
         "holder_principal_id": cell.holder,
@@ -1191,7 +1190,7 @@ async fn emit_consent_revoke_invalidation(
             .iter()
             .map(|channel| channel.as_str())
             .collect::<Vec<_>>(),
-        "target_peer_service_ids": target_peer_service_ids,
+        "target_peer_ids": target_peer_ids,
         "local_quarantine_entries_invalidated": quarantine_entries_invalidated,
         "eager_invalidation": true,
         "removed_dots": observed_dots,
@@ -1208,11 +1207,7 @@ async fn emit_consent_revoke_invalidation(
     .await;
 }
 
-async fn consent_invalidation_peer_service_ids(
-    state: &AppState,
-    holder: &str,
-    peer: &str,
-) -> Vec<String> {
+async fn consent_invalidation_peer_ids(state: &AppState, holder: &str, peer: &str) -> Vec<String> {
     let mut services = BTreeSet::new();
     for actor in [holder, peer] {
         let records = match state.contacts().contacts_for_actor(actor).await {
@@ -1235,7 +1230,7 @@ async fn consent_invalidation_peer_service_ids(
                 continue;
             }
             if let Some(service_id) = record
-                .peer_service_id
+                .peer_id
                 .as_deref()
                 .filter(|value| *value != state.service_id())
             {
@@ -1682,8 +1677,8 @@ mod tests {
         assert_eq!(envelope.recipient_principal_id.as_str(), HOLDER);
         assert!(matches!(
             &envelope.sender,
-            crate::wire::DeviceMessageSender::Service { sender_service_id }
-                if sender_service_id.as_str() == state.service_id()
+            crate::wire::DeviceMessageSender::Service { sender_id }
+                if sender_id.as_str() == state.service_id()
         ));
         assert_eq!(envelope.content.get("revision"), Some(&json!(2)));
         assert_eq!(

@@ -181,7 +181,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         approval_notification_id: proposed_notification_id.clone(),
         approval_requested_at: proposed_requested_at,
         controller_account_id: account.account_id.clone(),
-        recipient_service_id: state.service_id().clone(),
+        recipient_id: state.service_id().clone(),
         runtime_key_binding_digest: binding_digest.as_str().to_owned(),
         runtime_public_key_digest: public_key_digest.as_str().to_owned(),
         runtime_attestation_digest: attestation_digest.as_str().to_owned(),
@@ -249,14 +249,12 @@ pub(super) async fn submit_agent_runtime_key_request(
                         },
                     )?,
                     controller_account_id: account.account_id.clone(),
-                    recipient_service_id: arkret_identifiers::DidCoreId::new(
-                        state.service_id().clone(),
-                    )
-                    .map_err(|error| {
-                        AppError::internal(format!(
-                            "approval notification service is invalid: {error}"
-                        ))
-                    })?,
+                    recipient_id: arkret_identifiers::DidCoreId::new(state.service_id().clone())
+                        .map_err(|error| {
+                            AppError::internal(format!(
+                                "approval notification service is invalid: {error}"
+                            ))
+                        })?,
                     source_account_artifact_id: approval_request_id.to_string(),
                 },
             },
@@ -1108,7 +1106,7 @@ async fn validate_requested_scope_disclosure(
             "requested_scope_disclosure principal binding does not match the Agent record",
         ));
     }
-    if disclosure.verifier_service_id.as_str() != state.service_id()
+    if disclosure.verifier_id.as_str() != state.service_id()
         || disclosure.audience.as_str()
             != arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY_V1
     {
@@ -1259,7 +1257,7 @@ pub(super) struct AccountNotificationContext {
     notification_id: arkret_wire::NotificationId,
     recipient_id: arkret_wire::DidCoreId,
     controller_account_id: String,
-    recipient_service_id: arkret_wire::DidCoreId,
+    recipient_id: arkret_wire::DidCoreId,
     approval_request_id: arkret_wire::OpaqueLocalId,
 }
 
@@ -1278,10 +1276,8 @@ pub(super) fn account_notification_context(
             "account",
             &agent_record.controller_account_id?,
         ),
-        recipient_service_id: arkret_identifiers::DidCoreId::new(
-            agent_record.recipient_service_id.clone()?,
-        )
-        .ok()?,
+        recipient_id: arkret_identifiers::DidCoreId::new(agent_record.recipient_id.clone()?)
+            .ok()?,
         approval_request_id: agent_record.approval_request_id.clone()?,
     })
 }
@@ -1314,7 +1310,7 @@ pub(super) async fn persist_terminal_account_notification(
                     delta,
                     recipient_id: context.recipient_id,
                     controller_account_id: context.controller_account_id.clone(),
-                    recipient_service_id: context.recipient_service_id.clone(),
+                    recipient_id: context.recipient_id.clone(),
                     source_account_artifact_id: context.approval_request_id.to_string(),
                 },
             },
@@ -1327,7 +1323,7 @@ pub(super) async fn persist_terminal_account_notification(
         })?;
     let _ = state.publish_event_notification(crate::state::EventNotification::account(
         context.controller_account_id,
-        context.recipient_service_id.to_string(),
+        context.recipient_id.to_string(),
     ));
     Ok(())
 }
@@ -2043,7 +2039,7 @@ mod requested_scope_tests {
             uuid::Uuid::parse_str("019f6131-3dc4-76f1-ade6-00f4225a8529")
                 .expect("valid account uuid"),
         );
-        record.recipient_service_id = Some("ak:did_core:web:soland.example".to_owned());
+        record.recipient_id = Some("ak:did_core:web:soland.example".to_owned());
         record.approval_request_id =
             Some(arkret_wire::OpaqueLocalId::new("agent_runtime_approval:test").unwrap());
 

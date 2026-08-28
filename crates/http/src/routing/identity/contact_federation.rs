@@ -87,12 +87,10 @@ pub(crate) fn peer_router() -> Router {
 /// Contact projection was already committed by the self operation.
 pub(crate) async fn enqueue_peer_contact_carrier(
     state: &AppState,
-    recipient_service_id: &str,
+    recipient_id: &str,
     delivery: &PeerContactSubmitRequestBody,
 ) -> Result<bool, AppError> {
-    let Some(prepared) =
-        prepare_peer_contact_carrier(state, recipient_service_id, delivery).await?
-    else {
+    let Some(prepared) = prepare_peer_contact_carrier(state, recipient_id, delivery).await? else {
         return Ok(false);
     };
     state
@@ -107,19 +105,19 @@ pub(crate) async fn enqueue_peer_contact_carrier(
 
 pub(crate) async fn prepare_peer_contact_carrier(
     state: &AppState,
-    recipient_service_id: &str,
+    recipient_id: &str,
     delivery: &PeerContactSubmitRequestBody,
 ) -> Result<Option<soland_services::federation::FederationDeliveryRecord>, AppError> {
-    if recipient_service_id == state.service_id() {
+    if recipient_id == state.service_id() {
         return Ok(None);
     }
     let (_, contact_address) = peer_contact_delivery_address(delivery);
     contact_address.validate_shape().map_err(|error| {
         AppError::param_invalid(format!("invalid contact delivery address: {error}"))
     })?;
-    if contact_address.recipient_service_id.as_str() != recipient_service_id {
+    if contact_address.recipient_id.as_str() != recipient_id {
         return Err(AppError::param_invalid(
-            "contact_address.recipient_service_id does not match delivery destination",
+            "contact_address.recipient_id does not match delivery destination",
         ));
     }
     let resolver = state
@@ -128,7 +126,7 @@ pub(crate) async fn prepare_peer_contact_carrier(
     let entry = resolver
         .resolve_carrier(
             &contact_address.service_resolution,
-            &contact_address.recipient_service_id,
+            &contact_address.recipient_id,
             "principal_server",
             chrono::Utc::now(),
         )
@@ -148,7 +146,7 @@ pub(crate) async fn prepare_peer_contact_carrier(
     Ok(Some(
         soland_services::federation::FederationDeliveryRecord {
             id: Uuid::new_v4().to_string(),
-            peer_service_id: contact_address.recipient_service_id.clone(),
+            peer_id: contact_address.recipient_id.clone(),
             peer_url: Some(peer_url.trim_end_matches('/').to_owned()),
             endpoint: "/_arkret/peer/contacts".to_owned(),
             idempotency_key: idempotency_key.to_owned(),
@@ -228,7 +226,7 @@ async fn peer_contacts_submit(
             "invalid contact_address shape: {error}"
         ))
     })?;
-    let source_service_id = req
+    let source_id = req
         .headers()
         .get(HEADER_SOURCE_SERVICE_ID)
         .and_then(|value| value.to_str().ok())
@@ -238,9 +236,7 @@ async fn peer_contacts_submit(
             super::super::events::peer::schema_violation("source-service-id header is required")
         })?
         .to_owned();
-    if let Some(outcome) =
-        handle_contact_control_request(state, &delivery, &source_service_id).await?
-    {
+    if let Some(outcome) = handle_contact_control_request(state, &delivery, &source_id).await? {
         return json_ok(outcome);
     }
     let (fact_kind, signed_event, contact_address) = match &delivery {
@@ -261,7 +257,7 @@ async fn peer_contacts_submit(
                     &request_receipt.core.holder.contact_actor_id(),
                     &signed_event.actor_id,
                 )
-                || request_receipt.core.issuer.as_str() != source_service_id
+                || request_receipt.core.issuer.as_str() != source_id
                 || request_receipt.core.request_digest()
                     != event_digest_for_frozen_claim(
                         signed_event,
@@ -328,7 +324,7 @@ async fn peer_contacts_submit(
             )?;
             verify_contact_evidence_signature(
                 state,
-                &source_service_id,
+                &source_id,
                 &response_receipt.signature,
                 &response_receipt
                     .canonical_signing_bytes()
@@ -374,7 +370,7 @@ async fn peer_contacts_submit(
             )?;
             verify_contact_evidence_signature(
                 state,
-                &source_service_id,
+                &source_id,
                 &reject_receipt.signature,
                 &reject_receipt.canonical_signing_bytes().map_err(|error| {
                     AppError::internal(format!("Contact reject receipt transcript: {error}"))
@@ -396,7 +392,7 @@ async fn peer_contacts_submit(
         } => {
             validate_contact_lineage_carrier(
                 state,
-                &source_service_id,
+                &source_id,
                 signed_event,
                 lineage,
                 current_proof,
@@ -417,7 +413,7 @@ async fn peer_contacts_submit(
         } => {
             validate_contact_lineage_carrier(
                 state,
-                &source_service_id,
+                &source_id,
                 signed_event,
                 lineage,
                 current_proof,
@@ -448,10 +444,10 @@ async fn peer_contacts_submit(
         ));
     }
     let issuer = issuer_core_id.as_str().to_owned();
-    let recipient_service_id = contact_address.recipient_service_id.as_str();
-    if recipient_service_id != state.service_id() {
+    let recipient_id = contact_address.recipient_id.as_str();
+    if recipient_id != state.service_id() {
         return Err(super::super::events::peer::cross_domain_replay(
-            "contact_address.recipient_service_id does not match this service",
+            "contact_address.recipient_id does not match this service",
         ));
     }
     let payload_value = serde_json::to_value(&signed_event.payload)
@@ -485,7 +481,7 @@ async fn peer_contacts_submit(
         }
         verify_contact_evidence_signature(
             state,
-            &source_service_id,
+            &source_id,
             &current_proof.signature,
             &current_proof.canonical_signing_bytes().map_err(|error| {
                 AppError::internal(format!("Contact current proof transcript: {error}"))
@@ -497,9 +493,9 @@ async fn peer_contacts_submit(
     // Originating Principal Server of this delivery: the peer end of the
     // projected contact row (the issuer) is hosted there. `validate_peer_request`
     // above already verified this header is a present, well-formed DID, so we
-    // record it on the projection as the contact's `peer_service_id` — that is
+    // record it on the projection as the contact's `peer_id` — that is
     // the requester's/accepter's home server, NOT this service. inkson reads it
-    // off a pending_incoming row as the `requester_service_id` to address the
+    // off a pending_incoming row as the `requester_id` to address the
     // reverse `respond` delivery back to the originator.
     // Project the issuer's exact signed envelope; peer transport never
     // re-signs or rewrites the Contact fact.
@@ -540,7 +536,7 @@ async fn peer_contacts_submit(
                 request_digest,
                 canonical_event_bytes,
                 source_receipt: request_receipt.clone(),
-                issuer_service_id: source_service_id.clone(),
+                issuer_id: source_id.clone(),
                 verified_at: now(),
             })
             .await
@@ -559,7 +555,7 @@ async fn peer_contacts_submit(
         response_receipt,
         reject_receipt,
         carrier_current_proof,
-        Some(&source_service_id),
+        Some(&source_id),
     )
     .await?;
 
@@ -777,7 +773,7 @@ async fn persist_contact_event_outcome(
 async fn handle_contact_control_request(
     state: &AppState,
     request: &PeerContactSubmitRequestBody,
-    source_service_id: &str,
+    source_id: &str,
 ) -> Result<Option<PeerContactSubmitOutcome>, AppError> {
     match request {
         PeerContactSubmitRequestBody::ProofRefresh {
@@ -786,15 +782,15 @@ async fn handle_contact_control_request(
             contact_address,
             ..
         } => {
-            if contact_address.recipient_service_id.as_str() != state.service_id() {
+            if contact_address.recipient_id.as_str() != state.service_id() {
                 return Err(super::super::events::peer::cross_domain_replay(
-                    "contact_address.recipient_service_id does not match this service",
+                    "contact_address.recipient_id does not match this service",
                 ));
             }
             let outcome = finalize_contact_proof_refresh(
                 state,
                 request,
-                source_service_id,
+                source_id,
                 prior_mirror_receipt,
                 current_proof,
                 contact_address,
@@ -811,15 +807,15 @@ async fn handle_contact_control_request(
             contact_address,
             ..
         } => {
-            if contact_address.recipient_service_id.as_str() != state.service_id() {
+            if contact_address.recipient_id.as_str() != state.service_id() {
                 return Err(super::super::events::peer::cross_domain_replay(
-                    "contact_address.recipient_service_id does not match this service",
+                    "contact_address.recipient_id does not match this service",
                 ));
             }
             let outcome = finalize_glare_contact_round(
                 state,
                 request,
-                source_service_id,
+                source_id,
                 contact_round_id,
                 contact_round,
                 request_receipts,
@@ -835,15 +831,15 @@ async fn handle_contact_control_request(
             contact_address,
             ..
         } => {
-            if contact_address.recipient_service_id.as_str() != state.service_id() {
+            if contact_address.recipient_id.as_str() != state.service_id() {
                 return Err(super::super::events::peer::cross_domain_replay(
-                    "contact_address.recipient_service_id does not match this service",
+                    "contact_address.recipient_id does not match this service",
                 ));
             }
             let outcome = finalize_continuity_checkpoint(
                 state,
                 request,
-                source_service_id,
+                source_id,
                 proposal,
                 contact_address,
             )
@@ -897,8 +893,8 @@ fn participant_authority_pair(
             "Contact record does not contain the local principal",
         ));
     };
-    let peer_service_id = record
-        .peer_service_id
+    let peer_id = record
+        .peer_id
         .as_deref()
         .unwrap_or_else(|| state.service_id());
     let mut pair = [
@@ -915,7 +911,7 @@ fn participant_authority_pair(
             principal_id: arkret_wire::DidCoreId::new(peer_principal_id.to_owned()).map_err(
                 |error| AppError::internal(format!("peer Contact principal invalid: {error}")),
             )?,
-            principal_server_id: arkret_wire::DidCoreId::new(peer_service_id.to_owned()).map_err(
+            principal_server_id: arkret_wire::DidCoreId::new(peer_id.to_owned()).map_err(
                 |error| AppError::internal(format!("peer Contact service invalid: {error}")),
             )?,
         },
@@ -1189,7 +1185,7 @@ pub(crate) async fn accept_outbound_continuity_checkpoint_outcome(
     state: &AppState,
     request: &PeerContactSubmitRequestBody,
     outcome: &PeerContactSubmitOutcome,
-    peer_service_id: &str,
+    peer_id: &str,
 ) -> Result<(), AppError> {
     let PeerContactSubmitRequestBody::ContinuityCheckpoint {
         proposal,
@@ -1216,7 +1212,7 @@ pub(crate) async fn accept_outbound_continuity_checkpoint_outcome(
         PeerContactOutcome::Accepted | PeerContactOutcome::Duplicate
     ) || control_receipt.request_kind != PeerContactControlKind::ContinuityCheckpoint
         || control_receipt.outcome != *status
-        || control_receipt.issuer.as_str() != peer_service_id
+        || control_receipt.issuer.as_str() != peer_id
         || checkpoint.checkpoint_digest != proposal.checkpoint_digest
         || canonical::canonical_json_bytes(&checkpoint.core)
             .map_err(|error| AppError::internal(error.to_string()))?
@@ -1229,7 +1225,7 @@ pub(crate) async fn accept_outbound_continuity_checkpoint_outcome(
     }
     verify_contact_evidence_signature(
         state,
-        peer_service_id,
+        peer_id,
         &control_receipt.signature,
         &contact_control_receipt_signing_bytes(control_receipt)?,
         "continuity_checkpoint.control_receipt",
@@ -1262,7 +1258,7 @@ pub(crate) async fn accept_outbound_continuity_checkpoint_outcome(
                 "outbound checkpoint Contact disappeared",
             )
         })?;
-    if record.peer_service_id.as_deref() != Some(peer_service_id) {
+    if record.peer_id.as_deref() != Some(peer_id) {
         return Err(continuity_invalid(
             "outbound checkpoint peer service changed",
         ));
@@ -1317,7 +1313,7 @@ fn sign_checkpoint_participant(
 async fn finalize_continuity_checkpoint(
     state: &AppState,
     request: &PeerContactSubmitRequestBody,
-    source_service_id: &str,
+    source_id: &str,
     proposal: &BilateralContinuityCheckpointProposal,
     contact_address: &PeerContactAddress,
 ) -> Result<PeerContactSubmitOutcome, AppError> {
@@ -1331,7 +1327,7 @@ async fn finalize_continuity_checkpoint(
         .signer
         .principal_server_id
         .as_str()
-        != source_service_id
+        != source_id
     {
         return Err(super::super::events::peer::cross_domain_replay(
             "checkpoint proposer service does not match Source-Service-ID",
@@ -1339,7 +1335,7 @@ async fn finalize_continuity_checkpoint(
     }
     verify_contact_service_signature_bytes(
         state,
-        source_service_id,
+        source_id,
         &proposal.proposer_signature.signature,
         &proposal
             .signing_bytes()
@@ -1359,7 +1355,7 @@ async fn finalize_continuity_checkpoint(
                 "checkpoint Contact lineage is unavailable",
             )
         })?;
-    if record.peer_service_id.as_deref() != Some(source_service_id) {
+    if record.peer_id.as_deref() != Some(source_id) {
         return Err(super::super::events::peer::cross_domain_replay(
             "checkpoint source service does not match durable Contact peer",
         ));
@@ -1459,7 +1455,7 @@ pub(crate) fn validate_mirror_receipt_cryptography(
     field: &str,
 ) -> Result<(), AppError> {
     if receipt.issuer.as_str() != expected_service_id
-        || receipt.recipient_service_id.as_str() != expected_service_id
+        || receipt.recipient_id.as_str() != expected_service_id
         || !matches!(
             receipt.outcome,
             PeerContactOutcome::Accepted | PeerContactOutcome::Duplicate
@@ -1483,7 +1479,7 @@ pub(crate) fn validate_mirror_receipt_cryptography(
 
 async fn validate_proof_refresh_evidence(
     state: &AppState,
-    source_service_id: &str,
+    source_id: &str,
     prior_mirror_receipt: &PeerContactMirrorReceipt,
     current_proof: &ContactCurrentProof,
     contact_address: &PeerContactAddress,
@@ -1499,7 +1495,7 @@ async fn validate_proof_refresh_evidence(
         .map_err(|error| AppError::internal(format!("current_proof transcript failed: {error}")))?;
     verify_contact_service_signature_bytes(
         state,
-        source_service_id,
+        source_id,
         &current_proof.signature,
         &signing_bytes,
         "current_proof",
@@ -1529,7 +1525,7 @@ async fn validate_proof_refresh_evidence(
         let remote_is_target = record.target == current_proof.issuer.as_str()
             && did_str_projects_to_actor(&record.requester, &contact_address.subject_id);
         matches!(record.status.as_str(), "accepted" | "pending")
-            && record.peer_service_id.as_deref() == Some(source_service_id)
+            && record.peer_id.as_deref() == Some(source_id)
             && record.contact_round_id.as_deref() == Some(current_proof.contact_round_id.as_str())
             && (remote_is_requester || remote_is_target)
             && (record.request_receipts.iter().any(|stored| {
@@ -1554,7 +1550,7 @@ async fn validate_proof_refresh_evidence(
 async fn finalize_contact_proof_refresh(
     state: &AppState,
     request: &PeerContactSubmitRequestBody,
-    source_service_id: &str,
+    source_id: &str,
     prior_mirror_receipt: &PeerContactMirrorReceipt,
     current_proof: &ContactCurrentProof,
     contact_address: &PeerContactAddress,
@@ -1587,13 +1583,13 @@ async fn finalize_contact_proof_refresh(
     }
     validate_proof_refresh_evidence(
         state,
-        source_service_id,
+        source_id,
         prior_mirror_receipt,
         current_proof,
         contact_address,
     )
     .await?;
-    if record.peer_service_id.as_deref() != Some(source_service_id) {
+    if record.peer_id.as_deref() != Some(source_id) {
         return Err(super::super::events::peer::cross_domain_replay(
             "proof-refresh source service does not match durable Contact peer",
         ));
@@ -1668,7 +1664,7 @@ async fn finalize_contact_proof_refresh(
 #[allow(clippy::too_many_arguments)]
 fn validate_glare_finalize_evidence(
     state: &AppState,
-    source_service_id: &str,
+    source_id: &str,
     contact_round_id: &Hash,
     contact_round: &ContactRound,
     request_receipts: &[RequestAcceptanceReceipt; 2],
@@ -1703,7 +1699,7 @@ fn validate_glare_finalize_evidence(
     })?;
     verify_contact_service_signature_bytes(
         state,
-        source_service_id,
+        source_id,
         &attestation.signature,
         &signing_bytes,
         "glare_concurrency_attestation",
@@ -1771,7 +1767,7 @@ fn validate_glare_finalize_evidence(
     }
     let source_receipt = request_receipts
         .iter()
-        .find(|receipt| receipt.core.issuer.as_str() == source_service_id)
+        .find(|receipt| receipt.core.issuer.as_str() == source_id)
         .ok_or_else(|| {
             super::super::events::peer::schema_violation(
                 "glare request receipts have no source-service receipt",
@@ -1830,7 +1826,7 @@ fn verify_contact_service_signature_bytes(
 async fn finalize_glare_contact_round(
     state: &AppState,
     request: &PeerContactSubmitRequestBody,
-    source_service_id: &str,
+    source_id: &str,
     contact_round_id: &Hash,
     contact_round: &ContactRound,
     request_receipts: &[RequestAcceptanceReceipt; 2],
@@ -1869,7 +1865,7 @@ async fn finalize_glare_contact_round(
     }
     validate_glare_finalize_evidence(
         state,
-        source_service_id,
+        source_id,
         contact_round_id,
         contact_round,
         request_receipts,
@@ -1910,7 +1906,7 @@ async fn finalize_glare_contact_round(
         .request_mirror_receipts
         .iter()
         .find(|receipt| {
-            receipt.issuer.as_str() == source_service_id
+            receipt.issuer.as_str() == source_id
                 && receipt.signed_event_ref == local_request.core.request_event_ref
                 && receipt.signed_event_digest() == local_request.core.request_digest()
                 && matches!(
@@ -1939,7 +1935,7 @@ async fn finalize_glare_contact_round(
     validate_mirror_receipt_cryptography(
         state,
         &counterpart_mirror,
-        source_service_id,
+        source_id,
         "counterpart_mirror_receipt",
     )?;
 
@@ -2202,7 +2198,7 @@ fn normal_contact_round(
 
 fn validate_contact_lineage_carrier(
     state: &AppState,
-    source_service_id: &str,
+    source_id: &str,
     event: &Event,
     lineage: &arkret_models_collaboration::contact_operations::ContactLineage,
     current_proof: &arkret_models_collaboration::contact_operations::ContactCurrentProof,
@@ -2277,7 +2273,7 @@ fn validate_contact_lineage_carrier(
         .map_err(|error| AppError::internal(format!("Contact lineage transcript: {error}")))?;
     verify_contact_evidence_signature(
         state,
-        source_service_id,
+        source_id,
         &lineage.signature,
         &signing_bytes,
         "carrier_lineage",
@@ -2316,7 +2312,7 @@ fn sign_contact_mirror_receipt(
         "request_digest": request_digest,
         "signed_event_ref": event.event_id,
         "outcome": outcome,
-        "recipient_service_id": issuer,
+        "recipient_id": issuer,
         "received_at": arkret_canonical::format_timestamp_canonical(received_at),
         "issuer": issuer,
     }))
@@ -2331,7 +2327,7 @@ fn sign_contact_mirror_receipt(
         request_digest,
         signed_event_ref: event.event_id.clone(),
         outcome,
-        recipient_service_id: issuer.clone(),
+        recipient_id: issuer.clone(),
         received_at,
         issuer,
         signature: ProtocolSignature {
@@ -2410,7 +2406,7 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
     {
         return Ok(false);
     }
-    let Some(peer_service_id) = record.peer_service_id.as_deref() else {
+    let Some(peer_id) = record.peer_id.as_deref() else {
         return Ok(false);
     };
     let mut receipts = record.request_receipts.clone();
@@ -2438,7 +2434,7 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
         .request_mirror_receipts
         .iter()
         .find(|receipt| {
-            receipt.issuer.as_str() == peer_service_id
+            receipt.issuer.as_str() == peer_id
                 && receipt.signed_event_ref == local_request.core.request_event_ref
                 && receipt.signed_event_digest() == local_request.core.request_digest()
                 && matches!(
@@ -2453,7 +2449,7 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
     validate_mirror_receipt_cryptography(
         state,
         &remote_mirror_receipt,
-        peer_service_id,
+        peer_id,
         "glare_remote_mirror_receipt",
     )?;
 
@@ -2545,7 +2541,7 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
     state: &AppState,
     request: &PeerContactSubmitRequestBody,
     outcome: &PeerContactSubmitOutcome,
-    peer_service_id: &str,
+    peer_id: &str,
 ) -> Result<(), AppError> {
     match (request, outcome) {
         (
@@ -2570,7 +2566,7 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                 request,
                 control_receipt,
                 PeerContactControlKind::GlareFinalize,
-                peer_service_id,
+                peer_id,
                 Some(super::account::canonical_contact_digest(&json!({
                     "glare_concurrency_attestation": remote_attestation,
                     "current_proof": remote_proof,
@@ -2630,7 +2626,7 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
             }
             verify_contact_evidence_signature(
                 state,
-                peer_service_id,
+                peer_id,
                 &remote_attestation.signature,
                 &remote_attestation
                     .canonical_signing_bytes()
@@ -2641,7 +2637,7 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
             )?;
             verify_contact_evidence_signature(
                 state,
-                peer_service_id,
+                peer_id,
                 &remote_proof.signature,
                 &remote_proof.canonical_signing_bytes().map_err(|error| {
                     AppError::internal(format!("remote Contact current proof transcript: {error}"))
@@ -2662,7 +2658,7 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                         "outbound glare Contact slot is unavailable",
                     )
                 })?;
-            if record.peer_service_id.as_deref() != Some(peer_service_id) {
+            if record.peer_id.as_deref() != Some(peer_id) {
                 return Err(super::super::events::peer::cross_domain_replay(
                     "glare outcome service does not match durable Contact peer",
                 ));
@@ -2780,7 +2776,7 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                 current_proof: local_proof,
                 contact_address: contact_address.clone(),
             };
-            enqueue_peer_contact_carrier(state, peer_service_id, &delivery).await?;
+            enqueue_peer_contact_carrier(state, peer_id, &delivery).await?;
             Ok(())
         }
         (
@@ -2803,7 +2799,7 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                 request,
                 control_receipt,
                 PeerContactControlKind::ProofRefresh,
-                peer_service_id,
+                peer_id,
                 Some(super::account::canonical_contact_digest(returned_proof)?),
             )
         }
@@ -2817,7 +2813,7 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
     state: &AppState,
     request: &PeerContactSubmitRequestBody,
     outcome: &PeerContactEventSubmitOutcome,
-    peer_service_id: &str,
+    peer_id: &str,
 ) -> Result<(), AppError> {
     let (signed_event, contact_address, sent_proof, expected_kind, terminal) = match request {
         PeerContactSubmitRequestBody::Response {
@@ -2881,7 +2877,7 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
     validate_mirror_receipt_cryptography(
         state,
         &outcome.mirror_receipt,
-        peer_service_id,
+        peer_id,
         "outbound_contact_mirror_receipt",
     )?;
     let Some(returned_proof) = outcome.current_proof.as_ref() else {
@@ -2917,7 +2913,7 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
     }
     verify_contact_evidence_signature(
         state,
-        peer_service_id,
+        peer_id,
         &returned_proof.signature,
         &returned_proof.canonical_signing_bytes().map_err(|error| {
             AppError::internal(format!("recipient Contact proof transcript: {error}"))
@@ -2994,7 +2990,7 @@ pub(crate) async fn reenqueue_deferred_contact_control(
     state: &AppState,
     request: &PeerContactSubmitRequestBody,
     deferred: &arkret_models_collaboration::contact_operations::PeerContactControlDeferredOutcome,
-    peer_service_id: &str,
+    peer_id: &str,
 ) -> Result<(), AppError> {
     let expected_kind = match request {
         PeerContactSubmitRequestBody::GlareFinalize { .. } => PeerContactControlKind::GlareFinalize,
@@ -3018,8 +3014,8 @@ pub(crate) async fn reenqueue_deferred_contact_control(
     let receipt = &deferred.control_receipt;
     if receipt.request_kind != expected_kind
         || receipt.request_digest != request_digest
-        || receipt.issuer.as_str() != peer_service_id
-        || receipt.recipient_service_id.as_str() != peer_service_id
+        || receipt.issuer.as_str() != peer_id
+        || receipt.recipient_id.as_str() != peer_id
     {
         return Err(super::super::events::peer::schema_violation(
             "deferred Contact control receipt does not bind the request",
@@ -3028,7 +3024,7 @@ pub(crate) async fn reenqueue_deferred_contact_control(
     let signing_bytes = contact_control_receipt_signing_bytes(receipt)?;
     verify_contact_evidence_signature(
         state,
-        peer_service_id,
+        peer_id,
         &receipt.signature,
         &signing_bytes,
         "deferred Contact control receipt",
@@ -3051,7 +3047,7 @@ pub(crate) async fn reenqueue_deferred_contact_control(
         } => *idempotency_key = next_key,
         _ => unreachable!("request branch checked above"),
     }
-    enqueue_peer_contact_carrier(state, peer_service_id, &retry).await?;
+    enqueue_peer_contact_carrier(state, peer_id, &retry).await?;
     Ok(())
 }
 
@@ -3060,7 +3056,7 @@ fn validate_outbound_control_receipt(
     request: &PeerContactSubmitRequestBody,
     receipt: &PeerContactControlReceipt,
     expected_kind: PeerContactControlKind,
-    peer_service_id: &str,
+    peer_id: &str,
     expected_result_digest: Option<Hash>,
 ) -> Result<(), AppError> {
     let request_digest = contact_control_request_digest(request)?;
@@ -3068,8 +3064,8 @@ fn validate_outbound_control_receipt(
         || receipt.request_digest != request_digest
         || receipt.outcome == PeerContactOutcome::Deferred
         || receipt.result_digest != expected_result_digest
-        || receipt.issuer.as_str() != peer_service_id
-        || receipt.recipient_service_id.as_str() != peer_service_id
+        || receipt.issuer.as_str() != peer_id
+        || receipt.recipient_id.as_str() != peer_id
     {
         return Err(super::super::events::peer::schema_violation(
             "Contact control receipt does not bind the outbound request/result",
@@ -3078,7 +3074,7 @@ fn validate_outbound_control_receipt(
     let signing_bytes = contact_control_receipt_signing_bytes(receipt)?;
     verify_contact_evidence_signature(
         state,
-        peer_service_id,
+        peer_id,
         &receipt.signature,
         &signing_bytes,
         "Contact control receipt",
@@ -3093,7 +3089,7 @@ struct ContactControlReceiptSigningTranscript<'a> {
     outcome: PeerContactOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     result_digest: Option<&'a Hash>,
-    recipient_service_id: &'a arkret_wire::DidCoreId,
+    recipient_id: &'a arkret_wire::DidCoreId,
     #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
     received_at: chrono::DateTime<chrono::Utc>,
     issuer: &'a arkret_wire::DidCoreId,
@@ -3108,7 +3104,7 @@ fn contact_control_receipt_signing_bytes(
         request_digest: &receipt.request_digest,
         outcome: receipt.outcome,
         result_digest: receipt.result_digest.as_ref(),
-        recipient_service_id: &receipt.recipient_service_id,
+        recipient_id: &receipt.recipient_id,
         received_at: receipt.received_at,
         issuer: &receipt.issuer,
     })
@@ -3182,7 +3178,7 @@ fn sign_contact_control_receipt(
         "request_digest": request_digest,
         "outcome": outcome,
         "result_digest": result_digest,
-        "recipient_service_id": issuer,
+        "recipient_id": issuer,
         "received_at": arkret_canonical::format_timestamp_canonical(received_at),
         "issuer": issuer,
     });
@@ -3205,7 +3201,7 @@ fn sign_contact_control_receipt(
         request_digest,
         outcome,
         result_digest,
-        recipient_service_id: issuer.clone(),
+        recipient_id: issuer.clone(),
         received_at,
         issuer,
         signature: ProtocolSignature {
@@ -3301,7 +3297,7 @@ async fn project_delivered_contact_fact(
     response_receipt: Option<&NormalResponseAcceptanceReceipt>,
     reject_receipt: Option<&RejectAcceptanceReceipt>,
     carrier_current_proof: Option<&ContactCurrentProof>,
-    source_service_id: Option<&str>,
+    source_id: Option<&str>,
 ) -> Result<&'static str, AppError> {
     let projected_scopes = granted_scopes(payload);
     let scope = projected_scopes
@@ -3413,7 +3409,7 @@ async fn project_delivered_contact_fact(
                         response_event_ref: None,
                         tombstone_event_ref: None,
                         message,
-                        peer_service_id: source_service_id.map(ToOwned::to_owned),
+                        peer_id: source_id.map(ToOwned::to_owned),
                         peer_service_resolution: None,
                         created_at,
                         updated_at: now(),
@@ -3451,7 +3447,7 @@ async fn project_delivered_contact_fact(
                         response_event_ref: None,
                         tombstone_event_ref: None,
                         message,
-                        peer_service_id: source_service_id.map(ToOwned::to_owned),
+                        peer_id: source_id.map(ToOwned::to_owned),
                         peer_service_resolution: None,
                         created_at,
                         updated_at: now(),
@@ -3500,7 +3496,7 @@ async fn project_delivered_contact_fact(
                         let expected_updated_at = existing.updated_at;
                         existing.request_receipts.push(request_receipt.clone());
                         existing.granted_to_requester_scopes = projected_scopes.clone();
-                        existing.peer_service_id = source_service_id.map(ToOwned::to_owned);
+                        existing.peer_id = source_id.map(ToOwned::to_owned);
                         advance_contact_revision(&mut existing, expected_updated_at);
                         save_contact_cas(contacts, expected_updated_at, existing).await?;
                     }
@@ -3530,8 +3526,8 @@ async fn project_delivered_contact_fact(
                 // Peer end of this pending_incoming row is the remote requester
                 // (`issuer`), hosted on the delivering source server. The local
                 // holder later uses this as the reverse-delivery target when it
-                // responds (inkson's `requester_service_id`).
-                peer_service_id: source_service_id.map(ToOwned::to_owned),
+                // responds (inkson's `requester_id`).
+                peer_id: source_id.map(ToOwned::to_owned),
                 peer_service_resolution: None,
                 created_at: now(),
                 updated_at: now(),
@@ -3636,8 +3632,8 @@ async fn project_delivered_contact_fact(
             // Peer end is the remote accepter (`issuer`), hosted on the
             // delivering source server. Record/backfill it so the requester's
             // row can address future invites/responses to the peer's home PS.
-            if let Some(source) = source_service_id {
-                contact.peer_service_id = Some(source.to_owned());
+            if let Some(source) = source_id {
+                contact.peer_id = Some(source.to_owned());
             }
             if let Some(remote_proof) = carrier_current_proof {
                 if remote_proof.contact_round_id != accepted.contact_round_id
@@ -4011,16 +4007,16 @@ mod tests {
 
     /// Cross-PS `ak.contact.requested` delivery: the projected pending_incoming
     /// row on the recipient (target holder) MUST record the *originating*
-    /// requester's home Principal Server as `peer_service_id` — the
+    /// requester's home Principal Server as `peer_id` — the
     /// `source-service-id` of the delivery, NOT the recipient's own service
     /// DID. This is exactly the address inkson reads back as
-    /// `requester_service_id` to federate the reverse `respond` delivery.
+    /// `requester_id` to federate the reverse `respond` delivery.
     #[tokio::test]
     async fn delivered_request_records_originating_peer_service_id() {
         let state = AppState::new(test_config(), Db { pool: None });
         let requester = "ak:did_core:web:remote-alice.example"; // issuer, on source PS
         let target = "ak:did_core:web:local-bob.example"; // subject_id, this holder
-        let source_service_id = "ak:did_core:web:remote.local"; // requester's home PS
+        let source_id = "ak:did_core:web:remote.local"; // requester's home PS
 
         let payload = json!({
             "peer": {"kind": "human", "principal_id": target},
@@ -4037,7 +4033,7 @@ mod tests {
                 "request_event_ref": request_event_ref,
                 "source_checkpoint": format!("sha256:{}", "c".repeat(64)),
                 "accepted_at": "2026-08-09T00:00:00.000Z",
-                "issuer": source_service_id
+                "issuer": source_id
             },
             "receipt_digest": format!("sha256:{}", "d".repeat(64)),
             "signature": {
@@ -4059,7 +4055,7 @@ mod tests {
             None,
             None,
             None,
-            Some(source_service_id),
+            Some(source_id),
         )
         .await
         .expect("delivered request projects");
@@ -4073,9 +4069,9 @@ mod tests {
             .expect("pending_incoming row was projected");
 
         assert_eq!(
-            record.peer_service_id.as_deref(),
-            Some(source_service_id),
-            "peer_service_id must be the originating requester's PS, not the recipient's own \
+            record.peer_id.as_deref(),
+            Some(source_id),
+            "peer_id must be the originating requester's PS, not the recipient's own \
              service_id ({})",
             state.service_id(),
         );
@@ -4084,9 +4080,9 @@ mod tests {
             Some("ak:event:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-"),
         );
         assert_ne!(
-            record.peer_service_id.as_deref(),
+            record.peer_id.as_deref(),
             Some(state.service_id().as_str()),
-            "peer_service_id must not point at this recipient service",
+            "peer_id must not point at this recipient service",
         );
     }
 
@@ -4153,7 +4149,7 @@ mod tests {
             response_event_ref: None,
             tombstone_event_ref: None,
             message: None,
-            peer_service_id: Some(BOB_SERVICE.to_owned()),
+            peer_id: Some(BOB_SERVICE.to_owned()),
             peer_service_resolution: None,
             created_at: now,
             updated_at: now,
@@ -4232,7 +4228,7 @@ mod tests {
                 response_event_ref: None,
                 tombstone_event_ref: None,
                 message: None,
-                peer_service_id: Some(BOB_SERVICE.to_owned()),
+                peer_id: Some(BOB_SERVICE.to_owned()),
                 peer_service_resolution: None,
                 created_at: now,
                 updated_at: now,
@@ -4263,7 +4259,7 @@ mod tests {
             serde_json::to_value(&row.request_receipts[1].core).unwrap(),
             serde_json::to_value(&second.core).unwrap()
         );
-        assert_eq!(row.peer_service_id.as_deref(), Some(BOB_SERVICE));
+        assert_eq!(row.peer_id.as_deref(), Some(BOB_SERVICE));
     }
 
     #[test]
@@ -4278,7 +4274,7 @@ mod tests {
                 "request_digest": exact.clone(),
                 "outcome": "accepted",
                 "result_digest": format!("sha256:{}", "8".repeat(64)),
-                "recipient_service_id": BOB_SERVICE,
+                "recipient_id": BOB_SERVICE,
                 "received_at": "2026-08-09T00:00:00.000Z",
                 "issuer": BOB_SERVICE,
                 "signature": {
@@ -4320,7 +4316,7 @@ mod tests {
             response_event_ref: None,
             tombstone_event_ref: None,
             message: None,
-            peer_service_id: None,
+            peer_id: None,
             peer_service_resolution: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),

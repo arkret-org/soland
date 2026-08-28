@@ -594,14 +594,14 @@ impl ProjectionState {
             return None;
         }
 
-        let recipient_service_id = binding
-            .get("recipient_service_id")
+        let recipient_id = binding
+            .get("recipient_id")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())?;
         Some(serde_json::json!({
             "allowed_binding_sources": ["explicit"],
             "did_document_default_allowed": false,
-            "allowed_recipient_services": [recipient_service_id],
+            "allowed_recipient_services": [recipient_id],
             "required_endorsers": [],
         }))
     }
@@ -687,18 +687,18 @@ impl ProjectionState {
         } else {
             None
         };
-        let recipient_service_id =
-            if new_state == "join" && delivery_status.as_deref() == Some("routable") {
-                payload
-                    .get("delivery_binding")
-                    .and_then(Value::as_object)
-                    .and_then(|binding| binding.get("recipient_service_id"))
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.trim().is_empty())
-                    .map(ToOwned::to_owned)
-            } else {
-                None
-            };
+        let recipient_id = if new_state == "join" && delivery_status.as_deref() == Some("routable")
+        {
+            payload
+                .get("delivery_binding")
+                .and_then(Value::as_object)
+                .and_then(|binding| binding.get("recipient_id"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned)
+        } else {
+            None
+        };
         let recipient_service_resolution =
             if new_state == "join" && delivery_status.as_deref() == Some("routable") {
                 payload
@@ -785,7 +785,7 @@ impl ProjectionState {
                 state: new_state.to_owned(),
                 role,
                 delivery_status,
-                recipient_service_id,
+                recipient_id,
                 recipient_service_resolution,
                 membership_event_ref: event_ref,
                 delivery_binding_frontier,

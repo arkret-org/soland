@@ -58,7 +58,7 @@ pub struct ContactRecord {
     pub response_event_ref: Option<String>,
     pub tombstone_event_ref: Option<String>,
     pub message: Option<String>,
-    pub peer_service_id: Option<String>,
+    pub peer_id: Option<String>,
     /// Exact carrier retained from the verified introduction or shared-Realm
     /// delivery binding. It is re-verified before routing and is not a cached
     /// endpoint authority.

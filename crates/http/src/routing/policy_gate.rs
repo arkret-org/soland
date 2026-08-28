@@ -267,8 +267,8 @@ async fn policy_request_for_operation(
     let actor_id = arkret_identifiers::DidCoreId::new(actor_id.to_owned()).map_err(|error| {
         PolicyGateRejection::forbidden_request(format!("invalid actor DID: {error}"))
     })?;
-    let source_service_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
-        .map_err(|error| {
+    let source_id =
+        arkret_identifiers::DidCoreId::new(state.service_id().clone()).map_err(|error| {
             PolicyGateRejection::internal(format!("invalid local service DID: {error}"))
         })?;
     let event_preview = serde_json::to_value(operation).map_err(|error| {
@@ -281,8 +281,8 @@ async fn policy_request_for_operation(
         realm_id,
         actor_id,
         action: action.to_owned(),
-        source_service_id,
-        source_service_kind: "soland".to_owned(),
+        source_id,
+        source_kind: "soland".to_owned(),
         source_ip_digest: digest_value("policy-gate:no-source-ip")
             .map_err(PolicyGateRejection::forbidden_request)?,
         signed_transport: true,

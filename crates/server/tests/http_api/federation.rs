@@ -50,7 +50,7 @@ async fn seed_peer_delivery_binding(state: &AppState) {
             state: "join".to_owned(),
             role: "member".to_owned(),
             delivery_status: Some("routable".to_owned()),
-            recipient_service_id: Some(PEER_SOURCE_ID.to_owned()),
+            recipient_id: Some(PEER_SOURCE_ID.to_owned()),
             recipient_service_resolution: None,
             membership_event_ref: Some(PEER_DELIVERY_FRONTIER.to_owned()),
             delivery_binding_frontier: Some(PEER_DELIVERY_FRONTIER.to_owned()),
@@ -73,7 +73,7 @@ async fn seed_peer_delivery_binding(state: &AppState) {
             state: "join".to_owned(),
             role: "member".to_owned(),
             delivery_status: Some("routable".to_owned()),
-            recipient_service_id: Some(service_id().to_owned()),
+            recipient_id: Some(service_id().to_owned()),
             recipient_service_resolution: None,
             membership_event_ref: Some(PEER_DELIVERY_FRONTIER.to_owned()),
             delivery_binding_frontier: Some(PEER_DELIVERY_FRONTIER.to_owned()),
@@ -1360,7 +1360,7 @@ async fn submit_peer_event(state: AppState, event: &Value) -> Value {
         .unwrap()
 }
 
-async fn seed_peer_read_authorization(state: &AppState, source_service_id: &str, member_did: &str) {
+async fn seed_peer_read_authorization(state: &AppState, source_id: &str, member_did: &str) {
     let now = Utc::now() - ChronoDuration::seconds(60);
     let mut meta = state
         .test_persistence()
@@ -1384,10 +1384,9 @@ async fn seed_peer_read_authorization(state: &AppState, source_service_id: &str,
             created_at: now,
             updated_at: now,
         });
-    meta.plaintext_visible_services
-        .insert(source_service_id.to_owned());
+    meta.plaintext_visible_services.insert(source_id.to_owned());
     meta.plaintext_visible_service_classes
-        .entry(source_service_id.to_owned())
+        .entry(source_id.to_owned())
         .or_default()
         .insert(arkret_wire::PlaintextDataClassKind::MessageContent);
     meta.updated_at = now;
@@ -1402,7 +1401,7 @@ async fn seed_peer_read_authorization(state: &AppState, source_service_id: &str,
         member_binding_event(
             "ak:event:AWOy3SEshibYHuXWgX09nbOW8yvqtRV769ZsokfmH7Ao",
             member_did,
-            source_service_id,
+            source_id,
             21,
         ),
         now + ChronoDuration::seconds(1),
@@ -1410,19 +1409,14 @@ async fn seed_peer_read_authorization(state: &AppState, source_service_id: &str,
     .await;
 }
 
-fn member_binding_event(
-    event_id: &str,
-    member_did: &str,
-    source_service_id: &str,
-    seq: u64,
-) -> Value {
+fn member_binding_event(event_id: &str, member_did: &str, source_id: &str, seq: u64) -> Value {
     let payload = serde_json::json!({
         "actor_id": member_did,
         "membership": "join",
         "role": "member",
         "delivery_status": "routable",
         "delivery_binding": {
-            "recipient_service_id": source_service_id,
+            "recipient_id": source_id,
             "binding_source": "explicit",
             "delivery_binding_frontier": "ak:frontier:peer-read-test"
         }

@@ -152,7 +152,7 @@ fn add_realm_member(state: &mut ProjectionState, _hlc: &ServerHlc, realm_id: &st
             state: "join".to_owned(),
             role: "member".to_owned(),
             delivery_status: None,
-            recipient_service_id: None,
+            recipient_id: None,
             recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,

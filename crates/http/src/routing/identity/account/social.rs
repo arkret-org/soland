@@ -170,7 +170,7 @@ pub(crate) async fn contact_continuity_checkpoint(
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::new(ErrorCode::NotFound, "Contact lineage not found"))?;
     let (outcome, delivery) = if record
-        .peer_service_id
+        .peer_id
         .as_deref()
         .is_none_or(|service| service == state.service_id())
     {
@@ -189,7 +189,7 @@ pub(crate) async fn contact_continuity_checkpoint(
             None,
         )
     } else {
-        let peer_service_id = record.peer_service_id.as_deref().expect("checked remote");
+        let peer_id = record.peer_id.as_deref().expect("checked remote");
         let service_resolution = record
             .peer_service_resolution
             .clone()
@@ -204,7 +204,7 @@ pub(crate) async fn contact_continuity_checkpoint(
                     AppError::internal(format!("stored Contact service resolution: {error}"))
                 })
             })?;
-        let peer_service_id = DidCoreId::new(peer_service_id.to_owned()).map_err(|error| {
+        let peer_id = DidCoreId::new(peer_id.to_owned()).map_err(|error| {
             AppError::internal(format!("stored Contact peer service invalid: {error}"))
         })?;
         let contact_address =
@@ -212,9 +212,9 @@ pub(crate) async fn contact_continuity_checkpoint(
                 peer.clone(),
                 arkret_wire::PrincipalAuthorityKey {
                     principal_id: peer,
-                    principal_server_id: peer_service_id.clone(),
+                    principal_server_id: peer_id.clone(),
                 },
-                peer_service_id.clone(),
+                peer_id.clone(),
                 service_resolution,
             );
         let proposal =
@@ -235,13 +235,13 @@ pub(crate) async fn contact_continuity_checkpoint(
                 checkpoint_digest,
                 continuity_evidence: None,
             },
-            Some((peer_service_id, delivery)),
+            Some((peer_id, delivery)),
         )
     };
-    if let Some((peer_service_id, delivery)) = delivery {
+    if let Some((peer_id, delivery)) = delivery {
         crate::routing::identity::contact_federation::enqueue_peer_contact_carrier(
             state,
-            peer_service_id.as_str(),
+            peer_id.as_str(),
             &delivery,
         )
         .await?;
@@ -474,8 +474,8 @@ async fn contact_list_rows(
             .collect(),
             bidirectional_scopes: Vec::new(),
             effective_scopes: None,
-            peer_service_id: record
-                .peer_service_id
+            peer_id: record
+                .peer_id
                 .as_deref()
                 .and_then(|did| arkret_identifiers::DidCoreId::new(did.to_owned()).ok()),
             continuity_evidence:

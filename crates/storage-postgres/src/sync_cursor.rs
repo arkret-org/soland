@@ -15,7 +15,7 @@ struct SyncCursorRow {
     #[diesel(sql_type = Nullable<Text>)]
     device_id: Option<String>,
     #[diesel(sql_type = Text)]
-    service_id: String,
+    service_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Nullable<Text>)]
     filter_digest: Option<String>,
     #[diesel(sql_type = Text)]
@@ -35,7 +35,7 @@ impl From<SyncCursorRow> for SyncCursorRecord {
             handle: row.handle,
             binding_subject: row.binding_subject,
             device_id: row.device_id,
-            service_id: row.service_id,
+            service_id: row.service_id.into_string(),
             filter_digest: row.filter_digest,
             purpose: row.purpose,
             positions: row.positions,

@@ -154,7 +154,7 @@ async fn sign_registration_receipt(
     issued_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<ServiceRegistrationReceipt, AppError> {
     let issued_at = arkret_canonical::normalize_timestamp_canonical(issued_at);
-    let provider_service_id = DidCoreId::new(state.service_id().clone())
+    let provider_id = DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("provider service id invalid: {error}")))?;
     let log_head_digest = request
         .inception_operation
@@ -184,7 +184,7 @@ async fn sign_registration_receipt(
         log_head_digest,
         control_key_digest,
         issued_at,
-        provider_service_id,
+        provider_id,
         proof: PayloadProof {
             kind: proof_kind::DETACHED_JWS.to_owned(),
             verification_method,

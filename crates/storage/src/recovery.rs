@@ -225,7 +225,7 @@ pub fn validate_security_transaction_update(
         || current.transaction_id != next.transaction_id
         || current.kind != next.kind
         || current.principal_id != next.principal_id
-        || current.coordinator_service_id != next.coordinator_service_id
+        || current.coordinator_id != next.coordinator_id
         || current.expires_at != next.expires_at
         || current.created_at != next.created_at
         || current.request_digest != next.request_digest

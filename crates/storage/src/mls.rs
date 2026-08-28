@@ -260,13 +260,13 @@ mod key_package_lifecycle_tests {
 
 /// Durable terminal result for a peer KeyPackage claim request.
 ///
-/// `(source_service_id, claim_request_id)` is the protocol idempotency key.
+/// `(source_id, claim_request_id)` is the protocol idempotency key.
 /// `request_digest` prevents a caller from reusing that key for a different
 /// canonical request. `outcome` is the exact serialized success response and
 /// is absent for the opaque `claim_failed` terminal state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PeerKeyPackageClaimLedgerRecord {
-    pub source_service_id: String,
+    pub source_id: String,
     pub claim_request_id: String,
     pub request_digest: String,
     /// Durable use class of the claimed KeyPackage (`single_use`,
@@ -399,7 +399,7 @@ pub trait MlsKeyPackageStore: Send + Sync {
     /// Read a peer claim ledger row without revealing KeyPackage inventory.
     async fn get_peer_claim(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
     ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>>;
     /// Resolve the unique durable ordinary single-use peer-claim fact that
@@ -426,7 +426,7 @@ pub trait MlsKeyPackageStore: Send + Sync {
     /// state without the original durable request/outcome.
     async fn attach_peer_claim_terminal_receipt(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         terminal_receipt: &Value,
@@ -434,7 +434,7 @@ pub trait MlsKeyPackageStore: Send + Sync {
     ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>>;
     async fn attach_peer_claim_consume_receipt(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         consume_receipt: &Value,
@@ -445,7 +445,7 @@ pub trait MlsKeyPackageStore: Send + Sync {
     /// time, is checked against the original claim deadline.
     async fn transition_peer_claim_consumed(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         expected_outcome: &Value,
@@ -458,7 +458,7 @@ pub trait MlsKeyPackageStore: Send + Sync {
     /// state/digest/outcome drift, or a non-terminal target.
     async fn transition_peer_claim_terminal(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         expected_outcome: &Value,

@@ -25,7 +25,7 @@ pub struct AuthorizationCheck<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RealmPolicyServerConfig {
     pub realm_id: String,
-    pub policy_server_service_id: arkret_wire::DidCoreId,
+    pub policy_server_id: arkret_wire::DidCoreId,
     pub policy_server_url: String,
     pub cache_ttl_seconds: u64,
     pub timeout_ms: u64,

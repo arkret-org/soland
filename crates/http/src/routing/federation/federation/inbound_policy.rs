@@ -17,17 +17,17 @@ pub(crate) fn ensure_private_inbound_read_rail_local(state: &AppState) -> Result
 pub(crate) async fn federation_actor_origin_acceptable(
     state: &AppState,
     actor: &str,
-    source_service_id: &str,
+    source_id: &str,
     event_principal_server_id: Option<&str>,
     binding_realm: &str,
     event_kind: Option<&str>,
 ) -> bool {
     if let Some(principal_server_id) = event_principal_server_id {
-        if !event_origin_matches_source(source_service_id, principal_server_id) {
+        if !event_origin_matches_source(source_id, principal_server_id) {
             return false;
         }
         if did_deployment_authority(actor).is_some()
-            && did_deployment_authority(actor) == did_deployment_authority(source_service_id)
+            && did_deployment_authority(actor) == did_deployment_authority(source_id)
         {
             return true;
         }
@@ -39,7 +39,7 @@ pub(crate) async fn federation_actor_origin_acceptable(
         );
     }
     if did_deployment_authority(actor).is_some()
-        && did_deployment_authority(actor) == did_deployment_authority(source_service_id)
+        && did_deployment_authority(actor) == did_deployment_authority(source_id)
     {
         return true;
     }
@@ -52,8 +52,8 @@ pub(crate) async fn federation_actor_origin_acceptable(
             .invite_member_is_invited(binding_realm, actor)
 }
 
-fn event_origin_matches_source(source_service_id: &str, principal_server_id: &str) -> bool {
-    !source_service_id.is_empty() && source_service_id == principal_server_id
+fn event_origin_matches_source(source_id: &str, principal_server_id: &str) -> bool {
+    !source_id.is_empty() && source_id == principal_server_id
 }
 
 fn membership_authority_pair_acceptable(
@@ -65,7 +65,7 @@ fn membership_authority_pair_acceptable(
         let acceptable_state = membership.state == "join"
             || (event_kind == Some(arkret_wire::EventKind::InviteAccept.as_str())
                 && membership.state == "invite");
-        acceptable_state && membership.recipient_service_id.as_deref() == Some(principal_server_id)
+        acceptable_state && membership.recipient_id.as_deref() == Some(principal_server_id)
     })
 }
 
@@ -105,7 +105,7 @@ mod tests {
             state: state.to_owned(),
             role: "member".to_owned(),
             delivery_status: Some("routable".to_owned()),
-            recipient_service_id: Some(principal_server_id.to_owned()),
+            recipient_id: Some(principal_server_id.to_owned()),
             recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,

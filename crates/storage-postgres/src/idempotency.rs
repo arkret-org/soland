@@ -9,11 +9,11 @@ pub struct PgIdempotencyStore {
 #[derive(QueryableByName)]
 struct IdempotencyRow {
     #[diesel(sql_type = Text)]
-    principal_id: String,
+    principal_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Text)]
     idempotency_key: String,
     #[diesel(sql_type = Text)]
-    service_id: String,
+    service_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Text)]
     request_hash: String,
     #[diesel(sql_type = Integer)]
@@ -25,30 +25,18 @@ struct IdempotencyRow {
     #[diesel(sql_type = Timestamptz)]
     expires_at: chrono::DateTime<Utc>,
 }
-impl TryFrom<IdempotencyRow> for IdempotencyRecord {
-    type Error = PersistenceError;
-
-    fn try_from(row: IdempotencyRow) -> Result<Self, Self::Error> {
-        Ok(IdempotencyRecord {
-            principal_id: arkret_identifiers::DidCoreId::new(row.principal_id).map_err(
-                |error| {
-                    PersistenceError::SchemaViolation(format!(
-                        "stored idempotency principal_id is invalid: {error}"
-                    ))
-                },
-            )?,
+impl From<IdempotencyRow> for IdempotencyRecord {
+    fn from(row: IdempotencyRow) -> Self {
+        Self {
+            principal_id: row.principal_id,
             idempotency_key: row.idempotency_key,
-            service_id: arkret_identifiers::DidCoreId::new(row.service_id).map_err(|error| {
-                PersistenceError::SchemaViolation(format!(
-                    "stored idempotency service_id is invalid: {error}"
-                ))
-            })?,
+            service_id: row.service_id,
             request_hash: row.request_hash,
             response_status: row.response_status,
             response_body: row.response_body,
             created_at: row.created_at,
             expires_at: row.expires_at,
-        })
+        }
     }
 }
 #[async_trait]
@@ -61,19 +49,18 @@ impl IdempotencyStore for PgIdempotencyStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
+        Ok(sql_query(
             "SELECT principal_id, idempotency_key, service_id, request_hash, response_status, \
              response_body, created_at, expires_at \
              FROM idempotency_keys WHERE principal_id = $1 AND idempotency_key = $2",
         )
-        .bind::<Text, _>(principal_id.as_str())
+        .bind::<Text, _>(principal_id)
         .bind::<Text, _>(idempotency_key)
         .get_result::<IdempotencyRow>(&mut *conn)
         .await
         .optional()
         .map_err(PersistenceError::database)?
-        .map(IdempotencyRecord::try_from)
-        .transpose()
+        .map(IdempotencyRecord::from))
     }
 
     async fn record(&self, record: &IdempotencyRecord) -> PersistenceResult<()> {
@@ -89,9 +76,9 @@ impl IdempotencyStore for PgIdempotencyStore {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
              ON CONFLICT (principal_id, idempotency_key) DO NOTHING",
         )
-        .bind::<Text, _>(record.principal_id.as_str())
+        .bind::<Text, _>(&record.principal_id)
         .bind::<Text, _>(&record.idempotency_key)
-        .bind::<Text, _>(record.service_id.as_str())
+        .bind::<Text, _>(&record.service_id)
         .bind::<Text, _>(&record.request_hash)
         .bind::<Integer, _>(record.response_status)
         .bind::<Jsonb, _>(&record.response_body)

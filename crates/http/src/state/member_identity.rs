@@ -317,8 +317,8 @@ pub(crate) fn handle_claim_record_from_envelope(
         .get("audience")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let issuer_service_id = envelope
-        .get("issuer_service_id")
+    let issuer_id = envelope
+        .get("issuer_id")
         .and_then(Value::as_str)
         .map(str::to_owned);
     let visibility = envelope
@@ -340,7 +340,7 @@ pub(crate) fn handle_claim_record_from_envelope(
         digest,
         subject_id,
         issuer,
-        issuer_service_id,
+        issuer_id,
         audience,
         binding_state,
         visibility,

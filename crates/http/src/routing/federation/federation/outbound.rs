@@ -34,7 +34,7 @@ pub(crate) fn configured_peer_targets(state: &AppState) -> Vec<FederationPeerTar
             if denied {
                 tracing::warn!(
                     peer_url = %peer.url,
-                    peer_service_id = %peer.service_id,
+                    peer_id = %peer.service_id,
                     "configured federation peer denied by deployment peer policy"
                 );
                 return false;
@@ -50,7 +50,7 @@ pub(crate) fn configured_peer_targets(state: &AppState) -> Vec<FederationPeerTar
             ) {
                 tracing::warn!(
                     peer_url = %peer.url,
-                    peer_service_id = %peer.service_id,
+                    peer_id = %peer.service_id,
                     %reason,
                     "configured federation peer denied by sovereign outbound trust_domain policy"
                 );

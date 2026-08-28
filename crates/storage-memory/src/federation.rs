@@ -10,7 +10,7 @@ use super::{
     frontier_exchange_failure_record, frontier_exchange_success_record,
 };
 // G3.S0 — in-memory outbound federation HTTP delivery queue.
-// Keyed by `id` (the row PK) with a secondary `(peer_service_id,
+// Keyed by `id` (the row PK) with a secondary `(peer_id,
 // idempotency_key)` uniqueness guard implemented at insert time so the
 // Memory backend matches the Pg `federation_outbox_peer_idem` UNIQUE
 // INDEX semantics.
@@ -36,12 +36,11 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
             .validate_shape()
             .map_err(|error| PersistenceError::Conflict(format!("schema_violation: {error}")))?;
         let mut data = self.data.lock();
-        // Match the Pg `(peer_service_id, idempotency_key)` UNIQUE INDEX —
+        // Match the Pg `(peer_id, idempotency_key)` UNIQUE INDEX —
         // duplicate enqueue returns Ok(false) so re-broadcast on
         // restart is structurally idempotent.
         let already_present = data.values().any(|existing| {
-            existing.peer_service_id == record.peer_service_id
-                && existing.idempotency_key == record.idempotency_key
+            existing.peer_id == record.peer_id && existing.idempotency_key == record.idempotency_key
         });
         if already_present {
             return Ok(false);
@@ -53,7 +52,7 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
             let active = data
                 .values()
                 .filter(|existing| {
-                    existing.peer_service_id == record.peer_service_id
+                    existing.peer_id == record.peer_id
                         && existing.coalescing_key.as_deref() == Some(coalescing_key)
                         && matches!(
                             existing.state,
@@ -169,7 +168,7 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
         }
         if let Some(successor) = successor {
             let duplicate = data.values().any(|existing| {
-                existing.peer_service_id == successor.peer_service_id
+                existing.peer_id == successor.peer_id
                     && existing.idempotency_key == successor.idempotency_key
             });
             if !duplicate {
@@ -265,7 +264,7 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
         let mut buckets: BTreeMap<(String, DidCoreId), (i64, Option<i64>)> = BTreeMap::new();
         for row in data.values() {
             let entry = buckets
-                .entry((row.state.as_str().to_owned(), row.peer_service_id.clone()))
+                .entry((row.state.as_str().to_owned(), row.peer_id.clone()))
                 .or_insert((0, None));
             entry.0 += 1;
             entry.1 = Some(match entry.1 {
@@ -275,14 +274,14 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
         }
         buckets
             .into_iter()
-            .map(|((state, peer_service_id), (depth, oldest_created_at))| {
+            .map(|((state, peer_id), (depth, oldest_created_at))| {
                 Ok(FederationOutboxStateDepth {
                     state: FederationOutboxState::parse(&state).ok_or_else(|| {
                         PersistenceError::Internal(format!(
                             "unknown federation outbox state {state}"
                         ))
                     })?,
-                    peer_service_id,
+                    peer_id,
                     depth,
                     oldest_created_at,
                 })
@@ -318,7 +317,7 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
             return Ok(false);
         }
         if data.values().any(|existing| {
-            existing.peer_service_id == command.record.peer_service_id
+            existing.peer_id == command.record.peer_id
                 && existing.idempotency_key == command.record.idempotency_key
         }) {
             return Err(PersistenceError::Conflict(
@@ -355,27 +354,25 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
     async fn get(
         &self,
         realm_id: &str,
-        peer_service_id: &DidCoreId,
+        peer_id: &DidCoreId,
     ) -> PersistenceResult<Option<FederationFrontierExchangeRecord>> {
         let data = self.data.lock();
-        Ok(data
-            .get(&(realm_id.to_owned(), peer_service_id.clone()))
-            .cloned())
+        Ok(data.get(&(realm_id.to_owned(), peer_id.clone())).cloned())
     }
 
     async fn record_success(
         &self,
         realm_id: &str,
-        peer_service_id: &DidCoreId,
+        peer_id: &DidCoreId,
         frontier_root: &str,
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord> {
         let mut data = self.data.lock();
-        let key = (realm_id.to_owned(), peer_service_id.clone());
+        let key = (realm_id.to_owned(), peer_id.clone());
         let record = frontier_exchange_success_record(
             data.get(&key).cloned(),
             realm_id,
-            peer_service_id,
+            peer_id,
             frontier_root,
             observed_at,
         );
@@ -386,16 +383,16 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
     async fn record_failure(
         &self,
         realm_id: &str,
-        peer_service_id: &DidCoreId,
+        peer_id: &DidCoreId,
         reason: &str,
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord> {
         let mut data = self.data.lock();
-        let key = (realm_id.to_owned(), peer_service_id.clone());
+        let key = (realm_id.to_owned(), peer_id.clone());
         let record = frontier_exchange_failure_record(
             data.get(&key).cloned(),
             realm_id,
-            peer_service_id,
+            peer_id,
             reason,
             observed_at,
         );

@@ -224,9 +224,9 @@ fn shared_realm_evidence(realm_id: &str) -> IntroductionEvidence {
     IntroductionEvidence::SharedRealm {
         realm_id: RealmId::new(realm_id.to_owned()).expect("shared realm evidence realm id"),
         inviter_member_ref: arkret_identifiers::EventId::new(UNKNOWN_EVENT_ID.to_owned())
-            .expect("inviter member ref"),
+            .expect("inviter_id member ref"),
         invitee_member_ref: arkret_identifiers::EventId::new(UNKNOWN_EVENT_ID.to_owned())
-            .expect("invitee member ref"),
+            .expect("invitee_id member ref"),
     }
 }
 
@@ -265,7 +265,7 @@ async fn seed_dispatch_fixture_for_target(
         .expect("seeded realm id")
         .to_owned();
     let evidence = evidence_for_realm(&realm_id);
-    let (recipient_service_id, service_resolution) = target.unwrap_or_else(|| {
+    let (recipient_id, service_resolution) = target.unwrap_or_else(|| {
         (
             DidCoreId::new(state.service_id().to_owned()).expect("service id core DID"),
             local_service_resolution(&state),
@@ -274,12 +274,12 @@ async fn seed_dispatch_fixture_for_target(
     let evidence_digest =
         arkret_canonical::canonical_sha256(&evidence).expect("introduction evidence digest");
     let payload = serde_json::json!({
-        "invitee": fixture_actor_core_id(BOB),
+        "invitee_id": fixture_actor_core_id(BOB),
         "invite_delivery_target": {
-            "recipient_service_id": recipient_service_id.clone(),
+            "recipient_id": recipient_id.clone(),
             "service_resolution": serde_json::to_value(&service_resolution)
                 .expect("service resolution carrier serializes"),
-            "recipient_service_kind": "principal_server"
+            "recipient_kind": "principal_server"
         },
         "introduction_evidence_digest": evidence_digest,
         "expires_at": "2099-01-01T00:00:00.000Z"
@@ -339,7 +339,7 @@ async fn seed_dispatch_fixture_for_target(
 
     let invite_address = InviteAddress::principal_server(
         fixture_actor_core_id(BOB),
-        recipient_service_id,
+        recipient_id,
         service_resolution,
     );
     DispatchFixture {
@@ -528,7 +528,7 @@ async fn self_invite_dispatch_quarantine_is_deferred_and_idempotent_per_idempote
     assert_eq!(body["status"], "deferred", "dispatch response: {body}");
     assert!(
         body.get("disclosed_outcome").is_none(),
-        "quarantine MUST NOT be disclosed to the inviter: {body}"
+        "quarantine MUST NOT be disclosed to the inviter_id: {body}"
     );
     assert_eq!(fixture.quarantine_entries().await.len(), 1);
 

@@ -288,7 +288,7 @@ mod tests {
                 }
             }))
             .expect("typed Contact receipt fixture"),
-            issuer_service_id: "ak:did_core:web:requester.example".to_owned(),
+            issuer_id: "ak:did_core:web:requester.example".to_owned(),
             verified_at: chrono::Utc
                 .timestamp_opt(1_700_000_000, 0)
                 .single()

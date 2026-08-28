@@ -86,7 +86,7 @@ pub(crate) fn self_router() -> Router {
 
 fn new_invite_locator(
     subject_id: &str,
-    recipient_service_id: &str,
+    recipient_id: &str,
     options: InviteLocatorIssueRequestBody,
 ) -> Result<(InviteLocatorRecord, String), AppError> {
     options
@@ -99,7 +99,7 @@ fn new_invite_locator(
         locator_id: format!("ak:invite_locator:{}", uuid::Uuid::now_v7()),
         token_digest,
         subject_id: subject_id.to_owned(),
-        recipient_service_id: recipient_service_id.to_owned(),
+        recipient_id: recipient_id.to_owned(),
         issued_at,
         expires_at,
         one_time_use: options.one_time_use.unwrap_or(false),
@@ -255,13 +255,13 @@ async fn peer_invites_submit(
         super::events::peer::schema_violation(format!("invalid invite delivery request: {error}"))
     })?;
 
-    let destination_service_id = required_header(req, HEADER_DESTINATION_SERVICE_ID)?;
-    if destination_service_id != delivery.invite_address.recipient_service_id.as_str() {
+    let destination_id = required_header(req, HEADER_DESTINATION_SERVICE_ID)?;
+    if destination_id != delivery.invite_address.recipient_id.as_str() {
         return Err(super::events::peer::cross_domain_replay(
-            "Destination-Service-ID must equal invite_address.recipient_service_id",
+            "Destination-Service-ID must equal invite_address.recipient_id",
         ));
     }
-    let source_service_id = required_header(req, HEADER_SOURCE_SERVICE_ID)?;
+    let source_id = required_header(req, HEADER_SOURCE_SERVICE_ID)?;
 
     // Steps 1-3 are the service-to-service binding: the peer session below
     // exists only so the delivered envelope can be verified against a
@@ -280,7 +280,7 @@ async fn peer_invites_submit(
             trust_headers.source_trust_domain
         ),
         actor: delivery.invite_event.actor_id.as_str().to_owned(),
-        device_id: format!("peer-invite:{source_service_id}"),
+        device_id: format!("peer-invite:{source_id}"),
         audience: state.service_id().clone(),
         session_public_key: None,
         agent_session: None,
@@ -295,7 +295,7 @@ async fn peer_invites_submit(
             state,
             &delivery,
             &body,
-            &source_service_id,
+            &source_id,
             "peer.invites.submit",
             InvitePrivateProjection::FromDeliveredEvent { session: &session },
         )
@@ -330,16 +330,16 @@ async fn receive_private_invite_delivery(
     state: &AppState,
     delivery: &InviteDeliveryRequestBody,
     body: &Value,
-    source_service_id: &str,
+    source_id: &str,
     audit_operation: &'static str,
     projection: InvitePrivateProjection<'_>,
 ) -> Result<InviteDeliveryOutcome, AppError> {
     validate_invite_delivery_consistency(body, delivery, state)?;
 
-    // The inviter is the actor that signed the durable `ak.invite.create`
+    // The inviter_id is the actor that signed the durable `ak.invite.create`
     // event; it is the `peer` we test `denied_subjects` and the
     // `consent_grant` evidence against (spec invite-addressing.md §2 / §5).
-    let inviter = delivery.invite_event.actor_id.as_str().to_owned();
+    let inviter_id = delivery.invite_event.actor_id.as_str().to_owned();
     let subject_id = delivery.invite_address.subject_id.clone();
     let subject = subject_id.as_str().to_owned();
 
@@ -353,10 +353,10 @@ async fn receive_private_invite_delivery(
         state,
         &policy,
         &delivery.introduction_evidence,
-        &inviter,
+        &inviter_id,
         &subject,
-        delivery.invite_address.recipient_service_id.as_str(),
-        source_service_id,
+        delivery.invite_address.recipient_id.as_str(),
+        source_id,
     );
 
     if decision.action != InviteReceiveAction::Notify {
@@ -364,8 +364,8 @@ async fn receive_private_invite_delivery(
             persist_invite_quarantine_entry(
                 state,
                 &subject,
-                source_service_id,
-                &inviter,
+                source_id,
+                &inviter_id,
                 delivery,
                 body,
                 &decision,
@@ -380,8 +380,8 @@ async fn receive_private_invite_delivery(
             audit_operation,
             json!({
                 "idempotency_key": delivery.idempotency_key,
-                "invitee": delivery.invite_address.subject_id,
-                "recipient_service_id": delivery.invite_address.recipient_service_id,
+                "invitee_id": delivery.invite_address.subject_id,
+                "recipient_id": delivery.invite_address.recipient_id,
                 "introduction_kind": delivery.introduction_evidence.kind(),
                 "effective_kind": decision.effective_kind,
                 "trust_tier": decision.trust_tier.as_str(),
@@ -439,12 +439,12 @@ async fn receive_private_invite_delivery(
         ),
     };
 
-    // §7 — the notify branch owes the invitee's devices the private delivery
+    // §7 — the notify branch owes the invitee_id's devices the private delivery
     // material itself: the invite token is transport material, never an Invite
     // read-model field (governance-objects.md §5.3), so it travels on the
     // actor-private account-data carrier instead.
     let credential_delivered =
-        deliver_invite_credential(state, &subject, &inviter, body, &realm_id).await?;
+        deliver_invite_credential(state, &subject, &inviter_id, body, &realm_id).await?;
 
     let status = if duplicate { "duplicate" } else { "accepted" };
     super::append_audit_log(
@@ -454,8 +454,8 @@ async fn receive_private_invite_delivery(
         json!({
             "idempotency_key": delivery.idempotency_key,
             "event_id": event_id,
-            "invitee": delivery.invite_address.subject_id,
-            "recipient_service_id": delivery.invite_address.recipient_service_id,
+            "invitee_id": delivery.invite_address.subject_id,
+            "recipient_id": delivery.invite_address.recipient_id,
             "introduction_kind": delivery.introduction_evidence.kind(),
             "effective_kind": decision.effective_kind,
             "trust_tier": decision.trust_tier.as_str(),
@@ -526,7 +526,7 @@ async fn self_invites_dispatch(
     let delivery_body = serde_json::to_value(&delivery)
         .map_err(|error| AppError::internal(format!("invite delivery encoding failed: {error}")))?;
 
-    if delivery.invite_address.recipient_service_id.as_str() == state.service_id() {
+    if delivery.invite_address.recipient_id.as_str() == state.service_id() {
         // §7 — the local target runs the same steps 4-9 the peer ingress runs.
         return json_ok(
             receive_private_invite_delivery(
@@ -597,7 +597,7 @@ fn invite_event_precondition(reason_code: &'static str, message: &'static str) -
 /// re-encoding of the typed model, so every retry under the same
 /// `idempotency_key` reproduces byte-identical wire bytes and the receiver
 /// computes the same request digest. Deduplication is the outbox's own
-/// `(peer_service_id, idempotency_key)` uniqueness.
+/// `(peer_id, idempotency_key)` uniqueness.
 async fn enqueue_remote_invite_delivery(
     state: &AppState,
     delivery: &InviteDeliveryRequestBody,
@@ -605,14 +605,14 @@ async fn enqueue_remote_invite_delivery(
     accepted: &AcceptedEvent,
 ) -> Result<InviteDeliveryOutcome, AppError> {
     validate_invite_delivery_event_binding(body, delivery)?;
-    let recipient_service_id = &delivery.invite_address.recipient_service_id;
+    let recipient_id = &delivery.invite_address.recipient_id;
     let resolver = state
         .service_route_resolver()
         .map_err(|error| AppError::internal(error.to_owned()))?;
     let entry = resolver
         .resolve_carrier(
             &delivery.invite_address.service_resolution,
-            recipient_service_id,
+            recipient_id,
             "principal_server",
             now(),
         )
@@ -638,7 +638,7 @@ async fn enqueue_remote_invite_delivery(
         .enqueue_delivery(EnqueueFederationDeliveryCommand {
             delivery: FederationDeliveryRecord {
                 id: enqueued_id.clone(),
-                peer_service_id: recipient_service_id.clone(),
+                peer_id: recipient_id.clone(),
                 peer_url: Some(entry.base_url.trim_end_matches('/').to_owned()),
                 endpoint: PEER_INVITES_ENDPOINT.to_owned(),
                 idempotency_key: delivery.idempotency_key.clone(),
@@ -659,8 +659,8 @@ async fn enqueue_remote_invite_delivery(
         json!({
             "idempotency_key": delivery.idempotency_key,
             "event_id": accepted.event_id,
-            "invitee": delivery.invite_address.subject_id,
-            "recipient_service_id": delivery.invite_address.recipient_service_id,
+            "invitee_id": delivery.invite_address.subject_id,
+            "recipient_id": delivery.invite_address.recipient_id,
             "introduction_kind": delivery.introduction_evidence.kind(),
             "outbox_id": enqueued.id,
             "endpoint": PEER_INVITES_ENDPOINT,
@@ -737,8 +737,8 @@ async fn persist_private_invite_projection(
     let record = RealmInviteRecord {
         invite_id: invite_id.clone(),
         realm_id: validated.realm_id.to_string(),
-        inviter: validated.actor_id.to_string(),
-        invitee: Some(subject.to_owned()),
+        inviter_id: validated.actor_id.to_string(),
+        invitee_id: Some(subject.to_owned()),
         invite_delivery_target,
         introduction_evidence_digest,
         third_party_invite: None,
@@ -761,8 +761,8 @@ async fn persist_private_invite_projection(
         .map_err(|error| AppError::internal(format!("private invite lookup: {error}")))?
     {
         let exact_replay = existing.realm_id == record.realm_id
-            && existing.inviter == record.inviter
-            && existing.invitee == record.invitee
+            && existing.inviter_id == record.inviter_id
+            && existing.invitee_id == record.invitee_id
             && existing.invite_delivery_target == record.invite_delivery_target
             && existing.introduction_evidence_digest == record.introduction_evidence_digest
             && existing.expires_at == record.expires_at
@@ -784,7 +784,7 @@ async fn persist_private_invite_projection(
 }
 
 /// Spec invite-addressing.md §7 — hand a notified invite's private delivery
-/// material to the invitee's devices.
+/// material to the invitee_id's devices.
 ///
 /// The invite token is transport material: `governance-objects.md` §5.3
 /// forbids materializing it on the Invite object, so the authz Invite read
@@ -801,7 +801,7 @@ async fn persist_private_invite_projection(
 async fn deliver_invite_credential(
     state: &AppState,
     subject: &str,
-    inviter: &str,
+    inviter_id: &str,
     body: &Value,
     realm_id: &str,
 ) -> Result<bool, AppError> {
@@ -867,8 +867,8 @@ async fn deliver_invite_credential(
         invite_id,
         realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
             .map_err(|error| AppError::internal(format!("invite realm id is invalid: {error}")))?,
-        inviter: DidCoreId::new(inviter.to_owned())
-            .map_err(|error| AppError::internal(format!("inviter id is invalid: {error}")))?,
+        inviter_id: DidCoreId::new(inviter_id.to_owned())
+            .map_err(|error| AppError::internal(format!("inviter_id id is invalid: {error}")))?,
         invite_token,
         received_at,
         expires_at,
@@ -1009,25 +1009,24 @@ async fn resolve_invite_locator(
     let locator_ref_digest = Hash::new(locator_ref.token_digest.clone())
         .map_err(|error| AppError::internal(format!("locator_ref_digest invalid: {error}")))?;
     let display_hint = locator_ref.display_hint;
-    let recipient_service_id =
-        DidCoreId::new(locator_ref.recipient_service_id).map_err(|error| {
-            AppError::internal(format!(
-                "configured service DID invalid for principal locator: {error}"
-            ))
-        })?;
+    let recipient_id = DidCoreId::new(locator_ref.recipient_id).map_err(|error| {
+        AppError::internal(format!(
+            "configured service DID invalid for principal locator: {error}"
+        ))
+    })?;
     let mut locator = PrincipalLocator {
         schema: arkret_wire::SchemaId::PRINCIPAL_LOCATOR_V1.to_owned(),
         subject_id,
         service_resolution: ServiceResolutionCarrier::CurrentRecordUrl {
             current_record_url: format!(
-                "{}/_arkret/open/services/{recipient_service_id}/resolution",
+                "{}/_arkret/open/services/{recipient_id}/resolution",
                 state.config().public_base_url.trim_end_matches('/')
             ),
             pinned_record_digest: None,
         },
         route_assistance: None,
-        recipient_service_id,
-        recipient_service_kind: None,
+        recipient_id,
+        recipient_kind: None,
         issued_at,
         expires_at,
         locator_ref_digest,
@@ -1110,8 +1109,8 @@ fn receive_action_str(action: &InviteReceiveAction) -> &'static str {
 async fn persist_invite_quarantine_entry(
     state: &AppState,
     subject: &str,
-    source_service_id: &str,
-    inviter: &str,
+    source_id: &str,
+    inviter_id: &str,
     delivery: &InviteDeliveryRequestBody,
     body: &Value,
     decision: &ReceiveDecision,
@@ -1128,8 +1127,8 @@ async fn persist_invite_quarantine_entry(
             None,
             "peer.invites.quarantine",
             json!({
-                "invitee": subject,
-                "source_service_id": source_service_id,
+                "invitee_id": subject,
+                "source_id": source_id,
                 "receive_action": receive_action_str(&decision.action),
                 "reason": "unknown_subject",
             }),
@@ -1155,7 +1154,7 @@ async fn persist_invite_quarantine_entry(
         "sha256:{}",
         sha256_hex(
             format!(
-                "{subject}|{source_service_id}|{}|{invite_event_digest}",
+                "{subject}|{source_id}|{}|{invite_event_digest}",
                 delivery.idempotency_key
             )
             .as_bytes()
@@ -1165,9 +1164,9 @@ async fn persist_invite_quarantine_entry(
         "entry_digest": entry_digest.clone(),
         "status": "pending_review",
         "subject_id": subject,
-        "source_peer_principal_id": inviter,
-        "source_service_id": source_service_id,
-        "recipient_service_id": delivery.invite_address.recipient_service_id.as_str(),
+        "source_peer_principal_id": inviter_id,
+        "source_id": source_id,
+        "recipient_id": delivery.invite_address.recipient_id.as_str(),
         "consent_scope": "invite",
         "introduction_kind": delivery.introduction_evidence.kind(),
         "effective_kind": decision.effective_kind,
@@ -1249,9 +1248,9 @@ async fn persist_invite_quarantine_entry(
         Some(subject),
         "peer.invites.quarantine",
         json!({
-            "invitee": subject,
-            "source_service_id": source_service_id,
-            "inviter": inviter,
+            "invitee_id": subject,
+            "source_id": source_id,
+            "inviter_id": inviter_id,
             "invite_event_id": invite_event_id,
             "invite_event_digest": invite_event_digest,
             "expires_at": expires_at,
@@ -1317,8 +1316,8 @@ pub(crate) fn directory_handle_claim_resolve_allowed(
     intent: Option<DirectoryIntent>,
     requester: Option<&DidCoreId>,
     subject: &str,
-    recipient_service_id: &str,
-    source_service_id: &str,
+    recipient_id: &str,
+    source_id: &str,
     handle_claim: &HandleClaim,
     resolved_by: Option<DidCoreId>,
 ) -> bool {
@@ -1354,8 +1353,8 @@ pub(crate) fn directory_handle_claim_resolve_allowed(
                 &evidence,
                 requester.as_str(),
                 subject,
-                recipient_service_id,
-                source_service_id,
+                recipient_id,
+                source_id,
             )
         }
         Some(DirectoryIntent::Invite | DirectoryIntent::MemberAdd) => {
@@ -1372,8 +1371,8 @@ pub(crate) fn directory_handle_claim_resolve_allowed(
                 &evidence,
                 requester.as_str(),
                 subject,
-                recipient_service_id,
-                source_service_id,
+                recipient_id,
+                source_id,
             )
         }
         _ => return true,
@@ -1385,10 +1384,10 @@ fn evaluate_invite_receive(
     state: &AppState,
     policy: &InviteReceivePolicy,
     evidence: &IntroductionEvidence,
-    inviter: &str,
+    inviter_id: &str,
     subject: &str,
-    recipient_service_id: &str,
-    source_service_id: &str,
+    recipient_id: &str,
+    source_id: &str,
 ) -> ReceiveDecision {
     let now = now();
     let constraints = constraints_for_surface(state, ReceivePolicySurface::InviteDelivery);
@@ -1398,7 +1397,7 @@ fn evaluate_invite_receive(
     if policy
         .denied_subjects
         .iter()
-        .any(|did| did.as_str() == inviter)
+        .any(|did| did.as_str() == inviter_id)
     {
         return ReceiveDecision {
             action: InviteReceiveAction::Drop,
@@ -1409,10 +1408,10 @@ fn evaluate_invite_receive(
     }
 
     // §2 — `consent_grant` evidence: verify the referenced grant is an
-    // active `invite`/`any` dot the subject gave the inviter. On failure
+    // active `invite`/`any` dot the subject gave the inviter_id. On failure
     // MUST downgrade to low-trust `explicit_address`.
-    if principal_service_blocked(policy, constraints, source_service_id)
-        || !principal_service_trusted(policy, constraints, source_service_id)
+    if principal_service_blocked(policy, constraints, source_id)
+        || !principal_service_trusted(policy, constraints, source_id)
         || !subject_did_method_accepted(constraints, subject)
     {
         return opaque_drop(evidence.kind());
@@ -1422,7 +1421,7 @@ fn evaluate_invite_receive(
         IntroductionEvidence::LocatorRef { principal_locator } => {
             if principal_locator.validate_minimal().is_ok()
                 && principal_locator.subject_id.as_str() == subject
-                && principal_locator.recipient_service_id.as_str() == recipient_service_id
+                && principal_locator.recipient_id.as_str() == recipient_id
                 && principal_locator.expires_at > now
             {
                 "locator_ref"
@@ -1437,7 +1436,7 @@ fn evaluate_invite_receive(
             if crate::routing::identity::consent::has_active_consent_grant_evidence(
                 state,
                 subject,
-                inviter,
+                inviter_id,
                 consent_grant_ref.as_str(),
                 consent_id.as_deref(),
                 now,
@@ -1474,7 +1473,7 @@ fn evaluate_invite_receive(
                 member_delivery_binding_candidate.as_deref(),
                 resolved_by.as_ref(),
                 subject,
-                recipient_service_id,
+                recipient_id,
                 now,
             ) {
                 "handle_claim"
@@ -1559,8 +1558,8 @@ pub(crate) fn evaluate_contact_receive(
     evidence: &ContactIntroductionEvidence,
     requester: &str,
     subject: &str,
-    recipient_service_id: &str,
-    source_service_id: &str,
+    recipient_id: &str,
+    source_id: &str,
 ) -> ReceiveDecision {
     let now = now();
     let constraints = constraints_for_surface(state, ReceivePolicySurface::ContactRequest);
@@ -1568,7 +1567,7 @@ pub(crate) fn evaluate_contact_receive(
         ContactIntroductionEvidence::LocatorRef { principal_locator } => {
             if principal_locator.validate_minimal().is_ok()
                 && principal_locator.subject_id.as_str() == subject
-                && principal_locator.recipient_service_id.as_str() == recipient_service_id
+                && principal_locator.recipient_id.as_str() == recipient_id
                 && principal_locator.expires_at > now
             {
                 "locator_ref"
@@ -1602,7 +1601,7 @@ pub(crate) fn evaluate_contact_receive(
                 None,
                 resolved_by.as_ref(),
                 subject,
-                recipient_service_id,
+                recipient_id,
                 now,
             ) {
                 "handle_claim"
@@ -1618,8 +1617,8 @@ pub(crate) fn evaluate_contact_receive(
         .denied_subjects
         .iter()
         .any(|did| did.as_str() == requester)
-        || principal_service_blocked(policy, constraints, source_service_id)
-        || !principal_service_trusted(policy, constraints, source_service_id)
+        || principal_service_blocked(policy, constraints, source_id)
+        || !principal_service_trusted(policy, constraints, source_id)
         || !subject_did_method_accepted(constraints, subject)
         || kind_forbidden_by_constraints(constraints, effective_kind)
         || !kind_permitted_by_constraints(constraints, effective_kind)
@@ -1810,30 +1809,30 @@ fn did_in_list(value: &str, list: &[DidCoreId]) -> bool {
 fn principal_service_blocked(
     policy: &InviteReceivePolicy,
     constraints: Option<&ReceivePolicyConstraints>,
-    source_service_id: &str,
+    source_id: &str,
 ) -> bool {
     policy
         .denied_principal_services
         .iter()
-        .any(|did| did.as_str() == source_service_id)
+        .any(|did| did.as_str() == source_id)
         || constraints
             .and_then(|constraints| constraints.denied_principal_services.as_ref())
-            .is_some_and(|blocked| did_in_list(source_service_id, blocked))
+            .is_some_and(|blocked| did_in_list(source_id, blocked))
 }
 
 fn principal_service_trusted(
     policy: &InviteReceivePolicy,
     constraints: Option<&ReceivePolicyConstraints>,
-    source_service_id: &str,
+    source_id: &str,
 ) -> bool {
     if !policy.trusted_principal_services.is_empty()
-        && !did_in_list(source_service_id, &policy.trusted_principal_services)
+        && !did_in_list(source_id, &policy.trusted_principal_services)
     {
         return false;
     }
     constraints
         .and_then(|constraints| constraints.trusted_principal_services.as_ref())
-        .is_none_or(|trusted| did_in_list(source_service_id, trusted))
+        .is_none_or(|trusted| did_in_list(source_id, trusted))
 }
 
 fn subject_did_method_accepted(
@@ -1868,7 +1867,7 @@ fn handle_claim_evidence_valid(
     candidate: Option<&MemberDeliveryBindingCandidate>,
     resolved_by: Option<&DidCoreId>,
     subject: &str,
-    recipient_service_id: &str,
+    recipient_id: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
     if handle_claim.validate().is_err() {
@@ -1893,7 +1892,7 @@ fn handle_claim_evidence_valid(
         return false;
     }
     if let Some(binding) = &handle_claim.member_delivery_binding
-        && binding.recipient_service_id.as_str() != recipient_service_id
+        && binding.recipient_id.as_str() != recipient_id
     {
         return false;
     }
@@ -1907,7 +1906,7 @@ fn handle_claim_evidence_valid(
         return false;
     }
     if let Some(candidate) = candidate
-        && !member_delivery_candidate_valid(candidate, handle, subject, recipient_service_id, now)
+        && !member_delivery_candidate_valid(candidate, handle, subject, recipient_id, now)
     {
         return false;
     }
@@ -1964,7 +1963,7 @@ fn handle_claim_matches_did_list(handle_claim: &HandleClaim, trusted: &[DidCoreI
         return false;
     }
     if handle_claim
-        .issuer_service_id
+        .issuer_id
         .as_ref()
         .is_some_and(|issuer| trusted.iter().any(|did| did == issuer))
     {
@@ -1999,7 +1998,7 @@ fn member_delivery_candidate_valid(
     candidate: &MemberDeliveryBindingCandidate,
     handle: &Handle,
     subject: &str,
-    recipient_service_id: &str,
+    recipient_id: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
     if candidate.intent != CandidateIntent::Invite {
@@ -2011,12 +2010,7 @@ fn member_delivery_candidate_valid(
     if candidate.subject_id.as_str() != subject {
         return false;
     }
-    if candidate
-        .member_delivery_binding
-        .recipient_service_id
-        .as_str()
-        != recipient_service_id
-    {
+    if candidate.member_delivery_binding.recipient_id.as_str() != recipient_id {
         return false;
     }
     let Ok(subject_id) = DidCoreId::new(subject.to_owned()) else {
@@ -2033,9 +2027,9 @@ fn validate_invite_delivery_consistency(
     delivery: &InviteDeliveryRequestBody,
     state: &AppState,
 ) -> Result<(), AppError> {
-    if delivery.invite_address.recipient_service_id.as_str() != state.service_id() {
+    if delivery.invite_address.recipient_id.as_str() != state.service_id() {
         return Err(super::events::peer::cross_domain_replay(
-            "invite_address.recipient_service_id does not match this service",
+            "invite_address.recipient_id does not match this service",
         ));
     }
     validate_invite_delivery_event_binding(body, delivery)
@@ -2060,31 +2054,31 @@ fn validate_invite_delivery_event_binding(
         .pointer("/invite_event/payload")
         .and_then(Value::as_object)
         .ok_or_else(|| super::events::peer::schema_violation("invite_event.payload is required"))?;
-    if payload.get("invitee").and_then(Value::as_str)
+    if payload.get("invitee_id").and_then(Value::as_str)
         != Some(delivery.invite_address.subject_id.as_str())
     {
         return Err(super::events::peer::schema_violation(
-            "invite_event.payload.invitee must equal invite_address.subject_id",
+            "invite_event.payload.invitee_id must equal invite_address.subject_id",
         ));
     }
     if payload
         .get("invite_delivery_target")
-        .and_then(|target| target.get("recipient_service_id"))
+        .and_then(|target| target.get("recipient_id"))
         .and_then(Value::as_str)
-        != Some(delivery.invite_address.recipient_service_id.as_str())
+        != Some(delivery.invite_address.recipient_id.as_str())
     {
         return Err(super::events::peer::schema_violation(
-            "invite_event.payload.invite_delivery_target.recipient_service_id must equal invite_address.recipient_service_id",
+            "invite_event.payload.invite_delivery_target.recipient_id must equal invite_address.recipient_id",
         ));
     }
     if let Some(service_kind) = payload
         .get("invite_delivery_target")
-        .and_then(|target| target.get("recipient_service_kind"))
+        .and_then(|target| target.get("recipient_kind"))
         .and_then(Value::as_str)
         && service_kind != "principal_server"
     {
         return Err(super::events::peer::schema_violation(
-            "invite_delivery_target.recipient_service_kind must be principal_server",
+            "invite_delivery_target.recipient_kind must be principal_server",
         ));
     }
     let evidence_digest =
@@ -2134,7 +2128,7 @@ mod invite_locator_security_tests {
     use super::*;
 
     const PRODUCTION_HOLDER: &str = "ak:did_core:web:holder.example";
-    const PRODUCTION_INVITER: &str = "ak:did_core:web:inviter.example";
+    const PRODUCTION_INVITER: &str = "ak:did_core:web:inviter_id.example";
     const PRODUCTION_DEVICE_A: &str = "ak:device:01904100-0000-7000-8000-0000000000e1";
     const PRODUCTION_DEVICE_B: &str = "ak:device:01904100-0000-7000-8000-0000000000e2";
     const PRODUCTION_REALM: &str = "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W";
@@ -2218,8 +2212,8 @@ mod invite_locator_security_tests {
             assert_eq!(envelope.recipient_device_id.as_str(), device_id);
             assert!(matches!(
                 &envelope.sender,
-                crate::wire::DeviceMessageSender::Service { sender_service_id }
-                    if sender_service_id.as_str() == state.service_id()
+                crate::wire::DeviceMessageSender::Service { sender_id }
+                    if sender_id.as_str() == state.service_id()
             ));
             assert_eq!(
                 envelope.content.get("account_data_key"),
@@ -2246,7 +2240,7 @@ mod invite_locator_security_tests {
             "prev_refs": [],
             "refs": [],
             "payload": {
-                "invitee": PRODUCTION_HOLDER,
+                "invitee_id": PRODUCTION_HOLDER,
                 "expires_at": "2099-01-01T00:00:00.000Z"
             },
             "proofs": []
@@ -2320,7 +2314,7 @@ mod invite_locator_security_tests {
                 "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W".to_owned(),
             )
             .unwrap(),
-            inviter: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+            inviter_id: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
             invite_token: "opaque-token".to_owned(),
             received_at: at,
             expires_at: chrono::DateTime::parse_from_rfc3339(expires_at)
@@ -2355,7 +2349,7 @@ mod invite_locator_security_tests {
                 "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W".to_owned(),
             )
             .unwrap(),
-            inviter: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+            inviter_id: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
             invite_token: invite_token.to_owned(),
             received_at: at,
             expires_at: chrono::DateTime::parse_from_rfc3339(expires_at)
@@ -2481,8 +2475,8 @@ mod invite_locator_security_tests {
         );
         assert_eq!(entry["source_peer_principal_id"], PRODUCTION_INVITER);
         assert!(entry.get("quarantine_id").is_none());
-        assert!(entry.get("source_peer_service_id").is_none());
-        assert!(entry.get("inviter").is_none());
+        assert!(entry.get("source_peer_id").is_none());
+        assert!(entry.get("inviter_id").is_none());
         assert_service_account_data_fanout(
             &state,
             AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
@@ -2553,8 +2547,8 @@ mod invite_locator_security_tests {
                 "payload": {
                     "invite_id": invite_id,
                     "invite_delivery_target": {
-                        "recipient_service_id": state.service_id(),
-                        "recipient_service_kind": "principal_server"
+                        "recipient_id": state.service_id(),
+                        "recipient_kind": "principal_server"
                     },
                     "introduction_evidence_digest":
                         format!("sha256:{}", "a".repeat(64)),

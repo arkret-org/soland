@@ -13,7 +13,7 @@ pub struct ContactVerifiedMirrorRecord {
     pub request_digest: String,
     pub canonical_event_bytes: Vec<u8>,
     pub source_receipt: RequestAcceptanceReceipt,
-    pub issuer_service_id: String,
+    pub issuer_id: String,
     pub verified_at: chrono::DateTime<Utc>,
 }
 
@@ -112,7 +112,7 @@ pub struct MimiConsentCorrelationRecord {
     pub target_id: String,
     pub purpose: String,
     pub strand_id: Option<String>,
-    pub source_service_id: Option<String>,
+    pub source_id: Option<String>,
     pub created_at: chrono::DateTime<Utc>,
     pub expires_at: Option<chrono::DateTime<Utc>>,
 }

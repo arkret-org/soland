@@ -410,7 +410,7 @@ pub(super) async fn mimi_consent_request(
     if let Some(message) = unsupported_mimi_draft(&body_value) {
         return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
-    let source_service_id =
+    let source_id =
         verify_mimi_consent_write_authority(state, req, aa, body.requester_id.as_str()).await?;
     verify_mimi_request_consent_proofs(state, &body).await?;
     let consent_id = ids::generate("consent");
@@ -425,7 +425,7 @@ pub(super) async fn mimi_consent_request(
             target_id: body.target.id.to_string(),
             purpose: mimi_consent_purpose(body.purpose).to_owned(),
             strand_id: body.strand_id.as_ref().map(ToString::to_string),
-            source_service_id,
+            source_id,
             created_at: now(),
             expires_at: body.expires_at,
         })
@@ -473,9 +473,8 @@ pub(super) async fn mimi_consent_update(
         AppError::param_invalid(format!("MIMI consent Event binding is invalid: {error}"))
             .with_wire_code("schema_violation")
     })?;
-    let (session, source_service_id) =
-        verify_mimi_consent_update_authority(state, req, aa, &body).await?;
-    verify_mimi_consent_correlation(state, &body, source_service_id.as_deref()).await?;
+    let (session, source_id) = verify_mimi_consent_update_authority(state, req, aa, &body).await?;
+    verify_mimi_consent_correlation(state, &body, source_id.as_deref()).await?;
     let event_ref = body.consent_event.event.event_id.clone();
     let updated_at = body.consent_event.event.created_at;
     crate::routing::events::event_log::submit_initial_event_submission(
@@ -692,12 +691,12 @@ async fn verify_mimi_request_consent_proofs(
 async fn verify_mimi_identifier_query_proofs(
     state: &AppState,
     body: &MimiIdentifierQueryRequestBody,
-    source_service_id: &str,
+    source_id: &str,
 ) -> Result<(), AppError> {
     let issuer = body
         .requester
         .as_ref()
-        .map_or_else(|| source_service_id.to_owned(), ToString::to_string);
+        .map_or_else(|| source_id.to_owned(), ToString::to_string);
     for proof in &body.proofs {
         let binding = body.proof_binding_bytes(proof).map_err(|error| {
             AppError::param_invalid(format!(
@@ -729,7 +728,7 @@ async fn verify_mimi_consent_update_authority(
     ),
     AppError,
 > {
-    let (session, source_service_id) = if request_has_bearer_session(req) {
+    let (session, source_id) = if request_has_bearer_session(req) {
         let session = aa.authenticated_session(state, req).await?;
         if session.actor != body.actor_id.as_str() {
             return Err(AppError::capability_denied(
@@ -738,7 +737,7 @@ async fn verify_mimi_consent_update_authority(
         }
         (session, None)
     } else {
-        let source_service_id = verify_mimi_write_service_proof(state, req, None).await?;
+        let source_id = verify_mimi_write_service_proof(state, req, None).await?;
         let device_id = body
             .consent_event
             .event
@@ -764,12 +763,12 @@ async fn verify_mimi_consent_update_authority(
                 created_at: now(),
                 revoked_at: None,
             },
-            Some(source_service_id),
+            Some(source_id),
         )
     };
 
     verify_mimi_consent_actor_proof(state, body).await?;
-    Ok((session, source_service_id))
+    Ok((session, source_id))
 }
 
 fn mimi_consent_target_kind(kind: MimiConsentTargetKind) -> &'static str {
@@ -799,7 +798,7 @@ fn mimi_consent_correlation_unavailable() -> AppError {
 async fn verify_mimi_consent_correlation(
     state: &AppState,
     body: &MimiUpdateConsentRequestBody,
-    source_service_id: Option<&str>,
+    source_id: Option<&str>,
 ) -> Result<(), AppError> {
     let correlation = state
         .consents()
@@ -811,7 +810,7 @@ async fn verify_mimi_consent_correlation(
     if correlation
         .expires_at
         .is_some_and(|expires_at| expires_at <= now())
-        || correlation.source_service_id.as_deref() != source_service_id
+        || correlation.source_id.as_deref() != source_id
         || correlation.target_kind != "did"
         || correlation.target_id != body.actor_id.as_str()
     {
@@ -932,11 +931,11 @@ pub(super) async fn mimi_identifiers_query(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let typed = body.into_inner();
     let body = typed_body_value(&typed, "mimi identifiers query")?;
-    let source_service_id = verify_mimi_write_service_proof(state, req, None).await?;
+    let source_id = verify_mimi_write_service_proof(state, req, None).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
-    verify_mimi_identifier_query_proofs(state, &typed, &source_service_id).await?;
+    verify_mimi_identifier_query_proofs(state, &typed, &source_id).await?;
     let identifiers = body
         .get("identifiers")
         .and_then(Value::as_array)
@@ -1537,7 +1536,7 @@ mod consent_proof_tests {
                 target_id: target_id.to_owned(),
                 purpose: "direct_message".to_owned(),
                 strand_id: None,
-                source_service_id: None,
+                source_id: None,
                 created_at: now(),
                 expires_at: None,
             })

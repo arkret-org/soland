@@ -561,7 +561,7 @@ fn insert_joined_realm_member(
             state: "join".to_owned(),
             role: "member".to_owned(),
             delivery_status: Some("unroutable".to_owned()),
-            recipient_service_id: None,
+            recipient_id: None,
             recipient_service_resolution: None,
             membership_event_ref: Some(
                 "ak:event:AT41F_H8VlBMeU1YjfZKP1IwxWus1cykljb2DVv43LvY".to_owned(),
@@ -1120,7 +1120,7 @@ async fn register_native_agent_membership_context(
                 state: "join".to_owned(),
                 role: "owner".to_owned(),
                 delivery_status: Some("unroutable".to_owned()),
-                recipient_service_id: None,
+                recipient_id: None,
                 recipient_service_resolution: None,
                 membership_event_ref: Some(AGENT_CONTROLLER_MEMBERSHIP_EVENT_ID.to_owned()),
                 delivery_binding_frontier: None,
@@ -1431,10 +1431,10 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
         "000000000601",
         arkret_wire::EventKind::InviteCreate,
         json!({
-            "invitee": "ak:did_core:web:charlie.example",
+            "invitee_id": "ak:did_core:web:charlie.example",
             "invite_delivery_target": {
-                "recipient_service_id": "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x",
-                "recipient_service_kind": "principal_server"
+                "recipient_id": "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x",
+                "recipient_kind": "principal_server"
             },
             "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
             "expires_at": "2026-08-05T10:00:00.000Z"
@@ -1491,13 +1491,13 @@ async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
         "000000000604",
         arkret_wire::EventKind::InviteCreate,
         json!({
-            "invitee": "ak:did_core:web:charlie.example",
+            "invitee_id": "ak:did_core:web:charlie.example",
             "invite_delivery_target": {
-                "recipient_service_id": "ak:did_core:web:local.host",
+                "recipient_id": "ak:did_core:web:local.host",
                 "service_resolution": {
                     "current_record_url": "https://local.host/_arkret/open/services/ak%3Adid_core%3Aweb%3Alocal.host/resolution"
                 },
-                "recipient_service_kind": "principal_server"
+                "recipient_kind": "principal_server"
             },
             "introduction_evidence_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
             "expires_at": "2026-08-05T10:00:00.000Z"

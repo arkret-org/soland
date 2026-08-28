@@ -131,7 +131,7 @@ mod tests {
             locator_id: locator_id.to_owned(),
             token_digest: digest.to_owned(),
             subject_id: "ak:did_core:webvh:z6mkfixturebob".to_owned(),
-            recipient_service_id: "ak:did_core:webvh:z6mkfixtureps".to_owned(),
+            recipient_id: "ak:did_core:webvh:z6mkfixtureps".to_owned(),
             issued_at,
             expires_at: issued_at + Duration::minutes(15),
             one_time_use,

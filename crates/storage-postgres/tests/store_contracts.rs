@@ -920,7 +920,7 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_
     let notification_id =
         arkret_wire::NotificationId::new(format!("ak:notification:{notification_uuid}")).unwrap();
     let controller_account_id = format!("ak:account:{run_id}");
-    let recipient_service_id =
+    let recipient_id =
         arkret_wire::DidCoreId::new(format!("ak:did_core:web:notification-{run_id}.example"))
             .unwrap();
     let recipient_id =
@@ -957,7 +957,7 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_
         delta,
         recipient_id: recipient_id.clone(),
         controller_account_id: controller_account_id.clone(),
-        recipient_service_id: recipient_service_id.clone(),
+        recipient_id: recipient_id.clone(),
         source_account_artifact_id: artifact_id.clone(),
     };
 
@@ -966,7 +966,7 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_
         .await
         .unwrap();
     let inserted = store
-        .list_for_account(&controller_account_id, recipient_service_id.as_str(), None)
+        .list_for_account(&controller_account_id, recipient_id.as_str(), None)
         .await
         .unwrap();
     assert_eq!(inserted.len(), 1);
@@ -1009,7 +1009,7 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_
     let updated = store
         .list_for_account(
             &controller_account_id,
-            recipient_service_id.as_str(),
+            recipient_id.as_str(),
             Some(inserted_position),
         )
         .await
@@ -1044,7 +1044,7 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_
     let removed = store
         .list_for_account(
             &controller_account_id,
-            recipient_service_id.as_str(),
+            recipient_id.as_str(),
             Some(updated_position),
         )
         .await
@@ -1567,7 +1567,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     let outbox_id = format!("collision-outbox:{}", uuid::Uuid::now_v7());
     sql_query(
         "INSERT INTO federation_outbox \
-         (id, peer_service_id, peer_url, endpoint, idempotency_key, payload_json, next_attempt_at, created_at) \
+         (id, peer_id, peer_url, endpoint, idempotency_key, payload_json, next_attempt_at, created_at) \
          VALUES ($1, 'ak:did_core:web:peer.example', 'https://peer.example', '/events', $1, '{}', 0, 0)",
     )
     .bind::<Text, _>(&outbox_id)
@@ -1855,7 +1855,7 @@ async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract_when_confi
     );
 
     let concurrent = PeerKeyPackageClaimLedgerRecord {
-        source_service_id: format!("ak:did_core:web:{namespace}.example"),
+        source_id: format!("ak:did_core:web:{namespace}.example"),
         claim_request_id: format!("local-last-resort:{namespace}-concurrent"),
         request_digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
             .to_owned(),

@@ -67,7 +67,7 @@ impl OrganizationRegistrationError {
 }
 
 pub trait OrganizationRegistrationReceiptSigner: Send + Sync {
-    fn issuer_service_id(&self) -> &DidCoreId;
+    fn issuer_id(&self) -> &DidCoreId;
     /// `did-usage-and-verification.md` §2.2 / §6: a receipt-signing key is a
     /// concrete verification method, so the identifier is a typed DID URL and
     /// a DID without a verification-method fragment cannot be handed in.
@@ -144,7 +144,7 @@ impl OrganizationRegistrationService {
         request: OrganizationRegistrationChallengeRequestBody,
         origin: &str,
         trust_domain: &str,
-        issuer_service_id: &DidCoreId,
+        issuer_id: &DidCoreId,
         now: DateTime<Utc>,
     ) -> Result<OrganizationRegistrationChallenge, OrganizationRegistrationError> {
         request
@@ -169,7 +169,7 @@ impl OrganizationRegistrationService {
         let challenge_digest = arkret_canonical::canonical_sha256(&json!({
             "organization_id": &request.organization_id,
             "did": &request.did,
-            "local_admin_subject": &request.local_admin_subject,
+            "local_admin_subject_id": &request.local_admin_subject_id,
             "requested_scopes": &request.requested_scopes,
             "nonce": &nonce,
             "created_at": created_at,
@@ -186,10 +186,10 @@ impl OrganizationRegistrationService {
             did: request.did,
             purpose: ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1.to_owned(),
             nonce,
-            audience: issuer_service_id.clone(),
+            audience: issuer_id.clone(),
             origin: origin.to_owned(),
             trust_domain,
-            local_admin_subject: request.local_admin_subject,
+            local_admin_subject_id: request.local_admin_subject_id,
             requested_scopes: request.requested_scopes,
             expires_at: created_at + CHALLENGE_LIFETIME,
             created_at,
@@ -199,7 +199,7 @@ impl OrganizationRegistrationService {
                 &OrganizationRegistrationChallengeRequestBody {
                     organization_id: challenge.organization_id.clone(),
                     did: challenge.did.clone(),
-                    local_admin_subject: challenge.local_admin_subject.clone(),
+                    local_admin_subject_id: challenge.local_admin_subject_id.clone(),
                     requested_scopes: challenge.requested_scopes.clone(),
                 },
                 created_at,
@@ -274,7 +274,7 @@ impl OrganizationRegistrationService {
             .map(|current| current.generation.registration_generation);
         let needs_new_generation = current.as_ref().is_none_or(|current| {
             current.generation.status != OrganizationRegistrationStatus::Active
-                || current.generation.local_admin_subject != request.local_admin_subject
+                || current.generation.local_admin_subject_id != request.local_admin_subject_id
                 || current.generation.delegated_scopes != request.requested_scopes
         });
         let new_outcome = if needs_new_generation {
@@ -289,7 +289,7 @@ impl OrganizationRegistrationService {
                 &request.log_head_digest,
                 request.control_proof.proof_kind,
                 &control_key_digest,
-                &request.local_admin_subject,
+                &request.local_admin_subject_id,
                 &request.requested_scopes,
                 OrganizationRegistrationStatus::Active,
                 now,
@@ -406,7 +406,7 @@ impl OrganizationRegistrationService {
             &request.log_head_digest,
             request.control_proof.proof_kind,
             &control_key_digest,
-            &current.generation.local_admin_subject,
+            &current.generation.local_admin_subject_id,
             &current.generation.delegated_scopes,
             OrganizationRegistrationStatus::Active,
             now,
@@ -450,7 +450,7 @@ impl OrganizationRegistrationService {
             &receipt.log_head_digest,
             receipt.control_proof_kind,
             &receipt.control_key_digest,
-            &current.generation.local_admin_subject,
+            &current.generation.local_admin_subject_id,
             &current.generation.delegated_scopes,
             OrganizationRegistrationStatus::Revoked,
             now,
@@ -628,7 +628,7 @@ impl OrganizationRegistrationService {
                         &receipt.log_head_digest,
                         receipt.control_proof_kind,
                         &receipt.control_key_digest,
-                        &current.generation.local_admin_subject,
+                        &current.generation.local_admin_subject_id,
                         &current.generation.delegated_scopes,
                         OrganizationRegistrationStatus::Revoked,
                         now,
@@ -706,7 +706,7 @@ fn verify_control_proof(
             challenge_id: &request.challenge_id,
             organization_id: &request.organization_id,
             did: &request.did,
-            local_admin_subject: &request.local_admin_subject,
+            local_admin_subject_id: &request.local_admin_subject_id,
             version_id: &request.version_id,
             log_head_digest: &request.log_head_digest,
             pinned,
@@ -757,7 +757,7 @@ fn verify_refresh_control_proof(
             challenge_id: &request.challenge_id,
             organization_id: &request.organization_id,
             did: &request.did,
-            local_admin_subject: &current.generation.local_admin_subject,
+            local_admin_subject_id: &current.generation.local_admin_subject_id,
             version_id: &request.version_id,
             log_head_digest: &request.log_head_digest,
             pinned,
@@ -773,7 +773,7 @@ fn validate_ensure_challenge_binding(
     let challenge_request = OrganizationRegistrationChallengeRequestBody {
         organization_id: request.organization_id.clone(),
         did: request.did.clone(),
-        local_admin_subject: request.local_admin_subject.clone(),
+        local_admin_subject_id: request.local_admin_subject_id.clone(),
         requested_scopes: request.requested_scopes.clone(),
     };
     challenge
@@ -789,7 +789,7 @@ fn validate_ensure_challenge_binding(
         &request.challenge_id,
         &request.organization_id,
         &request.did,
-        &request.local_admin_subject,
+        &request.local_admin_subject_id,
         &request.version_id,
         &request.log_head_digest,
         challenge,
@@ -805,7 +805,7 @@ fn validate_refresh_challenge_binding(
     let challenge_request = OrganizationRegistrationChallengeRequestBody {
         organization_id: request.organization_id.clone(),
         did: request.did.clone(),
-        local_admin_subject: current.generation.local_admin_subject.clone(),
+        local_admin_subject_id: current.generation.local_admin_subject_id.clone(),
         requested_scopes: current.generation.delegated_scopes.clone(),
     };
     challenge
@@ -821,7 +821,7 @@ fn validate_refresh_challenge_binding(
         &request.challenge_id,
         &request.organization_id,
         &request.did,
-        &current.generation.local_admin_subject,
+        &current.generation.local_admin_subject_id,
         &request.version_id,
         &request.log_head_digest,
         challenge,
@@ -834,7 +834,7 @@ fn validate_control_proof_challenge_binding(
     challenge_id: &str,
     organization_id: &DidCoreId,
     did: &Did,
-    local_admin_subject: &DidCoreId,
+    local_admin_subject_id: &DidCoreId,
     version_id: &str,
     log_head_digest: &Hash,
     challenge: &OrganizationRegistrationChallenge,
@@ -844,7 +844,7 @@ fn validate_control_proof_challenge_binding(
             challenge_id,
             organization_id,
             did,
-            local_admin_subject,
+            local_admin_subject_id,
             version_id,
             log_head_digest,
         )
@@ -878,7 +878,7 @@ struct ControlProofVerificationContext<'a> {
     challenge_id: &'a str,
     organization_id: &'a DidCoreId,
     did: &'a Did,
-    local_admin_subject: &'a DidCoreId,
+    local_admin_subject_id: &'a DidCoreId,
     version_id: &'a str,
     log_head_digest: &'a Hash,
     pinned: &'a PinnedDidDocumentState,
@@ -892,7 +892,7 @@ fn verify_control_proof_inner(
         challenge_id,
         organization_id,
         did,
-        local_admin_subject,
+        local_admin_subject_id,
         version_id,
         log_head_digest,
         pinned,
@@ -912,7 +912,7 @@ fn verify_control_proof_inner(
             challenge_id,
             organization_id,
             did,
-            local_admin_subject,
+            local_admin_subject_id,
             version_id,
             log_head_digest,
         )
@@ -958,7 +958,7 @@ fn verify_control_proof_inner(
             challenge_id,
             organization_id,
             did,
-            local_admin_subject,
+            local_admin_subject_id,
             version_id,
             log_head_digest,
             item,
@@ -1232,7 +1232,7 @@ fn control_transcript_bytes(
     challenge_id: &str,
     organization_id: &DidCoreId,
     did: &Did,
-    local_admin_subject: &DidCoreId,
+    local_admin_subject_id: &DidCoreId,
     version_id: &str,
     log_head_digest: &Hash,
     proof: &PayloadProof,
@@ -1242,7 +1242,7 @@ fn control_transcript_bytes(
         "challenge_id": challenge_id,
         "organization_id": organization_id,
         "did": did,
-        "local_admin_subject": local_admin_subject,
+        "local_admin_subject_id": local_admin_subject_id,
         "version_id": version_id,
         "log_head_digest": log_head_digest,
         "verification_method": proof.verification_method,
@@ -1261,7 +1261,7 @@ fn sign_outcome(
     log_head_digest: &Hash,
     control_proof_kind: OrganizationControlProofKind,
     control_key_digest: &Hash,
-    local_admin_subject: &DidCoreId,
+    local_admin_subject_id: &DidCoreId,
     delegated_scopes: &[arkret_models_identity::OrganizationRegistrationScope],
     status: OrganizationRegistrationStatus,
     now: DateTime<Utc>,
@@ -1277,12 +1277,12 @@ fn sign_outcome(
         log_head_digest: log_head_digest.clone(),
         control_proof_kind,
         control_key_digest: control_key_digest.clone(),
-        local_admin_subject: local_admin_subject.clone(),
+        local_admin_subject_id: local_admin_subject_id.clone(),
         delegated_scopes: delegated_scopes.to_vec(),
         status,
         issued_at,
         expires_at: issued_at + RECEIPT_LIFETIME,
-        issuer_service_id: signer.issuer_service_id().clone(),
+        issuer_id: signer.issuer_id().clone(),
         proof: PayloadProof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             verification_method: signer.verification_method().to_owned(),
@@ -1461,7 +1461,7 @@ mod tests {
     }
 
     impl OrganizationRegistrationReceiptSigner for TestReceiptSigner {
-        fn issuer_service_id(&self) -> &DidCoreId {
+        fn issuer_id(&self) -> &DidCoreId {
             &self.issuer
         }
 
@@ -1588,7 +1588,7 @@ mod tests {
         OrganizationRegistrationChallengeRequestBody {
             organization_id: fixture.organization_id.clone(),
             did: fixture.did.clone(),
-            local_admin_subject: fixture.admin_id.clone(),
+            local_admin_subject_id: fixture.admin_id.clone(),
             requested_scopes: scopes,
         }
     }
@@ -1596,7 +1596,7 @@ mod tests {
     fn signed_proof(
         challenge: &OrganizationRegistrationChallenge,
         pinned: &PinnedDidDocumentState,
-        local_admin_subject: &DidCoreId,
+        local_admin_subject_id: &DidCoreId,
         proof_kind: OrganizationControlProofKind,
         signers: &[&Ed25519DetachedJwsSigner],
         created_at: DateTime<Utc>,
@@ -1618,7 +1618,7 @@ mod tests {
                 &challenge.challenge_id,
                 &challenge.organization_id,
                 &challenge.did,
-                local_admin_subject,
+                local_admin_subject_id,
                 &pinned.version_id,
                 &pinned.log_head_digest,
                 &proof,
@@ -1649,7 +1649,7 @@ mod tests {
             version_id: fixture.pinned.version_id.clone(),
             log_head_digest: fixture.pinned.log_head_digest.clone(),
             control_proof: proof,
-            local_admin_subject: fixture.admin_id.clone(),
+            local_admin_subject_id: fixture.admin_id.clone(),
             requested_scopes: scopes,
             handle_attestation: None,
         }
@@ -1795,7 +1795,7 @@ mod tests {
                 challenge_request(&fixture, profile.clone()),
                 "https://registry.example/",
                 "ak:trust_domain:registry.example",
-                fixture.receipt_signer.issuer_service_id(),
+                fixture.receipt_signer.issuer_id(),
                 fixture.now,
             )
             .await
@@ -1804,7 +1804,7 @@ mod tests {
             &OrganizationRegistrationChallengeRequestBody {
                 organization_id: challenge.organization_id.clone(),
                 did: challenge.did.clone(),
-                local_admin_subject: challenge.local_admin_subject.clone(),
+                local_admin_subject_id: challenge.local_admin_subject_id.clone(),
                 requested_scopes: challenge.requested_scopes.clone(),
             },
             fixture.now,
@@ -1871,7 +1871,7 @@ mod tests {
                 challenge_request(&fixture, profile.clone()),
                 "https://registry.example/",
                 "ak:trust_domain:registry.example",
-                fixture.receipt_signer.issuer_service_id(),
+                fixture.receipt_signer.issuer_id(),
                 fixture.now + Duration::minutes(2),
             )
             .await
@@ -1904,7 +1904,7 @@ mod tests {
                 challenge_request(&fixture, profile.clone()),
                 "https://registry.example/",
                 "ak:trust_domain:registry.example",
-                fixture.receipt_signer.issuer_service_id(),
+                fixture.receipt_signer.issuer_id(),
                 fixture.now + Duration::minutes(2),
             )
             .await
@@ -1946,7 +1946,7 @@ mod tests {
                 challenge_request(&fixture, profile.clone()),
                 "https://registry.example/",
                 "ak:trust_domain:registry.example",
-                fixture.receipt_signer.issuer_service_id(),
+                fixture.receipt_signer.issuer_id(),
                 fixture.now + Duration::minutes(2),
             )
             .await
@@ -1988,7 +1988,7 @@ mod tests {
                 challenge_request(&fixture, profile.clone()),
                 "https://registry.example/",
                 "ak:trust_domain:registry.example",
-                fixture.receipt_signer.issuer_service_id(),
+                fixture.receipt_signer.issuer_id(),
                 fixture.now + Duration::minutes(2),
             )
             .await
@@ -2006,7 +2006,7 @@ mod tests {
                 fixture.now + Duration::minutes(2),
             ),
         );
-        redirected.local_admin_subject =
+        redirected.local_admin_subject_id =
             DidCoreId::new("ak:did_core:webvh:z6mkattackerfixture".to_owned()).unwrap();
         let redirect_result = fixture
             .service
@@ -2036,7 +2036,7 @@ mod tests {
                 challenge_request(&fixture, profile.clone()),
                 "https://registry.example/",
                 "ak:trust_domain:registry.example",
-                fixture.receipt_signer.issuer_service_id(),
+                fixture.receipt_signer.issuer_id(),
                 fixture.now + Duration::minutes(4),
             )
             .await
@@ -2072,7 +2072,7 @@ mod tests {
                 challenge_request(&fixture, profile.clone()),
                 "https://registry.example/",
                 "ak:trust_domain:registry.example",
-                fixture.receipt_signer.issuer_service_id(),
+                fixture.receipt_signer.issuer_id(),
                 fixture.now + Duration::minutes(5),
             )
             .await
@@ -2122,7 +2122,7 @@ mod tests {
                 challenge_request(&fixture, realm.clone()),
                 "https://registry.example/",
                 "ak:trust_domain:registry.example",
-                fixture.receipt_signer.issuer_service_id(),
+                fixture.receipt_signer.issuer_id(),
                 fixture.now + Duration::minutes(6),
             )
             .await
@@ -2169,7 +2169,7 @@ mod tests {
                 challenge_request(&fixture, realm.clone()),
                 "https://registry.example/",
                 "ak:trust_domain:registry.example",
-                fixture.receipt_signer.issuer_service_id(),
+                fixture.receipt_signer.issuer_id(),
                 fixture.now + Duration::minutes(8),
             )
             .await
@@ -2209,7 +2209,7 @@ mod tests {
                 challenge_request(&stale_fixture, profile.clone()),
                 "https://registry.example/",
                 "ak:trust_domain:registry.example",
-                stale_fixture.receipt_signer.issuer_service_id(),
+                stale_fixture.receipt_signer.issuer_id(),
                 stale_fixture.now,
             )
             .await
@@ -2252,7 +2252,7 @@ mod tests {
                 challenge_request(&stale_fixture, profile.clone()),
                 "https://registry.example/",
                 "ak:trust_domain:registry.example",
-                stale_fixture.receipt_signer.issuer_service_id(),
+                stale_fixture.receipt_signer.issuer_id(),
                 expired_at + Duration::minutes(2),
             )
             .await
@@ -2311,7 +2311,7 @@ mod tests {
                 challenge_request(&rotation_fixture, profile.clone()),
                 "https://registry.example/",
                 "ak:trust_domain:registry.example",
-                rotation_fixture.receipt_signer.issuer_service_id(),
+                rotation_fixture.receipt_signer.issuer_id(),
                 rotation_fixture.now,
             )
             .await
@@ -2396,7 +2396,7 @@ mod tests {
             &OrganizationRegistrationChallengeRequestBody {
                 organization_id: long_challenge.organization_id.clone(),
                 did: long_challenge.did.clone(),
-                local_admin_subject: long_challenge.local_admin_subject.clone(),
+                local_admin_subject_id: long_challenge.local_admin_subject_id.clone(),
                 requested_scopes: long_challenge.requested_scopes.clone(),
             },
             long_challenge.created_at,

@@ -19,25 +19,25 @@ pub(super) fn realm_create_actor_is_creator(
     object.get("actor_id").and_then(Value::as_str) == Some(actor)
 }
 
-/// True when a `ak.invite.create` event is signed by its own inviter. The
-/// inviter is the payload `inviter`/`sender`/`issuer` when present; otherwise
+/// True when a `ak.invite.create` event is signed by its own inviter_id. The
+/// inviter_id is the payload `inviter_id`/`sender`/`issuer` when present; otherwise
 /// the top-level `actor_id` (the signer) is authoritative. Used to admit a
 /// cross-PS invite delivery on a recipient PS that does not host the realm.
 pub(super) fn invite_create_actor_is_inviter(
     object: &serde_json::Map<String, Value>,
     actor: &str,
 ) -> bool {
-    let inviter = object
+    let inviter_id = object
         .get("payload")
         .and_then(|payload| {
             payload
-                .get("inviter")
+                .get("inviter_id")
                 .or_else(|| payload.get("sender"))
                 .or_else(|| payload.get("issuer"))
                 .and_then(Value::as_str)
         })
         .or_else(|| object.get("actor_id").and_then(Value::as_str));
-    inviter.is_some_and(|inviter| inviter == actor)
+    inviter_id.is_some_and(|inviter_id| inviter_id == actor)
 }
 
 /// True when a `ak.member.state` event is a self-authored join-policy entry by
@@ -112,7 +112,7 @@ pub(super) async fn member_join_accepts_pending_invite(
     let Ok(Some(invite)) = state.realm_invites().get(invite_id).await else {
         return false;
     };
-    if invite.status != "pending" || invite.invitee.as_deref() != Some(actor) {
+    if invite.status != "pending" || invite.invitee_id.as_deref() != Some(actor) {
         return false;
     }
     if invite
@@ -149,7 +149,7 @@ pub(super) async fn invitee_cancels_pending_invite(
     };
     if invite.realm_id != realm_id
         || !matches!(invite.status.as_str(), "pending" | "claimed")
-        || invite.invitee.as_deref() != Some(actor)
+        || invite.invitee_id.as_deref() != Some(actor)
     {
         return false;
     }
@@ -190,7 +190,7 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     if invite.realm_id != realm_id {
         return false;
     }
-    let actor_is_invitee = invite.invitee.as_deref() == Some(actor);
+    let actor_is_invitee = invite.invitee_id.as_deref() == Some(actor);
     let is_pending_third_party = invite.status == "pending" && invite.third_party_invite.is_some();
     let is_duplicate_claim_by_invitee = invite.status == "claimed" && actor_is_invitee;
     if !is_pending_third_party && !is_duplicate_claim_by_invitee {
@@ -201,9 +201,9 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     // Do not short-circuit expired pending invites at the membership gate; let
     // the invite reducer observe the claim and produce `expired_invite_token`.
     invite
-        .invitee
+        .invitee_id
         .as_deref()
-        .is_none_or(|invitee| invitee == actor)
+        .is_none_or(|invitee_id| invitee_id == actor)
 }
 
 /// Quick existence probe against the in-memory `state.realms` index used

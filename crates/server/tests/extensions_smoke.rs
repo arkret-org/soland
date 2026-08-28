@@ -178,7 +178,7 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
             state: "join".to_owned(),
             role: "member".to_owned(),
             delivery_status: None,
-            recipient_service_id: None,
+            recipient_id: None,
             recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,
@@ -1037,7 +1037,7 @@ async fn applet_transaction_requires_signature_before_typed_body_validation() {
         .add_header("Authorization", "Bearer bearer-only", true)
         .add_header("Idempotency-Key", "missing-signature-order", true)
         .json(&json!({
-            "source_service_id": "not-a-did",
+            "source_id": "not-a-did",
             "events": "not-an-array"
         }))
         .send(&app)
@@ -1665,7 +1665,7 @@ async fn post_signed_applet_message_transaction(
     let event = applet_message_event(package, &request).await;
     let body = json!({
         "applet_id": request.applet_id,
-        "source_service_id": package.service_id.to_string(),
+        "source_id": package.service_id.to_string(),
         "events": [event],
     });
     let body_bytes = arkret_canonical::canonical_json_bytes(&body).unwrap();
@@ -1968,8 +1968,8 @@ fn content_digest_header(bytes: &[u8]) -> String {
 fn applet_signature_base(
     target_uri: &str,
     content_digest: &str,
-    source_service_id: &str,
-    destination_service_id: &str,
+    source_id: &str,
+    destination_id: &str,
     idempotency_key: &str,
     signature_params: &str,
 ) -> String {
@@ -1978,8 +1978,8 @@ fn applet_signature_base(
          \"@target-uri\": {target_uri}\n\
          \"@authority\": server\n\
          \"content-digest\": {content_digest}\n\
-         \"source-service-id\": {source_service_id}\n\
-         \"destination-service-id\": {destination_service_id}\n\
+         \"source-service-id\": {source_id}\n\
+         \"destination-service-id\": {destination_id}\n\
          \"idempotency-key\": {idempotency_key}\n\
          \"@signature-params\": {signature_params}",
     )

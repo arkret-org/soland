@@ -15,9 +15,9 @@ struct RealmInviteRow {
     #[diesel(sql_type = Text)]
     realm_id: String,
     #[diesel(sql_type = Text)]
-    inviter: String,
+    inviter_id: String,
     #[diesel(sql_type = Nullable<Text>)]
-    invitee: Option<String>,
+    invitee_id: Option<String>,
     #[diesel(sql_type = Nullable<Jsonb>)]
     invite_delivery_target: Option<Value>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -62,8 +62,8 @@ impl RealmInviteRow {
                 ids::format_event_token("invite", &token)
             },
             realm_id: self.realm_id,
-            inviter: self.inviter,
-            invitee: self.invitee,
+            inviter_id: self.inviter_id,
+            invitee_id: self.invitee_id,
             invite_delivery_target: self.invite_delivery_target,
             introduction_evidence_digest: self.introduction_evidence_digest,
             third_party_invite,
@@ -85,7 +85,7 @@ impl RealmInviteStore for PgRealmInviteStore {
         let invite_id_token =
             ids::event_token_part_or_schema_violation(invite_id, "invite")?.to_vec();
         sql_query(
-            "SELECT id, realm_id, inviter_id AS inviter, invitee_id AS invitee, invite_delivery_target, introduction_evidence_digest, third_party_invite, invite_token, status, claim_nonces, expires_at, created_at, updated_at \
+            "SELECT id, realm_id, inviter_id AS inviter_id, invitee_id AS invitee_id, invite_delivery_target, introduction_evidence_digest, third_party_invite, invite_token, status, claim_nonces, expires_at, created_at, updated_at \
              FROM realm_invites WHERE id = $1",
         )
         .bind::<Binary, _>(invite_id_token)
@@ -133,8 +133,8 @@ impl RealmInviteStore for PgRealmInviteStore {
         )
         .bind::<Binary, _>(invite_id_token)
         .bind::<Text, _>(&record.realm_id)
-        .bind::<Text, _>(&record.inviter)
-        .bind::<Nullable<Text>, _>(&record.invitee)
+        .bind::<Text, _>(&record.inviter_id)
+        .bind::<Nullable<Text>, _>(&record.invitee_id)
         .bind::<Nullable<Jsonb>, _>(&record.invite_delivery_target)
         .bind::<Nullable<Text>, _>(&record.introduction_evidence_digest)
         .bind::<Nullable<Jsonb>, _>(&third_party_invite)
@@ -165,7 +165,7 @@ impl RealmInviteStore for PgRealmInviteStore {
                AND third_party_invite IS NOT NULL \
                AND status = 'pending' \
                AND (expires_at IS NULL OR expires_at > $2) \
-             RETURNING id, realm_id, inviter_id AS inviter, invitee_id AS invitee, invite_delivery_target, introduction_evidence_digest, third_party_invite, invite_token, status, claim_nonces, expires_at, created_at, updated_at",
+             RETURNING id, realm_id, inviter_id AS inviter_id, invitee_id AS invitee_id, invite_delivery_target, introduction_evidence_digest, third_party_invite, invite_token, status, claim_nonces, expires_at, created_at, updated_at",
         )
         .bind::<Text, _>(token_digest)
         .bind::<Timestamptz, _>(now)
@@ -204,7 +204,7 @@ impl RealmInviteStore for PgRealmInviteStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id, realm_id, inviter_id AS inviter, invitee_id AS invitee, invite_delivery_target, introduction_evidence_digest, third_party_invite, invite_token, status, claim_nonces, expires_at, created_at, updated_at \
+            "SELECT id, realm_id, inviter_id AS inviter_id, invitee_id AS invitee_id, invite_delivery_target, introduction_evidence_digest, third_party_invite, invite_token, status, claim_nonces, expires_at, created_at, updated_at \
              FROM realm_invites ORDER BY created_at ASC, pk ASC",
         )
         .load::<RealmInviteRow>(&mut *conn)
@@ -226,8 +226,8 @@ mod tests {
         RealmInviteRow {
             id: vec![0u8; ids::EVENT_ID_BYTES],
             realm_id: "ak:realm:test".to_owned(),
-            inviter: "ak:did_core:web:alice.example".to_owned(),
-            invitee: None,
+            inviter_id: "ak:did_core:web:alice.example".to_owned(),
+            invitee_id: None,
             invite_delivery_target: None,
             introduction_evidence_digest: None,
             third_party_invite,
@@ -253,7 +253,7 @@ mod tests {
             lookup_table_ref: None,
             pepper_id: None,
             max_claims: 1,
-            verification_service_id: arkret_identifiers::DidCoreId::new(
+            verification_id: arkret_identifiers::DidCoreId::new(
                 "ak:did_core:web:verify.example".to_owned(),
             )
             .expect("valid DID core id literal"),
@@ -271,7 +271,7 @@ mod tests {
             lookup_table_ref: Some("lookup-table-7".to_owned()),
             pepper_id: Some("pepper-3".to_owned()),
             max_claims: 1,
-            verification_service_id: arkret_identifiers::DidCoreId::new(
+            verification_id: arkret_identifiers::DidCoreId::new(
                 "ak:did_core:web:verify.example".to_owned(),
             )
             .expect("valid DID core id literal"),
@@ -308,14 +308,14 @@ mod tests {
                 "token_commitment": format!("sha256:{}", "a".repeat(64)),
                 "token_salt_id": "salt-1",
                 "token_entropy_bits": 128,
-                "verification_service_id": "ak:did_core:web:verify.example",
+                "verification_id": "ak:did_core:web:verify.example",
                 "verification_public_key": "did:web:verify.example#invite-key",
                 "token": "plaintext-secret"
             }),
             // Missing the required discriminator.
             serde_json::json!({
                 "token_commitment": format!("sha256:{}", "a".repeat(64)),
-                "verification_service_id": "ak:did_core:web:verify.example",
+                "verification_id": "ak:did_core:web:verify.example",
                 "verification_public_key": "did:web:verify.example#invite-key"
             }),
             // Not an object at all.

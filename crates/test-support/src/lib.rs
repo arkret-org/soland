@@ -546,8 +546,7 @@ fn fixture_stored_service_identity(
         log_head_digest,
         control_key_digest: format!("sha256:{}", "1".repeat(64)),
         issued_at,
-        provider_service_id: project_did_to_core_id(&provider_did)
-            .expect("fixture provider projection"),
+        provider_id: project_did_to_core_id(&provider_did).expect("fixture provider projection"),
         proof: arkret_wire::PayloadProof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             verification_method: arkret_wire::DidUrl::new(format!("{provider_did}#service-key"))

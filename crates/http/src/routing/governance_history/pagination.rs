@@ -137,7 +137,7 @@ pub(super) fn history_response_ack_token(
     high_water_cursor: &str,
     token_expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<(String, HistoryResponseAckTokenClaims), AppError> {
-    let release_service_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+    let release_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("local service DID is invalid: {error}")))?;
     let request_id = HistoryRequestId::new(request_id.to_owned()).map_err(|error| {
         AppError::internal(format!("history response stream ID is invalid: {error}"))
@@ -151,7 +151,7 @@ pub(super) fn history_response_ack_token(
         })
         .collect::<Result<Vec<_>, AppError>>()?;
     let claims = HistoryResponseAckTokenClaims {
-        release_service_id,
+        release_id,
         request_id,
         ordered_ack_entries,
         high_water_cursor: high_water_cursor.to_owned(),

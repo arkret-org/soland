@@ -312,8 +312,8 @@ pub enum AccountDataCasResult {
 pub struct RealmInviteRecord {
     pub invite_id: String,
     pub realm_id: String,
-    pub inviter: String,
-    pub invitee: Option<String>,
+    pub inviter_id: String,
+    pub invitee_id: Option<String>,
     pub invite_delivery_target: Option<Value>,
     pub introduction_evidence_digest: Option<String>,
     pub third_party_invite: Option<ThirdPartyInvite>,
@@ -652,7 +652,7 @@ pub struct FederationOutboxRecord {
     /// ULID/UUID — primary key.
     pub id: String,
     /// Peer service identifier discovered from the configured federation endpoint.
-    pub peer_service_id: DidCoreId,
+    pub peer_id: DidCoreId,
     /// Fully-qualified peer base URL (no trailing slash) the dispatcher
     /// concatenates with `endpoint` to form the POST target.
     pub peer_url: Option<String>,
@@ -666,7 +666,7 @@ pub struct FederationOutboxRecord {
     /// Canonical request body the dispatcher POSTs verbatim.
     pub payload_json: String,
     /// Optional stable lane used by monotonic state replication. At most one
-    /// unfinished row may exist for `(peer_service_id, coalescing_key)`; a higher
+    /// unfinished row may exist for `(peer_id, coalescing_key)`; a higher
     /// `coalescing_position` atomically supersedes the older unfinished row.
     pub coalescing_key: Option<String>,
     /// Monotonic position within `coalescing_key` (account-status `status_seq`).
@@ -720,7 +720,7 @@ pub struct FederationOutboxRecord {
 #[derive(Clone, Debug)]
 pub struct RealmFanoutOutboxInput {
     pub id: String,
-    pub peer_service_id: DidCoreId,
+    pub peer_id: DidCoreId,
     pub peer_url: Option<String>,
     pub endpoint: String,
     pub idempotency_key: String,
@@ -793,7 +793,7 @@ impl FederationOutboxRecord {
     /// A freshly enqueued, never-attempted delivery intent.
     pub fn pending(
         id: String,
-        peer_service_id: DidCoreId,
+        peer_id: DidCoreId,
         peer_url: String,
         endpoint: String,
         idempotency_key: String,
@@ -802,7 +802,7 @@ impl FederationOutboxRecord {
     ) -> Self {
         Self {
             id,
-            peer_service_id,
+            peer_id,
             peer_url: Some(peer_url),
             endpoint,
             idempotency_key,
@@ -831,7 +831,7 @@ impl FederationOutboxRecord {
     pub fn realm_fanout(input: RealmFanoutOutboxInput) -> Self {
         let RealmFanoutOutboxInput {
             id,
-            peer_service_id,
+            peer_id,
             peer_url,
             endpoint,
             idempotency_key,
@@ -841,7 +841,7 @@ impl FederationOutboxRecord {
         } = input;
         Self {
             id,
-            peer_service_id,
+            peer_id,
             state: if peer_url.is_some() {
                 FederationOutboxState::Pending
             } else {
@@ -883,7 +883,7 @@ impl FederationOutboxRecord {
 pub struct FederationOutboxDeadLetterRecord {
     pub id: String,
     pub outbox_id: String,
-    pub peer_service_id: DidCoreId,
+    pub peer_id: DidCoreId,
     pub endpoint: String,
     pub idempotency_key: String,
     pub last_http_status: Option<i32>,
@@ -902,7 +902,7 @@ pub struct FederationOutboxDeadLetterRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FederationFrontierExchangeRecord {
     pub realm_id: String,
-    pub peer_service_id: DidCoreId,
+    pub peer_id: DidCoreId,
     pub status: String,
     pub consecutive_failures: i32,
     pub last_success_at: Option<i64>,

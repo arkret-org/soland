@@ -76,14 +76,14 @@ const PUSH_TARGET_ID_PREFIX: &str = "ak:pseudonym:push:";
 /// registration handle are spelled from.
 fn derive_push_target_tag(
     root_key: &[u8; 32],
-    recipient_service_id: &str,
+    recipient_id: &str,
     principal_id: &str,
     device_id: &str,
     push_route_id: &str,
     salt_epoch_id: &str,
 ) -> Result<String, AppError> {
     let input = json!({
-        "recipient_service_id": recipient_service_id,
+        "recipient_id": recipient_id,
         "principal_id": principal_id,
         "device_id": device_id,
         "push_route_id": push_route_id,
@@ -102,7 +102,7 @@ fn derive_push_target_tag(
 #[cfg(test)]
 fn derive_push_target_id(
     root_key: &[u8; 32],
-    recipient_service_id: &str,
+    recipient_id: &str,
     principal_id: &str,
     device_id: &str,
     push_route_id: &str,
@@ -110,7 +110,7 @@ fn derive_push_target_id(
 ) -> Result<arkret_identifiers::PushTargetId, AppError> {
     let tag = derive_push_target_tag(
         root_key,
-        recipient_service_id,
+        recipient_id,
         principal_id,
         device_id,
         push_route_id,
@@ -156,14 +156,14 @@ pub(super) async fn push_register(
     let app_id = body.app_id.clone();
     let push_gateway = body.push_gateway.clone();
     let push_key = body.push_key.clone();
-    let recipient_service_id = body
-        .recipient_service_id
+    let recipient_id = body
+        .recipient_id
         .as_ref()
         .map(|did| did.as_str())
         .unwrap_or(state.service_id().as_str());
-    if recipient_service_id != state.service_id() {
+    if recipient_id != state.service_id() {
         return Err(AppError::param_invalid(
-            "recipient_service_id must match this service",
+            "recipient_id must match this service",
         ));
     }
     let push_route_id = push_route_id_for_registration(&body);
@@ -214,7 +214,7 @@ pub(super) async fn push_register(
             "app_id": app_id,
             "push_gateway": push_gateway,
             "push_key": push_key,
-            "recipient_service_id": state.service_id().as_str(),
+            "recipient_id": state.service_id().as_str(),
             "push_route_id": push_route_id,
             "push_target_id": push_target_id.clone(),
             "salt_epoch_id": salt_epoch_id,

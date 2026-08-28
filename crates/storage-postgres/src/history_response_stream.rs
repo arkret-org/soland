@@ -268,7 +268,7 @@ struct ResponseStreamRow {
     #[diesel(sql_type = Text)]
     request_id: String,
     #[diesel(sql_type = Text)]
-    release_service_id: String,
+    release_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
     response_capability_commitment: String,
     #[diesel(sql_type = Timestamptz)]
@@ -302,7 +302,7 @@ mod capability_authorization_tests {
     fn row(commitment: &Hash, expires_at: DateTime<Utc>) -> ResponseStreamRow {
         ResponseStreamRow {
             request_id: "ak:history-key-request:01910000-0000-7000-8000-000000000001".to_owned(),
-            release_service_id: "ak:did_core:webvh:example".to_owned(),
+            release_id: arkret_wire::DidCoreId::new("ak:did_core:webvh:example").unwrap(),
             response_capability_commitment: commitment.as_str().to_owned(),
             expires_at,
             acked_sequence: None,
@@ -350,7 +350,7 @@ struct CompactReceiptAuthorityRow {
     #[diesel(sql_type = Text)]
     requester_actor_id: String,
     #[diesel(sql_type = Text)]
-    release_service_id: String,
+    release_id: arkret_wire::DidCoreId,
 }
 
 #[derive(QueryableByName)]
@@ -754,7 +754,7 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
             let sequence = sql_query(
                 "INSERT INTO history_key_requests \
                  (request_id,request_digest,request_receipt_digest,effective_scope_kind, \
-                  realm_id,circle_id,requester_actor_id,requester_sender_domain,release_service_id, \
+                  realm_id,circle_id,requester_actor_id,requester_sender_domain,release_id, \
                   traversal_retention_digest,request_json, \
                   request_receipt_json,sealed_history_response_capability_json,request_replica_digest,request_replica_json, \
                   stored_at,expires_at) \
@@ -769,7 +769,7 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
             .bind::<Nullable<Text>, _>(circle_id.as_deref())
             .bind::<Text, _>(write.request.requester_actor_id.as_str())
             .bind::<Text, _>(&write.request.requester_sender_domain)
-            .bind::<Text, _>(write.request_receipt.release_service_id.as_str())
+            .bind::<Text, _>(write.request_receipt.release_id.as_str())
             .bind::<Nullable<Text>, _>(write.local_traversal.as_ref().map(|_| write.traversal_retention_digest().as_str()))
             .bind::<Jsonb, _>(&request_json)
             .bind::<Jsonb, _>(&receipt_json)
@@ -1055,23 +1055,23 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
             let row = response_by(conn, write.record.source_record.response_id.as_str(), true).await?
                 .ok_or_else(|| PersistenceError::NotFound("response reservation unavailable".to_owned()))?;
             let request_id = row.request_id.clone();
-            let authority=sql_query("SELECT r.requester_actor_id,r.release_service_id FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.request_id=$1")
+            let authority=sql_query("SELECT r.requester_actor_id,r.release_id FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.request_id=$1")
                 .bind::<Text,_>(&request_id)
                 .get_result::<CompactReceiptAuthorityRow>(&mut *conn).await.optional()?
                 .ok_or_else(||PersistenceError::NotFound("response stream unavailable".to_owned()))?;
             for quota_lock in [
-                format!("history-compact-service:{}", authority.release_service_id),
-                format!("history-compact-requester:{}:{}", authority.release_service_id, authority.requester_actor_id),
+                format!("history-compact-service:{}", authority.release_id),
+                format!("history-compact-requester:{}:{}", authority.release_id, authority.requester_actor_id),
                 format!("history-compact-request:{}", request_id),
             ] {
                 sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
                     .bind::<Text,_>(&quota_lock).execute(&mut *conn).await?;
             }
-            let stream_guard=sql_query("SELECT s.request_id,r.release_service_id,s.response_capability_commitment,r.expires_at,s.acked_sequence FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.request_id=$1 FOR UPDATE OF s")
+            let stream_guard=sql_query("SELECT s.request_id,r.release_id,s.response_capability_commitment,r.expires_at,s.acked_sequence FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.request_id=$1 FOR UPDATE OF s")
                 .bind::<Text,_>(&request_id)
                 .get_result::<ResponseStreamRow>(&mut *conn).await.optional()?
                 .ok_or_else(||PersistenceError::NotFound("response stream unavailable".to_owned()))?;
-            if stream_guard.release_service_id != authority.release_service_id {
+            if stream_guard.release_id != authority.release_id {
                 return Err(PersistenceError::Internal("history response stream authority changed".to_owned()).into());
             }
             let request = request_by(conn, "request_id", &request_id)
@@ -1102,15 +1102,15 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
                 || !write.signer_dependencies.contains(&reserved.input.release_service_signer_evidence) {
                 return Err(PersistenceError::Conflict("duplicate_conflict: completion differs from reservation".to_owned()).into());
             }
-            let requester_total=sql_query("SELECT SUM(s.compact_receipt_bytes)::bigint AS total FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE r.release_service_id=$1 AND r.requester_actor_id=$2")
-                .bind::<Text,_>(&authority.release_service_id).bind::<Text,_>(&authority.requester_actor_id)
+            let requester_total=sql_query("SELECT SUM(s.compact_receipt_bytes)::bigint AS total FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE r.release_id=$1 AND r.requester_actor_id=$2")
+                .bind::<Text,_>(&authority.release_id).bind::<Text,_>(&authority.requester_actor_id)
                 .get_result::<SumRow>(&mut *conn).await?.total.unwrap_or(0);
             let requester_limit=as_i64(HISTORY_COMPACT_RECEIPTS_PER_REQUESTER_LIMIT,"requester compact receipt quota")?;
             if requester_total.checked_add(compact_receipt_bytes).is_none_or(|total| total>requester_limit) {
                 return Err(PersistenceError::Conflict("failed_precondition: history requester compact receipt quota exceeded".to_owned()).into());
             }
-            let service_total=sql_query("SELECT SUM(s.compact_receipt_bytes)::bigint AS total FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE r.release_service_id=$1")
-                .bind::<Text,_>(&authority.release_service_id).get_result::<SumRow>(&mut *conn).await?.total.unwrap_or(0);
+            let service_total=sql_query("SELECT SUM(s.compact_receipt_bytes)::bigint AS total FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE r.release_id=$1")
+                .bind::<Text,_>(&authority.release_id).get_result::<SumRow>(&mut *conn).await?.total.unwrap_or(0);
             let advertised_service_limit=as_i64(write.advertised_service_compact_receipt_bytes,"advertised service compact receipt quota")?;
             if service_total.checked_add(compact_receipt_bytes).is_none_or(|total| total>advertised_service_limit) {
                 return Err(PersistenceError::Conflict("failed_precondition: history release service compact receipt quota exceeded".to_owned()).into());
@@ -1227,7 +1227,7 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_,PgTransactionError,_>(async move|conn|{
             let unlocked=response_by(conn,response_id.as_str(),false).await?.ok_or_else(||PersistenceError::NotFound("response unavailable".to_owned()))?;
-            sql_query("SELECT s.request_id,r.release_service_id,s.response_capability_commitment,r.expires_at,s.acked_sequence FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.request_id=$1 FOR UPDATE OF s")
+            sql_query("SELECT s.request_id,r.release_id,s.response_capability_commitment,r.expires_at,s.acked_sequence FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.request_id=$1 FOR UPDATE OF s")
                 .bind::<Text,_>(&unlocked.request_id).get_result::<ResponseStreamRow>(&mut *conn).await.optional()?
                 .ok_or_else(||PersistenceError::NotFound("response stream unavailable".to_owned()))?;
             let row=response_by(conn,response_id.as_str(),true).await?.ok_or_else(||PersistenceError::NotFound("response unavailable".to_owned()))?;
@@ -1264,7 +1264,7 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
             ));
         }
         let mut conn = pg_conn(&self.pool).await?;
-        let auth=sql_query("SELECT s.request_id,r.release_service_id,s.response_capability_commitment,r.expires_at,s.acked_sequence FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.response_capability_commitment=$1")
+        let auth=sql_query("SELECT s.request_id,r.release_id,s.response_capability_commitment,r.expires_at,s.acked_sequence FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.response_capability_commitment=$1")
             .bind::<Text,_>(response_capability_commitment.as_str()).get_result::<ResponseStreamRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
             ;
         let auth = authorize_response_stream_row(auth, response_capability_commitment, now)?;
@@ -1332,13 +1332,13 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
             .sequence;
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_,PgTransactionError,_>(async move|conn|{
-            let auth=sql_query("SELECT s.request_id,r.release_service_id,s.response_capability_commitment,r.expires_at,s.acked_sequence FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.response_capability_commitment=$1 FOR UPDATE OF s")
+            let auth=sql_query("SELECT s.request_id,r.release_id,s.response_capability_commitment,r.expires_at,s.acked_sequence FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.response_capability_commitment=$1 FOR UPDATE OF s")
                 .bind::<Text,_>(response_capability_commitment.as_str()).get_result::<ResponseStreamRow>(&mut *conn).await.optional()?;
             let auth = authorize_response_stream_row(auth, response_capability_commitment, now)?;
             if auth.request_id.as_str() != write.claims.request_id.as_str() {
                 return Err(PersistenceError::NotFound("history stream unavailable".to_owned()).into());
             }
-            if auth.release_service_id.as_str() != write.claims.release_service_id.as_str() {
+            if auth.release_id.as_str() != write.claims.release_id.as_str() {
                 return Err(PersistenceError::SchemaViolation("ack token release service mismatch".to_owned()).into());
             }
             if let Some(stored)=sql_query("SELECT claims_json,consumed_request_json,consumed_at FROM history_key_response_ack_tokens WHERE ack_token=$1 AND request_id=$2")
@@ -1403,14 +1403,14 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
         let request = request.clone();
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_,PgTransactionError,_>(async move|conn|{
-            let mb=sql_query("SELECT s.request_id,r.release_service_id,s.response_capability_commitment,r.expires_at,s.acked_sequence FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.response_capability_commitment=$1 FOR UPDATE OF s").bind::<Text,_>(response_capability_commitment.as_str()).get_result::<ResponseStreamRow>(&mut *conn).await.optional()?;
+            let mb=sql_query("SELECT s.request_id,r.release_id,s.response_capability_commitment,r.expires_at,s.acked_sequence FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE s.response_capability_commitment=$1 FOR UPDATE OF s").bind::<Text,_>(response_capability_commitment.as_str()).get_result::<ResponseStreamRow>(&mut *conn).await.optional()?;
             let mb = authorize_response_stream_row(mb, &response_capability_commitment, now)?;
             let stream = mb.request_id.clone();
             let token=sql_query("SELECT claims_json,consumed_request_json,consumed_at FROM history_key_response_ack_tokens WHERE ack_token=$1 AND request_id=$2 FOR UPDATE").bind::<Text,_>(&request.ack_token).bind::<Text,_>(&stream).get_result::<TokenRow>(&mut *conn).await.optional()?.ok_or_else(||PersistenceError::NotFound("ack token unavailable".to_owned()))?;
             if let Some(value)=token.consumed_request_json.clone(){let prior:HistoryKeyResponseAckRequest=decode(value,"consumed ack")?;if prior==request{return Ok(request.high_water_cursor);}}
             let claims:HistoryResponseAckTokenClaims=decode(token.claims_json,"ack token claims")?;
             claims.validate().map_err(|error|PersistenceError::Internal(format!("stored ack token claims are invalid: {error}")))?;
-            if token.consumed_at.is_some()||claims.token_expires_at<=now||claims.request_id.as_str()!=stream.as_str()||claims.release_service_id.as_str()!=mb.release_service_id.as_str()||claims.high_water_cursor!=request.high_water_cursor||claims.ordered_ack_entries.len()!=request.ack_entries.len(){return Err(PersistenceError::Conflict("failed_precondition: ack token invalid".to_owned()).into());}
+            if token.consumed_at.is_some()||claims.token_expires_at<=now||claims.request_id.as_str()!=stream.as_str()||claims.release_id.as_str()!=mb.release_id.as_str()||claims.high_water_cursor!=request.high_water_cursor||claims.ordered_ack_entries.len()!=request.ack_entries.len(){return Err(PersistenceError::Conflict("failed_precondition: ack token invalid".to_owned()).into());}
             let high_water_sequence=as_i64(claims.ordered_ack_entries.last().expect("validated claims").sequence,"ack high water")?;
             let mut expected_sequences=Vec::new(); for(claim,ack)in claims.ordered_ack_entries.iter().zip(&request.ack_entries){let claim_kind=match claim.kind{arkret_models_collaboration::history_key::HistoryResponseAckTokenEntryKind::Record=>"record",arkret_models_collaboration::history_key::HistoryResponseAckTokenEntryKind::Lost=>"lost"}; let(ab_seq,ab_kind,ab_id,ab_digest,status)=match ack{HistoryResponseAckEntry::Record{sequence,response_id,record_digest,status}=>(*sequence,"record",response_id.as_str(),record_digest,match status{arkret_models_collaboration::history_key::HistoryResponseRecordStatus::Installed=>"installed",arkret_models_collaboration::history_key::HistoryResponseRecordStatus::CryptographicallyRejected=>"cryptographically_rejected",arkret_models_collaboration::history_key::HistoryResponseRecordStatus::SupersededDuplicate=>"superseded_duplicate"}),HistoryResponseAckEntry::Lost{sequence,response_id,lost_record_digest,..}=>(*sequence,"lost",response_id.as_str(),lost_record_digest,"service_record_lost")}; if(claim.sequence,claim_kind,claim.response_id.as_str(),claim.entry_digest.as_str())!=(ab_seq,ab_kind,ab_id,ab_digest.as_str()){return Err(PersistenceError::Conflict("duplicate_conflict: ack entry binding differs".to_owned()).into());} expected_sequences.push(as_i64(ab_seq,"ack sequence")?); sql_query("INSERT INTO history_key_response_dispositions (request_id,sequence,response_id,entry_kind,entry_digest,status,acked_at) VALUES ($1,$2,$3,$4,$5,$6,$7)").bind::<Text,_>(&stream).bind::<BigInt,_>(as_i64(ab_seq,"ack sequence")?).bind::<Text,_>(ab_id).bind::<Text,_>(ab_kind).bind::<Text,_>(ab_digest.as_str()).bind::<Text,_>(status).bind::<Timestamptz,_>(now).execute(&mut *conn).await?;}
             let active=sql_query("SELECT response_id,request_id,source_record_digest,source_record_json,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at,state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes FROM history_key_responses WHERE request_id=$1 AND sequence>$2 AND sequence<=$3 AND state IN ('accepted','lost') ORDER BY sequence FOR UPDATE").bind::<Text,_>(&stream).bind::<BigInt,_>(mb.acked_sequence.unwrap_or(-1)).bind::<BigInt,_>(high_water_sequence).load::<ResponseRow>(&mut *conn).await?;

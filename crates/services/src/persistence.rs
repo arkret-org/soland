@@ -366,9 +366,9 @@ impl PersistenceHandle {
 
     pub async fn service_route_successors(
         &self,
-        source_service_id: &arkret_wire::DidCoreId,
+        source_id: &arkret_wire::DidCoreId,
         realm_id: &arkret_wire::RealmId,
-        target_service_id: &arkret_wire::DidCoreId,
+        target_id: &arkret_wire::DidCoreId,
         service_kind: &str,
         after_sequence: u64,
         limit: usize,
@@ -377,9 +377,9 @@ impl PersistenceHandle {
             .persistence
             .service_routes()
             .successor_records(
-                source_service_id,
+                source_id,
                 realm_id,
-                target_service_id,
+                target_id,
                 service_kind,
                 after_sequence,
                 limit,
@@ -389,15 +389,15 @@ impl PersistenceHandle {
 
     pub async fn latest_service_route_notice(
         &self,
-        source_service_id: &arkret_wire::DidCoreId,
+        source_id: &arkret_wire::DidCoreId,
         realm_id: &arkret_wire::RealmId,
-        target_service_id: &arkret_wire::DidCoreId,
+        target_id: &arkret_wire::DidCoreId,
         service_kind: &str,
     ) -> crate::ServiceResult<Option<arkret_models_identity::ServiceRouteHandoverNotice>> {
         Ok(self
             .persistence
             .service_routes()
-            .latest_notice(source_service_id, realm_id, target_service_id, service_kind)
+            .latest_notice(source_id, realm_id, target_id, service_kind)
             .await?)
     }
 
@@ -938,9 +938,9 @@ impl soland_storage::ServiceRouteStore for PersistenceHandle {
 
     async fn successor_records(
         &self,
-        source_service_id: &arkret_wire::DidCoreId,
+        source_id: &arkret_wire::DidCoreId,
         realm_id: &arkret_wire::RealmId,
-        target_service_id: &arkret_wire::DidCoreId,
+        target_id: &arkret_wire::DidCoreId,
         service_kind: &str,
         after_sequence: u64,
         limit: usize,
@@ -948,9 +948,9 @@ impl soland_storage::ServiceRouteStore for PersistenceHandle {
         self.persistence
             .service_routes()
             .successor_records(
-                source_service_id,
+                source_id,
                 realm_id,
-                target_service_id,
+                target_id,
                 service_kind,
                 after_sequence,
                 limit,
@@ -960,14 +960,14 @@ impl soland_storage::ServiceRouteStore for PersistenceHandle {
 
     async fn latest_notice(
         &self,
-        source_service_id: &arkret_wire::DidCoreId,
+        source_id: &arkret_wire::DidCoreId,
         realm_id: &arkret_wire::RealmId,
-        target_service_id: &arkret_wire::DidCoreId,
+        target_id: &arkret_wire::DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<Option<arkret_models_identity::ServiceRouteHandoverNotice>> {
         self.persistence
             .service_routes()
-            .latest_notice(source_service_id, realm_id, target_service_id, service_kind)
+            .latest_notice(source_id, realm_id, target_id, service_kind)
             .await
     }
 

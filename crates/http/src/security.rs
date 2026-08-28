@@ -90,14 +90,14 @@ pub fn sovereign_enclave_enabled() -> bool {
 /// [`federation_target_denied`]: a denylist cannot fail closed, and §8 says
 /// explicitly that the sender MUST NOT rely on the receiver to refuse.
 pub fn federation_outbound_trust_domain_denial(
-    peer_service_id: &str,
+    peer_id: &str,
     peer_trust_domain: Option<&str>,
 ) -> Option<String> {
     let policy = egress_policy();
     federation_outbound_trust_domain_denial_with_policy(
         policy.sovereign_enclave_enabled,
         &policy.federation_trust_domain_allowlist,
-        peer_service_id,
+        peer_id,
         peer_trust_domain,
     )
 }
@@ -105,7 +105,7 @@ pub fn federation_outbound_trust_domain_denial(
 fn federation_outbound_trust_domain_denial_with_policy(
     sovereign_enabled: bool,
     allowlist: &[String],
-    peer_service_id: &str,
+    peer_id: &str,
     peer_trust_domain: Option<&str>,
 ) -> Option<String> {
     if !sovereign_enabled {
@@ -113,7 +113,7 @@ fn federation_outbound_trust_domain_denial_with_policy(
     }
     let Some(trust_domain) = peer_trust_domain.filter(|value| !value.trim().is_empty()) else {
         return Some(format!(
-            "federation_trust_domain_missing: {peer_service_id} has no verified trust_domain binding"
+            "federation_trust_domain_missing: {peer_id} has no verified trust_domain binding"
         ));
     };
     let allowed = allowlist
@@ -122,7 +122,7 @@ fn federation_outbound_trust_domain_denial_with_policy(
     tracing::info!(
         target = "sovereign_boundary_audit",
         target_class = "federation outbound",
-        peer_service_id,
+        peer_id,
         trust_domain,
         posture = if allowed { "allowed" } else { "denied" },
         "sovereign federation outbound trust_domain check"
@@ -131,7 +131,7 @@ fn federation_outbound_trust_domain_denial_with_policy(
         None
     } else {
         Some(format!(
-            "federation_trust_domain_not_allowed: {peer_service_id} is bound to trust_domain \
+            "federation_trust_domain_not_allowed: {peer_id} is bound to trust_domain \
              {trust_domain}, which is not in the local federation_allowlist"
         ))
     }
@@ -454,33 +454,33 @@ pub fn federation_origin_denied(origin_did: &str) -> bool {
     federation_target_denied(None, Some(origin_did), None)
 }
 
-pub fn federation_peer_denied(peer_url: &str, peer_service_id: &str) -> bool {
-    federation_target_denied(Some(peer_url), Some(peer_service_id), None)
+pub fn federation_peer_denied(peer_url: &str, peer_id: &str) -> bool {
+    federation_target_denied(Some(peer_url), Some(peer_id), None)
 }
 
 pub fn federation_target_denied(
     peer_url: Option<&str>,
-    peer_service_id: Option<&str>,
+    peer_id: Option<&str>,
     peer_trust_domain: Option<&str>,
 ) -> bool {
     let entries = federation_denylist_entries();
-    federation_target_denied_with_entries(&entries, peer_url, peer_service_id, peer_trust_domain)
+    federation_target_denied_with_entries(&entries, peer_url, peer_id, peer_trust_domain)
 }
 
 fn federation_target_denied_with_entries(
     entries: &[String],
     peer_url: Option<&str>,
-    peer_service_id: Option<&str>,
+    peer_id: Option<&str>,
     peer_trust_domain: Option<&str>,
 ) -> bool {
     if entries.is_empty() {
         return false;
     }
     let url_host = peer_url.and_then(url_host);
-    let did_domain = peer_service_id.and_then(did_web_domain);
+    let did_domain = peer_id.and_then(did_web_domain);
     entries.iter().any(|entry| {
         let entry = entry.as_str();
-        peer_service_id.is_some_and(|did| entry_matches(entry, did))
+        peer_id.is_some_and(|did| entry_matches(entry, did))
             || peer_trust_domain.is_some_and(|trust| entry_matches(entry, trust))
             || url_host
                 .as_deref()

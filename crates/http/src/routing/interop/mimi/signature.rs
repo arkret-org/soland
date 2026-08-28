@@ -20,11 +20,11 @@ pub(super) async fn verify_mimi_write_service_proof(
             AppError::json_invalid(format!("unable to read MIMI request body: {error}"))
         })?
         .to_vec();
-    let source_service_id = mimi_required_header(req, "source-service-id")?;
-    let source_service_id = arkret_wire::DidCoreId::new(source_service_id)
+    let source_id = mimi_required_header(req, "source-service-id")?;
+    let source_id = arkret_wire::DidCoreId::new(source_id)
         .map_err(|_| mimi_signature_error_invalid("Source-Service-ID must be a core id"))?;
-    let destination_service_id = mimi_required_header(req, "destination-service-id")?;
-    if destination_service_id != state.service_id().as_str() {
+    let destination_id = mimi_required_header(req, "destination-service-id")?;
+    if destination_id != state.service_id().as_str() {
         return Err(mimi_signature_error_invalid(
             "Destination-Service-ID does not match this service",
         ));
@@ -50,7 +50,7 @@ pub(super) async fn verify_mimi_write_service_proof(
 
     let signature_input =
         http_signature::parse_signature_input_header(req).map_err(mimi_verification_error)?;
-    let verification_method = mimi_validate_signature_input(&signature_input, &source_service_id)?;
+    let verification_method = mimi_validate_signature_input(&signature_input, &source_id)?;
     let target_uri = crate::routing::federation::signature_target_uri(req, state);
     let authority = crate::routing::federation::signature_authority(req, state);
     let mut required_components = vec![
@@ -76,7 +76,7 @@ pub(super) async fn verify_mimi_write_service_proof(
         &policy,
     )
     .map_err(mimi_verification_error)?;
-    Ok(source_service_id.to_string())
+    Ok(source_id.to_string())
 }
 
 pub(super) fn mimi_required_header(req: &Request, name: &str) -> Result<String, AppError> {
@@ -87,7 +87,7 @@ pub(super) fn mimi_required_header(req: &Request, name: &str) -> Result<String, 
 
 pub(super) fn mimi_validate_signature_input(
     signature_input: &SignatureInput,
-    source_service_id: &arkret_wire::DidCoreId,
+    source_id: &arkret_wire::DidCoreId,
 ) -> Result<String, AppError> {
     if signature_input.label != "sig1" {
         return Err(mimi_signature_error_invalid(
@@ -104,7 +104,7 @@ pub(super) fn mimi_validate_signature_input(
         .ok()
         .and_then(|did| arkret_wire::project_did_to_core_id(&did).ok())
         .as_ref()
-        == Some(source_service_id);
+        == Some(source_id);
     if !controller_matches {
         return Err(mimi_signature_error_invalid(
             "Signature-Input keyid controller must project to Source-Service-ID",

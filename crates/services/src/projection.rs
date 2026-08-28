@@ -1159,7 +1159,7 @@ impl ProjectionService {
     /// has already succeeded.
     ///
     /// `ak.invite.cancel` is the only active contract with
-    /// `pre_state_requirements`. Its signed `payload.invitee` is not
+    /// `pre_state_requirements`. Its signed `payload.invitee_id` is not
     /// authoritative during admission, but after the lock-protected frozen
     /// check and durable commit it is safe for downstream live reduction and
     /// control-Seal construction to reuse that verified binding. Callers MUST
@@ -1188,18 +1188,18 @@ impl ProjectionService {
             .get("invite_id")
             .and_then(Value::as_str)
             .ok_or_else(|| "accepted ak.invite.cancel is missing invite_id".to_owned())?;
-        let invitee = event
+        let invitee_id = event
             .payload
-            .get("invitee")
+            .get("invitee_id")
             .and_then(Value::as_str)
-            .ok_or_else(|| "accepted ak.invite.cancel is missing verified invitee".to_owned())?;
+            .ok_or_else(|| "accepted ak.invite.cancel is missing verified invitee_id".to_owned())?;
         let lifecycle_cell = CellRef::new(format!(
             "ak:cell:ak.component.invite.lifecycle.v1:{invite_id}"
         ))
         .map_err(|error| error.to_string())?;
         let frozen_pre_state = arkret_schema::FrozenPreState::from([(
             lifecycle_cell,
-            serde_json::json!({"invitee": invitee}),
+            serde_json::json!({"invitee_id": invitee_id}),
         )]);
         let projection = self.state.lock();
         arkret_schema::project_registered_cell_writes_with_pre_state_and_authority_resolver(
@@ -1711,7 +1711,7 @@ impl ProjectionService {
         Ok(Some(RealmPolicyServerConfigView {
             config: RealmPolicyServerConfig {
                 realm_id: config.realm_id.clone(),
-                policy_server_service_id: config.policy_server_service_id.clone(),
+                policy_server_id: config.policy_server_id.clone(),
                 policy_server_url: config.policy_server_url.clone(),
                 cache_ttl_seconds: config.cache_ttl_seconds,
                 timeout_ms: config.timeout_ms,
@@ -1746,7 +1746,7 @@ impl ProjectionService {
         if expected_verification_public_key.is_empty() {
             return Err("verification_public_key_required");
         }
-        let expected_verification_service_id = third_party_invite.verification_service_id.as_str();
+        let expected_verification_service_id = third_party_invite.verification_id.as_str();
         let invite_record = serde_json::json!({
             "expires_at": arkret_canonical::format_timestamp_canonical(invite.expires_at),
             "invite_id": invite.invite_id,
@@ -2832,11 +2832,11 @@ impl ProjectionService {
         realm_id: &str,
         member: &str,
         invite_created_at: DateTime<Utc>,
-        recipient_service_id: Option<String>,
+        recipient_id: Option<String>,
         operation: &Operation,
     ) {
         let _authority_guard = self.history_authority_view_cas_guard();
-        let delivery_status = recipient_service_id
+        let delivery_status = recipient_id
             .as_ref()
             .map(|_| "routable".to_owned())
             .or_else(|| Some("unroutable".to_owned()));
@@ -2844,13 +2844,13 @@ impl ProjectionService {
         let mut state = self.state.lock();
         let key = (realm_id.to_owned(), member.to_owned());
         let previous = state.members.get(&key).cloned();
-        let delivery_binding_frontier = recipient_service_id.as_ref().and_then(|_| {
+        let delivery_binding_frontier = recipient_id.as_ref().and_then(|_| {
             previous
                 .as_ref()
                 .and_then(|member| member.delivery_binding_frontier.clone())
                 .or_else(|| membership_event_ref.clone())
         });
-        let delivery_binding_expires_at = recipient_service_id.as_ref().and_then(|_| {
+        let delivery_binding_expires_at = recipient_id.as_ref().and_then(|_| {
             previous
                 .as_ref()
                 .and_then(|membership| membership.delivery_binding_expires_at)
@@ -2868,7 +2868,7 @@ impl ProjectionService {
                 state: "join".to_owned(),
                 role: "member".to_owned(),
                 delivery_status,
-                recipient_service_id,
+                recipient_id,
                 recipient_service_resolution: None,
                 membership_event_ref,
                 delivery_binding_frontier,
@@ -2908,11 +2908,14 @@ impl ProjectionService {
             .is_some_and(|membership| matches!(membership.state.as_str(), "invite" | "join"))
     }
 
-    pub fn project_invite_creation(&self, operation: &Operation, invitee: &str) {
+    pub fn project_invite_creation(&self, operation: &Operation, invitee_id: &str) {
         let _authority_guard = self.history_authority_view_cas_guard();
         let event_ref = projection_event_ref(operation);
         let mut state = self.state.lock();
-        let key = (operation.realm_id.as_str().to_owned(), invitee.to_owned());
+        let key = (
+            operation.realm_id.as_str().to_owned(),
+            invitee_id.to_owned(),
+        );
         let previous = state.members.get(&key).cloned();
         let joined_at = previous
             .as_ref()
@@ -2922,7 +2925,7 @@ impl ProjectionService {
         state.members.insert(
             key,
             SolandMembershipState {
-                member: invitee.to_owned(),
+                member: invitee_id.to_owned(),
                 realm_id: operation.realm_id.as_str().to_owned(),
                 state: "invite".to_owned(),
                 role: previous
@@ -2930,7 +2933,7 @@ impl ProjectionService {
                     .map(|member| member.role.clone())
                     .unwrap_or_else(|| "member".to_owned()),
                 delivery_status: None,
-                recipient_service_id: None,
+                recipient_id: None,
                 recipient_service_resolution: None,
                 membership_event_ref: Some(event_ref.clone()),
                 delivery_binding_frontier: None,
@@ -2944,7 +2947,8 @@ impl ProjectionService {
                 reason: None,
             },
         );
-        if let Ok(cell_id) = CellRef::new(format!("ak:cell:ak.component.member.state.v1:{invitee}"))
+        if let Ok(cell_id) =
+            CellRef::new(format!("ak:cell:ak.component.member.state.v1:{invitee_id}"))
         {
             state.cells.insert(
                 cell_id,
@@ -2956,12 +2960,12 @@ impl ProjectionService {
     pub fn project_invite_termination(
         &self,
         operation: &Operation,
-        invitee: &str,
+        invitee_id: &str,
         reason: Option<String>,
     ) -> bool {
         let _authority_guard = self.history_authority_view_cas_guard();
         let mut state = self.state.lock();
-        let key = (operation.realm_id.to_string(), invitee.to_owned());
+        let key = (operation.realm_id.to_string(), invitee_id.to_owned());
         let Some(previous) = state.members.get(&key).cloned() else {
             return false;
         };
@@ -2973,7 +2977,7 @@ impl ProjectionService {
             SolandMembershipState {
                 state: "leave".to_owned(),
                 delivery_status: None,
-                recipient_service_id: None,
+                recipient_id: None,
                 recipient_service_resolution: None,
                 membership_event_ref: Some(projection_event_ref(operation)),
                 delivery_binding_frontier: previous.delivery_binding_frontier,
@@ -2982,7 +2986,8 @@ impl ProjectionService {
                 ..previous
             },
         );
-        if let Ok(cell_id) = CellRef::new(format!("ak:cell:ak.component.member.state.v1:{invitee}"))
+        if let Ok(cell_id) =
+            CellRef::new(format!("ak:cell:ak.component.member.state.v1:{invitee_id}"))
         {
             state
                 .cells

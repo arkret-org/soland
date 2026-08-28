@@ -80,7 +80,7 @@ pub enum EventNotificationKind {
     /// account context, never caller-supplied wire data.
     Account {
         account_id: String,
-        recipient_service_id: String,
+        recipient_id: String,
     },
 }
 
@@ -132,12 +132,12 @@ impl EventBroadcast {
 }
 
 impl EventNotification {
-    pub fn account(account_id: String, recipient_service_id: String) -> Self {
+    pub fn account(account_id: String, recipient_id: String) -> Self {
         Self {
             realm_id: String::new(),
             kind: EventNotificationKind::Account {
                 account_id,
-                recipient_service_id,
+                recipient_id,
             },
         }
     }

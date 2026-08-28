@@ -24,7 +24,7 @@ fn federation_delivery_record(
     let mut persisted = match record.realm_fanout {
         Some(binding) => FederationOutboxRecord::realm_fanout(RealmFanoutOutboxInput {
             id: record.id,
-            peer_service_id: record.peer_service_id,
+            peer_id: record.peer_id,
             peer_url: record.peer_url,
             endpoint: record.endpoint,
             idempotency_key: record.idempotency_key,
@@ -34,7 +34,7 @@ fn federation_delivery_record(
         }),
         None => FederationOutboxRecord::pending(
             record.id,
-            record.peer_service_id,
+            record.peer_id,
             record
                 .peer_url
                 .expect("generic federation delivery requires a route"),
@@ -54,7 +54,7 @@ fn application_delivery_record(
 ) -> crate::federation::FederationDeliveryRecord {
     crate::federation::FederationDeliveryRecord {
         id: record.id.clone(),
-        peer_service_id: record.peer_service_id.clone(),
+        peer_id: record.peer_id.clone(),
         peer_url: record.peer_url.clone(),
         endpoint: record.endpoint.clone(),
         idempotency_key: record.idempotency_key.clone(),
@@ -94,7 +94,7 @@ fn application_dead_letter(
     crate::federation::FederationDeadLetter {
         id: record.id,
         outbox_id: record.outbox_id,
-        peer_service_id: record.peer_service_id,
+        peer_id: record.peer_id,
         endpoint: record.endpoint,
         idempotency_key: record.idempotency_key,
         last_http_status: record.last_http_status,
@@ -116,7 +116,7 @@ fn persistence_dead_letter(
     FederationOutboxDeadLetterRecord {
         id: record.id.clone(),
         outbox_id: record.outbox_id.clone(),
-        peer_service_id: record.peer_service_id.clone(),
+        peer_id: record.peer_id.clone(),
         endpoint: record.endpoint.clone(),
         idempotency_key: record.idempotency_key.clone(),
         last_http_status: record.last_http_status,
@@ -137,7 +137,7 @@ fn application_frontier_exchange(
 ) -> crate::federation::FederationFrontierExchangeRecord {
     crate::federation::FederationFrontierExchangeRecord {
         realm_id: record.realm_id,
-        peer_service_id: record.peer_service_id,
+        peer_id: record.peer_id,
         status: record.status,
         consecutive_failures: record.consecutive_failures,
         last_success_at: record.last_success_at,
@@ -163,7 +163,7 @@ impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
 
     async fn find(
         &self,
-        peer_service_id: &arkret_identifiers::DidCoreId,
+        peer_id: &arkret_identifiers::DidCoreId,
         idempotency_key: &str,
     ) -> crate::ServiceResult<Option<crate::federation::FederationDeliveryRecord>> {
         Ok(self
@@ -172,9 +172,7 @@ impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
             .snapshot_all()
             .await?
             .into_iter()
-            .find(|row| {
-                &row.peer_service_id == peer_service_id && row.idempotency_key == idempotency_key
-            })
+            .find(|row| &row.peer_id == peer_id && row.idempotency_key == idempotency_key)
             .map(|row| application_delivery_record(&row)))
     }
 
@@ -422,40 +420,40 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
     async fn frontier_exchange(
         &self,
         realm_id: &str,
-        peer_service_id: &arkret_identifiers::DidCoreId,
+        peer_id: &arkret_identifiers::DidCoreId,
     ) -> crate::ServiceResult<Option<crate::federation::FederationFrontierExchangeRecord>> {
         Ok(self
             .0
             .federation_frontier_exchange()
-            .get(realm_id, peer_service_id)
+            .get(realm_id, peer_id)
             .await?
             .map(application_frontier_exchange))
     }
     async fn record_frontier_success(
         &self,
         realm_id: &str,
-        peer_service_id: &arkret_identifiers::DidCoreId,
+        peer_id: &arkret_identifiers::DidCoreId,
         frontier_root: &str,
         observed_at: i64,
     ) -> crate::ServiceResult<crate::federation::FederationFrontierExchangeRecord> {
         Ok(application_frontier_exchange(
             self.0
                 .federation_frontier_exchange()
-                .record_success(realm_id, peer_service_id, frontier_root, observed_at)
+                .record_success(realm_id, peer_id, frontier_root, observed_at)
                 .await?,
         ))
     }
     async fn record_frontier_failure(
         &self,
         realm_id: &str,
-        peer_service_id: &arkret_identifiers::DidCoreId,
+        peer_id: &arkret_identifiers::DidCoreId,
         reason: &str,
         observed_at: i64,
     ) -> crate::ServiceResult<crate::federation::FederationFrontierExchangeRecord> {
         Ok(application_frontier_exchange(
             self.0
                 .federation_frontier_exchange()
-                .record_failure(realm_id, peer_service_id, reason, observed_at)
+                .record_failure(realm_id, peer_id, reason, observed_at)
                 .await?,
         ))
     }

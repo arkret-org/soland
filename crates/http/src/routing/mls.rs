@@ -537,8 +537,8 @@ async fn peer_claim_keypackage(
     // caller cannot probe whether a target principal or KeyPackage exists.
     crate::routing::events::peer::validate_peer_request(state, req, true).await?;
     let transport = peer_claim_transport_binding(state, req)?;
-    if body.service_binding.source_service_id != transport.source_service_id
-        || body.service_binding.destination_service_id != transport.destination_service_id
+    if body.service_binding.source_id != transport.source_id
+        || body.service_binding.destination_id != transport.destination_id
     {
         return Err(peer_claim_schema_violation(
             "request service_binding must equal the authenticated HTTP service coordinates",
@@ -563,33 +563,31 @@ async fn claim_keypackage_at_destination(
 ) -> JsonResult<PeerKeyPackagesClaimOutcome> {
     let body_value = serde_json::to_value(body)
         .map_err(|error| AppError::internal(format!("KeyPackage claim serialize: {error}")))?;
-    let source_service_id = body.service_binding.source_service_id.as_str().to_owned();
+    let source_id = body.service_binding.source_id.as_str().to_owned();
     let claim_request_id = body.claim_request_id.as_str();
     let request_digest = arkret_canonical::canonical_sha256(&body_value)
         .map_err(|error| AppError::internal(format!("peer claim digest: {error}")))?;
     revoke_expired_peer_claims(state).await?;
     if let Some(existing) = state
         .mls_key_packages()
-        .peer_claim(&source_service_id, claim_request_id)
+        .peer_claim(&source_id, claim_request_id)
         .await
         .map_err(|error| AppError::internal(format!("peer claim ledger lookup: {error}")))?
     {
         return replay_peer_claim(existing, &request_digest);
     }
-    if state
-        .peer_keypackage_claim_rate_limited(&source_service_id, body.target_principal_id.as_str())
-    {
+    if state.peer_keypackage_claim_rate_limited(&source_id, body.target_principal_id.as_str()) {
         tracing::warn!(
-            %source_service_id,
+            %source_id,
             target_principal_id = %body.target_principal_id,
             reason = "keypackage_claim_rate_limited",
             "peer KeyPackage claim rejected by protocol quota"
         );
-        record_peer_claim_failed(state, body, &source_service_id, &request_digest).await?;
+        record_peer_claim_failed(state, body, &source_id, &request_digest).await?;
         return Err(peer_claim_failed());
     }
 
-    let policy_authorized = peer_claim_policy_authorized(state, body, &source_service_id).await?;
+    let policy_authorized = peer_claim_policy_authorized(state, body, &source_id).await?;
     let participant_authorized = if policy_authorized {
         verify_peer_claim_participant_authorization(state, body).await?
     } else {
@@ -597,14 +595,14 @@ async fn claim_keypackage_at_destination(
     };
     if !policy_authorized || !participant_authorized {
         tracing::warn!(
-            %source_service_id,
+            %source_id,
             requester = %body.requester,
             target_principal_id = %body.target_principal_id,
             policy_authorized,
             participant_authorized,
             "peer KeyPackage claim authorization rejected"
         );
-        record_peer_claim_failed(state, body, &source_service_id, &request_digest).await?;
+        record_peer_claim_failed(state, body, &source_id, &request_digest).await?;
         return Err(peer_claim_failed());
     }
 
@@ -715,13 +713,12 @@ async fn claim_keypackage_at_destination(
             predicted.consumed_at = None;
         }
         let outcome =
-            build_peer_claim_outcome(state, body, &source_service_id, &request_digest, &predicted)
-                .await?;
+            build_peer_claim_outcome(state, body, &source_id, &request_digest, &predicted).await?;
         let outcome_value = serde_json::to_value(&outcome).map_err(|error| {
             AppError::internal(format!("peer claim outcome serialize: {error}"))
         })?;
         let ledger = PeerKeyPackageClaimLedgerRecord {
-            source_service_id: source_service_id.clone(),
+            source_id: source_id.clone(),
             claim_request_id: claim_request_id.to_owned(),
             request_digest: request_digest.clone(),
             key_package_use: if is_last_resort {
@@ -796,7 +793,7 @@ async fn claim_keypackage_at_destination(
         }
     }
 
-    record_peer_claim_failed(state, body, &source_service_id, &request_digest).await?;
+    record_peer_claim_failed(state, body, &source_id, &request_digest).await?;
     Err(peer_claim_failed())
 }
 
@@ -815,11 +812,11 @@ async fn peer_query_keypackage_claim(
     body.validate_shape()
         .map_err(|error| peer_claim_schema_violation(error.to_string()))?;
     let transport = peer_claim_transport_binding(state, req)?;
-    let source_service_id = transport.source_service_id.as_str().to_owned();
+    let source_id = transport.source_id.as_str().to_owned();
     revoke_expired_peer_claims(state).await?;
     let Some(record) = state
         .mls_key_packages()
-        .peer_claim(&source_service_id, body.claim_request_id.as_str())
+        .peer_claim(&source_id, body.claim_request_id.as_str())
         .await
         .map_err(|error| AppError::internal(format!("peer claim query ledger: {error}")))?
     else {
@@ -894,7 +891,7 @@ async fn peer_query_keypackage_claim(
             body.request_digest.clone(),
             terminal_state,
             Some(refs),
-            arkret_wire::DidCoreId::new(source_service_id.clone()).map_err(|error| {
+            arkret_wire::DidCoreId::new(source_id.clone()).map_err(|error| {
                 AppError::internal(format!("peer source service id invalid: {error}"))
             })?,
             now(),
@@ -904,7 +901,7 @@ async fn peer_query_keypackage_claim(
         let _attached = state
             .mls_key_packages()
             .attach_peer_claim_terminal_receipt(
-                &source_service_id,
+                &source_id,
                 body.claim_request_id.as_str(),
                 body.request_digest.as_str(),
                 &receipt_value,
@@ -944,18 +941,17 @@ async fn peer_query_keypackage_claim(
 
 #[derive(Debug)]
 struct PeerClaimHttpTransportBinding {
-    source_service_id: arkret_wire::DidCoreId,
-    destination_service_id: arkret_wire::DidCoreId,
+    source_id: arkret_wire::DidCoreId,
+    destination_id: arkret_wire::DidCoreId,
 }
 
 fn peer_claim_transport_binding(
     state: &AppState,
     req: &Request,
 ) -> Result<PeerClaimHttpTransportBinding, AppError> {
-    let source_service_id =
-        arkret_wire::DidCoreId::new(peer_required_header(req, "source-service-id")?)
-            .map_err(|_| peer_claim_schema_violation("source-service-id must be a core_id"))?;
-    let destination_service_id =
+    let source_id = arkret_wire::DidCoreId::new(peer_required_header(req, "source-service-id")?)
+        .map_err(|_| peer_claim_schema_violation("source-service-id must be a core_id"))?;
+    let destination_id =
         arkret_wire::DidCoreId::new(peer_required_header(req, "destination-service-id")?)
             .map_err(|_| peer_claim_schema_violation("destination-service-id must be a core_id"))?;
     let source_trust_domain =
@@ -967,8 +963,8 @@ fn peer_claim_transport_binding(
     )?)
     .map_err(|_| peer_claim_schema_violation("destination-trust-domain is invalid"))?;
     let local_trust_domain = state.config().trust_domain.clone();
-    if destination_service_id.as_str() != state.service_id()
-        || source_service_id == destination_service_id
+    if destination_id.as_str() != state.service_id()
+        || source_id == destination_id
         || source_trust_domain != local_trust_domain
         || destination_trust_domain != local_trust_domain
     {
@@ -977,8 +973,8 @@ fn peer_claim_transport_binding(
         ));
     }
     Ok(PeerClaimHttpTransportBinding {
-        source_service_id,
-        destination_service_id,
+        source_id,
+        destination_id,
     })
 }
 
@@ -1055,7 +1051,7 @@ async fn verify_peer_claim_participant_authorization(
                 &body.requester,
                 verification_method,
                 &body.intended_realm_id,
-                body.service_binding.source_service_id.as_str(),
+                body.service_binding.source_id.as_str(),
             )
             .await
             .is_err()
@@ -1215,7 +1211,7 @@ async fn verify_peer_claim_participant_authorization(
 async fn peer_claim_policy_authorized(
     state: &AppState,
     body: &PeerKeyPackagesClaimRequestBody,
-    source_service_id: &str,
+    source_id: &str,
 ) -> Result<bool, AppError> {
     let target_authority_current = if let Some(method) = &body.target_pairwise_verification_method {
         ensure_pairwise_realm_affinity(
@@ -1256,7 +1252,7 @@ async fn peer_claim_policy_authorized(
             if !crate::routing::federation::federation::federation_actor_origin_acceptable(
                 state,
                 body.requester.as_str(),
-                source_service_id,
+                source_id,
                 None,
                 body.intended_realm_id.as_str(),
                 None,
@@ -1269,8 +1265,8 @@ async fn peer_claim_policy_authorized(
             if projection
                 .member(body.intended_realm_id.as_str(), body.requester.as_str())
                 .filter(|member| member.state == "join")
-                .and_then(|member| member.recipient_service_id.as_deref())
-                != Some(source_service_id)
+                .and_then(|member| member.recipient_id.as_deref())
+                != Some(source_id)
             {
                 return Ok(false);
             }
@@ -1302,7 +1298,7 @@ async fn peer_claim_policy_authorized(
             let Some(contact) = contact else {
                 return Ok(false);
             };
-            if contact.peer_service_id.as_deref() != Some(source_service_id) {
+            if contact.peer_id.as_deref() != Some(source_id) {
                 return Ok(false);
             }
             let trust_domain = state.config().trust_domain.clone();
@@ -1330,7 +1326,7 @@ async fn peer_claim_policy_authorized(
 async fn build_peer_claim_outcome(
     state: &AppState,
     body: &PeerKeyPackagesClaimRequestBody,
-    source_service_id: &str,
+    source_id: &str,
     request_digest: &str,
     claimed: &MlsKeyPackageRow,
 ) -> Result<PeerKeyPackagesClaimOutcome, AppError> {
@@ -1348,9 +1344,9 @@ async fn build_peer_claim_outcome(
             .map_err(|error| AppError::internal(format!("request digest invalid: {error}")))?,
         claims_digest: Hash::new(claims_digest)
             .map_err(|error| AppError::internal(format!("claims digest invalid: {error}")))?,
-        source_service_id: arkret_wire::DidCoreId::new(source_service_id.to_owned())
+        source_id: arkret_wire::DidCoreId::new(source_id.to_owned())
             .map_err(|error| AppError::internal(format!("source service id invalid: {error}")))?,
-        destination_service_id: arkret_wire::DidCoreId::new(state.service_id().clone())
+        destination_id: arkret_wire::DidCoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(format!("service id invalid: {error}")))?,
         request: body.unsigned_request(),
         claimed_at: unix_timestamp_datetime(
@@ -1386,14 +1382,14 @@ async fn build_peer_claim_outcome(
 
 pub(in crate::routing) async fn validate_federated_welcome_peer_claim(
     state: &AppState,
-    source_service_id: &str,
+    source_id: &str,
     realm_id: &str,
     actor_id: &str,
     payload: &Value,
 ) -> Result<(), &'static str> {
     validate_welcome_peer_claim_ledger(
         state,
-        source_service_id,
+        source_id,
         Some(state.service_id()),
         realm_id,
         actor_id,
@@ -1414,7 +1410,7 @@ pub(in crate::routing) async fn validate_local_welcome_peer_claim(
 
 async fn validate_welcome_peer_claim_ledger(
     state: &AppState,
-    source_service_id: &str,
+    source_id: &str,
     required_destination_service_id: Option<&str>,
     realm_id: &str,
     actor_id: &str,
@@ -1500,9 +1496,9 @@ async fn validate_welcome_peer_claim_ledger(
     let receipt = &welcome.claim_receipt;
     let request = &receipt.request;
     if receipt.claim_request_id != request.claim_request_id
-        || receipt.source_service_id.as_str() != source_service_id
+        || receipt.source_id.as_str() != source_id
         || required_destination_service_id
-            .is_some_and(|expected| receipt.destination_service_id.as_str() != expected)
+            .is_some_and(|expected| receipt.destination_id.as_str() != expected)
         || request.requester.as_str() != actor_id
         || &request.target_principal_id != recipient_actor_id
         || request.intended_realm_id.as_str() != realm_id
@@ -1524,7 +1520,7 @@ async fn validate_welcome_peer_claim_ledger(
     }
     let signing_bytes = peer_keypackage_claim_receipt_signing_bytes(receipt)
         .map_err(|_| "peer_claim_welcome_invalid")?;
-    let verification_key = if receipt.destination_service_id.as_str() == state.service_id() {
+    let verification_key = if receipt.destination_id.as_str() == state.service_id() {
         let expected_method = format!("{}#notary-key", state.service_resolution_commitment().did);
         if receipt.signature.kid.as_str() != expected_method {
             return Err("peer_claim_welcome_invalid");
@@ -1537,7 +1533,7 @@ async fn validate_welcome_peer_claim_ledger(
             .map_err(|_| "peer_claim_welcome_invalid")?;
         let document = arkret_identity::authenticated_service_document_at(
             &resolution,
-            &receipt.destination_service_id,
+            &receipt.destination_id,
             receipt.claimed_at,
         )
         .map_err(|_| "peer_claim_welcome_invalid")?;
@@ -1548,7 +1544,7 @@ async fn validate_welcome_peer_claim_ledger(
         .map_err(|_| "peer_claim_welcome_invalid")?
     } else {
         crate::jws_verify::validate_verification_method_controller(
-            receipt.destination_service_id.as_str(),
+            receipt.destination_id.as_str(),
             receipt.signature.kid.as_str(),
         )
         .map_err(|_| "peer_claim_welcome_invalid")?;
@@ -1569,7 +1565,7 @@ async fn validate_welcome_peer_claim_ledger(
     }
     let ledger = state
         .mls_key_packages()
-        .peer_claim(source_service_id, receipt.claim_request_id.as_str())
+        .peer_claim(source_id, receipt.claim_request_id.as_str())
         .await
         .map_err(|_| "peer_claim_welcome_pending")?
         .ok_or("peer_claim_welcome_pending")?;
@@ -1666,7 +1662,7 @@ fn peer_claim_state_allows_welcome(state: &str) -> bool {
 async fn record_peer_claim_failed(
     state: &AppState,
     body: &PeerKeyPackagesClaimRequestBody,
-    source_service_id: &str,
+    source_id: &str,
     request_digest: &str,
 ) -> Result<(), AppError> {
     let timestamp = now().timestamp();
@@ -1678,12 +1674,12 @@ async fn record_peer_claim_failed(
         })?,
         KeyPackageClaimTerminalState::NeverClaimed,
         None,
-        arkret_wire::DidCoreId::new(source_service_id.to_owned())
+        arkret_wire::DidCoreId::new(source_id.to_owned())
             .map_err(|error| AppError::internal(format!("peer service DID invalid: {error}")))?,
         now(),
     )?;
     let record = PeerKeyPackageClaimLedgerRecord {
-        source_service_id: source_service_id.to_owned(),
+        source_id: source_id.to_owned(),
         claim_request_id: body.claim_request_id.as_str().to_owned(),
         request_digest: request_digest.to_owned(),
         key_package_use: "none".to_owned(),
@@ -1720,7 +1716,7 @@ fn build_peer_claim_terminal_receipt(
     request_digest: Hash,
     terminal_state: KeyPackageClaimTerminalState,
     key_package_refs: Option<Vec<String>>,
-    source_service_id: arkret_wire::DidCoreId,
+    source_id: arkret_wire::DidCoreId,
     terminal_at: DateTime<Utc>,
 ) -> Result<KeyPackageClaimTerminalReceipt, AppError> {
     let verification_method = format!("{}#notary-key", state.service_resolution_commitment().did);
@@ -1733,8 +1729,8 @@ fn build_peer_claim_terminal_receipt(
         request_digest,
         terminal_state,
         key_package_refs,
-        source_service_id,
-        destination_service_id: arkret_wire::DidCoreId::new(state.service_id().clone())
+        source_id,
+        destination_id: arkret_wire::DidCoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(format!("service id invalid: {error}")))?,
         terminal_at,
         signature: KeyOperationSignature {
@@ -1852,7 +1848,7 @@ async fn claim_keypackage(
     let peer_body = PeerKeyPackagesClaimRequestBody::from(&body);
     validate_peer_claim_time_window(&peer_body)?;
     let local_service_id = state.service_id();
-    if body.service_binding.source_service_id.as_str() != local_service_id {
+    if body.service_binding.source_id.as_str() != local_service_id {
         return Err(peer_claim_schema_violation(
             "self claim transport source must be the authenticated local service",
         ));
@@ -1883,8 +1879,7 @@ async fn claim_keypackage(
             .snapshot()
             .member(body.intended_realm_id.as_str(), body.requester.as_str())
             .is_some_and(|member| {
-                member.state == "join"
-                    && member.recipient_service_id.as_deref() == Some(local_service_id)
+                member.state == "join" && member.recipient_id.as_deref() == Some(local_service_id)
             });
         if !requester_is_current_member {
             return Err(AppError::capability_denied(
@@ -1892,8 +1887,8 @@ async fn claim_keypackage(
             ));
         }
     }
-    if body.service_binding.destination_service_id.as_str() != local_service_id {
-        let destination = body.service_binding.destination_service_id.as_str();
+    if body.service_binding.destination_id.as_str() != local_service_id {
+        let destination = body.service_binding.destination_id.as_str();
         let snapshot = state.projections().snapshot();
         let target_binding = snapshot
             .member(
@@ -1901,7 +1896,7 @@ async fn claim_keypackage(
                 body.target_principal_id.as_str(),
             )
             .filter(|member| member.state == "join")
-            .and_then(|member| member.recipient_service_id.as_deref());
+            .and_then(|member| member.recipient_id.as_deref());
         if target_binding != Some(destination) {
             return Err(AppError::capability_denied(
                 "destination service must equal the target's current Realm delivery binding",
@@ -1962,7 +1957,7 @@ async fn claim_keypackage(
 
 pub(crate) async fn capture_relayed_keypackage_claim_outcome(
     state: &AppState,
-    destination_service_id: &str,
+    destination_id: &str,
     request_body: &str,
     response_body: &str,
 ) -> Result<(), String> {
@@ -1974,10 +1969,10 @@ pub(crate) async fn capture_relayed_keypackage_claim_outcome(
         .validate_shape()
         .map_err(|error| error.to_string())?;
     let receipt = &outcome.claim_receipt;
-    if request.service_binding.source_service_id.as_str() != state.service_id()
-        || request.service_binding.destination_service_id.as_str() != destination_service_id
-        || receipt.source_service_id != request.service_binding.source_service_id
-        || receipt.destination_service_id != request.service_binding.destination_service_id
+    if request.service_binding.source_id.as_str() != state.service_id()
+        || request.service_binding.destination_id.as_str() != destination_id
+        || receipt.source_id != request.service_binding.source_id
+        || receipt.destination_id != request.service_binding.destination_id
         || receipt.request != request.unsigned_request()
     {
         return Err("relayed KeyPackage claim outcome binding mismatch".to_owned());
@@ -1998,7 +1993,7 @@ pub(crate) async fn capture_relayed_keypackage_claim_outcome(
     let signing_bytes =
         peer_keypackage_claim_receipt_signing_bytes(receipt).map_err(|error| error.to_string())?;
     crate::jws_verify::validate_verification_method_controller(
-        destination_service_id,
+        destination_id,
         receipt.signature.kid.as_str(),
     )?;
     let verification_key = crate::jws_verify::resolve_ed25519_pubkey_at(
@@ -2019,7 +2014,7 @@ pub(crate) async fn capture_relayed_keypackage_claim_outcome(
         .iter()
         .any(|claim| claim.last_resort == Some(true));
     let record = PeerKeyPackageClaimLedgerRecord {
-        source_service_id: state.service_id().clone(),
+        source_id: state.service_id().clone(),
         claim_request_id: request.claim_request_id.as_str().to_owned(),
         request_digest,
         key_package_use: if is_last_resort {
@@ -2064,7 +2059,7 @@ pub(crate) async fn capture_relayed_keypackage_claim_outcome(
 
 pub(crate) async fn capture_relayed_keypackage_claim_query(
     state: &AppState,
-    destination_service_id: &str,
+    destination_id: &str,
     request_body: &str,
     query: &PeerKeyPackagesClaimQueryOutcome,
 ) -> Result<(), String> {
@@ -2079,7 +2074,7 @@ pub(crate) async fn capture_relayed_keypackage_claim_query(
             .ok_or_else(|| "claim query omitted its outcome".to_owned())?;
         capture_relayed_keypackage_claim_outcome(
             state,
-            destination_service_id,
+            destination_id,
             request_body,
             &serde_json::to_string(outcome).map_err(|error| error.to_string())?,
         )
@@ -2102,21 +2097,14 @@ pub(crate) async fn capture_relayed_keypackage_claim_query(
             .filter(|_| outcome.claims.len() == 1)
             .ok_or_else(|| "consumed claim query has no unique claim".to_owned())?;
         if consume.recipient_durable_receipt.claim_request_id != request.claim_request_id
-            || consume
-                .recipient_durable_receipt
-                .recipient_service_id
-                .as_str()
-                != destination_service_id
+            || consume.recipient_durable_receipt.recipient_id.as_str() != destination_id
             || consume.claim_id.as_str() != claim.claim_id
             || consume.recipient_durable_receipt.key_package_ref.as_str() != claim.keypackage_ref
         {
             return Err("consumed claim query receipt binding mismatch".to_owned());
         }
         crate::jws_verify::validate_verification_method_controller(
-            consume
-                .recipient_durable_receipt
-                .recipient_service_id
-                .as_str(),
+            consume.recipient_durable_receipt.recipient_id.as_str(),
             consume.signature.kid.as_str(),
         )?;
         let signing_bytes = consume
@@ -2180,9 +2168,9 @@ pub(crate) async fn capture_relayed_keypackage_claim_query(
     if terminal.validate_shape().is_err()
         || terminal.claim_request_id != request.claim_request_id
         || terminal.request_digest.as_str() != request_digest
-        || terminal.source_service_id != request.service_binding.source_service_id
-        || terminal.destination_service_id != request.service_binding.destination_service_id
-        || terminal.destination_service_id.as_str() != destination_service_id
+        || terminal.source_id != request.service_binding.source_id
+        || terminal.destination_id != request.service_binding.destination_id
+        || terminal.destination_id.as_str() != destination_id
         || terminal.terminal_state
             != match query.state {
                 PeerKeyPackagesClaimQueryState::ClaimFailed => {
@@ -2199,7 +2187,7 @@ pub(crate) async fn capture_relayed_keypackage_claim_query(
         .canonical_signing_bytes()
         .map_err(|error| error.to_string())?;
     crate::jws_verify::validate_verification_method_controller(
-        destination_service_id,
+        destination_id,
         terminal.signature.kid.as_str(),
     )?;
     let verification_key =
@@ -2243,7 +2231,7 @@ pub(crate) async fn capture_relayed_keypackage_claim_query(
     let terminal_receipt_value =
         serde_json::to_value(terminal).map_err(|error| error.to_string())?;
     let record = PeerKeyPackageClaimLedgerRecord {
-        source_service_id: state.service_id().clone(),
+        source_id: state.service_id().clone(),
         claim_request_id: request.claim_request_id.as_str().to_owned(),
         request_digest,
         key_package_use: "none".to_owned(),
@@ -2533,11 +2521,11 @@ async fn consume_last_resort_keypackage(
         AppError::internal(format!("stored Welcome payload serialize: {error}"))
     })?)
     .map_err(|error| AppError::internal(format!("stored Welcome payload invalid: {error}")))?;
-    let source_service_id = welcome.claim_receipt.source_service_id.as_str();
+    let source_id = welcome.claim_receipt.source_id.as_str();
     let claim_request_id = durable.claim_request_id.as_str();
     let ledger = state
         .mls_key_packages()
-        .peer_claim(source_service_id, claim_request_id)
+        .peer_claim(source_id, claim_request_id)
         .await
         .map_err(|error| AppError::internal(format!("last-resort claim lookup failed: {error}")))?
         .ok_or_else(|| {
@@ -2613,7 +2601,7 @@ async fn consume_last_resort_keypackage(
     let attached = state
         .mls_key_packages()
         .attach_peer_claim_consume_receipt(
-            source_service_id,
+            source_id,
             claim_request_id,
             &ledger_request_digest,
             &receipt_value,
@@ -2628,7 +2616,7 @@ async fn consume_last_resort_keypackage(
     let Some(attached) = attached else {
         let winner = state
             .mls_key_packages()
-            .peer_claim(source_service_id, claim_request_id)
+            .peer_claim(source_id, claim_request_id)
             .await
             .map_err(|error| {
                 AppError::internal(format!(
@@ -2686,7 +2674,7 @@ async fn validate_recipient_durable_receipt(
 ) -> Result<(), AppError> {
     let receipt = &body.recipient_durable_receipt;
     if receipt.domain.as_str() != arkret_wire::DomainSeparationId::MLS_RECIPIENT_DURABLE_RECEIPT_V1
-        || receipt.recipient_service_id.as_str() != state.service_id()
+        || receipt.recipient_id.as_str() != state.service_id()
     {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -3012,11 +3000,7 @@ fn validate_consume_receipt_replay(
     receipt
         .validate_shape()
         .map_err(|error| AppError::internal(format!("stored consume receipt shape: {error}")))?;
-    if receipt
-        .recipient_durable_receipt
-        .recipient_service_id
-        .as_str()
-        != state.service_id()
+    if receipt.recipient_durable_receipt.recipient_id.as_str() != state.service_id()
         || receipt.request_digest != consume_request_digest(body)?
         || receipt.claim_id != body.claim_id
         || serde_json::to_value(&receipt.recipient_durable_receipt).map_err(|error| {
@@ -3953,7 +3937,7 @@ async fn ensure_pairwise_realm_affinity(
         .member(realm_id.as_str(), principal.as_str())
         .is_none_or(|membership| {
             membership.state != "join"
-                || membership.recipient_service_id.as_deref() != Some(expected_service_id)
+                || membership.recipient_id.as_deref() != Some(expected_service_id)
         })
     {
         return Err(AppError::new(
@@ -5071,7 +5055,7 @@ mod trust_binding_tests {
     #[test]
     fn claim_failed_query_rejects_a_contradictory_existing_winner() {
         let expected = PeerKeyPackageClaimLedgerRecord {
-            source_service_id: "ak:did_core:web:source.example".to_owned(),
+            source_id: "ak:did_core:web:source.example".to_owned(),
             claim_request_id: "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
             request_digest:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),

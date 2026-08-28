@@ -14,12 +14,12 @@ use super::*;
 use crate::state::AppState;
 
 /// Spec invite-addressing.md / event-kind-registry — project an accepted
-/// `ak.invite.accept` durable event. The invitee submits it to close the
+/// `ak.invite.accept` durable event. The invitee_id submits it to close the
 /// group-invite loop:
 ///   1. resolve the referenced invite, validating it is still `pending` and that the accepting
-///      sender == the invite's `invitee`;
+///      sender == the invite's `invitee_id`;
 ///   2. flip the `RealmInviteRecord` to `accepted`;
-///   3. cascade membership — activate the invitee's `ak.member.state(join)` in the target Realm
+///   3. cascade membership — activate the invitee_id's `ak.member.state(join)` in the target Realm
 ///      (in-memory member index) so the capability grants carried on the invite take effect.
 ///
 /// Replays and mismatched senders are ignored fail-closed.
@@ -40,11 +40,11 @@ pub(super) async fn project_invite_accept_operation(state: &AppState, operation:
         tracing::warn!(invite_id = %invite_id, "ak.invite.accept references unknown invite");
         return;
     };
-    if record.invitee.as_deref() != Some(accepter.as_str()) {
+    if record.invitee_id.as_deref() != Some(accepter.as_str()) {
         tracing::warn!(
             invite_id = %invite_id,
             accepter = %accepter,
-            "ak.invite.accept sender is not the invitee; ignored"
+            "ak.invite.accept sender is not the invitee_id; ignored"
         );
         return;
     }
@@ -78,7 +78,7 @@ pub(super) async fn project_invite_accept_operation(state: &AppState, operation:
     {
         tracing::warn!(
             invite_id = %invite_id,
-            invitee = %accepter,
+            invitee_id = %accepter,
             "ak.invite.accept requires the invited-or-atomically-joined member state"
         );
         return;
@@ -93,7 +93,7 @@ pub(super) async fn project_invite_accept_operation(state: &AppState, operation:
         tracing::warn!(%error, invite_id = %invite_id, "failed to mark invite accepted");
         return;
     }
-    // Cascade membership: activate the invitee's join in the target Realm
+    // Cascade membership: activate the invitee_id's join in the target Realm
     // member index so subsequent realm-scoped reads include them.
     if let (Ok(realm_id_typed), Ok(member_did)) = (
         RealmId::new(realm_id.clone()),
@@ -114,7 +114,7 @@ pub(super) async fn project_invite_accept_operation(state: &AppState, operation:
     touch_realm(state, &realm_id).await;
     tracing::info!(
         invite_id = %invite_id,
-        invitee = %accepter,
+        invitee_id = %accepter,
         realm_id = %realm_id,
         "ak.invite.accept projected: invite accepted + membership cascaded"
     );
@@ -128,8 +128,8 @@ fn project_invite_accept_membership(
     invite_delivery_target: Option<&Value>,
     operation: &Operation,
 ) {
-    let recipient_service_id = invite_delivery_target
-        .and_then(|target| target.get("recipient_service_id"))
+    let recipient_id = invite_delivery_target
+        .and_then(|target| target.get("recipient_id"))
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned);
@@ -137,7 +137,7 @@ fn project_invite_accept_membership(
         realm_id,
         member,
         invite_created_at,
-        recipient_service_id,
+        recipient_id,
         operation,
     );
 }
@@ -181,7 +181,7 @@ pub(in crate::routing::events) async fn freeze_invite_cancel_pre_state(
     if record.realm_id != event.realm_id.as_str() {
         return Err("reducer_projection_failed");
     }
-    if record.third_party_invite.is_none() && record.invitee.is_none() {
+    if record.third_party_invite.is_none() && record.invitee_id.is_none() {
         return Err("reducer_projection_failed");
     }
 
@@ -211,17 +211,17 @@ pub(in crate::routing::events) async fn freeze_invite_cancel_pre_state(
         ),
     ]);
     if record.third_party_invite.is_none()
-        && let Some(invitee) = record.invitee
+        && let Some(invitee_id) = record.invitee_id
     {
         let member_cell = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.member.state.v1:{invitee}"
+            "ak:cell:ak.component.member.state.v1:{invitee_id}"
         ))
         .map_err(|_| "reducer_projection_failed")?;
         let member_value = projection
             .cell_value(&member_cell)
             .cloned()
             .ok_or("reducer_projection_failed")?;
-        lifecycle.insert("invitee".to_owned(), Value::String(invitee));
+        lifecycle.insert("invitee_id".to_owned(), Value::String(invitee_id));
         frozen.insert(member_cell, member_value);
     }
     frozen.insert(lifecycle_cell, Value::Object(lifecycle));
@@ -256,11 +256,11 @@ pub(in crate::routing::events) fn validate_invite_cancel_pre_admission(
     if lifecycle.get("third_party").and_then(Value::as_bool) == Some(true) {
         return Err("invite_kind_requires_revoke");
     }
-    let invitee = lifecycle
-        .get("invitee")
+    let invitee_id = lifecycle
+        .get("invitee_id")
         .and_then(Value::as_str)
         .ok_or("reducer_projection_failed")?;
-    if operation.payload.get("invitee").and_then(Value::as_str) != Some(invitee) {
+    if operation.payload.get("invitee_id").and_then(Value::as_str) != Some(invitee_id) {
         return Err("reducer_projection_failed");
     }
     if !matches!(
@@ -269,15 +269,16 @@ pub(in crate::routing::events) fn validate_invite_cancel_pre_admission(
     ) {
         return Err("reducer_projection_failed");
     }
-    let member_cell =
-        arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.member.state.v1:{invitee}"))
-            .map_err(|_| "reducer_projection_failed")?;
+    let member_cell = arkret_identifiers::CellRef::new(format!(
+        "ak:cell:ak.component.member.state.v1:{invitee_id}"
+    ))
+    .map_err(|_| "reducer_projection_failed")?;
     if frozen_pre_state.get(&member_cell).and_then(Value::as_str) != Some("invite") {
         return Err("reducer_projection_failed");
     }
     let terminal_status = invite_terminal_transition_target(operation, &invite_id)
         .ok_or("reducer_projection_failed")?;
-    let expected_status = if invitee == origin.trim() {
+    let expected_status = if invitee_id == origin.trim() {
         "rejected"
     } else {
         "revoked"
@@ -356,7 +357,7 @@ async fn project_invite_terminal_operation(
         );
         return;
     };
-    let expected_cancel_status = if record.invitee.as_deref() == Some(origin.trim()) {
+    let expected_cancel_status = if record.invitee_id.as_deref() == Some(origin.trim()) {
         "rejected"
     } else {
         "revoked"
@@ -380,24 +381,24 @@ async fn project_invite_terminal_operation(
         );
         return;
     }
-    let direct_invitee = record.invitee.clone();
-    if let Some(invitee) = direct_invitee.as_deref()
-        && operation.payload.get("invitee").and_then(Value::as_str) != Some(invitee)
+    let direct_invitee = record.invitee_id.clone();
+    if let Some(invitee_id) = direct_invitee.as_deref()
+        && operation.payload.get("invitee_id").and_then(Value::as_str) != Some(invitee_id)
     {
         tracing::warn!(
             invite_id = %invite_id,
-            "direct invite terminal event has a missing or mismatched invitee"
+            "direct invite terminal event has a missing or mismatched invitee_id"
         );
         return;
     };
-    if let Some(invitee) = direct_invitee.as_deref()
+    if let Some(invitee_id) = direct_invitee.as_deref()
         && !state
             .projections()
-            .invite_member_is_invited(record.realm_id.as_str(), invitee)
+            .invite_member_is_invited(record.realm_id.as_str(), invitee_id)
     {
         tracing::warn!(
             invite_id = %invite_id,
-            invitee = %invitee,
+            invitee_id = %invitee_id,
             "direct invite terminal event requires member state invite"
         );
         return;
@@ -412,10 +413,10 @@ async fn project_invite_terminal_operation(
     let realm_id = record.realm_id.clone();
     match invites.put(record).await {
         Ok(()) => {
-            if let Some(invitee) = direct_invitee.as_deref()
+            if let Some(invitee_id) = direct_invitee.as_deref()
                 && !state.projections().project_invite_termination(
                     operation,
-                    invitee,
+                    invitee_id,
                     operation
                         .payload
                         .get("reason_code")
@@ -426,7 +427,7 @@ async fn project_invite_terminal_operation(
             {
                 tracing::warn!(
                     invite_id = %invite_id,
-                    invitee = %invitee,
+                    invitee_id = %invitee_id,
                     "validated invite terminal projection unexpectedly lost its invite membership"
                 );
             }
@@ -481,7 +482,7 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
     };
     let invite_id =
         arkret_identifiers::InviteId::from_event_id(&operation.context.event_id).to_string();
-    let inviter = operation.context.sender.to_string();
+    let inviter_id = operation.context.sender.to_string();
     let Some(third_party_invite_value) = payload.get("third_party_invite").cloned() else {
         tracing::warn!(invite_id = %invite_id, "ak.invite.third_party missing third_party_invite");
         return;
@@ -515,8 +516,8 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
     let record = RealmInviteRecord {
         invite_id: invite_id.clone(),
         realm_id: operation.realm_id.to_string(),
-        inviter,
-        invitee: None,
+        inviter_id,
+        invitee_id: None,
         invite_delivery_target: None,
         introduction_evidence_digest: None,
         third_party_invite,
@@ -593,7 +594,7 @@ pub(super) async fn project_invite_claim_operation(state: &AppState, operation: 
         return;
     }
     record.status = "claimed".to_owned();
-    record.invitee = Some(subject_id);
+    record.invitee_id = Some(subject_id);
     record.updated_at = Some(operation.created_at);
     record.invite_token.clear();
     remove_third_party_active_material(&mut record.third_party_invite, false);
@@ -620,11 +621,11 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
     if !kinds::operation_is_invite_create(operation) {
         return;
     }
-    let Some(invitee) = invitee_for_operation(operation) else {
+    let Some(invitee_id) = invitee_for_operation(operation) else {
         tracing::warn!(
             operation_id = %operation.operation_id,
             realm_id = %operation.realm_id,
-            "ak.invite.create missing valid invitee DID"
+            "ak.invite.create missing valid invitee_id DID"
         );
         return;
     };
@@ -639,20 +640,20 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
     if crate::routing::spaces::space::realm_has_member_by_id(
         state,
         operation.realm_id.as_str(),
-        invitee.as_str(),
+        invitee_id.as_str(),
     )
     .await
     {
         tracing::debug!(
             invite_id = %invite_id,
-            invitee = %invitee.as_str(),
+            invitee_id = %invitee_id.as_str(),
             realm_id = %operation.realm_id,
-            "ak.invite.create projection skipped: invitee is already a member"
+            "ak.invite.create projection skipped: invitee_id is already a member"
         );
         return;
     }
 
-    let inviter = operation.context.sender.as_str();
+    let inviter_id = operation.context.sender.as_str();
     let expires_at = operation
         .payload
         .get("expires_at")
@@ -667,8 +668,8 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
         Ok(Some(existing)) => {
             let reconciles_private_delivery = existing.status == "pending"
                 && existing.realm_id == operation.realm_id.as_str()
-                && existing.inviter == inviter
-                && existing.invitee.as_deref() == Some(invitee.as_str())
+                && existing.inviter_id == inviter_id
+                && existing.invitee_id.as_deref() == Some(invitee_id.as_str())
                 && existing.invite_delivery_target == invite_delivery_target
                 && existing.introduction_evidence_digest == introduction_evidence_digest
                 && existing.third_party_invite.is_none()
@@ -678,13 +679,13 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
             if reconciles_private_delivery {
                 if !state
                     .projections()
-                    .invite_member_is_invited(operation.realm_id.as_str(), invitee.as_str())
+                    .invite_member_is_invited(operation.realm_id.as_str(), invitee_id.as_str())
                 {
-                    project_invite_creation(state, operation, invitee.as_str());
+                    project_invite_creation(state, operation, invitee_id.as_str());
                     touch_realm(state, operation.realm_id.as_str()).await;
                     tracing::info!(
                         invite_id = %invite_id,
-                        invitee = %invitee.as_str(),
+                        invitee_id = %invitee_id.as_str(),
                         realm_id = %operation.realm_id,
                         "reconciled shared ak.invite.create after private invite delivery"
                     );
@@ -717,7 +718,7 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
         .into_iter()
         .any(|existing| {
             existing.realm_id == operation.realm_id.as_str()
-                && existing.invitee.as_deref() == Some(invitee.as_str())
+                && existing.invitee_id.as_deref() == Some(invitee_id.as_str())
                 && existing.third_party_invite.is_none()
                 && matches!(
                     existing.status.as_str(),
@@ -730,7 +731,7 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
     if already_live {
         tracing::debug!(
             invite_id = %invite_id,
-            invitee = %invitee.as_str(),
+            invitee_id = %invitee_id.as_str(),
             realm_id = %operation.realm_id,
             "ak.invite.create projection skipped: live direct invite already exists"
         );
@@ -740,13 +741,13 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
     let invite_token = crate::routing::generate_invite_token(
         &invite_id,
         operation.realm_id.as_str(),
-        invitee.as_str(),
+        invitee_id.as_str(),
     );
     let record = RealmInviteRecord {
         invite_id: invite_id.clone(),
         realm_id: operation.realm_id.to_string(),
-        inviter: inviter.to_owned(),
-        invitee: Some(invitee.as_str().to_owned()),
+        inviter_id: inviter_id.to_owned(),
+        invitee_id: Some(invitee_id.as_str().to_owned()),
         invite_delivery_target,
         introduction_evidence_digest,
         third_party_invite: None,
@@ -767,10 +768,10 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
             // `leave -> invite`. The delivery address is private invite/join
             // input, not an effective member delivery binding; that binding is
             // materialized only by the later accepted join transition.
-            project_invite_creation(state, operation, invitee.as_str());
+            project_invite_creation(state, operation, invitee_id.as_str());
             tracing::info!(
                 invite_id = %invite_id,
-                invitee = %invitee.as_str(),
+                invitee_id = %invitee_id.as_str(),
                 realm_id = %operation.realm_id,
                 "projected invite via ak.invite.create event"
             );
@@ -780,10 +781,10 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
     }
 }
 
-fn project_invite_creation(state: &AppState, operation: &Operation, invitee: &str) {
+fn project_invite_creation(state: &AppState, operation: &Operation, invitee_id: &str) {
     state
         .projections()
-        .project_invite_creation(operation, invitee);
+        .project_invite_creation(operation, invitee_id);
 }
 
 /// `invite` is an Event-derived kind, so its only legitimate identity is the
@@ -853,11 +854,11 @@ fn claim_binding_matches(
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
     let binding = &claim.binding_proof;
-    let service_id = binding.verification_service_id.as_str();
+    let service_id = binding.verification_id.as_str();
     if record
         .third_party_invite
         .as_ref()
-        .map(|third_party| third_party.verification_service_id.as_str())
+        .map(|third_party| third_party.verification_id.as_str())
         != Some(service_id)
     {
         return false;
@@ -880,7 +881,7 @@ fn claim_binding_matches(
 fn invitee_for_operation(operation: &Operation) -> Option<DidCoreId> {
     operation
         .payload
-        .get("invitee")
+        .get("invitee_id")
         .or_else(|| operation.payload.get("actor_id"))
         .or_else(|| operation.payload.get("member"))
         .and_then(Value::as_str)
@@ -892,21 +893,21 @@ fn invitee_for_operation(operation: &Operation) -> Option<DidCoreId> {
 fn invite_delivery_target_for_operation(operation: &Operation) -> Option<Value> {
     let target = operation.payload.get("invite_delivery_target")?;
     let object = target.as_object()?;
-    let service_id = object.get("recipient_service_id").and_then(Value::as_str)?;
+    let service_id = object.get("recipient_id").and_then(Value::as_str)?;
     if arkret_identifiers::DidCoreId::new(service_id.to_owned()).is_err() {
         tracing::warn!(
             operation_id = %operation.operation_id,
-            "ak.invite.create supplied invalid invite_delivery_target.recipient_service_id"
+            "ak.invite.create supplied invalid invite_delivery_target.recipient_id"
         );
         return None;
     }
-    if let Some(service_kind) = object.get("recipient_service_kind").and_then(Value::as_str)
+    if let Some(service_kind) = object.get("recipient_kind").and_then(Value::as_str)
         && service_kind != "principal_server"
     {
         tracing::warn!(
             operation_id = %operation.operation_id,
             service_kind = %service_kind,
-            "ak.invite.create supplied invalid invite_delivery_target.recipient_service_kind"
+            "ak.invite.create supplied invalid invite_delivery_target.recipient_kind"
         );
         return None;
     }
@@ -1032,13 +1033,13 @@ mod tests {
         )
     }
 
-    fn cancel_event(invitee: Option<&str>) -> arkret_wire::Event {
+    fn cancel_event(invitee_id: Option<&str>) -> arkret_wire::Event {
         let mut payload = json!({
             "invite_id": CANCEL_INVITE,
             "target_state": "revoked",
         });
-        if let Some(invitee) = invitee {
-            payload["invitee"] = json!(invitee);
+        if let Some(invitee_id) = invitee_id {
+            payload["invitee_id"] = json!(invitee_id);
         }
         crate::test_event::raw_event(
             arkret_wire::EventKind::InviteCancel.as_str(),
@@ -1053,8 +1054,8 @@ mod tests {
         .unwrap()
     }
 
-    fn cancel_operation(invitee: Option<&str>) -> Operation {
-        let event = cancel_event(invitee);
+    fn cancel_operation(invitee_id: Option<&str>) -> Operation {
+        let event = cancel_event(invitee_id);
         arkret_event_draft::ProjectedEventOperation::from_accepted_event(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-000000000523",
@@ -1075,12 +1076,12 @@ mod tests {
             .put(RealmInviteRecord {
                 invite_id: CANCEL_INVITE.to_owned(),
                 realm_id: CANCEL_REALM.to_owned(),
-                inviter: CANCEL_INVITER.to_owned(),
-                invitee: (!third_party).then(|| CANCEL_INVITEE.to_owned()),
+                inviter_id: CANCEL_INVITER.to_owned(),
+                invitee_id: (!third_party).then(|| CANCEL_INVITEE.to_owned()),
                 invite_delivery_target: (!third_party).then(|| {
                     json!({
-                        "recipient_service_id": "ak:did_core:web:soland.example",
-                        "recipient_service_kind": "principal_server"
+                        "recipient_id": "ak:did_core:web:soland.example",
+                        "recipient_kind": "principal_server"
                     })
                 }),
                 introduction_evidence_digest: None,
@@ -1097,7 +1098,7 @@ mod tests {
                     lookup_table_ref: None,
                     pepper_id: None,
                     max_claims: 1,
-                    verification_service_id: DidCoreId::new(
+                    verification_id: DidCoreId::new(
                         "ak:did_core:web:verify.example".to_owned(),
                     )
                     .unwrap(),
@@ -1127,7 +1128,7 @@ mod tests {
                 .unwrap(),
                 RealmId::new(CANCEL_REALM).unwrap(),
                 arkret_wire::EventKind::InviteCreate.as_str(),
-                json!({"invite_id": CANCEL_INVITE, "invitee": CANCEL_INVITEE}),
+                json!({"invite_id": CANCEL_INVITE, "invitee_id": CANCEL_INVITEE}),
             );
             create.created_at = created_at;
             state
@@ -1153,7 +1154,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(record.status, "pending");
-        assert_eq!(record.invitee.as_deref(), expected_invitee);
+        assert_eq!(record.invitee_id.as_deref(), expected_invitee);
         assert_eq!(
             record.invite_delivery_target.is_some(),
             expected_invitee.is_some()
@@ -1168,11 +1169,11 @@ mod tests {
             ),
             Some(json!("pending"))
         );
-        if let Some(invitee) = expected_invitee {
+        if let Some(invitee_id) = expected_invitee {
             assert_eq!(
                 state.projections().cell_value(
                     &arkret_identifiers::CellRef::new(format!(
-                        "ak:cell:ak.component.member.state.v1:{invitee}"
+                        "ak:cell:ak.component.member.state.v1:{invitee_id}"
                     ))
                     .unwrap()
                 ),
@@ -1181,7 +1182,7 @@ mod tests {
             assert!(
                 state
                     .projections()
-                    .invite_member_is_invited(CANCEL_REALM, invitee)
+                    .invite_member_is_invited(CANCEL_REALM, invitee_id)
             );
         }
     }
@@ -1283,13 +1284,13 @@ mod tests {
         let realm_id =
             RealmId::new("ak:realm:ATgPyXyxa7nHOBDf8wno4jWA7fVMO63Mba64ZIYHssA9").unwrap();
         let invite_id = "ak:invite:ATDCCDepUfY2x8Ah8veGLjoJl1foYqzljIn1qxn7iDSg";
-        let inviter = "ak:did_core:web:alice.example";
-        let invitee = "ak:did_core:web:bob.example";
+        let inviter_id = "ak:did_core:web:alice.example";
+        let invitee_id = "ak:did_core:web:bob.example";
         let created_at = "2026-07-29T10:00:00Z".parse().unwrap();
         let expires_at = "2026-08-05T10:00:00Z".parse().unwrap();
         let delivery_target = json!({
-            "recipient_service_id": "ak:did_core:web:beta.example",
-            "recipient_service_kind": "principal_server"
+            "recipient_id": "ak:did_core:web:beta.example",
+            "recipient_kind": "principal_server"
         });
         let evidence_digest = format!("sha256:{}", "a".repeat(64));
         state
@@ -1297,8 +1298,8 @@ mod tests {
             .put(RealmInviteRecord {
                 invite_id: invite_id.to_owned(),
                 realm_id: realm_id.to_string(),
-                inviter: inviter.to_owned(),
-                invitee: Some(invitee.to_owned()),
+                inviter_id: inviter_id.to_owned(),
+                invitee_id: Some(invitee_id.to_owned()),
                 invite_delivery_target: Some(delivery_target.clone()),
                 introduction_evidence_digest: Some(evidence_digest.clone()),
                 third_party_invite: None,
@@ -1314,7 +1315,7 @@ mod tests {
         assert!(
             !state
                 .projections()
-                .invite_member_is_invited(realm_id.as_str(), invitee)
+                .invite_member_is_invited(realm_id.as_str(), invitee_id)
         );
 
         let mut event = crate::test_event::raw_event_at(
@@ -1326,7 +1327,7 @@ mod tests {
             0,
             arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
             json!({
-                "invitee": invitee,
+                "invitee_id": invitee_id,
                 "invite_delivery_target": delivery_target,
                 "introduction_evidence_digest": evidence_digest,
                 "expires_at": "2026-08-05T10:00:00.000Z"
@@ -1354,7 +1355,7 @@ mod tests {
         assert!(
             state
                 .projections()
-                .invite_member_is_invited(realm_id.as_str(), invitee)
+                .invite_member_is_invited(realm_id.as_str(), invitee_id)
         );
         let retained = state.realm_invites().get(invite_id).await.unwrap().unwrap();
         assert_eq!(
@@ -1375,15 +1376,15 @@ mod tests {
         let realm_id =
             RealmId::new("ak:realm:Ad-NSApg_uD02vD0do9fZZZJ1Zmt7NwwVBcwb04N9zN6").unwrap();
         let invite_id = "ak:invite:AdC0j3vbvw3GtVXF8ur0n33PvcSmEMMhI4ROVwQk3ypg";
-        let invitee = "ak:did_core:web:bob.example";
+        let invitee_id = "ak:did_core:web:bob.example";
         let created_at = "2026-07-29T10:00:00Z".parse().unwrap();
         state
             .realm_invites()
             .put(RealmInviteRecord {
                 invite_id: invite_id.to_owned(),
                 realm_id: realm_id.to_string(),
-                inviter: "ak:did_core:web:mallory.example".to_owned(),
-                invitee: Some(invitee.to_owned()),
+                inviter_id: "ak:did_core:web:mallory.example".to_owned(),
+                invitee_id: Some(invitee_id.to_owned()),
                 invite_delivery_target: None,
                 introduction_evidence_digest: None,
                 third_party_invite: None,
@@ -1404,7 +1405,7 @@ mod tests {
             realm_id.clone(),
             arkret_wire::EventKind::InviteCreate.as_str(),
             json!({
-                "invitee": invitee,
+                "invitee_id": invitee_id,
                 "expires_at": "2026-08-05T10:00:00.000Z"
             }),
         );
@@ -1416,7 +1417,7 @@ mod tests {
         assert!(
             !state
                 .projections()
-                .invite_member_is_invited(realm_id.as_str(), invitee)
+                .invite_member_is_invited(realm_id.as_str(), invitee_id)
         );
     }
 }

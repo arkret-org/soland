@@ -255,7 +255,7 @@ async fn resolve_handle_from_configured_peer(
             Err(error) => {
                 tracing::debug!(
                     peer_url = %peer.url,
-                    peer_service_id = %peer.service_id,
+                    peer_id = %peer.service_id,
                     authority = %lookup.authority,
                     error = %error,
                     "remote directory resolve-handle rejected or failed"
@@ -285,7 +285,7 @@ fn peer_matches_handle_authority(peer_url: &str, authority: &str) -> bool {
 async fn fetch_remote_handle_from_peer(
     state: &AppState,
     peer_url: &str,
-    peer_service_id: &str,
+    peer_id: &str,
     body: &DirectoryResolveHandleRequestBody,
     lookup: &HandleLookup,
 ) -> Result<Option<DirectoryHandleResolutionOutcome>, AppError> {
@@ -332,7 +332,7 @@ async fn fetch_remote_handle_from_peer(
     if !status.is_success() {
         tracing::debug!(
             status = %status,
-            peer_service_id = %peer_service_id,
+            peer_id = %peer_id,
             authority = %lookup.authority,
             "remote directory resolve-handle returned non-success"
         );
@@ -342,7 +342,7 @@ async fn fetch_remote_handle_from_peer(
         serde_json::from_str(&text).map_err(|error| {
             AppError::internal(format!("parse remote resolve-handle response: {error}"))
         })?;
-    validate_remote_handle_resolution(state, peer_service_id, &remote_body, lookup, &outcome)
+    validate_remote_handle_resolution(state, peer_id, &remote_body, lookup, &outcome)
         .await
         .map_err(|reason| {
             AppError::capability_denied(reason).with_wire_code("handle_unverified")
@@ -350,9 +350,9 @@ async fn fetch_remote_handle_from_peer(
     if !outcome
         .via_services
         .iter()
-        .any(|service| service == peer_service_id)
+        .any(|service| service == peer_id)
     {
-        outcome.via_services.push(peer_service_id.to_owned());
+        outcome.via_services.push(peer_id.to_owned());
     }
     if let Some(claim) = outcome.handle_claim.as_ref()
         && let Ok(envelope) = serde_json::to_value(claim)
@@ -364,7 +364,7 @@ async fn fetch_remote_handle_from_peer(
 
 async fn validate_remote_handle_resolution(
     state: &AppState,
-    peer_service_id: &str,
+    peer_id: &str,
     body: &DirectoryResolveHandleRequestBody,
     lookup: &HandleLookup,
     outcome: &DirectoryHandleResolutionOutcome,
@@ -375,7 +375,7 @@ async fn validate_remote_handle_resolution(
     if outcome.handle != lookup.canonical {
         return Err("remote handle resolution handle mismatch".to_owned());
     }
-    let audience = resolve_handle_audience(body, peer_service_id);
+    let audience = resolve_handle_audience(body, peer_id);
     if outcome.audience.as_deref() != Some(audience.as_str()) {
         return Err("remote handle resolution audience mismatch".to_owned());
     }
@@ -388,12 +388,12 @@ async fn validate_remote_handle_resolution(
         .handle_claim
         .as_ref()
         .ok_or_else(|| "remote handle resolution requires handle_claim".to_owned())?;
-    let expected_peer_id = DidCoreId::new(peer_service_id.to_owned())
+    let expected_peer_id = DidCoreId::new(peer_id.to_owned())
         .map_err(|error| format!("invalid peer principal id: {error}"))?;
     claim
         .validate_remote_resolution(Some(audience.as_str()), Some(&expected_peer_id), now())
         .map_err(|error| format!("remote handle claim invalid: {error}"))?;
-    verify_remote_handle_claim_proof(state, peer_service_id, audience.as_str(), claim).await?;
+    verify_remote_handle_claim_proof(state, peer_id, audience.as_str(), claim).await?;
     if claim.handle_canonical() != Some(lookup.canonical.as_str()) {
         return Err("remote handle claim handle mismatch".to_owned());
     }
@@ -401,30 +401,30 @@ async fn validate_remote_handle_resolution(
         return Err("remote handle claim subject mismatch".to_owned());
     }
     if claim
-        .issuer_service_id
+        .issuer_id
         .as_ref()
         .map(DidCoreId::as_str)
         .unwrap_or_default()
-        != peer_service_id
+        != peer_id
     {
         return Err("remote handle claim issuer service mismatch".to_owned());
     }
     if claim
         .member_delivery_binding
         .as_ref()
-        .map(|binding| binding.recipient_service_id.as_str())
-        != Some(peer_service_id)
+        .map(|binding| binding.recipient_id.as_str())
+        != Some(peer_id)
     {
         return Err("remote handle claim delivery binding service mismatch".to_owned());
     }
     if outcome
         .member_delivery_binding
         .as_ref()
-        .map(|binding| &binding.recipient_service_id)
+        .map(|binding| &binding.recipient_id)
         != claim
             .member_delivery_binding
             .as_ref()
-            .map(|binding| &binding.recipient_service_id)
+            .map(|binding| &binding.recipient_id)
     {
         return Err("remote handle top-level delivery binding mismatch".to_owned());
     }
@@ -433,7 +433,7 @@ async fn validate_remote_handle_resolution(
 
 async fn verify_remote_handle_claim_proof(
     state: &AppState,
-    peer_service_id: &str,
+    peer_id: &str,
     expected_audience: &str,
     claim: &SdkHandleClaim,
 ) -> Result<(), String> {
@@ -457,7 +457,7 @@ async fn verify_remote_handle_claim_proof(
             continue;
         }
         if let Err(error) = crate::jws_verify::validate_verification_method_controller(
-            peer_service_id,
+            peer_id,
             &proof.verification_method,
         ) {
             last_error = Some(error);
@@ -468,14 +468,14 @@ async fn verify_remote_handle_claim_proof(
                 &canonical_bytes,
                 &proof.jws,
                 &proof.verification_method,
-                peer_service_id,
+                peer_id,
             )
         } else {
             crate::jws_verify::verify_did_controlled_jws_async(
                 &canonical_bytes,
                 &proof.jws,
                 &proof.verification_method,
-                peer_service_id,
+                peer_id,
                 state,
             )
             .await
@@ -548,10 +548,10 @@ pub(super) async fn resolve_handle(
             let handle_claim =
                 signed_handle_claim(state, &lookup.canonical, &principal_id, &audience, true)
                     .await?;
-            let recipient_service_id = handle_claim
+            let recipient_id = handle_claim
                 .member_delivery_binding
                 .as_ref()
-                .map(|binding| binding.recipient_service_id.as_str())
+                .map(|binding| binding.recipient_id.as_str())
                 .unwrap_or(state.service_id().as_str());
             let resolved_by = arkret_identifiers::DidCoreId::new(state.service_id().clone()).ok();
             if !crate::routing::invites::directory_handle_claim_resolve_allowed(
@@ -559,7 +559,7 @@ pub(super) async fn resolve_handle(
                 body.intent,
                 body.requester.as_ref(),
                 &principal_id,
-                recipient_service_id,
+                recipient_id,
                 state.service_id().as_str(),
                 &handle_claim,
                 resolved_by,
@@ -671,8 +671,8 @@ pub(super) async fn signed_handle_claim(
     let created_at = now();
     let expires_at = created_at + chrono::Duration::hours(24);
     let member_delivery_binding = DeliveryBindingHint {
-        recipient_service_id: signer_id.clone(),
-        recipient_service_kind: RecipientServiceKind::PrincipalServer,
+        recipient_id: signer_id.clone(),
+        recipient_kind: RecipientServiceKind::PrincipalServer,
         binding_source: HandleHintBindingSource::Explicit,
         delivery_modes: BTreeSet::from([
             DeliveryMode::Events,
@@ -690,7 +690,7 @@ pub(super) async fn signed_handle_claim(
         handle_aliases: vec![handle_alias],
         subject: Some(subject),
         issuer: Some(signer_id.clone()),
-        issuer_service_id: Some(signer_id),
+        issuer_id: Some(signer_id),
         binding_state: Some(HandleBindingState::Verified),
         claim_kind: Some(HandleClaimKind::HandleBinding),
         visibility: Some(HandleVisibility::Public),
@@ -1047,9 +1047,8 @@ pub(super) fn subject_handle_claim_visible(
         return false;
     }
     let issuer = claim.get("issuer").and_then(Value::as_str);
-    let issuer_service_id = claim.get("issuer_service_id").and_then(Value::as_str);
-    if issuer != Some(state.service_id().as_str())
-        && issuer_service_id != Some(state.service_id().as_str())
+    let issuer_id = claim.get("issuer_id").and_then(Value::as_str);
+    if issuer != Some(state.service_id().as_str()) && issuer_id != Some(state.service_id().as_str())
     {
         return false;
     }

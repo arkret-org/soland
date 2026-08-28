@@ -12,7 +12,7 @@ use soland_services::ServiceErrorKind;
 
 use super::peer::{
     cross_domain_replay, schema_violation, source_service_id_from_request,
-    trusted_account_authority_service_id, validate_peer_request,
+    trusted_account_authority_id, validate_peer_request,
 };
 use crate::state::AppState;
 
@@ -119,9 +119,9 @@ pub(super) async fn check_device_revocation_gate(
     // Authentication and transport binding precede every principal/device
     // lookup. A caller must not use this operation as an account oracle.
     validate_peer_request(state, req, true).await?;
-    let source_service_id = source_service_id_from_request(req)?;
-    let configured_authority = trusted_account_authority_service_id(state).await?;
-    if source_service_id != configured_authority.as_str() {
+    let source_id = source_service_id_from_request(req)?;
+    let configured_authority = trusted_account_authority_id(state).await?;
+    if source_id != configured_authority.as_str() {
         return Err(AppError::capability_denied(
             "device revocation gate caller is not the configured Account Authority",
         ));

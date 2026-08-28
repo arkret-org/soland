@@ -488,7 +488,7 @@ impl ProjectionState {
                 let payload = operation
                     .typed_payload::<arkret_wire::event_spec::InviteCreate>()
                     .map_err(|_| "gate_check_failed")?;
-                (Some(payload.invitee.to_string()), true)
+                (Some(payload.invitee_id.to_string()), true)
             }
             Some(arkret_wire::EventKind::InviteAccept) => {
                 (Some(operation.context.sender.to_string()), true)

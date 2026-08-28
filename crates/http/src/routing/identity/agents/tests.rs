@@ -299,7 +299,7 @@ fn key_pair_request_body(
         "agent_id": agent_id.as_str(),
         "controller_id": controller_id.as_str(),
         "requested_scope": requested_scope,
-        "verifier_service_id": service_id,
+        "verifier_id": service_id,
         "audience": "ak.gate.account.command.pair_agent_key.v1",
         "challenge": "pairing-challenge-0001",
         "issued_at": "2026-07-06T00:00:00.000Z",

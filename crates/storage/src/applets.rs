@@ -21,7 +21,7 @@ pub trait AppletStore: Send + Sync {
     async fn complete_transaction_replay(
         &self,
         applet_id: &str,
-        source_service_id: &str,
+        source_id: &str,
         idempotency_key: &str,
         outcome: Value,
     ) -> PersistenceResult<()>;
@@ -47,7 +47,7 @@ pub struct AppletAuthoringPreviewRecord {
 #[derive(Clone, Debug)]
 pub struct AppletTransactionReplayRecord {
     pub applet_id: arkret_wire::AppletId,
-    pub source_service_id: String,
+    pub source_id: String,
     pub idempotency_key: String,
     pub delivery_authentication_record_digest: String,
     pub request_digest: String,
@@ -66,8 +66,8 @@ pub fn applet_registration_select_sql(suffix: &str) -> String {
 }
 #[doc(hidden)]
 pub fn applet_transaction_replay_select_sql() -> &'static str {
-    "SELECT applet_id, source_service_id, idempotency_key, delivery_authentication_record_digest, request_digest, \
+    "SELECT applet_id, source_id, idempotency_key, delivery_authentication_record_digest, request_digest, \
      outcome, received_at, completed_at \
      FROM applet_transactions \
-     WHERE applet_id = $1 AND source_service_id = $2 AND idempotency_key = $3"
+     WHERE applet_id = $1 AND source_id = $2 AND idempotency_key = $3"
 }

@@ -62,7 +62,7 @@ impl NotificationStore for MemoryNotificationStore {
         let mut data = self.account_notifications.lock();
         if let Some(existing) = data.iter_mut().find(|candidate| {
             candidate.record.controller_account_id == stored.record.controller_account_id
-                && candidate.record.recipient_service_id == stored.record.recipient_service_id
+                && candidate.record.recipient_id == stored.record.recipient_id
                 && candidate.record.source_account_artifact_id
                     == stored.record.source_account_artifact_id
         }) {
@@ -89,7 +89,7 @@ impl NotificationStore for MemoryNotificationStore {
     async fn list_for_account(
         &self,
         controller_account_id: &str,
-        recipient_service_id: &str,
+        recipient_id: &str,
         after_position: Option<i64>,
     ) -> PersistenceResult<Vec<StoredAccountNotificationDelta>> {
         let mut rows = self
@@ -98,7 +98,7 @@ impl NotificationStore for MemoryNotificationStore {
             .iter()
             .filter(|record| {
                 record.record.controller_account_id == controller_account_id
-                    && record.record.recipient_service_id.as_str() == recipient_service_id
+                    && record.record.recipient_id.as_str() == recipient_id
                     && after_position.is_none_or(|after| record.projection_position > after)
             })
             .cloned()

@@ -108,12 +108,12 @@ async fn verify_inbound_peer_http_signature_inner(
         validate_federation_request_binding(state.config().trust_domain.as_str(), req)?;
     }
 
-    let source_service_id = required_header(req, "source-service-id")?;
-    let destination_service_id = required_header(req, "destination-service-id")?;
+    let source_id = required_header(req, "source-service-id")?;
+    let destination_id = required_header(req, "destination-service-id")?;
     let _source_trust_domain = required_header(req, "source-trust-domain")?;
     let destination_trust_domain = required_header(req, "destination-trust-domain")?;
 
-    if destination_service_id != *state.service_id() {
+    if destination_id != *state.service_id() {
         return Err(signature_error(
             "Destination-Service-ID does not match this service",
         ));
@@ -128,11 +128,10 @@ async fn verify_inbound_peer_http_signature_inner(
     // deriving and comparing a domain from the DID would reject valid peers.
     let target_uri = signature_target_uri(req, state);
     let authority = signature_authority(req, state);
-    let endpoint_digest =
-        validate_destination_authority(state, req, &authority, &destination_service_id)?;
+    let endpoint_digest = validate_destination_authority(state, req, &authority, &destination_id)?;
     let signature_input = http_signature::parse_signature_input_header(req)
         .map_err(|error| federation_verification_error(error, "outer"))?;
-    validate_signature_input(&signature_input, &source_service_id, "outer")?;
+    validate_signature_input(&signature_input, &source_id, "outer")?;
     let idempotency_key = req
         .headers()
         .get("idempotency-key")
@@ -140,7 +139,7 @@ async fn verify_inbound_peer_http_signature_inner(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let source_verifying_key =
-        verifying_key_for_service_id(state, &source_service_id, &signature_input.key_id).await?;
+        verifying_key_for_service_id(state, &source_id, &signature_input.key_id).await?;
     let mut required_components = vec![
         Component::Method,
         Component::TargetUri,
@@ -185,14 +184,14 @@ async fn verify_inbound_peer_http_signature_inner(
         ),
     };
     verification.map_err(|error| federation_verification_error(error, "outer"))?;
-    state.install_federation_peer_verifying_key(None, &source_service_id, source_verifying_key);
+    state.install_federation_peer_verifying_key(None, &source_id, source_verifying_key);
     state.install_federation_peer_verification_method_key(
         None,
         &signature_input.key_id,
         source_verifying_key,
     );
 
-    if crate::security::federation_origin_denied(&source_service_id) {
+    if crate::security::federation_origin_denied(&source_id) {
         return Err(signature_error("peer is denied by local federation policy"));
     }
 
@@ -201,7 +200,7 @@ async fn verify_inbound_peer_http_signature_inner(
 
 /// federation.md §3.2 line 105-106: verify the signed `@authority` host matches
 /// the endpoint registered for the Destination-Service-ID. Because the inbound
-/// path already enforces `destination_service_id == this service`, the
+/// path already enforces `destination_id == this service`, the
 /// authoritative endpoint is this service's own published `public_base_url`.
 ///
 /// Returns the `Destination-Service-Endpoint-Digest` to bind into the transcript
@@ -212,7 +211,7 @@ fn validate_destination_authority(
     state: &AppState,
     req: &Request,
     authority: &str,
-    destination_service_id: &str,
+    destination_id: &str,
 ) -> Result<Option<String>, AppError> {
     // The registered endpoint authority for this (destination) service.
     if let Some(expected_authority) = public_base_url_authority(state)
@@ -247,7 +246,7 @@ fn validate_destination_authority(
             ));
         }
         // Sanity: the digest must be for *this* service's destination DID.
-        debug_assert_eq!(destination_service_id, state.service_id());
+        debug_assert_eq!(destination_id, state.service_id());
         return Ok(Some(observed_digest));
     }
     Ok(None)

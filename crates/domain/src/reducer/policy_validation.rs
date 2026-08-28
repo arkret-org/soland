@@ -36,8 +36,8 @@ pub(crate) fn enforce_delivery_binding_policy(
         .get("binding_source")
         .and_then(Value::as_str)
         .unwrap_or("");
-    let recipient_service_id = binding
-        .get("recipient_service_id")
+    let recipient_id = binding
+        .get("recipient_id")
         .and_then(Value::as_str)
         .unwrap_or("");
 
@@ -74,7 +74,7 @@ pub(crate) fn enforce_delivery_binding_policy(
         .map(|arr| arr.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
     let unrestricted_sentinel = allowed_recipients == ["*"];
-    if !unrestricted_sentinel && !allowed_recipients.contains(&recipient_service_id) {
+    if !unrestricted_sentinel && !allowed_recipients.contains(&recipient_id) {
         return Err("recipient_service_not_allowed");
     }
 

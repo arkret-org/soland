@@ -54,7 +54,7 @@ struct HandleClaimRow {
     #[diesel(sql_type = Text)]
     issuer: String,
     #[diesel(sql_type = Nullable<Text>)]
-    issuer_service_id: Option<String>,
+    issuer_id: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     audience: Option<String>,
     #[diesel(sql_type = Text)]
@@ -75,7 +75,7 @@ impl From<HandleClaimRow> for HandleClaimEvidenceRecord {
             digest: row.digest,
             subject_id: row.subject_id,
             issuer: row.issuer,
-            issuer_service_id: row.issuer_service_id,
+            issuer_id: row.issuer_id,
             audience: row.audience,
             binding_state: row.binding_state,
             visibility: row.visibility,
@@ -86,7 +86,7 @@ impl From<HandleClaimRow> for HandleClaimEvidenceRecord {
     }
 }
 
-const HANDLE_CLAIM_COLUMNS: &str = "digest, subject_id, issuer, issuer_service_id, audience, \
+const HANDLE_CLAIM_COLUMNS: &str = "digest, subject_id, issuer, issuer_id, audience, \
      binding_state, visibility, expires_at, revoked, envelope";
 
 #[async_trait]
@@ -148,12 +148,12 @@ impl MemberIdentityStore for PgMemberIdentityStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO member_identity_handle_claims \
-             (digest, subject_id, issuer, issuer_service_id, audience, binding_state, visibility, \
+             (digest, subject_id, issuer, issuer_id, audience, binding_state, visibility, \
               expires_at, revoked, envelope) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
              ON CONFLICT (subject_id, digest) DO UPDATE SET \
                 issuer = EXCLUDED.issuer, \
-                issuer_service_id = EXCLUDED.issuer_service_id, \
+                issuer_id = EXCLUDED.issuer_id, \
                 audience = EXCLUDED.audience, \
                 binding_state = EXCLUDED.binding_state, \
                 visibility = EXCLUDED.visibility, \
@@ -164,7 +164,7 @@ impl MemberIdentityStore for PgMemberIdentityStore {
         .bind::<Text, _>(&record.digest)
         .bind::<Text, _>(&record.subject_id)
         .bind::<Text, _>(&record.issuer)
-        .bind::<Nullable<Text>, _>(&record.issuer_service_id)
+        .bind::<Nullable<Text>, _>(&record.issuer_id)
         .bind::<Nullable<Text>, _>(&record.audience)
         .bind::<Text, _>(&record.binding_state)
         .bind::<Nullable<Text>, _>(&record.visibility)

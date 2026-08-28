@@ -223,14 +223,14 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
 
     async fn get_peer_claim(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
     ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
         Ok(self
             .state
             .lock()
             .peer_claims
-            .get(&(source_service_id.to_owned(), claim_request_id.to_owned()))
+            .get(&(source_id.to_owned(), claim_request_id.to_owned()))
             .cloned())
     }
 
@@ -287,7 +287,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         };
         let mut state = self.state.lock();
         let ledger_key = (
-            attempt.ledger.source_service_id.clone(),
+            attempt.ledger.source_id.clone(),
             attempt.ledger.claim_request_id.clone(),
         );
         if let Some(existing) = state.peer_claims.get(&ledger_key) {
@@ -349,10 +349,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             ));
         }
         let mut state = self.state.lock();
-        let key = (
-            record.source_service_id.clone(),
-            record.claim_request_id.clone(),
-        );
+        let key = (record.source_id.clone(), record.claim_request_id.clone());
         if let Some(existing) = state.peer_claims.get(&key) {
             return Ok(PeerKeyPackageClaimLedgerWriteResult::Existing(Box::new(
                 existing.clone(),
@@ -364,7 +361,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
 
     async fn attach_peer_claim_terminal_receipt(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         terminal_receipt: &Value,
@@ -373,7 +370,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         let mut state = self.state.lock();
         let Some(record) = state
             .peer_claims
-            .get_mut(&(source_service_id.to_owned(), claim_request_id.to_owned()))
+            .get_mut(&(source_id.to_owned(), claim_request_id.to_owned()))
         else {
             return Ok(None);
         };
@@ -389,7 +386,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
 
     async fn attach_peer_claim_consume_receipt(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         consume_receipt: &Value,
@@ -398,7 +395,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         let mut state = self.state.lock();
         let Some(record) = state
             .peer_claims
-            .get_mut(&(source_service_id.to_owned(), claim_request_id.to_owned()))
+            .get_mut(&(source_id.to_owned(), claim_request_id.to_owned()))
         else {
             return Ok(None);
         };
@@ -425,7 +422,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
 
     async fn transition_peer_claim_consumed(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         expected_outcome: &Value,
@@ -435,7 +432,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         let mut state = self.state.lock();
         let Some(record) = state
             .peer_claims
-            .get_mut(&(source_service_id.to_owned(), claim_request_id.to_owned()))
+            .get_mut(&(source_id.to_owned(), claim_request_id.to_owned()))
         else {
             return Ok(None);
         };
@@ -460,7 +457,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
 
     async fn transition_peer_claim_terminal(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         expected_outcome: &Value,
@@ -474,7 +471,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         let mut state = self.state.lock();
         let Some(record) = state
             .peer_claims
-            .get_mut(&(source_service_id.to_owned(), claim_request_id.to_owned()))
+            .get_mut(&(source_id.to_owned(), claim_request_id.to_owned()))
         else {
             return Ok(None);
         };
@@ -727,7 +724,7 @@ mod tests {
 
     fn ledger(outcome: &str) -> PeerKeyPackageClaimLedgerRecord {
         PeerKeyPackageClaimLedgerRecord {
-            source_service_id: "ak:did_core:web:alpha.example".to_owned(),
+            source_id: "ak:did_core:web:alpha.example".to_owned(),
             claim_request_id: "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
             request_digest:
                 "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_owned(),
@@ -925,7 +922,7 @@ mod tests {
         let receipt = serde_json::json!({"receipt": "last-resort-consume-ack"});
         let consumed_audit = store
             .attach_peer_claim_consume_receipt(
-                &first.source_service_id,
+                &first.source_id,
                 &first.claim_request_id,
                 &first.request_digest,
                 &receipt,

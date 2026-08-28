@@ -728,7 +728,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 PersistenceError::Conflict(format!("schema_violation: {error}"))
             })?;
             let existing_id = staged_outbox.values().find_map(|existing| {
-                (existing.peer_service_id == record.peer_service_id
+                (existing.peer_id == record.peer_id
                     && existing.idempotency_key == record.idempotency_key)
                     .then(|| existing.id.clone())
             });
@@ -981,7 +981,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                     PersistenceError::Conflict(format!("schema_violation: {error}"))
                 })?;
                 let existing_id = staged_outbox.values().find_map(|existing| {
-                    (existing.peer_service_id == record.peer_service_id
+                    (existing.peer_id == record.peer_id
                         && existing.idempotency_key == record.idempotency_key)
                         .then(|| existing.id.clone())
                 });

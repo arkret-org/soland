@@ -761,12 +761,12 @@ async fn invites(
             || realm_filter
                 .as_deref()
                 .is_some_and(|realm_id| invite.realm_id.as_str() != realm_id)
-            || invite.invitee.as_deref() != Some(subject.as_str())
+            || invite.invitee_id.as_deref() != Some(subject.as_str())
             || holder_delivery_ids
                 .as_ref()
                 .is_some_and(|ids| !ids.contains(&invite.invite_id))
             || (!subject_is_self
-                && invite.inviter.as_str() != session.actor.as_str()
+                && invite.inviter_id.as_str() != session.actor.as_str()
                 && !caller_owns_realm)
             || invite
                 .expires_at
@@ -806,10 +806,10 @@ fn invite_record_to_sdk(
             .map_err(|error| AppError::internal(error.to_string()))?,
         realm_id: RealmId::new(invite.realm_id.clone())
             .map_err(|error| AppError::internal(error.to_string()))?,
-        inviter: arkret_wire::DidCoreId::new(invite.inviter.clone())
+        inviter_id: arkret_wire::DidCoreId::new(invite.inviter_id.clone())
             .map_err(|error| AppError::internal(error.to_string()))?,
-        invitee: invite
-            .invitee
+        invitee_id: invite
+            .invitee_id
             .map(arkret_wire::DidCoreId::new)
             .transpose()
             .map_err(|error| AppError::internal(error.to_string()))?,

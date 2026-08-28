@@ -1149,10 +1149,10 @@ async fn event_delivery_status(
             state,
             &session,
             binding,
-            delivery.delivery.peer_service_id.as_str(),
+            delivery.delivery.peer_id.as_str(),
         )
         .await;
-        let service_id = can_read_service_id.then(|| delivery.delivery.peer_service_id.clone());
+        let service_id = can_read_service_id.then(|| delivery.delivery.peer_id.clone());
         let target = EventDeliveryTargetStatus {
             target_id: target_id.clone(),
             status,
@@ -1179,7 +1179,7 @@ async fn caller_can_read_delivery_target_service(
     state: &AppState,
     session: &SessionRecord,
     binding: &soland_services::federation::RealmFanoutBinding,
-    recipient_service_id: &str,
+    recipient_id: &str,
 ) -> bool {
     for witness in &binding.authority_witnesses {
         let witness_is_current = state
@@ -1189,7 +1189,7 @@ async fn caller_can_read_delivery_target_service(
             .is_some_and(|member| {
                 member.state == "join"
                     && member.delivery_status.as_deref() == Some("routable")
-                    && member.recipient_service_id.as_deref() == Some(recipient_service_id)
+                    && member.recipient_id.as_deref() == Some(recipient_id)
                     && member.membership_event_ref.as_deref()
                         == Some(witness.membership_event_ref.as_str())
                     && member.delivery_binding_frontier.as_deref()
@@ -1273,7 +1273,7 @@ async fn verified_contact_mirror_event(
         || contact.requester != event.actor_id.as_str()
         || contact.target != session.actor
         || contact.request_event_ref.as_deref() != Some(event.event_id.as_str())
-        || contact.peer_service_id.as_deref() != Some(mirror.issuer_service_id.as_str())
+        || contact.peer_id.as_deref() != Some(mirror.issuer_id.as_str())
     {
         return Ok(None);
     }

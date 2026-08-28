@@ -194,7 +194,7 @@ fn invite_delivery_read_model_projection_surfaces_via_authz_invites() {
 
 async fn invite_delivery_read_model_projection_surfaces_via_authz_invites_body() {
     // A directed `ak.invite.create` atomically creates the invite lifecycle
-    // and the invitee's membership proposal. The invitee must then see the
+    // and the invitee_id's membership proposal. The invitee_id must then see the
     // pending invitation through `GET /authz/invites`.
     let state = soland_test_support::app_state(test_config());
     // dev-login auto-registers the actor; we don't need /account/register's
@@ -233,9 +233,9 @@ async fn invite_delivery_read_model_projection_surfaces_via_authz_invites_body()
     // Submit Alice's canonical directed invite.
     let event_id = "ak:event:ARdpHJI61pXl2eDxXq5o-JwwZDx5_mx7XTPBZMba03_p";
     let payload = serde_json::json!({
-        "invitee": fixture_actor_core_id(bob_did),
+        "invitee_id": fixture_actor_core_id(bob_did),
         "invite_delivery_target": {
-            "recipient_service_id": state.service_id(),
+            "recipient_id": state.service_id(),
             "service_resolution": {
                 "current_record_url": format!(
                     "https://soland.local{}",
@@ -244,7 +244,7 @@ async fn invite_delivery_read_model_projection_surfaces_via_authz_invites_body()
                     )
                 )
             },
-            "recipient_service_kind": "principal_server"
+            "recipient_kind": "principal_server"
         },
         "introduction_evidence_digest": format!("sha256:{}", "1".repeat(64)),
         "expires_at": "2099-01-01T00:00:00.000Z"
@@ -304,7 +304,7 @@ async fn invite_delivery_read_model_projection_surfaces_via_authz_invites_body()
             arkret_models_collaboration::governance::invite_addressing::InviteDeliveryEntry {
                 invite_id: invite_id.clone(),
                 realm_id: RealmId::new(realm_id.clone()).unwrap(),
-                inviter: fixture_actor_core_id(alice_did),
+                inviter_id: fixture_actor_core_id(alice_did),
                 invite_token: projected.invite_token,
                 received_at,
                 expires_at: projected
@@ -343,7 +343,7 @@ async fn invite_delivery_read_model_projection_surfaces_via_authz_invites_body()
             // ak.schema.invite.v1: the state field is `state`, not `status`.
             invite["realm_id"].as_str() == Some(realm_id.as_str())
                 && invite["id"].as_str() == Some(invite_id.as_str())
-                && invite["invitee"].as_str() == Some(fixture_actor_core_id(bob_did).as_str())
+                && invite["invitee_id"].as_str() == Some(fixture_actor_core_id(bob_did).as_str())
                 && invite["state"].as_str() == Some("pending")
         }),
         "expected pending invite for bob in {realm_id} (got: {invites:?})"
@@ -424,7 +424,7 @@ fn server_describe_advertises_account_authority_and_oidc_method_when_configured(
 async fn server_describe_advertises_account_authority_and_oidc_method_when_configured_body() {
     let mut config = test_config();
     config.account_authority_url = Some("https://auth.local.host".to_owned());
-    config.account_authority_service_id =
+    config.account_authority_id =
         Some("did:key:z6Mkfmm57fsb6VL7zVusP8zeA9SYkCKdvUhby2G7Yh8vvQ1P".to_owned());
     config.oidc_client_id = Some("01GFWR28C4KNE04WG3HKXB7C9R".to_owned());
     let service = app_from_state(soland_test_support::app_state(config));

@@ -321,9 +321,9 @@ pub(crate) fn device_inventory_to_json(
     })
 }
 
-pub(crate) fn generate_invite_token(invite_id: &str, realm_id: &str, invitee: &str) -> String {
+pub(crate) fn generate_invite_token(invite_id: &str, realm_id: &str, invitee_id: &str) -> String {
     format!(
         "ak:invite-token:{}",
-        sha256_hex(format!("{invite_id}:{realm_id}:{invitee}").as_bytes())
+        sha256_hex(format!("{invite_id}:{realm_id}:{invitee_id}").as_bytes())
     )
 }

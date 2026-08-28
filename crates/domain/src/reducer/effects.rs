@@ -65,7 +65,7 @@ pub enum ProjectionEffect {
         invite_id: String,
         realm_id: String,
         state: String,
-        invitee: Option<String>,
+        invitee_id: Option<String>,
     },
     KeyBackupActiveSeriesProjected {
         actor_id: String,
@@ -289,7 +289,7 @@ pub enum ProjectionEffect {
     /// `realm_policy_servers` structured cache.
     RealmPolicyServerProjected {
         realm_id: String,
-        policy_server_service_id: arkret_wire::DidCoreId,
+        policy_server_id: arkret_wire::DidCoreId,
     },
     RealmPolicyServerTombstoned {
         realm_id: String,

@@ -207,7 +207,7 @@ mod tests {
                 account_authority_id: record.account_authority_id.clone(),
                 account_id: record.account_id.clone(),
                 status_seq: record.status_seq,
-                receiver_service_id: DidCoreId::new("ak:did_core:web:receiver.example").unwrap(),
+                receiver_id: DidCoreId::new("ak:did_core:web:receiver.example").unwrap(),
                 accepted_at: format!("2026-08-16T00:01:{suffix:02}.000Z")
                     .parse()
                     .unwrap(),

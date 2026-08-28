@@ -35,8 +35,8 @@ impl ProjectionState {
             return rejected("invite_create_event_id_required");
         };
         let realm_id = operation.realm_id.to_string();
-        let inviter = operation.context.sender.to_string();
-        if arkret_identifiers::DidCoreId::new(inviter.clone()).is_err() {
+        let inviter_id = operation.context.sender.to_string();
+        if arkret_identifiers::DidCoreId::new(inviter_id.clone()).is_err() {
             return rejected("inviter_invalid");
         }
         let Some(raw_third_party_invite) = payload.get("third_party_invite") else {
@@ -66,7 +66,7 @@ impl ProjectionState {
                 invite_id: existing.invite_id.clone(),
                 realm_id: existing.realm_id.clone(),
                 state: existing.state.clone(),
-                invitee: existing.invitee.clone(),
+                invitee_id: existing.invitee_id.clone(),
             };
         }
         if let Some(token_commitment) = token_commitment_for_third_party(&third_party_invite)
@@ -89,8 +89,8 @@ impl ProjectionState {
         let projection = InviteProjection {
             invite_id: invite_id.clone(),
             realm_id: realm_id.clone(),
-            inviter,
-            invitee: None,
+            inviter_id,
+            invitee_id: None,
             third_party_invite: Some(third_party_invite),
             state: INVITE_STATE_PENDING.to_owned(),
             expires_at,
@@ -99,13 +99,13 @@ impl ProjectionState {
             claim_nonces: BTreeMap::new(),
         };
         let state = projection.state.clone();
-        let invitee = projection.invitee.clone();
+        let invitee_id = projection.invitee_id.clone();
         self.invites.insert(invite_id.clone(), projection);
         ProjectionEffect::InviteStateChanged {
             invite_id,
             realm_id,
             state,
-            invitee,
+            invitee_id,
         }
     }
 
@@ -178,7 +178,7 @@ impl ProjectionState {
             INVITE_STATE_CLAIMED => return rejected("duplicate_conflict"),
             _ => return rejected("not_found"),
         }
-        if let Some(existing_invitee) = invite.invitee.as_deref()
+        if let Some(existing_invitee) = invite.invitee_id.as_deref()
             && existing_invitee != subject_id
         {
             return rejected("not_found");
@@ -234,7 +234,7 @@ impl ProjectionState {
             .claim_nonces
             .insert(claim_nonce, operation.operation_id.to_string());
         invite.state = INVITE_STATE_CLAIMED.to_owned();
-        invite.invitee = Some(subject_id.clone());
+        invite.invitee_id = Some(subject_id.clone());
         invite.updated_at = admission_time;
         cleanup_third_party_projection(invite);
         self.members.insert(
@@ -245,7 +245,7 @@ impl ProjectionState {
                 state: "invite".to_owned(),
                 role: INVITE_MEMBER_ROLE.to_owned(),
                 delivery_status: None,
-                recipient_service_id: None,
+                recipient_id: None,
                 recipient_service_resolution: None,
                 membership_event_ref: None,
                 delivery_binding_frontier: None,
@@ -261,7 +261,7 @@ impl ProjectionState {
             invite_id,
             realm_id: invite.realm_id.clone(),
             state: INVITE_STATE_CLAIMED.to_owned(),
-            invitee: Some(subject_id),
+            invitee_id: Some(subject_id),
         }
     }
 }
@@ -301,7 +301,7 @@ fn validate_third_party_invite(third_party_invite: &Value) -> Result<(), &'stati
         }
     }
     let Some(service_id) = object
-        .get("verification_service_id")
+        .get("verification_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -376,8 +376,8 @@ fn validate_binding_proof(
     binding_proof
         .validate()
         .map_err(|_| "binding_proof_invalid")?;
-    let service_id = binding_proof.verification_service_id.as_str();
-    let expected_service_id = third_party_invite.verification_service_id.as_str();
+    let service_id = binding_proof.verification_id.as_str();
+    let expected_service_id = third_party_invite.verification_id.as_str();
     if service_id != expected_service_id {
         return Err("verification_service_not_authorized");
     }
@@ -451,7 +451,7 @@ fn validate_subject_proof(
         realm_id,
         token_commitment,
         claim_nonce,
-        third_party_invite.verification_service_id.as_str(),
+        third_party_invite.verification_id.as_str(),
         binding_digest.as_str(),
     )
     .map_err(|_| "subject_proof_transcript_invalid")?;
@@ -464,7 +464,7 @@ fn validate_subject_proof(
 /// `third-party-invites.md` — the only authority for third-party invite
 /// verification services is the current accepted
 /// `ak.realm.policy_bundle` component
-/// `allowed_third_party_invite_verification_service_ids`. It is read at the
+/// `allowed_third_party_invite_verification_ids`. It is read at the
 /// bundle's top level only: the payload is the flat closed
 /// `realm_policy_bundle_payload` object and every revision carries the whole
 /// component set forward, so a nested occurrence is never authoritative.
@@ -476,7 +476,7 @@ fn validate_subject_proof(
 /// authority.
 fn value_allowlists_service(policy_bundle: &Value, service_id: &str) -> bool {
     policy_bundle
-        .get("allowed_third_party_invite_verification_service_ids")
+        .get("allowed_third_party_invite_verification_ids")
         .and_then(Value::as_array)
         .is_some_and(|allowset| {
             allowset

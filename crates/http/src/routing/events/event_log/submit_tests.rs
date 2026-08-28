@@ -557,14 +557,14 @@ mod federation_delivery_binding_tests {
 
     fn member_view(
         actor: &str,
-        recipient_service_id: &str,
+        recipient_id: &str,
         frontier: &EventId,
         updated_at: DateTime<Utc>,
     ) -> DeliveryBindingMemberView {
         DeliveryBindingMemberView {
             member: actor.to_owned(),
             realm_id: "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
-            recipient_service_id: recipient_service_id.to_owned(),
+            recipient_id: recipient_id.to_owned(),
             membership_event_ref: Some(frontier.as_str().to_owned()),
             delivery_binding_frontier_ref: frontier.as_str().to_owned(),
             updated_at,
@@ -631,7 +631,7 @@ mod federation_delivery_binding_tests {
         match result {
             FederationServiceBindingCheck::Stale(evidence) => {
                 assert_eq!(
-                    evidence.new_recipient_service_id.as_str(),
+                    evidence.new_recipient_id.as_str(),
                     "ak:did_core:web:new.example"
                 );
                 assert_eq!(evidence.actor_id.as_str(), "ak:did_core:web:alice.example");

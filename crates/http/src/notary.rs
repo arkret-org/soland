@@ -1931,9 +1931,9 @@ async fn local_service_is_eligible_availability_holder(
         })?)
         .map_err(|error| NotaryError::Construction(error.to_string()))?;
         let principal_server_id = payload.delivery_binding.and_then(|binding| {
-            (binding.recipient_service_kind
+            (binding.recipient_kind
                 == arkret_models_identity::RecipientServiceKind::PrincipalServer)
-                .then_some(binding.recipient_service_id)
+                .then_some(binding.recipient_id)
         });
         if principal_server_id.as_ref() == Some(service_id) {
             return Ok(true);

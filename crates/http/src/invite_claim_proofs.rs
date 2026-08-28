@@ -99,7 +99,7 @@ fn verify_binding_proof_signature(
     verification: &InviteClaimProofVerification<'_>,
 ) -> Result<String, &'static str> {
     let binding_proof = parse_binding_proof(verification.binding_proof)?;
-    let service_id = binding_proof.verification_service_id.as_str();
+    let service_id = binding_proof.verification_id.as_str();
     if service_id != verification.expected_verification_service_id {
         return Err("verification_service_not_authorized");
     }
@@ -153,7 +153,7 @@ async fn verify_binding_proof_signature_for_state(
     verification: &InviteClaimProofVerification<'_>,
 ) -> Result<String, &'static str> {
     let binding_proof = parse_binding_proof(verification.binding_proof)?;
-    let service_id = binding_proof.verification_service_id.as_str();
+    let service_id = binding_proof.verification_id.as_str();
     if service_id != verification.expected_verification_service_id {
         return Err("verification_service_not_authorized");
     }
@@ -497,7 +497,7 @@ mod tests {
         invite_digest: &str,
     ) -> Value {
         let mut binding_proof = json!({
-            "verification_service_id": SERVICE,
+            "verification_id": SERVICE,
             "verification_method": SERVICE_METHOD,
             "subject_id": SUBJECT,
             "realm_id": REALM,

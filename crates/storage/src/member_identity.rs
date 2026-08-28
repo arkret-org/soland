@@ -46,7 +46,7 @@ pub struct HandleClaimEvidenceRecord {
     pub digest: String,
     pub subject_id: String,
     pub issuer: String,
-    pub issuer_service_id: Option<String>,
+    pub issuer_id: Option<String>,
     pub audience: Option<String>,
     pub binding_state: String,
     pub visibility: Option<String>,

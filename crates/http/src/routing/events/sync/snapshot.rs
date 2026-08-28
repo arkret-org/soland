@@ -360,7 +360,7 @@ async fn agent_signer_evidence_bundle_for_sync(
 
     const MAX_SYNC_EVIDENCE: usize = 256;
 
-    let receiver_service_id = arkret_wire::DidCoreId::new(state.service_id().clone()).ok()?;
+    let receiver_id = arkret_wire::DidCoreId::new(state.service_id().clone()).ok()?;
     let store = state.persistence().governance_dependency_store();
     let mut evidence_by_receipt = BTreeMap::new();
     let mut conflicted_receipts = BTreeSet::new();
@@ -481,13 +481,13 @@ async fn agent_signer_evidence_bundle_for_sync(
                 || event_admission_receipt.realm_id != realm_id
                 || event_admission_receipt.agent_id != *signer_id
                 || event_admission_receipt.verification_method != *verification_method
-                || event_admission_receipt.receiver_service_id != receiver_service_id
+                || event_admission_receipt.receiver_id != receiver_id
             {
                 continue;
             }
             let receipt_key = (
                 event_admission_receipt.event_id.clone(),
-                event_admission_receipt.receiver_service_id.clone(),
+                event_admission_receipt.receiver_id.clone(),
             );
             if conflicted_receipts.contains(&receipt_key) {
                 continue;
@@ -551,7 +551,7 @@ async fn account_notification_delta(
         .list_account_deltas(
             soland_services::delivery::ListAccountNotificationDeltasQuery {
                 controller_account_id: account.account_id,
-                recipient_service_id: state.service_id().clone(),
+                recipient_id: state.service_id().clone(),
                 after_position: is_incremental.then_some(after_cursor.notification_position),
             },
         )
@@ -852,8 +852,7 @@ fn trusted_handle_claim_issuer(
     context: &RosterDisclosureContext<'_>,
     claim: &HandleClaimEvidenceRecord,
 ) -> bool {
-    claim.issuer == context.service_id
-        || claim.issuer_service_id.as_deref() == Some(context.service_id)
+    claim.issuer == context.service_id || claim.issuer_id.as_deref() == Some(context.service_id)
 }
 
 fn inline_handle_claims(claims: &[HandleClaimEvidenceRecord]) -> (Vec<Value>, bool) {

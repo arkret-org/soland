@@ -133,7 +133,7 @@ pub(super) async fn submit_signal(
 /// detached task; failure is diagnostic-only and never changes the sender's
 /// opaque accepted outcome.
 fn relay_signal_to_remote_services(state: &AppState, envelope: &SignalEnvelope) {
-    for destination_service_id in remote_recipient_services(state, envelope) {
+    for destination_id in remote_recipient_services(state, envelope) {
         let state = state.clone();
         let request = SignalRelayRequest {
             realm_id: envelope.realm_id.clone(),
@@ -142,14 +142,14 @@ fn relay_signal_to_remote_services(state: &AppState, envelope: &SignalEnvelope) 
         tokio::spawn(async move {
             if let Err(error) = crate::routing::federation::outbox::relay_signal_once(
                 &state,
-                &destination_service_id,
+                &destination_id,
                 &request,
             )
             .await
             {
                 tracing::debug!(
                     %error,
-                    %destination_service_id,
+                    %destination_id,
                     realm = %request.realm_id,
                     "single-attempt Signal peer relay failed"
                 );
@@ -169,14 +169,14 @@ fn remote_recipient_services(state: &AppState, envelope: &SignalEnvelope) -> BTr
                 && membership.state == "join"
                 && membership.member != envelope.sender_actor_id.as_str()
                 && membership
-                    .recipient_service_id
+                    .recipient_id
                     .as_deref()
                     .is_some_and(|service_id| service_id != local_service_id)
                 && envelope.scope_ref.circle_id().is_none_or(|circle_id| {
                     projection.circle_scope_visible_to_actor(circle_id.as_str(), &membership.member)
                 })
         })
-        .filter_map(|membership| membership.recipient_service_id.clone())
+        .filter_map(|membership| membership.recipient_id.clone())
         .collect()
 }
 
@@ -430,7 +430,7 @@ async fn verify_signal_agent_proof(
 /// before this function is entered.
 pub(in crate::routing::events) async fn accept_peer_signal(
     state: &AppState,
-    source_service_id: &str,
+    source_id: &str,
     envelope: &SignalEnvelope,
 ) -> Result<(), AppError> {
     envelope.validate_structural().map_err(structural_error)?;
@@ -448,7 +448,7 @@ pub(in crate::routing::events) async fn accept_peer_signal(
         .get(&membership_key)
         .filter(|membership| membership.state == "join")
         .ok_or_else(|| signal_invalid("signal sender is not a current member"))?;
-    if sender.recipient_service_id.as_deref() != Some(source_service_id) {
+    if sender.recipient_id.as_deref() != Some(source_id) {
         return Err(signal_invalid(
             "source service is not the sender current delivery binding",
         ));
@@ -505,7 +505,7 @@ pub(in crate::routing::events) async fn accept_peer_signal(
         membership.realm_id == envelope.realm_id.as_str()
             && membership.state == "join"
             && membership.member != envelope.sender_actor_id.as_str()
-            && membership.recipient_service_id.as_deref() == Some(local_service_id)
+            && membership.recipient_id.as_deref() == Some(local_service_id)
             && envelope.scope_ref.circle_id().is_none_or(|circle_id| {
                 projection.circle_scope_visible_to_actor(circle_id.as_str(), &membership.member)
             })

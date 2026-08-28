@@ -38,12 +38,12 @@ async fn create_and_dispatch_local_realm_invite(
         "bind Bob's invite receive policy"
     );
 
-    let recipient_service_id =
+    let recipient_id =
         DidCoreId::new(state.service_id().to_owned()).expect("configured service core DID");
     let service_resolution = ServiceResolutionCarrier::CurrentRecordUrl {
         current_record_url: format!(
             "https://soland.local{}",
-            arkret_models_identity::canonical_service_current_record_path(&recipient_service_id)
+            arkret_models_identity::canonical_service_current_record_path(&recipient_id)
         ),
         pinned_record_digest: None,
     };
@@ -59,11 +59,11 @@ async fn create_and_dispatch_local_realm_invite(
         0,
         Vec::new(),
         serde_json::json!({
-            "invitee": bob_core.clone(),
+            "invitee_id": bob_core.clone(),
             "invite_delivery_target": {
-                "recipient_service_id": recipient_service_id.clone(),
+                "recipient_id": recipient_id.clone(),
                 "service_resolution": service_resolution.clone(),
-                "recipient_service_kind": "principal_server"
+                "recipient_kind": "principal_server"
             },
             "introduction_evidence_digest": introduction_evidence_digest,
             "expires_at": "2099-01-01T00:00:00.000Z"
@@ -98,11 +98,7 @@ async fn create_and_dispatch_local_realm_invite(
     let dispatch = SelfInviteDispatchRequestBody {
         schema: arkret_wire::SchemaId::INVITE_DELIVERY_REQUEST_V1.to_owned(),
         invite_event_id,
-        invite_address: InviteAddress::principal_server(
-            bob_core,
-            recipient_service_id,
-            service_resolution,
-        ),
+        invite_address: InviteAddress::principal_server(bob_core, recipient_id, service_resolution),
         introduction_evidence,
         idempotency_key: "ak:idempotency:account-workflow-invite".to_owned(),
     };
@@ -1162,12 +1158,12 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         1
     );
     assert_eq!(bob_invites["invites"][0]["realm_id"], invite_realm_id);
-    // invite.schema.json + decision 0008: a direct member invite (invitee is a
+    // invite.schema.json + decision 0008: a direct member invite (invitee_id is a
     // DID, no third_party_invite) carries the recipient binding in
-    // invite_delivery_target.recipient_service_id; third_party_invite exists only for
-    // third-party/3PID invites and only holds a verification_service_id.
+    // invite_delivery_target.recipient_id; third_party_invite exists only for
+    // third-party/3PID invites and only holds a verification_id.
     assert_eq!(
-        bob_invites["invites"][0]["invite_delivery_target"]["recipient_service_id"],
+        bob_invites["invites"][0]["invite_delivery_target"]["recipient_id"],
         state.service_id().as_str()
     );
     assert_eq!(

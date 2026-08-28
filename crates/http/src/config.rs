@@ -260,7 +260,7 @@ pub struct AppConfig {
     /// Optional fail-closed Account Authority service DID pin. When omitted,
     /// the accepted AuthServer service-registration mapping for
     /// `account_authority_url` supplies the runtime identity.
-    pub account_authority_service_id: Option<String>,
+    pub account_authority_id: Option<String>,
     /// OAuth/OIDC `client_id` this soland deployment is registered as at the
     /// Auth Server, advertised to browser clients in
     /// `/_arkret/describe.auth_metadata.methods[].oidc.client_id`. The web
@@ -457,7 +457,7 @@ pub struct AppConfig {
     /// `trusted` on snapshot import. Empty (default) means imports stay at
     /// `pending` and have to be promoted manually via the live-fetch path.
     /// Env: `SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_IDS` (comma-separated).
-    pub push_bridge_trusted_service_ids: Vec<String>,
+    pub push_bridge_trusted_ids: Vec<String>,
     /// Base URL of the push gateway (floria) this deployment notifies over
     /// the registered internal channel when an account is deactivated
     /// (`account-lifecycle.md` §7.1 "Push route 行的完成判据"). The fanout
@@ -865,7 +865,7 @@ impl AppConfig {
             media: MediaIssuerConfig::test_default(),
             cors_allow_origin: None,
             account_authority_url: None,
-            account_authority_service_id: None,
+            account_authority_id: None,
             oidc_client_id: None,
             development_mode: false,
             failpoints: crate::failpoints::FailpointRegistry::disabled(),
@@ -909,7 +909,7 @@ impl AppConfig {
             db_pool_max_size: None,
             db_pool_acquire_timeout_seconds: None,
             push_bridge_cache_ttl_seconds: 900,
-            push_bridge_trusted_service_ids: Vec::new(),
+            push_bridge_trusted_ids: Vec::new(),
             deactivation_push_gateway_url: None,
             deactivation_push_gateway_bearer: None,
             resumable_upload_dir: PathBuf::from("./soland-resumable-uploads"),
@@ -960,14 +960,13 @@ impl AppConfig {
         let livekit = load_livekit_config(values);
         let media = load_media_issuer_config(values);
         let account_authority_url = env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_URL");
-        let account_authority_service_id =
-            env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID");
-        if account_authority_url.is_none() && account_authority_service_id.is_some() {
+        let account_authority_id = env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID");
+        if account_authority_url.is_none() && account_authority_id.is_some() {
             anyhow::bail!(
                 "SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID requires SOLAND_ACCOUNT_AUTHORITY_URL"
             );
         }
-        if let Some(value) = account_authority_service_id.as_deref() {
+        if let Some(value) = account_authority_id.as_deref() {
             arkret_identifiers::DidCoreId::new(value.to_owned()).map_err(|error| {
                 anyhow::anyhow!("SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID is invalid: {error}")
             })?;
@@ -1129,17 +1128,16 @@ impl AppConfig {
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
             .unwrap_or(900);
-        let push_bridge_trusted_service_ids =
-            lookup(values, "SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_IDS")
-                .ok()
-                .map(|value| {
-                    value
-                        .split(',')
-                        .map(|v| v.trim().to_owned())
-                        .filter(|v| !v.is_empty())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
+        let push_bridge_trusted_ids = lookup(values, "SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_IDS")
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(|v| v.trim().to_owned())
+                    .filter(|v| !v.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let deactivation_push_gateway_url =
             env_non_empty(values, "SOLAND_DEACTIVATION_PUSH_GATEWAY_URL");
         let deactivation_push_gateway_bearer =
@@ -1227,7 +1225,7 @@ impl AppConfig {
             media,
             cors_allow_origin,
             account_authority_url,
-            account_authority_service_id,
+            account_authority_id,
             oidc_client_id,
             development_mode,
             failpoints,
@@ -1266,7 +1264,7 @@ impl AppConfig {
             db_pool_max_size,
             db_pool_acquire_timeout_seconds,
             push_bridge_cache_ttl_seconds,
-            push_bridge_trusted_service_ids,
+            push_bridge_trusted_ids,
             deactivation_push_gateway_url,
             deactivation_push_gateway_bearer,
             resumable_upload_dir,

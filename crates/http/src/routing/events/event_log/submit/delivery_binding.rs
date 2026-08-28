@@ -23,7 +23,7 @@ pub(super) async fn federation_service_binding_current_for_destination(
     };
     if !members
         .iter()
-        .any(|member| member.recipient_service_id == state.service_id().as_str())
+        .any(|member| member.recipient_id == state.service_id().as_str())
         && prospective_events.is_some_and(|events| {
             federation_batch_establishes_local_binding(state.service_id(), binding, events)
         })
@@ -41,7 +41,7 @@ pub(super) async fn federation_service_binding_current_for_destination(
         .map(|member| {
             (
                 member.member.clone(),
-                member.recipient_service_id.clone(),
+                member.recipient_id.clone(),
                 member.delivery_binding_frontier_ref.clone(),
             )
         })
@@ -139,8 +139,8 @@ fn federation_batch_establishes_local_binding(
                         == Some(arkret_models_identity::delivery_binding::DeliveryStatus::Routable)
                     && payload.delivery_binding.as_ref().is_some_and(|member_binding| {
                         member_binding.validate().is_ok()
-                            && member_binding.recipient_service_id.as_str() == local_service_id
-                            && member_binding.recipient_service_kind
+                            && member_binding.recipient_id.as_str() == local_service_id
+                            && member_binding.recipient_kind
                                 == arkret_models_identity::delivery_binding::RecipientServiceKind::PrincipalServer
                             && member_binding.delivery_modes.contains(
                                 &arkret_models_identity::delivery_binding::DeliveryMode::Events,
@@ -156,7 +156,7 @@ pub(super) fn delivery_binding_member_view(
     if member.delivery_status.as_deref() != Some("routable") {
         return None;
     }
-    let recipient_service_id = member.recipient_service_id.clone()?;
+    let recipient_id = member.recipient_id.clone()?;
     let delivery_binding_frontier_ref = member
         .delivery_binding_frontier
         .clone()
@@ -164,7 +164,7 @@ pub(super) fn delivery_binding_member_view(
     Some(DeliveryBindingMemberView {
         member: member.member.clone(),
         realm_id: member.realm_id.clone(),
-        recipient_service_id,
+        recipient_id,
         membership_event_ref: member.membership_event_ref.clone(),
         delivery_binding_frontier_ref,
         updated_at: member.updated_at,
@@ -179,7 +179,7 @@ pub(super) fn federation_service_binding_check_from_members(
 ) -> FederationServiceBindingCheck {
     let current_local_frontiers = members
         .iter()
-        .filter(|member| member.recipient_service_id == local_service_id)
+        .filter(|member| member.recipient_id == local_service_id)
         .map(|member| member.delivery_binding_frontier_ref.clone())
         .collect::<Vec<_>>();
     match federation_delivery_binding_frontier_is_current(request_frontier, current_local_frontiers)
@@ -203,7 +203,7 @@ pub(super) fn federation_service_binding_check_from_members(
             (
                 (
                     evidence.actor_id.as_str().to_owned(),
-                    evidence.new_recipient_service_id.as_str().to_owned(),
+                    evidence.new_recipient_id.as_str().to_owned(),
                     evidence.delivery_binding_frontier_ref.clone(),
                 ),
                 evidence,
@@ -217,7 +217,7 @@ pub(super) fn federation_service_binding_check_from_members(
         .into_values()
         .next()
         .expect("one handover evidence candidate");
-    let grace_expired = evidence.new_recipient_service_id.as_str() != local_service_id
+    let grace_expired = evidence.new_recipient_id.as_str() != local_service_id
         && now.signed_duration_since(evidence.updated_at)
             > Duration::seconds(DELIVERY_BINDING_HANDOVER_GRACE_SECONDS);
     if grace_expired {
@@ -231,13 +231,12 @@ pub(super) fn delivery_binding_handover_evidence_from_member(
     member: DeliveryBindingMemberView,
 ) -> Option<DeliveryBindingHandoverEvidence> {
     let actor_id = arkret_wire::DidCoreId::new(member.member.clone()).ok()?;
-    let new_recipient_service_id =
-        arkret_wire::DidCoreId::new(member.recipient_service_id.clone()).ok()?;
+    let new_recipient_id = arkret_wire::DidCoreId::new(member.recipient_id.clone()).ok()?;
     let handover_frontier = vec![EventId::new(member.delivery_binding_frontier_ref.clone()).ok()?];
     Some(DeliveryBindingHandoverEvidence {
         realm_id: member.realm_id,
         actor_id,
-        new_recipient_service_id,
+        new_recipient_id,
         new_service_resolution: None,
         handover_frontier,
         membership_event_ref: member.membership_event_ref,
@@ -253,7 +252,7 @@ async fn current_handover_service_resolution(
 ) -> Option<arkret_models_identity::ServiceResolutionCarrier> {
     let entry = state
         .persistence()
-        .service_route_cache(&evidence.new_recipient_service_id, "principal_server")
+        .service_route_cache(&evidence.new_recipient_id, "principal_server")
         .await
         .ok()??;
     entry.is_routable_at(now()).then_some({
@@ -277,7 +276,7 @@ pub(super) async fn delivery_binding_handover_witness(
         "kind": "member_delivery_binding_projection",
         "realm_id": evidence.realm_id.as_str(),
         "actor_id": evidence.actor_id.as_str(),
-        "recipient_service_id": evidence.new_recipient_service_id.as_str(),
+        "recipient_id": evidence.new_recipient_id.as_str(),
         "delivery_binding_frontier": frontier,
         "membership_event_ref": evidence.membership_event_ref.as_deref(),
         "projection_updated_at": arkret_canonical::format_timestamp_canonical(

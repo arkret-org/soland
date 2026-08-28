@@ -1045,7 +1045,7 @@ async fn prepare_federated_transition(
 async fn submit_federated_cascade_after_transport_validation(
     state: &AppState,
     submission: &arkret_models_collaboration::governance::agent_membership_cascade::AgentMembershipCascadeFederationSubmission,
-    source_service_id: &arkret_wire::DidCoreId,
+    source_id: &arkret_wire::DidCoreId,
     source_trust_domain: &str,
     request_hash: &str,
     admitted_producers: &BTreeMap<String, (arkret_wire::DidUrl, arkret_wire::DidKey)>,
@@ -1140,7 +1140,7 @@ async fn submit_federated_cascade_after_transport_validation(
                 controller_membership_generation_ref: frozen.generation,
                 initiator_authority: arkret_wire::PrincipalAuthorityKey {
                     principal_id: initiator,
-                    principal_server_id: source_service_id.clone(),
+                    principal_server_id: source_id.clone(),
                 },
                 controller_terminal_event_id: controller_event_id.clone(),
                 expected_agent_ids: frozen.agent_ids,
@@ -1205,7 +1205,7 @@ async fn submit_federated_cascade_after_transport_validation(
                 })?;
             if record.controller_terminal_event_id != controller_event_id
                 || record.initiator_authority.principal_id != initiator
-                || record.initiator_authority.principal_server_id != *source_service_id
+                || record.initiator_authority.principal_server_id != *source_id
             {
                 return Err(cascade_error(
                     StatusCode::FORBIDDEN,
@@ -1390,13 +1390,13 @@ pub(super) async fn submit_agent_membership_cascade_federation(
         );
         return;
     }
-    let source_service_id = req
+    let source_id = req
         .headers()
         .get("source-service-id")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .and_then(|value| arkret_wire::DidCoreId::new(value.to_owned()).ok());
-    let Some(source_service_id) = source_service_id else {
+    let Some(source_id) = source_id else {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
@@ -1424,7 +1424,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
     match crate::routing::federation::frontier_exchange::inbound_peer_is_stale(
         state,
         realm_id,
-        source_service_id.as_str(),
+        source_id.as_str(),
     )
     .await
     {
@@ -1464,7 +1464,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
             res.status_code(StatusCode::CONFLICT);
             res.render(Json(
                 crate::routing::federation::federation::delivery_binding_stale_response(
-                    &evidence.new_recipient_service_id,
+                    &evidence.new_recipient_id,
                     &evidence.actor_id,
                     evidence
                         .new_service_resolution
@@ -1480,7 +1480,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
             res.status_code(StatusCode::CONFLICT);
             res.render(Json(
                 crate::routing::federation::federation::delivery_binding_handed_over_response(
-                    &evidence.new_recipient_service_id,
+                    &evidence.new_recipient_id,
                 ),
             ));
             return;
@@ -1490,7 +1490,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
     let profile_gate =
         match crate::routing::federation::federation::federation_profile_intersection_for_peer(
             state,
-            source_service_id.as_str(),
+            source_id.as_str(),
             Some(&source_trust_domain),
         )
         .await
@@ -1508,7 +1508,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
         };
     let mut admitted_producers = BTreeMap::new();
     for (event, digest_suite) in events.iter().zip(digest_suites.iter().copied()) {
-        if event.realm_id.as_str() != realm_id || event.principal_server_id != source_service_id {
+        if event.realm_id.as_str() != realm_id || event.principal_server_id != source_id {
             render_error(
                 res,
                 StatusCode::FORBIDDEN,
@@ -1520,7 +1520,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
         if !crate::routing::federation::federation::federation_actor_origin_acceptable(
             state,
             event.actor_id.as_str(),
-            source_service_id.as_str(),
+            source_id.as_str(),
             Some(event.principal_server_id.as_str()),
             realm_id,
             Some(event.kind.as_str()),
@@ -1602,8 +1602,8 @@ pub(super) async fn submit_agent_membership_cascade_federation(
     if !crate::routing::federation::federation::federation_actor_origin_acceptable(
         state,
         initiator.as_str(),
-        source_service_id.as_str(),
-        Some(source_service_id.as_str()),
+        source_id.as_str(),
+        Some(source_id.as_str()),
         realm_id,
         Some(arkret_wire::EventKind::MemberState.as_str()),
     )
@@ -1672,7 +1672,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
     match submit_federated_cascade_after_transport_validation(
         state,
         &submission,
-        &source_service_id,
+        &source_id,
         &source_trust_domain,
         &request_hash,
         &admitted_producers,

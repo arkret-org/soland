@@ -90,7 +90,7 @@ fn seed_circle_authz_state() -> (ProjectionState, ServerHlc, String, String) {
                 state: "join".to_owned(),
                 role: "member".to_owned(),
                 delivery_status: None,
-                recipient_service_id: None,
+                recipient_id: None,
                 recipient_service_resolution: None,
                 membership_event_ref: None,
                 delivery_binding_frontier: None,

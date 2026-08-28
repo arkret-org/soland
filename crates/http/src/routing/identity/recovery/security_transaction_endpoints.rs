@@ -122,10 +122,10 @@ pub(super) async fn security_transaction_create(
         recovery_transaction_session_id(&request),
     )
     .await?;
-    let coordinator_service_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
+    let coordinator_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("invalid local service DID: {error}")))?;
     let (resource, canonical_request) = request
-        .into_initial_resource(coordinator_service_id, chrono::Utc::now())
+        .into_initial_resource(coordinator_id, chrono::Utc::now())
         .map_err(|error| {
             AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
         })?;
@@ -1517,7 +1517,7 @@ async fn continue_issue_terminal_receipt(
         transaction_request_digest: transaction.resource.request_digest.clone(),
         prepared_plan_digest: transaction.resource.prepared_plan_digest.clone(),
         principal_id: transaction.resource.principal_id.clone(),
-        coordinator_service_id: transaction.resource.coordinator_service_id.clone(),
+        coordinator_id: transaction.resource.coordinator_id.clone(),
         recovery_session_id: expected_recovery_session_id.clone(),
         terminal_receipt_id: receipt.receipt_id.clone(),
         terminal_receipt_digest: receipt_digest.clone(),

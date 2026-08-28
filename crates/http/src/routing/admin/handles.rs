@@ -117,7 +117,7 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
                 canonical_uri: format!("ak:handle:{handle}"),
                 aliases: vec![handle],
                 issuer_did: primary_claim
-                    .and_then(|record| record.issuer_service_id.clone())
+                    .and_then(|record| record.issuer_id.clone())
                     .or_else(|| Some(state.service_id().clone())),
                 subject_id: Some(account.principal_id.to_string()),
                 assigned_at: Some(arkret_canonical::format_timestamp_canonical(

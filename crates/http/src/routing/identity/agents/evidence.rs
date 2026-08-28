@@ -115,7 +115,7 @@ async fn current_authenticated_agent_signer_evidence(
         agent_id,
         verification_method,
         event_id,
-        receiver_service_id,
+        receiver_id,
     } = selector
     {
         return historical_authenticated_agent_signer_evidence(
@@ -124,7 +124,7 @@ async fn current_authenticated_agent_signer_evidence(
                 agent_id: agent_id.clone(),
                 verification_method: verification_method.clone(),
                 event_id: event_id.clone(),
-                receiver_service_id: receiver_service_id.clone(),
+                receiver_id: receiver_id.clone(),
             },
         )
         .await;
@@ -154,7 +154,7 @@ async fn current_authenticated_agent_signer_evidence(
     .await?;
     let account_authority_evidence = fetch_service_signer_evidence(
         state,
-        &gate.authority_service_id,
+        &gate.authority_id,
         state.config().account_authority_url.as_deref(),
         None,
         chrono::Utc::now(),
@@ -227,7 +227,7 @@ async fn historical_authenticated_agent_signer_evidence(
     if signer_id != &key.agent_id
         || verification_method != &key.verification_method
         || event_admission_receipt.event_id != key.event_id
-        || event_admission_receipt.receiver_service_id != key.receiver_service_id
+        || event_admission_receipt.receiver_id != key.receiver_id
     {
         return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
     }
@@ -408,7 +408,7 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
             agent_id: receipt.agent_id.clone(),
             verification_method: receipt.verification_method.clone(),
             event_id: receipt.event_id.clone(),
-            receiver_service_id: receipt.receiver_service_id.clone(),
+            receiver_id: receipt.receiver_id.clone(),
         })
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -505,7 +505,7 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
             .map_err(|reason| AppError::internal(reason.as_str()))?;
     let receiver_evidence = fetch_service_signer_evidence(
         state,
-        &receipt.receiver_service_id,
+        &receipt.receiver_id,
         Some(receiver_base_url),
         Some(&receipt_method),
         receipt.accepted_at,
@@ -523,7 +523,7 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
     };
     let historical_document = arkret_identity::authenticated_service_document_at(
         authenticated_resolution,
-        &receipt.receiver_service_id,
+        &receipt.receiver_id,
         receipt.accepted_at,
     )
     .map_err(|error| AppError::internal(error.to_string()))?;
@@ -549,7 +549,7 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
                 .map_err(|reason| AppError::internal(format!("{reason:?}")))?,
             core_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
                 .map_err(|error| AppError::internal(error.to_string()))?,
-            source_service_id: authority_evidence.signer_id().clone(),
+            source_id: authority_evidence.signer_id().clone(),
             verification_method: authority_evidence.verification_method().clone(),
             attested_at,
             proof: empty_proof().map_err(|reason| AppError::internal(format!("{reason:?}")))?,
@@ -734,11 +734,10 @@ async fn preflight_controller_gate(
         .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let principal_id = DidCoreId::new(agent.controller_id)
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let destination_service_id =
-        crate::routing::events::peer::trusted_account_authority_service_id(state)
-            .await
-            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let source_service_id = DidCoreId::new(state.service_id().clone())
+    let destination_id = crate::routing::events::peer::trusted_account_authority_id(state)
+        .await
+        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+    let source_id = DidCoreId::new(state.service_id().clone())
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let account_authority_url = state
         .config()
@@ -755,7 +754,7 @@ async fn preflight_controller_gate(
     let request = ControllerAccountGateAttestationIssueRequestBody {
         request_id: request_id.clone(),
         principal_id: principal_id.clone(),
-        agent_authority_service_id: source_service_id.clone(),
+        agent_authority_id: source_id.clone(),
         agent_authority_service_resolution:
             crate::routing::system::service_resolution::current_authenticated_service_resolution(
                 state,
@@ -785,12 +784,12 @@ async fn preflight_controller_gate(
     crate::routing::federation::outbox::insert_header_if_valid(
         &mut headers,
         "source-service-id",
-        source_service_id.as_str(),
+        source_id.as_str(),
     );
     crate::routing::federation::outbox::insert_header_if_valid(
         &mut headers,
         "destination-service-id",
-        destination_service_id.as_str(),
+        destination_id.as_str(),
     );
     crate::routing::federation::outbox::insert_header_if_valid(
         &mut headers,
@@ -832,10 +831,7 @@ async fn preflight_controller_gate(
             .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     if outcome.request_id != request_id
         || outcome.controller_account_gate_attestation.principal_id != principal_id
-        || outcome
-            .controller_account_gate_attestation
-            .authority_service_id
-            != destination_service_id
+        || outcome.controller_account_gate_attestation.authority_id != destination_id
     {
         return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
     }
@@ -847,7 +843,7 @@ async fn preflight_controller_gate(
     arkret_signatures::agent_evidence::verify_controller_account_gate_attestation(
         &gate,
         &principal_id,
-        &destination_service_id,
+        &destination_id,
         &PublicKeyMaterial::Ed25519Raw {
             bytes: authority_key.to_bytes().to_vec(),
         },
@@ -980,7 +976,7 @@ async fn produce_current_agent_signer_evidence(
     let key_seal_id = key_seal.id.clone();
     let lifecycle_seal_id = lifecycle_seal.id.clone();
     let core = AgentAuthoritySnapshotCore {
-        authority_service_id: service_id.clone(),
+        authority_id: service_id.clone(),
         principal_control_realm_id: realm_id,
         frontier_seal_id: frontier.id.clone(),
         frontier_state_root: frontier.state_root.clone(),
@@ -1036,7 +1032,7 @@ async fn produce_current_agent_signer_evidence(
         snapshot_digest: snapshot_digest.clone(),
         lease: AgentSnapshotLease {
             authority_kind: non_empty("agent_authority")?,
-            authority_service_id: service_id.clone(),
+            authority_id: service_id.clone(),
             verification_method: authority_method.clone(),
             snapshot_digest: snapshot_digest.clone(),
             issued_at: now,
@@ -1078,7 +1074,7 @@ async fn produce_current_agent_signer_evidence(
             domain: non_empty(arkret_wire::DomainSeparationId::AGENT_SIGNER_EVIDENCE_V1)?,
             core_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
                 .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?,
-            source_service_id: service_id,
+            source_id: service_id,
             verification_method: authority_method,
             issued_at: now,
             expires_at,
@@ -1326,10 +1322,10 @@ async fn verify_current_evidence(
     .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let gate = &admission_evidence.controller_account_gate_attestation;
     let trusted_account_authority =
-        crate::routing::events::peer::trusted_account_authority_service_id(state)
+        crate::routing::events::peer::trusted_account_authority_id(state)
             .await
             .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    if gate.authority_service_id != trusted_account_authority {
+    if gate.authority_id != trusted_account_authority {
         return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
     }
     let account_authority_key =
@@ -1385,9 +1381,9 @@ async fn verify_current_evidence(
         agent_key_authorize_event_id: &binding.agent_key_authorize_event_id,
         authorize_public_key_digest: &binding.public_key_digest,
         authorize_signing_key_binding_digest: &binding_digest,
-        expected_authority_service_id: &snapshot.core.authority_service_id,
+        expected_authority_service_id: &snapshot.core.authority_id,
         expected_authority_verification_method: &outer_attestation.verification_method,
-        expected_account_authority_service_id: &gate.authority_service_id,
+        expected_account_authority_service_id: &gate.authority_id,
         expected_account_authority_verification_method: &gate.verification_method,
         controller_public_key: &controller_material,
         authority_public_key: &authority_material,

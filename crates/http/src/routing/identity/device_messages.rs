@@ -44,7 +44,7 @@ pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 1000;
 /// producers from accepting or copying a caller-supplied service identity.
 pub(crate) fn principal_server_device_message_sender(state: &AppState) -> DeviceMessageSender {
     DeviceMessageSender::Service {
-        sender_service_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
+        sender_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
             .expect("the loaded Principal Server identity is a core DID"),
     }
 }
@@ -448,11 +448,11 @@ pub(crate) async fn fanout_actor_private_update(
                 sender_revocation_gate,
             )
         }
-        DeviceMessageSender::Service { sender_service_id } => {
-            if sender_service_id.as_str() != state.service_id() {
+        DeviceMessageSender::Service { sender_id } => {
+            if sender_id.as_str() != state.service_id() {
                 tracing::warn!(
                     actor,
-                    sender_service_id = sender_service_id.as_str(),
+                    sender_id = sender_id.as_str(),
                     local_service_id = state.service_id(),
                     "actor-private fanout rejected because the service sender is not local"
                 );
@@ -463,7 +463,7 @@ pub(crate) async fn fanout_actor_private_update(
             // the holder whose cell changed, does not borrow a holder device's
             // authority, and has neither a device-revocation gate nor an
             // origin device to exclude.
-            (None, sender_service_id.as_str(), None)
+            (None, sender_id.as_str(), None)
         }
         DeviceMessageSender::NativeAgent { .. } => {
             tracing::warn!(
@@ -805,8 +805,8 @@ fn device_message_envelope_from_record(
     // exactly one complete branch is dropped rather than repaired: repairing it
     // would mean choosing a sender identity the producer never wrote down.
     let sender = <DeviceMessageSender as serde::Deserialize>::deserialize(&message.content).ok()?;
-    if let DeviceMessageSender::Service { sender_service_id } = &sender
-        && (sender_service_id.as_str() != state.service_id() || message.sender != message.recipient)
+    if let DeviceMessageSender::Service { sender_id } = &sender
+        && (sender_id.as_str() != state.service_id() || message.sender != message.recipient)
     {
         // Fail closed on persisted rows that do not carry the exact local
         // service/holder binding the internal materializer wrote.
@@ -1011,8 +1011,8 @@ mod tests {
             assert_eq!(envelope.recipient_device_id.as_str(), device_id);
             assert!(matches!(
                 &envelope.sender,
-                DeviceMessageSender::Service { sender_service_id }
-                    if sender_service_id.as_str() == state.service_id()
+                DeviceMessageSender::Service { sender_id }
+                    if sender_id.as_str() == state.service_id()
             ));
             assert_eq!(envelope.content.get("revision"), Some(&json!(7)));
             assert_eq!(envelope.content.get("content"), Some(&cell));

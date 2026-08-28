@@ -420,13 +420,13 @@ pub(crate) async fn account_subscribe_notification_should_wake(
 ) -> bool {
     if let crate::state::EventNotificationKind::Account {
         account_id,
-        recipient_service_id,
+        recipient_id,
     } = &notification.kind
     {
         let Some(session) = session else {
             return false;
         };
-        if recipient_service_id != state.service_id() {
+        if recipient_id != state.service_id() {
             return false;
         }
         return state

@@ -31,7 +31,7 @@ async fn submit(
     let state = depot.get_typed::<AppState>().expect("state injected");
     verify_inbound_peer_http_signature(state, req, true).await?;
     let source = required_header(req, "source-service-id")?;
-    let source_service_id = arkret_wire::DidCoreId::new(source.clone())
+    let source_id = arkret_wire::DidCoreId::new(source.clone())
         .map_err(|error| AppError::param_invalid(format!("Source-Service-ID invalid: {error}")))?;
     let key = required_header(req, "idempotency-key")?;
     let body = body.into_inner();
@@ -111,7 +111,7 @@ async fn submit(
         .map_err(|error| AppError::internal(format!("erasure receipt request digest: {error}")))?;
     if let Some(stored) = state
         .jobs()
-        .idempotency_record(&source_service_id, &key)
+        .idempotency_record(&source_id, &key)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
@@ -168,7 +168,7 @@ async fn submit(
     state
         .jobs()
         .store_idempotency_record(IdempotencyState {
-            principal_id: source_service_id,
+            principal_id: source_id,
             idempotency_key: key,
             service_id: state.service_core_id(),
             request_hash,
@@ -206,9 +206,9 @@ async fn get(
     let stored: StoredReceipt = serde_json::from_value(stored.response_body)
         .map_err(|error| AppError::internal(format!("stored erasure package: {error}")))?;
     if source != stored.package.receipt.issuer.as_str()
-        && source != stored.acceptance.receiver_service_id.as_str()
+        && source != stored.acceptance.receiver_id.as_str()
         && stored
-            .authorized_requester_service_id
+            .authorized_requester_id
             .as_ref()
             .map(|id| id.as_str())
             != Some(source.as_str())
@@ -225,14 +225,14 @@ struct StoredReceipt {
     package: ErasureReceiptPackage,
     acceptance: ErasureReceiptAcceptance,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    authorized_requester_service_id: Option<arkret_wire::DidCoreId>,
+    authorized_requester_id: Option<arkret_wire::DidCoreId>,
 }
 
 async fn persist_lookup(
     state: &AppState,
     package: &ErasureReceiptPackage,
     outcome: &ErasureReceiptSubmitOutcome,
-    authorized_requester_service_id: Option<&arkret_wire::DidCoreId>,
+    authorized_requester_id: Option<&arkret_wire::DidCoreId>,
 ) -> Result<(), AppError> {
     let ErasureReceiptSubmitOutcome::Accepted(acceptance) = outcome else {
         return Ok(());
@@ -253,7 +253,7 @@ async fn persist_lookup(
             response_body: serde_json::to_value(StoredReceipt {
                 package: package.clone(),
                 acceptance: acceptance.clone(),
-                authorized_requester_service_id: authorized_requester_service_id.cloned(),
+                authorized_requester_id: authorized_requester_id.cloned(),
             })
             .map_err(|error| AppError::internal(error.to_string()))?,
             created_at: now,
@@ -266,7 +266,7 @@ async fn persist_lookup(
 pub(crate) async fn persist_issued_package(
     state: &AppState,
     package: &ErasureReceiptPackage,
-    authorized_requester_service_id: &arkret_wire::DidCoreId,
+    authorized_requester_id: &arkret_wire::DidCoreId,
 ) -> Result<(), AppError> {
     package
         .validate_bindings()
@@ -282,7 +282,7 @@ pub(crate) async fn persist_issued_package(
         state,
         package,
         &ErasureReceiptSubmitOutcome::Accepted(acceptance),
-        Some(authorized_requester_service_id),
+        Some(authorized_requester_id),
     )
     .await
 }
@@ -303,8 +303,8 @@ async fn signed_acceptance(
         receipt_digest: package
             .computed_receipt_digest()
             .map_err(|error| AppError::internal(error.to_string()))?,
-        issuer_service_id: package.receipt.issuer.clone(),
-        receiver_service_id: arkret_identifiers::DidCoreId::new(state.service_id().clone())
+        issuer_id: package.receipt.issuer.clone(),
+        receiver_id: arkret_identifiers::DidCoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(error.to_string()))?,
         accepted_at,
         proof: ProtocolSignature {

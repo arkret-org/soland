@@ -346,7 +346,7 @@ async fn append_account_deactivation_propagation_state(
     capability_cache_invalidated: usize,
 ) {
     let peer_targets = deactivation_peer_service_targets_for_actor(state, principal_id);
-    let peer_service_ids = peer_targets
+    let peer_ids = peer_targets
         .iter()
         .filter_map(|target| target.get("service_id").and_then(Value::as_str))
         .map(ToOwned::to_owned)
@@ -387,7 +387,7 @@ async fn append_account_deactivation_propagation_state(
         "propagation": {
             "mode": "eager",
             "requires_peer_ack": true,
-            "target_service_ids": peer_service_ids,
+            "target_service_ids": peer_ids,
             "targets": peer_targets,
         },
     });
@@ -443,7 +443,7 @@ pub(crate) fn deactivation_peer_service_targets_for_actor(
             if member.delivery_status.as_deref() != Some("routable") {
                 continue;
             }
-            let Some(service_id) = member.recipient_service_id.as_deref() else {
+            let Some(service_id) = member.recipient_id.as_deref() else {
                 continue;
             };
             if service_id == state.service_id() {
@@ -624,7 +624,7 @@ async fn enqueue_erasure_receipt_fanout(
                 .and_then(Value::as_object)
                 .and_then(|payload| payload.get("delivery_binding"))
                 .and_then(Value::as_object)
-                .and_then(|binding| binding.get("recipient_service_id"))
+                .and_then(|binding| binding.get("recipient_id"))
                 .and_then(Value::as_str)
                 .map(str::to_owned)
         })

@@ -15,7 +15,7 @@ struct AppletTransactionReplayRow {
     #[diesel(sql_type = Text)]
     applet_id: String,
     #[diesel(sql_type = Text)]
-    source_service_id: String,
+    source_id: String,
     #[diesel(sql_type = Text)]
     idempotency_key: String,
     #[diesel(sql_type = Text)]
@@ -54,7 +54,7 @@ impl From<AppletTransactionReplayRow> for AppletTransactionReplayRecord {
         Self {
             applet_id: arkret_wire::AppletId::new(row.applet_id)
                 .expect("stored applet transaction id must be canonical"),
-            source_service_id: row.source_service_id,
+            source_id: row.source_id,
             idempotency_key: row.idempotency_key,
             delivery_authentication_record_digest: row.delivery_authentication_record_digest,
             request_digest: row.request_digest,
@@ -156,13 +156,13 @@ impl AppletStore for PgAppletStore {
             .map_err(PersistenceError::database)?;
         let inserted = sql_query(
             "INSERT INTO applet_transactions \
-             (applet_id, source_service_id, idempotency_key, delivery_authentication_record_digest, request_digest, \
+             (applet_id, source_id, idempotency_key, delivery_authentication_record_digest, request_digest, \
               outcome, received_at, completed_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-             ON CONFLICT (applet_id, source_service_id, idempotency_key) DO NOTHING",
+             ON CONFLICT (applet_id, source_id, idempotency_key) DO NOTHING",
         )
         .bind::<Text, _>(record.applet_id.as_str())
-        .bind::<Text, _>(&record.source_service_id)
+        .bind::<Text, _>(&record.source_id)
         .bind::<Text, _>(&record.idempotency_key)
         .bind::<Text, _>(&record.delivery_authentication_record_digest)
         .bind::<Text, _>(&record.request_digest)
@@ -177,7 +177,7 @@ impl AppletStore for PgAppletStore {
         }
         sql_query(applet_transaction_replay_select_sql())
             .bind::<Text, _>(record.applet_id.as_str())
-            .bind::<Text, _>(&record.source_service_id)
+            .bind::<Text, _>(&record.source_id)
             .bind::<Text, _>(&record.idempotency_key)
             .get_result::<AppletTransactionReplayRow>(&mut *conn)
             .await
@@ -195,7 +195,7 @@ impl AppletStore for PgAppletStore {
     async fn complete_transaction_replay(
         &self,
         applet_id: &str,
-        source_service_id: &str,
+        source_id: &str,
         idempotency_key: &str,
         outcome: Value,
     ) -> PersistenceResult<()> {
@@ -205,10 +205,10 @@ impl AppletStore for PgAppletStore {
         sql_query(
             "UPDATE applet_transactions \
              SET outcome = $4, completed_at = NOW() \
-             WHERE applet_id = $1 AND source_service_id = $2 AND idempotency_key = $3",
+             WHERE applet_id = $1 AND source_id = $2 AND idempotency_key = $3",
         )
         .bind::<Text, _>(applet_id)
-        .bind::<Text, _>(source_service_id)
+        .bind::<Text, _>(source_id)
         .bind::<Text, _>(idempotency_key)
         .bind::<Jsonb, _>(&outcome)
         .execute(&mut *conn)
@@ -217,7 +217,7 @@ impl AppletStore for PgAppletStore {
         .and_then(|updated| {
             if updated == 0 {
                 Err(PersistenceError::NotFound(format!(
-                    "applet transaction replay missing for {applet_id}/{source_service_id}/{idempotency_key}"
+                    "applet transaction replay missing for {applet_id}/{source_id}/{idempotency_key}"
                 )))
             } else {
                 Ok(())

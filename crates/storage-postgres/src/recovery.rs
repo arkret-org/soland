@@ -16,7 +16,7 @@ struct RecoveryPolicyRow {
     #[diesel(sql_type = sql_types::Uuid)]
     policy_id: Uuid,
     #[diesel(sql_type = Text)]
-    principal_id: String,
+    principal_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Integer)]
     version: i32,
     #[diesel(sql_type = Jsonb)]
@@ -56,7 +56,7 @@ impl TryFrom<RecoveryPolicyRow> for RecoveryPolicyRecord {
         })?;
         Ok(Self {
             policy_id: ids::format_typed_uuid("policy", &row.policy_id),
-            principal_id: row.principal_id,
+            principal_id: row.principal_id.into_string(),
             version,
             acceptance_basis,
             trust_domain: row.trust_domain,
@@ -266,9 +266,9 @@ struct RecoverySessionRow {
     #[diesel(sql_type = Text)]
     session_grant_cnf_jkt: String,
     #[diesel(sql_type = Text)]
-    principal_id: String,
+    principal_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Text)]
-    principal_server_id: String,
+    principal_server_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Text)]
     requesting_device_id: String,
     #[diesel(sql_type = Text)]
@@ -387,8 +387,8 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             ),
             session_grant_id: row.session_grant_id,
             session_grant_cnf_jkt: row.session_grant_cnf_jkt,
-            principal_id: row.principal_id,
-            principal_server_id: row.principal_server_id,
+            principal_id: row.principal_id.into_string(),
+            principal_server_id: row.principal_server_id.into_string(),
             requesting_device_id: row.requesting_device_id,
             trust_domain: row.trust_domain,
             policy_id: ids::format_typed_uuid("policy", &row.policy_id),

@@ -304,7 +304,7 @@ fn stage_federation_outbox(
             .validate_shape()
             .map_err(|error| PersistenceError::Conflict(format!("schema_violation: {error}")))?;
         let existing_id = staged.values().find_map(|existing| {
-            (existing.peer_service_id == record.peer_service_id
+            (existing.peer_id == record.peer_id
                 && existing.idempotency_key == record.idempotency_key)
                 .then(|| existing.id.clone())
         });

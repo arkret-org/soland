@@ -111,7 +111,7 @@ diesel::table! {
         pairing_expires_at -> Nullable<Timestamptz>,
         approval_request_id -> Nullable<Text>,
         controller_account_id -> Nullable<Uuid>,
-        recipient_service_id -> Nullable<Text>,
+        recipient_id -> Nullable<Text>,
         runtime_key_binding_digest -> Nullable<Text>,
         runtime_public_key_digest -> Nullable<Text>,
         runtime_attestation_digest -> Nullable<Text>,
@@ -163,9 +163,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    applet_transactions (applet_id, source_service_id, idempotency_key) {
+    applet_transactions (applet_id, source_id, idempotency_key) {
         applet_id -> Text,
-        source_service_id -> Text,
+        source_id -> Text,
         idempotency_key -> Text,
         delivery_authentication_record_digest -> Text,
         request_digest -> Text,
@@ -318,7 +318,7 @@ diesel::table! {
         target_id -> Text,
         purpose -> Text,
         strand_id -> Nullable<Text>,
-        source_service_id -> Nullable<Text>,
+        source_id -> Nullable<Text>,
         created_at -> Timestamptz,
         expires_at -> Nullable<Timestamptz>,
     }
@@ -343,7 +343,7 @@ diesel::table! {
         response_event_ref -> Nullable<Bytea>,
         tombstone_event_ref -> Nullable<Bytea>,
         message -> Nullable<Text>,
-        peer_service_id -> Nullable<Text>,
+        peer_id -> Nullable<Text>,
         peer_service_resolution -> Nullable<Jsonb>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
@@ -357,7 +357,7 @@ diesel::table! {
         request_digest -> Text,
         canonical_event_bytes -> Bytea,
         source_receipt -> Jsonb,
-        issuer_service_id -> Text,
+        issuer_id -> Text,
         verified_at -> Timestamptz,
     }
 }
@@ -539,9 +539,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    federation_frontier_exchange (realm_id, peer_service_id) {
+    federation_frontier_exchange (realm_id, peer_id) {
         realm_id -> Text,
-        peer_service_id -> Text,
+        peer_id -> Text,
         status -> Text,
         consecutive_failures -> Int4,
         last_success_at -> Nullable<Int8>,
@@ -567,7 +567,7 @@ diesel::table! {
 diesel::table! {
     federation_outbox (id) {
         id -> Text,
-        peer_service_id -> Text,
+        peer_id -> Text,
         peer_url -> Nullable<Text>,
         endpoint -> Text,
         idempotency_key -> Text,
@@ -602,7 +602,7 @@ diesel::table! {
     federation_outbox_dead_letter (id) {
         id -> Text,
         outbox_id -> Text,
-        peer_service_id -> Text,
+        peer_id -> Text,
         endpoint -> Text,
         idempotency_key -> Text,
         last_http_status -> Nullable<Int4>,
@@ -675,7 +675,7 @@ diesel::table! {
         locator_id -> Text,
         token_digest -> Text,
         subject_id -> Text,
-        recipient_service_id -> Text,
+        recipient_id -> Text,
         issued_at -> Timestamptz,
         expires_at -> Timestamptz,
         one_time_use -> Bool,
@@ -752,7 +752,7 @@ diesel::table! {
         digest -> Text,
         subject_id -> Text,
         issuer -> Text,
-        issuer_service_id -> Nullable<Text>,
+        issuer_id -> Nullable<Text>,
         audience -> Nullable<Text>,
         binding_state -> Text,
         visibility -> Nullable<Text>,
@@ -887,7 +887,7 @@ diesel::table! {
         realm_id -> Nullable<Text>,
         source_event_id -> Nullable<Text>,
         controller_account_id -> Nullable<Uuid>,
-        recipient_service_id -> Nullable<Text>,
+        recipient_id -> Nullable<Text>,
         source_account_artifact_kind -> Nullable<Text>,
         source_account_artifact_id -> Nullable<Text>,
         source_ref -> Nullable<Text>,
@@ -945,8 +945,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    peer_keypackage_claims (source_service_id, claim_request_id) {
-        source_service_id -> Text,
+    peer_keypackage_claims (source_id, claim_request_id) {
+        source_id -> Text,
         claim_request_id -> Text,
         request_digest -> Text,
         key_package_use -> Text,
@@ -1289,7 +1289,7 @@ diesel::table! {
         id -> Uuid,
         kind -> Text,
         principal_id -> Text,
-        coordinator_service_id -> Text,
+        coordinator_id -> Text,
         expires_at -> Timestamptz,
         created_at -> Timestamptz,
         request_digest -> Text,
@@ -1385,8 +1385,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    service_resolution_mirror_ledger (source_service_id, realm_id, request_id) {
-        source_service_id -> Text,
+    service_resolution_mirror_ledger (source_id, realm_id, request_id) {
+        source_id -> Text,
         realm_id -> Text,
         request_id -> Text,
         request_digest -> Text,
@@ -1573,7 +1573,7 @@ diesel::table! {
         historical_agent_id -> Nullable<Text>,
         historical_verification_method -> Nullable<Text>,
         historical_event_id -> Nullable<Text>,
-        historical_receiver_service_id -> Nullable<Text>,
+        historical_receiver_id -> Nullable<Text>,
         inserted_at -> Timestamptz,
     }
 }
@@ -1641,7 +1641,7 @@ diesel::table! {
         circle_id -> Nullable<Text>,
         requester_actor_id -> Text,
         requester_sender_domain -> Text,
-        release_service_id -> Text,
+        release_id -> Text,
         traversal_retention_digest -> Nullable<Text>,
         request_json -> Jsonb,
         request_receipt_json -> Jsonb,
@@ -1738,7 +1738,7 @@ diesel::table! {
         epoch -> Int8,
         recovery_key_id -> Text,
         holder_principal_id -> Text,
-        holder_service_id -> Text,
+        holder_id -> Text,
         container_event_ref -> Text,
         archive_tuple_digest -> Text,
         archive_replica_digest -> Text,

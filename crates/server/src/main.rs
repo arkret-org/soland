@@ -653,7 +653,7 @@ fn spawn_service_identity_supervisor(
                     {
                         tracing::error!(
                             runtime_service_id = %state.service_id(),
-                            provider_service_id = %identity.service_id,
+                            provider_id = %identity.service_id,
                             "service identity supervisor rejected a runtime identity switch"
                         );
                         break;
@@ -737,7 +737,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                             Err(error) => {
                                 tracing::debug!(
                                     %endpoint,
-                                    peer_service_id = %description.service_id,
+                                    peer_id = %description.service_id,
                                     %error,
                                     "federation peer DID document is not ready; retrying"
                                 );
@@ -755,7 +755,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                             Err(error) => {
                                 tracing::warn!(
                                     %endpoint,
-                                    peer_service_id = %description.service_id,
+                                    peer_id = %description.service_id,
                                     %error,
                                     "federation peer returned an invalid service DID document"
                                 );
@@ -800,7 +800,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                         {
                             tracing::warn!(
                                 %endpoint,
-                                peer_service_id = %description.service_id,
+                                peer_id = %description.service_id,
                                 "federation peer DID document does not bind the described Principal Server identity"
                             );
                             continue;
@@ -813,7 +813,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                         else {
                             tracing::warn!(
                                 %endpoint,
-                                peer_service_id = %description.service_id,
+                                peer_id = %description.service_id,
                                 "federation peer DID document has no active assertion key"
                             );
                             continue;
@@ -826,7 +826,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                         else {
                             tracing::warn!(
                                 %endpoint,
-                                peer_service_id = %description.service_id,
+                                peer_id = %description.service_id,
                                 "federation peer DID document has no active receipt assertion key"
                             );
                             continue;
@@ -842,7 +842,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                                 Err(error) => {
                                     tracing::warn!(
                                         %endpoint,
-                                        peer_service_id = %description.service_id,
+                                        peer_id = %description.service_id,
                                         %error,
                                         "federation peer assertion key is invalid"
                                     );
@@ -862,7 +862,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                                 Err(error) => {
                                     tracing::warn!(
                                         %endpoint,
-                                        peer_service_id = %description.service_id,
+                                        peer_id = %description.service_id,
                                         %error,
                                         "federation peer receipt assertion key is invalid"
                                     );
@@ -891,7 +891,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                         if configured != discovered || key_changed {
                             tracing::info!(
                                 peer_endpoint = %endpoint,
-                                peer_service_id = %description.service_id,
+                                peer_id = %description.service_id,
                                 peer_verification_method = %expected_verification_method,
                                 "resolved federation peer service identity and assertion key"
                             );
@@ -902,7 +902,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                         tracing::warn!(
                             peer_endpoint = %endpoint,
                             peer_service_kind = %description.service_kind.as_str(),
-                            peer_service_id = %description.service_id,
+                            peer_id = %description.service_id,
                             "federation peer describe returned an ineligible service"
                         );
                     }

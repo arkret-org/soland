@@ -14,7 +14,7 @@ use super::{
 };
 
 /// Every column of `federation_outbox`, aliased to the record field names.
-pub(crate) const OUTBOX_COLUMNS: &str = "id, peer_service_id, peer_url, endpoint, idempotency_key, \
+pub(crate) const OUTBOX_COLUMNS: &str = "id, peer_id, peer_url, endpoint, idempotency_key, \
      payload_json, coalescing_key, coalescing_position, state, leased_from_state, realm_fanout, attempts, semantic_attempts, next_attempt_at, last_http_status, \
      last_error_code, last_response_excerpt, lease_owner, lease_token, lease_expires_at, \
      policy_version, supersedes_outbox_id, created_at, completed_at";
@@ -32,12 +32,12 @@ pub(crate) fn qualified_outbox_columns(alias: &str) -> String {
         .join(", ")
 }
 
-const DEAD_LETTER_COLUMNS: &str = "id, outbox_id, peer_service_id, endpoint, idempotency_key, last_http_status, attempts, \
+const DEAD_LETTER_COLUMNS: &str = "id, outbox_id, peer_id, endpoint, idempotency_key, last_http_status, attempts, \
      response_excerpt, reason, failed_at, requeued_outbox_id, requeued_by, requeue_reason, \
      requeue_request_digest, requeued_at";
 
 // G3.S0 — Postgres-backed durable outbound federation HTTP delivery queue.
-// Mirrors `MemoryFederationOutboxStore`. The `(peer_service_id,
+// Mirrors `MemoryFederationOutboxStore`. The `(peer_id,
 // idempotency_key)` UNIQUE INDEX in the migration is what makes
 // `enqueue` structurally idempotent across worker restarts; we catch
 // the conflict here and return Ok(false).
@@ -57,16 +57,16 @@ pub(crate) async fn insert_federation_outbox_row(
         .map_err(|error| PersistenceError::Conflict(format!("schema_violation: {error}")))?;
     sql_query(
         "INSERT INTO federation_outbox \
-         (id, peer_service_id, peer_url, endpoint, idempotency_key, payload_json, coalescing_key, coalescing_position, state, leased_from_state, realm_fanout, attempts, \
+         (id, peer_id, peer_url, endpoint, idempotency_key, payload_json, coalescing_key, coalescing_position, state, leased_from_state, realm_fanout, attempts, \
           semantic_attempts, next_attempt_at, last_http_status, last_error_code, \
           last_response_excerpt, lease_owner, lease_token, lease_expires_at, policy_version, \
           supersedes_outbox_id, created_at, completed_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, \
           $19, $20, $21, $22, $23, $24) \
-         ON CONFLICT (peer_service_id, idempotency_key) DO NOTHING",
+         ON CONFLICT (peer_id, idempotency_key) DO NOTHING",
     )
     .bind::<Text, _>(&record.id)
-    .bind::<Text, _>(record.peer_service_id.as_str())
+    .bind::<Text, _>(record.peer_id.as_str())
     .bind::<Nullable<Text>, _>(record.peer_url.as_deref())
     .bind::<Text, _>(&record.endpoint)
     .bind::<Text, _>(&record.idempotency_key)
@@ -125,7 +125,7 @@ impl FederationOutboxStore for PgFederationOutboxStore {
             })?;
             // The advisory-lock key is bound as TEXT, and PostgreSQL rejects
             // NUL in text; \u{1f} keeps the two halves unambiguous.
-            let lock_key = format!("{}\u{1f}{coalescing_key}", record.peer_service_id);
+            let lock_key = format!("{}\u{1f}{coalescing_key}", record.peer_id);
             sql_query("SELECT true AS present FROM pg_advisory_xact_lock(hashtextextended($1, 0))")
                 .bind::<Text, _>(&lock_key)
                 .get_result::<ExistsRow>(&mut *conn)
@@ -134,9 +134,9 @@ impl FederationOutboxStore for PgFederationOutboxStore {
 
             let duplicate = sql_query(
                 "SELECT true AS present FROM federation_outbox \
-                 WHERE peer_service_id = $1 AND idempotency_key = $2 LIMIT 1",
+                 WHERE peer_id = $1 AND idempotency_key = $2 LIMIT 1",
             )
-            .bind::<Text, _>(record.peer_service_id.as_str())
+            .bind::<Text, _>(record.peer_id.as_str())
             .bind::<Text, _>(&record.idempotency_key)
             .get_result::<ExistsRow>(&mut *conn)
             .await
@@ -149,11 +149,11 @@ impl FederationOutboxStore for PgFederationOutboxStore {
 
             let active = sql_query(
                 "SELECT id, coalescing_position FROM federation_outbox \
-                 WHERE peer_service_id = $1 AND coalescing_key = $2 \
+                 WHERE peer_id = $1 AND coalescing_key = $2 \
                    AND state IN ('pending', 'pending_route', 'leased', 'policy_suppressed') \
                  ORDER BY coalescing_position DESC LIMIT 1 FOR UPDATE",
             )
-            .bind::<Text, _>(record.peer_service_id.as_str())
+            .bind::<Text, _>(record.peer_id.as_str())
             .bind::<Text, _>(coalescing_key)
             .get_result::<ActiveCoalescingLaneRow>(&mut *conn)
             .await
@@ -245,7 +245,7 @@ impl FederationOutboxStore for PgFederationOutboxStore {
                 && let Some(coalescing_key) = successor.coalescing_key.as_deref()
             {
                 // Same TEXT-bound advisory-lock key as `enqueue`: no NUL.
-                let lock_key = format!("{}\u{1f}{coalescing_key}", successor.peer_service_id);
+                let lock_key = format!("{}\u{1f}{coalescing_key}", successor.peer_id);
                 sql_query(
                     "SELECT true AS present FROM pg_advisory_xact_lock(hashtextextended($1, 0))",
                 )
@@ -430,8 +430,8 @@ impl FederationOutboxStore for PgFederationOutboxStore {
             .await
             .map_err(PersistenceError::database)?;
         let rows = sql_query(
-            "SELECT state, peer_service_id, COUNT(*) AS depth, MIN(created_at) AS oldest_created_at \
-             FROM federation_outbox GROUP BY state, peer_service_id ORDER BY state ASC, peer_service_id ASC",
+            "SELECT state, peer_id, COUNT(*) AS depth, MIN(created_at) AS oldest_created_at \
+             FROM federation_outbox GROUP BY state, peer_id ORDER BY state ASC, peer_id ASC",
         )
         .load::<FederationOutboxStateDepthRow>(&mut *conn)
         .await
@@ -445,10 +445,7 @@ impl FederationOutboxStore for PgFederationOutboxStore {
                             row.state
                         ))
                     })?,
-                    peer_service_id: parse_peer_service_id(
-                        row.peer_service_id,
-                        "federation outbox depth",
-                    )?,
+                    peer_id: row.peer_id,
                     depth: row.depth,
                     oldest_created_at: row.oldest_created_at,
                 })
@@ -541,7 +538,7 @@ async fn insert_dead_letter_row(
 ) -> PersistenceResult<()> {
     sql_query(
         "INSERT INTO federation_outbox_dead_letter \
-         (id, outbox_id, peer_service_id, endpoint, idempotency_key, last_http_status, attempts, \
+         (id, outbox_id, peer_id, endpoint, idempotency_key, last_http_status, attempts, \
           response_excerpt, reason, failed_at, requeued_outbox_id, requeued_by, requeue_reason, \
           requeue_request_digest, requeued_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
@@ -549,7 +546,7 @@ async fn insert_dead_letter_row(
     )
     .bind::<Text, _>(&record.id)
     .bind::<Text, _>(&record.outbox_id)
-    .bind::<Text, _>(record.peer_service_id.as_str())
+    .bind::<Text, _>(record.peer_id.as_str())
     .bind::<Text, _>(&record.endpoint)
     .bind::<Text, _>(&record.idempotency_key)
     .bind::<Nullable<Integer>, _>(record.last_http_status)
@@ -575,19 +572,19 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
     async fn get(
         &self,
         realm_id: &str,
-        peer_service_id: &DidCoreId,
+        peer_id: &DidCoreId,
     ) -> PersistenceResult<Option<FederationFrontierExchangeRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT realm_id, peer_service_id, status, consecutive_failures, \
+            "SELECT realm_id, peer_id, status, consecutive_failures, \
              last_success_at, last_failure_at, last_frontier_root, last_error, updated_at \
              FROM federation_frontier_exchange \
-             WHERE realm_id = $1 AND peer_service_id = $2",
+             WHERE realm_id = $1 AND peer_id = $2",
         )
         .bind::<Text, _>(realm_id)
-        .bind::<Text, _>(peer_service_id.as_str())
+        .bind::<Text, _>(peer_id.as_str())
         .get_result::<FederationFrontierExchangeRow>(&mut *conn)
         .await
         .optional()
@@ -599,18 +596,18 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
     async fn record_success(
         &self,
         realm_id: &str,
-        peer_service_id: &DidCoreId,
+        peer_id: &DidCoreId,
         frontier_root: &str,
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord> {
         let existing = self
-            .get(realm_id, peer_service_id)
+            .get(realm_id, peer_id)
             .await
             .map_err(PersistenceError::database)?;
         let record = frontier_exchange_success_record(
             existing,
             realm_id,
-            peer_service_id,
+            peer_id,
             frontier_root,
             observed_at,
         );
@@ -623,21 +620,16 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
     async fn record_failure(
         &self,
         realm_id: &str,
-        peer_service_id: &DidCoreId,
+        peer_id: &DidCoreId,
         reason: &str,
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord> {
         let existing = self
-            .get(realm_id, peer_service_id)
+            .get(realm_id, peer_id)
             .await
             .map_err(PersistenceError::database)?;
-        let record = frontier_exchange_failure_record(
-            existing,
-            realm_id,
-            peer_service_id,
-            reason,
-            observed_at,
-        );
+        let record =
+            frontier_exchange_failure_record(existing, realm_id, peer_id, reason, observed_at);
         self.put_record(&record)
             .await
             .map_err(PersistenceError::database)?;
@@ -649,9 +641,9 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
             .await
             .map_err(PersistenceError::database)?;
         let rows = sql_query(
-            "SELECT realm_id, peer_service_id, status, consecutive_failures, \
+            "SELECT realm_id, peer_id, status, consecutive_failures, \
              last_success_at, last_failure_at, last_frontier_root, last_error, updated_at \
-             FROM federation_frontier_exchange ORDER BY updated_at ASC, realm_id ASC, peer_service_id ASC",
+             FROM federation_frontier_exchange ORDER BY updated_at ASC, realm_id ASC, peer_id ASC",
         )
         .load::<FederationFrontierExchangeRow>(&mut *conn)
         .await
@@ -669,10 +661,10 @@ impl PgFederationFrontierExchangeStore {
         crate::realm_identity::ensure_realm_pk(&mut conn, &record.realm_id).await?;
         sql_query(
             "INSERT INTO federation_frontier_exchange \
-             (realm_id, peer_service_id, status, consecutive_failures, last_success_at, \
+             (realm_id, peer_id, status, consecutive_failures, last_success_at, \
               last_failure_at, last_frontier_root, last_error, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-             ON CONFLICT (realm_id, peer_service_id) DO UPDATE SET \
+             ON CONFLICT (realm_id, peer_id) DO UPDATE SET \
              status = EXCLUDED.status, \
              consecutive_failures = EXCLUDED.consecutive_failures, \
              last_success_at = EXCLUDED.last_success_at, \
@@ -682,7 +674,7 @@ impl PgFederationFrontierExchangeStore {
              updated_at = EXCLUDED.updated_at",
         )
         .bind::<Text, _>(&record.realm_id)
-        .bind::<Text, _>(record.peer_service_id.as_str())
+        .bind::<Text, _>(record.peer_id.as_str())
         .bind::<Text, _>(&record.status)
         .bind::<Integer, _>(record.consecutive_failures)
         .bind::<Nullable<BigInt>, _>(record.last_success_at)
@@ -805,7 +797,7 @@ struct FederationFrontierExchangeRow {
     #[diesel(sql_type = Text)]
     realm_id: String,
     #[diesel(sql_type = Text)]
-    peer_service_id: String,
+    peer_id: DidCoreId,
     #[diesel(sql_type = Text)]
     status: String,
     #[diesel(sql_type = Integer)]
@@ -827,10 +819,7 @@ impl TryFrom<FederationFrontierExchangeRow> for FederationFrontierExchangeRecord
     fn try_from(row: FederationFrontierExchangeRow) -> Result<Self, Self::Error> {
         Ok(Self {
             realm_id: row.realm_id,
-            peer_service_id: parse_peer_service_id(
-                row.peer_service_id,
-                "federation frontier exchange",
-            )?,
+            peer_id: row.peer_id,
             status: row.status,
             consecutive_failures: row.consecutive_failures,
             last_success_at: row.last_success_at,
@@ -854,7 +843,7 @@ pub(crate) struct FederationOutboxRow {
     #[diesel(sql_type = Text)]
     id: String,
     #[diesel(sql_type = Text)]
-    peer_service_id: String,
+    peer_id: DidCoreId,
     #[diesel(sql_type = Nullable<Text>)]
     peer_url: Option<String>,
     #[diesel(sql_type = Text)]
@@ -932,7 +921,7 @@ impl TryFrom<FederationOutboxRow> for FederationOutboxRecord {
             })?;
         let record = Self {
             id: row.id,
-            peer_service_id: parse_peer_service_id(row.peer_service_id, "federation outbox")?,
+            peer_id: row.peer_id,
             peer_url: row.peer_url,
             endpoint: row.endpoint,
             idempotency_key: row.idempotency_key,
@@ -967,7 +956,7 @@ struct FederationOutboxStateDepthRow {
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Text)]
-    peer_service_id: String,
+    peer_id: DidCoreId,
     #[diesel(sql_type = BigInt)]
     depth: i64,
     #[diesel(sql_type = Nullable<BigInt>)]
@@ -980,7 +969,7 @@ struct FederationOutboxDeadLetterRow {
     #[diesel(sql_type = Text)]
     outbox_id: String,
     #[diesel(sql_type = Text)]
-    peer_service_id: String,
+    peer_id: DidCoreId,
     #[diesel(sql_type = Text)]
     endpoint: String,
     #[diesel(sql_type = Text)]
@@ -1013,7 +1002,7 @@ impl TryFrom<FederationOutboxDeadLetterRow> for FederationOutboxDeadLetterRecord
         Ok(Self {
             id: row.id,
             outbox_id: row.outbox_id,
-            peer_service_id: parse_peer_service_id(row.peer_service_id, "federation dead letter")?,
+            peer_id: row.peer_id,
             endpoint: row.endpoint,
             idempotency_key: row.idempotency_key,
             last_http_status: row.last_http_status,
@@ -1030,14 +1019,6 @@ impl TryFrom<FederationOutboxDeadLetterRow> for FederationOutboxDeadLetterRecord
     }
 }
 
-fn parse_peer_service_id(value: String, context: &str) -> PersistenceResult<DidCoreId> {
-    DidCoreId::new(value).map_err(|error| {
-        PersistenceError::Internal(format!(
-            "stored {context} peer service id is invalid: {error}"
-        ))
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1046,7 +1027,7 @@ mod tests {
     fn joined_outbox_projection_qualifies_every_source_column() {
         let columns = qualified_outbox_columns("outbox");
 
-        assert!(columns.starts_with("outbox.id, outbox.peer_service_id"));
+        assert!(columns.starts_with("outbox.id, outbox.peer_id"));
         assert!(columns.contains(", outbox.state,"));
         assert!(columns.ends_with("outbox.completed_at"));
         assert_eq!(

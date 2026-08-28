@@ -183,9 +183,9 @@ pub(super) async fn admin_list_member_routability(
             // routes only register if no live route was seen.
             let entry = routes_by_actor
                 .entry(subject.principal_id.clone())
-                .or_insert_with(|| (subject.recipient_service_id.clone(), false));
+                .or_insert_with(|| (subject.recipient_id.clone(), false));
             if !cell.revoked {
-                *entry = (subject.recipient_service_id.clone(), true);
+                *entry = (subject.recipient_id.clone(), true);
             }
         }
         (allowed, routes_by_actor)
@@ -196,10 +196,10 @@ pub(super) async fn admin_list_member_routability(
         .into_iter()
         .map(|actor_id| {
             let route = routes_by_actor.get(&actor_id);
-            let recipient_service_id = route.map(|(did, _)| did.clone());
+            let recipient_id = route.map(|(did, _)| did.clone());
             // The explicit ["*"] sentinel is unrestricted. Missing or empty
             // allow-lists remain fail-closed, matching the reducer and schema.
-            let in_allowed_list = match &recipient_service_id {
+            let in_allowed_list = match &recipient_id {
                 Some(did) => unrestricted || allowed.contains(did),
                 None => false,
             };
@@ -212,7 +212,7 @@ pub(super) async fn admin_list_member_routability(
             MemberRoutabilityRowOutcome {
                 actor_id,
                 display_name: None,
-                recipient_service_id,
+                recipient_id,
                 in_allowed_list,
                 delivery_status,
             }
@@ -324,7 +324,7 @@ fn handover_row_from_audit(realm_id: &str, entry: Value) -> DeliveryBindingHando
             })
             .unwrap_or_default(),
         previous_recipient_service_id: str_field("previous_recipient_service_id"),
-        new_recipient_service_id: str_field("new_recipient_service_id"),
+        new_recipient_id: str_field("new_recipient_id"),
         handover_frontier: frontier,
         reason_code: str_field("reason_code"),
         observed_at: entry

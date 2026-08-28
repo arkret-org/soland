@@ -77,7 +77,7 @@ pub struct AgentRuntimeApprovalWrite {
     pub approval_notification_id: String,
     pub approval_requested_at: chrono::DateTime<chrono::Utc>,
     pub controller_account_id: String,
-    pub recipient_service_id: String,
+    pub recipient_id: String,
     pub runtime_key_binding_digest: String,
     pub runtime_public_key_digest: String,
     pub runtime_attestation_digest: String,

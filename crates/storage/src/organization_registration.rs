@@ -51,7 +51,7 @@ pub struct OrganizationRegistrationGenerationRecord {
     pub organization_id: DidCoreId,
     pub did: Did,
     pub registration_generation: u64,
-    pub local_admin_subject: DidCoreId,
+    pub local_admin_subject_id: DidCoreId,
     pub delegated_scopes: Vec<OrganizationRegistrationScope>,
     pub status: OrganizationRegistrationStatus,
     pub current_outcome_id: String,
@@ -209,7 +209,7 @@ pub fn validate_prepared_challenge(
     let request = OrganizationRegistrationChallengeRequestBody {
         organization_id: challenge.organization_id.clone(),
         did: challenge.did.clone(),
-        local_admin_subject: challenge.local_admin_subject.clone(),
+        local_admin_subject_id: challenge.local_admin_subject_id.clone(),
         requested_scopes: challenge.requested_scopes.clone(),
     };
     challenge
@@ -242,8 +242,8 @@ pub fn apply_organization_registration_ensure(
     if let Some(existing_state) = state.as_mut() {
         existing_state.validate()?;
         let current = existing_state.current()?.clone();
-        let same_delegation = current.local_admin_subject
-            == challenge.challenge.local_admin_subject
+        let same_delegation = current.local_admin_subject_id
+            == challenge.challenge.local_admin_subject_id
             && current.delegated_scopes == challenge.challenge.requested_scopes;
         if same_delegation && current.status == OrganizationRegistrationStatus::Active {
             if commit.new_outcome.is_some() {
@@ -311,7 +311,7 @@ pub fn apply_organization_registration_ensure(
                     organization_id: receipt.organization_id.clone(),
                     did: receipt.did.clone(),
                     registration_generation: generation,
-                    local_admin_subject: receipt.local_admin_subject.clone(),
+                    local_admin_subject_id: receipt.local_admin_subject_id.clone(),
                     delegated_scopes: receipt.delegated_scopes.clone(),
                     status: OrganizationRegistrationStatus::Active,
                     current_outcome_id: outcome_id.clone(),
@@ -329,7 +329,7 @@ pub fn apply_organization_registration_ensure(
                 organization_id: organization_id.clone(),
                 did: receipt.did.clone(),
                 registration_generation: generation,
-                local_admin_subject: receipt.local_admin_subject.clone(),
+                local_admin_subject_id: receipt.local_admin_subject_id.clone(),
                 delegated_scopes: receipt.delegated_scopes.clone(),
                 status: OrganizationRegistrationStatus::Active,
                 current_outcome_id: outcome_id.clone(),
@@ -385,7 +385,7 @@ pub fn apply_organization_registration_refresh(
     }
     if challenge.challenge.organization_id != state.organization_id
         || challenge.challenge.did != current.did
-        || challenge.challenge.local_admin_subject != current.local_admin_subject
+        || challenge.challenge.local_admin_subject_id != current.local_admin_subject_id
         || challenge.challenge.requested_scopes != current.delegated_scopes
     {
         return Err(challenge_invalid(
@@ -531,7 +531,7 @@ fn validate_challenge_at(
     let request = OrganizationRegistrationChallengeRequestBody {
         organization_id: record.challenge.organization_id.clone(),
         did: record.challenge.did.clone(),
-        local_admin_subject: record.challenge.local_admin_subject.clone(),
+        local_admin_subject_id: record.challenge.local_admin_subject_id.clone(),
         requested_scopes: record.challenge.requested_scopes.clone(),
     };
     record
@@ -584,7 +584,7 @@ fn validate_new_generation_outcome(
         || receipt.organization_id != challenge.organization_id
         || receipt.did != challenge.did
         || receipt.registration_generation != expected_generation
-        || receipt.local_admin_subject != challenge.local_admin_subject
+        || receipt.local_admin_subject_id != challenge.local_admin_subject_id
         || receipt.delegated_scopes != challenge.requested_scopes
         || receipt.status != OrganizationRegistrationStatus::Active
     {
@@ -609,7 +609,7 @@ fn validate_same_generation_outcome(
     if outcome.created != required_created
         || receipt.organization_id != current.organization_id
         || receipt.registration_generation != current.registration_generation
-        || receipt.local_admin_subject != current.local_admin_subject
+        || receipt.local_admin_subject_id != current.local_admin_subject_id
         || receipt.delegated_scopes != current.delegated_scopes
         || receipt.status != required_status
     {

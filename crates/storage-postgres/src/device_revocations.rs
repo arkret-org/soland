@@ -43,9 +43,9 @@ struct CleanupRow {
     #[diesel(sql_type = Text)]
     covering_seal_id: String,
     #[diesel(sql_type = Text)]
-    principal_id: String,
+    principal_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Text)]
-    principal_server_id: String,
+    principal_server_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Text)]
     device_id: String,
     #[diesel(sql_type = Text)]
@@ -630,8 +630,8 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
                 proposal_event_id: row.proposal_event_id,
                 covering_seal_id: row.covering_seal_id,
                 selector: DeviceRevocationGateSelector {
-                    principal_id: row.principal_id,
-                    principal_server_id: row.principal_server_id,
+                    principal_id: row.principal_id.into_string(),
+                    principal_server_id: row.principal_server_id.into_string(),
                     device_id: row.device_id,
                     target_device_authorize_event_id: row.target_device_authorize_event_id,
                     target_device_generation_ref: u64::try_from(row.target_device_generation_ref)

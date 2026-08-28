@@ -197,7 +197,7 @@ pub fn apply_realm_policy_server(
                 RealmPolicyServerPayload::Declaration(payload) => {
                     ProjectionEffect::RealmPolicyServerProjected {
                         realm_id,
-                        policy_server_service_id: payload.policy_server_service_id,
+                        policy_server_id: payload.policy_server_id,
                     }
                 }
                 RealmPolicyServerPayload::Tombstone(_) => {
@@ -239,7 +239,7 @@ pub fn apply_realm_policy_server(
             return ProjectionEffect::RealmPolicyServerTombstoned { realm_id };
         }
     };
-    let policy_server_service_id = payload.policy_server_service_id;
+    let policy_server_id = payload.policy_server_id;
 
     let policy_server_url = payload.policy_server_url;
     if !policy_server_url.starts_with("https://") {
@@ -285,7 +285,7 @@ pub fn apply_realm_policy_server(
         realm_id.clone(),
         RealmPolicyServerConfig {
             realm_id: realm_id.clone(),
-            policy_server_service_id: policy_server_service_id.clone(),
+            policy_server_id: policy_server_id.clone(),
             policy_server_url,
             cache_ttl_seconds,
             timeout_ms,
@@ -296,7 +296,7 @@ pub fn apply_realm_policy_server(
 
     ProjectionEffect::RealmPolicyServerProjected {
         realm_id,
-        policy_server_service_id,
+        policy_server_id,
     }
 }
 
@@ -358,7 +358,7 @@ mod tests {
             &op(
                 REALM_CHILD,
                 json!({
-                    "policy_server_service_id": "ak:did_core:web:policy.example.com",
+                    "policy_server_id": "ak:did_core:web:policy.example.com",
                     "policy_server_url": "https://policy.example.com/_arkret/self/policy/check",
                     "cache_ttl_seconds": 60,
                     "timeout_ms": 1500,
@@ -369,11 +369,11 @@ mod tests {
         match effect {
             ProjectionEffect::RealmPolicyServerProjected {
                 realm_id,
-                policy_server_service_id,
+                policy_server_id,
             } => {
                 assert_eq!(realm_id, REALM_CHILD);
                 assert_eq!(
-                    policy_server_service_id.as_str(),
+                    policy_server_id.as_str(),
                     "ak:did_core:web:policy.example.com"
                 );
             }
@@ -385,7 +385,7 @@ mod tests {
             .expect("resolvable policy-server chain")
             .expect("cached");
         assert_eq!(
-            cfg.policy_server_service_id.as_str(),
+            cfg.policy_server_id.as_str(),
             "ak:did_core:web:policy.example.com"
         );
         assert_eq!(cfg.cache_ttl_seconds, 60);
@@ -400,9 +400,7 @@ mod tests {
             )
             .expect("cell present");
         assert_eq!(
-            value
-                .get("policy_server_service_id")
-                .and_then(Value::as_str),
+            value.get("policy_server_id").and_then(Value::as_str),
             Some("ak:did_core:web:policy.example.com")
         );
     }
@@ -416,7 +414,7 @@ mod tests {
             &op(
                 REALM_ORG,
                 json!({
-                    "policy_server_service_id": "ak:did_core:web:org.example.com",
+                    "policy_server_id": "ak:did_core:web:org.example.com",
                     "policy_server_url": "https://org.example.com/_arkret/self/policy/check",
                 }),
             ),
@@ -447,7 +445,7 @@ mod tests {
             .expect("org-fallback config");
         assert_eq!(cfg.realm_id, REALM_ORG);
         assert_eq!(
-            cfg.policy_server_service_id.as_str(),
+            cfg.policy_server_id.as_str(),
             "ak:did_core:web:org.example.com"
         );
     }
@@ -467,7 +465,7 @@ mod tests {
             &mut state,
             &op(
                 REALM_CHILD,
-                json!({"policy_server_service_id": "ak:did_core:web:p.example"}),
+                json!({"policy_server_id": "ak:did_core:web:p.example"}),
             ),
         ) {
             ProjectionEffect::Rejected { reason } => {
@@ -481,7 +479,7 @@ mod tests {
             &op(
                 REALM_CHILD,
                 json!({
-                    "policy_server_service_id": "ak:did_core:web:p.example",
+                    "policy_server_id": "ak:did_core:web:p.example",
                     "policy_server_url": "ftp://nope.example",
                 }),
             ),
@@ -497,7 +495,7 @@ mod tests {
             &op(
                 REALM_CHILD,
                 json!({
-                    "policy_server_service_id": "ak:did_core:web:p.example",
+                    "policy_server_id": "ak:did_core:web:p.example",
                     "policy_server_url": "https://p.example/_arkret/self/policy/check",
                     "on_timeout": "soft_pass",
                 }),
@@ -514,7 +512,7 @@ mod tests {
             &op(
                 REALM_CHILD,
                 json!({
-                    "policy_server_service_id": "ak:did_core:web:p.example",
+                    "policy_server_id": "ak:did_core:web:p.example",
                     "policy_server_url": "https://p.example/_arkret/self/policy/check",
                     "timeout_ms": 0,
                 }),
@@ -535,7 +533,7 @@ mod tests {
             &op(
                 REALM_ORG,
                 json!({
-                    "policy_server_service_id": "ak:did_core:web:org.example.com",
+                    "policy_server_id": "ak:did_core:web:org.example.com",
                     "policy_server_url": "https://org.example.com/_arkret/self/policy/check",
                 }),
             ),
@@ -545,7 +543,7 @@ mod tests {
             &op(
                 REALM_CHILD,
                 json!({
-                    "policy_server_service_id": "ak:did_core:web:child.example.com",
+                    "policy_server_id": "ak:did_core:web:child.example.com",
                     "policy_server_url": "https://child.example.com/_arkret/self/policy/check",
                 }),
             ),
@@ -571,7 +569,7 @@ mod tests {
             "preconditions": [{
                 "cell": "ak:cell:ak.component.realm.policy_server.v1:null",
                 "predicate": {"op": "head_eq", "value": {
-                    "policy_server_service_id": "ak:did_core:web:child.example.com",
+                    "policy_server_id": "ak:did_core:web:child.example.com",
                     "policy_server_url": "https://child.example.com/_arkret/self/policy/check",
                 }},
             }],
@@ -612,7 +610,7 @@ mod tests {
     fn stale_policy_server_head_eq_is_rejected() {
         let mut state = ProjectionState::new();
         let first_value = json!({
-            "policy_server_service_id": "ak:did_core:web:first.example",
+            "policy_server_id": "ak:did_core:web:first.example",
             "policy_server_url": "https://first.example/_arkret/self/policy/check",
         });
         apply_realm_policy_server(&mut state, &op(REALM_CHILD, first_value.clone()));
@@ -620,7 +618,7 @@ mod tests {
         let mut replacement = op(
             REALM_CHILD,
             json!({
-                "policy_server_service_id": "ak:did_core:web:second.example",
+                "policy_server_id": "ak:did_core:web:second.example",
                 "policy_server_url": "https://second.example/_arkret/self/policy/check",
             }),
         );
@@ -641,7 +639,7 @@ mod tests {
                     "predicate": {
                         "op": "head_eq",
                         "value": {
-                            "policy_server_service_id": "ak:did_core:web:first.example",
+                            "policy_server_id": "ak:did_core:web:first.example",
                             "policy_server_url": "https://first.example/_arkret/self/policy/check",
                         },
                     },

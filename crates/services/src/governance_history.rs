@@ -393,7 +393,7 @@ impl GovernanceHistoryService {
                     archive_authorization_tuple,
                     ..
                 },
-            ) => &archive_authorization_tuple.holder_service_id == caller,
+            ) => &archive_authorization_tuple.holder_id == caller,
             _ => false,
         };
         if !caller_authorized {
@@ -455,7 +455,7 @@ impl GovernanceHistoryService {
         &self,
         effective_scope: &HistoryEffectiveScope,
         holder_principal_id: &DidCoreId,
-        holder_service_id: &DidCoreId,
+        holder_id: &DidCoreId,
         from_epoch: u64,
         to_epoch: u64,
         limit: usize,
@@ -466,7 +466,7 @@ impl GovernanceHistoryService {
             .list_accepted_for_authority(
                 effective_scope,
                 holder_principal_id,
-                holder_service_id,
+                holder_id,
                 from_epoch,
                 to_epoch,
                 limit,

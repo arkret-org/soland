@@ -63,7 +63,7 @@ impl VerifiedBindingRouteFetcher {
             .filter(|member| {
                 member.state == "join"
                     && member.delivery_status.as_deref() == Some("routable")
-                    && member.recipient_service_id.as_deref() == Some(service_id.as_str())
+                    && member.recipient_id.as_deref() == Some(service_id.as_str())
             })
             .filter_map(|member| {
                 let carrier = member.recipient_service_resolution.as_ref()?;

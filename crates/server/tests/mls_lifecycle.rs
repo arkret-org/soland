@@ -80,7 +80,7 @@ fn sha256_json(value: &Value) -> String {
     reason = "the helper mirrors the complete self KeyPackage claim transcript"
 )]
 fn signed_keypackage_claim_request(
-    authority_service_id: &str,
+    authority_id: &str,
     requester: &str,
     requester_device: &str,
     requester_device_authorize_event_id: &str,
@@ -115,8 +115,8 @@ fn signed_keypackage_claim_request(
             "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
             "mls_group_id": mls_group_id,
             "service_binding": {
-                "source_service_id": authority_service_id,
-                "destination_service_id": authority_service_id
+                "source_id": authority_id,
+                "destination_id": authority_id
             },
             "requester_authorization": {
                 "kind": "device",
@@ -168,7 +168,7 @@ fn install_routable_member(state: &AppState, realm_id: &str, member: &arkret_wir
             state: "join".to_owned(),
             role: "member".to_owned(),
             delivery_status: Some("routable".to_owned()),
-            recipient_service_id: Some(state.service_id().to_owned()),
+            recipient_id: Some(state.service_id().to_owned()),
             recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,

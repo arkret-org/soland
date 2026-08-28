@@ -71,8 +71,8 @@ async fn peer_publish(
     let ack = arkret_signatures::service_resolution::sign_service_resolution_publish_ack(
         ServiceResolutionPublishAckCore {
             request_id: request.request_id.clone(),
-            source_service_id: source.clone(),
-            receiver_service_id: receiver,
+            source_id: source.clone(),
+            receiver_id: receiver,
             realm_id: request.realm_id.clone(),
             request_digest: request_digest.clone(),
             artifact_key: artifact_key.clone(),
@@ -87,7 +87,7 @@ async fn peer_publish(
     let committed = state
         .persistence()
         .commit_service_route_mirror(ServiceResolutionMirrorEntry {
-            source_service_id: source,
+            source_id: source,
             realm_id: request.realm_id.clone(),
             request_id: request.request_id.clone(),
             request_digest,
@@ -145,7 +145,7 @@ async fn peer_resolve(
         state,
         source.as_str(),
         request.realm_id.as_str(),
-        request.target_service_id.as_str(),
+        request.target_id.as_str(),
     )
     .await?
     {
@@ -153,7 +153,7 @@ async fn peer_resolve(
     }
     if state
         .persistence()
-        .service_route_is_quarantined(&request.target_service_id, &request.target_service_kind)
+        .service_route_is_quarantined(&request.target_id, &request.target_service_kind)
         .await
         .map_err(route_service_error)?
     {
@@ -170,7 +170,7 @@ async fn peer_resolve(
         .service_route_successors(
             &source,
             &request.realm_id,
-            &request.target_service_id,
+            &request.target_id,
             &request.target_service_kind,
             request.known_record_sequence,
             record_limit.saturating_add(1),
@@ -195,7 +195,7 @@ async fn peer_resolve(
         .latest_service_route_notice(
             &source,
             &request.realm_id,
-            &request.target_service_id,
+            &request.target_id,
             &request.target_service_kind,
         )
         .await

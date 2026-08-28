@@ -114,7 +114,7 @@ fn signed_control_proof(
         "challenge_id": challenge.challenge_id,
         "organization_id": challenge.organization_id,
         "did": challenge.did,
-        "local_admin_subject": challenge.local_admin_subject,
+        "local_admin_subject_id": challenge.local_admin_subject_id,
         "version_id": pinned.version_id,
         "log_head_digest": pinned.log_head_digest,
         "verification_method": proof.verification_method,
@@ -209,7 +209,7 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable_bo
             .body(canonical_body(&serde_json::json!({
                 "organization_id": organization_id,
                 "did": did,
-                "local_admin_subject": admin_id,
+                "local_admin_subject_id": admin_id,
                 "requested_scopes": ["organization_unregistered_scope"],
             })))
             .send(&app)
@@ -228,7 +228,7 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable_bo
             .body(canonical_body(&serde_json::json!({
                 "organization_id": organization_id,
                 "did": did,
-                "local_admin_subject": admin_id,
+                "local_admin_subject_id": admin_id,
                 "requested_scopes": ["organization_profile_manage"],
             })))
             .send(&app)
@@ -243,7 +243,7 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable_bo
         version_id: pinned.version_id.clone(),
         log_head_digest: pinned.log_head_digest.clone(),
         control_proof: signed_control_proof(&challenge, &pinned, &control_signer),
-        local_admin_subject: admin_id.clone(),
+        local_admin_subject_id: admin_id.clone(),
         requested_scopes: vec![OrganizationRegistrationScope::OrganizationProfileManage],
         handle_attestation: None,
     };
@@ -283,7 +283,7 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable_bo
             .body(canonical_body(&serde_json::json!({
                 "organization_id": organization_id,
                 "did": did,
-                "local_admin_subject": admin_id,
+                "local_admin_subject_id": admin_id,
                 "requested_scopes": ["organization_profile_manage"],
             })))
             .send(&app)

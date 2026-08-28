@@ -190,7 +190,7 @@ CREATE TABLE public.agent_principals (
     pairing_expires_at timestamp with time zone,
     approval_request_id text,
     controller_account_id uuid,
-    recipient_service_id text,
+    recipient_id text,
     runtime_key_binding_digest text,
     runtime_public_key_digest text,
     runtime_attestation_digest text,
@@ -328,14 +328,14 @@ CREATE INDEX managed_authority_claims_applet_idx
 
 CREATE TABLE public.applet_transactions (
     applet_id text NOT NULL,
-    source_service_id text NOT NULL,
+    source_id text NOT NULL,
     idempotency_key text NOT NULL,
     delivery_authentication_record_digest text NOT NULL,
     request_digest text NOT NULL,
     outcome jsonb,
     received_at timestamp with time zone DEFAULT now() NOT NULL,
     completed_at timestamp with time zone,
-    CONSTRAINT applet_transactions_pkey PRIMARY KEY (applet_id, source_service_id, idempotency_key)
+    CONSTRAINT applet_transactions_pkey PRIMARY KEY (applet_id, source_id, idempotency_key)
 );
 
 CREATE INDEX applet_transactions_received_idx ON public.applet_transactions USING btree (received_at);
@@ -743,7 +743,7 @@ CREATE TABLE public.governance_unscoped_signer_evidence (
     historical_agent_id text,
     historical_verification_method text,
     historical_event_id text,
-    historical_receiver_service_id text,
+    historical_receiver_id text,
     inserted_at timestamp with time zone DEFAULT now() NOT NULL,
     PRIMARY KEY (dependency_kind, object_digest),
     CONSTRAINT governance_unscoped_signer_evidence_kind_check CHECK (dependency_kind IN (
@@ -754,12 +754,12 @@ CREATE TABLE public.governance_unscoped_signer_evidence (
         (historical_agent_id IS NULL
             AND historical_verification_method IS NULL
             AND historical_event_id IS NULL
-            AND historical_receiver_service_id IS NULL)
+            AND historical_receiver_id IS NULL)
         OR
         (historical_agent_id IS NOT NULL
             AND historical_verification_method IS NOT NULL
             AND historical_event_id IS NOT NULL
-            AND historical_receiver_service_id IS NOT NULL)
+            AND historical_receiver_id IS NOT NULL)
     ),
     CONSTRAINT governance_unscoped_signer_evidence_size_check CHECK (octet_length(canonical_bytes) <= 1048576)
 );
@@ -769,7 +769,7 @@ CREATE UNIQUE INDEX governance_unscoped_signer_evidence_historical_key_unique
         historical_agent_id,
         historical_verification_method,
         historical_event_id,
-        historical_receiver_service_id
+        historical_receiver_id
     )
     WHERE historical_agent_id IS NOT NULL;
 
@@ -908,7 +908,7 @@ CREATE TABLE public.history_key_requests (
     circle_id text,
     requester_actor_id text NOT NULL,
     requester_sender_domain text NOT NULL,
-    release_service_id text NOT NULL,
+    release_id text NOT NULL,
     traversal_retention_digest text REFERENCES public.history_traversal_retentions(retention_digest) ON DELETE RESTRICT,
     request_json jsonb NOT NULL,
     request_receipt_json jsonb NOT NULL,
@@ -1072,7 +1072,7 @@ CREATE TABLE public.pending_rrk_acquisitions (
     epoch bigint NOT NULL,
     recovery_key_id text NOT NULL,
     holder_principal_id text NOT NULL,
-    holder_service_id text NOT NULL,
+    holder_id text NOT NULL,
     container_event_ref text NOT NULL,
     archive_tuple_digest text NOT NULL,
     archive_replica_digest text NOT NULL,
@@ -1129,7 +1129,7 @@ CREATE INDEX pending_rrk_acquisitions_authority_epoch_idx
     ON public.pending_rrk_acquisitions (
         effective_scope,
         holder_principal_id,
-        holder_service_id,
+        holder_id,
         epoch,
         container_event_ref,
         archive_replica_digest
@@ -1203,7 +1203,7 @@ CREATE TABLE public.mimi_consent_correlations (
     target_id text NOT NULL,
     purpose text NOT NULL,
     strand_id text,
-    source_service_id text,
+    source_id text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     expires_at timestamp with time zone
 );
@@ -1236,7 +1236,7 @@ CREATE TABLE public.contacts (
     response_event_ref bytea CHECK (octet_length(response_event_ref) = 33),
     tombstone_event_ref bytea CHECK (octet_length(tombstone_event_ref) = 33),
     message text,
-    peer_service_id text,
+    peer_id text,
     peer_service_resolution jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
@@ -1255,7 +1255,7 @@ CREATE TABLE public.contact_verified_mirrors (
     request_digest text NOT NULL,
     canonical_event_bytes bytea NOT NULL,
     source_receipt jsonb NOT NULL,
-    issuer_service_id text NOT NULL,
+    issuer_id text NOT NULL,
     verified_at timestamp with time zone NOT NULL,
     PRIMARY KEY (target_holder_id, request_event_id)
 );
@@ -1442,7 +1442,7 @@ CREATE INDEX federation_operations_space_idx ON public.federation_operations USI
 
 CREATE TABLE public.federation_outbox (
     id text PRIMARY KEY,
-    peer_service_id text NOT NULL CHECK (peer_service_id LIKE 'ak:did_core:%'),
+    peer_id text NOT NULL CHECK (peer_id LIKE 'ak:did_core:%'),
     peer_url text,
     endpoint text NOT NULL,
     idempotency_key text NOT NULL,
@@ -1487,13 +1487,13 @@ CREATE TABLE public.federation_outbox (
     )
 );
 
-CREATE UNIQUE INDEX federation_outbox_peer_idem ON public.federation_outbox USING btree (peer_service_id, idempotency_key);
+CREATE UNIQUE INDEX federation_outbox_peer_idem ON public.federation_outbox USING btree (peer_id, idempotency_key);
 
 -- Account-status propagation uses one stable lane per account/destination. A
 -- leased or policy-suppressed row is still unfinished and therefore occupies
 -- the lane until it is atomically superseded or reaches a terminal outcome.
 CREATE UNIQUE INDEX federation_outbox_unfinished_coalescing_lane
-    ON public.federation_outbox (peer_service_id, coalescing_key)
+    ON public.federation_outbox (peer_id, coalescing_key)
     WHERE coalescing_key IS NOT NULL
       AND state IN ('pending', 'pending_route', 'leased', 'policy_suppressed');
 
@@ -1505,12 +1505,12 @@ CREATE INDEX federation_outbox_claim ON public.federation_outbox USING btree (st
 -- Policy-suppressed revalidation sweep (`federation.md` §4.4).
 CREATE INDEX federation_outbox_policy_suppressed ON public.federation_outbox USING btree (policy_version) WHERE (state = 'policy_suppressed'::text);
 
-CREATE INDEX federation_outbox_state_peer ON public.federation_outbox USING btree (state, peer_service_id, created_at);
+CREATE INDEX federation_outbox_state_peer ON public.federation_outbox USING btree (state, peer_id, created_at);
 
 CREATE TABLE public.federation_outbox_dead_letter (
     id text PRIMARY KEY,
     outbox_id text NOT NULL,
-    peer_service_id text NOT NULL CHECK (peer_service_id LIKE 'ak:did_core:%'),
+    peer_id text NOT NULL CHECK (peer_id LIKE 'ak:did_core:%'),
     endpoint text NOT NULL,
     idempotency_key text NOT NULL,
     last_http_status integer,
@@ -1535,7 +1535,7 @@ ALTER TABLE ONLY public.federation_outbox_dead_letter
 
 CREATE TABLE public.federation_frontier_exchange (
     realm_id text NOT NULL,
-    peer_service_id text NOT NULL CHECK (peer_service_id LIKE 'ak:did_core:%'),
+    peer_id text NOT NULL CHECK (peer_id LIKE 'ak:did_core:%'),
     status text NOT NULL,
     consecutive_failures integer DEFAULT 0 NOT NULL,
     last_success_at bigint,
@@ -1543,7 +1543,7 @@ CREATE TABLE public.federation_frontier_exchange (
     last_frontier_root text,
     last_error text,
     updated_at bigint NOT NULL,
-    CONSTRAINT federation_frontier_exchange_pkey PRIMARY KEY (realm_id, peer_service_id)
+    CONSTRAINT federation_frontier_exchange_pkey PRIMARY KEY (realm_id, peer_id)
 );
 
 CREATE INDEX federation_frontier_exchange_status_idx ON public.federation_frontier_exchange USING btree (status, updated_at);
@@ -1559,7 +1559,7 @@ CREATE TABLE public.invite_locators (
     locator_id text PRIMARY KEY,
     token_digest text NOT NULL UNIQUE,
     subject_id text NOT NULL,
-    recipient_service_id text NOT NULL,
+    recipient_id text NOT NULL,
     issued_at timestamp with time zone NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     one_time_use boolean DEFAULT false NOT NULL,
@@ -1757,7 +1757,7 @@ ALTER TABLE ONLY public.mls_key_packages
 CREATE INDEX mls_key_packages_by_actor_endpoint ON public.mls_key_packages USING btree (actor_id, device_id, endpoint_verification_method, intended_realm_id, claimed_by_mls_group_id);
 
 CREATE TABLE public.peer_keypackage_claims (
-    source_service_id text NOT NULL,
+    source_id text NOT NULL,
     claim_request_id text NOT NULL,
     request_digest text NOT NULL,
     key_package_use text NOT NULL,
@@ -1773,7 +1773,7 @@ CREATE TABLE public.peer_keypackage_claims (
     CONSTRAINT peer_keypackage_claims_state_check CHECK (state IN ('claimed', 'consumed', 'claim_failed', 'expired', 'revoked', 'last_resort_claimed')),
     CONSTRAINT peer_keypackage_claims_deadline_check CHECK (key_package_use = 'none' OR claim_expires_at_unix_ms IS NOT NULL),
     CONSTRAINT peer_keypackage_claims_last_resort_state_check CHECK (state <> 'last_resort_claimed' OR key_package_use = 'last_resort'),
-    PRIMARY KEY (source_service_id, claim_request_id)
+    PRIMARY KEY (source_id, claim_request_id)
 );
 
 CREATE UNIQUE INDEX peer_keypackage_claims_single_use_keypackage_id_key ON public.peer_keypackage_claims USING btree (keypackage_id) WHERE key_package_use = 'single_use' AND keypackage_id IS NOT NULL;
@@ -2062,7 +2062,7 @@ CREATE TABLE public.notifications (
     -- column can become a 33-octet Event identity.
     source_event_id text,
     controller_account_id uuid,
-    recipient_service_id text,
+    recipient_id text,
     source_account_artifact_kind text,
     source_account_artifact_id text,
     source_ref text,
@@ -2080,7 +2080,7 @@ CREATE TABLE public.notifications (
     read_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
-    CONSTRAINT notifications_source_boundary_check CHECK (((source_event_id IS NOT NULL) AND (realm_id IS NOT NULL) AND (controller_account_id IS NULL) AND (recipient_service_id IS NULL) AND (source_account_artifact_kind IS NULL) AND (source_account_artifact_id IS NULL) AND (notification_kind IS NOT NULL) AND (projection_action IS NULL) AND (projection_data IS NULL)) OR ((source_event_id IS NULL) AND (realm_id IS NULL) AND (controller_account_id IS NOT NULL) AND (recipient_service_id IS NOT NULL) AND (source_account_artifact_kind = 'agent_runtime_approval'::text) AND (source_account_artifact_id IS NOT NULL) AND (notification_kind IS NULL) AND (projection_action IS NOT NULL))),
+    CONSTRAINT notifications_source_boundary_check CHECK (((source_event_id IS NOT NULL) AND (realm_id IS NOT NULL) AND (controller_account_id IS NULL) AND (recipient_id IS NULL) AND (source_account_artifact_kind IS NULL) AND (source_account_artifact_id IS NULL) AND (notification_kind IS NOT NULL) AND (projection_action IS NULL) AND (projection_data IS NULL)) OR ((source_event_id IS NULL) AND (realm_id IS NULL) AND (controller_account_id IS NOT NULL) AND (recipient_id IS NOT NULL) AND (source_account_artifact_kind = 'agent_runtime_approval'::text) AND (source_account_artifact_id IS NOT NULL) AND (notification_kind IS NULL) AND (projection_action IS NOT NULL))),
     CONSTRAINT notifications_projection_action_check CHECK ((projection_action IS NULL) OR (projection_action = ANY (ARRAY['upsert'::text, 'remove'::text])))
 );
 
@@ -2088,9 +2088,9 @@ CREATE INDEX notifications_recipient_idx ON public.notifications USING btree (re
 
 CREATE UNIQUE INDEX notifications_event_source_key ON public.notifications USING btree (recipient_id, source_event_id, notification_kind) WHERE (source_event_id IS NOT NULL);
 
-CREATE UNIQUE INDEX notifications_account_artifact_key ON public.notifications USING btree (controller_account_id, recipient_service_id, source_account_artifact_kind, source_account_artifact_id) WHERE (controller_account_id IS NOT NULL);
+CREATE UNIQUE INDEX notifications_account_artifact_key ON public.notifications USING btree (controller_account_id, recipient_id, source_account_artifact_kind, source_account_artifact_id) WHERE (controller_account_id IS NOT NULL);
 
-CREATE INDEX notifications_account_position_idx ON public.notifications USING btree (controller_account_id, recipient_service_id, projection_position) WHERE (controller_account_id IS NOT NULL);
+CREATE INDEX notifications_account_position_idx ON public.notifications USING btree (controller_account_id, recipient_id, projection_position) WHERE (controller_account_id IS NOT NULL);
 
 CREATE INDEX notifications_source_idx ON public.notifications USING btree (source_event_id);
 
@@ -2112,11 +2112,11 @@ BEGIN
     IF NEW.approval_request_id IS NOT NULL
        AND NEW.approval_notification_id IS NOT NULL
        AND NEW.controller_account_id IS NOT NULL
-       AND NEW.recipient_service_id IS NOT NULL THEN
+       AND NEW.recipient_id IS NOT NULL THEN
         delta_action := 'upsert';
         notification_id := NEW.approval_notification_id;
         account_id := NEW.controller_account_id;
-        service_id := NEW.recipient_service_id;
+        service_id := NEW.recipient_id;
         recipient_id := NEW.controller_id;
         artifact_id := NEW.approval_request_id;
         notification_data := jsonb_build_object(
@@ -2140,7 +2140,7 @@ BEGIN
         delta_action := 'remove';
         notification_id := OLD.approval_notification_id;
         account_id := OLD.controller_account_id;
-        service_id := OLD.recipient_service_id;
+        service_id := OLD.recipient_id;
         recipient_id := OLD.controller_id;
         artifact_id := OLD.approval_request_id;
         notification_data := jsonb_build_object(
@@ -2151,7 +2151,7 @@ BEGIN
     END IF;
 
     INSERT INTO public.notifications (
-        id, recipient_id, controller_account_id, recipient_service_id,
+        id, recipient_id, controller_account_id, recipient_id,
         source_account_artifact_kind, source_account_artifact_id,
         priority, state, projection_action,
         projection_data, created_at, updated_at
@@ -2161,7 +2161,7 @@ BEGIN
         'normal', 'unread', delta_action,
         notification_data, now(), now()
     )
-    ON CONFLICT (controller_account_id, recipient_service_id,
+    ON CONFLICT (controller_account_id, recipient_id,
                  source_account_artifact_kind, source_account_artifact_id)
         WHERE controller_account_id IS NOT NULL
     DO UPDATE SET
@@ -2548,7 +2548,7 @@ CREATE TABLE public.security_transactions (
     id uuid NOT NULL,
     kind text NOT NULL,
     principal_id text NOT NULL,
-    coordinator_service_id text NOT NULL,
+    coordinator_id text NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone NOT NULL,
     request_digest text NOT NULL,
@@ -2786,7 +2786,7 @@ CREATE TABLE public.service_route_notice_states (
 );
 
 CREATE TABLE public.service_resolution_mirror_ledger (
-    source_service_id text NOT NULL CHECK (source_service_id LIKE 'ak:did_core:%'),
+    source_id text NOT NULL CHECK (source_id LIKE 'ak:did_core:%'),
     realm_id text NOT NULL,
     request_id text NOT NULL,
     request_digest text NOT NULL,
@@ -2795,8 +2795,8 @@ CREATE TABLE public.service_resolution_mirror_ledger (
     artifact jsonb NOT NULL,
     ack jsonb NOT NULL,
     accepted_at timestamptz NOT NULL,
-    PRIMARY KEY (source_service_id, realm_id, request_id),
-    UNIQUE (source_service_id, realm_id, artifact_key)
+    PRIMARY KEY (source_id, realm_id, request_id),
+    UNIQUE (source_id, realm_id, artifact_key)
 );
 
 CREATE TABLE public.service_resolution_fork_quarantine (
@@ -2969,7 +2969,7 @@ CREATE TABLE public.member_identity_handle_claims (
     digest text NOT NULL,
     subject_id text NOT NULL,
     issuer text NOT NULL,
-    issuer_service_id text,
+    issuer_id text,
     audience text,
     binding_state text NOT NULL,
     visibility text,

@@ -580,7 +580,7 @@ fn signed_federation_request_headers(
     } = request;
     let origin_did =
         arkret_wire::Did::new(origin.to_owned()).expect("federation test origin must be a DID");
-    let origin_service_id = arkret_wire::project_did_to_core_id(&origin_did)
+    let origin_id = arkret_wire::project_did_to_core_id(&origin_did)
         .expect("federation test origin must project to a service core ID");
     let body_bytes = arkret_canonical::canonical_json_bytes(body).unwrap();
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
@@ -619,7 +619,7 @@ fn signed_federation_request_headers(
          \"@target-uri\": {target_uri}\n\
          \"@authority\": {authority}\n\
          \"content-digest\": {content_digest}\n\
-         \"source-service-id\": {origin_service_id}\n\
+         \"source-service-id\": {origin_id}\n\
          \"destination-service-id\": {destination}\n\
          \"source-trust-domain\": {source_trust_domain}\n\
          \"destination-trust-domain\": {destination_trust_domain}",
@@ -632,10 +632,10 @@ fn signed_federation_request_headers(
     }
     signature_base.push_str(&format!("\n\"@signature-params\": {signature_params}"));
     let signature =
-        development_service_signing_key(origin_service_id.as_str()).sign(signature_base.as_bytes());
+        development_service_signing_key(origin_id.as_str()).sign(signature_base.as_bytes());
     let mut headers = vec![
         ("content-digest", content_digest),
-        ("source-service-id", origin_service_id.to_string()),
+        ("source-service-id", origin_id.to_string()),
         ("destination-service-id", destination.to_owned()),
         ("source-trust-domain", source_trust_domain),
         (
@@ -882,22 +882,22 @@ pub(crate) async fn seed_test_realm(
         &Did::new(owner.to_owned()).expect("fixture realm owner DID"),
     )
     .expect("fixture realm owner core DID");
-    let recipient_service_id =
+    let recipient_id =
         DidCoreId::new(state.service_id().clone()).expect("fixture recipient service core DID");
     let current_record_url = format!(
         "https://soland.local{}",
-        arkret_models_identity::canonical_service_current_record_path(&recipient_service_id)
+        arkret_models_identity::canonical_service_current_record_path(&recipient_id)
     );
 
     // The private invite delivery token is transport material, not part of the
     // Invite object (`governance-objects.md` §5.3), so it is returned to the
     // caller here instead of being read back out of an invite read model.
     let mut seeded_invite_tokens: Vec<String> = Vec::new();
-    for invitee in invitees {
+    for invitee_id in invitees {
         let invitee_core = arkret_wire::project_did_to_core_id(
-            &Did::new((*invitee).to_owned()).expect("fixture invitee DID"),
+            &Did::new((*invitee_id).to_owned()).expect("fixture invitee_id DID"),
         )
-        .expect("fixture invitee core DID");
+        .expect("fixture invitee_id core DID");
         let invite_event_id = arkret_identifiers::EventId::new(
             signed_canonical_event(
                 "seed-test-realm-invite",
@@ -922,14 +922,14 @@ pub(crate) async fn seed_test_realm(
             .put(RealmInviteRecord {
                 invite_id,
                 realm_id: realm_id.clone(),
-                inviter: owner_core.to_string(),
-                invitee: Some(invitee_core.to_string()),
+                inviter_id: owner_core.to_string(),
+                invitee_id: Some(invitee_core.to_string()),
                 invite_delivery_target: Some(serde_json::json!({
-                    "recipient_service_id": recipient_service_id,
+                    "recipient_id": recipient_id,
                     "service_resolution": {
                         "current_record_url": current_record_url
                     },
-                    "recipient_service_kind": "principal_server"
+                    "recipient_kind": "principal_server"
                 })),
                 introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
                 third_party_invite: None,
@@ -979,7 +979,7 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
                 state: "join".to_owned(),
                 role: "member".to_owned(),
                 delivery_status: None,
-                recipient_service_id: None,
+                recipient_id: None,
                 recipient_service_resolution: None,
                 membership_event_ref: None,
                 delivery_binding_frontier: None,

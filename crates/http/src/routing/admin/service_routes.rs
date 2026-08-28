@@ -201,8 +201,8 @@ async fn load_detail(
         .filter(|entry| entry.request.service_route_handover_notice.is_some())
         .map(|entry| AdminServiceRouteAck {
             request_id: entry.ack.ack.request_id.to_string(),
-            source_service_id: entry.ack.ack.source_service_id.to_string(),
-            receiver_service_id: entry.ack.ack.receiver_service_id.to_string(),
+            source_id: entry.ack.ack.source_id.to_string(),
+            receiver_id: entry.ack.ack.receiver_id.to_string(),
             realm_id: entry.ack.ack.realm_id.to_string(),
             request_digest: entry.ack.ack.request_digest.to_string(),
             artifact_digest: entry.ack.ack.artifact_digest.to_string(),

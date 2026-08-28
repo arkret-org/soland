@@ -342,7 +342,7 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
                 "INSERT INTO governance_unscoped_signer_evidence \
                     (dependency_kind,object_digest,canonical_bytes,object_json, \
                      historical_agent_id,historical_verification_method,historical_event_id, \
-                     historical_receiver_service_id) \
+                     historical_receiver_id) \
                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING",
             )
             .bind::<Text, _>(canonical.dependency_kind)
@@ -356,11 +356,7 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
                     .map(|key| key.verification_method.as_str()),
             )
             .bind::<Nullable<Text>, _>(historical_key.as_ref().map(|key| key.event_id.as_str()))
-            .bind::<Nullable<Text>, _>(
-                historical_key
-                    .as_ref()
-                    .map(|key| key.receiver_service_id.as_str()),
-            )
+            .bind::<Nullable<Text>, _>(historical_key.as_ref().map(|key| key.receiver_id.as_str()))
             .execute(&mut *conn)
             .await?;
             if inserted == 1 {
@@ -435,12 +431,12 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
             "SELECT dependency_kind,object_digest,canonical_bytes,object_json \
              FROM governance_unscoped_signer_evidence \
              WHERE historical_agent_id=$1 AND historical_verification_method=$2 \
-               AND historical_event_id=$3 AND historical_receiver_service_id=$4",
+               AND historical_event_id=$3 AND historical_receiver_id=$4",
         )
         .bind::<Text, _>(key.agent_id.as_str())
         .bind::<Text, _>(key.verification_method.as_str())
         .bind::<Text, _>(key.event_id.as_str())
-        .bind::<Text, _>(key.receiver_service_id.as_str())
+        .bind::<Text, _>(key.receiver_id.as_str())
         .get_result::<DependencyObjectRow>(&mut conn)
         .await
         .optional()
@@ -1301,9 +1297,9 @@ struct PendingRrkRow {
     #[diesel(sql_type = Text)]
     recovery_key_id: String,
     #[diesel(sql_type = Text)]
-    holder_principal_id: String,
+    holder_principal_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
-    holder_service_id: String,
+    holder_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
     container_event_ref: String,
     #[diesel(sql_type = Text)]
@@ -1381,8 +1377,8 @@ fn decode_pending_rrk(row: PendingRrkRow) -> PersistenceResult<PendingRrkAcquisi
         || row.mls_group_id != archive_replica.archive.mls_group_id
         || i64_to_u64(row.epoch, "pending RRK epoch")? != archive_replica.archive.epoch
         || row.recovery_key_id != archive_replica.archive.recovery_key_id
-        || row.holder_principal_id != archive_replica.archive.holder_principal_id.to_string()
-        || row.holder_service_id != archive_replica.archive.holder_service_id.to_string()
+        || row.holder_principal_id != archive_replica.archive.holder_principal_id
+        || row.holder_id != archive_replica.archive.holder_id
         || row.container_event_ref != archive_replica.container_event_ref.as_str()
         || row.archive_tuple_digest != expected_tuple_digest.as_str()
         || row.retention_digest
@@ -1476,7 +1472,7 @@ fn decode_pending_rrk(row: PendingRrkRow) -> PersistenceResult<PendingRrkAcquisi
 }
 
 const RRK_SELECT: &str = "acquisition_digest, realm_id, effective_scope, mls_group_id, epoch, recovery_key_id, \
-     holder_principal_id, holder_service_id, container_event_ref, archive_tuple_digest, \
+     holder_principal_id, holder_id, container_event_ref, archive_tuple_digest, \
      archive_replica_digest, archive_replica_bytes, \
      archive_replica_json, retention_digest, state, attempt_count, next_attempt_at, claim_token, \
      claim_until, ready_at, accepted_at, archive_sequence, accepted_outcome_bytes, \
@@ -1521,7 +1517,7 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
             let inserted = sql_query(
                 "INSERT INTO pending_rrk_acquisitions \
                     (acquisition_digest, realm_id, effective_scope, mls_group_id, epoch, \
-                     recovery_key_id, holder_principal_id, holder_service_id, \
+                     recovery_key_id, holder_principal_id, holder_id, \
                      container_event_ref, archive_tuple_digest, archive_replica_digest, \
                      archive_replica_bytes, archive_replica_json, retention_digest, \
                      next_attempt_at, created_at, updated_at) \
@@ -1541,7 +1537,7 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
                     .holder_principal_id
                     .to_string(),
             )
-            .bind::<Text, _>(&input.archive_replica.archive.holder_service_id.to_string())
+            .bind::<Text, _>(&input.archive_replica.archive.holder_id.to_string())
             .bind::<Text, _>(input.archive_replica.container_event_ref.as_str())
             .bind::<Text, _>(archive_tuple_digest.as_str())
             .bind::<Text, _>(input.archive_replica_digest.as_str())
@@ -1585,7 +1581,7 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
         &self,
         effective_scope: &arkret_wire::HistoryEffectiveScope,
         holder_principal_id: &arkret_wire::DidCoreId,
-        holder_service_id: &arkret_wire::DidCoreId,
+        holder_id: &arkret_wire::DidCoreId,
         from_epoch: u64,
         to_epoch: u64,
         limit: usize,
@@ -1606,13 +1602,13 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
         let rows = sql_query(format!(
             "SELECT {RRK_SELECT} FROM pending_rrk_acquisitions \
              WHERE state = 'accepted' AND effective_scope = $1 \
-               AND holder_principal_id = $2 AND holder_service_id = $3 \
+               AND holder_principal_id = $2 AND holder_id = $3 \
                AND epoch BETWEEN $4 AND $5 \
              ORDER BY epoch, container_event_ref, archive_replica_digest LIMIT $6"
         ))
         .bind::<Jsonb, _>(&effective_scope)
         .bind::<Text, _>(holder_principal_id.as_str())
-        .bind::<Text, _>(holder_service_id.as_str())
+        .bind::<Text, _>(holder_id.as_str())
         .bind::<BigInt, _>(from_epoch)
         .bind::<BigInt, _>(to_epoch)
         .bind::<BigInt, _>(limit)

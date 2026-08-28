@@ -5,7 +5,7 @@ use super::*;
 pub(super) fn sign_history_request_replica_outcome(
     state: &AppState,
     request_digest: arkret_wire::Hash,
-    destination_service_id: arkret_wire::DidCoreId,
+    destination_id: arkret_wire::DidCoreId,
     accepted_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<HistoryKeyRequestReplicaOutcome, AppError> {
     let verification_method = arkret_wire::DidUrl::new(format!(
@@ -18,7 +18,7 @@ pub(super) fn sign_history_request_replica_outcome(
         accepted_at,
         |service_proof| HistoryKeyRequestReplicaOutcome {
             request_digest: request_digest.clone(),
-            destination_service_id: destination_service_id.clone(),
+            destination_id: destination_id.clone(),
             accepted_at,
             service_proof,
         },

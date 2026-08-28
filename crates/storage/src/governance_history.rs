@@ -260,7 +260,7 @@ pub struct HistoricalAgentSignerEvidenceKey {
     pub agent_id: arkret_wire::DidCoreId,
     pub verification_method: arkret_wire::DidUrl,
     pub event_id: arkret_wire::EventId,
-    pub receiver_service_id: arkret_wire::DidCoreId,
+    pub receiver_id: arkret_wire::DidCoreId,
 }
 
 pub fn historical_agent_signer_evidence_key(
@@ -294,7 +294,7 @@ pub fn historical_agent_signer_evidence_key(
         agent_id: signer_id.clone(),
         verification_method: verification_method.clone(),
         event_id: event_admission_receipt.event_id.clone(),
-        receiver_service_id: event_admission_receipt.receiver_service_id.clone(),
+        receiver_id: event_admission_receipt.receiver_id.clone(),
     }))
 }
 
@@ -820,7 +820,7 @@ pub fn rrk_archive_authorization_tuple(
         recovery_key_id: archive.recovery_key_id.clone(),
         key_agreement_ref: archive.key_agreement_ref.clone(),
         holder_principal_id: archive.holder_principal_id.clone(),
-        holder_service_id: archive.holder_service_id.clone(),
+        holder_id: archive.holder_id.clone(),
         holder_signing_ref: archive.holder_signing_ref.clone(),
         accepted_key_evidence_ref: archive.accepted_key_evidence_ref.clone(),
         holder_trusted_basis: archive.holder_trusted_basis.clone(),
@@ -883,7 +883,7 @@ pub fn validate_rrk_acceptance(
         .validate()
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
     if outcome.archive_replica_digest != input.archive_replica_digest
-        || outcome.holder_service_id != input.archive_replica.holder_service_id
+        || outcome.holder_id != input.archive_replica.holder_id
     {
         return Err(PersistenceError::SchemaViolation(
             "RRK acceptance outcome does not bind its pending archive replica".to_owned(),
@@ -924,7 +924,7 @@ pub trait PendingRrkAcquisitionStore: Send + Sync {
         &self,
         effective_scope: &HistoryEffectiveScope,
         holder_principal_id: &arkret_wire::DidCoreId,
-        holder_service_id: &arkret_wire::DidCoreId,
+        holder_id: &arkret_wire::DidCoreId,
         from_epoch: u64,
         to_epoch: u64,
         limit: usize,

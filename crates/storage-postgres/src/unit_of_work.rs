@@ -426,7 +426,7 @@ async fn commit_contact_projection(
                 granted_to_requester_scopes = $6, status = $7, request_event_ref = $8, \
                 request_receipts = $9, request_mirror_receipts = $10, contact_round_evidence = $11, \
                 contact_round_evidence_history = $12, control_outcomes = $13, response_event_ref = $14, \
-                tombstone_event_ref = $15, message = $16, peer_service_id = $17, updated_at = $18 \
+                tombstone_event_ref = $15, message = $16, peer_id = $17, updated_at = $18 \
              WHERE ((requester_id = $1 AND target_id = $2) OR \
                     (requester_id = $2 AND target_id = $1)) AND updated_at = $19",
         )
@@ -446,7 +446,7 @@ async fn commit_contact_projection(
         .bind::<Nullable<Binary>, _>(response_event_ref)
         .bind::<Nullable<Binary>, _>(tombstone_event_ref)
         .bind::<Nullable<Text>, _>(record.message.as_deref())
-        .bind::<Nullable<Text>, _>(record.peer_service_id.as_deref())
+        .bind::<Nullable<Text>, _>(record.peer_id.as_deref())
         .bind::<Timestamptz, _>(record.updated_at)
         .bind::<Timestamptz, _>(expected_updated_at)
         .execute(conn)
@@ -455,7 +455,7 @@ async fn commit_contact_projection(
     } else {
         sql_query(
             "INSERT INTO contacts \
-             (id, requester_id, target_id, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_service_id, created_at, updated_at) \
+             (id, requester_id, target_id, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_id, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) \
              ON CONFLICT (requester_id, target_id) DO NOTHING",
         )
@@ -476,7 +476,7 @@ async fn commit_contact_projection(
         .bind::<Nullable<Binary>, _>(response_event_ref)
         .bind::<Nullable<Binary>, _>(tombstone_event_ref)
         .bind::<Nullable<Text>, _>(record.message.as_deref())
-        .bind::<Nullable<Text>, _>(record.peer_service_id.as_deref())
+        .bind::<Nullable<Text>, _>(record.peer_id.as_deref())
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.updated_at)
         .execute(conn)
@@ -494,14 +494,14 @@ async fn commit_contact_projection(
         })?;
         let committed = sql_query(
             "INSERT INTO contact_verified_mirrors \
-             (target_holder_id, request_event_id, request_digest, canonical_event_bytes, source_receipt, issuer_service_id, verified_at) \
+             (target_holder_id, request_event_id, request_digest, canonical_event_bytes, source_receipt, issuer_id, verified_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7) \
              ON CONFLICT (target_holder_id, request_event_id) DO UPDATE \
              SET verified_at = contact_verified_mirrors.verified_at \
              WHERE contact_verified_mirrors.request_digest = EXCLUDED.request_digest \
                AND contact_verified_mirrors.canonical_event_bytes = EXCLUDED.canonical_event_bytes \
                AND contact_verified_mirrors.source_receipt = EXCLUDED.source_receipt \
-               AND contact_verified_mirrors.issuer_service_id = EXCLUDED.issuer_service_id \
+               AND contact_verified_mirrors.issuer_id = EXCLUDED.issuer_id \
              RETURNING target_holder_id",
         )
         .bind::<Text, _>(&mirror.target_holder_id)
@@ -509,7 +509,7 @@ async fn commit_contact_projection(
         .bind::<Text, _>(&mirror.request_digest)
         .bind::<Binary, _>(&mirror.canonical_event_bytes)
         .bind::<Jsonb, _>(&source_receipt)
-        .bind::<Text, _>(&mirror.issuer_service_id)
+        .bind::<Text, _>(&mirror.issuer_id)
         .bind::<Timestamptz, _>(mirror.verified_at)
         .get_result::<ContactMirrorCommitRow>(conn)
         .await
@@ -1073,9 +1073,9 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
                      ON CONFLICT (principal_id, idempotency_key) DO NOTHING",
                 )
-                .bind::<Text, _>(record.principal_id.as_str())
+                .bind::<Text, _>(&record.principal_id)
                 .bind::<Text, _>(&record.idempotency_key)
-                .bind::<Text, _>(record.service_id.as_str())
+                .bind::<Text, _>(&record.service_id)
                 .bind::<Text, _>(&record.request_hash)
                 .bind::<Integer, _>(record.response_status)
                 .bind::<Jsonb, _>(&record.response_body)
@@ -1097,17 +1097,17 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 })?;
                 let inserted = sql_query(
                     "INSERT INTO federation_outbox \
-                     (id, peer_service_id, peer_url, endpoint, idempotency_key, payload_json, state, \
+                     (id, peer_id, peer_url, endpoint, idempotency_key, payload_json, state, \
                      leased_from_state, realm_fanout, attempts, semantic_attempts, next_attempt_at, last_http_status, \
                      last_error_code, last_response_excerpt, lease_owner, lease_token, \
                      lease_expires_at, policy_version, supersedes_outbox_id, created_at, \
                       completed_at) \
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
                       $16, $17, $18, $19, $20, $21, $22) \
-                     ON CONFLICT (peer_service_id, idempotency_key) DO NOTHING",
+                     ON CONFLICT (peer_id, idempotency_key) DO NOTHING",
                 )
                 .bind::<Text, _>(&record.id)
-                .bind::<Text, _>(record.peer_service_id.as_str())
+                .bind::<Text, _>(record.peer_id.as_str())
                 .bind::<Nullable<Text>, _>(record.peer_url.as_deref())
                 .bind::<Text, _>(&record.endpoint)
                 .bind::<Text, _>(&record.idempotency_key)

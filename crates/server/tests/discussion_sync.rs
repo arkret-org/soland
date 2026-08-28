@@ -245,12 +245,12 @@ async fn admit_member(
 async fn seed_pending_invite(
     state: &AppState,
     realm_id: &str,
-    inviter: &str,
-    invitee: &str,
+    inviter_id: &str,
+    invitee_id: &str,
 ) -> String {
     let now = chrono::Utc::now();
-    let inviter_core = core_actor_id(inviter);
-    let invitee_core = core_actor_id(invitee);
+    let inviter_core = core_actor_id(inviter_id);
+    let invitee_core = core_actor_id(invitee_id);
     let invite_event_id = EventId::new(soland_test_support::fixture_content_bound_id("ak:event:"))
         .expect("fixture invite producer Event id");
     let invite_id = InviteId::from_event_id(&invite_event_id).to_string();
@@ -260,11 +260,11 @@ async fn seed_pending_invite(
         .put(RealmInviteRecord {
             invite_id: invite_id.clone(),
             realm_id: realm_id.to_owned(),
-            inviter: inviter_core,
-            invitee: Some(invitee_core.clone()),
+            inviter_id: inviter_core,
+            invitee_id: Some(invitee_core.clone()),
             invite_delivery_target: Some(json!({
-                "recipient_service_id": state.service_id().clone(),
-                "recipient_service_kind": "principal_server"
+                "recipient_id": state.service_id().clone(),
+                "recipient_kind": "principal_server"
             })),
             introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
             third_party_invite: None,
@@ -285,7 +285,7 @@ async fn seed_pending_invite(
             state: "invite".to_owned(),
             role: "member".to_owned(),
             delivery_status: Some("routable".to_owned()),
-            recipient_service_id: Some(state.service_id().to_string()),
+            recipient_id: Some(state.service_id().to_string()),
             recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,
@@ -1017,7 +1017,7 @@ async fn invite_accept_member_receives_since_join_messages_after_accept_body() {
                 &arkret_wire::project_did_to_core_id(&Did::new(bob_did.to_owned()).unwrap(),)
                     .unwrap(),
             )),
-        "ak.invite.accept must add the invitee to the Realm directory"
+        "ak.invite.accept must add the invitee_id to the Realm directory"
     );
 
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;

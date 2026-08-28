@@ -38,7 +38,7 @@ fn signed_mimi_headers(
     let created = chrono::Utc::now().timestamp();
     let expires = created + 300;
     let verification_method = format!("{MIMI_SOURCE_SERVICE_DID}#mimi-provider-test-key");
-    let destination_service_id = state.service_id().as_str();
+    let destination_id = state.service_id().as_str();
     let mut covered_components = vec![
         arkret_signatures::http_signature::Component::Method,
         arkret_signatures::http_signature::Component::TargetUri,
@@ -68,7 +68,7 @@ fn signed_mimi_headers(
     let mut headers = vec![
         ("content-digest", content_digest),
         ("source-service-id", MIMI_SOURCE_SERVICE_ID.to_owned()),
-        ("destination-service-id", destination_service_id.to_owned()),
+        ("destination-service-id", destination_id.to_owned()),
         ("provider-id", MIMI_PROVIDER_ID.to_owned()),
     ];
     if let Some(room_uri) = room_uri {

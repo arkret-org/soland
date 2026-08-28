@@ -17,9 +17,9 @@ pub struct PgPrincipalResolutionStore {
 #[derive(QueryableByName)]
 struct CurrentRow {
     #[diesel(sql_type = Text)]
-    principal_id: String,
+    principal_id: DidCoreId,
     #[diesel(sql_type = Text)]
-    principal_server_id: String,
+    principal_server_id: DidCoreId,
     #[diesel(sql_type = Text)]
     pcr_realm_id: String,
     #[diesel(sql_type = Jsonb)]
@@ -47,12 +47,7 @@ impl TryFrom<CurrentRow> for PrincipalResolutionRecord {
 
     fn try_from(row: CurrentRow) -> Result<Self, Self::Error> {
         let record = Self {
-            authority_key: PrincipalAuthorityKey::new(
-                DidCoreId::new(row.principal_id)
-                    .map_err(|error| PersistenceError::Internal(error.to_string()))?,
-                DidCoreId::new(row.principal_server_id)
-                    .map_err(|error| PersistenceError::Internal(error.to_string()))?,
-            ),
+            authority_key: PrincipalAuthorityKey::new(row.principal_id, row.principal_server_id),
             pcr_realm_id: RealmId::new(row.pcr_realm_id)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             genesis_event: serde_json::from_value(row.genesis_event)

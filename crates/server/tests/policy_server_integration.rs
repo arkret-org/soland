@@ -45,7 +45,7 @@ const POLICY_SERVER_SERVICE_ID: &str = "ak:did_core:web:policy.example.com";
 fn config_for(url: &str, timeout_ms: u64) -> RealmPolicyServerConfig {
     RealmPolicyServerConfig {
         realm_id: REALM_ID.to_owned(),
-        policy_server_service_id: DidCoreId::new(POLICY_SERVER_SERVICE_ID).unwrap(),
+        policy_server_id: DidCoreId::new(POLICY_SERVER_SERVICE_ID).unwrap(),
         policy_server_url: url.to_owned(),
         cache_ttl_seconds: 60,
         timeout_ms,
@@ -60,11 +60,11 @@ fn input(bypass_cache: bool) -> PolicyCheckRequestInput {
         realm_id: RealmId::new(REALM_ID).unwrap(),
         actor_id: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
         action: "ak.message.create".to_owned(),
-        source_service_id: DidCoreId::new(
+        source_id: DidCoreId::new(
             "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x",
         )
         .unwrap(),
-        source_service_kind: "principal_server".to_owned(),
+        source_kind: "principal_server".to_owned(),
         source_ip_digest: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
         signed_transport: true,
         event_preview: Value::Null,
@@ -110,8 +110,8 @@ fn wire_request(input: &PolicyCheckRequestInput) -> PolicyCheckRequestBody {
         action: input.action.clone(),
         request_canonical_digest: input.canonical_request_hash(),
         source: PolicyCheckSource {
-            service_id: input.source_service_id.clone(),
-            service_kind: input.source_service_kind.clone(),
+            service_id: input.source_id.clone(),
+            service_kind: input.source_kind.clone(),
             source_ip_digest: Some(input.source_ip_digest.clone()),
             signed_transport: input.signed_transport,
         },

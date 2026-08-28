@@ -1846,11 +1846,11 @@ impl AppState {
     /// called and therefore do not consume quota.
     pub fn peer_keypackage_claim_rate_limited(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         target_principal_id: &str,
     ) -> bool {
         self.runtime_guards
-            .peer_keypackage_claim_rate_limited(source_service_id, target_principal_id)
+            .peer_keypackage_claim_rate_limited(source_id, target_principal_id)
     }
 
     /// Spec `identity/key-management.md` §7.8 — record a full-ciphertext
@@ -2303,17 +2303,17 @@ mod membership_hydration_tests {
         realms
     }
 
-    // Regression: a joined invitee's `ak.member.state{join}` MUST be replayed
+    // Regression: a joined invitee_id's `ak.member.state{join}` MUST be replayed
     // into the realm directory on boot. Without it the admin's synced roster
     // shows only the creator, admin-side MLS admission never fires, and the
-    // invitee is stuck "waiting for a Welcome" after every restart.
+    // invitee_id is stuck "waiting for a Welcome" after every restart.
     #[test]
     fn joined_member_survives_directory_hydration() {
         let realm_id =
             RealmId::new("ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C".to_owned())
                 .expect("realm id");
         let creator = DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap();
-        let invitee = DidCoreId::new("ak:did_core:web:bob.example".to_owned()).unwrap();
+        let invitee_id = DidCoreId::new("ak:did_core:web:bob.example".to_owned()).unwrap();
 
         let mut realms = directory_with_creator(&realm_id, &creator);
         // Before replay: only the creator is present (the realm.create seed).
@@ -2321,13 +2321,13 @@ mod membership_hydration_tests {
 
         hydrate_realm_member_state_event(
             &mut realms,
-            &member_state_event(realm_id.as_str(), invitee.as_str(), "join"),
+            &member_state_event(realm_id.as_str(), invitee_id.as_str(), "join"),
         );
 
         let members = &realms.get(&realm_id).unwrap().members;
         assert!(
-            members.contains(&invitee),
-            "joined invitee must survive directory hydration"
+            members.contains(&invitee_id),
+            "joined invitee_id must survive directory hydration"
         );
         assert!(members.contains(&creator));
         assert_eq!(members.len(), 2);
@@ -2339,20 +2339,23 @@ mod membership_hydration_tests {
             RealmId::new("ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C".to_owned())
                 .expect("realm id");
         let creator = DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap();
-        let invitee = DidCoreId::new("ak:did_core:web:bob.example".to_owned()).unwrap();
+        let invitee_id = DidCoreId::new("ak:did_core:web:bob.example".to_owned()).unwrap();
 
         let mut realms = directory_with_creator(&realm_id, &creator);
         hydrate_realm_member_state_event(
             &mut realms,
-            &member_state_event(realm_id.as_str(), invitee.as_str(), "join"),
+            &member_state_event(realm_id.as_str(), invitee_id.as_str(), "join"),
         );
         hydrate_realm_member_state_event(
             &mut realms,
-            &member_state_event(realm_id.as_str(), invitee.as_str(), "leave"),
+            &member_state_event(realm_id.as_str(), invitee_id.as_str(), "leave"),
         );
 
         let members = &realms.get(&realm_id).unwrap().members;
-        assert!(!members.contains(&invitee), "left member must be removed");
+        assert!(
+            !members.contains(&invitee_id),
+            "left member must be removed"
+        );
         assert!(members.contains(&creator));
     }
 
@@ -2365,16 +2368,16 @@ mod membership_hydration_tests {
             RealmId::new("ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C".to_owned())
                 .expect("realm id");
         let creator = DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap();
-        let invitee = DidCoreId::new("ak:did_core:web:bob.example".to_owned()).unwrap();
+        let invitee_id = DidCoreId::new("ak:did_core:web:bob.example".to_owned()).unwrap();
 
         let mut realms = directory_with_creator(&realm_id, &creator);
         hydrate_realm_member_state_event(
             &mut realms,
-            &member_state_event(realm_id.as_str(), invitee.as_str(), "invite"),
+            &member_state_event(realm_id.as_str(), invitee_id.as_str(), "invite"),
         );
 
         let members = &realms.get(&realm_id).unwrap().members;
-        assert!(!members.contains(&invitee));
+        assert!(!members.contains(&invitee_id));
         assert_eq!(members.len(), 1);
     }
 
@@ -2430,7 +2433,7 @@ mod membership_hydration_tests {
     // Regression: the MLS KeyPackage + commit-epoch projections — which the
     // claim selector and the commit-epoch CAS read ONLY from memory — MUST be
     // rebuilt from their durable tables on boot, or a restart strands every
-    // pending admission (admin can't claim the invitee's KeyPackage; add-member
+    // pending admission (admin can't claim the invitee_id's KeyPackage; add-member
     // commit is rejected for "no genesis").
     #[tokio::test]
     async fn mls_projections_rehydrate_from_durable_stores() {

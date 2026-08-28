@@ -889,7 +889,7 @@ fn apply_delivery_summary_from_intents(
                     .any(|event_id| event_id == &response.event_id)
             })
         })
-        .map(|intent| intent.peer_service_id.as_str())
+        .map(|intent| intent.peer_id.as_str())
         .collect::<std::collections::BTreeSet<_>>()
         .len() as u32;
     response.outcome.pending_delivery_count = pending_targets;

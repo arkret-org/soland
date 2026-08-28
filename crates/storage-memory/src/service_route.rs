@@ -370,12 +370,12 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
     ) -> PersistenceResult<ServiceResolutionMirrorCommit> {
         entry.validate()?;
         let transport = (
-            entry.source_service_id.as_str().to_owned(),
+            entry.source_id.as_str().to_owned(),
             entry.realm_id.as_str().to_owned(),
             entry.request_id.as_str().to_owned(),
         );
         let artifact = (
-            entry.source_service_id.as_str().to_owned(),
+            entry.source_id.as_str().to_owned(),
             entry.realm_id.as_str().to_owned(),
             artifact_key(&entry.artifact_key)?,
         );
@@ -408,9 +408,9 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
 
     async fn successor_records(
         &self,
-        source_service_id: &DidCoreId,
+        source_id: &DidCoreId,
         realm_id: &RealmId,
-        target_service_id: &DidCoreId,
+        target_id: &DidCoreId,
         service_kind: &str,
         after_sequence: u64,
         limit: usize,
@@ -419,12 +419,10 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
         let mut records: Vec<_> = state
             .mirrors_by_request
             .values()
-            .filter(|entry| {
-                &entry.source_service_id == source_service_id && &entry.realm_id == realm_id
-            })
+            .filter(|entry| &entry.source_id == source_id && &entry.realm_id == realm_id)
             .filter_map(|entry| entry.request.service_resolution_record.as_ref())
             .filter(|record| {
-                &record.record.service_id == target_service_id
+                &record.record.service_id == target_id
                     && record.record.service_kind == service_kind
                     && record.record.record_sequence > after_sequence
             })
@@ -437,9 +435,9 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
 
     async fn latest_notice(
         &self,
-        source_service_id: &DidCoreId,
+        source_id: &DidCoreId,
         realm_id: &RealmId,
-        target_service_id: &DidCoreId,
+        target_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<Option<ServiceRouteHandoverNotice>> {
         Ok(self
@@ -447,13 +445,10 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
             .lock()
             .mirrors_by_request
             .values()
-            .filter(|entry| {
-                &entry.source_service_id == source_service_id && &entry.realm_id == realm_id
-            })
+            .filter(|entry| &entry.source_id == source_id && &entry.realm_id == realm_id)
             .filter_map(|entry| entry.request.service_route_handover_notice.as_ref())
             .filter(|notice| {
-                &notice.notice.service_id == target_service_id
-                    && notice.notice.service_kind == service_kind
+                &notice.notice.service_id == target_id && notice.notice.service_kind == service_kind
             })
             .max_by_key(|notice| notice.notice.notice_revision)
             .cloned())
@@ -576,8 +571,8 @@ mod tests {
         let ack = arkret_models_identity::ServiceResolutionPublishAck {
             ack: ServiceResolutionPublishAckCore {
                 request_id: request.request_id.clone(),
-                source_service_id: source.clone(),
-                receiver_service_id: DidCoreId::new("ak:did_core:web:mirror.example").unwrap(),
+                source_id: source.clone(),
+                receiver_id: DidCoreId::new("ak:did_core:web:mirror.example").unwrap(),
                 realm_id: realm_id.clone(),
                 request_digest: request_digest.clone(),
                 artifact_key: artifact_key.clone(),
@@ -591,7 +586,7 @@ mod tests {
             },
         };
         ServiceResolutionMirrorEntry {
-            source_service_id: source,
+            source_id: source,
             realm_id,
             request_id: request.request_id.clone(),
             request_digest,

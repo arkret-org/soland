@@ -87,8 +87,8 @@ pub struct PolicyCheckRequestInput {
     pub realm_id: RealmId,
     pub actor_id: DidCoreId,
     pub action: String,
-    pub source_service_id: DidCoreId,
-    pub source_service_kind: String,
+    pub source_id: DidCoreId,
+    pub source_kind: String,
     pub source_ip_digest: Hash,
     pub signed_transport: bool,
     pub event_preview: Value,
@@ -110,8 +110,8 @@ impl PolicyCheckRequestInput {
             "actor_id": self.actor_id.as_str(),
             "action": self.action,
             "source": {
-                "service_id": self.source_service_id.as_str(),
-                "service_kind": self.source_service_kind,
+                "service_id": self.source_id.as_str(),
+                "service_kind": self.source_kind,
                 "source_ip_digest": self.source_ip_digest.as_str(),
                 "signed_transport": self.signed_transport,
             },
@@ -139,8 +139,8 @@ impl PolicyCheckRequestInput {
             action: self.action,
             request_canonical_digest,
             source: PolicyCheckSource {
-                service_id: self.source_service_id,
-                service_kind: self.source_service_kind,
+                service_id: self.source_id,
+                service_kind: self.source_kind,
                 source_ip_digest: Some(self.source_ip_digest),
                 signed_transport: self.signed_transport,
             },
@@ -559,7 +559,7 @@ impl PolicyClient {
 
     /// Verify the signature on a genuine `PolicyCheckOutcome`. The
     /// `kid` MUST be a verification method owned by the declared
-    /// `policy_server_service_id`; the signature MUST verify over the canonical
+    /// `policy_server_id`; the signature MUST verify over the canonical
     /// policy-check transcript reconstructed from the original request
     /// and the response.
     fn verify_signature(
@@ -592,20 +592,20 @@ impl PolicyClient {
         let kid_service_id = arkret_wire::project_did_to_core_id(&kid_did).map_err(|error| {
             PolicyClientError::DirectoryGovernanceProofSignatureInvalid(error.to_string())
         })?;
-        if kid_service_id != config.policy_server_service_id {
+        if kid_service_id != config.policy_server_id {
             return Err(PolicyClientError::DirectoryGovernanceProofSignatureInvalid(
                 format!(
-                    "kid {kid_did_part} does not project to policy_server_service_id {server}",
-                    server = config.policy_server_service_id
+                    "kid {kid_did_part} does not project to policy_server_id {server}",
+                    server = config.policy_server_id
                 ),
             ));
         }
-        if response.bound_to.policy_server_id != config.policy_server_service_id {
+        if response.bound_to.policy_server_id != config.policy_server_id {
             return Err(PolicyClientError::DirectoryGovernanceProofSignatureInvalid(
                 format!(
                     "bound_to.policy_server_id {bt} != config {cfg}",
                     bt = response.bound_to.policy_server_id.as_str(),
-                    cfg = config.policy_server_service_id
+                    cfg = config.policy_server_id
                 ),
             ));
         }
@@ -711,7 +711,7 @@ mod tests {
     fn realm_config(url: &str) -> RealmPolicyServerConfig {
         RealmPolicyServerConfig {
             realm_id: "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
-            policy_server_service_id: DidCoreId::new("ak:did_core:web:policy.example.com").unwrap(),
+            policy_server_id: DidCoreId::new("ak:did_core:web:policy.example.com").unwrap(),
             policy_server_url: url.to_owned(),
             cache_ttl_seconds: 60,
             timeout_ms: 250,
@@ -735,11 +735,11 @@ mod tests {
                 .unwrap(),
             actor_id: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
             action: "ak.message.create".to_owned(),
-            source_service_id: DidCoreId::new(
+            source_id: DidCoreId::new(
                 "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x",
             )
             .unwrap(),
-            source_service_kind: "principal_server".to_owned(),
+            source_kind: "principal_server".to_owned(),
             source_ip_digest: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
             signed_transport: true,
             event_preview: Value::Null,
@@ -1044,7 +1044,7 @@ mod tests {
     #[tokio::test]
     async fn check_signature_invalid_rejected() {
         // Spin up a mock that returns a response whose kid does NOT
-        // match the declared policy_server_service_id.
+        // match the declared policy_server_id.
         let signing = signing_key();
         let input = sample_input(true);
         let mut bad_response = signed_sample_response(&input, &signing);

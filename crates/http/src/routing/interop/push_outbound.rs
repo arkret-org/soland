@@ -134,7 +134,7 @@ fn resolve_trust_level(state: &AppState, description: &ServiceDescribe) -> Strin
     if state.config().development_mode
         || state
             .settings()
-            .push_bridge_trusted_service_ids
+            .push_bridge_trusted_ids
             .iter()
             .any(|allowed| allowed == description.service_id.as_str())
     {

@@ -44,8 +44,8 @@ fn join_op(member: &str, binding: Value) -> Operation {
 }
 
 fn complete_binding(mut binding: Value) -> Value {
-    if binding.get("recipient_service_kind").is_none() {
-        binding["recipient_service_kind"] = json!("principal_server");
+    if binding.get("recipient_kind").is_none() {
+        binding["recipient_kind"] = json!("principal_server");
     }
     if binding.get("binding_scope").is_none() {
         binding["binding_scope"] = json!("realm");
@@ -54,10 +54,9 @@ fn complete_binding(mut binding: Value) -> Value {
         binding["delivery_modes"] = json!(["events"]);
     }
     if binding.get("service_resolution").is_none()
-        && let Some(recipient_service_id) =
-            binding.get("recipient_service_id").and_then(Value::as_str)
+        && let Some(recipient_id) = binding.get("recipient_id").and_then(Value::as_str)
     {
-        let service_id = arkret_identifiers::DidCoreId::new(recipient_service_id).unwrap();
+        let service_id = arkret_identifiers::DidCoreId::new(recipient_id).unwrap();
         binding["service_resolution"] = json!({
             "current_record_url": format!(
                 "https://fixture.example{}",
@@ -146,7 +145,7 @@ fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) -> S
 
 // ── 1. delivery_binding_policy_member_join_test ─────────────────────────
 //
-// `recipient_service_id` outside the policy's `allowed_recipient_services`
+// `recipient_id` outside the policy's `allowed_recipient_services`
 // allow-list MUST be rejected with `recipient_service_not_allowed`.
 
 #[test]
@@ -179,7 +178,7 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
         "ak:did_core:web:bob",
         json!({
             "binding_source": "explicit",
-            "recipient_service_id": "ak:did_core:web:rogue.example",
+            "recipient_id": "ak:did_core:web:rogue.example",
             "service_acceptance_ref": "ak:event:AUiSHUfqumU5_UtRrOIga2jjSmucw5MpSQdam3TtzPQu",
             "resolved_at": "2026-05-19T00:00:00.000Z",
         }),
@@ -198,7 +197,7 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
         "ak:did_core:web:alice",
         json!({
             "binding_source": "explicit",
-            "recipient_service_id": "ak:did_core:web:principal.acme.example",
+            "recipient_id": "ak:did_core:web:principal.acme.example",
             "service_acceptance_ref": "ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim",
             "resolved_at": "2026-05-19T00:00:00.000Z",
         }),
@@ -235,7 +234,7 @@ fn delivery_binding_policy_empty_recipient_allow_list_rejects_all() {
         "ak:did_core:web:ida",
         json!({
             "binding_source": "explicit",
-            "recipient_service_id": "ak:did_core:web:principal.acme.example",
+            "recipient_id": "ak:did_core:web:principal.acme.example",
             "service_acceptance_ref": "ak:event:AQlHdUE3urVdfxTt7ycDMQRrgYPGEa5lOPTTdGDDO7w_",
         }),
     );
@@ -267,7 +266,7 @@ fn delivery_binding_policy_omitted_recipient_allow_list_rejects_all() {
         "ak:did_core:web:jane",
         json!({
             "binding_source": "explicit",
-            "recipient_service_id": "ak:did_core:web:principal.acme.example",
+            "recipient_id": "ak:did_core:web:principal.acme.example",
             "service_acceptance_ref": "ak:event:AdaVg413OwhSu62wpakXmVkeXGpGgVIRhwmIKtrcSFcT",
         }),
     );
@@ -299,7 +298,7 @@ fn delivery_binding_policy_star_sentinel_is_unrestricted() {
         "ak:did_core:web:kim",
         json!({
             "binding_source": "explicit",
-            "recipient_service_id": "ak:did_core:web:principal.anywhere.example",
+            "recipient_id": "ak:did_core:web:principal.anywhere.example",
             "service_acceptance_ref": "ak:event:AWFZIiVRYv3UXtLsxC0FrmfecM_JlRJAoKP0NXeMrpiQ",
         }),
     );
@@ -331,7 +330,7 @@ fn delivery_binding_policy_rejects_disallowed_binding_source() {
         "ak:did_core:web:carol",
         json!({
             "binding_source": "explicit",
-            "recipient_service_id": "ak:did_core:web:principal.acme.example",
+            "recipient_id": "ak:did_core:web:principal.acme.example",
             "service_acceptance_ref": "ak:event:AdIAmf-J5rIPxEomGXwJblJdhNg-TllVN8uRTI85EUIM",
         }),
     );
@@ -366,7 +365,7 @@ fn delivery_binding_policy_rejects_missing_service_acceptance() {
         "ak:did_core:web:dave",
         json!({
             "binding_source": "explicit",
-            "recipient_service_id": "ak:did_core:web:principal.acme.example",
+            "recipient_id": "ak:did_core:web:principal.acme.example",
             // service_acceptance_ref omitted
         }),
     );
@@ -401,7 +400,7 @@ fn delivery_binding_policy_no_did_fallback_when_policy_unset() {
         "ak:did_core:web:eve",
         json!({
             "binding_source": "did_document_default",
-            "recipient_service_id": "ak:did_core:web:principal.example",
+            "recipient_id": "ak:did_core:web:principal.example",
             "did_document_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
             "resolved_at": "2026-05-19T00:00:00.000Z",
         }),
@@ -423,7 +422,7 @@ fn direct_conversation_bootstrap_reason_does_not_bypass_atomic_unit() {
 
     let founding_binding = complete_binding(json!({
         "binding_source": "explicit",
-        "recipient_service_id": "ak:did_core:web:soland-beta.example",
+        "recipient_id": "ak:did_core:web:soland-beta.example",
         "service_acceptance_ref": "ak:event:AUiSHUfqumU5_UtRrOIga2jjSmucw5MpSQdam3TtzPQu",
         "resolved_at": "2026-07-25T00:00:00.000Z"
     }));
@@ -458,7 +457,7 @@ fn direct_conversation_join_without_bootstrap_reason_still_requires_policy() {
         "ak:did_core:web:bob.example",
         json!({
             "binding_source": "explicit",
-            "recipient_service_id": "ak:did_core:web:soland-beta.example",
+            "recipient_id": "ak:did_core:web:soland-beta.example",
             "service_acceptance_ref": "ak:event:AdIAmf-J5rIPxEomGXwJblJdhNg-TllVN8uRTI85EUIM",
             "resolved_at": "2026-07-25T00:00:00.000Z"
         }),
@@ -495,7 +494,7 @@ fn delivery_binding_policy_rejects_did_document_default_when_disabled() {
         "ak:did_core:web:fred",
         json!({
             "binding_source": "did_document_default",
-            "recipient_service_id": "ak:did_core:web:principal.example",
+            "recipient_id": "ak:did_core:web:principal.example",
             "did_document_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
         }),
     );

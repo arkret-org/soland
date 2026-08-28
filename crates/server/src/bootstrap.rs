@@ -380,7 +380,7 @@ async fn accept_external_outcome(
     {
         return Ok(DidCoreIdentityState::Conflict {
             stored_service_id: prior.identity.service_id.clone(),
-            provider_service_id: outcome.service_id().clone(),
+            provider_id: outcome.service_id().clone(),
         });
     }
     let stored =
@@ -810,7 +810,7 @@ fn validate_signed_service_inception(
 
 fn validate_registration_receipt_signature(stored: &StoredDidCoreIdentity) -> anyhow::Result<()> {
     let receipt = &stored.registration_receipt;
-    if receipt.provider_service_id != stored.identity.service_id {
+    if receipt.provider_id != stored.identity.service_id {
         anyhow::bail!("self-hosted identity bundle receipt was issued by a different service DID");
     }
     let expected_method = format!("{}#notary-key", stored.identity.did);
@@ -1145,7 +1145,7 @@ fn sign_registration_receipt(
     let control_key_digest = request.inception_operation.control_key_digest()?;
     let did = request.inception_operation.state.id.clone();
     let service_id = project_did_to_core_id(&did)?;
-    let provider_service_id = project_did_to_core_id(provider_did)?;
+    let provider_id = project_did_to_core_id(provider_did)?;
     let verification_method = arkret_wire::DidUrl::new(format!("{provider_did}#notary-key"))
         .map_err(|error| {
             anyhow::anyhow!("provider notary verification method is invalid: {error}")
@@ -1162,7 +1162,7 @@ fn sign_registration_receipt(
         log_head_digest,
         control_key_digest,
         issued_at,
-        provider_service_id,
+        provider_id,
         proof: PayloadProof {
             kind: proof_kind::DETACHED_JWS.to_owned(),
             verification_method,

@@ -51,7 +51,7 @@ struct ContactVerifiedMirrorRow {
     #[diesel(sql_type = Jsonb)]
     source_receipt: Value,
     #[diesel(sql_type = Text)]
-    issuer_service_id: String,
+    issuer_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Timestamptz)]
     verified_at: chrono::DateTime<chrono::Utc>,
 }
@@ -70,13 +70,13 @@ impl TryFrom<ContactVerifiedMirrorRow> for ContactVerifiedMirrorRecord {
                     "stored Contact request receipt is invalid: {error}"
                 ))
             })?,
-            issuer_service_id: row.issuer_service_id,
+            issuer_id: row.issuer_id.into_string(),
             verified_at: row.verified_at,
         })
     }
 }
 
-const CONTACT_VERIFIED_MIRROR_COLUMNS: &str = "target_holder_id, request_event_id, request_digest, canonical_event_bytes, source_receipt, issuer_service_id, verified_at";
+const CONTACT_VERIFIED_MIRROR_COLUMNS: &str = "target_holder_id, request_event_id, request_digest, canonical_event_bytes, source_receipt, issuer_id, verified_at";
 
 #[async_trait]
 impl ContactVerifiedMirrorStore for PgContactVerifiedMirrorStore {
@@ -135,7 +135,7 @@ impl ContactVerifiedMirrorStore for PgContactVerifiedMirrorStore {
              WHERE contact_verified_mirrors.request_digest = EXCLUDED.request_digest \
                AND contact_verified_mirrors.canonical_event_bytes = EXCLUDED.canonical_event_bytes \
                AND contact_verified_mirrors.source_receipt = EXCLUDED.source_receipt \
-               AND contact_verified_mirrors.issuer_service_id = EXCLUDED.issuer_service_id \
+               AND contact_verified_mirrors.issuer_id = EXCLUDED.issuer_id \
              RETURNING {CONTACT_VERIFIED_MIRROR_COLUMNS}"
         ))
         .bind::<Text, _>(&record.target_holder_id)
@@ -143,7 +143,7 @@ impl ContactVerifiedMirrorStore for PgContactVerifiedMirrorStore {
         .bind::<Text, _>(&record.request_digest)
         .bind::<Binary, _>(&record.canonical_event_bytes)
         .bind::<Jsonb, _>(&source_receipt)
-        .bind::<Text, _>(&record.issuer_service_id)
+        .bind::<Text, _>(&record.issuer_id)
         .bind::<Timestamptz, _>(record.verified_at)
         .get_result::<ContactVerifiedMirrorRow>(&mut *conn)
         .await
@@ -192,7 +192,7 @@ struct ContactRow {
     #[diesel(sql_type = Nullable<Text>)]
     message: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
-    peer_service_id: Option<String>,
+    peer_id: Option<String>,
     #[diesel(sql_type = Nullable<Jsonb>)]
     peer_service_resolution: Option<Value>,
     #[diesel(sql_type = Timestamptz)]
@@ -256,13 +256,13 @@ fn contact_record_from_row(row: ContactRow) -> PersistenceResult<ContactRecord> 
             .as_deref()
             .map(format_contact_event_ref),
         message: row.message,
-        peer_service_id: row.peer_service_id,
+        peer_id: row.peer_id,
         peer_service_resolution: row.peer_service_resolution,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
 }
-const CONTACT_COLUMNS: &str = "requester_id AS requester, target_id AS target, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_service_id AS peer_service_id, peer_service_resolution, created_at, updated_at";
+const CONTACT_COLUMNS: &str = "requester_id AS requester, target_id AS target, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_id AS peer_id, peer_service_resolution, created_at, updated_at";
 #[async_trait]
 impl ContactStore for PgContactStore {
     async fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>> {
@@ -302,7 +302,7 @@ impl ContactStore for PgContactStore {
         let control_outcomes = encode_contact_json(&record.control_outcomes, "control_outcomes")?;
         sql_query(
             "INSERT INTO contacts \
-             (id, requester_id, target_id, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_service_id, peer_service_resolution, created_at, updated_at) \
+             (id, requester_id, target_id, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_id, peer_service_resolution, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
              ON CONFLICT (requester_id, target_id) DO UPDATE SET \
                 contact_round_id = EXCLUDED.contact_round_id, \
@@ -319,7 +319,7 @@ impl ContactStore for PgContactStore {
                 response_event_ref = EXCLUDED.response_event_ref, \
                 tombstone_event_ref = EXCLUDED.tombstone_event_ref, \
                 message = EXCLUDED.message, \
-                peer_service_id = EXCLUDED.peer_service_id, \
+                peer_id = EXCLUDED.peer_id, \
                 peer_service_resolution = EXCLUDED.peer_service_resolution, \
                 updated_at = EXCLUDED.updated_at",
         )
@@ -342,7 +342,7 @@ impl ContactStore for PgContactStore {
             record.tombstone_event_ref.as_deref(),
         )?)
         .bind::<Nullable<Text>, _>(record.message.as_deref())
-        .bind::<Nullable<Text>, _>(record.peer_service_id.as_deref())
+        .bind::<Nullable<Text>, _>(record.peer_id.as_deref())
         .bind::<Nullable<Jsonb>, _>(record.peer_service_resolution.as_ref())
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.updated_at)
@@ -382,7 +382,7 @@ impl ContactStore for PgContactStore {
                 granted_to_requester_scopes = $6, status = $7, request_event_ref = $8, \
                 request_receipts = $9, request_mirror_receipts = $10, contact_round_evidence = $11, \
                 contact_round_evidence_history = $12, control_outcomes = $13, response_event_ref = $14, \
-                tombstone_event_ref = $15, message = $16, peer_service_id = $17, \
+                tombstone_event_ref = $15, message = $16, peer_id = $17, \
                 peer_service_resolution = $18, updated_at = $19 \
              WHERE ((requester_id = $1 AND target_id = $2) OR \
                     (requester_id = $2 AND target_id = $1)) AND updated_at = $20",
@@ -411,7 +411,7 @@ impl ContactStore for PgContactStore {
             record.tombstone_event_ref.as_deref(),
         )?)
         .bind::<Nullable<Text>, _>(record.message.as_deref())
-        .bind::<Nullable<Text>, _>(record.peer_service_id.as_deref())
+        .bind::<Nullable<Text>, _>(record.peer_id.as_deref())
         .bind::<Nullable<Jsonb>, _>(record.peer_service_resolution.as_ref())
         .bind::<Timestamptz, _>(record.updated_at)
         .bind::<Timestamptz, _>(expected_updated_at)
@@ -470,7 +470,7 @@ struct MimiConsentCorrelationRow {
     #[diesel(sql_type = Nullable<Text>)]
     strand_id: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
-    source_service_id: Option<String>,
+    source_id: Option<String>,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -486,7 +486,7 @@ impl From<MimiConsentCorrelationRow> for MimiConsentCorrelationRecord {
             target_id: row.target_id,
             purpose: row.purpose,
             strand_id: row.strand_id,
-            source_service_id: row.source_service_id,
+            source_id: row.source_id,
             created_at: row.created_at,
             expires_at: row.expires_at,
         }
@@ -504,7 +504,7 @@ impl MimiConsentCorrelationStore for PgMimiConsentCorrelationStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "SELECT consent_id, requester_id, target_kind, target_id, purpose, strand_id, \
-             source_service_id, created_at, expires_at \
+             source_id, created_at, expires_at \
              FROM mimi_consent_correlations WHERE consent_id = $1",
         )
         .bind::<Text, _>(consent_id)
@@ -522,7 +522,7 @@ impl MimiConsentCorrelationStore for PgMimiConsentCorrelationStore {
         sql_query(
             "INSERT INTO mimi_consent_correlations \
              (consent_id, requester_id, target_kind, target_id, purpose, strand_id, \
-              source_service_id, created_at, expires_at) \
+              source_id, created_at, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
              ON CONFLICT (consent_id) DO NOTHING",
         )
@@ -532,7 +532,7 @@ impl MimiConsentCorrelationStore for PgMimiConsentCorrelationStore {
         .bind::<Text, _>(&record.target_id)
         .bind::<Text, _>(&record.purpose)
         .bind::<Nullable<Text>, _>(record.strand_id.as_deref())
-        .bind::<Nullable<Text>, _>(record.source_service_id.as_deref())
+        .bind::<Nullable<Text>, _>(record.source_id.as_deref())
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Nullable<Timestamptz>, _>(record.expires_at)
         .execute(&mut *conn)

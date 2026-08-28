@@ -186,7 +186,7 @@ async fn resolve_peer_mls_governance_proof(
 ) -> JsonResult<MlsGovernanceProofBundle> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
-    let source_service_id = source_service_id_from_request(req)?;
+    let source_id = source_service_id_from_request(req)?;
     let request = req
         .parse_json::<MlsGovernanceProofRequestBody>()
         .await
@@ -194,7 +194,7 @@ async fn resolve_peer_mls_governance_proof(
     request
         .validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    if !peer_mls_scope_visibility(state, &source_service_id, &request.effective_scope).await? {
+    if !peer_mls_scope_visibility(state, &source_id, &request.effective_scope).await? {
         return Err(AppError::not_found("MLS governance scope not found"));
     }
     let outcome = super::events::event_log::governance_proof::materialize_governance_frontier(
@@ -215,7 +215,7 @@ async fn resolve_peer_mls_group_state_material(
 ) -> JsonResult<MlsGroupStateMaterialOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
-    let source_service_id = source_service_id_from_request(req)?;
+    let source_id = source_service_id_from_request(req)?;
     let request = req
         .parse_json::<MlsGroupStateMaterialRequestBody>()
         .await
@@ -233,7 +233,7 @@ async fn resolve_peer_mls_group_state_material(
     if event.event_id != request.group_state_event_id.as_str()
         || event.kind != EventKind::MlsGenesis.as_str()
         || event.realm_id.as_deref() != Some(request.realm_id.as_str())
-        || !peer_event_visibility(state, &source_service_id, &event).await?
+        || !peer_event_visibility(state, &source_id, &event).await?
     {
         return Err(AppError::not_found("MLS group-state material not found"));
     }
@@ -395,8 +395,8 @@ async fn resolve_peer_seals(
 ) -> JsonResult<SealResolveOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
-    let source_service_id = source_service_id_from_request(req)?;
-    let source_service_core_id = arkret_wire::DidCoreId::new(source_service_id.clone())
+    let source_id = source_service_id_from_request(req)?;
+    let source_service_core_id = arkret_wire::DidCoreId::new(source_id.clone())
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let request = req
         .parse_json::<PeerSealResolveRequestBody>()
@@ -406,7 +406,7 @@ async fn resolve_peer_seals(
         .validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let ordinary_visible = if request.history_traversal_access.is_none() {
-        peer_realm_visibility(state, &source_service_id, request.realm_id.as_str()).await?
+        peer_realm_visibility(state, &source_id, request.realm_id.as_str()).await?
     } else {
         false
     };
@@ -507,15 +507,15 @@ async fn resolve_peer_dependencies(
 ) -> JsonResult<GovernanceDependencyResolveOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
-    let source_service_id = source_service_id_from_request(req)?;
-    let source_service_core_id = arkret_wire::DidCoreId::new(source_service_id.clone())
+    let source_id = source_service_id_from_request(req)?;
+    let source_service_core_id = arkret_wire::DidCoreId::new(source_id.clone())
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let request = req
         .parse_json::<PeerGovernanceDependencyResolveRequest>()
         .await
         .map_err(|_| AppError::json_invalid("invalid governance dependency request"))?;
     let ordinary_visible = if request.history_traversal_access.is_none() {
-        peer_realm_visibility(state, &source_service_id, request.realm_id.as_str()).await?
+        peer_realm_visibility(state, &source_id, request.realm_id.as_str()).await?
     } else {
         false
     };
@@ -592,12 +592,12 @@ async fn create_history_key_request(
     }
     let (retention, pins, objects) =
         build_member_history_retention(state, &request, request_digest.clone()).await?;
-    let (release_service_id, release_service_binding_ref) =
+    let (release_id, release_service_binding_ref) =
         validate_local_history_release_binding(state, &request).await?;
     let description = super::system::describe::build_server_description(state);
     let resolution =
         super::system::service_resolution::ensure_current_record(state, &description).await?;
-    if resolution.record.service_id != release_service_id {
+    if resolution.record.service_id != release_id {
         return Err(AppError::conflict(
             "current service resolution does not match the request delivery binding",
         ));
@@ -619,7 +619,7 @@ async fn create_history_key_request(
             request_digest: request_digest.clone(),
             response_capability_commitment: response_capability_commitment.clone(),
             effective_scope: request.effective_scope.clone(),
-            release_service_id: release_service_id.clone(),
+            release_id: release_id.clone(),
             release_service_binding_ref: release_service_binding_ref.clone(),
             release_service_resolution_ref: resolution.record.resolution_event_ref.clone(),
             release_service_resolution_sequence: resolution.record.record_sequence,
@@ -657,7 +657,7 @@ async fn create_history_key_request(
                     .clone(),
                 trusted_history_base_basis: request.trusted_history_base_basis.clone(),
                 trusted_current_basis: request.trusted_current_basis.clone(),
-                release_service_id: release_service_id.clone(),
+                release_id: release_id.clone(),
                 release_service_binding_ref: release_service_binding_ref.clone(),
                 release_service_resolution_ref: resolution.record.resolution_event_ref.clone(),
                 release_service_resolution_sequence: resolution.record.record_sequence,
@@ -748,13 +748,13 @@ async fn enqueue_member_history_request_replicas(
             if member.realm_id != realm_id.as_str()
                 || member.state != "join"
                 || member.delivery_status.as_deref() != Some("routable")
-                || member.recipient_service_id.as_deref() == Some(local_service_id.as_str())
+                || member.recipient_id.as_deref() == Some(local_service_id.as_str())
                 || !scope_visible
             {
                 continue;
             }
             let (Some(service_id), Some(binding_ref)) = (
-                member.recipient_service_id.as_deref(),
+                member.recipient_id.as_deref(),
                 member.delivery_binding_frontier.as_deref(),
             ) else {
                 continue;
@@ -766,7 +766,7 @@ async fn enqueue_member_history_request_replicas(
         targets
     };
     for (destination, binding_ref) in targets {
-        let destination_service_id = arkret_wire::DidCoreId::new(destination)
+        let destination_id = arkret_wire::DidCoreId::new(destination)
             .map_err(|error| AppError::internal(error.to_string()))?;
         let delivery_binding_ref = arkret_wire::EventId::new(binding_ref)
             .map_err(|error| AppError::internal(error.to_string()))?;
@@ -791,7 +791,7 @@ async fn enqueue_member_history_request_replicas(
                 kind: HistoryKeyRequestReplicaKind::Value,
                 request: record.write.request.clone(),
                 request_receipt: record.write.request_receipt.clone(),
-                destination_service_id: destination_service_id.clone(),
+                destination_id: destination_id.clone(),
                 destination_authorization:
                     HistoryKeyRequestReplicaDestinationAuthorization::MemberDeliveryBinding {
                         delivery_binding_ref: delivery_binding_ref.clone(),
@@ -811,7 +811,7 @@ async fn enqueue_member_history_request_replicas(
             .map_err(|error| AppError::internal(error.to_string()))?;
         let route = super::federation::federation::resolved_peer_target(
             state,
-            destination_service_id.as_str(),
+            destination_id.as_str(),
             "principal_server",
             false,
         )
@@ -820,17 +820,17 @@ async fn enqueue_member_history_request_replicas(
         let outbox_id = format!(
             "history-request-replica:{}:{}",
             record.write.request_digest.as_str(),
-            destination_service_id.as_str()
+            destination_id.as_str()
         );
         let delivery = soland_services::federation::FederationDeliveryRecord {
             id: outbox_id.clone(),
-            peer_service_id: destination_service_id.clone(),
+            peer_id: destination_id.clone(),
             peer_url: Some(route.base_url),
             endpoint: "/_arkret/peer/history-key-requests/replicate".to_owned(),
             idempotency_key: format!(
                 "{}:{}",
                 record.write.request_digest.as_str(),
-                destination_service_id.as_str()
+                destination_id.as_str()
             ),
             payload_json,
             coalescing_key: None,
@@ -848,7 +848,7 @@ async fn enqueue_member_history_request_replicas(
             .await
             .map_err(map_service_error)?;
         if stored.id != outbox_id
-            || stored.peer_service_id != delivery.peer_service_id
+            || stored.peer_id != delivery.peer_id
             || stored.endpoint != delivery.endpoint
             || stored.idempotency_key != delivery.idempotency_key
             || stored.payload_json != delivery.payload_json
@@ -898,7 +898,7 @@ async fn validate_local_history_release_binding(
             .filter(|member| member.state == "join")
             .ok_or_else(|| AppError::capability_denied("history requester is not active"))?;
         if member.delivery_status.as_deref() != Some("routable")
-            || member.recipient_service_id.as_deref() != Some(local_service_id.as_str())
+            || member.recipient_id.as_deref() != Some(local_service_id.as_str())
         {
             return Err(AppError::capability_denied(
                 "history requester delivery binding does not name this service",
@@ -922,7 +922,7 @@ async fn validate_local_history_release_binding(
         .envelope
         .get("payload")
         .and_then(|payload| payload.get("delivery_binding"))
-        .and_then(|value| value.get("recipient_service_id"))
+        .and_then(|value| value.get("recipient_id"))
         .and_then(serde_json::Value::as_str);
     if binding.actor_id != request.requester_actor_id.as_str()
         || binding.realm_id.as_deref() != Some(realm_id.as_str())
@@ -1044,7 +1044,7 @@ async fn relay_history_key_response(
     relay
         .validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    if relay.source_relay_attestation.source_service_id != transport_source {
+    if relay.source_relay_attestation.source_id != transport_source {
         return Err(AppError::capability_denied(
             "history response relay transport binding mismatch",
         ));
@@ -1053,11 +1053,7 @@ async fn relay_history_key_response(
         &state.service_resolution_commitment().did,
     )
     .map_err(|error| AppError::internal(format!("local service DID is invalid: {error}")))?;
-    if relay
-        .source_relay_attestation
-        .destination_release_service_id
-        != local_service_id
-    {
+    if relay.source_relay_attestation.destination_release_id != local_service_id {
         return Err(AppError::capability_denied(
             "history response relay destination mismatch",
         ));
@@ -1147,7 +1143,7 @@ async fn relay_history_key_response(
 async fn resolve_history_source_signer_dependencies(
     state: &AppState,
     response: &HistoryKeyResponseSendRequest,
-    peer_source_service_id: Option<&arkret_wire::DidCoreId>,
+    peer_source_id: Option<&arkret_wire::DidCoreId>,
 ) -> Result<Vec<GovernanceDependency>, AppError> {
     let realm_id = match &response.effective_scope {
         HistoryEffectiveScope::Realm { realm_id }
@@ -1211,7 +1207,7 @@ async fn resolve_history_source_signer_dependencies(
             }
         }
         if !missing.is_empty()
-            && let Some(peer_source_service_id) = peer_source_service_id
+            && let Some(peer_source_id) = peer_source_id
         {
             let resolving_transitive_attesters = primary_resolved;
             let request = PeerGovernanceDependencyResolveRequest {
@@ -1222,7 +1218,7 @@ async fn resolve_history_source_signer_dependencies(
             };
             let outcome = super::federation::rrk_acquisition::fetch_peer_governance_dependencies(
                 state,
-                peer_source_service_id,
+                peer_source_id,
                 &request,
             )
             .await
@@ -1264,7 +1260,7 @@ async fn resolve_history_source_signer_dependencies(
                 }
             }
         }
-        if primary_resolved && !missing.is_empty() && peer_source_service_id.is_none() {
+        if primary_resolved && !missing.is_empty() && peer_source_id.is_none() {
             return Err(AppError::new(
                 ErrorCode::DependencyMissing,
                 "transitive history source attester evidence is unavailable",
@@ -1493,9 +1489,7 @@ async fn accepted_remote_history_response_retry(
             validate_remote_history_response_receipt(
                 state,
                 response,
-                &relay
-                    .source_relay_attestation
-                    .destination_release_service_id,
+                &relay.source_relay_attestation.destination_release_id,
                 &receipt,
             )
             .await?;
@@ -1521,9 +1515,7 @@ async fn enqueue_remote_history_response(
     response: &HistoryKeyResponseSendRequest,
     source_relay_attestation: SourceRelayAttestation,
 ) -> Result<(), AppError> {
-    let destination = source_relay_attestation
-        .destination_release_service_id
-        .clone();
+    let destination = source_relay_attestation.destination_release_id.clone();
     let relay = HistoryKeySourceRelay {
         response: response.clone(),
         source_relay_attestation,
@@ -1544,7 +1536,7 @@ async fn enqueue_remote_history_response(
     let outbox_id = history_response_relay_outbox_id(response);
     let delivery = soland_services::federation::FederationDeliveryRecord {
         id: outbox_id.clone(),
-        peer_service_id: destination,
+        peer_id: destination,
         peer_url: Some(route.base_url),
         endpoint: HISTORY_RESPONSE_RELAY_ENDPOINT.to_owned(),
         idempotency_key: response.response_id.to_string(),
@@ -1564,7 +1556,7 @@ async fn enqueue_remote_history_response(
         .await
         .map_err(map_service_error)?;
     if stored.id != outbox_id
-        || stored.peer_service_id != delivery.peer_service_id
+        || stored.peer_id != delivery.peer_id
         || stored.endpoint != delivery.endpoint
         || stored.idempotency_key != delivery.idempotency_key
         || stored.payload_json != delivery.payload_json
@@ -1579,7 +1571,7 @@ async fn enqueue_remote_history_response(
 pub(crate) async fn validate_remote_history_response_receipt(
     state: &AppState,
     response: &HistoryKeyResponseSendRequest,
-    destination_release_service_id: &arkret_wire::DidCoreId,
+    destination_release_id: &arkret_wire::DidCoreId,
     receipt: &HistoryKeyResponseSendReceipt,
 ) -> Result<(), AppError> {
     receipt
@@ -1598,7 +1590,7 @@ pub(crate) async fn validate_remote_history_response_receipt(
     verify_history_proof(
         state,
         &receipt.service_proof,
-        destination_release_service_id,
+        destination_release_id,
         receipt
             .proof_binding_bytes()
             .map_err(|error| AppError::param_invalid(error.to_string()))?,
@@ -1619,8 +1611,7 @@ pub(crate) async fn validate_remote_history_request_replica_outcome(
         .request
         .request_digest()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    if outcome.request_digest != request_digest
-        || outcome.destination_service_id != replica.destination_service_id
+    if outcome.request_digest != request_digest || outcome.destination_id != replica.destination_id
     {
         return Err(AppError::capability_denied(
             "history request replica outcome does not bind the request",
@@ -1629,7 +1620,7 @@ pub(crate) async fn validate_remote_history_request_replica_outcome(
     verify_history_proof(
         state,
         &outcome.service_proof,
-        &replica.destination_service_id,
+        &replica.destination_id,
         outcome
             .proof_binding_bytes()
             .map_err(|error| AppError::param_invalid(error.to_string()))?,
@@ -1726,9 +1717,7 @@ async fn delivered_remote_source_manifest(
         validate_remote_history_response_receipt(
             state,
             &relay.response,
-            &relay
-                .source_relay_attestation
-                .destination_release_service_id,
+            &relay.source_relay_attestation.destination_release_id,
             &receipt,
         )
         .await?;
@@ -1788,15 +1777,11 @@ async fn build_local_history_source_relay(
                 source_kind: SourceKind::OrganizationRecoveryHolder,
                 source_author_profile: None,
                 source_authorization_incarnation: None,
-                source_service_id: local_service_id.clone(),
+                source_id: local_service_id.clone(),
                 source_authority_locator: SourceAuthorityLocator::OrganizationRecoveryHolder {
                     authority_observation: authority_observation.clone(),
                 },
-                destination_release_service_id: request_record
-                    .write
-                    .request_receipt
-                    .release_service_id
-                    .clone(),
+                destination_release_id: request_record.write.request_receipt.release_id.clone(),
                 relayed_at,
                 expires_at: response.expires_at,
                 service_proof,
@@ -1869,7 +1854,7 @@ async fn build_local_history_source_relay(
         .envelope
         .get("payload")
         .and_then(|payload| payload.get("delivery_binding"))
-        .and_then(|value| value.get("recipient_service_id"))
+        .and_then(|value| value.get("recipient_id"))
         .and_then(serde_json::Value::as_str);
     if binding.actor_id != response.source_actor_id.as_str()
         || binding.realm_id.as_deref() != Some(realm_id.as_str())
@@ -1903,16 +1888,12 @@ async fn build_local_history_source_relay(
             source_kind: SourceKind::Member,
             source_author_profile: Some(source_author_profile),
             source_authorization_incarnation: Some(source_authorization_incarnation.clone()),
-            source_service_id: local_service_id.clone(),
+            source_id: local_service_id.clone(),
             source_authority_locator: SourceAuthorityLocator::MemberDeliveryBinding {
                 binding_ref: binding_ref.clone(),
                 binding_digest: binding_digest.clone(),
             },
-            destination_release_service_id: request_record
-                .write
-                .request_receipt
-                .release_service_id
-                .clone(),
+            destination_release_id: request_record.write.request_receipt.release_id.clone(),
             relayed_at,
             expires_at: response.expires_at,
             service_proof,
@@ -1947,7 +1928,7 @@ async fn local_rrk_source_authority(
         .member(realm_id.as_str(), response.source_actor_id.as_str())
         .is_some_and(|member| {
             member.state == "join"
-                && member.recipient_service_id.as_deref() == Some(local_service_id.as_str())
+                && member.recipient_id.as_deref() == Some(local_service_id.as_str())
         })
     {
         return Ok(None);
@@ -1966,7 +1947,7 @@ async fn local_rrk_source_authority(
         let archive = &record.input.archive_replica.archive;
         record.accepted_outcome.is_some()
             && archive.holder_principal_id == response.source_actor_id
-            && archive.holder_service_id == local_service_id
+            && archive.holder_id == local_service_id
             && archive.effective_scope == response.effective_scope
             && request
                 .requested_ranges
@@ -2089,7 +2070,7 @@ async fn accepted_rrk_for_ranges(
     state: &AppState,
     effective_scope: &HistoryEffectiveScope,
     holder_principal_id: &arkret_wire::DidCoreId,
-    holder_service_id: &arkret_wire::DidCoreId,
+    holder_id: &arkret_wire::DidCoreId,
     ranges: &[arkret_models_collaboration::history_key::EpochRange],
 ) -> Result<Vec<soland_storage::PendingRrkAcquisitionRecord>, AppError> {
     if ranges.is_empty() {
@@ -2108,7 +2089,7 @@ async fn accepted_rrk_for_ranges(
             .list_accepted_rrk_for_authority(
                 effective_scope,
                 holder_principal_id,
-                holder_service_id,
+                holder_id,
                 range.from_epoch,
                 range.to_epoch,
                 65_537 - records.len(),
@@ -2132,7 +2113,7 @@ fn current_rrk_holder_authority_observation(
     state: &AppState,
     realm_id: &arkret_wire::RealmId,
     holder_principal_id: &arkret_wire::DidCoreId,
-    holder_service_id: &arkret_wire::DidCoreId,
+    holder_id: &arkret_wire::DidCoreId,
     archive_authorization_tuple_digest: arkret_wire::Hash,
     observed_at: chrono::DateTime<chrono::Utc>,
     expires_at: chrono::DateTime<chrono::Utc>,
@@ -2165,24 +2146,22 @@ fn current_rrk_holder_authority_observation(
             serde_json::from_value::<arkret_wire::DidCoreId>(value)
                 .map_err(|error| AppError::internal(error.to_string()))
         })?;
-    let current_holder_service_id = key_tuple
-        .get("holder_service_id")
+    let current_holder_id = key_tuple
+        .get("holder_id")
         .cloned()
-        .ok_or_else(|| AppError::internal("current RRK cell omits holder_service_id"))
+        .ok_or_else(|| AppError::internal("current RRK cell omits holder_id"))
         .and_then(|value| {
             serde_json::from_value::<arkret_wire::DidCoreId>(value)
                 .map_err(|error| AppError::internal(error.to_string()))
         })?;
-    if &current_holder_principal_id != holder_principal_id
-        || &current_holder_service_id != holder_service_id
-    {
+    if &current_holder_principal_id != holder_principal_id || &current_holder_id != holder_id {
         return Err(AppError::capability_denied(
             "current RRK authority names a different holder",
         ));
     }
     let observation = RrkHolderAuthorityObservation {
         holder_principal_id: current_holder_principal_id,
-        holder_service_id: current_holder_service_id,
+        holder_id: current_holder_id,
         current_holder_signing_ref: key_tuple
             .get("holder_signing_ref")
             .cloned()
@@ -2231,7 +2210,7 @@ async fn validate_history_source_relay_binding(
             state,
             realm_id,
             &attestation.source_actor_id,
-            &attestation.source_service_id,
+            &attestation.source_id,
             authority_observation
                 .archive_authorization_tuple_digest
                 .clone(),
@@ -2248,7 +2227,7 @@ async fn validate_history_source_relay_binding(
             state,
             &attestation.effective_scope,
             &attestation.source_actor_id,
-            &attestation.source_service_id,
+            &attestation.source_id,
             &ranges,
         )
         .await?;
@@ -2257,7 +2236,7 @@ async fn validate_history_source_relay_binding(
             record.accepted_outcome.is_some()
                 && replica.archive.effective_scope == attestation.effective_scope
                 && replica.archive.holder_principal_id == attestation.source_actor_id
-                && replica.archive.holder_service_id == attestation.source_service_id
+                && replica.archive.holder_id == attestation.source_id
                 && authority_observation
                     .validate_for_archive_tuple(&soland_storage::rrk_archive_authorization_tuple(
                         replica,
@@ -2287,7 +2266,7 @@ async fn validate_history_source_relay_binding(
             .cloned()
             .ok_or_else(|| AppError::capability_denied("history relay source is not current"))?
     };
-    if member.recipient_service_id.as_deref() != Some(attestation.source_service_id.as_str())
+    if member.recipient_id.as_deref() != Some(attestation.source_id.as_str())
         || member.delivery_binding_frontier.as_deref() != Some(binding_ref.as_str())
     {
         return Err(AppError::capability_denied(
@@ -2773,9 +2752,9 @@ async fn accept_history_response_manifest(
         .map_err(map_service_error)?
         .ok_or_else(|| AppError::not_found("history request is unavailable"))?;
     if existing_reservation.is_none() {
-        let (current_release_service_id, _) =
+        let (current_release_id, _) =
             validate_local_history_release_binding(state, &request_record.write.request).await?;
-        if request_record.write.request_receipt.release_service_id != current_release_service_id {
+        if request_record.write.request_receipt.release_id != current_release_id {
             return Err(AppError::capability_denied(
                 "history response stream release service binding changed",
             ));
@@ -3412,9 +3391,9 @@ async fn accept_history_response_chunk(
         .map_err(map_service_error)?
         .ok_or_else(|| AppError::not_found("history request is unavailable"))?;
     if existing_reservation.is_none() {
-        let (current_release_service_id, _) =
+        let (current_release_id, _) =
             validate_local_history_release_binding(state, &request_record.write.request).await?;
-        if request_record.write.request_receipt.release_service_id != current_release_service_id {
+        if request_record.write.request_receipt.release_id != current_release_id {
             return Err(AppError::capability_denied(
                 "history response stream release service binding changed",
             ));
@@ -3766,7 +3745,7 @@ async fn build_history_release_attestation(
             recipient_pcr_device,
             recipient_agent_control_evidence,
             source_relay: SourceRelayViewLocator {
-                relay_service_id: source_relay.source_service_id.clone(),
+                relay_id: source_relay.source_id.clone(),
                 relay_attestation_digest,
                 source_authority_digest,
                 observed_at: source_relay.relayed_at,
@@ -3818,7 +3797,7 @@ async fn validate_rrk_release_coverage(
         state,
         &response.effective_scope,
         &source_relay.source_actor_id,
-        &source_relay.source_service_id,
+        &source_relay.source_id,
         std::slice::from_ref(released_range),
     )
     .await?;
@@ -3831,7 +3810,7 @@ async fn validate_rrk_release_coverage(
         if record.accepted_outcome.is_none()
             || archive.effective_scope != response.effective_scope
             || archive.holder_principal_id != source_relay.source_actor_id
-            || archive.holder_service_id != source_relay.source_service_id
+            || archive.holder_id != source_relay.source_id
             || archive.epoch < released_range.from_epoch
             || archive.epoch > released_range.to_epoch
         {
@@ -4130,8 +4109,7 @@ async fn validate_manifest_current_gate(
         || source_relay.effective_scope != response.effective_scope
         || source_relay.expires_at != response.expires_at
         || source_relay.source_record_digest != source_record_digest
-        || source_relay.destination_release_service_id
-            != request_record.write.request_receipt.release_service_id
+        || source_relay.destination_release_id != request_record.write.request_receipt.release_id
     {
         return Err(AppError::capability_denied(
             "history manifest source relay binding mismatch",
@@ -4597,7 +4575,7 @@ async fn replicate_history_key_request(
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
     let transport_source = source_service_id_from_request(req)?;
-    let source_service_id = arkret_wire::DidCoreId::new(transport_source.clone())
+    let source_id = arkret_wire::DidCoreId::new(transport_source.clone())
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let replica = req
         .parse_json::<HistoryKeyRequestReplica>()
@@ -4606,7 +4584,7 @@ async fn replicate_history_key_request(
     replica
         .validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    if replica.request_receipt.release_service_id != source_service_id {
+    if replica.request_receipt.release_id != source_id {
         return Err(AppError::capability_denied(
             "history request replica source service binding mismatch",
         ));
@@ -4614,7 +4592,7 @@ async fn replicate_history_key_request(
     verify_history_proof(
         state,
         &replica.relay_proof,
-        &source_service_id,
+        &source_id,
         replica
             .proof_binding_bytes()
             .map_err(|error| AppError::param_invalid(error.to_string()))?,
@@ -4625,7 +4603,7 @@ async fn replicate_history_key_request(
         &state.service_resolution_commitment().did,
     )
     .map_err(|error| AppError::internal(format!("local service DID is invalid: {error}")))?;
-    if replica.destination_service_id != local_service_id {
+    if replica.destination_id != local_service_id {
         return Err(AppError::capability_denied(
             "history request replica destination service mismatch",
         ));
@@ -4645,7 +4623,7 @@ async fn replicate_history_key_request(
     verify_history_proof(
         state,
         &replica.request_receipt.service_proof,
-        &replica.request_receipt.release_service_id,
+        &replica.request_receipt.release_id,
         replica
             .request_receipt
             .proof_binding_bytes()
@@ -4721,7 +4699,7 @@ async fn validate_history_request_replica_destination(
                 .envelope
                 .get("payload")
                 .and_then(|payload| payload.get("delivery_binding"))
-                .and_then(|value| value.get("recipient_service_id"))
+                .and_then(|value| value.get("recipient_id"))
                 .and_then(serde_json::Value::as_str);
             if binding.canonical_digest != delivery_binding_digest.as_str()
                 || binding.realm_id.as_deref() != Some(realm_id.as_str())
@@ -4748,10 +4726,10 @@ async fn validate_history_request_replica_destination(
         }
         HistoryKeyRequestReplicaDestinationAuthorization::OrganizationRecoveryHolder {
             holder_principal_id,
-            holder_service_id,
+            holder_id,
             archive_tuple_digest,
         } => {
-            if holder_service_id != local_service_id {
+            if holder_id != local_service_id {
                 return Err(AppError::capability_denied(
                     "history request RRK destination service mismatch",
                 ));
@@ -4760,14 +4738,14 @@ async fn validate_history_request_replica_destination(
                 state,
                 &replica.request.effective_scope,
                 holder_principal_id,
-                holder_service_id,
+                holder_id,
                 &replica.request.requested_ranges,
             )
             .await?;
             let authorized = accepted.iter().any(|record| {
                 let archive = &record.input.archive_replica.archive;
                 archive.holder_principal_id == *holder_principal_id
-                    && archive.holder_service_id == *holder_service_id
+                    && archive.holder_id == *holder_id
                     && archive.effective_scope == replica.request.effective_scope
                     && replica.request.requested_ranges.iter().any(|range| {
                         range.from_epoch <= archive.epoch && archive.epoch <= range.to_epoch
@@ -4801,7 +4779,7 @@ async fn replicate_organization_recovery_archive(
 ) -> JsonResult<OrganizationRecoveryArchiveReplicaOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
-    let source_service_id = source_service_id_from_request(req)?;
+    let source_id = source_service_id_from_request(req)?;
     let replica = req
         .parse_json::<OrganizationRecoveryArchiveReplica>()
         .await
@@ -4818,9 +4796,7 @@ async fn replicate_organization_recovery_archive(
             "local service DID cannot project to core_id: {error}"
         ))
     })?;
-    if replica.source_service_id.as_str() != source_service_id
-        || replica.holder_service_id != local_service_id
-    {
+    if replica.source_id.as_str() != source_id || replica.holder_id != local_service_id {
         return Err(AppError::capability_denied(
             "organization recovery archive transport binding mismatch",
         ));
@@ -4867,7 +4843,7 @@ async fn verify_archive_replica_service_proof(
             "organization recovery archive proof controller cannot project: {error}"
         ))
     })?;
-    if controller_core != replica.source_service_id {
+    if controller_core != replica.source_id {
         return Err(AppError::capability_denied(
             "organization recovery archive proof controller does not match source service",
         ));

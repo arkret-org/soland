@@ -93,8 +93,8 @@ pub struct AdminServiceRouteNotice {
 #[serde(deny_unknown_fields)]
 pub struct AdminServiceRouteAck {
     pub request_id: String,
-    pub source_service_id: String,
-    pub receiver_service_id: String,
+    pub source_id: String,
+    pub receiver_id: String,
     pub realm_id: String,
     pub request_digest: String,
     pub artifact_digest: String,

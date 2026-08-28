@@ -10,7 +10,7 @@ use super::{PersistenceResult, async_trait};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceResolutionMirrorEntry {
-    pub source_service_id: DidCoreId,
+    pub source_id: DidCoreId,
     pub realm_id: RealmId,
     pub request_id: RequestId,
     pub request_digest: Hash,
@@ -32,7 +32,7 @@ impl ServiceResolutionMirrorEntry {
             .canonical_digest()
             .map_err(|error| super::PersistenceError::SchemaViolation(error.to_string()))?;
         self.ack
-            .validate_request_binding(&self.source_service_id, &self.request)
+            .validate_request_binding(&self.source_id, &self.request)
             .map_err(|error| super::PersistenceError::SchemaViolation(error.to_string()))?;
         if self.request_id != self.request.request_id
             || self.realm_id != self.request.realm_id
@@ -168,9 +168,9 @@ pub trait ServiceRouteStore: Send + Sync {
 
     async fn successor_records(
         &self,
-        source_service_id: &DidCoreId,
+        source_id: &DidCoreId,
         realm_id: &RealmId,
-        target_service_id: &DidCoreId,
+        target_id: &DidCoreId,
         service_kind: &str,
         after_sequence: u64,
         limit: usize,
@@ -178,9 +178,9 @@ pub trait ServiceRouteStore: Send + Sync {
 
     async fn latest_notice(
         &self,
-        source_service_id: &DidCoreId,
+        source_id: &DidCoreId,
         realm_id: &RealmId,
-        target_service_id: &DidCoreId,
+        target_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<Option<ServiceRouteHandoverNotice>>;
 

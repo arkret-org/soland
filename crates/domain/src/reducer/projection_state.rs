@@ -288,12 +288,12 @@ pub struct ProjectionState {
     /// `ak.component.realm.policy_server.v1`.
     pub realm_policy_servers: BTreeMap<String, RealmPolicyServerConfig>,
     /// Device push-route projection keyed by the protocol composite
-    /// `(recipient_service_id, principal_id, device_id, push_route)`.
+    /// `(recipient_id, principal_id, device_id, push_route)`.
     /// These are actor-private state cells and MUST stay isolated per
     /// recipient Principal Server.
     pub push_routes: BTreeMap<PushRouteSubject, PushRouteCellValue>,
     /// Optional local Principal/Sync service DID. When set, incoming
-    /// `ak.device.push_route` writes whose `recipient_service_id` does
+    /// `ak.device.push_route` writes whose `recipient_id` does
     /// not match this service are rejected instead of cached.
     pub local_service_id: Option<String>,
     /// Stream-F (Wave 1B) — `ak.audit.erasure_receipt` projection.
@@ -494,9 +494,9 @@ impl ProjectionState {
             }
         };
         let scope = payload.scope();
-        let recipient_service_id = scope.recipient_service_id.as_str();
+        let recipient_id = scope.recipient_id.as_str();
         if let Some(local_service_id) = self.local_service_id.as_deref()
-            && local_service_id != recipient_service_id
+            && local_service_id != recipient_id
         {
             return ProjectionEffect::Rejected {
                 reason: "recipient_service_id_mismatch".to_owned(),
@@ -507,7 +507,7 @@ impl ProjectionState {
         let push_route = scope.push_route.as_str();
 
         let subject = PushRouteSubject {
-            recipient_service_id: recipient_service_id.to_owned(),
+            recipient_id: recipient_id.to_owned(),
             principal_id: principal_id.to_owned(),
             device_id: device_id.to_owned(),
             push_route: push_route.to_owned(),
@@ -533,7 +533,7 @@ impl ProjectionState {
             }
         };
         let expected_subject = match arkret_wire::composite_subject(&[
-            recipient_service_id,
+            recipient_id,
             principal_id,
             device_id,
             push_route,
@@ -565,12 +565,12 @@ impl ProjectionState {
         let current = self.push_routes.get(&subject).map(|value| {
             arkret_lattice_registry::ActorPrivateCandidate {
                 value: serde_json::json!({
-                    "recipient_service_id": &subject.recipient_service_id,
+                    "recipient_id": &subject.recipient_id,
                     "principal_id": &subject.principal_id,
                     "device_id": &subject.device_id,
                     "push_route": &subject.push_route,
                     "push_target_id": &value.push_target_id,
-                    "push_gateway_service_id": &value.push_gateway_service_id,
+                    "push_gateway_id": &value.push_gateway_id,
                     "encryption_key": &value.encryption_key,
                     "capabilities": &value.capabilities,
                     "revoked": value.revoked,
@@ -618,7 +618,7 @@ impl ProjectionState {
                     PushRouteCellValue {
                         revision: incoming_revision,
                         push_target_id: None,
-                        push_gateway_service_id: None,
+                        push_gateway_id: None,
                         encryption_key: None,
                         capabilities: Vec::new(),
                         revoked: true,
@@ -645,7 +645,7 @@ impl ProjectionState {
                     PushRouteCellValue {
                         revision: incoming_revision,
                         push_target_id: Some(active.push_target_id.into_string()),
-                        push_gateway_service_id: Some(active.push_gateway_service_id.into_string()),
+                        push_gateway_id: Some(active.push_gateway_id.into_string()),
                         encryption_key: Some(active.encryption_key),
                         capabilities: active.capabilities,
                         revoked: false,

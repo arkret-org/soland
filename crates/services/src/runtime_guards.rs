@@ -70,13 +70,13 @@ impl Default for RuntimeGuardService {
 impl RuntimeGuardService {
     pub fn peer_keypackage_claim_rate_limited(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         target_principal_id: &str,
     ) -> bool {
         let mut records = self.inner.peer_keypackage_claims.lock();
         let now = Utc::now();
         prune_window_records(&mut records, now - PEER_KEYPACKAGE_CLAIM_WINDOW);
-        let key = (source_service_id.to_owned(), target_principal_id.to_owned());
+        let key = (source_id.to_owned(), target_principal_id.to_owned());
         record_window_attempt(
             &mut records,
             key,

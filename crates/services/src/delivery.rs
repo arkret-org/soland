@@ -41,7 +41,7 @@ pub struct StoreAccountNotificationDeltaCommand {
 #[derive(Clone, Debug)]
 pub struct ListAccountNotificationDeltasQuery {
     pub controller_account_id: String,
-    pub recipient_service_id: String,
+    pub recipient_id: String,
     pub after_position: Option<i64>,
 }
 
@@ -58,7 +58,7 @@ pub trait NotificationWritePort: Send + Sync {
     async fn list_for_account(
         &self,
         controller_account_id: &str,
-        recipient_service_id: &str,
+        recipient_id: &str,
         after_position: Option<i64>,
     ) -> ServiceResult<Vec<StoredAccountNotificationDelta>>;
     async fn list_for_recipient(
@@ -414,7 +414,7 @@ impl DeliveryService {
         self.notifications
             .list_for_account(
                 &query.controller_account_id,
-                &query.recipient_service_id,
+                &query.recipient_id,
                 query.after_position,
             )
             .await

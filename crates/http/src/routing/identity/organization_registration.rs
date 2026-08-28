@@ -23,14 +23,14 @@ use super::AuthArgs;
 use crate::state::AppState;
 
 struct CurrentReceiptSigner {
-    issuer_service_id: DidCoreId,
+    issuer_id: DidCoreId,
     verification_method: arkret_wire::DidUrl,
     signer: Ed25519DetachedJwsSigner,
 }
 
 impl CurrentReceiptSigner {
     fn from_state(state: &AppState) -> Result<Self, AppError> {
-        let issuer_service_id = DidCoreId::new(state.service_id().clone())
+        let issuer_id = DidCoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(format!("service core id is invalid: {error}")))?;
         let issuer_did = state.service_resolution_commitment().did.clone();
         let verification_method = arkret_wire::DidUrl::new(format!("{issuer_did}#notary-key"))
@@ -44,7 +44,7 @@ impl CurrentReceiptSigner {
             verification_method.as_str().to_owned(),
         );
         Ok(Self {
-            issuer_service_id,
+            issuer_id,
             verification_method,
             signer,
         })
@@ -52,8 +52,8 @@ impl CurrentReceiptSigner {
 }
 
 impl OrganizationRegistrationReceiptSigner for CurrentReceiptSigner {
-    fn issuer_service_id(&self) -> &DidCoreId {
-        &self.issuer_service_id
+    fn issuer_id(&self) -> &DidCoreId {
+        &self.issuer_id
     }
 
     fn verification_method(&self) -> &arkret_wire::DidUrl {
@@ -142,7 +142,7 @@ pub(crate) async fn get(
     let actor_core_id = authenticated_actor_core_id(&actor);
     let authorized = current.as_ref().is_some_and(|current| {
         state.is_admin_principal(&actor)
-            || actor_core_id.as_ref() == Some(&current.generation.local_admin_subject)
+            || actor_core_id.as_ref() == Some(&current.generation.local_admin_subject_id)
     });
     if !authorized {
         return Err(indistinguishable_not_found());
@@ -216,7 +216,7 @@ async fn require_registration_manager(
     let actor_core_id = authenticated_actor_core_id(&actor);
     if current.as_ref().is_some_and(|current| {
         state.is_admin_principal(&actor)
-            || actor_core_id.as_ref() == Some(&current.generation.local_admin_subject)
+            || actor_core_id.as_ref() == Some(&current.generation.local_admin_subject_id)
     }) {
         return Ok(());
     }

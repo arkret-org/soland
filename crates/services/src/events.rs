@@ -723,7 +723,7 @@ pub trait MessagePort: Send + Sync {
 #[derive(Clone, Debug)]
 pub struct AppletTransactionReplayState {
     pub applet_id: arkret_wire::AppletId,
-    pub source_service_id: String,
+    pub source_id: String,
     pub idempotency_key: String,
     pub delivery_authentication_record_digest: String,
     pub request_digest: String,
@@ -770,7 +770,7 @@ pub trait AppletPort: Send + Sync {
     async fn complete_applet_transaction(
         &self,
         applet_id: &str,
-        source_service_id: &str,
+        source_id: &str,
         idempotency_key: &str,
         outcome: Value,
     ) -> ServiceResult<()>;
@@ -1568,12 +1568,12 @@ impl EventQueryService {
     pub async fn complete_applet_transaction(
         &self,
         applet_id: &str,
-        source_service_id: &str,
+        source_id: &str,
         idempotency_key: &str,
         outcome: Value,
     ) -> ServiceResult<()> {
         self.applets
-            .complete_applet_transaction(applet_id, source_service_id, idempotency_key, outcome)
+            .complete_applet_transaction(applet_id, source_id, idempotency_key, outcome)
             .await
     }
 
@@ -1773,7 +1773,7 @@ pub use soland_storage::{
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PeerKeyPackageClaimLedgerState {
-    pub source_service_id: String,
+    pub source_id: String,
     pub claim_request_id: String,
     pub request_digest: String,
     pub key_package_use: String,
@@ -1832,7 +1832,7 @@ pub trait MlsKeyPackageMaintenancePort: Send + Sync {
     ) -> ServiceResult<Option<MlsKeyPackageState>>;
     async fn peer_claim(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
     async fn peer_claim_by_keypackage_id(
@@ -1849,7 +1849,7 @@ pub trait MlsKeyPackageMaintenancePort: Send + Sync {
     ) -> ServiceResult<PeerKeyPackageClaimLedgerWriteResult>;
     async fn attach_peer_claim_terminal_receipt(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         terminal_receipt: &Value,
@@ -1857,7 +1857,7 @@ pub trait MlsKeyPackageMaintenancePort: Send + Sync {
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
     async fn attach_peer_claim_consume_receipt(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         consume_receipt: &Value,
@@ -1865,7 +1865,7 @@ pub trait MlsKeyPackageMaintenancePort: Send + Sync {
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
     async fn transition_peer_claim_consumed(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         expected_outcome: &Value,
@@ -1874,7 +1874,7 @@ pub trait MlsKeyPackageMaintenancePort: Send + Sync {
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
     async fn transition_peer_claim_terminal(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         expected_outcome: &Value,
@@ -1964,11 +1964,11 @@ impl MlsKeyPackageService {
     }
     pub async fn peer_claim(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>> {
         self.key_packages
-            .peer_claim(source_service_id, claim_request_id)
+            .peer_claim(source_id, claim_request_id)
             .await
     }
     pub async fn peer_claim_by_keypackage_id(
@@ -1993,7 +1993,7 @@ impl MlsKeyPackageService {
     }
     pub async fn attach_peer_claim_terminal_receipt(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         terminal_receipt: &Value,
@@ -2001,7 +2001,7 @@ impl MlsKeyPackageService {
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>> {
         self.key_packages
             .attach_peer_claim_terminal_receipt(
-                source_service_id,
+                source_id,
                 claim_request_id,
                 request_digest,
                 terminal_receipt,
@@ -2011,7 +2011,7 @@ impl MlsKeyPackageService {
     }
     pub async fn attach_peer_claim_consume_receipt(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         consume_receipt: &Value,
@@ -2019,7 +2019,7 @@ impl MlsKeyPackageService {
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>> {
         self.key_packages
             .attach_peer_claim_consume_receipt(
-                source_service_id,
+                source_id,
                 claim_request_id,
                 request_digest,
                 consume_receipt,
@@ -2029,7 +2029,7 @@ impl MlsKeyPackageService {
     }
     pub async fn transition_peer_claim_terminal(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         expected_outcome: &Value,
@@ -2039,7 +2039,7 @@ impl MlsKeyPackageService {
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>> {
         self.key_packages
             .transition_peer_claim_terminal(
-                source_service_id,
+                source_id,
                 claim_request_id,
                 request_digest,
                 expected_outcome,
@@ -2051,7 +2051,7 @@ impl MlsKeyPackageService {
     }
     pub async fn transition_peer_claim_consumed(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         expected_outcome: &Value,
@@ -2060,7 +2060,7 @@ impl MlsKeyPackageService {
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>> {
         self.key_packages
             .transition_peer_claim_consumed(
-                source_service_id,
+                source_id,
                 claim_request_id,
                 request_digest,
                 expected_outcome,
@@ -2175,8 +2175,8 @@ pub trait RealmInvitePort: Send + Sync {
 pub struct RealmInviteState {
     pub invite_id: String,
     pub realm_id: String,
-    pub inviter: String,
-    pub invitee: Option<String>,
+    pub inviter_id: String,
+    pub invitee_id: Option<String>,
     pub invite_delivery_target: Option<Value>,
     pub introduction_evidence_digest: Option<String>,
     pub third_party_invite: Option<ThirdPartyInvite>,
@@ -2193,7 +2193,7 @@ pub struct InviteLocatorState {
     pub locator_id: String,
     pub token_digest: String,
     pub subject_id: String,
-    pub recipient_service_id: String,
+    pub recipient_id: String,
     pub issued_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub one_time_use: bool,
@@ -2557,7 +2557,7 @@ mod tests {
                 idempotency: None,
                 deliveries: vec![FederationDeliveryRecord {
                     id: "delivery:test".to_owned(),
-                    peer_service_id: arkret_wire::DidCoreId::new("ak:did_core:web:peer.example")
+                    peer_id: arkret_wire::DidCoreId::new("ak:did_core:web:peer.example")
                         .expect("peer service id"),
                     peer_url: Some("https://peer.example".to_owned()),
                     endpoint: "/_arkret/peer/events".to_owned(),

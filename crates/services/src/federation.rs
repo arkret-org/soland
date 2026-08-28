@@ -15,7 +15,7 @@ pub const FEDERATION_FRONTIER_STATUS_STALE_PEER: &str = "peer_stale";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FederationFrontierExchangeRecord {
     pub realm_id: String,
-    pub peer_service_id: DidCoreId,
+    pub peer_id: DidCoreId,
     pub status: String,
     pub consecutive_failures: i32,
     pub last_success_at: Option<i64>,
@@ -66,8 +66,8 @@ pub struct SovereignExternalInviteRecord {
     pub invite_token: String,
     pub target_realm: String,
     pub target_host: String,
-    pub invitee: String,
-    pub inviter: String,
+    pub invitee_id: String,
+    pub inviter_id: String,
     pub accepted: bool,
     pub created_at: DateTime<Utc>,
 }
@@ -109,7 +109,7 @@ pub struct SovereignStoreForwardRecord {
 #[derive(Clone, Debug)]
 pub struct FederationDeliveryRecord {
     pub id: String,
-    pub peer_service_id: DidCoreId,
+    pub peer_id: DidCoreId,
     pub peer_url: Option<String>,
     pub endpoint: String,
     pub idempotency_key: String,
@@ -148,7 +148,7 @@ pub struct PendingFederationDelivery {
 pub struct FederationDeadLetter {
     pub id: String,
     pub outbox_id: String,
-    pub peer_service_id: DidCoreId,
+    pub peer_id: DidCoreId,
     pub endpoint: String,
     pub idempotency_key: String,
     pub last_http_status: Option<i32>,
@@ -240,7 +240,7 @@ pub trait FederationOutboxPort: Send + Sync {
     async fn enqueue(&self, delivery: &FederationDeliveryRecord) -> ServiceResult<bool>;
     async fn find(
         &self,
-        peer_service_id: &DidCoreId,
+        peer_id: &DidCoreId,
         idempotency_key: &str,
     ) -> ServiceResult<Option<FederationDeliveryRecord>>;
     async fn claim_due(
@@ -288,19 +288,19 @@ pub trait FederationStatePort: Send + Sync {
     async fn frontier_exchange(
         &self,
         realm_id: &str,
-        peer_service_id: &DidCoreId,
+        peer_id: &DidCoreId,
     ) -> ServiceResult<Option<FederationFrontierExchangeRecord>>;
     async fn record_frontier_success(
         &self,
         realm_id: &str,
-        peer_service_id: &DidCoreId,
+        peer_id: &DidCoreId,
         frontier_root: &str,
         observed_at: i64,
     ) -> ServiceResult<FederationFrontierExchangeRecord>;
     async fn record_frontier_failure(
         &self,
         realm_id: &str,
-        peer_service_id: &DidCoreId,
+        peer_id: &DidCoreId,
         reason: &str,
         observed_at: i64,
     ) -> ServiceResult<FederationFrontierExchangeRecord>;
@@ -339,17 +339,14 @@ impl FederationService {
         }
         if let Some(existing) = self
             .outbox
-            .find(
-                &command.delivery.peer_service_id,
-                &command.delivery.idempotency_key,
-            )
+            .find(&command.delivery.peer_id, &command.delivery.idempotency_key)
             .await?
         {
             return Ok(existing);
         }
         if let Some(coalescing_key) = command.delivery.coalescing_key.as_deref()
             && let Some(existing) = self.outbox.deliveries().await?.into_iter().find(|row| {
-                row.delivery.peer_service_id == command.delivery.peer_service_id
+                row.delivery.peer_id == command.delivery.peer_id
                     && row.delivery.coalescing_key.as_deref() == Some(coalescing_key)
                     && matches!(
                         row.state,
@@ -456,32 +453,30 @@ impl FederationService {
     pub async fn frontier_exchange(
         &self,
         realm_id: &str,
-        peer_service_id: &DidCoreId,
+        peer_id: &DidCoreId,
     ) -> ServiceResult<Option<FederationFrontierExchangeRecord>> {
-        self.state
-            .frontier_exchange(realm_id, peer_service_id)
-            .await
+        self.state.frontier_exchange(realm_id, peer_id).await
     }
     pub async fn record_frontier_success(
         &self,
         realm_id: &str,
-        peer_service_id: &DidCoreId,
+        peer_id: &DidCoreId,
         frontier_root: &str,
         observed_at: i64,
     ) -> ServiceResult<FederationFrontierExchangeRecord> {
         self.state
-            .record_frontier_success(realm_id, peer_service_id, frontier_root, observed_at)
+            .record_frontier_success(realm_id, peer_id, frontier_root, observed_at)
             .await
     }
     pub async fn record_frontier_failure(
         &self,
         realm_id: &str,
-        peer_service_id: &DidCoreId,
+        peer_id: &DidCoreId,
         reason: &str,
         observed_at: i64,
     ) -> ServiceResult<FederationFrontierExchangeRecord> {
         self.state
-            .record_frontier_failure(realm_id, peer_service_id, reason, observed_at)
+            .record_frontier_failure(realm_id, peer_id, reason, observed_at)
             .await
     }
 }
@@ -572,7 +567,7 @@ mod tests {
 
         async fn find(
             &self,
-            peer_service_id: &DidCoreId,
+            peer_id: &DidCoreId,
             idempotency_key: &str,
         ) -> ServiceResult<Option<FederationDeliveryRecord>> {
             Ok(self
@@ -581,7 +576,7 @@ mod tests {
                 .expect("delivery lock")
                 .iter()
                 .find(|entry| {
-                    &entry.delivery.peer_service_id == peer_service_id
+                    &entry.delivery.peer_id == peer_id
                         && entry.delivery.idempotency_key == idempotency_key
                 })
                 .map(|entry| entry.delivery.clone()))
@@ -778,7 +773,7 @@ mod tests {
             .enqueue_delivery(EnqueueFederationDeliveryCommand {
                 delivery: FederationDeliveryRecord {
                     id: "delivery:1".to_owned(),
-                    peer_service_id: DidCoreId::new("ak:did_core:web:peer.example")
+                    peer_id: DidCoreId::new("ak:did_core:web:peer.example")
                         .expect("peer service id"),
                     peer_url: Some("https://peer.example".to_owned()),
                     endpoint: "/_arkret/federation/v1/events".to_owned(),

@@ -17,7 +17,7 @@ async fn policy_check_and_validation_work_body() {
     seed_realm_genesis_event(&state, demo_realm_id(), "did:web:alice.example").await;
     let token = dev_token(state.clone()).await;
     let actor_id = fixture_actor_core_id("did:web:alice.example");
-    let source_service_id = state.service_id().to_owned();
+    let source_id = state.service_id().to_owned();
 
     let policy: Value = TestClient::post("http://server/_arkret/self/policy/check")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -28,7 +28,7 @@ async fn policy_check_and_validation_work_body() {
             "action": "message.send",
             "actor_id": actor_id,
             "source": {
-                "service_id": source_service_id,
+                "service_id": source_id,
                 "service_kind": "soland",
                 "signed_transport": true
             }
@@ -102,7 +102,7 @@ async fn policy_check_and_validation_work_body() {
             "action": "message.send",
             "actor_id": actor_id,
             "source": {
-                "service_id": source_service_id,
+                "service_id": source_id,
                 "service_kind": "soland",
                 "signed_transport": true
             }
@@ -139,7 +139,7 @@ async fn policy_check_and_validation_work_body() {
             "action": "message.send",
             "actor_id": actor_id,
             "source": {
-                "service_id": source_service_id,
+                "service_id": source_id,
                 "service_kind": "soland",
                 "signed_transport": true
             }

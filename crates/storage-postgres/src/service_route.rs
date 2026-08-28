@@ -28,7 +28,7 @@ struct JsonRow {
 #[derive(QueryableByName)]
 struct MirrorRow {
     #[diesel(sql_type = Text)]
-    source_service_id: String,
+    source_id: DidCoreId,
     #[diesel(sql_type = Text)]
     realm_id: String,
     #[diesel(sql_type = Text)]
@@ -56,7 +56,7 @@ struct ExistsRow {
 #[derive(QueryableByName)]
 struct RouteKeyRow {
     #[diesel(sql_type = Text)]
-    service_id: String,
+    service_id: DidCoreId,
     #[diesel(sql_type = Text)]
     service_kind: String,
 }
@@ -64,7 +64,7 @@ struct RouteKeyRow {
 #[derive(QueryableByName)]
 struct QuarantineRow {
     #[diesel(sql_type = Text)]
-    service_id: String,
+    service_id: DidCoreId,
     #[diesel(sql_type = Text)]
     service_kind: String,
     #[diesel(sql_type = Text)]
@@ -97,8 +97,7 @@ fn key_json(key: &ServiceResolutionArtifactKey) -> PersistenceResult<String> {
 impl MirrorRow {
     fn decode(self) -> PersistenceResult<ServiceResolutionMirrorEntry> {
         Ok(ServiceResolutionMirrorEntry {
-            source_service_id: DidCoreId::new(self.source_service_id)
-                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+            source_id: self.source_id,
             realm_id: RealmId::new(self.realm_id)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             request_id: arkret_wire::RequestId::new(self.request_id)
@@ -301,8 +300,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
         rows.into_iter()
             .map(|row| {
                 Ok(ServiceRouteStoredKey {
-                    service_id: DidCoreId::new(row.service_id)
-                        .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+                    service_id: row.service_id,
                     service_kind: row.service_kind,
                 })
             })
@@ -334,7 +332,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query("SELECT source_service_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at FROM service_resolution_mirror_ledger WHERE artifact->'service_route_handover_notice'->'notice'->>'service_id'=$1 AND artifact->'service_route_handover_notice'->'notice'->>'service_kind'=$2 ORDER BY accepted_at DESC LIMIT $3")
+        sql_query("SELECT source_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at FROM service_resolution_mirror_ledger WHERE artifact->'service_route_handover_notice'->'notice'->>'service_id'=$1 AND artifact->'service_route_handover_notice'->'notice'->>'service_kind'=$2 ORDER BY accepted_at DESC LIMIT $3")
             .bind::<Text,_>(service_id.as_str()).bind::<Text,_>(service_kind)
             .bind::<BigInt,_>(i64::try_from(limit.clamp(1, 256)).unwrap_or(256))
             .load::<MirrorRow>(&mut *conn).await.map_err(PersistenceError::database)?
@@ -357,8 +355,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
         rows.into_iter()
             .map(|row| {
                 Ok(ServiceResolutionForkEvidence {
-                    service_id: DidCoreId::new(row.service_id)
-                        .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+                    service_id: row.service_id,
                     service_kind: row.service_kind,
                     artifact_family: row.artifact_family,
                     artifact_key: row.artifact_key,
@@ -473,7 +470,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
             .map_err(PersistenceError::database)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             let artifact_key = key_json(&entry.artifact_key)?;
-            let (target_service_id, target_service_kind) =
+            let (target_id, target_service_kind) =
                 if let Some(record) = entry.request.service_resolution_record.as_ref() {
                     (&record.record.service_id, record.record.service_kind.as_str())
                 } else if let Some(notice) =
@@ -486,23 +483,23 @@ impl ServiceRouteStore for PgServiceRouteStore {
             // Serialize both initial inserts and successors before inspecting
             // either idempotency index. This makes concurrent exact requests
             // deterministically observe and replay the first durable ACK.
-            lock_route_sequence(conn, target_service_id, target_service_kind).await?;
+            lock_route_sequence(conn, target_id, target_service_kind).await?;
             let mut idempotency_locks = [
                 format!(
                     "service-route-artifact:{}:{}:{artifact_key}",
-                    entry.source_service_id, entry.realm_id
+                    entry.source_id, entry.realm_id
                 ),
                 format!(
                     "service-route-transport:{}:{}:{}",
-                    entry.source_service_id, entry.realm_id, entry.request_id
+                    entry.source_id, entry.realm_id, entry.request_id
                 ),
             ];
             idempotency_locks.sort();
             for key in &idempotency_locks {
                 lock_transaction_key(conn, key).await?;
             }
-            let by_request = sql_query("SELECT source_service_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at FROM service_resolution_mirror_ledger WHERE source_service_id=$1 AND realm_id=$2 AND request_id=$3 FOR UPDATE")
-                .bind::<Text, _>(entry.source_service_id.as_str())
+            let by_request = sql_query("SELECT source_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at FROM service_resolution_mirror_ledger WHERE source_id=$1 AND realm_id=$2 AND request_id=$3 FOR UPDATE")
+                .bind::<Text, _>(entry.source_id.as_str())
                 .bind::<Text, _>(entry.realm_id.as_str())
                 .bind::<Text, _>(entry.request_id.as_str())
                 .get_result::<MirrorRow>(conn)
@@ -516,8 +513,8 @@ impl ServiceRouteStore for PgServiceRouteStore {
                     ServiceResolutionMirrorCommit::TransportConflict
                 });
             }
-            let by_artifact = sql_query("SELECT source_service_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at FROM service_resolution_mirror_ledger WHERE source_service_id=$1 AND realm_id=$2 AND artifact_key=$3 FOR UPDATE")
-                .bind::<Text, _>(entry.source_service_id.as_str())
+            let by_artifact = sql_query("SELECT source_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at FROM service_resolution_mirror_ledger WHERE source_id=$1 AND realm_id=$2 AND artifact_key=$3 FOR UPDATE")
+                .bind::<Text, _>(entry.source_id.as_str())
                 .bind::<Text, _>(entry.realm_id.as_str())
                 .bind::<Text, _>(&artifact_key)
                 .get_result::<MirrorRow>(conn)
@@ -533,8 +530,8 @@ impl ServiceRouteStore for PgServiceRouteStore {
             }
             let request = encode(&entry.request)?;
             let ack = encode(&entry.ack)?;
-            sql_query("INSERT INTO service_resolution_mirror_ledger(source_service_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
-                .bind::<Text, _>(entry.source_service_id.as_str())
+            sql_query("INSERT INTO service_resolution_mirror_ledger(source_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
+                .bind::<Text, _>(entry.source_id.as_str())
                 .bind::<Text, _>(entry.realm_id.as_str())
                 .bind::<Text, _>(entry.request_id.as_str())
                 .bind::<Text, _>(entry.request_digest.as_str())
@@ -553,9 +550,9 @@ impl ServiceRouteStore for PgServiceRouteStore {
 
     async fn successor_records(
         &self,
-        source_service_id: &DidCoreId,
+        source_id: &DidCoreId,
         realm_id: &RealmId,
-        target_service_id: &DidCoreId,
+        target_id: &DidCoreId,
         service_kind: &str,
         after_sequence: u64,
         limit: usize,
@@ -563,14 +560,14 @@ impl ServiceRouteStore for PgServiceRouteStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let rows = sql_query("SELECT artifact AS value FROM service_resolution_mirror_ledger WHERE source_service_id=$1 AND realm_id=$2 ORDER BY accepted_at ASC")
-            .bind::<Text,_>(source_service_id.as_str()).bind::<Text,_>(realm_id.as_str())
+        let rows = sql_query("SELECT artifact AS value FROM service_resolution_mirror_ledger WHERE source_id=$1 AND realm_id=$2 ORDER BY accepted_at ASC")
+            .bind::<Text,_>(source_id.as_str()).bind::<Text,_>(realm_id.as_str())
             .load::<JsonRow>(&mut *conn).await.map_err(PersistenceError::database)?;
         let mut records = Vec::new();
         for row in rows {
             let request: ServiceResolutionPublishRequest = decode(row.value)?;
             if let Some(record) = request.service_resolution_record.filter(|record| {
-                &record.record.service_id == target_service_id
+                &record.record.service_id == target_id
                     && record.record.service_kind == service_kind
                     && record.record.record_sequence > after_sequence
             }) {
@@ -584,22 +581,21 @@ impl ServiceRouteStore for PgServiceRouteStore {
 
     async fn latest_notice(
         &self,
-        source_service_id: &DidCoreId,
+        source_id: &DidCoreId,
         realm_id: &RealmId,
-        target_service_id: &DidCoreId,
+        target_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<Option<ServiceRouteHandoverNotice>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let rows = sql_query("SELECT artifact AS value FROM service_resolution_mirror_ledger WHERE source_service_id=$1 AND realm_id=$2 ORDER BY accepted_at DESC")
-            .bind::<Text,_>(source_service_id.as_str()).bind::<Text,_>(realm_id.as_str()).load::<JsonRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+        let rows = sql_query("SELECT artifact AS value FROM service_resolution_mirror_ledger WHERE source_id=$1 AND realm_id=$2 ORDER BY accepted_at DESC")
+            .bind::<Text,_>(source_id.as_str()).bind::<Text,_>(realm_id.as_str()).load::<JsonRow>(&mut *conn).await.map_err(PersistenceError::database)?;
         let mut latest: Option<ServiceRouteHandoverNotice> = None;
         for row in rows {
             let request: ServiceResolutionPublishRequest = decode(row.value)?;
             if let Some(notice) = request.service_route_handover_notice.filter(|notice| {
-                &notice.notice.service_id == target_service_id
-                    && notice.notice.service_kind == service_kind
+                &notice.notice.service_id == target_id && notice.notice.service_kind == service_kind
             }) && latest.as_ref().is_none_or(|current| {
                 current.notice.notice_revision < notice.notice.notice_revision
             }) {

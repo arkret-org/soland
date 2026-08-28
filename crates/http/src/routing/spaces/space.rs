@@ -1024,9 +1024,9 @@ pub async fn realm_member_invited_or_joined_at_for_id(
         }
     }
     // A private invite delivery is deliberately not projected as shared
-    // Realm membership state, but it is still the invitee's authoritative
+    // Realm membership state, but it is still the invitee_id's authoritative
     // pre-join evidence. Account-client authoring surfaces must recognize it
-    // so the invitee can obtain an empty actor frontier and submit the
+    // so the invitee_id can obtain an empty actor frontier and submit the
     // invite-accept Control Move without widening general Realm reads.
     let now = now();
     if let Some(invited_at) = state
@@ -1038,7 +1038,7 @@ pub async fn realm_member_invited_or_joined_at_for_id(
         .flatten()
         .filter(|invite| {
             invite.realm_id == realm_id
-                && invite.invitee.as_deref() == Some(actor)
+                && invite.invitee_id.as_deref() == Some(actor)
                 && invite.status == "pending"
                 && invite.expires_at.is_none_or(|expires_at| expires_at > now)
         })
@@ -1120,15 +1120,15 @@ mod tests {
             },
             soland_storage_postgres::Db { pool: None },
         );
-        let invitee = "ak:did_core:web:bob.example";
+        let invitee_id = "ak:did_core:web:bob.example";
         let invited_at = "2026-08-14T00:00:00.000Z".parse().unwrap();
         state
             .realm_invites()
             .put(RealmInviteState {
                 invite_id: "ak:invite:ATDCCDepUfY2x8Ah8veGLjoJl1foYqzljIn1qxn7iDSg".to_owned(),
                 realm_id: LIFECYCLE_REALM.to_owned(),
-                inviter: LIFECYCLE_ACTOR.to_owned(),
-                invitee: Some(invitee.to_owned()),
+                inviter_id: LIFECYCLE_ACTOR.to_owned(),
+                invitee_id: Some(invitee_id.to_owned()),
                 invite_delivery_target: None,
                 introduction_evidence_digest: None,
                 third_party_invite: None,
@@ -1143,7 +1143,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            realm_member_invited_or_joined_at_for_id(&state, LIFECYCLE_REALM, invitee).await,
+            realm_member_invited_or_joined_at_for_id(&state, LIFECYCLE_REALM, invitee_id).await,
             Some(invited_at)
         );
         assert_eq!(

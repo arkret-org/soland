@@ -688,7 +688,7 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
             PersistenceError::Internal("history stream request row is missing".to_owned())
         })?;
         let requester_actor_id = request.write.request.requester_actor_id.clone();
-        let release_service_id = request.write.request_receipt.release_service_id.clone();
+        let release_id = request.write.request_receipt.release_id.clone();
         let mut requester_total = 0_u64;
         let mut service_total = 0_u64;
         for (candidate_request_id, candidate_stream) in &data.streams {
@@ -697,7 +697,7 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
                     "history compact receipt accounting index is corrupt".to_owned(),
                 )
             })?;
-            if candidate_request.write.request_receipt.release_service_id == release_service_id {
+            if candidate_request.write.request_receipt.release_id == release_id {
                 service_total = service_total
                     .checked_add(candidate_stream.compact_receipt_bytes)
                     .ok_or_else(|| {
@@ -1005,7 +1005,7 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
                 "history stream is unavailable".to_owned(),
             ));
         }
-        if request.write.request_receipt.release_service_id != write.claims.release_service_id {
+        if request.write.request_receipt.release_id != write.claims.release_id {
             return Err(PersistenceError::SchemaViolation(
                 "history ack token release service mismatch".to_owned(),
             ));

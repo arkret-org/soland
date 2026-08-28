@@ -726,7 +726,7 @@ fn policy_check_has_service_delegation(
             "executed_by",
             "service_id",
             "delegated_service_id",
-            "source_service_id",
+            "source_id",
         ],
         session_actor,
     ) && request.source.service_id.as_str() == session_actor;

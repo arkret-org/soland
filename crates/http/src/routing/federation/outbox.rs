@@ -113,7 +113,7 @@ fn now_unix_secs() -> i64 {
 /// G3.S0 — synchronous outbox enqueue.
 ///
 /// Inserts one row per `(peer, resource)` tuple. Idempotent on
-/// `(peer_service_id, idempotency_key)`: a re-enqueue (e.g. restart-time
+/// `(peer_id, idempotency_key)`: a re-enqueue (e.g. restart-time
 /// re-broadcast of an already-sealed Move) returns the pre-existing
 /// row instead of creating a duplicate, matching the spec's
 /// `Idempotency-Key`-bound replay semantics in `federation.md` §8.5.
@@ -123,7 +123,7 @@ fn now_unix_secs() -> i64 {
 pub async fn enqueue_outbound(
     state: &AppState,
     peer_url: &str,
-    peer_service_id: &str,
+    peer_id: &str,
     endpoint: &str,
     idempotency_key: &str,
     payload_json: &str,
@@ -131,7 +131,7 @@ pub async fn enqueue_outbound(
     enqueue_outbound_with_lane(
         state,
         peer_url,
-        peer_service_id,
+        peer_id,
         endpoint,
         idempotency_key,
         payload_json,
@@ -146,7 +146,7 @@ pub async fn enqueue_outbound(
 pub async fn enqueue_coalesced_outbound(
     state: &AppState,
     peer_url: &str,
-    peer_service_id: &str,
+    peer_id: &str,
     endpoint: &str,
     idempotency_key: &str,
     payload_json: &str,
@@ -156,7 +156,7 @@ pub async fn enqueue_coalesced_outbound(
     enqueue_outbound_with_lane(
         state,
         peer_url,
-        peer_service_id,
+        peer_id,
         endpoint,
         idempotency_key,
         payload_json,
@@ -169,18 +169,15 @@ pub async fn enqueue_coalesced_outbound(
 async fn enqueue_outbound_with_lane(
     state: &AppState,
     peer_url: &str,
-    peer_service_id: &str,
+    peer_id: &str,
     endpoint: &str,
     idempotency_key: &str,
     payload_json: &str,
     coalescing_lane: Option<(&str, i64)>,
 ) -> soland_services::ServiceResult<soland_services::federation::FederationDeliveryRecord> {
-    let peer_service_id =
-        arkret_wire::DidCoreId::new(peer_service_id.to_owned()).map_err(|error| {
-            soland_services::ServiceError::SchemaViolation(format!(
-                "invalid peer service id: {error}"
-            ))
-        })?;
+    let peer_id = arkret_wire::DidCoreId::new(peer_id.to_owned()).map_err(|error| {
+        soland_services::ServiceError::SchemaViolation(format!("invalid peer service id: {error}"))
+    })?;
     let now = now_unix_secs();
     let (coalescing_key, coalescing_position) = coalescing_lane
         .map(|(key, position)| (Some(key.to_owned()), Some(position)))
@@ -191,7 +188,7 @@ async fn enqueue_outbound_with_lane(
             soland_services::federation::EnqueueFederationDeliveryCommand {
                 delivery: soland_services::federation::FederationDeliveryRecord {
                     id: Uuid::new_v4().to_string(),
-                    peer_service_id,
+                    peer_id,
                     peer_url: Some(peer_url.trim_end_matches('/').to_owned()),
                     endpoint: endpoint.to_owned(),
                     idempotency_key: idempotency_key.to_owned(),
@@ -350,15 +347,14 @@ fn rfc9421_sign_with_window(
 /// Send one Signal peer relay request without a durable outbox or retry.
 pub(crate) async fn relay_signal_once(
     state: &AppState,
-    peer_service_id: &str,
+    peer_id: &str,
     request: &arkret_wire::SignalRelayRequest,
 ) -> Result<(), String> {
     request.validate().map_err(|error| error.to_string())?;
     let body =
         arkret_canonical::canonical_json_bytes(request).map_err(|error| error.to_string())?;
     let peer_target =
-        super::federation::resolved_peer_target(state, peer_service_id, "principal_server", false)
-            .await?;
+        super::federation::resolved_peer_target(state, peer_id, "principal_server", false).await?;
     let target = format!("{}/_arkret/peer/signal", peer_target.base_url);
     let (parsed_url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
         &target,
@@ -377,7 +373,7 @@ pub(crate) async fn relay_signal_once(
         &content_digest_header_value(&body),
     );
     insert_header_if_valid(&mut headers, "source-service-id", state.service_id());
-    insert_header_if_valid(&mut headers, "destination-service-id", peer_service_id);
+    insert_header_if_valid(&mut headers, "destination-service-id", peer_id);
     insert_header_if_valid(
         &mut headers,
         "source-trust-domain",
@@ -815,7 +811,7 @@ impl FederationDispatcher {
         for row in rows {
             let peer_target = super::federation::resolved_peer_target(
                 &self.state,
-                row.delivery.peer_service_id.as_str(),
+                row.delivery.peer_id.as_str(),
                 "principal_server",
                 false,
             )
@@ -839,7 +835,7 @@ impl FederationDispatcher {
             // released row goes straight back to the wire, so a policy that
             // still denies the peer must still deny it after a version bump.
             let trust_domain_denied = crate::security::federation_outbound_trust_domain_denial(
-                row.delivery.peer_service_id.as_str(),
+                row.delivery.peer_id.as_str(),
                 Some(&peer_target.trust_domain),
             )
             .is_some();
@@ -872,7 +868,7 @@ impl FederationDispatcher {
                         target = "federation_outbox",
                         worker = "federation_outbox",
                         outbox_id = %row.delivery.id,
-                        peer_service_id = %row.delivery.peer_service_id,
+                        peer_id = %row.delivery.peer_id,
                         "federation outbox row revalidated under the new egress policy"
                     );
                 }
@@ -918,7 +914,7 @@ impl FederationDispatcher {
         }
         let peer_target = super::federation::resolved_peer_target(
             &self.state,
-            row.delivery.peer_service_id.as_str(),
+            row.delivery.peer_id.as_str(),
             "principal_server",
             false,
         )
@@ -932,7 +928,7 @@ impl FederationDispatcher {
                     target = "federation_outbox",
                     worker = "federation_outbox",
                     outbox_id = %row.delivery.id,
-                    peer_service_id = %row.delivery.peer_service_id,
+                    peer_id = %row.delivery.peer_id,
                     endpoint = %row.delivery.endpoint,
                     attempts,
                     %error,
@@ -944,7 +940,7 @@ impl FederationDispatcher {
                             target = "federation_outbox",
                             worker = "federation_outbox",
                             outbox_id = %row.delivery.id,
-                            peer_service_id = %row.delivery.peer_service_id,
+                            peer_id = %row.delivery.peer_id,
                             endpoint = %row.delivery.endpoint,
                             attempts,
                             "Realm fanout route remains unavailable past the operator alert threshold"
@@ -996,14 +992,14 @@ impl FederationDispatcher {
         // decides on the host, and §8 binds the decision to the peer's
         // service_id.
         if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
-            row.delivery.peer_service_id.as_str(),
+            row.delivery.peer_id.as_str(),
             Some(&peer_target.trust_domain),
         ) {
             tracing::warn!(
                 target = "federation_outbox",
                 worker = "federation_outbox",
                 outbox_id = %row.delivery.id,
-                peer_service_id = %row.delivery.peer_service_id,
+                peer_id = %row.delivery.peer_id,
                 endpoint = %row.delivery.endpoint,
                 %reason,
                 "federation outbox delivery suppressed by sovereign outbound trust_domain policy"
@@ -1061,7 +1057,7 @@ impl FederationDispatcher {
                         target = "federation_outbox",
                         worker = "federation_outbox",
                         outbox_id = %row.delivery.id,
-                        peer_service_id = %row.delivery.peer_service_id,
+                        peer_id = %row.delivery.peer_id,
                         endpoint = %row.delivery.endpoint,
                         %error,
                         "federation outbox delivery suppressed by egress policy"
@@ -1121,7 +1117,7 @@ impl FederationDispatcher {
                     let body = serde_json::to_string(&outcome).unwrap_or_default();
                     let recovered = crate::routing::mls::capture_relayed_keypackage_claim_query(
                         &self.state,
-                        row.delivery.peer_service_id.as_str(),
+                        row.delivery.peer_id.as_str(),
                         &row.delivery.payload_json,
                         &outcome,
                     )
@@ -1194,7 +1190,7 @@ impl FederationDispatcher {
         insert_header_if_valid(
             &mut headers,
             "destination-service-id",
-            row.delivery.peer_service_id.as_str(),
+            row.delivery.peer_id.as_str(),
         );
         insert_header_if_valid(
             &mut headers,
@@ -1423,7 +1419,7 @@ impl FederationDispatcher {
                     != admission
                         .producer_signer_resolution_evidence_digest
                         .as_ref()
-                || receipt.receiver_service_id != row.delivery.peer_service_id
+                || receipt.receiver_id != row.delivery.peer_id
             {
                 return Err("Agent Event receipt does not match the delivered Event".to_owned());
             }
@@ -1461,9 +1457,7 @@ impl FederationDispatcher {
         crate::routing::governance_history::validate_remote_history_response_receipt(
             &self.state,
             &relay.response,
-            &relay
-                .source_relay_attestation
-                .destination_release_service_id,
+            &relay.source_relay_attestation.destination_release_id,
             &receipt,
         )
         .await
@@ -1538,7 +1532,7 @@ impl FederationDispatcher {
                 crate::routing::identity::contact_federation::validate_mirror_receipt_cryptography(
                     &self.state,
                     &event_outcome.mirror_receipt,
-                    row.delivery.peer_service_id.as_str(),
+                    row.delivery.peer_id.as_str(),
                     "outbound_request_mirror_receipt",
                 )
                 .map_err(|error| error.to_string())?;
@@ -1574,7 +1568,7 @@ impl FederationDispatcher {
                 &self.state,
                 &request,
                 event_outcome,
-                row.delivery.peer_service_id.as_str(),
+                row.delivery.peer_id.as_str(),
             )
             .await
             .map_err(|error| error.to_string()),
@@ -1586,7 +1580,7 @@ impl FederationDispatcher {
                 &self.state,
                 &request,
                 deferred,
-                row.delivery.peer_service_id.as_str(),
+                row.delivery.peer_id.as_str(),
             )
             .await
             .map_err(|error| error.to_string()),
@@ -1598,7 +1592,7 @@ impl FederationDispatcher {
                 &self.state,
                 &request,
                 &outcome,
-                row.delivery.peer_service_id.as_str(),
+                row.delivery.peer_id.as_str(),
             )
             .await
             .map_err(|error| error.to_string()),
@@ -1609,7 +1603,7 @@ impl FederationDispatcher {
                 &self.state,
                 &request,
                 &outcome,
-                row.delivery.peer_service_id.as_str(),
+                row.delivery.peer_id.as_str(),
             )
             .await
             .map_err(|error| error.to_string()),
@@ -1660,7 +1654,7 @@ impl FederationDispatcher {
         insert_header_if_valid(
             &mut headers,
             "destination-service-id",
-            row.delivery.peer_service_id.as_str(),
+            row.delivery.peer_id.as_str(),
         );
         insert_header_if_valid(
             &mut headers,
@@ -1714,7 +1708,7 @@ impl FederationDispatcher {
         }
         crate::routing::mls::capture_relayed_keypackage_claim_outcome(
             &self.state,
-            row.delivery.peer_service_id.as_str(),
+            row.delivery.peer_id.as_str(),
             &row.delivery.payload_json,
             response_body,
         )
@@ -1762,7 +1756,7 @@ impl FederationDispatcher {
                     break;
                 };
                 if ancestor.delivery.endpoint != row.delivery.endpoint
-                    || ancestor.delivery.peer_service_id != row.delivery.peer_service_id
+                    || ancestor.delivery.peer_id != row.delivery.peer_id
                     || ancestor.delivery.coalescing_key != row.delivery.coalescing_key
                 {
                     break;
@@ -1930,7 +1924,7 @@ impl FederationDispatcher {
                 target = "federation_outbox",
                 worker = "federation_outbox",
                 outbox_id = %row.delivery.id,
-                peer_service_id = %row.delivery.peer_service_id,
+                peer_id = %row.delivery.peer_id,
                 endpoint = %row.delivery.endpoint,
                 status,
                 "federation outbox delivery succeeded"
@@ -2024,7 +2018,7 @@ impl FederationDispatcher {
                 target = "federation_outbox",
                 worker = "federation_outbox",
                 outbox_id = %row.delivery.id,
-                peer_service_id = %row.delivery.peer_service_id,
+                peer_id = %row.delivery.peer_id,
                 endpoint = %row.delivery.endpoint,
                 status,
                 reason,
@@ -2043,7 +2037,7 @@ impl FederationDispatcher {
                 outcome: FederationDeliveryOutcome::Superseded {
                     delivery: Box::new(FederationDeliveryRecord {
                         id: Uuid::new_v4().to_string(),
-                        peer_service_id: row.delivery.peer_service_id.clone(),
+                        peer_id: row.delivery.peer_id.clone(),
                         peer_url: row.delivery.peer_url.clone(),
                         endpoint: row.delivery.endpoint.clone(),
                         idempotency_key: resubmission.idempotency_key,
@@ -2091,7 +2085,7 @@ impl FederationDispatcher {
             target = "federation_outbox",
             worker = "federation_outbox",
             outbox_id = %row.delivery.id,
-            peer_service_id = %row.delivery.peer_service_id,
+            peer_id = %row.delivery.peer_id,
             endpoint = %row.delivery.endpoint,
             status,
             attempts,
@@ -2141,7 +2135,7 @@ impl FederationDispatcher {
                 target = "federation_outbox",
                 worker = "federation_outbox",
                 outbox_id = %row.delivery.id,
-                peer_service_id = %row.delivery.peer_service_id,
+                peer_id = %row.delivery.peer_id,
                 endpoint = %row.delivery.endpoint,
                 attempts,
                 "Realm fanout remains pending past the operator alert threshold"
@@ -2184,7 +2178,7 @@ impl FederationDispatcher {
             target = "federation_outbox",
             worker = "federation_outbox",
             outbox_id = %row.delivery.id,
-            peer_service_id = %row.delivery.peer_service_id,
+            peer_id = %row.delivery.peer_id,
             endpoint = %row.delivery.endpoint,
             ?status,
             attempts,
@@ -2205,7 +2199,7 @@ impl FederationDispatcher {
             outcome: FederationDeliveryOutcome::DeadLettered(Box::new(FederationDeadLetter {
                 id: Uuid::new_v4().to_string(),
                 outbox_id: row.delivery.id.clone(),
-                peer_service_id: row.delivery.peer_service_id.clone(),
+                peer_id: row.delivery.peer_id.clone(),
                 endpoint: row.delivery.endpoint.clone(),
                 idempotency_key: row.delivery.idempotency_key.clone(),
                 last_http_status: status,
@@ -2262,8 +2256,7 @@ fn realm_fanout_authority_is_current(state: &AppState, row: &PendingFederationDe
             .is_some_and(|member| {
                 member.state == "join"
                     && member.delivery_status.as_deref() == Some("routable")
-                    && member.recipient_service_id.as_deref()
-                        == Some(row.delivery.peer_service_id.as_str())
+                    && member.recipient_id.as_deref() == Some(row.delivery.peer_id.as_str())
                     && member.membership_event_ref.as_deref()
                         == Some(witness.membership_event_ref.as_str())
                     && member.delivery_binding_frontier.as_deref()

@@ -22,9 +22,9 @@ struct SecurityTransactionRow {
     #[diesel(sql_type = Text)]
     kind: String,
     #[diesel(sql_type = Text)]
-    principal_id: String,
+    principal_id: DidCoreId,
     #[diesel(sql_type = Text)]
-    coordinator_service_id: String,
+    coordinator_id: DidCoreId,
     #[diesel(sql_type = Timestamptz)]
     expires_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Timestamptz)]
@@ -123,10 +123,8 @@ impl TryFrom<SecurityTransactionRow> for SecurityTransactionRecord {
             transaction_id: TransactionId::new(ids::format_typed_uuid("transaction", &row.id))
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             kind: parse_stored("kind", Value::String(row.kind))?,
-            principal_id: DidCoreId::new(row.principal_id)
-                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
-            coordinator_service_id: DidCoreId::new(row.coordinator_service_id)
-                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+            principal_id: row.principal_id,
+            coordinator_id: row.coordinator_id,
             expires_at: row.expires_at,
             created_at: row.created_at,
             request_digest: Hash::new(row.request_digest)
@@ -158,7 +156,7 @@ fn parse_stored<T: serde::de::DeserializeOwned>(name: &str, value: Value) -> Per
     })
 }
 
-const COLUMNS: &str = "id, kind, principal_id, coordinator_service_id, expires_at, created_at, \
+const COLUMNS: &str = "id, kind, principal_id, coordinator_id, expires_at, created_at, \
     request_digest, prepared_plan, prepared_plan_digest, accepted_steps, \
     terminal_result, canonical_request";
 
@@ -219,7 +217,7 @@ async fn insert_one(
     let resource = &record.resource;
     sql_query(
         "INSERT INTO security_transactions \
-         (id, kind, principal_id, coordinator_service_id, expires_at, created_at, request_digest, \
+         (id, kind, principal_id, coordinator_id, expires_at, created_at, request_digest, \
            prepared_plan, prepared_plan_digest, accepted_steps, \
            terminal_result, canonical_request) \
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
@@ -232,7 +230,7 @@ async fn insert_one(
         SecurityTransactionKind::SecurityRotation => "security_rotation",
     })
     .bind::<Text, _>(resource.principal_id.as_str())
-    .bind::<Text, _>(resource.coordinator_service_id.as_str())
+    .bind::<Text, _>(resource.coordinator_id.as_str())
     .bind::<Timestamptz, _>(resource.expires_at)
     .bind::<Timestamptz, _>(resource.created_at)
     .bind::<Text, _>(resource.request_digest.as_str())
@@ -351,7 +349,7 @@ fn enum_text<T: serde::Serialize>(value: T) -> PersistenceResult<String> {
 #[derive(QueryableByName)]
 struct RecoverySessionBindingRow {
     #[diesel(sql_type = Text)]
-    principal_id: String,
+    principal_id: DidCoreId,
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Timestamptz)]
@@ -380,7 +378,7 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
             .recovery_binding()
             .map(|binding| binding.recovery_session_id.as_str().to_owned());
         let transaction_id = record.resource.transaction_id.as_str().to_owned();
-        let principal_id = record.resource.principal_id.as_str().to_owned();
+        let principal_id = record.resource.principal_id.clone();
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             if let Some(existing) = load_one(conn, &transaction_id, true).await? {

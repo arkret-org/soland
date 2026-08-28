@@ -81,13 +81,13 @@ impl crate::delivery::NotificationWritePort for PersistenceNotificationWriter {
     async fn list_for_account(
         &self,
         controller_account_id: &str,
-        recipient_service_id: &str,
+        recipient_id: &str,
         after_position: Option<i64>,
     ) -> crate::ServiceResult<Vec<StoredAccountNotificationDelta>> {
         Ok(self
             .0
             .notifications()
-            .list_for_account(controller_account_id, recipient_service_id, after_position)
+            .list_for_account(controller_account_id, recipient_id, after_position)
             .await?)
     }
 

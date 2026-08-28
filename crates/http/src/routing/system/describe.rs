@@ -264,11 +264,11 @@ fn service_identity_health(state: &DidCoreIdentityState) -> Value {
         }),
         DidCoreIdentityState::Conflict {
             stored_service_id,
-            provider_service_id,
+            provider_id,
         } => json!({
             "state": "conflict",
             "service_id": stored_service_id,
-            "provider_service_id": provider_service_id,
+            "provider_id": provider_id,
             "provider_endpoint": null,
             "last_verified_at": null,
             "retry_at": null,
@@ -641,7 +641,7 @@ pub(crate) fn apply_claim_level_partition(
                     verification_run_id: entry.verification_run_id.clone(),
                     artifact_digest: entry.artifact_digest.clone(),
                     artifact_ref: entry.artifact_ref.clone(),
-                    verifier_service_id: entry.verifier_service_id.clone(),
+                    verifier_id: entry.verifier_id.clone(),
                     signature: entry.signature.clone(),
                     timestamp: entry.timestamp,
                     expires_at: entry.expires_at,

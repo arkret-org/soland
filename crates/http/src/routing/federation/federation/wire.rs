@@ -88,7 +88,7 @@ impl HeaderViolation {
 /// response carries the new recipient service DID and a frontier the sender
 /// should replay from after re-binding.
 pub(crate) fn delivery_binding_stale_response(
-    new_recipient_service_id: &arkret_wire::DidCoreId,
+    new_recipient_id: &arkret_wire::DidCoreId,
     actor_id: &arkret_wire::DidCoreId,
     new_service_resolution: &arkret_models_identity::ServiceResolutionCarrier,
     handover_frontier: &[arkret_identifiers::EventId],
@@ -99,13 +99,13 @@ pub(crate) fn delivery_binding_stale_response(
         other => BTreeMap::from([("value".to_owned(), other)]),
     };
     let details = arkret_models_identity::artifacts_device_identity::DeliveryBindingStale {
-        new_recipient_service_id: new_recipient_service_id.clone(),
+        new_recipient_id: new_recipient_id.clone(),
         new_service_resolution: new_service_resolution.clone(),
         handover_frontier: handover_frontier.to_vec(),
         handover_proof:
             arkret_models_identity::artifacts_device_identity::DeliveryBindingStaleHandoverProof {
                 frontier: handover_frontier.to_vec(),
-                recipient_service_id: new_recipient_service_id.clone(),
+                recipient_id: new_recipient_id.clone(),
                 actor_id: actor_id.clone(),
                 witness: arkret_wire::wire_strings::NonEmptyJsonObject::new(witness)
                     .expect("delivery binding witness must be non-empty"),
@@ -123,12 +123,12 @@ pub(crate) fn delivery_binding_stale_response(
 /// Spec B1.9 — emit-shape for `delivery_binding_handed_over` (409).
 /// Returned when the inbound delivery is a duplicate of a binding that has
 /// already been handed over to the new recipient.
-pub(crate) fn delivery_binding_handed_over_response(new_recipient_service_id: &DidCoreId) -> Value {
+pub(crate) fn delivery_binding_handed_over_response(new_recipient_id: &DidCoreId) -> Value {
     error_envelope_with_details(
         arkret_wire::ErrorCode::DELIVERY_BINDING_HANDED_OVER,
         "delivery binding has already been handed over to the new recipient",
         json!({
-            "new_recipient_service_id": new_recipient_service_id.as_str(),
+            "new_recipient_id": new_recipient_id.as_str(),
         }),
     )
 }

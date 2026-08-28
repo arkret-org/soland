@@ -28,7 +28,7 @@ pub struct MemberRoutabilityRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub recipient_service_id: Option<String>,
+    pub recipient_id: Option<String>,
     pub in_allowed_list: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery_status: Option<String>,
@@ -43,7 +43,7 @@ pub struct DeliveryBindingHandoverRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_recipient_service_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub new_recipient_service_id: Option<String>,
+    pub new_recipient_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub handover_frontier: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

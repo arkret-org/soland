@@ -123,8 +123,8 @@ struct RealmCreateRequestBody {
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 struct ExternalInviteRequestBody {
     target_realm: String,
-    invitee: String,
-    inviter: String,
+    invitee_id: String,
+    inviter_id: String,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -238,7 +238,7 @@ struct ExternalInviteResponseBody {
     invite_token: String,
     target_realm: String,
     target_host: String,
-    invitee: String,
+    invitee_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, salvo::oapi::ToSchema)]
@@ -659,7 +659,7 @@ async fn external_invite(
     let session = aa.authenticated_session(state, req).await?;
     require_admin_principal(state, session)?;
     let body = body.into_inner();
-    validate_did_against_roots(state, &body.invitee, Some("enclave"))?;
+    validate_did_against_roots(state, &body.invitee_id, Some("enclave"))?;
     let mut guard = state.federation().sovereign_state();
     let Some(realm) = guard.enclave_realms.get(&body.target_realm).cloned() else {
         return Err(AppError::not_found("target enclave realm not found"));
@@ -674,17 +674,17 @@ async fn external_invite(
         invite_token: invite_token.clone(),
         target_realm: body.target_realm.clone(),
         target_host: target_host.clone(),
-        invitee: body.invitee.clone(),
-        inviter: body.inviter.clone(),
+        invitee_id: body.invitee_id.clone(),
+        inviter_id: body.inviter_id.clone(),
         accepted: false,
         created_at: chrono::Utc::now(),
     };
     guard.external_invites.insert(invite_token.clone(), record);
     guard
         .external_accounts
-        .entry(body.invitee.clone())
+        .entry(body.invitee_id.clone())
         .or_insert_with(|| SovereignExternalAccountRecord {
-            did: body.invitee.clone(),
+            did: body.invitee_id.clone(),
             realm_id: body.target_realm.clone(),
             bound_node: target_host.clone(),
             trust_chain_profile: "external_via_enclave".to_owned(),
@@ -693,18 +693,18 @@ async fn external_invite(
         });
     audit(
         &mut guard,
-        &body.invitee,
+        &body.invitee_id,
         "external_invite.create",
         Some(&body.target_realm),
         "accepted",
-        json!({"target_host": target_host, "inviter": body.inviter}),
+        json!({"target_host": target_host, "inviter_id": body.inviter_id}),
     );
     json_ok(ExternalInviteResponseBody {
         ok: true,
         invite_token,
         target_realm: body.target_realm,
         target_host,
-        invitee: body.invitee,
+        invitee_id: body.invitee_id,
     })
 }
 
@@ -742,8 +742,8 @@ async fn accept_external_invite(
         .or(body.target_host)
         .unwrap_or_else(|| state.config().public_base_url.clone());
     if let Some(invite) = invite {
-        if invite.invitee != body.actor_id {
-            return Err(AppError::capability_denied("invitee mismatch")
+        if invite.invitee_id != body.actor_id {
+            return Err(AppError::capability_denied("invitee_id mismatch")
                 .with_status(StatusCode::FORBIDDEN)
                 .with_wire_code("external_invite_actor_mismatch"));
         }

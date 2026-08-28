@@ -30,9 +30,7 @@ fn delivery_binding_stale_response_carries_new_service_and_frontier() {
     );
     let details = Value::Object(envelope.error.details.into_iter().collect());
     assert_eq!(
-        details
-            .pointer("/new_recipient_service_id")
-            .and_then(Value::as_str),
+        details.pointer("/new_recipient_id").and_then(Value::as_str),
         Some("ak:did_core:web:bob.example")
     );
     assert_eq!(
@@ -49,7 +47,7 @@ fn delivery_binding_stale_response_carries_new_service_and_frontier() {
     );
     assert_eq!(
         details
-            .pointer("/handover_proof/recipient_service_id")
+            .pointer("/handover_proof/recipient_id")
             .and_then(Value::as_str),
         Some("ak:did_core:web:bob.example")
     );
@@ -78,7 +76,7 @@ fn delivery_binding_handed_over_response_carries_new_service() {
         envelope
             .error
             .details
-            .get("new_recipient_service_id")
+            .get("new_recipient_id")
             .and_then(Value::as_str),
         Some("ak:did_core:web:bob.example")
     );

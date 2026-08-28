@@ -103,7 +103,7 @@ impl RrkAcquisitionWorker {
                     .await;
                 tracing::warn!(
                     acquisition_digest = %record.input.acquisition_digest,
-                    source_service_id = %record.input.archive_replica.source_service_id,
+                    source_id = %record.input.archive_replica.source_id,
                     %error,
                     worker = "rrk_acquisition",
                     "RRK traversal acquisition will retry"
@@ -178,7 +178,7 @@ impl RrkAcquisitionWorker {
             accepted_at,
             |service_proof| OrganizationRecoveryArchiveReplicaOutcome {
                 archive_replica_digest: ready.input.archive_replica_digest.clone(),
-                holder_service_id: replica.holder_service_id.clone(),
+                holder_id: replica.holder_id.clone(),
                 archive_sequence: sequence,
                 accepted_at,
                 service_proof,
@@ -460,14 +460,14 @@ impl RrkAcquisitionWorker {
     {
         let route = super::federation::resolved_peer_target(
             &self.state,
-            replica.source_service_id.as_str(),
+            replica.source_id.as_str(),
             "principal_server",
             false,
         )
         .await
         .map_err(|error| format!("service_route:{error}"))?;
         if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
-            replica.source_service_id.as_str(),
+            replica.source_id.as_str(),
             Some(route.trust_domain.as_str()),
         ) {
             return Err(format!("trust_domain_denied:{reason}"));
@@ -484,7 +484,7 @@ impl RrkAcquisitionWorker {
         .map_err(|error| format!("egress_policy:{error}"))?;
         let headers = signed_headers(
             &self.state,
-            replica.source_service_id.as_str(),
+            replica.source_id.as_str(),
             route.trust_domain.as_str(),
             method,
             &target,
@@ -525,19 +525,19 @@ struct VerifiedClosure {
 
 pub(crate) async fn fetch_peer_governance_dependencies(
     state: &AppState,
-    source_service_id: &arkret_wire::DidCoreId,
+    source_id: &arkret_wire::DidCoreId,
     request: &PeerGovernanceDependencyResolveRequest,
 ) -> Result<GovernanceDependencyResolveOutcome, String> {
     let route = super::federation::resolved_peer_target(
         state,
-        source_service_id.as_str(),
+        source_id.as_str(),
         "principal_server",
         false,
     )
     .await
     .map_err(|error| format!("service_route:{error}"))?;
     if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
-        source_service_id.as_str(),
+        source_id.as_str(),
         Some(route.trust_domain.as_str()),
     ) {
         return Err(format!("trust_domain_denied:{reason}"));
@@ -555,7 +555,7 @@ pub(crate) async fn fetch_peer_governance_dependencies(
     .map_err(|error| format!("egress_policy:{error}"))?;
     let headers = signed_headers(
         state,
-        source_service_id.as_str(),
+        source_id.as_str(),
         route.trust_domain.as_str(),
         "POST",
         &target,
@@ -738,7 +738,7 @@ fn retained_write(
 
 fn signed_headers(
     state: &AppState,
-    peer_service_id: &str,
+    peer_id: &str,
     peer_trust_domain: &str,
     method: &str,
     target: &str,
@@ -747,7 +747,7 @@ fn signed_headers(
     if method == "QUERY" {
         return super::frontier_exchange::signed_query_headers(
             state,
-            peer_service_id,
+            peer_id,
             peer_trust_domain,
             target,
             body,
@@ -761,7 +761,7 @@ fn signed_headers(
         &super::outbox::content_digest_header_value(body),
     );
     super::outbox::insert_header_if_valid(&mut headers, "source-service-id", state.service_id());
-    super::outbox::insert_header_if_valid(&mut headers, "destination-service-id", peer_service_id);
+    super::outbox::insert_header_if_valid(&mut headers, "destination-service-id", peer_id);
     super::outbox::insert_header_if_valid(
         &mut headers,
         "source-trust-domain",

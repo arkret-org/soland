@@ -386,7 +386,7 @@ impl AccountLifecycleStore for PgAccountLifecycleStore {
             rows.into_iter()
                 .map(|row| {
                     (
-                        row.principal_id,
+                        row.principal_id.into_string(),
                         AccountLifecycleRecord {
                             state: row.state,
                             reason: row.reason,
@@ -506,7 +506,7 @@ struct AccountRow {
     #[diesel(sql_type = sql_types::Uuid)]
     id: Uuid,
     #[diesel(sql_type = Text)]
-    principal_id: String,
+    principal_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
     localpart: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -526,7 +526,7 @@ struct AccountLocalpartRow {
     #[diesel(sql_type = sql_types::Uuid)]
     id: Uuid,
     #[diesel(sql_type = Text)]
-    account_principal_id: String,
+    account_principal_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
     localpart: String,
     #[diesel(sql_type = Bool)]
@@ -544,7 +544,7 @@ struct LocalpartOnlyRow {
 #[derive(QueryableByName)]
 struct AccountLifecycleRow {
     #[diesel(sql_type = Text)]
-    principal_id: String,
+    principal_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -560,8 +560,7 @@ impl TryFrom<AccountLocalpartRow> for AccountLocalpartRecord {
     fn try_from(row: AccountLocalpartRow) -> Result<Self, Self::Error> {
         Ok(Self {
             id: ids::format_typed_uuid("account_localpart", &row.id),
-            account_principal_id: arkret_wire::DidCoreId::new(row.account_principal_id)
-                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
+            account_principal_id: row.account_principal_id,
             localpart: row.localpart,
             is_primary: row.is_primary,
             created_at: row.created_at,
@@ -575,8 +574,7 @@ impl TryFrom<AccountRow> for AccountRecord {
     fn try_from(row: AccountRow) -> Result<Self, Self::Error> {
         Ok(Self {
             id: ids::format_typed_uuid("account", &row.id),
-            principal_id: arkret_wire::DidCoreId::new(row.principal_id)
-                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
+            principal_id: row.principal_id,
             localpart: row.localpart,
             display_name: row.display_name,
             bio: row

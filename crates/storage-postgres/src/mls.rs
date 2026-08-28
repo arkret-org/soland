@@ -307,13 +307,13 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
 
     async fn get_peer_claim(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
     ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        load_peer_claim(&mut conn, source_service_id, claim_request_id).await
+        load_peer_claim(&mut conn, source_id, claim_request_id).await
     }
 
     async fn get_peer_claim_by_keypackage_id(
@@ -324,7 +324,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT source_service_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at \
+            "SELECT source_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at \
              FROM peer_keypackage_claims WHERE key_package_use = 'single_use' AND keypackage_id = $1",
         )
         .bind::<Text, _>(keypackage_id)
@@ -342,13 +342,13 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let source_service_id = attempt.ledger.source_service_id.clone();
+        let source_id = attempt.ledger.source_id.clone();
         let claim_request_id = attempt.ledger.claim_request_id.clone();
         let result = conn
             .transaction::<_, PgTransactionError, _>(async move |conn| {
                 if let Some(existing) = load_peer_claim(
                     conn,
-                    &attempt.ledger.source_service_id,
+                    &attempt.ledger.source_id,
                     &attempt.ledger.claim_request_id,
                 )
                 .await?
@@ -462,10 +462,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         match result {
             Ok(result) => Ok(result),
             Err(error) => {
-                if let Some(existing) = self
-                    .get_peer_claim(&source_service_id, &claim_request_id)
-                    .await?
-                {
+                if let Some(existing) = self.get_peer_claim(&source_id, &claim_request_id).await? {
                     Ok(PeerKeyPackageClaimAttemptResult::Existing(Box::new(
                         existing,
                     )))
@@ -489,17 +486,13 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         if inserted > 0 {
             return Ok(PeerKeyPackageClaimLedgerWriteResult::Inserted);
         }
-        let existing = load_peer_claim(
-            &mut conn,
-            &record.source_service_id,
-            &record.claim_request_id,
-        )
-        .await?
-        .ok_or_else(|| {
-            PersistenceError::Internal(
-                "peer KeyPackage claim ledger conflict row disappeared".to_owned(),
-            )
-        })?;
+        let existing = load_peer_claim(&mut conn, &record.source_id, &record.claim_request_id)
+            .await?
+            .ok_or_else(|| {
+                PersistenceError::Internal(
+                    "peer KeyPackage claim ledger conflict row disappeared".to_owned(),
+                )
+            })?;
         Ok(PeerKeyPackageClaimLedgerWriteResult::Existing(Box::new(
             existing,
         )))
@@ -507,7 +500,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
 
     async fn attach_peer_claim_terminal_receipt(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         terminal_receipt: &Value,
@@ -519,13 +512,13 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         sql_query(
             "UPDATE peer_keypackage_claims \
              SET terminal_receipt = $4, updated_at = $5 \
-             WHERE source_service_id = $1 AND claim_request_id = $2 \
+             WHERE source_id = $1 AND claim_request_id = $2 \
                AND request_digest = $3 AND state IN ('expired', 'revoked') \
-             RETURNING source_service_id, claim_request_id, request_digest, key_package_use, keypackage_id, \
+             RETURNING source_id, claim_request_id, request_digest, key_package_use, keypackage_id, \
                outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, \
                expires_at, state, updated_at",
         )
-        .bind::<Text, _>(source_service_id)
+        .bind::<Text, _>(source_id)
         .bind::<Text, _>(claim_request_id)
         .bind::<Text, _>(request_digest)
         .bind::<Jsonb, _>(terminal_receipt)
@@ -539,7 +532,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
 
     async fn attach_peer_claim_consume_receipt(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         consume_receipt: &Value,
@@ -552,18 +545,18 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             "WITH expired_last_resort AS ( \
                UPDATE peer_keypackage_claims \
                SET state = 'expired', updated_at = $5 / 1000 \
-               WHERE source_service_id = $1 AND claim_request_id = $2 AND request_digest = $3 \
+               WHERE source_id = $1 AND claim_request_id = $2 AND request_digest = $3 \
                  AND state = 'last_resort_claimed' \
                  AND (claim_expires_at_unix_ms IS NULL OR claim_expires_at_unix_ms <= $5) \
                RETURNING claim_request_id \
              ) \
              UPDATE peer_keypackage_claims SET state = 'consumed', consume_receipt = $4, updated_at = $5 / 1000 \
-             WHERE source_service_id = $1 AND claim_request_id = $2 AND request_digest = $3 \
+             WHERE source_id = $1 AND claim_request_id = $2 AND request_digest = $3 \
                AND state IN ('claimed', 'last_resort_claimed') \
                AND claim_expires_at_unix_ms > $5 \
-             RETURNING source_service_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at",
+             RETURNING source_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at",
         )
-        .bind::<Text, _>(source_service_id)
+        .bind::<Text, _>(source_id)
         .bind::<Text, _>(claim_request_id)
         .bind::<Text, _>(request_digest)
         .bind::<Jsonb, _>(consume_receipt)
@@ -577,7 +570,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
 
     async fn transition_peer_claim_consumed(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         expected_outcome: &Value,
@@ -590,14 +583,14 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         sql_query(
             "UPDATE peer_keypackage_claims \
              SET state = 'consumed', consume_receipt = $5, updated_at = $6 / 1000 \
-             WHERE source_service_id = $1 AND claim_request_id = $2 \
+             WHERE source_id = $1 AND claim_request_id = $2 \
                AND request_digest = $3 AND outcome = $4 \
                AND state IN ('claimed', 'last_resort_claimed', 'expired') \
                AND (state <> 'expired' OR terminal_receipt IS NULL) \
                AND claim_expires_at_unix_ms > $6 \
-             RETURNING source_service_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at",
+             RETURNING source_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at",
         )
-        .bind::<Text, _>(source_service_id)
+        .bind::<Text, _>(source_id)
         .bind::<Text, _>(claim_request_id)
         .bind::<Text, _>(request_digest)
         .bind::<Jsonb, _>(expected_outcome)
@@ -612,7 +605,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
 
     async fn transition_peer_claim_terminal(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         expected_outcome: &Value,
@@ -629,13 +622,13 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         sql_query(
             "UPDATE peer_keypackage_claims \
              SET state = $5, terminal_receipt = $6, updated_at = $7 / 1000 \
-             WHERE source_service_id = $1 AND claim_request_id = $2 \
+             WHERE source_id = $1 AND claim_request_id = $2 \
                AND request_digest = $3 AND outcome = $4 \
                AND (state IN ('claimed', 'last_resort_claimed') \
                     OR (state = $5 AND terminal_receipt IS NULL)) \
-             RETURNING source_service_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at",
+             RETURNING source_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at",
         )
-        .bind::<Text, _>(source_service_id)
+        .bind::<Text, _>(source_id)
         .bind::<Text, _>(claim_request_id)
         .bind::<Text, _>(request_digest)
         .bind::<Jsonb, _>(expected_outcome)
@@ -673,7 +666,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .map_err(PersistenceError::database)?;
             let rows = sql_query(
                 "WITH expired AS ( \
-                   SELECT source_service_id, claim_request_id, keypackage_id \
+                   SELECT source_id, claim_request_id, keypackage_id \
                    FROM peer_keypackage_claims \
                    WHERE key_package_use = 'single_use' \
                      AND state = 'claimed' AND claim_expires_at_unix_ms <= $1 \
@@ -690,7 +683,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                  UPDATE peer_keypackage_claims ledger \
                  SET state = 'revoked', updated_at = $1 / 1000 \
                  FROM expired e, revoked r \
-                 WHERE ledger.source_service_id = e.source_service_id \
+                 WHERE ledger.source_id = e.source_id \
                    AND ledger.claim_request_id = e.claim_request_id \
                    AND e.keypackage_id = r.id \
                  RETURNING r.id",
@@ -760,11 +753,11 @@ async fn insert_peer_claim(
 ) -> Result<usize, diesel::result::Error> {
     sql_query(
         "INSERT INTO peer_keypackage_claims \
-         (source_service_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at) \
+         (source_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
-         ON CONFLICT (source_service_id, claim_request_id) DO NOTHING",
+         ON CONFLICT (source_id, claim_request_id) DO NOTHING",
     )
-    .bind::<Text, _>(&record.source_service_id)
+    .bind::<Text, _>(&record.source_id)
     .bind::<Text, _>(&record.claim_request_id)
     .bind::<Text, _>(&record.request_digest)
     .bind::<Text, _>(&record.key_package_use)
@@ -786,10 +779,10 @@ async fn insert_peer_claim_strict(
 ) -> Result<(), diesel::result::Error> {
     sql_query(
         "INSERT INTO peer_keypackage_claims \
-         (source_service_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at) \
+         (source_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
     )
-    .bind::<Text, _>(&record.source_service_id)
+    .bind::<Text, _>(&record.source_id)
     .bind::<Text, _>(&record.claim_request_id)
     .bind::<Text, _>(&record.request_digest)
     .bind::<Text, _>(&record.key_package_use)
@@ -808,15 +801,15 @@ async fn insert_peer_claim_strict(
 
 async fn load_peer_claim(
     conn: &mut diesel_async::AsyncPgConnection,
-    source_service_id: &str,
+    source_id: &str,
     claim_request_id: &str,
 ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
     sql_query(
-        "SELECT source_service_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at \
+        "SELECT source_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at \
          FROM peer_keypackage_claims \
-         WHERE source_service_id = $1 AND claim_request_id = $2",
+         WHERE source_id = $1 AND claim_request_id = $2",
     )
-    .bind::<Text, _>(source_service_id)
+    .bind::<Text, _>(source_id)
     .bind::<Text, _>(claim_request_id)
     .get_result::<PeerKeyPackageClaimPgRow>(conn)
     .await
@@ -1089,7 +1082,7 @@ struct MlsKeyPackagePgRow {
 #[derive(QueryableByName)]
 struct PeerKeyPackageClaimPgRow {
     #[diesel(sql_type = Text)]
-    source_service_id: String,
+    source_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
     claim_request_id: String,
     #[diesel(sql_type = Text)]
@@ -1117,7 +1110,7 @@ struct PeerKeyPackageClaimPgRow {
 impl From<PeerKeyPackageClaimPgRow> for PeerKeyPackageClaimLedgerRecord {
     fn from(row: PeerKeyPackageClaimPgRow) -> Self {
         Self {
-            source_service_id: row.source_service_id,
+            source_id: row.source_id.into_string(),
             claim_request_id: row.claim_request_id,
             request_digest: row.request_digest,
             key_package_use: row.key_package_use,

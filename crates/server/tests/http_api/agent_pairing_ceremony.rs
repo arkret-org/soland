@@ -368,7 +368,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
             agent_id: outcome.agent_id.clone(),
             controller_id: controller_core.clone(),
             requested_scope: requested_scope_typed,
-            verifier_service_id: service_core.clone(),
+            verifier_id: service_core.clone(),
             audience: arkret_wire::NonEmptyString::new(
                 arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY_V1,
             )

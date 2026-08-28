@@ -150,7 +150,7 @@ async fn seed_accepted_direct_message_contact(
     state: &AppState,
     target: &str,
     _target_device: &str,
-    peer_service_id: Option<&str>,
+    peer_id: Option<&str>,
 ) {
     let request_event_ref =
         arkret_wire::EventId::new(soland_test_support::fixture_content_bound_id("ak:event:"))
@@ -188,7 +188,7 @@ async fn seed_accepted_direct_message_contact(
             response_event_ref: Some(response_event_ref.to_string()),
             tombstone_event_ref: None,
             message: None,
-            peer_service_id: peer_service_id.map(str::to_owned),
+            peer_id: peer_id.map(str::to_owned),
             peer_service_resolution: None,
             created_at: now,
             updated_at: now,
@@ -253,13 +253,13 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, _suffix:
 
 async fn seed_remote_claim_prerequisites(
     state: &AppState,
-    source_service_id: &str,
+    source_id: &str,
 ) -> (ed25519_dalek::SigningKey, String) {
     let alice = "did:web:alice.example";
     let signing_key = test_ephemeral_device_signing_key(alice, ALICE_SIGNING_DEVICE);
     let authorize_event_id =
         project_authorized_device(state, alice, ALICE_SIGNING_DEVICE, &signing_key).await;
-    seed_accepted_direct_message_contact(state, BOB_DID, BOB_DEVICE, Some(source_service_id)).await;
+    seed_accepted_direct_message_contact(state, BOB_DID, BOB_DEVICE, Some(source_id)).await;
     let now = chrono::Utc::now();
     let consent_grant = signed_canonical_event(
         "direct-peer-claim-consent-grant",
@@ -314,10 +314,10 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
     let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
     upload_bob_direct_keypackage(state.clone(), &bob, "peer-http").await;
     let source_service_did = "did:web:peer-claim-source.example";
-    let source_service_id = core_id(source_service_did);
-    let destination_service_id = state.service_id().to_owned();
+    let source_id = core_id(source_service_did);
+    let destination_id = state.service_id().to_owned();
     let (signing_key, authorize_event_id) =
-        seed_remote_claim_prerequisites(&state, source_service_id.as_str()).await;
+        seed_remote_claim_prerequisites(&state, source_id.as_str()).await;
     let trust_domain = state.config().trust_domain.clone();
     let requester = core_id("did:web:alice.example");
     let target = core_id(BOB_DID);
@@ -367,9 +367,8 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
         }))
         .unwrap();
     let service_binding = arkret_models_crypto::KeyPackagesClaimServiceBinding {
-        source_service_id: source_service_id.clone(),
-        destination_service_id: arkret_identifiers::DidCoreId::new(destination_service_id.clone())
-            .unwrap(),
+        source_id: source_id.clone(),
+        destination_id: arkret_identifiers::DidCoreId::new(destination_id.clone()).unwrap(),
     };
     let signing_bytes = arkret_models_crypto::keypackage_claim_authorization_signing_bytes(
         &unsigned,
@@ -412,7 +411,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
     );
     let headers = signed_federation_push_headers_with_idempotency(
         source_service_did,
-        &destination_service_id,
+        &destination_id,
         state.config().trust_domain.as_str(),
         &target_uri,
         &request_value,
@@ -432,19 +431,16 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
         serde_json::from_value(outcome_value).unwrap();
     assert_eq!(outcome.claims.len(), 1);
     assert_ne!(outcome.claims[0].last_resort, Some(true));
+    assert_eq!(outcome.claim_receipt.source_id.as_str(), source_id.as_str());
     assert_eq!(
-        outcome.claim_receipt.source_service_id.as_str(),
-        source_service_id.as_str()
-    );
-    assert_eq!(
-        outcome.claim_receipt.destination_service_id.as_str(),
-        destination_service_id
+        outcome.claim_receipt.destination_id.as_str(),
+        destination_id
     );
     assert_eq!(outcome.claim_receipt.request, request.unsigned_request());
 
     let replay_headers = signed_federation_push_headers_with_idempotency(
         source_service_did,
-        &destination_service_id,
+        &destination_id,
         state.config().trust_domain.as_str(),
         &target_uri,
         &request_value,
@@ -486,7 +482,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
     let conflicting_value = serde_json::to_value(&conflicting_request).unwrap();
     let conflict_headers = signed_federation_push_headers_with_idempotency(
         source_service_did,
-        &destination_service_id,
+        &destination_id,
         state.config().trust_domain.as_str(),
         &target_uri,
         &conflicting_value,
@@ -514,7 +510,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
     );
     let query_headers = signed_federation_push_headers_same_trust(
         source_service_did,
-        &destination_service_id,
+        &destination_id,
         state.config().trust_domain.as_str(),
         &query_uri,
         &query,
@@ -687,7 +683,7 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs_body() {
             response_event_ref: None,
             tombstone_event_ref: None,
             message: None,
-            peer_service_id: None,
+            peer_id: None,
             peer_service_resolution: None,
             created_at: now,
             updated_at: now,

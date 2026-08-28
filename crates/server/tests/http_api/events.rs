@@ -246,7 +246,7 @@ async fn seed_agent_grant_session(
         approval_notification_id: new_prefixed_uuid7("ak:notification:"),
         approval_requested_at: now,
         controller_account_id: new_prefixed_uuid7("ak:account:"),
-        recipient_service_id: state.service_id().clone(),
+        recipient_id: state.service_id().clone(),
         runtime_key_binding_digest: binding_digest.as_str().to_owned(),
         runtime_public_key_digest: request
             .runtime_request_public_key_digest
@@ -1456,9 +1456,9 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent_bod
     .await;
     let realm_id = seeded["realm_id"].as_str().unwrap().to_owned();
     let payload = serde_json::json!({
-        "invitee": fixture_actor_core_id("did:web:carol.example"),
+        "invitee_id": fixture_actor_core_id("did:web:carol.example"),
         "invite_delivery_target": {
-            "recipient_service_id": state.service_id(),
+            "recipient_id": state.service_id(),
             "service_resolution": {
                 "current_record_url": format!(
                     "https://soland.local{}",
@@ -1467,7 +1467,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent_bod
                     )
                 )
             },
-            "recipient_service_kind": "principal_server"
+            "recipient_kind": "principal_server"
         },
         "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "expires_at": "2099-01-01T00:00:00.000Z"
@@ -1524,7 +1524,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent_bod
         .expect("invite projected");
     assert_eq!(projected.status, "pending");
     assert_eq!(
-        projected.invitee.as_deref(),
+        projected.invitee_id.as_deref(),
         Some(fixture_actor_core_id("did:web:carol.example").as_str())
     );
     assert_eq!(

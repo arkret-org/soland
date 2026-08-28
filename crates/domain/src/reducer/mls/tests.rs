@@ -123,8 +123,8 @@ fn welcome_payload() -> Value {
             "claim_request_id": b64(b"welcome-claim-nonce-01-128-bit"),
             "request_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
             "claims_digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
-            "source_service_id": "ak:did_core:web:server.example",
-            "destination_service_id": "ak:did_core:web:server.example",
+            "source_id": "ak:did_core:web:server.example",
+            "destination_id": "ak:did_core:web:server.example",
             "request": {
                 "claim_request_id": b64(b"welcome-claim-nonce-01-128-bit"),
                 "target_principal_id": "ak:did_core:web:bob.example",

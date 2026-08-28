@@ -2027,7 +2027,7 @@ mod tests {
         let state = test_state();
         let realm_id =
             RealmId::new("ak:realm:AUNpwW417vtZcK0hWrtv9UDvU8aC0UKocKAIMZ8xszoU").unwrap();
-        let actor_did = arkret_identifiers::Did::new("did:web:invitee.example").unwrap();
+        let actor_did = arkret_identifiers::Did::new("did:web:invitee_id.example").unwrap();
         let event = crate::test_event::raw_event(
             arkret_wire::EventKind::InviteAccept.as_str(),
             arkret_wire::ScopeRef::Realm {

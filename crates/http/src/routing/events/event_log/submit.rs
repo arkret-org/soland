@@ -873,7 +873,7 @@ const DELIVERY_BINDING_HANDOVER_GRACE_SECONDS: i64 = 86_400;
 struct DeliveryBindingMemberView {
     member: String,
     realm_id: String,
-    recipient_service_id: String,
+    recipient_id: String,
     membership_event_ref: Option<String>,
     delivery_binding_frontier_ref: String,
     updated_at: DateTime<Utc>,
@@ -883,7 +883,7 @@ struct DeliveryBindingMemberView {
 struct DeliveryBindingHandoverEvidence {
     realm_id: String,
     actor_id: arkret_wire::DidCoreId,
-    new_recipient_service_id: arkret_wire::DidCoreId,
+    new_recipient_id: arkret_wire::DidCoreId,
     new_service_resolution: Option<arkret_models_identity::ServiceResolutionCarrier>,
     handover_frontier: Vec<EventId>,
     membership_event_ref: Option<String>,
@@ -1389,14 +1389,13 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
             })?;
         }
     }
-    let issuer_service_id =
-        arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("service DID is invalid: {error}"),
-            )
-        })?;
+    let issuer_id = arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("service DID is invalid: {error}"),
+        )
+    })?;
     let (_, verification_method) =
         state
             .current_service_receipt_binding()
@@ -1415,7 +1414,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         main_strand_id: plan.main_strand_id.clone(),
         founding_unit_digest: plan.founding_unit_digest.clone(),
         authorization_core,
-        issuer_service_id,
+        issuer_id,
         accepted_at,
         proof: arkret_wire::ProtocolSignature {
             verification_method,
@@ -1991,7 +1990,7 @@ async fn validate_identity_creation_control_proof(
 
 async fn direct_bootstrap_source_is_contact_authority(
     state: &AppState,
-    source_service_id: &str,
+    source_id: &str,
     events: &[Value],
 ) -> bool {
     let Some(first) = events.first() else {
@@ -2033,9 +2032,8 @@ async fn direct_bootstrap_source_is_contact_authority(
             return None;
         }
         let binding = payload.get("delivery_binding")?;
-        (binding.get("recipient_service_id").and_then(Value::as_str)
-            == Some(state.service_id().as_str()))
-        .then(|| peer.to_owned())
+        (binding.get("recipient_id").and_then(Value::as_str) == Some(state.service_id().as_str()))
+            .then(|| peer.to_owned())
     });
     let Some(peer) = peer else {
         return false;
@@ -2047,8 +2045,7 @@ async fn direct_bootstrap_source_is_contact_authority(
         .ok()
         .flatten()
         .is_some_and(|contact| {
-            contact.status == "accepted"
-                && contact.peer_service_id.as_deref() == Some(source_service_id)
+            contact.status == "accepted" && contact.peer_id.as_deref() == Some(source_id)
         })
 }
 
@@ -2614,7 +2611,7 @@ pub(crate) async fn submit_federation_events(
     };
 
     let binding_realm = service_binding_ref.realm_id.as_str().to_owned();
-    let source_service_id = req
+    let source_id = req
         .headers()
         .get("source-service-id")
         .and_then(|value| value.to_str().ok())
@@ -2625,7 +2622,7 @@ pub(crate) async fn submit_federation_events(
     match crate::routing::federation::frontier_exchange::inbound_peer_is_stale(
         state,
         &binding_realm,
-        &source_service_id,
+        &source_id,
     )
     .await
     {
@@ -2640,7 +2637,7 @@ pub(crate) async fn submit_federation_events(
                 "peer.events.submit",
                 json!({
                     "realm_id": binding_realm,
-                    "source_service_id": source_service_id,
+                    "source_id": source_id,
                     "reason": "peer_stale",
                     "quarantine_count": quarantine.len()
                 }),
@@ -2665,7 +2662,7 @@ pub(crate) async fn submit_federation_events(
                 "peer.events.submit",
                 json!({
                     "realm_id": binding_realm,
-                    "source_service_id": source_service_id,
+                    "source_id": source_id,
                     "reason": "peer_state_stale_unavailable",
                     "error": error
                 }),
@@ -2697,7 +2694,7 @@ pub(crate) async fn submit_federation_events(
             res.status_code(StatusCode::CONFLICT);
             res.render(Json(
                 crate::routing::federation::federation::delivery_binding_stale_response(
-                    &evidence.new_recipient_service_id,
+                    &evidence.new_recipient_id,
                     &evidence.actor_id,
                     evidence
                         .new_service_resolution
@@ -2713,7 +2710,7 @@ pub(crate) async fn submit_federation_events(
             res.status_code(StatusCode::CONFLICT);
             res.render(Json(
                 crate::routing::federation::federation::delivery_binding_handed_over_response(
-                    &evidence.new_recipient_service_id,
+                    &evidence.new_recipient_id,
                 ),
             ));
             return;
@@ -2729,7 +2726,7 @@ pub(crate) async fn submit_federation_events(
     let profile_gate =
         match crate::routing::federation::federation::federation_profile_intersection_for_peer(
             state,
-            &source_service_id,
+            &source_id,
             Some(&source_trust_domain),
         )
         .await
@@ -2754,7 +2751,7 @@ pub(crate) async fn submit_federation_events(
                     json!({
                         "realm_id": binding_realm,
                         "source_trust_domain": source_trust_domain,
-                        "source_service_id": source_service_id,
+                        "source_id": source_id,
                         "request_canonical_digest": request_hash,
                         "accepted": Vec::<String>::new(),
                         "duplicate": Vec::<String>::new(),
@@ -2936,7 +2933,7 @@ pub(crate) async fn submit_federation_events(
         if !crate::routing::federation::federation::federation_actor_origin_acceptable(
             state,
             &actor,
-            &source_service_id,
+            &source_id,
             Some(&event_principal_server_id),
             &binding_realm,
             event_kind.as_deref(),
@@ -2969,7 +2966,7 @@ pub(crate) async fn submit_federation_events(
             };
             match crate::routing::mls::validate_federated_welcome_peer_claim(
                 state,
-                &source_service_id,
+                &source_id,
                 &binding_realm,
                 &actor,
                 payload,
@@ -3239,7 +3236,7 @@ async fn prepare_agent_event_admission_receipt(
     ) else {
         return Ok(None);
     };
-    let receiver_service_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+    let receiver_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| format!("receiver service id is invalid: {error}"))?;
     let (_, receiver_method) = state
         .current_service_receipt_binding()
@@ -3247,11 +3244,11 @@ async fn prepare_agent_event_admission_receipt(
         .map_err(|error| format!("receiver receipt method is unavailable: {error}"))?;
     let receipt_key = format!(
         "agent-event-admission-receipt:{}:{}",
-        event.event_id, receiver_service_id
+        event.event_id, receiver_id
     );
     if let Some(record) = state
         .persistence()
-        .idempotency_record(&receiver_service_id, &receipt_key)
+        .idempotency_record(&receiver_id, &receipt_key)
         .await
         .map_err(|error| format!("receipt lookup failed: {error}"))?
     {
@@ -3278,7 +3275,7 @@ async fn prepare_agent_event_admission_receipt(
         verification_method: admission.producer_verification_method.clone(),
         producer_signer_resolution_evidence_ref: producer_evidence_ref,
         producer_signer_resolution_evidence_digest: producer_evidence_digest,
-        receiver_service_id: receiver_service_id.clone(),
+        receiver_id: receiver_id.clone(),
         proof: AgentDetachedJws {
             kind: arkret_wire::NonEmptyString::new("detached_jws".to_owned())
                 .map_err(|error| error.to_string())?,
@@ -3296,7 +3293,7 @@ async fn prepare_agent_event_admission_receipt(
         .map_err(|error| format!("receipt encoding failed: {error}"))?;
     Ok(Some(PreparedAgentEventAdmissionReceipt {
         idempotency: Some(soland_services::events::IdempotentResponse {
-            principal_id: receiver_service_id.clone(),
+            principal_id: receiver_id.clone(),
             key: receipt_key,
             service_id: state.service_core_id(),
             request_hash: event.event_id.as_str().to_owned(),
@@ -3322,15 +3319,15 @@ async fn load_agent_event_admission_receipt(
         .any(|proof| matches!(proof, arkret_wire::EventProof::PrincipalServerAdmission(_)))
         .then_some(())
         .ok_or_else(|| "federated Event omitted its Principal Server admission proof".to_owned())?;
-    let receiver_service_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+    let receiver_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| format!("receiver service id is invalid: {error}"))?;
     let receipt_key = format!(
         "agent-event-admission-receipt:{}:{}",
-        event.event_id, receiver_service_id
+        event.event_id, receiver_id
     );
     let stored = state
         .persistence()
-        .idempotency_record(&receiver_service_id, &receipt_key)
+        .idempotency_record(&receiver_id, &receipt_key)
         .await
         .map_err(|error| format!("receipt replay lookup failed: {error}"))?
         .ok_or_else(|| "atomic receipt did not become visible".to_owned())?;
@@ -3389,7 +3386,7 @@ async fn submit_direct_conversation_federation(
         );
         return;
     }
-    let source_service_id = req
+    let source_id = req
         .headers()
         .get("source-service-id")
         .and_then(|value| value.to_str().ok())
@@ -3399,10 +3396,10 @@ async fn submit_direct_conversation_federation(
         .iter()
         .map(|item| item.event.principal_server_id.as_str())
         .collect::<Vec<_>>();
-    if arkret_wire::DidCoreId::new(source_service_id.to_owned()).is_err()
+    if arkret_wire::DidCoreId::new(source_id.to_owned()).is_err()
         || !direct_founding_origin_ids_match(
-            source_service_id,
-            receipt.issuer_service_id.as_str(),
+            source_id,
+            receipt.issuer_id.as_str(),
             &event_principal_server_ids,
         )
     {
@@ -3430,7 +3427,7 @@ async fn submit_direct_conversation_federation(
         &signing_input,
         receipt.proof.jws.as_str(),
         receipt.proof.verification_method.as_str(),
-        receipt.issuer_service_id.as_str(),
+        receipt.issuer_id.as_str(),
         state,
     )
     .await
@@ -3454,7 +3451,7 @@ async fn submit_direct_conversation_federation(
         .payload
         .get("delivery_binding")
         .and_then(Value::as_object)
-        .and_then(|binding| binding.get("recipient_service_id"))
+        .and_then(|binding| binding.get("recipient_id"))
         .and_then(Value::as_str)
         .unwrap_or_default();
     if peer_actor.is_empty() || destination != state.service_id() {
@@ -3478,12 +3475,8 @@ async fn submit_direct_conversation_federation(
             return;
         }
     };
-    if !direct_bootstrap_source_is_contact_authority(
-        state,
-        receipt.issuer_service_id.as_str(),
-        &envelopes,
-    )
-    .await
+    if !direct_bootstrap_source_is_contact_authority(state, receipt.issuer_id.as_str(), &envelopes)
+        .await
     {
         render_error(
             res,
@@ -3591,16 +3584,16 @@ async fn submit_direct_conversation_federation(
 }
 
 fn direct_founding_origin_ids_match(
-    source_service_id: &str,
-    receipt_issuer_service_id: &str,
+    source_id: &str,
+    receipt_issuer_id: &str,
     event_principal_server_ids: &[&str],
 ) -> bool {
-    !source_service_id.is_empty()
-        && source_service_id == receipt_issuer_service_id
+    !source_id.is_empty()
+        && source_id == receipt_issuer_id
         && event_principal_server_ids.len() == 3
         && event_principal_server_ids
             .iter()
-            .all(|principal_server_id| *principal_server_id == source_service_id)
+            .all(|principal_server_id| *principal_server_id == source_id)
 }
 
 pub(super) fn event_string_field_from_value(value: &Value, field: &str) -> Option<String> {

@@ -18,7 +18,7 @@ use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PushRouteSubject {
-    pub recipient_service_id: String,
+    pub recipient_id: String,
     pub principal_id: String,
     pub device_id: String,
     pub push_route: String,
@@ -94,7 +94,7 @@ pub struct ErasureReceiptRecord {
 pub struct PushRouteCellValue {
     pub revision: u64,
     pub push_target_id: Option<String>,
-    pub push_gateway_service_id: Option<String>,
+    pub push_gateway_id: Option<String>,
     pub encryption_key: Option<String>,
     pub capabilities: Vec<String>,
     pub revoked: bool,
@@ -104,8 +104,8 @@ pub struct PushRouteCellValue {
 pub struct InviteProjection {
     pub invite_id: String,
     pub realm_id: String,
-    pub inviter: String,
-    pub invitee: Option<String>,
+    pub inviter_id: String,
+    pub invitee_id: Option<String>,
     pub third_party_invite: Option<ThirdPartyInvite>,
     pub state: String,
     pub expires_at: chrono::DateTime<chrono::Utc>,
@@ -162,7 +162,7 @@ pub struct RealmPolicyServerConfig {
     pub realm_id: String,
     /// Stable identity core of the policy decision service. Used to resolve the
     /// signature verification key and match against `bound_to.policy_server_id`.
-    pub policy_server_service_id: arkret_wire::DidCoreId,
+    pub policy_server_id: arkret_wire::DidCoreId,
     /// HTTPS endpoint that accepts `POST /_arkret/self/policy/check`.
     pub policy_server_url: String,
     /// Decision cache TTL. Spec §2 default `300`. The outbound client
@@ -1055,7 +1055,7 @@ pub struct SolandMembershipState {
     /// Principal Server service DID materialized from the member
     /// `delivery_binding`. This is the single routing source for federated
     /// Realm event delivery; senders must not re-resolve DID Documents.
-    pub recipient_service_id: Option<String>,
+    pub recipient_id: Option<String>,
     /// Exact first-hop carrier accepted with the current delivery binding.
     /// This remains business-binding evidence, not a URL authority: outbound
     /// routing must materialize and independently verify it before use.

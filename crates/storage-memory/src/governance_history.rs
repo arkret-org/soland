@@ -683,7 +683,7 @@ impl PendingRrkAcquisitionStore for MemoryPendingRrkAcquisitionStore {
         &self,
         effective_scope: &arkret_wire::HistoryEffectiveScope,
         holder_principal_id: &arkret_wire::DidCoreId,
-        holder_service_id: &arkret_wire::DidCoreId,
+        holder_id: &arkret_wire::DidCoreId,
         from_epoch: u64,
         to_epoch: u64,
         limit: usize,
@@ -702,7 +702,7 @@ impl PendingRrkAcquisitionStore for MemoryPendingRrkAcquisitionStore {
                 let archive = &record.input.archive_replica.archive;
                 &archive.effective_scope == effective_scope
                     && &archive.holder_principal_id == holder_principal_id
-                    && &archive.holder_service_id == holder_service_id
+                    && &archive.holder_id == holder_id
                     && from_epoch <= archive.epoch
                     && archive.epoch <= to_epoch
             })

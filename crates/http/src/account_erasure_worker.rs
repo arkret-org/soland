@@ -27,8 +27,8 @@ enum ExecutionState {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AccountErasureExecution {
-    receiver_service_id: arkret_wire::DidCoreId,
-    account_authority_service_id: arkret_wire::DidCoreId,
+    receiver_id: arkret_wire::DidCoreId,
+    account_authority_id: arkret_wire::DidCoreId,
     account_id: String,
     principal_id: arkret_wire::DidCoreId,
     triggering_status_record_id: AccountStatusRecordId,
@@ -54,16 +54,16 @@ fn execution_key(record_id: &AccountStatusRecordId, state: ExecutionState) -> St
 fn execution_hash(execution: &AccountErasureExecution) -> Result<String, AppError> {
     #[derive(Serialize)]
     struct Coordinates<'a> {
-        receiver_service_id: &'a arkret_wire::DidCoreId,
-        account_authority_service_id: &'a arkret_wire::DidCoreId,
+        receiver_id: &'a arkret_wire::DidCoreId,
+        account_authority_id: &'a arkret_wire::DidCoreId,
         account_id: &'a str,
         principal_id: &'a arkret_wire::DidCoreId,
         triggering_status_record_id: &'a AccountStatusRecordId,
         storage_boundary: ErasureStorageBoundary,
     }
     arkret_canonical::canonical_sha256(&Coordinates {
-        receiver_service_id: &execution.receiver_service_id,
-        account_authority_service_id: &execution.account_authority_service_id,
+        receiver_id: &execution.receiver_id,
+        account_authority_id: &execution.account_authority_id,
         account_id: &execution.account_id,
         principal_id: &execution.principal_id,
         triggering_status_record_id: &execution.triggering_status_record_id,
@@ -77,7 +77,7 @@ fn execution_hash(execution: &AccountErasureExecution) -> Result<String, AppErro
 /// a permanent duplicate conflict.
 pub async fn ensure_intent(
     state: &AppState,
-    account_authority_service_id: &str,
+    account_authority_id: &str,
     account_id: &str,
     principal_id: &arkret_wire::DidCoreId,
     record_id: &AccountStatusRecordId,
@@ -85,12 +85,12 @@ pub async fn ensure_intent(
     let principal_idempotency_id = execution_principal_id(state);
     let key = execution_key(record_id, ExecutionState::Pending);
     let execution = AccountErasureExecution {
-        receiver_service_id: arkret_wire::DidCoreId::new(state.service_id().to_owned())
+        receiver_id: arkret_wire::DidCoreId::new(state.service_id().to_owned())
             .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?,
-        account_authority_service_id: arkret_wire::DidCoreId::new(
-            account_authority_service_id.to_owned(),
-        )
-        .map_err(|error| AppError::internal(format!("Account Authority DID invalid: {error}")))?,
+        account_authority_id: arkret_wire::DidCoreId::new(account_authority_id.to_owned())
+            .map_err(|error| {
+                AppError::internal(format!("Account Authority DID invalid: {error}"))
+            })?,
         account_id: account_id.to_owned(),
         principal_id: principal_id.clone(),
         triggering_status_record_id: record_id.clone(),
@@ -163,11 +163,11 @@ async fn run_execution(
     principal_id: &arkret_wire::DidCoreId,
     record_id: &AccountStatusRecordId,
 ) -> Result<(), AppError> {
-    let account_authority_service_id =
-        crate::routing::events::peer::trusted_account_authority_service_id(state).await?;
+    let account_authority_id =
+        crate::routing::events::peer::trusted_account_authority_id(state).await?;
     ensure_intent(
         state,
-        account_authority_service_id.as_str(),
+        account_authority_id.as_str(),
         account_id,
         principal_id,
         record_id,
@@ -230,7 +230,7 @@ async fn run_execution(
         crate::routing::federation::federation::erasure_receipts::persist_issued_package(
             state,
             package,
-            &execution.account_authority_service_id,
+            &execution.account_authority_id,
         )
         .await?;
         crate::routing::identity::account::lifecycle::fanout_account_status_erasure_receipt(
@@ -286,11 +286,11 @@ mod tests {
 
     fn execution(state: ExecutionState) -> AccountErasureExecution {
         AccountErasureExecution {
-            receiver_service_id: arkret_wire::DidCoreId::new(
+            receiver_id: arkret_wire::DidCoreId::new(
                 "ak:did_core:web:principal.example".to_owned(),
             )
             .unwrap(),
-            account_authority_service_id: arkret_wire::DidCoreId::new(
+            account_authority_id: arkret_wire::DidCoreId::new(
                 "ak:did_core:web:authority.example".to_owned(),
             )
             .unwrap(),
@@ -342,7 +342,7 @@ mod tests {
     fn authority_source_is_part_of_execution_coordinates() {
         let original = execution(ExecutionState::Pending);
         let mut different_authority = original.clone();
-        different_authority.account_authority_service_id =
+        different_authority.account_authority_id =
             arkret_wire::DidCoreId::new("ak:did_core:web:other-authority.example".to_owned())
                 .unwrap();
 

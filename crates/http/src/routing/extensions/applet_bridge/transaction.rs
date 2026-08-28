@@ -23,12 +23,12 @@ pub(super) async fn process_verified_transaction(
     verified: VerifiedAppletServiceSignature,
 ) -> Result<AppletTransactionOutcome, AppError> {
     let applet_id = transaction.applet_id.clone();
-    let source_service_id = transaction.source_service_id.to_string();
+    let source_id = transaction.source_id.to_string();
     let begin = state
         .event_queries()
         .begin_applet_transaction(AppletTransactionReplayState {
             applet_id: applet_id.clone(),
-            source_service_id: source_service_id.clone(),
+            source_id: source_id.clone(),
             idempotency_key: idempotency_key.to_owned(),
             delivery_authentication_record_digest: verified
                 .delivery_authentication_record_digest
@@ -64,9 +64,7 @@ pub(super) async fn process_verified_transaction(
                 continue;
             }
         };
-        if let Err(reason_code) =
-            validate_transaction_event_binding(&install, &source_service_id, &event)
-        {
+        if let Err(reason_code) = validate_transaction_event_binding(&install, &source_id, &event) {
             rejected.push(rejected_event(&event_id, reason_code));
             continue;
         }
@@ -121,7 +119,7 @@ pub(super) async fn process_verified_transaction(
         .event_queries()
         .complete_applet_transaction(
             applet_id.as_str(),
-            &source_service_id,
+            &source_id,
             idempotency_key,
             outcome_value,
         )
@@ -181,11 +179,11 @@ fn applet_event_session(state: &AppState, event: &Event) -> SessionRecord {
 
 fn validate_transaction_event_binding(
     install: &AppletRecord,
-    source_service_id: &str,
+    source_id: &str,
     event: &Event,
 ) -> Result<(), &'static str> {
     let package = &install.package;
-    if package.service_id.as_str() != source_service_id {
+    if package.service_id.as_str() != source_id {
         return Err("applet_registration_unauthorized");
     }
     if install.revoked_at.is_some()

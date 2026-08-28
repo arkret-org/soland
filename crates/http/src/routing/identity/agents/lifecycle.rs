@@ -761,7 +761,7 @@ pub(super) async fn provision_agent(
             principal.controller_account_id = Some(ids::typed_uuid_part_expect_internal(
                 &controller_account.account_id,
             ));
-            principal.recipient_service_id = Some(state.service_id().clone());
+            principal.recipient_id = Some(state.service_id().clone());
             principal.provision_event_refs = Some(json!({
                 "provision_event_id": provision_event_id,
                 "operation_id": operation_id,

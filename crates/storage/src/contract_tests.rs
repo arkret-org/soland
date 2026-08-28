@@ -915,7 +915,7 @@ fn registration_challenge(
     label: &str,
     organization_id: &DidCoreId,
     organization_did: &Did,
-    local_admin_subject: &DidCoreId,
+    local_admin_subject_id: &DidCoreId,
     scopes: &[OrganizationRegistrationScope],
     created_at: chrono::DateTime<Utc>,
 ) -> OrganizationRegistrationChallenge {
@@ -930,7 +930,7 @@ fn registration_challenge(
         origin: "https://service.example/".to_owned(),
         trust_domain: arkret_wire::TrustDomainId::new("ak:trust_domain:service.example")
             .expect("valid service trust domain"),
-        local_admin_subject: local_admin_subject.clone(),
+        local_admin_subject_id: local_admin_subject_id.clone(),
         requested_scopes: scopes.to_vec(),
         expires_at: created_at + Duration::seconds(300),
         created_at,
@@ -941,7 +941,7 @@ fn registration_challenge(
 fn registration_outcome(
     organization_id: &DidCoreId,
     organization_did: &Did,
-    local_admin_subject: &DidCoreId,
+    local_admin_subject_id: &DidCoreId,
     scopes: &[OrganizationRegistrationScope],
     generation: u64,
     status: OrganizationRegistrationStatus,
@@ -966,12 +966,12 @@ fn registration_outcome(
             "{}:{generation}:{version_id}:control-key",
             organization_id.as_str()
         )),
-        local_admin_subject: local_admin_subject.clone(),
+        local_admin_subject_id: local_admin_subject_id.clone(),
         delegated_scopes: scopes.to_vec(),
         status,
         issued_at,
         expires_at: issued_at + Duration::days(30),
-        issuer_service_id: issuer.clone(),
+        issuer_id: issuer.clone(),
         proof: PayloadProof {
             kind: "detached_jws".to_owned(),
             verification_method: arkret_wire::DidUrl::new(format!("{issuer_did}#registry-key-1"))
@@ -1053,7 +1053,7 @@ pub async fn assert_mimi_consent_correlation_store_contract(
         target_id: format!("ak:did_core:web:{namespace}-target.example"),
         purpose: "direct_message".to_owned(),
         strand_id: None,
-        source_service_id: Some(format!("ak:did_core:web:{namespace}-provider.example")),
+        source_id: Some(format!("ak:did_core:web:{namespace}-provider.example")),
         created_at: now,
         expires_at: Some(now + Duration::hours(1)),
     };
@@ -1757,7 +1757,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         }),
         outbox: vec![FederationOutboxRecord {
             id: outbox_id.clone(),
-            peer_service_id: DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
+            peer_id: DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
                 .expect("peer service id"),
             peer_url: Some("https://peer.example".to_owned()),
             endpoint: "/_arkret/peer/events".to_owned(),
@@ -2058,7 +2058,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         response_event_ref: None,
         tombstone_event_ref: None,
         message: None,
-        peer_service_id: Some(format!(
+        peer_id: Some(format!(
             "ak:did_core:web:contact-service-{namespace}.example"
         )),
         peer_service_resolution: None,
@@ -2098,7 +2098,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         }),
         outbox: vec![FederationOutboxRecord::pending(
             contact_outbox_id.clone(),
-            DidCoreId::new(contact_record.peer_service_id.clone().unwrap())
+            DidCoreId::new(contact_record.peer_id.clone().unwrap())
                 .expect("contact peer service id"),
             "https://contact-peer.example".to_owned(),
             "/_arkret/peer/contacts".to_owned(),
@@ -2181,7 +2181,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             idempotency: None,
             outbox: vec![FederationOutboxRecord::pending(
                 failed_contact_outbox_id.clone(),
-                DidCoreId::new(contact_record.peer_service_id.clone().unwrap())
+                DidCoreId::new(contact_record.peer_id.clone().unwrap())
                     .expect("contact peer service id"),
                 "https://contact-peer.example".to_owned(),
                 "/_arkret/peer/contacts".to_owned(),
@@ -2249,7 +2249,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         }),
         outbox: vec![FederationOutboxRecord {
             id: rollback_outbox_id.clone(),
-            peer_service_id: DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
+            peer_id: DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
                 .expect("peer service id"),
             peer_url: Some("https://peer.example".to_owned()),
             endpoint: "/_arkret/peer/events".to_owned(),
@@ -2326,12 +2326,12 @@ pub async fn assert_federation_outbox_store_contract(
     store: &dyn FederationOutboxStore,
     namespace: &str,
 ) {
-    let peer_service_id = DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
+    let peer_id = DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
         .expect("peer service id");
     let row = |suffix: &str, created_at: i64| {
         FederationOutboxRecord::pending(
             format!("outbox:{namespace}:{suffix}"),
-            peer_service_id.clone(),
+            peer_id.clone(),
             "https://peer.example".to_owned(),
             "/_arkret/peer/events".to_owned(),
             format!("ak:outbox:event:{namespace}:{suffix}"),
@@ -2462,7 +2462,7 @@ pub async fn assert_federation_outbox_store_contract(
                     FederationOutboxDeadLetterRecord {
                         id: dead_letter_id.clone(),
                         outbox_id: first.id.clone(),
-                        peer_service_id: peer_service_id.clone(),
+                        peer_id: peer_id.clone(),
                         endpoint: "/_arkret/peer/events".to_owned(),
                         idempotency_key: first.idempotency_key.clone(),
                         last_http_status: Some(404),
@@ -2716,7 +2716,7 @@ pub async fn assert_federation_outbox_store_contract(
     );
     let route_missing = FederationOutboxRecord::realm_fanout(RealmFanoutOutboxInput {
         id: format!("outbox:{namespace}:pending-route"),
-        peer_service_id: DidCoreId::new("ak:did_core:web:peer.example").expect("peer service id"),
+        peer_id: DidCoreId::new("ak:did_core:web:peer.example").expect("peer service id"),
         peer_url: None,
         endpoint: "/_arkret/peer/events".to_owned(),
         idempotency_key: format!("ak:outbox:event:{namespace}:pending-route"),
@@ -2796,7 +2796,7 @@ pub async fn assert_federation_outbox_store_contract(
                 FederationOutboxDeadLetterRecord {
                     id: format!("dead-letter:{namespace}:realm"),
                     outbox_id: route_missing.id.clone(),
-                    peer_service_id: route_missing.peer_service_id.clone(),
+                    peer_id: route_missing.peer_id.clone(),
                     endpoint: route_missing.endpoint.clone(),
                     idempotency_key: route_missing.idempotency_key.clone(),
                     last_http_status: Some(404),
@@ -2859,7 +2859,7 @@ pub async fn assert_federation_outbox_store_contract(
     let lane_row = |suffix: &str, position: i64, created_at: i64| {
         FederationOutboxRecord::pending(
             format!("outbox:{namespace}:lane:{suffix}"),
-            peer_service_id.clone(),
+            peer_id.clone(),
             "https://peer.example".to_owned(),
             "/_arkret/peer/account-status".to_owned(),
             format!("ak:outbox:account-status:{namespace}:{suffix}"),
@@ -2900,7 +2900,7 @@ pub async fn assert_federation_outbox_store_contract(
         .expect("snapshot coalescing lane")
         .into_iter()
         .filter(|row| {
-            row.peer_service_id == peer_service_id
+            row.peer_id == peer_id
                 && row.coalescing_key.as_deref() == Some(lane_key.as_str())
                 && matches!(
                     row.state,
@@ -2923,7 +2923,7 @@ pub async fn assert_federation_outbox_store_contract(
         depth
             .iter()
             .any(|bucket| bucket.state == FederationOutboxState::DeadLettered
-                && bucket.peer_service_id == peer_service_id
+                && bucket.peer_id == peer_id
                 && bucket.depth >= 1)
     );
 }
@@ -3409,7 +3409,7 @@ pub async fn assert_last_resort_claim_ledger_contract(
         .expect("publish last-resort KeyPackage");
 
     let ledger = |suffix: &str, welcome: &str| PeerKeyPackageClaimLedgerRecord {
-        source_service_id: format!("ak:did_core:web:{namespace}.example"),
+        source_id: format!("ak:did_core:web:{namespace}.example"),
         claim_request_id: format!("local-last-resort:{namespace}-{suffix}"),
         request_digest: format!("sha256:{:0>64}", suffix),
         key_package_use: "last_resort".to_owned(),
@@ -3472,14 +3472,14 @@ pub async fn assert_last_resort_claim_ledger_contract(
     );
     assert_eq!(
         store
-            .get_peer_claim(&first.source_service_id, &first.claim_request_id)
+            .get_peer_claim(&first.source_id, &first.claim_request_id)
             .await
             .expect("reload first last-resort claim"),
         Some(first.clone())
     );
     assert_eq!(
         store
-            .get_peer_claim(&second.source_service_id, &second.claim_request_id)
+            .get_peer_claim(&second.source_id, &second.claim_request_id)
             .await
             .expect("reload second last-resort claim"),
         Some(second.clone())
@@ -3487,14 +3487,14 @@ pub async fn assert_last_resort_claim_ledger_contract(
     let concurrent_receipt = serde_json::json!({"receipt": "first-writer"});
     let (left, right) = tokio::join!(
         store.attach_peer_claim_consume_receipt(
-            &first.source_service_id,
+            &first.source_id,
             &first.claim_request_id,
             &first.request_digest,
             &concurrent_receipt,
             11_000,
         ),
         store.attach_peer_claim_consume_receipt(
-            &first.source_service_id,
+            &first.source_id,
             &first.claim_request_id,
             &first.request_digest,
             &concurrent_receipt,
@@ -3507,7 +3507,7 @@ pub async fn assert_last_resort_claim_ledger_contract(
     ];
     assert_eq!(attached.iter().filter(|record| record.is_some()).count(), 1);
     let replayed = store
-        .get_peer_claim(&first.source_service_id, &first.claim_request_id)
+        .get_peer_claim(&first.source_id, &first.claim_request_id)
         .await
         .expect("reload concurrent last-resort consume winner")
         .expect("consume winner is durable");
@@ -3516,7 +3516,7 @@ pub async fn assert_last_resort_claim_ledger_contract(
     assert!(
         store
             .attach_peer_claim_consume_receipt(
-                &second.source_service_id,
+                &second.source_id,
                 &second.claim_request_id,
                 &second.request_digest,
                 &serde_json::json!({"receipt": "too-late"}),
@@ -3527,7 +3527,7 @@ pub async fn assert_last_resort_claim_ledger_contract(
             .is_none()
     );
     let expired = store
-        .get_peer_claim(&second.source_service_id, &second.claim_request_id)
+        .get_peer_claim(&second.source_id, &second.claim_request_id)
         .await
         .expect("reload expired last-resort audit")
         .expect("expired last-resort audit remains durable");
@@ -3575,7 +3575,7 @@ pub async fn assert_last_resort_claim_ledger_contract(
     let delayed_receipt = serde_json::json!({"receipt": "signed-before-deadline"});
     let recovered = store
         .transition_peer_claim_consumed(
-            &delayed_source.source_service_id,
+            &delayed_source.source_id,
             &delayed_source.claim_request_id,
             &delayed_source.request_digest,
             delayed_outcome,
@@ -3593,7 +3593,7 @@ pub async fn assert_last_resort_claim_ledger_contract(
     assert!(
         store
             .transition_peer_claim_consumed(
-                &delayed_source.source_service_id,
+                &delayed_source.source_id,
                 &delayed_source.claim_request_id,
                 &delayed_source.request_digest,
                 delayed_outcome,
@@ -3618,7 +3618,7 @@ pub async fn assert_last_resort_claim_ledger_contract(
     assert!(
         store
             .transition_peer_claim_terminal(
-                &terminal_source.source_service_id,
+                &terminal_source.source_id,
                 &terminal_source.claim_request_id,
                 &terminal_source.request_digest,
                 &serde_json::json!({"response": {"claims": ["drift"]}}),
@@ -3633,7 +3633,7 @@ pub async fn assert_last_resort_claim_ledger_contract(
     let terminal_receipt = serde_json::json!({"receipt": "terminal"});
     let terminal = store
         .transition_peer_claim_terminal(
-            &terminal_source.source_service_id,
+            &terminal_source.source_id,
             &terminal_source.claim_request_id,
             &terminal_source.request_digest,
             terminal_outcome,
@@ -3652,7 +3652,7 @@ pub async fn assert_last_resort_claim_ledger_contract(
     assert!(
         store
             .transition_peer_claim_terminal(
-                &terminal_source.source_service_id,
+                &terminal_source.source_id,
                 &terminal_source.claim_request_id,
                 &terminal_source.request_digest,
                 terminal_outcome,
@@ -3666,7 +3666,7 @@ pub async fn assert_last_resort_claim_ledger_contract(
     );
     let terminal_winner = store
         .get_peer_claim(
-            &terminal_source.source_service_id,
+            &terminal_source.source_id,
             &terminal_source.claim_request_id,
         )
         .await
@@ -3772,8 +3772,7 @@ fn account_status_receipt(record: &AccountStatusRecord, suffix: u32) -> AccountS
         account_authority_id: record.account_authority_id.clone(),
         account_id: record.account_id.clone(),
         status_seq: record.status_seq,
-        receiver_service_id: DidCoreId::new("ak:did_core:web:receiver.example")
-            .expect("receiver core id"),
+        receiver_id: DidCoreId::new("ak:did_core:web:receiver.example").expect("receiver core id"),
         accepted_at,
         verification_method: DidUrl::new("did:web:receiver.example#notary-key")
             .expect("receiver verification method"),
@@ -4403,7 +4402,7 @@ pub async fn assert_member_identity_store_contract(
         digest: format!("sha256:{}", "c".repeat(64)),
         subject_id: format!("ak:did_core:web:{namespace}.example"),
         issuer: format!("did:web:{namespace}-issuer.example"),
-        issuer_service_id: Some(format!("ak:did_core:web:{namespace}-issuer.example")),
+        issuer_id: Some(format!("ak:did_core:web:{namespace}-issuer.example")),
         audience: Some("ak:service:directory".to_owned()),
         binding_state: "bound".to_owned(),
         visibility: Some("public".to_owned()),

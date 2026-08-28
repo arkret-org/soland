@@ -102,8 +102,8 @@ mod tests {
         std::fs::write(
             &path,
             br#"{"verified":[
-                {"profile_id":"principal","claim_kind":"conformance_verified","verification_run_id":"run","service_role":"principal_server","artifact_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_ref":"file:///artifact","verifier_service_id":"ak:did_core:web:cotest.example","signature":"sig","timestamp":"2026-05-20T00:00:00.000Z"},
-                {"profile_id":"auth","claim_kind":"conformance_verified","verification_run_id":"run","service_role":"auth_server","artifact_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","artifact_ref":"file:///artifact","verifier_service_id":"ak:did_core:web:cotest.example","signature":"sig","timestamp":"2026-05-20T00:00:00.000Z"}
+                {"profile_id":"principal","claim_kind":"conformance_verified","verification_run_id":"run","service_role":"principal_server","artifact_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_ref":"file:///artifact","verifier_id":"ak:did_core:web:cotest.example","signature":"sig","timestamp":"2026-05-20T00:00:00.000Z"},
+                {"profile_id":"auth","claim_kind":"conformance_verified","verification_run_id":"run","service_role":"auth_server","artifact_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","artifact_ref":"file:///artifact","verifier_id":"ak:did_core:web:cotest.example","signature":"sig","timestamp":"2026-05-20T00:00:00.000Z"}
             ]}"#,
         )
         .unwrap();

@@ -17,7 +17,7 @@ pub struct AccountNotificationDeltaWrite {
     pub delta: NotificationDelta,
     pub recipient_id: DidCoreId,
     pub controller_account_id: String,
-    pub recipient_service_id: DidCoreId,
+    pub recipient_id: DidCoreId,
     pub source_account_artifact_id: String,
 }
 
@@ -44,7 +44,7 @@ pub trait NotificationStore: Send + Sync {
     async fn list_for_account(
         &self,
         controller_account_id: &str,
-        recipient_service_id: &str,
+        recipient_id: &str,
         after_position: Option<i64>,
     ) -> PersistenceResult<Vec<StoredAccountNotificationDelta>>;
 }

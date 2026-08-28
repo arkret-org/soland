@@ -92,7 +92,7 @@ fn persistence_outbox_row(
         Some(binding) => soland_storage::FederationOutboxRecord::realm_fanout(
             soland_storage::RealmFanoutOutboxInput {
                 id: delivery.id,
-                peer_service_id: delivery.peer_service_id,
+                peer_id: delivery.peer_id,
                 peer_url: delivery.peer_url,
                 endpoint: delivery.endpoint,
                 idempotency_key: delivery.idempotency_key,
@@ -103,7 +103,7 @@ fn persistence_outbox_row(
         ),
         None => soland_storage::FederationOutboxRecord::pending(
             delivery.id,
-            delivery.peer_service_id,
+            delivery.peer_id,
             delivery
                 .peer_url
                 .expect("generic federation delivery requires a route"),
@@ -154,7 +154,7 @@ fn persistence_event_commit_request(
                     response_event_ref: commit.record.response_event_ref,
                     tombstone_event_ref: commit.record.tombstone_event_ref,
                     message: commit.record.message,
-                    peer_service_id: commit.record.peer_service_id,
+                    peer_id: commit.record.peer_id,
                     peer_service_resolution: commit.record.peer_service_resolution,
                     created_at: commit.record.created_at,
                     updated_at: commit.record.updated_at,
@@ -713,7 +713,7 @@ fn application_applet_replay(
 ) -> crate::events::AppletTransactionReplayState {
     crate::events::AppletTransactionReplayState {
         applet_id: record.applet_id,
-        source_service_id: record.source_service_id,
+        source_id: record.source_id,
         idempotency_key: record.idempotency_key,
         delivery_authentication_record_digest: record.delivery_authentication_record_digest,
         request_digest: record.request_digest,
@@ -727,7 +727,7 @@ fn persistence_applet_replay(
 ) -> soland_storage::AppletTransactionReplayRecord {
     soland_storage::AppletTransactionReplayRecord {
         applet_id: record.applet_id,
-        source_service_id: record.source_service_id,
+        source_id: record.source_id,
         idempotency_key: record.idempotency_key,
         delivery_authentication_record_digest: record.delivery_authentication_record_digest,
         request_digest: record.request_digest,
@@ -813,13 +813,13 @@ impl crate::events::AppletPort for PersistenceEventReader {
     async fn complete_applet_transaction(
         &self,
         applet_id: &str,
-        source_service_id: &str,
+        source_id: &str,
         idempotency_key: &str,
         outcome: Value,
     ) -> crate::ServiceResult<()> {
         self.0
             .applets()
-            .complete_transaction_replay(applet_id, source_service_id, idempotency_key, outcome)
+            .complete_transaction_replay(applet_id, source_id, idempotency_key, outcome)
             .await?;
         Ok(())
     }
@@ -1121,7 +1121,7 @@ fn application_peer_claim(
     row: soland_storage::PeerKeyPackageClaimLedgerRecord,
 ) -> crate::events::PeerKeyPackageClaimLedgerState {
     crate::events::PeerKeyPackageClaimLedgerState {
-        source_service_id: row.source_service_id,
+        source_id: row.source_id,
         claim_request_id: row.claim_request_id,
         request_digest: row.request_digest,
         key_package_use: row.key_package_use,
@@ -1140,7 +1140,7 @@ fn persistence_peer_claim(
     row: &crate::events::PeerKeyPackageClaimLedgerState,
 ) -> soland_storage::PeerKeyPackageClaimLedgerRecord {
     soland_storage::PeerKeyPackageClaimLedgerRecord {
-        source_service_id: row.source_service_id.clone(),
+        source_id: row.source_id.clone(),
         claim_request_id: row.claim_request_id.clone(),
         request_digest: row.request_digest.clone(),
         key_package_use: row.key_package_use.clone(),
@@ -1219,13 +1219,13 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
     }
     async fn peer_claim(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
     ) -> crate::ServiceResult<Option<crate::events::PeerKeyPackageClaimLedgerState>> {
         Ok(self
             .0
             .mls_key_packages()
-            .get_peer_claim(source_service_id, claim_request_id)
+            .get_peer_claim(source_id, claim_request_id)
             .await?
             .map(application_peer_claim))
     }
@@ -1299,7 +1299,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
     }
     async fn attach_peer_claim_terminal_receipt(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         terminal_receipt: &Value,
@@ -1309,7 +1309,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
             .0
             .mls_key_packages()
             .attach_peer_claim_terminal_receipt(
-                source_service_id,
+                source_id,
                 claim_request_id,
                 request_digest,
                 terminal_receipt,
@@ -1320,7 +1320,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
     }
     async fn attach_peer_claim_consume_receipt(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         consume_receipt: &Value,
@@ -1330,7 +1330,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
             .0
             .mls_key_packages()
             .attach_peer_claim_consume_receipt(
-                source_service_id,
+                source_id,
                 claim_request_id,
                 request_digest,
                 consume_receipt,
@@ -1341,7 +1341,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
     }
     async fn transition_peer_claim_consumed(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         expected_outcome: &Value,
@@ -1352,7 +1352,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
             .0
             .mls_key_packages()
             .transition_peer_claim_consumed(
-                source_service_id,
+                source_id,
                 claim_request_id,
                 request_digest,
                 expected_outcome,
@@ -1364,7 +1364,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
     }
     async fn transition_peer_claim_terminal(
         &self,
-        source_service_id: &str,
+        source_id: &str,
         claim_request_id: &str,
         request_digest: &str,
         expected_outcome: &Value,
@@ -1376,7 +1376,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
             .0
             .mls_key_packages()
             .transition_peer_claim_terminal(
-                source_service_id,
+                source_id,
                 claim_request_id,
                 request_digest,
                 expected_outcome,
@@ -1570,8 +1570,8 @@ fn application_realm_invite(
     crate::events::RealmInviteState {
         invite_id: record.invite_id,
         realm_id: record.realm_id,
-        inviter: record.inviter,
-        invitee: record.invitee,
+        inviter_id: record.inviter_id,
+        invitee_id: record.invitee_id,
         invite_delivery_target: record.invite_delivery_target,
         introduction_evidence_digest: record.introduction_evidence_digest,
         third_party_invite: record.third_party_invite,
@@ -1590,8 +1590,8 @@ fn persistence_realm_invite(
     soland_storage::RealmInviteRecord {
         invite_id: record.invite_id,
         realm_id: record.realm_id,
-        inviter: record.inviter,
-        invitee: record.invitee,
+        inviter_id: record.inviter_id,
+        invitee_id: record.invitee_id,
         invite_delivery_target: record.invite_delivery_target,
         introduction_evidence_digest: record.introduction_evidence_digest,
         third_party_invite: record.third_party_invite,
@@ -1611,7 +1611,7 @@ fn application_invite_locator(
         locator_id: record.locator_id,
         token_digest: record.token_digest,
         subject_id: record.subject_id,
-        recipient_service_id: record.recipient_service_id,
+        recipient_id: record.recipient_id,
         issued_at: record.issued_at,
         expires_at: record.expires_at,
         one_time_use: record.one_time_use,
@@ -1628,7 +1628,7 @@ fn persistence_invite_locator(
         locator_id: record.locator_id.clone(),
         token_digest: record.token_digest.clone(),
         subject_id: record.subject_id.clone(),
-        recipient_service_id: record.recipient_service_id.clone(),
+        recipient_id: record.recipient_id.clone(),
         issued_at: record.issued_at,
         expires_at: record.expires_at,
         one_time_use: record.one_time_use,

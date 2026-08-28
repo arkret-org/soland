@@ -859,7 +859,7 @@ fn realm_genesis_and_profile_cells_return_none_for_uncreated_realm() {
 fn invite_entry_evaluates_principal_admission_hard_gate() {
     let mut state = ProjectionState::new();
     let realm_id = "ak:realm:AZpIovRd-lKGm0kpgKgqtWiGni5pA7imt7H99x3r-ot9";
-    let invitee = "ak:did_core:web:denied.example";
+    let invitee_id = "ak:did_core:web:denied.example";
     state.realm_policy_bundle_cells.insert(
         realm_id.to_owned(),
         CellState::Value(serde_json::json!({
@@ -869,7 +869,7 @@ fn invite_entry_evaluates_principal_admission_hard_gate() {
                     "gate_id": "principal",
                     "kind": "principal_admission",
                     "auto_resolve": true,
-                    "denied_principal_dids": [invitee]
+                    "denied_principal_dids": [invitee_id]
                 }]
             }
         })),
@@ -878,8 +878,8 @@ fn invite_entry_evaluates_principal_admission_hard_gate() {
         arkret_wire::EventKind::InviteCreate,
         realm_id,
         serde_json::json!({
-            "invitee": invitee,
-            "sender": "ak:did_core:web:inviter.example"
+            "invitee_id": invitee_id,
+            "sender": "ak:did_core:web:inviter_id.example"
         }),
     );
     assert_eq!(
@@ -904,7 +904,7 @@ fn public_entry_skips_c_axis_but_still_enforces_cooldown() {
             state: "leave".to_owned(),
             role: "member".to_owned(),
             delivery_status: None,
-            recipient_service_id: None,
+            recipient_id: None,
             recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,
@@ -1003,7 +1003,7 @@ fn closed_entry_rejects_self_join_but_allows_authorized_writer_path() {
             state: "join".to_owned(),
             role: "member".to_owned(),
             delivery_status: Some("unroutable".to_owned()),
-            recipient_service_id: None,
+            recipient_id: None,
             recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,
@@ -1035,7 +1035,7 @@ fn bare_member_state_cannot_leave_a_live_invite_state() {
             state: "invite".to_owned(),
             role: "member".to_owned(),
             delivery_status: None,
-            recipient_service_id: None,
+            recipient_id: None,
             recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,
@@ -1787,7 +1787,7 @@ fn policy_check_frontiers_are_independent_actor_scoped_commitments() {
             state: "join".to_owned(),
             role: "member".to_owned(),
             delivery_status: None,
-            recipient_service_id: None,
+            recipient_id: None,
             recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,

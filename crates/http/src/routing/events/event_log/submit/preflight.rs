@@ -101,12 +101,12 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
             ..
         } => return None,
     };
-    let recipient_service_id = state
+    let recipient_id = state
         .projections()
         .snapshot()
         .member(operation.realm_id.as_str(), recipient_actor_id)
-        .and_then(|member| member.recipient_service_id.clone());
-    if recipient_device_is_remote(state.service_id(), recipient_service_id.as_deref()) {
+        .and_then(|member| member.recipient_id.clone());
+    if recipient_device_is_remote(state.service_id(), recipient_id.as_deref()) {
         // The canonical member delivery binding assigns this recipient to a
         // different Principal Server. That server validates its local device
         // record when the Welcome crosses federation ingress; treating the
@@ -123,8 +123,8 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
     welcome_recipient_trust_reject_reason(None, false, device_revoked).map(str::to_owned)
 }
 
-fn recipient_device_is_remote(local_service_id: &str, recipient_service_id: Option<&str>) -> bool {
-    recipient_service_id.is_some_and(|service_id| service_id != local_service_id)
+fn recipient_device_is_remote(local_service_id: &str, recipient_id: Option<&str>) -> bool {
+    recipient_id.is_some_and(|service_id| service_id != local_service_id)
 }
 
 fn welcome_recipient_trust_reject_reason(

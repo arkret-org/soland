@@ -921,7 +921,7 @@ pub(super) async fn register_package_install(
 }
 
 fn build_install_execution_record(
-    principal_service_id: &str,
+    principal_id: &str,
     admin_actor_id: &str,
     idempotency_key: &str,
     body_digest: &str,
@@ -937,7 +937,7 @@ fn build_install_execution_record(
         Vec::new()
     };
     Ok(json!({
-        "principal_service_id": principal_service_id,
+        "principal_id": principal_id,
         "admin_actor_id": admin_actor_id,
         "idempotency_key": idempotency_key,
         "body_hash": body_digest,

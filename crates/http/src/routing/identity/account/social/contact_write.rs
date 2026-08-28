@@ -285,7 +285,7 @@ async fn validate_request_acceptance_receipt(
     validate_request_receipt_cryptography(state, receipt, "request_receipt")?;
 
     let expected_issuer = record
-        .peer_service_id
+        .peer_id
         .as_deref()
         .unwrap_or_else(|| state.service_id());
     if receipt.core.issuer.as_str() != expected_issuer {
@@ -1216,7 +1216,7 @@ async fn plan_contact_commit(
                     AppError::internal(format!("Contact target account lookup: {error}"))
                 })?
                 .is_some();
-            let peer_service_id = if same_service_target
+            let peer_id = if same_service_target
                 || matches!(
                     introduction_evidence.as_ref(),
                     ContactIntroductionEvidence::SamePrincipalServer
@@ -1230,7 +1230,7 @@ async fn plan_contact_commit(
                     introduction_evidence,
                 )
                 .await?
-                .map(|address| address.recipient_service_id.to_string())
+                .map(|address| address.recipient_id.to_string())
             };
             let existing = contacts
                 .contact_any(&holder, &peer)
@@ -1363,7 +1363,7 @@ async fn plan_contact_commit(
                                 ))
                             })?,
                         source_receipt: request_receipt.clone(),
-                        issuer_service_id: state.service_id().clone(),
+                        issuer_id: state.service_id().clone(),
                         verified_at: now(),
                     })
                 })
@@ -1390,7 +1390,7 @@ async fn plan_contact_commit(
                         .get("message")
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned),
-                    peer_service_id,
+                    peer_id,
                     peer_service_resolution: contact_service_resolution(state, &reservation.branch)
                         .await?,
                     created_at,
@@ -1887,7 +1887,7 @@ async fn prepare_contact_federation_delivery(
             contact_address,
         },
     };
-    let recipient_service_id = match &delivery {
+    let recipient_id = match &delivery {
         PeerContactSubmitRequestBody::Request {
             contact_address, ..
         }
@@ -1902,7 +1902,7 @@ async fn prepare_contact_federation_delivery(
         }
         | PeerContactSubmitRequestBody::Tombstone {
             contact_address, ..
-        } => contact_address.recipient_service_id.as_str(),
+        } => contact_address.recipient_id.as_str(),
         PeerContactSubmitRequestBody::ProofRefresh { .. }
         | PeerContactSubmitRequestBody::GlareFinalize { .. }
         | PeerContactSubmitRequestBody::ContinuityCheckpoint { .. } => {
@@ -1911,7 +1911,7 @@ async fn prepare_contact_federation_delivery(
     };
     crate::routing::identity::contact_federation::prepare_peer_contact_carrier(
         state,
-        recipient_service_id,
+        recipient_id,
         &delivery,
     )
     .await

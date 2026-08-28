@@ -763,7 +763,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
         });
     // Disclose the current accepted Realm Seal view to resolvers the Directory
     // has already authorized to resolve this Realm (this function is only
-    // reached after `realm_resolvable_to`). An invitee who is not yet a member
+    // reached after `realm_resolvable_to`). An invitee_id who is not yet a member
     // cannot read the membership-gated `seals/frontier` Realm Seal view, so
     // they stamp this as `seal_ref` for DataEvents or as full `seal_basis` for
     // Control Moves before signing (spec discovery-directory.md §9.1.1). When
@@ -792,7 +792,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
         .filter(|member| {
             member.state == "join"
                 && member.delivery_status.as_deref() == Some("routable")
-                && member.recipient_service_id.as_deref() == Some(state.service_id())
+                && member.recipient_id.as_deref() == Some(state.service_id())
         })
         .filter_map(|member| member.delivery_binding_frontier.as_deref())
         .filter_map(|event_ref| arkret_wire::EventId::new(event_ref.to_owned()).ok())
@@ -802,7 +802,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
     if source_refs.is_empty() {
         return Vec::new();
     }
-    let authority_service_ids: BTreeSet<String> =
+    let authority_ids: BTreeSet<String> =
         crate::notary::NotaryWorker::for_service(state.service_id().clone())
             .current_notary_value_for_events(state, &realm_id_typed, &[])
             .ok()
@@ -835,14 +835,14 @@ pub(super) async fn join_candidates_for_resolved_realm(
                     .collect(),
             })
             .unwrap_or_default();
-    if authority_service_ids.is_empty() {
+    if authority_ids.is_empty() {
         return Vec::new();
     }
 
     let mut candidates = Vec::new();
 
     if candidates.is_empty()
-        && authority_service_ids.contains(state.service_id())
+        && authority_ids.contains(state.service_id())
         && let Some(own_resolution) = own_resolution
     {
         candidates.push(RealmJoinCandidate {

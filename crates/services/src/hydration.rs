@@ -1035,7 +1035,7 @@ pub async fn hydrate_projections_from_persistence(
     }
     // MLS KeyPackage projection — the claim selector reads ONLY this in-memory
     // map (`routing/mls.rs`), so without this rehydration the admin can never
-    // claim a joined invitee's KeyPackage after a restart and admission stalls
+    // claim a joined invitee_id's KeyPackage after a restart and admission stalls
     // ("waiting for a Welcome"). The durable `mls_key_packages` table is the
     // authoritative store; mirror it back 1:1.
     if let Ok(rows) = persistence.mls_key_packages().snapshot_all().await {
@@ -1240,7 +1240,7 @@ pub async fn hydrate_realms_from_canonical_events(
             // explicit bootstrap `ak.member.state`, not by `ak.realm.create`.
             // Losing that transition silently breaks admin-side MLS admission: the
             // admin's synced roster shows only itself, `other_joined` stays
-            // false, and a newly-joined invitee is never claimed/Welcomed —
+            // false, and a newly-joined invitee_id is never claimed/Welcomed —
             // stuck "waiting for a Welcome" forever. Mirrors the live
             // projection in `routing/events/projection/realm.rs`.
             hydrate_realm_member_state_event(realms, record);

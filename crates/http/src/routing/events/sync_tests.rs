@@ -702,7 +702,7 @@ fn insert_projected_membership_at(
             state: membership.to_owned(),
             role: "member".to_owned(),
             delivery_status: None,
-            recipient_service_id: None,
+            recipient_id: None,
             recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,
@@ -1116,7 +1116,7 @@ fn handle_claim(
         "handle": "alice:soland.local",
         "subject": ROSTER_SUBJECT,
         "issuer": issuer,
-        "issuer_service_id": issuer,
+        "issuer_id": issuer,
         "binding_state": binding_state,
         "claim_kind": "handle_binding",
         "visibility": "public",
@@ -1140,7 +1140,7 @@ fn handle_claim(
     // Keep tests honest: use the configured service DID unless a test is
     // intentionally exercising issuer trust rejection.
     if issuer == state.service_id() {
-        claim["issuer_service_id"] = json!(state.service_id());
+        claim["issuer_id"] = json!(state.service_id());
     }
     claim
 }
@@ -1281,7 +1281,7 @@ fn roster_includes_projected_members_and_directory_fallback() {
     assert_eq!(
         roster_membership_for_actor(&rows, ROSTER_CALLER),
         Some("join"),
-        "accepted invitee from projected member FSM is emitted"
+        "accepted invitee_id from projected member FSM is emitted"
     );
     assert_eq!(
         roster_membership_for_actor(&rows, "did:web:carol.example"),

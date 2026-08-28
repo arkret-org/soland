@@ -69,11 +69,11 @@ impl InviteLocatorStore for PgInviteLocatorStore {
                 return Ok(InviteLocatorInsertOutcome::ActiveLimitReached);
             }
             let payload = payload(&record)?;
-            sql_query("INSERT INTO invite_locators (locator_id, token_digest, subject_id, recipient_service_id, issued_at, expires_at, one_time_use, record_payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
+            sql_query("INSERT INTO invite_locators (locator_id, token_digest, subject_id, recipient_id, issued_at, expires_at, one_time_use, record_payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
                 .bind::<Text, _>(&record.locator_id)
                 .bind::<Text, _>(&record.token_digest)
                 .bind::<Text, _>(&record.subject_id)
-                .bind::<Text, _>(&record.recipient_service_id)
+                .bind::<Text, _>(&record.recipient_id)
                 .bind::<Timestamptz, _>(record.issued_at)
                 .bind::<Timestamptz, _>(record.expires_at)
                 .bind::<Bool, _>(record.one_time_use)
@@ -128,9 +128,9 @@ impl InviteLocatorStore for PgInviteLocatorStore {
             sql_query("UPDATE invite_locators SET revoked_at = $2 WHERE locator_id = $1")
                 .bind::<Text, _>(&old_locator_id).bind::<Timestamptz, _>(now).execute(conn).await?;
             let replacement_payload = payload(&replacement)?;
-            sql_query("INSERT INTO invite_locators (locator_id, token_digest, subject_id, recipient_service_id, issued_at, expires_at, one_time_use, record_payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
+            sql_query("INSERT INTO invite_locators (locator_id, token_digest, subject_id, recipient_id, issued_at, expires_at, one_time_use, record_payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
                 .bind::<Text, _>(&replacement.locator_id).bind::<Text, _>(&replacement.token_digest)
-                .bind::<Text, _>(&replacement.subject_id).bind::<Text, _>(&replacement.recipient_service_id)
+                .bind::<Text, _>(&replacement.subject_id).bind::<Text, _>(&replacement.recipient_id)
                 .bind::<Timestamptz, _>(replacement.issued_at).bind::<Timestamptz, _>(replacement.expires_at)
                 .bind::<Bool, _>(replacement.one_time_use).bind::<Jsonb, _>(&replacement_payload)
                 .execute(conn).await?;

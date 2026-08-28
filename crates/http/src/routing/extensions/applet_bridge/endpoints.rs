@@ -850,7 +850,7 @@ fn validate_revoke_scope(
 
 fn load_stored_revoke_outcome(
     execution: Option<&Value>,
-    principal_service_id: &str,
+    principal_id: &str,
     admin_actor_id: &str,
     idempotency_key: &str,
     request_digest: &str,
@@ -858,10 +858,8 @@ fn load_stored_revoke_outcome(
     let Some(execution) = execution else {
         return Ok(None);
     };
-    let binding_matches = execution
-        .get("principal_service_id")
-        .and_then(Value::as_str)
-        == Some(principal_service_id)
+    let binding_matches = execution.get("principal_id").and_then(Value::as_str)
+        == Some(principal_id)
         && execution.get("admin_actor_id").and_then(Value::as_str) == Some(admin_actor_id)
         && execution.get("idempotency_key").and_then(Value::as_str) == Some(idempotency_key)
         && execution.get("request_digest").and_then(Value::as_str) == Some(request_digest);
@@ -1075,7 +1073,7 @@ async fn persist_revoke_execution(
     fence_applet: bool,
 ) -> Result<(), AppError> {
     let execution = json!({
-        "principal_service_id": state.service_id(),
+        "principal_id": state.service_id(),
         "admin_actor_id": admin_actor_id,
         "idempotency_key": idempotency_key,
         "request_digest": request_digest,
@@ -1935,7 +1933,7 @@ mod revoke_saga_tests {
 
     fn completed_execution() -> Value {
         json!({
-            "principal_service_id": "ak:did_core:web:service-a.example",
+            "principal_id": "ak:did_core:web:service-a.example",
             "admin_actor_id": "ak:did_core:web:admin-a.example",
             "idempotency_key": "revoke-key",
             "request_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
