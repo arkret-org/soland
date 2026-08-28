@@ -5,7 +5,7 @@ use arkret_models_identity::{
     ResolutionDidBindingMethodProofKind, ResolutionMethodEvidenceBoundary,
     ResolutionMethodHistoryEvidence,
 };
-use arkret_wire::{DidCoreId, DidFullId, Hash, PrincipalAuthorityKey};
+use arkret_wire::{Did, DidCoreId, Hash, PrincipalAuthorityKey};
 use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
 use soland_http::error::{AppError, ErrorCode};
@@ -114,16 +114,15 @@ async fn principal_method_history_evidence(
     state: &AppState,
     projection: &PrincipalResolutionProjection,
 ) -> Result<(ResolutionMethodHistoryEvidence, DidDocument), AppError> {
-    let full_id = DidFullId::new(projection.full_id.to_string()).map_err(|error| {
-        AppError::internal(format!("stored principal full_id is invalid: {error}"))
-    })?;
+    let did = Did::new(projection.did.to_string())
+        .map_err(|error| AppError::internal(format!("stored principal did is invalid: {error}")))?;
     let boundary = ResolutionMethodEvidenceBoundary {
         from_method_history_head: projection.method_history_head.clone(),
         from_version_id: projection.version_id.clone(),
         to_method_history_head: projection.method_history_head.clone(),
         to_version_id: projection.version_id.clone(),
     };
-    match full_id.method() {
+    match did.method() {
         "webvh" => {
             let history_head =
                 Hash::new(projection.method_history_head.clone()).map_err(|error| {
@@ -133,7 +132,7 @@ async fn principal_method_history_evidence(
                 })?;
             let pinned = state
                 .dids()
-                .resolve_pinned_webvh_state(&full_id, &projection.version_id, &history_head)
+                .resolve_pinned_webvh_state(&did, &projection.version_id, &history_head)
                 .await
                 .map_err(|error| {
                     AppError::new(
@@ -156,7 +155,7 @@ async fn principal_method_history_evidence(
             let document_digest = canonical_document_digest(&document)?;
             let mut events = state
                 .dids()
-                .log_events(full_id.as_str())
+                .log_events(did.as_str())
                 .await
                 .map_err(|error| {
                     AppError::new(
@@ -234,7 +233,7 @@ async fn principal_method_history_evidence(
             ))
         }
         "web" | "key" => {
-            let resolved = state.dids().resolve_did(&full_id).await.map_err(|error| {
+            let resolved = state.dids().resolve_did(&did).await.map_err(|error| {
                 AppError::new(
                     ErrorCode::TemporarilyUnavailable,
                     format!("current principal DID document is unverifiable: {error}"),
@@ -252,11 +251,11 @@ async fn principal_method_history_evidence(
             let document_digest = canonical_document_digest(&document)?;
             let evidence = ResolutionDidBindingEvidenceReceipt {
                 kind: ResolutionDidBindingEvidenceKind::AkDidBindingEvidenceV1,
-                method: full_id.method().to_owned(),
+                method: did.method().to_owned(),
                 document_digest,
                 method_proofs: Vec::new(),
             };
-            if full_id.method() == "web" {
+            if did.method() == "web" {
                 validate_did_web_coordinates(projection, &evidence.document_digest)?;
                 Ok((
                     ResolutionMethodHistoryEvidence::DidWebDocument {
@@ -267,7 +266,7 @@ async fn principal_method_history_evidence(
                     document,
                 ))
             } else {
-                validate_did_key_coordinates(projection, &projection.full_id)?;
+                validate_did_key_coordinates(projection, &projection.did)?;
                 Ok((
                     ResolutionMethodHistoryEvidence::DidKeyExpansion {
                         adapter_version: "did:key:1".to_owned(),
@@ -309,11 +308,11 @@ fn validate_did_web_coordinates(
 
 fn validate_did_key_coordinates(
     projection: &PrincipalResolutionProjection,
-    full_id: &DidFullId,
+    did: &Did,
 ) -> Result<(), AppError> {
-    let digest = Hash::new(arkret_canonical::sha256_digest(full_id.as_str().as_bytes()))
+    let digest = Hash::new(arkret_canonical::sha256_digest(did.as_str().as_bytes()))
         .map_err(|error| AppError::internal(format!("did:key digest is invalid: {error}")))?;
-    validate_synthetic_coordinates(projection, &digest, "synthetic-full-id-sha256:", "did:key")
+    validate_synthetic_coordinates(projection, &digest, "synthetic-did-sha256:", "did:key")
 }
 
 fn validate_synthetic_coordinates(

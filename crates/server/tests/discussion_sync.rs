@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
-use arkret_identifiers::{DidFullId, EventId, InviteId, RealmId, new_prefixed_uuid7};
+use arkret_identifiers::{Did, EventId, InviteId, RealmId, new_prefixed_uuid7};
 use arkret_wire::PlaintextDataClassKind;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
@@ -40,11 +40,9 @@ fn test_signer_did(seed: [u8; 32]) -> String {
 }
 
 fn core_actor_id(actor: &str) -> String {
-    arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
-    )
-    .expect("fixture actor core id")
-    .to_string()
+    arkret_wire::project_did_to_core_id(&Did::new(actor.to_owned()).expect("fixture actor DID"))
+        .expect("fixture actor core id")
+        .to_string()
 }
 
 fn test_config() -> AppConfig {
@@ -111,7 +109,7 @@ async fn seed_realm(state: &AppState, owner: &str, title: &str, history_access: 
         soland_test_support::cba_basis::seed_event_derived_realm_genesis_event(state, owner, title)
             .await;
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
-    let owner_did = arkret_identifiers::DidCoreId::new(core_actor_id(owner)).unwrap();
+    let owner_id = arkret_identifiers::DidCoreId::new(core_actor_id(owner)).unwrap();
     let now = chrono::Utc::now();
 
     let mut entry = RealmDirectoryEntry::new(
@@ -121,7 +119,7 @@ async fn seed_realm(state: &AppState, owner: &str, title: &str, history_access: 
     );
     entry.description = Some("history access fixture".to_owned());
     entry.public = true;
-    entry.members.insert(owner_did);
+    entry.members.insert(owner_id);
     state.test_realms().lock().upsert(entry);
     state
         .test_projection()
@@ -649,9 +647,9 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         payload,
         causal_refs,
     } = input;
-    let actor_full = DidFullId::new(actor_id.to_owned()).expect("fixture actor full DID");
-    let actor = arkret_wire::project_full_id_to_core_id(&actor_full)
-        .expect("fixture actor full DID projects to a core id");
+    let actor_did = Did::new(actor_id.to_owned()).expect("fixture actor DID");
+    let actor = arkret_wire::project_did_to_core_id(&actor_did)
+        .expect("fixture actor DID projects to a core id");
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
         TestClient::query("http://server/_arkret/self/events/frontier")
             .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
@@ -707,7 +705,7 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
     );
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         arkret_signatures::development_signing_key_seed(verification_method.as_str()),
-        actor_full,
+        actor_did,
         verification_method.clone(),
     );
     let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
@@ -976,10 +974,8 @@ async fn invite_accept_member_receives_since_join_messages_after_accept_body() {
             .lock()
             .get(&RealmId::new(realm_id.clone()).unwrap())
             .is_some_and(|realm| realm.members.contains(
-                &arkret_wire::project_full_id_to_core_id(
-                    &DidFullId::new(bob_did.to_owned()).unwrap(),
-                )
-                .unwrap(),
+                &arkret_wire::project_did_to_core_id(&Did::new(bob_did.to_owned()).unwrap(),)
+                    .unwrap(),
             )),
         "ak.invite.accept must add the invitee to the Realm directory"
     );

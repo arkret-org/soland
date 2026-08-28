@@ -4,7 +4,7 @@ use arkret_models_identity::service_identity::{
     CanonicalServiceUrl, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
     ServiceRegistrationOutcome, ServiceRegistrationReceipt,
 };
-use arkret_wire::{DidCoreId, PayloadProof, ServiceKind, project_full_id_to_core_id, proof_kind};
+use arkret_wire::{DidCoreId, PayloadProof, ServiceKind, project_did_to_core_id, proof_kind};
 use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, QueryParam};
@@ -52,11 +52,11 @@ pub(crate) async fn ensure(
         .map_err(registration_rejected)?;
 
     let event_digest = outcome.registration_receipt.log_head_digest.clone();
-    let service_full_id = outcome.did_document.id.to_string();
+    let service_did = outcome.did_document.id.to_string();
     let document_value = serde_json::to_value(&outcome.did_document)
         .map_err(|error| AppError::internal(error.to_string()))?;
     let document = DidDocumentState {
-        did: service_full_id.clone(),
+        did: service_did.clone(),
         did_document: document_value,
         key_log_head: Some(event_digest.clone()),
         seq: 1,
@@ -73,7 +73,7 @@ pub(crate) async fn ensure(
     };
     let event = DidLogEvent {
         event_digest,
-        did: service_full_id,
+        did: service_did,
         seq: 1,
         operation,
         created_at: issued_at,
@@ -164,9 +164,9 @@ async fn sign_registration_receipt(
         .inception_operation
         .control_key_digest()
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let full_id = request.inception_operation.state.id.clone();
-    let service_id = project_full_id_to_core_id(&full_id)
-        .map_err(|error| AppError::internal(error.to_string()))?;
+    let did = request.inception_operation.state.id.clone();
+    let service_id =
+        project_did_to_core_id(&did).map_err(|error| AppError::internal(error.to_string()))?;
     let (_, verification_method) = state
         .current_service_receipt_binding()
         .await
@@ -179,7 +179,7 @@ async fn sign_registration_receipt(
         .map_err(|error| AppError::internal(error.to_string()))?,
         registration_key: key.clone(),
         service_id,
-        full_id,
+        did,
         version_id: request.inception_operation.version_id.clone(),
         log_head_digest,
         control_key_digest,
@@ -209,7 +209,7 @@ async fn sign_registration_receipt(
     )
     .map_err(|error| AppError::internal(error.to_string()))?;
     receipt
-        .validate_for(key, &receipt.service_id, &receipt.full_id)
+        .validate_for(key, &receipt.service_id, &receipt.did)
         .map_err(|error| AppError::internal(error.to_string()))?;
     Ok(receipt)
 }

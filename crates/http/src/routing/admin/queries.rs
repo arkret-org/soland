@@ -28,7 +28,6 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::DidCoreId;
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
@@ -116,27 +115,19 @@ async fn query_audit_trail(
 // ---------------------------------------------------------------------------
 
 /// Build the production [`AdminActor`] projection for one account record.
-/// `device_counts` / `realm_counts` are precomputed maps keyed by DID.
-/// Returns `None` (with a warning) for rows whose stored DID fails the
-/// canonical grammar — such rows cannot be represented in the typed contract.
+/// `device_counts` / `realm_counts` are precomputed maps keyed by principal id.
 pub(super) fn admin_actor_row(
     state: &AppState,
     account: &soland_services::identity::AccountProfileState,
     device_counts: &BTreeMap<String, u64>,
     realm_counts: &BTreeMap<String, u64>,
 ) -> Option<AdminActor> {
-    let did = match DidCoreId::new(account.did.clone()) {
-        Ok(did) => did,
-        Err(error) => {
-            tracing::warn!(did = %account.did, %error, "account row DID fails canonical grammar; skipped");
-            return None;
-        }
-    };
-    let status = state.account_lifecycle_status(&account.did);
+    let principal_id = account.principal_id.clone();
+    let status = state.account_lifecycle_status(principal_id.as_str());
     let deactivation_federation_incomplete = (status == AccountStatus::Deactivated).then(|| {
         !crate::routing::identity::account::deactivation_peer_service_targets_for_actor(
             state,
-            &account.did,
+            principal_id.as_str(),
         )
         .is_empty()
     });
@@ -147,24 +138,27 @@ pub(super) fn admin_actor_row(
         status,
         AccountStatus::Deactivated | AccountStatus::ErasurePending
     )
-    .then(|| state.deactivation_push_partial(&account.did));
+    .then(|| state.deactivation_push_partial(principal_id.as_str()));
     let handle = account.handle();
     Some(AdminActor {
-        id: account.did.clone(),
-        did,
+        id: principal_id.to_string(),
+        principal_id: principal_id.clone(),
         account_id: Some(account.id.clone()),
         handle: (!handle.is_empty()).then_some(handle),
         display_name: account.display_name.clone(),
         status: Some(status),
-        is_admin: Some(state.is_admin_principal(&account.did)),
+        is_admin: Some(state.is_admin_principal(principal_id.as_str())),
         deactivation_federation_incomplete,
         deactivation_partial,
         created_at: Some(account.created_at),
         // Not tracked by this deployment — reported as unknown, never a
         // fabricated timestamp.
         last_active_at: None,
-        device_count: device_counts.get(&account.did).copied().or(Some(0)),
-        realm_count: realm_counts.get(&account.did).copied().or(Some(0)),
+        device_count: device_counts
+            .get(principal_id.as_str())
+            .copied()
+            .or(Some(0)),
+        realm_count: realm_counts.get(principal_id.as_str()).copied().or(Some(0)),
     })
 }
 

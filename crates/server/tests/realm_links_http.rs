@@ -60,10 +60,8 @@ fn canonical_body<T: serde::Serialize>(body: &T) -> Vec<u8> {
 /// directory has to authorize the key the envelope names; without this the
 /// Events fail the device proof rather than anything the test is about.
 async fn prepare_alice(state: &AppState) -> String {
-    let alice_core = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new(ALICE).unwrap(),
-    )
-    .unwrap();
+    let alice_core =
+        arkret_wire::project_did_to_core_id(&arkret_identifiers::Did::new(ALICE).unwrap()).unwrap();
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
             "actor": alice_core,
@@ -83,7 +81,7 @@ async fn prepare_alice(state: &AppState) -> String {
 }
 
 fn alice_core_id() -> String {
-    arkret_wire::project_full_id_to_core_id(&arkret_identifiers::DidFullId::new(ALICE).unwrap())
+    arkret_wire::project_did_to_core_id(&arkret_identifiers::Did::new(ALICE).unwrap())
         .unwrap()
         .to_string()
 }

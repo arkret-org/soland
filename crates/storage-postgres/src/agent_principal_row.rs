@@ -1,4 +1,4 @@
-use arkret_identifiers::{DidCoreId, DidFullId, project_full_id_to_core_id};
+use arkret_identifiers::{Did, DidCoreId, project_did_to_core_id};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_wire::{DidUrl, OpaqueLocalId};
 use chrono::{DateTime, Utc};
@@ -140,7 +140,7 @@ fn validate_managed_agent_identity_binding(
     let agent_id = DidCoreId::new(agent_id.to_owned()).map_err(|error| {
         PersistenceError::SchemaViolation(format!("Agent id is not a did_core_id: {error}"))
     })?;
-    let (agent_full_id, fragment) = controller_authorization_ref
+    let (agent_did, fragment) = controller_authorization_ref
         .as_str()
         .split_once('#')
         .ok_or_else(|| {
@@ -154,14 +154,14 @@ fn validate_managed_agent_identity_binding(
                 .to_owned(),
         ));
     }
-    let agent_full_id = DidFullId::new(agent_full_id.to_owned()).map_err(|error| {
+    let agent_did = Did::new(agent_did.to_owned()).map_err(|error| {
         PersistenceError::SchemaViolation(format!(
-            "Agent controller_authorization_ref does not contain a valid full DID: {error}"
+            "Agent controller_authorization_ref does not contain a valid DID: {error}"
         ))
     })?;
-    let projected = project_full_id_to_core_id(&agent_full_id).map_err(|error| {
+    let projected = project_did_to_core_id(&agent_did).map_err(|error| {
         PersistenceError::SchemaViolation(format!(
-            "Agent controller_authorization_ref full DID projection failed: {error}"
+            "Agent controller_authorization_ref DID projection failed: {error}"
         ))
     })?;
     if projected != agent_id {
@@ -263,7 +263,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn managed_agent_binding_accepts_full_did_delegation_for_projected_core() {
+    fn managed_agent_binding_accepts_did_delegation_for_projected_core() {
         let authorization_ref =
             DidUrl::new("did:webvh:z6mkfixtureagent:agent.example#managed-controller").unwrap();
 

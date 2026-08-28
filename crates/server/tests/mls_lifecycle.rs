@@ -97,11 +97,11 @@ fn signed_keypackage_claim_request(
         "self KeyPackage claim request id must carry at least 128 bits"
     );
     let created_at = Utc::now();
-    let requester_full = arkret_identifiers::DidFullId::new(requester.to_owned()).unwrap();
-    let requester_id = arkret_wire::project_full_id_to_core_id(&requester_full).unwrap();
-    let target_full = arkret_identifiers::DidFullId::new(target_principal_id.to_owned()).unwrap();
-    let target_principal_id = arkret_wire::project_full_id_to_core_id(&target_full).unwrap();
-    let verification_method = format!("{}#{requester_device}", requester_full.as_str());
+    let requester_did = arkret_identifiers::Did::new(requester.to_owned()).unwrap();
+    let requester_id = arkret_wire::project_did_to_core_id(&requester_did).unwrap();
+    let target_did = arkret_identifiers::Did::new(target_principal_id.to_owned()).unwrap();
+    let target_principal_id = arkret_wire::project_did_to_core_id(&target_did).unwrap();
+    let verification_method = format!("{}#{requester_device}", requester_did.as_str());
     let claim_request_id = b64(claim_random);
     let mut body: arkret_models_crypto::KeyPackagesClaimRequestBody =
         serde_json::from_value(json!({
@@ -234,16 +234,16 @@ fn signed_event(
     seal_basis: Option<arkret_wire::SealBasis>,
 ) -> Value {
     let now = Utc::now();
-    let actor_full_id = arkret_identifiers::DidFullId::new(actor.to_owned()).unwrap();
+    let actor_did = arkret_identifiers::Did::new(actor.to_owned()).unwrap();
     let verification_method =
-        arkret_wire::DidUrl::new(format!("{}#{device_id}", actor_full_id.as_str()))
+        arkret_wire::DidUrl::new(format!("{}#{device_id}", actor_did.as_str()))
             .expect("fixture verification method is a DID URL");
     let mut event = arkret_wire::test_support::raw_event_at(
         kind.as_ref(),
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
         },
-        arkret_wire::project_full_id_to_core_id(&actor_full_id).unwrap(),
+        arkret_wire::project_did_to_core_id(&actor_did).unwrap(),
         soland_test_support::fixture_principal_server_id(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
@@ -258,7 +258,7 @@ fn signed_event(
     event.seal_basis = seal_basis;
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         [21_u8; 32],
-        actor_full_id,
+        actor_did,
         verification_method.clone(),
     );
     let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
@@ -314,8 +314,8 @@ fn set_event_prev_refs(event: &mut Value, prev_refs: &[&str]) {
 }
 
 async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str) -> String {
-    let actor_core = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    let actor_core = arkret_wire::project_did_to_core_id(
+        &arkret_identifiers::Did::new(actor.to_owned()).expect("fixture actor DID"),
     )
     .expect("fixture actor core id");
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
@@ -334,22 +334,22 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str)
 
 async fn project_authorized_principal_device(
     state: &AppState,
-    principal_full_id: &str,
+    principal_did: &str,
     device_id: &str,
     signing_key: &SigningKey,
 ) -> String {
-    let principal_full = arkret_identifiers::DidFullId::new(principal_full_id.to_owned()).unwrap();
-    let principal_id = arkret_wire::project_full_id_to_core_id(&principal_full).unwrap();
+    let principal_did = arkret_identifiers::Did::new(principal_did.to_owned()).unwrap();
+    let principal_id = arkret_wire::project_did_to_core_id(&principal_did).unwrap();
     let principal_server_id =
         arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap();
     let pcr_realm_id = arkret_identifiers::RealmId::new(
-        soland_test_support::fixture_principal_control_realm(principal_full_id),
+        soland_test_support::fixture_principal_control_realm(principal_did),
     )
     .unwrap();
     soland_test_support::cba_basis::seed_realm_genesis_event(
         state,
         pcr_realm_id.as_str(),
-        principal_full_id,
+        principal_did,
     )
     .await;
     let genesis_record = state
@@ -433,7 +433,7 @@ async fn project_authorized_principal_device(
                     genesis_event: genesis.clone(),
                     current_event: genesis.clone(),
                     projection: arkret_models_identity::PrincipalResolutionProjection {
-                        full_id: principal_full,
+                        did: principal_did,
                         method_history_head: format!("sha256:{}", "1".repeat(64)),
                         version_id: "1-QmMlsLifecycleAuthority".to_owned(),
                         resolution_event_ref: genesis.event_id.to_string(),
@@ -478,10 +478,9 @@ async fn mls_lifecycle_end_to_end_body() {
     let alice_did = "did:web:alice.example";
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_token = dev_token(state.clone(), alice_did, alice_device, "Alice").await;
-    let alice_core = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new(alice_did).unwrap(),
-    )
-    .unwrap();
+    let alice_core =
+        arkret_wire::project_did_to_core_id(&arkret_identifiers::Did::new(alice_did).unwrap())
+            .unwrap();
     let event_signing_key = SigningKey::from_bytes(&[21_u8; 32]);
     let alice_device_authorize_event_id =
         project_authorized_principal_device(&state, alice_did, alice_device, &event_signing_key)
@@ -733,10 +732,9 @@ async fn mls_lifecycle_end_to_end_body() {
     );
 
     let bob_did = "did:web:bob.example";
-    let bob_core = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new(bob_did).unwrap(),
-    )
-    .unwrap();
+    let bob_core =
+        arkret_wire::project_did_to_core_id(&arkret_identifiers::Did::new(bob_did).unwrap())
+            .unwrap();
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b0e0000001";
     let bob_token = dev_token(state.clone(), bob_did, bob_device, "Bob").await;
     project_authorized_principal_device(&state, bob_did, bob_device, &event_signing_key).await;

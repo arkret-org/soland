@@ -343,7 +343,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
     let pending_delivery_count = deliveries
         .iter()
         .filter(|delivery| delivery.realm_fanout.is_some())
-        .map(|delivery| delivery.peer_did.as_str())
+        .map(|delivery| delivery.peer_service_id.as_str())
         .collect::<std::collections::BTreeSet<_>>()
         .len() as u32;
     let direct_commit_outcome = if let Some(context) = direct_conversation_founding {

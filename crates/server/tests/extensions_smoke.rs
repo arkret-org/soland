@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{AppletId, DidFullId, EventId, Hlc, RealmId};
+use arkret_identifiers::{AppletId, Did, EventId, Hlc, RealmId};
 use arkret_models_collaboration::events_payloads::{
     ActorProfileCreatePayload, CapabilityGrantCreateBody, CapabilityGrantPayload,
     RealmCreatePayload, RealmGenesis,
@@ -112,7 +112,7 @@ async fn dev_token(state: AppState) -> String {
 async fn dev_login_token(state: AppState, actor: &str, device_suffix: &str) -> String {
     state.hydrate().await.unwrap();
     let actor_core = arkret_identifiers::DidCoreId::new(actor.to_owned()).unwrap_or_else(|_| {
-        arkret_wire::project_full_id_to_core_id(&DidFullId::new(actor.to_owned()).unwrap()).unwrap()
+        arkret_wire::project_did_to_core_id(&Did::new(actor.to_owned()).unwrap()).unwrap()
     });
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
@@ -154,8 +154,7 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
             .unwrap();
     }
     let actor_did =
-        arkret_wire::project_full_id_to_core_id(&DidFullId::new(actor.to_owned()).unwrap())
-            .unwrap();
+        arkret_wire::project_did_to_core_id(&Did::new(actor.to_owned()).unwrap()).unwrap();
     let now = chrono::Utc::now();
     {
         let mut realms = state.test_realms().lock();
@@ -254,10 +253,8 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
             )),
         );
         let authority_root = arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
-            arkret_wire::project_full_id_to_core_id(
-                &DidFullId::new("did:web:alice.example").unwrap(),
-            )
-            .unwrap(),
+            arkret_wire::project_did_to_core_id(&Did::new("did:web:alice.example").unwrap())
+                .unwrap(),
         );
         projection.realm_null_subject_cells.insert(
             (
@@ -268,7 +265,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         );
     }
     let create = soland_http::state::development_demo_genesis_event(
-        &state.service_full_id(),
+        &state.service_did(),
         &arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap(),
         state.notary_signing_key().to_bytes(),
     )
@@ -308,10 +305,8 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     ))
     .unwrap();
     let admin_grant_op = arkret_state::lattice::ordered_log::IssuedOp {
-        issuer: arkret_wire::project_full_id_to_core_id(
-            &DidFullId::new("did:web:alice.example").unwrap(),
-        )
-        .unwrap(),
+        issuer: arkret_wire::project_did_to_core_id(&Did::new("did:web:alice.example").unwrap())
+            .unwrap(),
         op: arkret_state::lattice::SealedOp::new(
             admin_grant_move_id.clone(),
             arkret_wire::LatticeOp {
@@ -374,7 +369,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     .unwrap();
     let signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
         state.notary_signing_key().to_bytes(),
-        state.service_full_id(),
+        state.service_did(),
         state.service_verification_method("notary-key").unwrap(),
     );
     let mut delta = vec![move_id, admin_grant_move_id];
@@ -411,7 +406,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
 
 async fn ingest_extension_admin_document(state: &AppState) {
     let now = chrono::Utc::now();
-    let did = DidFullId::new("did:web:alice.example").unwrap();
+    let did = Did::new("did:web:alice.example").unwrap();
     let verification_method =
         arkret_wire::DidUrl::new("did:web:alice.example#extension-test-notary".to_owned())
             .expect("fixture verification method is a DID URL");
@@ -512,8 +507,8 @@ fn managed_actor_fixture(
         },
     )
     .expect("fixture managed-actor WebVH inception");
-    let full_id = DidFullId::new(inception.did.clone()).expect("fixture managed-actor Full DID");
-    let actor_id = arkret_wire::project_full_id_to_core_id(&full_id)
+    let did = Did::new(inception.did.clone()).expect("fixture managed-actor DID");
+    let actor_id = arkret_wire::project_did_to_core_id(&did)
         .expect("fixture managed-actor Core DID projection");
     let method_history_head = arkret_canonical::canonical_sha256(&inception.log_entry)
         .expect("fixture WebVH history head");
@@ -555,7 +550,7 @@ fn managed_actor_fixture(
     ManagedActorFixture {
         actor_id,
         initial_resolution: arkret_models_identity::ResolutionCommitment {
-            full_id,
+            did,
             method_history_head,
             version_id: inception.version_id,
         },
@@ -566,7 +561,7 @@ fn managed_actor_fixture(
 
 async fn ingest_managed_actor_current_document(state: &AppState, actor: &ManagedActorFixture) {
     let now = chrono::Utc::now();
-    let did = actor.initial_resolution.full_id.to_string();
+    let did = actor.initial_resolution.did.to_string();
     let document = actor.inception_log_entry["state"].clone();
     let record = soland_storage::WebvhDocumentRecord {
         did: did.clone(),
@@ -618,7 +613,7 @@ fn finalize_and_sign_applet_event(
     let verification_method = package.webhook_auth.key_ref.clone();
     let signer = Ed25519PayloadSigner::new(
         applet_service_signing_key(&verification_method),
-        DidFullId::new(
+        Did::new(
             verification_method
                 .as_str()
                 .split_once('#')
@@ -1928,7 +1923,7 @@ async fn applet_message_event(
     let signing_key = applet_service_signing_key(&verification_method);
     let signer = Ed25519PayloadSigner::new(
         signing_key,
-        DidFullId::new(
+        Did::new(
             verification_method
                 .as_str()
                 .split_once('#')
@@ -2148,7 +2143,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         .await
         .unwrap()
         .expect("applet record remains durable after ghost provision");
-    assert_eq!(stored_applet["registry_did"], json!(package.controller_id));
+    assert_eq!(stored_applet["registry_id"], json!(package.controller_id));
 
     let revoke_preview: Value = TestClient::post(format!(
         "http://server/_arkret/self/applets/{applet_id}/revoke/preview"
@@ -2324,21 +2319,21 @@ async fn tsp_local_stub_routes_are_not_mounted() {
 }
 
 fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
-    let controller_full_id = DidFullId::new("did:web:registry.example".to_owned()).unwrap();
-    let controller_id = arkret_wire::project_full_id_to_core_id(&controller_full_id).unwrap();
-    let service_full_id = DidFullId::new(format!(
+    let controller_did = Did::new("did:web:registry.example".to_owned()).unwrap();
+    let controller_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
+    let service_did = Did::new(format!(
         "did:web:{}.applet.example",
         safe_did_token(namespace)
     ))
     .unwrap();
-    let service_id = arkret_wire::project_full_id_to_core_id(&service_full_id).unwrap();
+    let service_id = arkret_wire::project_did_to_core_id(&service_did).unwrap();
     let bot_actor = managed_actor_fixture(namespace, "bot", &service_id);
     let bot_actor_id = bot_actor.actor_id;
     let mut package = AppletPackage::new(
         format!("package:{applet_id}"),
         AppletId::new(applet_id.to_owned()).unwrap(),
         service_id,
-        service_full_id.clone(),
+        service_did.clone(),
         controller_id.clone(),
         format!("https://{}.applet.example", safe_did_token(namespace)),
         bot_actor_id,
@@ -2353,7 +2348,7 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         },
     );
     package.webhook_auth = WebhookAuth::http_message_signature(
-        arkret_wire::DidUrl::new(format!("{service_full_id}#applet-service-key")).unwrap(),
+        arkret_wire::DidUrl::new(format!("{service_did}#applet-service-key")).unwrap(),
         vec![HttpMessageSignatureAlgorithm::Ed25519],
     );
     let service_document = applet_service_id_document(&package);
@@ -2402,12 +2397,11 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         .seal_registration_epoch(&registration_epoch_evidence)
         .unwrap();
     package.seal().unwrap();
-    let verification_method =
-        arkret_wire::DidUrl::new(format!("{controller_full_id}#applet-package"))
-            .expect("fixture verification method is a DID URL");
+    let verification_method = arkret_wire::DidUrl::new(format!("{controller_did}#applet-package"))
+        .expect("fixture verification method is a DID URL");
     let signer = Ed25519PayloadSigner::from_did_key_seed(
         [13u8; 32],
-        controller_full_id,
+        controller_did,
         verification_method.clone(),
     );
     package.sign(&signer, &verification_method).unwrap();
@@ -2417,7 +2411,7 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
 fn applet_service_id_document(package: &AppletPackage) -> arkret_identity::DidDocument {
     let applet_signing_key = applet_service_signing_key(&package.webhook_auth.key_ref);
     arkret_identity::DidDocument {
-        id: DidFullId::new(
+        id: Did::new(
             package
                 .webhook_auth
                 .key_ref
@@ -2503,8 +2497,8 @@ async fn signed_install_events(
     accepted_admin_events: Option<(Event, Vec<Event>)>,
 ) -> (Event, Vec<Event>, Event, Event, Event, Event) {
     let ingest_actor_document = accepted_admin_events.is_none();
-    let actor_id = DidFullId::new("did:web:alice.example").unwrap();
-    let actor_core_id = arkret_wire::project_full_id_to_core_id(&actor_id).unwrap();
+    let actor_did = Did::new("did:web:alice.example").unwrap();
+    let actor_core_id = arkret_wire::project_did_to_core_id(&actor_did).unwrap();
     let realm_id = RealmId::new(realm_id.to_owned()).unwrap();
     let scope_ref = ScopeRef::Realm {
         realm_id: realm_id.clone(),
@@ -2514,7 +2508,7 @@ async fn signed_install_events(
             .expect("fixture verification method is a DID URL");
     let signer = Ed25519PayloadSigner::from_did_key_seed(
         arkret_signatures::development_signing_key_seed(verification_method.as_str()),
-        actor_id.clone(),
+        actor_did.clone(),
         verification_method.clone(),
     );
     let seal_id = state
@@ -2816,8 +2810,8 @@ async fn signed_revoke_events(
     Vec<arkret_wire::EventInitialSubmission>,
     Vec<arkret_wire::EventInitialSubmission>,
 ) {
-    let actor_id = DidFullId::new("did:web:alice.example").unwrap();
-    let actor_core_id = arkret_wire::project_full_id_to_core_id(&actor_id).unwrap();
+    let actor_did = Did::new("did:web:alice.example").unwrap();
+    let actor_core_id = arkret_wire::project_did_to_core_id(&actor_did).unwrap();
     let realm_id = RealmId::new(realm_id.to_owned()).unwrap();
     let scope_ref = ScopeRef::Realm {
         realm_id: realm_id.clone(),
@@ -2826,7 +2820,7 @@ async fn signed_revoke_events(
         arkret_wire::DidUrl::new(format!("did:web:alice.example#{ALICE_DEVICE_ID}")).unwrap();
     let signer = Ed25519PayloadSigner::from_did_key_seed(
         arkret_signatures::development_signing_key_seed(verification_method.as_str()),
-        actor_id.clone(),
+        actor_did.clone(),
         verification_method.clone(),
     );
     let seal_id = state

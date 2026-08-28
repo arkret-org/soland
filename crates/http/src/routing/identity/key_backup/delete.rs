@@ -380,14 +380,12 @@ async fn verify_principal_signing_delete(
         .ok_or_else(|| {
             AppError::capability_denied("principal proof method has no device fragment")
         })?;
-    let method_did =
-        arkret_identifiers::DidFullId::new(method_did.to_owned()).map_err(|error| {
-            AppError::capability_denied(format!("principal proof DID is invalid: {error}"))
-        })?;
-    let method_principal =
-        arkret_wire::project_full_id_to_core_id(&method_did).map_err(|error| {
-            AppError::capability_denied(format!("principal proof DID cannot be projected: {error}"))
-        })?;
+    let method_did = arkret_identifiers::Did::new(method_did.to_owned()).map_err(|error| {
+        AppError::capability_denied(format!("principal proof DID is invalid: {error}"))
+    })?;
+    let method_principal = arkret_wire::project_did_to_core_id(&method_did).map_err(|error| {
+        AppError::capability_denied(format!("principal proof DID cannot be projected: {error}"))
+    })?;
     if method_principal != challenge.principal_id {
         return Err(AppError::capability_denied(
             "principal proof method does not belong to the challenge authority pair",
@@ -640,10 +638,9 @@ async fn verify_trusted_recovery_service_delete(
             "the accepted recovery policy requires an attestation_ref for this service",
         ));
     }
-    let service_full_id =
-        arkret_identity::verification_method_did(proof.verification_method.as_str())
-            .map_err(|error| AppError::capability_denied(error.to_string()))?;
-    let service_core_id = arkret_wire::project_full_id_to_core_id(&service_full_id)
+    let service_did = arkret_identity::verification_method_did(proof.verification_method.as_str())
+        .map_err(|error| AppError::capability_denied(error.to_string()))?;
+    let service_core_id = arkret_wire::project_did_to_core_id(&service_did)
         .map_err(|error| AppError::capability_denied(error.to_string()))?;
     if service_core_id != *service_id {
         return Err(AppError::capability_denied(

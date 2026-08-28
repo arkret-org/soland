@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_canonical as canonical;
-use arkret_identifiers::{DidCoreId, DidFullId, EventId, Hash, RealmId};
+use arkret_identifiers::{Did, DidCoreId, EventId, Hash, RealmId};
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
@@ -37,8 +37,8 @@ pub(crate) fn typed_actor_upper_bounds(
 ) -> BTreeMap<DidCoreId, u64> {
     let mut out = BTreeMap::new();
     for (actor, seq) in actor_to_seq {
-        if let Ok(did) = DidCoreId::new(actor) {
-            out.insert(did, seq);
+        if let Ok(actor_id) = DidCoreId::new(actor) {
+            out.insert(actor_id, seq);
         }
     }
     out
@@ -103,7 +103,7 @@ pub(crate) fn frontier_root(
 /// payload and cannot be substituted independently.
 pub(crate) fn frontier_signature_payload(
     realm_id: Option<&RealmId>,
-    issuer: &DidFullId,
+    issuer_id: &DidCoreId,
     observed_at: DateTime<Utc>,
     frontier_root: &Hash,
     auth_state_root: Option<&Hash>,
@@ -117,7 +117,7 @@ pub(crate) fn frontier_signature_payload(
         "policy_frontier_root": policy_frontier_root.map(Hash::as_str),
         "membership_frontier_root": membership_frontier_root.map(Hash::as_str),
         "realm_id": realm_id.map(RealmId::as_str),
-        "issuer": issuer.as_str(),
+        "issuer": issuer_id.as_str(),
         "observed_at": arkret_canonical::format_timestamp_canonical(observed_at),
     })
 }
@@ -125,7 +125,8 @@ pub(crate) fn frontier_signature_payload(
 /// Build an Ed25519 detached-JWS signature envelope for the canonical
 /// frontier signature payload.
 pub(crate) fn sign_frontier_root(
-    service_id: &DidFullId,
+    issuer_id: &DidCoreId,
+    signer_did: &Did,
     realm_id: Option<&RealmId>,
     observed_at: DateTime<Utc>,
     frontier_root: &Hash,
@@ -136,7 +137,7 @@ pub(crate) fn sign_frontier_root(
 ) -> Result<Value, String> {
     let signed_payload = frontier_signature_payload(
         realm_id,
-        service_id,
+        issuer_id,
         observed_at,
         frontier_root,
         auth_state_root,
@@ -152,7 +153,7 @@ pub(crate) fn sign_frontier_root(
     Ok(json!({
         "typ": arkret_wire::DomainSeparationId::EVENTS_FRONTIER_SIGNATURE_V1,
         "scheme": "ed25519-detached-jws",
-        "verification_method": format!("{}#frontier-key", service_id.as_str()),
+        "verification_method": format!("{}#frontier-key", signer_did.as_str()),
         "payload_digest": payload_digest,
         "created_at": arkret_canonical::format_timestamp_canonical(observed_at),
         "jws": jws,
@@ -173,8 +174,8 @@ mod tests {
         RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K").unwrap()
     }
 
-    fn alice() -> DidFullId {
-        DidFullId::new("did:web:alice.example").unwrap()
+    fn alice() -> Did {
+        Did::new("did:web:alice.example").unwrap()
     }
 
     fn alice_core() -> DidCoreId {
@@ -238,6 +239,7 @@ mod tests {
         let policy_root = Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap();
         let membership_root = Hash::new(format!("sha256:{}", "3".repeat(64))).unwrap();
         let signature = sign_frontier_root(
+            &alice_core(),
             &alice(),
             Some(&realm()),
             observed_at,

@@ -48,10 +48,10 @@ impl ProjectionState {
             };
         };
         let valid_next = next
-            .get("full_id")
+            .get("did")
             .and_then(Value::as_str)
-            .and_then(|value| arkret_wire::DidFullId::new(value.to_owned()).ok())
-            .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id).ok())
+            .and_then(|value| arkret_wire::Did::new(value.to_owned()).ok())
+            .and_then(|did| arkret_wire::project_did_to_core_id(&did).ok())
             .is_some_and(|projected| projected.as_str() == principal_id)
             && next
                 .get("method_history_head")

@@ -193,7 +193,7 @@ impl ProjectionState {
         // kind's payload shape, so an `ak:<kind>:` prefix on its own is not
         // the constraint's value space.
         match type_constraint {
-            "did" => arkret_identifiers::DidFullId::new(object_ref).is_ok(),
+            "did" => arkret_identifiers::Did::new(object_ref).is_ok(),
             "realm" => arkret_identifiers::RealmId::new(object_ref).is_ok(),
             "space" => arkret_identifiers::SpaceId::new(object_ref).is_ok(),
             "space:board" => self

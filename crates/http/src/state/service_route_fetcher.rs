@@ -5,7 +5,7 @@ use arkret_models_identity::{
     ResolutionDidBindingEvidenceReceipt, ResolutionMethodEvidenceBoundary,
     ResolutionMethodHistoryEvidence, ServiceResolutionCarrier, ServiceRouteHandoverState,
 };
-use arkret_wire::{BindingKind, DidCoreId, DidFullId, Hash, ServiceKind};
+use arkret_wire::{BindingKind, Did, DidCoreId, Hash, ServiceKind};
 use async_trait::async_trait;
 use chrono::Utc;
 use soland_services::identity::{DidService, PinnedDidVersionStatus};
@@ -98,7 +98,7 @@ impl VerifiedBindingRouteFetcher {
             ));
         }
         validate_route_binding(&record, self.development_mode)?;
-        let full_id = DidFullId::new(record.record.full_id.to_string())
+        let did = Did::new(record.record.did.to_string())
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         if let Some(authenticated) = fetched_authenticated {
             arkret_identity::verify_authenticated_service_resolution_history(
@@ -107,7 +107,7 @@ impl VerifiedBindingRouteFetcher {
                 Utc::now(),
             )
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-            if full_id.method() == "webvh" {
+            if did.method() == "webvh" {
                 self.confirm_webvh_resolution_against_independent_state(
                     &record,
                     &authenticated.normalized_did_document,
@@ -116,7 +116,7 @@ impl VerifiedBindingRouteFetcher {
             }
             return self.finish_verified_candidate(record, service_kind).await;
         }
-        let (document, method_history_evidence) = match full_id.method() {
+        let (document, method_history_evidence) = match did.method() {
             "webvh" => {
                 return Err(ServiceError::SchemaViolation(
                     "inline WebVH service resolution omits complete method-history evidence"
@@ -126,7 +126,7 @@ impl VerifiedBindingRouteFetcher {
             "web" => {
                 let resolved = self
                     .dids
-                    .resolve_did(&full_id)
+                    .resolve_did(&did)
                     .await
                     .map_err(ServiceError::SchemaViolation)?;
                 let document: DidDocument = serde_json::from_value(
@@ -149,7 +149,7 @@ impl VerifiedBindingRouteFetcher {
             "key" => {
                 let resolved = self
                     .dids
-                    .resolve_did(&full_id)
+                    .resolve_did(&did)
                     .await
                     .map_err(ServiceError::SchemaViolation)?;
                 let document: DidDocument = serde_json::from_value(
@@ -157,15 +157,15 @@ impl VerifiedBindingRouteFetcher {
                         .map_err(|error| ServiceError::Internal(error.to_string()))?,
                 )
                 .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-                let full_id_digest = Hash::new(arkret_canonical::sha256_digest(
-                    record.record.full_id.as_str().as_bytes(),
+                let did_digest = Hash::new(arkret_canonical::sha256_digest(
+                    record.record.did.as_str().as_bytes(),
                 ))
                 .map_err(|error| ServiceError::Internal(error.to_string()))?;
                 validate_synthetic_method_coordinates(
                     &record,
-                    &full_id_digest,
-                    "synthetic-full-id-sha256:",
-                    "did-key-full-id-sha256:",
+                    &did_digest,
+                    "synthetic-did-sha256:",
+                    "did-key-did-sha256:",
                 )?;
                 let document_digest = canonical_document_digest(&document)?;
                 (
@@ -198,7 +198,7 @@ impl VerifiedBindingRouteFetcher {
         record: &arkret_models_identity::ServiceResolutionRecord,
         embedded_document: &DidDocument,
     ) -> ServiceResult<()> {
-        let full_id = DidFullId::new(record.record.full_id.to_string())
+        let did = Did::new(record.record.did.to_string())
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let history_head = Hash::new(record.record.method_history_head.clone())
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
@@ -215,7 +215,7 @@ impl VerifiedBindingRouteFetcher {
         }
         let Ok(pinned) = self
             .dids
-            .resolve_pinned_webvh_state(&full_id, &record.record.version_id, &history_head)
+            .resolve_pinned_webvh_state(&did, &record.record.version_id, &history_head)
             .await
         else {
             return Ok(());
@@ -286,7 +286,7 @@ fn validate_service_describe(
     if description.protocol_version != arkret_wire::PROTOCOL_VERSION
         || description.service_id != record.record.service_id
         || description.service_kind != expected_kind
-        || description.service_resolution.full_id != record.record.full_id
+        || description.service_resolution.did != record.record.did
         || description.service_resolution.method_history_head != record.record.method_history_head
         || description.service_resolution.version_id != record.record.version_id
     {
@@ -383,7 +383,7 @@ fn validate_route_binding(
         &record.record.service_id,
         &record.record.service_kind,
         &arkret_models_identity::ResolutionCommitment {
-            full_id: record.record.full_id.clone(),
+            did: record.record.did.clone(),
             method_history_head: record.record.method_history_head.clone(),
             version_id: record.record.version_id.clone(),
         },
@@ -570,22 +570,22 @@ mod tests {
     use arkret_models_identity::{
         ResolutionCommitment, ServiceResolutionRecord, ServiceResolutionRecordCore,
     };
-    use arkret_wire::{Base64UrlString, DidFullId, DidUrl, ProtocolSignature, TrustDomainId};
+    use arkret_wire::{Base64UrlString, Did, DidUrl, ProtocolSignature, TrustDomainId};
     use chrono::{Duration, TimeZone as _};
 
     use super::*;
 
     fn fixture() -> (ServiceResolutionRecord, ServiceDescribe) {
-        let full_id = DidFullId::new("did:webvh:z6mkdescribe:route.example").unwrap();
-        let service_id = arkret_wire::project_full_id_to_core_id(&full_id).unwrap();
+        let did = Did::new("did:webvh:z6mkdescribe:route.example").unwrap();
+        let service_id = arkret_wire::project_did_to_core_id(&did).unwrap();
         let base_url = "https://route.example/";
         let commitment = ResolutionCommitment {
-            full_id: full_id.clone(),
+            did: did.clone(),
             method_history_head: "head-0".to_owned(),
             version_id: "version-0".to_owned(),
         };
         let mut description = ServiceDescribe::development(
-            full_id.clone(),
+            did.clone(),
             TrustDomainId::new("ak:trust_domain:route.example").unwrap(),
             ServiceKind::PrincipalServer,
             vec!["ak.operation_bundle.principal_server.describe.v1".to_owned()],
@@ -617,7 +617,7 @@ mod tests {
             record: ServiceResolutionRecordCore {
                 service_id,
                 service_kind: "principal_server".to_owned(),
-                full_id: full_id.clone(),
+                did: did.clone(),
                 method_history_head: commitment.method_history_head.clone(),
                 version_id: commitment.version_id.clone(),
                 resolution_event_ref: "fixture".to_owned(),
@@ -631,7 +631,7 @@ mod tests {
                 expires_at: issued_at + Duration::minutes(10),
             },
             proof: ProtocolSignature {
-                verification_method: DidUrl::new(format!("{full_id}#assertion-1")).unwrap(),
+                verification_method: DidUrl::new(format!("{did}#assertion-1")).unwrap(),
                 created_at: issued_at,
                 jws: Base64UrlString::new("AA").unwrap(),
             },

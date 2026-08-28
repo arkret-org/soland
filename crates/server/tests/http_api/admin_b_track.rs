@@ -30,7 +30,7 @@ async fn admin_actor_detail_includes_account_lifecycle_linkage_body() {
 
     // D14 — detail row is the typed production `AdminActor` projection.
     assert_eq!(actor["id"], alice.as_str());
-    assert_eq!(actor["did"], alice.as_str());
+    assert_eq!(actor["principal_id"], alice.as_str());
     assert!(
         actor["account_id"]
             .as_str()

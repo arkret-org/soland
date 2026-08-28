@@ -586,14 +586,12 @@ impl PolicyClient {
         }
         // The kid's resolvable controller MUST project to the declared stable
         // policy-server service identity.
-        let kid_full_id =
-            arkret_identifiers::DidFullId::new(kid_did_part.to_owned()).map_err(|error| {
-                PolicyClientError::DirectoryGovernanceProofSignatureInvalid(error.to_string())
-            })?;
-        let kid_service_id =
-            arkret_wire::project_full_id_to_core_id(&kid_full_id).map_err(|error| {
-                PolicyClientError::DirectoryGovernanceProofSignatureInvalid(error.to_string())
-            })?;
+        let kid_did = arkret_identifiers::Did::new(kid_did_part.to_owned()).map_err(|error| {
+            PolicyClientError::DirectoryGovernanceProofSignatureInvalid(error.to_string())
+        })?;
+        let kid_service_id = arkret_wire::project_did_to_core_id(&kid_did).map_err(|error| {
+            PolicyClientError::DirectoryGovernanceProofSignatureInvalid(error.to_string())
+        })?;
         if kid_service_id != config.policy_server_service_id {
             return Err(PolicyClientError::DirectoryGovernanceProofSignatureInvalid(
                 format!(
@@ -791,7 +789,7 @@ mod tests {
         let mut resolver = DidWebResolver::new();
         resolver
             .insert(DidDocument::new(
-                arkret_identifiers::DidFullId::new("did:web:policy.example.com").unwrap(),
+                arkret_identifiers::Did::new("did:web:policy.example.com").unwrap(),
                 "did:web:policy.example.com#key-1",
                 ed25519_public_multibase(signing),
             ))

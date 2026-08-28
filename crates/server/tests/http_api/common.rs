@@ -9,9 +9,7 @@ use std::sync::OnceLock;
 pub(crate) use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) use std::time::Duration;
 
-pub(crate) use arkret_identifiers::{
-    DidCoreId, DidFullId, OperationId, RealmId, new_prefixed_uuid7,
-};
+pub(crate) use arkret_identifiers::{Did, DidCoreId, OperationId, RealmId, new_prefixed_uuid7};
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 pub(crate) use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
@@ -157,13 +155,11 @@ pub(crate) fn test_event_signer_did() -> &'static str {
     TEST_EVENT_SIGNER_DID.as_str()
 }
 
-/// Project a fixture's full DID onto the stable core id that account-data AAD,
+/// Project a fixture's DID onto the stable core id that account-data AAD,
 /// key derivation and owner projections are bound to.
 pub(crate) fn fixture_actor_core_id(actor: &str) -> DidCoreId {
-    arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
-    )
-    .expect("fixture actor full DID projects to a core id")
+    arkret_wire::project_did_to_core_id(&Did::new(actor.to_owned()).expect("fixture actor DID"))
+        .expect("fixture actor DID projects to a core id")
 }
 /// Render a timestamp exactly as the SDK's canonical wire serializer does
 /// (fixed milliseconds, `Z` suffix). The canonical deserializer rejects every
@@ -193,8 +189,8 @@ pub(crate) fn test_config() -> AppConfig {
 }
 
 pub(crate) fn test_state_with_service_id(service_id: &str) -> AppState {
-    if let Ok(full_id) = arkret_wire::DidFullId::new(service_id.to_owned()) {
-        return soland_test_support::app_state_with_service_full_id(test_config(), full_id);
+    if let Ok(did) = arkret_wire::Did::new(service_id.to_owned()) {
+        return soland_test_support::app_state_with_service_did(test_config(), did);
     }
     let state = soland_test_support::app_state(test_config());
     assert_eq!(
@@ -402,14 +398,14 @@ pub(crate) fn app_state_for_postgres(config: AppConfig, db: Db) -> AppState {
     let identity = soland_test_support::fixture_service_identity(&config);
     let signing_seed = soland_test_support::fixture_signing_seed(&config, &identity);
     let resolution_commitment = arkret_models_identity::ResolutionCommitment {
-        full_id: arkret_wire::DidFullId::new(
+        did: arkret_wire::Did::new(
             identity
                 .identity()
                 .expect("fixture serving identity")
                 .service_id
                 .to_string(),
         )
-        .expect("fixture service DidFullId"),
+        .expect("fixture service DID"),
         method_history_head: format!("sha256:{}", "0".repeat(64)),
         version_id: "fixture-v1".to_owned(),
     };
@@ -571,18 +567,18 @@ fn signed_federation_request_headers(
         source_trust_domain_override,
         idempotency_key,
     } = request;
-    let origin_full_id = arkret_wire::DidFullId::new(origin.to_owned())
-        .expect("federation test origin must be a full DID");
-    let origin_service_id = arkret_wire::project_full_id_to_core_id(&origin_full_id)
+    let origin_did =
+        arkret_wire::Did::new(origin.to_owned()).expect("federation test origin must be a DID");
+    let origin_service_id = arkret_wire::project_did_to_core_id(&origin_did)
         .expect("federation test origin must project to a service core ID");
     let body_bytes = arkret_canonical::canonical_json_bytes(body).unwrap();
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
     let source_trust_domain = source_trust_domain_override
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| trust_domain_from_service_id(origin_full_id.as_str()));
+        .unwrap_or_else(|| trust_domain_from_service_id(origin_did.as_str()));
     let created = chrono::Utc::now().timestamp();
     let expires = created + 300;
-    let keyid = format!("{origin_full_id}#federation-fanout-key");
+    let keyid = format!("{origin_did}#federation-fanout-key");
     let covered_components = if idempotency_key.is_some() {
         "\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"source-service-id\" \"destination-service-id\" \"source-trust-domain\" \"destination-trust-domain\" \"idempotency-key\""
     } else {
@@ -680,8 +676,8 @@ pub(crate) async fn dev_token_for_device(
     device_id: &str,
     display_name: &str,
 ) -> String {
-    let actor_core = arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    let actor_core = arkret_wire::project_did_to_core_id(
+        &Did::new(actor.to_owned()).expect("fixture actor DID"),
     )
     .expect("fixture actor core id");
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
@@ -766,8 +762,7 @@ pub(crate) async fn seed_test_realm(
             .await;
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner_did =
-        arkret_wire::project_full_id_to_core_id(&DidFullId::new(owner.to_owned()).unwrap())
-            .unwrap();
+        arkret_wire::project_did_to_core_id(&Did::new(owner.to_owned()).unwrap()).unwrap();
     let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
         chrono::Utc::now().timestamp_millis(),
     )
@@ -830,7 +825,7 @@ pub(crate) async fn seed_test_realm(
         .unwrap();
     let seal_signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
         state.notary_signing_key().to_bytes(),
-        state.service_full_id(),
+        state.service_did(),
         state.service_verification_method("notary-key").unwrap(),
     );
     let bootstrap_seal = arkret_wire::Seal::sign_single(
@@ -851,8 +846,8 @@ pub(crate) async fn seed_test_realm(
         .test_put_seal(&bootstrap_seal, arkret_canonical::DigestSuite::Sha256)
         .unwrap();
     let seal_basis = bootstrap_seal.seal_basis();
-    let owner_core = arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(owner.to_owned()).expect("fixture realm owner full DID"),
+    let owner_core = arkret_wire::project_did_to_core_id(
+        &Did::new(owner.to_owned()).expect("fixture realm owner DID"),
     )
     .expect("fixture realm owner core DID");
     let recipient_service_id =
@@ -867,8 +862,8 @@ pub(crate) async fn seed_test_realm(
     // caller here instead of being read back out of an invite read model.
     let mut seeded_invite_tokens: Vec<String> = Vec::new();
     for invitee in invitees {
-        let invitee_core = arkret_wire::project_full_id_to_core_id(
-            &DidFullId::new((*invitee).to_owned()).expect("fixture invitee full DID"),
+        let invitee_core = arkret_wire::project_did_to_core_id(
+            &Did::new((*invitee).to_owned()).expect("fixture invitee DID"),
         )
         .expect("fixture invitee core DID");
         let invite_event_id = arkret_identifiers::EventId::new(
@@ -931,8 +926,8 @@ pub(crate) async fn seed_test_realm(
 
 pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &str) -> Value {
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
-    let member_did = DidFullId::new(member.to_owned()).unwrap();
-    let member_core = arkret_wire::project_full_id_to_core_id(&member_did).unwrap();
+    let member_did = Did::new(member.to_owned()).unwrap();
+    let member_core = arkret_wire::project_did_to_core_id(&member_did).unwrap();
     let member_core_string = member_core.to_string();
     let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
         chrono::Utc::now().timestamp_millis(),
@@ -976,8 +971,8 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
 
 pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member: &str) -> Value {
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
-    let member_did = DidFullId::new(member.to_owned()).unwrap();
-    let member_core = arkret_wire::project_full_id_to_core_id(&member_did).unwrap();
+    let member_did = Did::new(member.to_owned()).unwrap();
+    let member_core = arkret_wire::project_did_to_core_id(&member_did).unwrap();
     let member_core_string = member_core.to_string();
     let mut realms = state.test_realms().lock();
     if let Some(mut entry) = realms.get(&typed_realm_id).cloned() {
@@ -1345,8 +1340,8 @@ pub(crate) async fn move_event_to_actor_realm_frontier(
     // this Realm (`event-auth-state-resolution.md` §4.3(1)), so the basis Seal
     // the envelope builder named has to be accepted before the Event is sent.
     seed_test_realm_basis_seal(state, realm_id, actor).await;
-    let actor_core = arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(actor.to_owned()).expect("fixture frontier actor full DID"),
+    let actor_core = arkret_wire::project_did_to_core_id(
+        &Did::new(actor.to_owned()).expect("fixture frontier actor DID"),
     )
     .expect("fixture frontier actor core DID");
     let frontier_value: Value = TestClient::query("http://server/_arkret/self/events/frontier")
@@ -1520,12 +1515,12 @@ pub(crate) async fn register_account(
     handle: &str,
     device_id: &str,
 ) -> String {
-    let full_id = DidFullId::new(did.to_owned()).expect("fixture account full DID");
+    let did = Did::new(did.to_owned()).expect("fixture account DID");
     let principal_id = fixture_actor_core_id(did);
     let registered: Value = TestClient::post("http://server/_soland/gate/account/project")
         .json(&serde_json::json!({
             "principal_id": principal_id,
-            "full_id": full_id,
+            "did": did,
             "display_name": handle.trim_start_matches('@'),
             "device_id": device_id
         }))
@@ -1588,7 +1583,7 @@ pub(crate) async fn register_account_with_handle(
         .await
         .unwrap();
     assert_eq!(
-        registered["did"],
+        registered["principal_id"],
         fixture_actor_core_id(did).as_str(),
         "register response: {registered}"
     );
@@ -1652,9 +1647,9 @@ pub(crate) async fn project_test_authorized_device(
     device_id: &str,
     signing_key: &SigningKey,
 ) -> String {
-    let actor_full = DidFullId::new(actor.to_owned()).expect("fixture actor full DID");
+    let actor_did = Did::new(actor.to_owned()).expect("fixture actor DID");
     let actor_core =
-        arkret_wire::project_full_id_to_core_id(&actor_full).expect("fixture actor core DID");
+        arkret_wire::project_did_to_core_id(&actor_did).expect("fixture actor core DID");
     let principal_server_id = arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
         .expect("fixture local principal server core DID");
     let realm_id =
@@ -1765,7 +1760,7 @@ pub(crate) async fn project_test_authorized_device(
                     genesis_event: genesis.clone(),
                     current_event: genesis.clone(),
                     projection: arkret_models_identity::PrincipalResolutionProjection {
-                        full_id: actor_full,
+                        did: actor_did,
                         method_history_head: format!("sha256:{}", "1".repeat(64)),
                         version_id: "1-QmTestAuthority".to_owned(),
                         resolution_event_ref: genesis.event_id.to_string(),
@@ -1871,9 +1866,8 @@ fn test_realm_basis(
     realm_id: &str,
     subject: &str,
 ) -> soland_services::conformance_basis::ConformanceRealmBasis {
-    let subject_core = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new(subject.to_owned())
-            .expect("fixture basis subject full DID"),
+    let subject_core = arkret_wire::project_did_to_core_id(
+        &arkret_identifiers::Did::new(subject.to_owned()).expect("fixture basis subject DID"),
     )
     .expect("fixture basis subject projection");
     soland_test_support::cba_basis::realm_basis(
@@ -2012,8 +2006,8 @@ pub(crate) async fn seed_test_realm_basis_seal(
     let historical_state = state
         .test_effective_state_at(std::slice::from_ref(&basis.seal.id), &realm)
         .expect("fixture basis historical state");
-    let subject_core = arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(subject.to_owned()).expect("fixture basis subject full DID"),
+    let subject_core = arkret_wire::project_did_to_core_id(
+        &Did::new(subject.to_owned()).expect("fixture basis subject DID"),
     )
     .expect("fixture basis subject core DID");
     for expected in &basis.grants {

@@ -160,8 +160,8 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
     ];
     let principal_id =
         arkret_identifiers::DidCoreId::new(session.actor.clone()).unwrap_or_else(|_| {
-            // Dev-login actors may be handles rather than full DIDs. Reuse the
-            // configured, verified service full_id; never reconstruct one from
+            // Dev-login actors may be handles rather than DIDs. Reuse the
+            // configured, verified service did; never reconstruct one from
             // the service core_id.
             arkret_identifiers::DidCoreId::new(state.service_id().clone())
                 .expect("configured service id is a validated core id")

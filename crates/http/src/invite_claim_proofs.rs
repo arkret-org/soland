@@ -334,9 +334,9 @@ fn resolve_current_ed25519_key(
         .rsplit_once('#')
         .map(|(controller, _)| controller)
         .ok_or_else(|| "verification method has no fragment".to_owned())?;
-    let did = arkret_identifiers::DidFullId::new(controller.to_owned())
+    let did = arkret_identifiers::Did::new(controller.to_owned())
         .map_err(|error| format!("verification method controller is invalid: {error}"))?;
-    let core = arkret_wire::project_full_id_to_core_id(&did)
+    let core = arkret_wire::project_did_to_core_id(&did)
         .map_err(|error| format!("verification method controller cannot be projected: {error}"))?;
     if core.as_str() != controller_id {
         return Err("verification method controller does not match core identity".to_owned());
@@ -361,9 +361,9 @@ async fn resolve_current_ed25519_key_for_state(
         .rsplit_once('#')
         .map(|(controller, _)| controller)
         .ok_or_else(|| "verification method has no fragment".to_owned())?;
-    let did = arkret_identifiers::DidFullId::new(controller.to_owned())
+    let did = arkret_identifiers::Did::new(controller.to_owned())
         .map_err(|error| format!("verification method controller is invalid: {error}"))?;
-    let core = arkret_wire::project_full_id_to_core_id(&did)
+    let core = arkret_wire::project_did_to_core_id(&did)
         .map_err(|error| format!("verification method controller cannot be projected: {error}"))?;
     if core.as_str() != controller_id {
         return Err("verification method controller does not match core identity".to_owned());
@@ -400,7 +400,7 @@ fn trimmed_string(value: Option<&Value>) -> Option<&str> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use arkret_identifiers::DidFullId;
+    use arkret_identifiers::Did;
     use arkret_identity::DidDocument;
     use ed25519_dalek::{Signer as _, SigningKey};
     use serde_json::json;
@@ -410,11 +410,11 @@ mod tests {
     const REALM: &str = "ak:realm:Af9DRPZ6jo28Ku6bsJX3iOs5fu2GLdPa5mI-lkvcujvM";
     const INVITE: &str = "ak:invite:AUftf_3k2fRKMG0NFlHe5iEMBOUpxMwYMRu-yhMJl-yz";
     const SUBJECT: &str = "ak:did_core:web:bob.example";
-    const SUBJECT_FULL: &str = "did:web:bob.example";
+    const SUBJECT_DID: &str = "did:web:bob.example";
     const SUBJECT_CURRENT_METHOD: &str = "did:web:bob.example#device-current";
     const SUBJECT_OLD_METHOD: &str = "did:web:bob.example#device-old";
     const SERVICE: &str = "ak:did_core:web:verify.example";
-    const SERVICE_FULL: &str = "did:web:verify.example";
+    const SERVICE_DID: &str = "did:web:verify.example";
     const SERVICE_METHOD: &str = "did:web:verify.example#invite-key";
     const TOKEN_A: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const TOKEN_B: &str = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -429,7 +429,7 @@ mod tests {
 
     impl StubResolver {
         fn with_method(mut self, did: &str, method: &str, key: &SigningKey) -> Self {
-            let document_did = DidFullId::new(did.to_owned()).unwrap();
+            let document_did = Did::new(did.to_owned()).unwrap();
             let entry = self
                 .docs
                 .entry(did.to_owned())
@@ -451,14 +451,11 @@ mod tests {
     }
 
     impl DidResolver for StubResolver {
-        fn supports(&self, did: &DidFullId) -> bool {
+        fn supports(&self, did: &Did) -> bool {
             self.docs.contains_key(did.as_str())
         }
 
-        fn resolve_did(
-            &self,
-            did: &DidFullId,
-        ) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
+        fn resolve_did(&self, did: &Did) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
             self.docs
                 .get(did.as_str())
                 .cloned()
@@ -556,8 +553,8 @@ mod tests {
         let service_key = SigningKey::from_bytes(&[11u8; 32]);
         let subject_key = SigningKey::from_bytes(&[22u8; 32]);
         let resolver = StubResolver::default()
-            .with_method(SERVICE_FULL, SERVICE_METHOD, &service_key)
-            .with_method(SUBJECT_FULL, SUBJECT_CURRENT_METHOD, &subject_key);
+            .with_method(SERVICE_DID, SERVICE_METHOD, &service_key)
+            .with_method(SUBJECT_DID, SUBJECT_CURRENT_METHOD, &subject_key);
 
         let binding_proof = signed_binding_proof(&service_key, TOKEN_A, INVITE, INVITE_DIGEST);
         let subject_proof = signed_subject_proof(
@@ -577,8 +574,8 @@ mod tests {
         let service_key = SigningKey::from_bytes(&[11u8; 32]);
         let subject_key = SigningKey::from_bytes(&[22u8; 32]);
         let resolver = StubResolver::default()
-            .with_method(SERVICE_FULL, SERVICE_METHOD, &service_key)
-            .with_method(SUBJECT_FULL, SUBJECT_CURRENT_METHOD, &subject_key);
+            .with_method(SERVICE_DID, SERVICE_METHOD, &service_key)
+            .with_method(SUBJECT_DID, SUBJECT_CURRENT_METHOD, &subject_key);
 
         let mut binding_proof = signed_binding_proof(&service_key, TOKEN_A, INVITE, INVITE_DIGEST);
         binding_proof["signature"] = json!(URL_SAFE_NO_PAD.encode([0u8; 64]));
@@ -603,8 +600,8 @@ mod tests {
         let current_subject_key = SigningKey::from_bytes(&[22u8; 32]);
         let old_subject_key = SigningKey::from_bytes(&[33u8; 32]);
         let resolver = StubResolver::default()
-            .with_method(SERVICE_FULL, SERVICE_METHOD, &service_key)
-            .with_method(SUBJECT_FULL, SUBJECT_CURRENT_METHOD, &current_subject_key);
+            .with_method(SERVICE_DID, SERVICE_METHOD, &service_key)
+            .with_method(SUBJECT_DID, SUBJECT_CURRENT_METHOD, &current_subject_key);
 
         let binding_proof = signed_binding_proof(&service_key, TOKEN_A, INVITE, INVITE_DIGEST);
         let subject_proof = signed_subject_proof(
@@ -627,8 +624,8 @@ mod tests {
         let service_key = SigningKey::from_bytes(&[11u8; 32]);
         let subject_key = SigningKey::from_bytes(&[22u8; 32]);
         let resolver = StubResolver::default()
-            .with_method(SERVICE_FULL, SERVICE_METHOD, &service_key)
-            .with_method(SUBJECT_FULL, SUBJECT_CURRENT_METHOD, &subject_key);
+            .with_method(SERVICE_DID, SERVICE_METHOD, &service_key)
+            .with_method(SUBJECT_DID, SUBJECT_CURRENT_METHOD, &subject_key);
 
         let binding_a = signed_binding_proof(&service_key, TOKEN_A, INVITE, INVITE_DIGEST);
         let subject_a = signed_subject_proof(
@@ -657,8 +654,8 @@ mod tests {
         let service_key = SigningKey::from_bytes(&[11u8; 32]);
         let subject_key = SigningKey::from_bytes(&[22u8; 32]);
         let resolver = StubResolver::default()
-            .with_method(SERVICE_FULL, SERVICE_METHOD, &service_key)
-            .with_method(SUBJECT_FULL, SUBJECT_CURRENT_METHOD, &subject_key);
+            .with_method(SERVICE_DID, SERVICE_METHOD, &service_key)
+            .with_method(SUBJECT_DID, SUBJECT_CURRENT_METHOD, &subject_key);
 
         let binding_a = signed_binding_proof(&service_key, TOKEN_A, INVITE, INVITE_DIGEST);
         let subject_b = signed_subject_proof(

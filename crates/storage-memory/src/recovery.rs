@@ -481,7 +481,7 @@ mod tests {
         AuthoritySetPolicy, AuthoritySetPolicyKind, AuthoritySetPolicySource, AuthoritySetRef,
         AuthoritySetSourceKind, AuthorizationLease, AuthorizationLeaseId, BackupId,
         BackupObjectRef, BackupRotationBinding, BackupRotationKind, BackupRotationPlan,
-        BackupSeriesId, CanonicalPublicMaterial, DeviceId, DidFullId, DidUrl, EventId,
+        BackupSeriesId, CanonicalPublicMaterial, DeviceId, Did, DidUrl, EventId,
         EventInitialSubmission, EventsSubmitBatchRequestBody, Hash, Hlc, LeaseBasisRef,
         PayloadProof, PreparedEventUnit, RealmId, RiskTier, SchemaId, ScopeRef, SealId,
         SecurityRotationTransactionCreateRequest, SecurityTransactionCreateRequest,
@@ -560,8 +560,8 @@ mod tests {
             basis_ref: LeaseBasisRef::Seal(
                 SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
             ),
-            actor_id: arkret_wire::project_full_id_to_core_id(
-                &DidFullId::new("did:web:alice.example").unwrap(),
+            actor_id: arkret_wire::project_did_to_core_id(
+                &Did::new("did:web:alice.example").unwrap(),
             )
             .unwrap(),
             device_id: DeviceId::new("ak:device:019a7360-0000-7000-8000-000000000113").unwrap(),
@@ -681,10 +681,9 @@ mod tests {
     }
 
     fn initial_rotation() -> SecurityTransactionRecord {
-        let service_id = arkret_wire::project_full_id_to_core_id(
-            &DidFullId::new("did:web:principal.example").unwrap(),
-        )
-        .unwrap();
+        let service_id =
+            arkret_wire::project_did_to_core_id(&Did::new("did:web:principal.example").unwrap())
+                .unwrap();
         let (_revoke_event_id, revoke_unit) = event_unit("ak.device.revoke", "revoke");
         let (secret_active_series_event_id, secret_active_series_unit) =
             event_unit("ak.key_backup.active_series", "secret-storage");
@@ -751,10 +750,8 @@ mod tests {
         let request = SecurityTransactionCreateRequest::SecurityRotation(
             SecurityRotationTransactionCreateRequest::from_prepared_rotations(
                 transaction_id,
-                arkret_wire::project_full_id_to_core_id(
-                    &DidFullId::new("did:web:alice.example").unwrap(),
-                )
-                .unwrap(),
+                arkret_wire::project_did_to_core_id(&Did::new("did:web:alice.example").unwrap())
+                    .unwrap(),
                 Utc::now() + Duration::hours(1),
                 revoke_unit,
                 hash('1'),

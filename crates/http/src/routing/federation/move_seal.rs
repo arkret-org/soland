@@ -231,8 +231,8 @@ fn verify_control_move_proofs(state: &AppState, event: &Event) -> Result<(), Str
     {
         // `did-usage-and-verification.md` §2.2: the method MUST be a DID URL
         // under the signer, never the bare signer DID. Event actor identities
-        // are stable CoreIds while verification methods are rooted in FullIds,
-        // so compare the canonical FullId projection instead of string prefixes.
+        // are stable CoreIds while verification methods are rooted in Dids,
+        // so compare the canonical DID projection instead of string prefixes.
         if !control_move_verification_method_matches_signer(
             &proof.verification_method,
             &signer_root,
@@ -272,10 +272,10 @@ fn control_move_verification_method_matches_signer(
     let Some((controller, _)) = verification_method.as_str().rsplit_once('#') else {
         return false;
     };
-    let Ok(controller) = arkret_wire::DidFullId::new(controller.to_owned()) else {
+    let Ok(controller) = arkret_wire::Did::new(controller.to_owned()) else {
         return false;
     };
-    arkret_wire::project_full_id_to_core_id(&controller)
+    arkret_wire::project_did_to_core_id(&controller)
         .is_ok_and(|controller_core| controller_core.as_str() == signer_root)
 }
 
@@ -487,7 +487,7 @@ fn device_verification_method_matches(
     verification_method: &str,
 ) -> bool {
     // `did-usage-and-verification.md` §2.2: a proof `verification_method` MUST
-    // be a DID URL with a `#fragment`; a bare DID never names a concrete
+    // be a DID URL with a `#fragment`; a DID without URL components never names a concrete
     // verification method.
     let Some(fragment) = device_public_key.strip_prefix("did:key:") else {
         return false;
@@ -512,11 +512,10 @@ pub(crate) fn session_device_verification_method_matches(
     if fragment != device_id {
         return false;
     }
-    let Ok(full_id) = arkret_identity::verification_method_did(verification_method) else {
+    let Ok(did) = arkret_identity::verification_method_did(verification_method) else {
         return false;
     };
-    arkret_wire::project_full_id_to_core_id(&full_id)
-        .is_ok_and(|core_id| core_id.as_str() == principal_id)
+    arkret_wire::project_did_to_core_id(&did).is_ok_and(|core_id| core_id.as_str() == principal_id)
 }
 
 fn first_seal_signer_matches(
@@ -575,8 +574,8 @@ fn ordinary_event_device_id(record: &soland_services::events::AcceptedEvent) -> 
         .and_then(|proof| proof.get("verification_method"))
         .and_then(serde_json::Value::as_str)?;
     let (controller, fragment) = verification_method.rsplit_once('#')?;
-    let controller = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
-    if arkret_wire::project_full_id_to_core_id(&controller)
+    let controller = arkret_wire::Did::new(controller.to_owned()).ok()?;
+    if arkret_wire::project_did_to_core_id(&controller)
         .ok()?
         .as_str()
         != record.actor_id
@@ -1300,8 +1299,8 @@ pub(crate) async fn apply_managed_agent_event_seal(
     })?;
     let record_controller_id = arkret_wire::DidCoreId::new(agent_record.controller_id.clone())
         .or_else(|_| {
-            arkret_wire::DidFullId::new(agent_record.controller_id.clone())
-                .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+            arkret_wire::Did::new(agent_record.controller_id.clone())
+                .and_then(|did| arkret_wire::project_did_to_core_id(&did))
         })
         .map_err(|error| {
             device_generation_fenced(format!(
@@ -1813,12 +1812,10 @@ mod seal_delta_tests {
         let realm_id =
             RealmId::new("ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC".to_owned())
                 .unwrap();
-        let issuer_full =
-            arkret_identifiers::DidFullId::new("did:web:alice.example".to_owned()).unwrap();
-        let issuer = arkret_wire::project_full_id_to_core_id(&issuer_full).unwrap();
-        let subject_full =
-            arkret_identifiers::DidFullId::new("did:web:agent.example".to_owned()).unwrap();
-        let subject = arkret_wire::project_full_id_to_core_id(&subject_full).unwrap();
+        let issuer_did = arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap();
+        let issuer = arkret_wire::project_did_to_core_id(&issuer_did).unwrap();
+        let subject_did = arkret_identifiers::Did::new("did:web:agent.example".to_owned()).unwrap();
+        let subject = arkret_wire::project_did_to_core_id(&subject_did).unwrap();
         let event = crate::test_event::raw_event(
             arkret_wire::EventKind::CapabilityGrant.as_str(),
             arkret_wire::ScopeRef::Realm {
@@ -2014,16 +2011,15 @@ mod seal_delta_tests {
 
     #[test]
     fn device_verification_method_is_bound_to_device_id_or_key() {
-        let full_id =
-            arkret_wire::DidFullId::new("did:webvh:z6mkfixture:alice.example".to_owned()).unwrap();
-        let principal = arkret_wire::project_full_id_to_core_id(&full_id).unwrap();
+        let did = arkret_wire::Did::new("did:webvh:z6mkfixture:alice.example".to_owned()).unwrap();
+        let principal = arkret_wire::project_did_to_core_id(&did).unwrap();
         let device = "ak:device:recovery";
         let key = "did:key:z6MkRecovery";
         assert!(device_verification_method_matches(
             principal.as_str(),
             device,
             key,
-            &format!("{full_id}#{device}"),
+            &format!("{did}#{device}"),
         ));
         assert!(device_verification_method_matches(
             principal.as_str(),
@@ -2035,7 +2031,7 @@ mod seal_delta_tests {
             principal.as_str(),
             device,
             key,
-            &format!("{full_id}#ak:device:other"),
+            &format!("{did}#ak:device:other"),
         ));
     }
 
@@ -2043,12 +2039,11 @@ mod seal_delta_tests {
     // be a DID URL with a `#fragment`. A bare `did:key:<mb>` (or the bare
     // principal DID) names no concrete verification method.
     #[test]
-    fn device_verification_method_rejects_bare_dids() {
-        let full_id = "did:webvh:z6mkfixture:alice.example";
-        let principal = arkret_wire::project_full_id_to_core_id(
-            &arkret_wire::DidFullId::new(full_id.to_owned()).unwrap(),
-        )
-        .unwrap();
+    fn device_verification_method_rejects_dids_without_fragments() {
+        let did = "did:webvh:z6mkfixture:alice.example";
+        let principal =
+            arkret_wire::project_did_to_core_id(&arkret_wire::Did::new(did.to_owned()).unwrap())
+                .unwrap();
         let device = "ak:device:recovery";
         let key = "did:key:z6MkRecovery";
 
@@ -2062,19 +2057,19 @@ mod seal_delta_tests {
             principal.as_str(),
             device,
             key,
-            full_id
+            did
         ));
     }
 
     #[test]
-    fn session_device_method_projects_full_did_to_authenticated_core() {
+    fn session_device_method_projects_did_to_authenticated_core() {
         let method = arkret_wire::DidUrl::new(
             "did:webvh:z6Mkfull:alice.example#ak:device:0196419b-0000-7000-8000-000000000001"
                 .to_owned(),
         )
         .unwrap();
-        let core = arkret_wire::project_full_id_to_core_id(
-            &arkret_wire::DidFullId::new("did:webvh:z6Mkfull:alice.example".to_owned()).unwrap(),
+        let core = arkret_wire::project_did_to_core_id(
+            &arkret_wire::Did::new("did:webvh:z6Mkfull:alice.example".to_owned()).unwrap(),
         )
         .unwrap();
         assert!(session_device_verification_method_matches(
@@ -2090,7 +2085,7 @@ mod seal_delta_tests {
     }
 
     #[test]
-    fn control_move_method_projects_full_did_to_signer_core() {
+    fn control_move_method_projects_did_to_signer_core() {
         let method = arkret_wire::DidUrl::new(
             "did:webvh:z6Mkfull:alice.example#ak:device:0196419b-0000-7000-8000-000000000001"
                 .to_owned(),
@@ -2110,12 +2105,12 @@ mod seal_delta_tests {
     // verification method rooted in the signer as a `#fragment` DID URL; the
     // bare signer DID is not a verification method.
     #[test]
-    fn control_move_proof_rejects_bare_signer_did() {
+    fn control_move_proof_rejects_signer_did_without_fragment() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
         );
-        let actor_id = arkret_identifiers::DidFullId::new("did:web:alice.example").unwrap();
+        let actor_did = arkret_identifiers::Did::new("did:web:alice.example").unwrap();
         let realm_id =
             RealmId::new("ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC".to_owned())
                 .unwrap();
@@ -2123,7 +2118,7 @@ mod seal_delta_tests {
         let mut event = crate::test_event::raw_event_at(
             arkret_wire::EventKind::MessageCreate.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
-            crate::test_actor_id(&actor_id),
+            crate::test_actor_id(&actor_did),
             1,
             arkret_identifiers::Hlc::new("019f00000000-0000-a11ce001").unwrap(),
             serde_json::json!({}),
@@ -2155,11 +2150,11 @@ mod seal_delta_tests {
         // value cannot be built at all. Pin that at the type boundary, which is
         // where the guarantee now lives.
         assert!(
-            arkret_wire::DidUrl::new(actor_id.as_str().to_owned()).is_err(),
+            arkret_wire::DidUrl::new(actor_did.as_str().to_owned()).is_err(),
             "a bare signer DID must not be constructible as a verification method"
         );
 
-        event.proofs = vec![proof(&format!("{}.evil#device-1", actor_id.as_str())).into()];
+        event.proofs = vec![proof(&format!("{}.evil#device-1", actor_did.as_str())).into()];
         assert!(
             verify_control_move_proofs(&state, &event).is_err(),
             "a sibling DID sharing the signer prefix must not be accepted"
@@ -2167,7 +2162,7 @@ mod seal_delta_tests {
 
         // The `#fragment` form still gets past the rooting gate and fails
         // later, in the signature check.
-        event.proofs = vec![proof(&format!("{}#device-1", actor_id.as_str())).into()];
+        event.proofs = vec![proof(&format!("{}#device-1", actor_did.as_str())).into()];
         let error = verify_control_move_proofs(&state, &event)
             .expect_err("the placeholder JWS cannot verify");
         assert!(!error.contains("is not rooted in the signer"), "{error}");

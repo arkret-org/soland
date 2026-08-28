@@ -1,3 +1,5 @@
+use arkret_wire::DidCoreId;
+
 use super::{
     FederationFrontierExchangeRecord, FederationOutboxDeadLetterRecord, FederationOutboxRecord,
     FederationOutboxState, PersistenceError, PersistenceResult, ProjectedEventOperation,
@@ -185,14 +187,14 @@ pub struct FederationOutboxRequeue {
 /// (`routing::federation::outbox::FederationDispatcher`) claims due rows under
 /// a lease and posts them to peers.
 ///
-/// Idempotency: `(peer_did, idempotency_key)` is UNIQUE. Callers that
+/// Idempotency: `(peer_service_id, idempotency_key)` is UNIQUE. Callers that
 /// re-enqueue the same logical request MUST see `enqueue` return `Ok(false)`
 /// rather than a duplicate-row error; the worker treats the existing row as
 /// the authoritative delivery state.
 #[async_trait]
 pub trait FederationOutboxStore: Send + Sync {
     /// Insert a new outbox row. Returns `Ok(true)` if a fresh row was
-    /// stored, `Ok(false)` if `(peer_did, idempotency_key)` already
+    /// stored, `Ok(false)` if `(peer_service_id, idempotency_key)` already
     /// exists (callers MUST treat that as "already enqueued" rather
     /// than an error — see trait-doc idempotency note).
     async fn enqueue(&self, record: &FederationOutboxRecord) -> PersistenceResult<bool>;
@@ -240,7 +242,7 @@ pub trait FederationOutboxStore: Send + Sync {
         state: FederationOutboxState,
         limit: usize,
     ) -> PersistenceResult<Vec<FederationOutboxRecord>>;
-    /// Aggregate depth per `(state, peer_did)` for the gauge exporter.
+    /// Aggregate depth per `(state, peer_service_id)` for the gauge exporter.
     async fn state_depth(&self) -> PersistenceResult<Vec<FederationOutboxStateDepth>>;
     async fn dead_letter(
         &self,
@@ -258,11 +260,11 @@ pub trait FederationOutboxStore: Send + Sync {
     ) -> PersistenceResult<bool>;
 }
 
-/// One `(state, peer_did)` bucket of the outbox depth gauge.
+/// One `(state, peer_service_id)` bucket of the outbox depth gauge.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FederationOutboxStateDepth {
     pub state: FederationOutboxState,
-    pub peer_did: String,
+    pub peer_service_id: DidCoreId,
     pub depth: i64,
     /// Unix seconds of the oldest row in this bucket, for the pending-age
     /// alert. `None` when the bucket is empty.
@@ -276,19 +278,19 @@ pub trait FederationFrontierExchangeStore: Send + Sync {
     async fn get(
         &self,
         realm_id: &str,
-        peer_service_id: &str,
+        peer_service_id: &DidCoreId,
     ) -> PersistenceResult<Option<FederationFrontierExchangeRecord>>;
     async fn record_success(
         &self,
         realm_id: &str,
-        peer_service_id: &str,
+        peer_service_id: &DidCoreId,
         frontier_root: &str,
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord>;
     async fn record_failure(
         &self,
         realm_id: &str,
-        peer_service_id: &str,
+        peer_service_id: &DidCoreId,
         reason: &str,
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord>;
@@ -302,13 +304,13 @@ mod tests;
 pub fn frontier_exchange_success_record(
     existing: Option<FederationFrontierExchangeRecord>,
     realm_id: &str,
-    peer_service_id: &str,
+    peer_service_id: &DidCoreId,
     frontier_root: &str,
     observed_at: i64,
 ) -> FederationFrontierExchangeRecord {
     FederationFrontierExchangeRecord {
         realm_id: realm_id.to_owned(),
-        peer_service_id: peer_service_id.to_owned(),
+        peer_service_id: peer_service_id.clone(),
         status: FEDERATION_FRONTIER_STATUS_HEALTHY.to_owned(),
         consecutive_failures: 0,
         last_success_at: Some(observed_at),
@@ -322,7 +324,7 @@ pub fn frontier_exchange_success_record(
 pub fn frontier_exchange_failure_record(
     existing: Option<FederationFrontierExchangeRecord>,
     realm_id: &str,
-    peer_service_id: &str,
+    peer_service_id: &DidCoreId,
     reason: &str,
     observed_at: i64,
 ) -> FederationFrontierExchangeRecord {
@@ -337,7 +339,7 @@ pub fn frontier_exchange_failure_record(
     };
     FederationFrontierExchangeRecord {
         realm_id: realm_id.to_owned(),
-        peer_service_id: peer_service_id.to_owned(),
+        peer_service_id: peer_service_id.clone(),
         status: status.to_owned(),
         consecutive_failures: failures,
         last_success_at: existing.as_ref().and_then(|record| record.last_success_at),

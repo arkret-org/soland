@@ -47,7 +47,7 @@ pub fn demo_organization(realms: &[&RealmDirectoryEntry], service_id: &str) -> V
 
 pub async fn demo_actors(state: &AppState) -> Vec<Value> {
     let mut actors = vec![json!({
-        "did": "did:web:alice.example",
+        "id": "ak:did_core:web:alice.example",
         "handle": "@alice",
         "display_name": "Alice Example",
         "organization_id": "ak:org:demo",
@@ -58,25 +58,27 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
     for account in accounts {
         if actors
             .iter()
-            .any(|actor| actor["did"].as_str() == Some(account.did.as_str()))
+            .any(|actor| actor["id"].as_str() == Some(account.principal_id.as_str()))
         {
             continue;
         }
-        let account_state = state.account_lifecycle_state(&account.did);
+        let account_state = state.account_lifecycle_state(account.principal_id.as_str());
         // GDPR erasure / deactivation: terminal account states MUST NOT
         // surface in directory search results.
         if matches!(account_state.as_str(), "deactivated" | "erasure_pending") {
             continue;
         }
-        let profile =
-            crate::routing::identity::account::accepted_account_profile(state, &account.did)
-                .await
-                .ok()
-                .flatten();
+        let profile = crate::routing::identity::account::accepted_account_profile(
+            state,
+            account.principal_id.as_str(),
+        )
+        .await
+        .ok()
+        .flatten();
         let display_name = profile
             .as_ref()
             .map(|profile| profile.display_name.clone())
-            .unwrap_or_else(|| account.did.clone());
+            .unwrap_or_else(|| account.principal_id.to_string());
         let bio = profile
             .as_ref()
             .and_then(|profile| profile.profile_fields.get("bio"))
@@ -86,7 +88,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
             .as_ref()
             .and_then(|profile| profile.avatar_blob_ref.clone());
         actors.push(json!({
-            "did": account.did,
+            "id": account.principal_id,
             "handle": account.handle(),
             "display_name": display_name,
             "state": account_state.clone(),

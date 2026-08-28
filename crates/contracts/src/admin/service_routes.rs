@@ -52,7 +52,7 @@ pub struct AdminServiceRouteFloor {
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AdminServiceRouteCurrentRecord {
-    pub full_id: String,
+    pub did: String,
     pub method_history_head: String,
     pub version_id: String,
     pub record_sequence: u64,

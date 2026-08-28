@@ -22,7 +22,7 @@
 //! Production note: see `_todos.md` B9 (merge `policy_check` and `authz_check`
 //! into a single evaluator), B10 (obligation execution), B12 (cache TTL).
 
-use arkret_identifiers::{DidCoreId, DidFullId, Hash, RealmId, project_full_id_to_core_id};
+use arkret_identifiers::{Did, DidCoreId, Hash, RealmId, project_did_to_core_id};
 use arkret_models_collaboration::governance::policy_check::{
     PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody, PolicyCheckSignature,
 };
@@ -643,10 +643,7 @@ fn canonical_policy_subject_ref(subject_ref: &str) -> Option<String> {
         return Some(subject_ref.to_owned());
     }
     DidCoreId::new(subject_ref.to_owned())
-        .or_else(|_| {
-            DidFullId::new(subject_ref.to_owned())
-                .and_then(|full_id| project_full_id_to_core_id(&full_id))
-        })
+        .or_else(|_| Did::new(subject_ref.to_owned()).and_then(|did| project_did_to_core_id(&did)))
         .ok()
         .map(|core_id| core_id.to_string())
 }
@@ -806,7 +803,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn policy_subject_matching_projects_full_did_to_core_identity() {
+    fn policy_subject_matching_projects_did_to_core_identity() {
         assert_eq!(
             canonical_policy_subject_ref("did:web:alice.example").as_deref(),
             Some("ak:did_core:web:alice.example")

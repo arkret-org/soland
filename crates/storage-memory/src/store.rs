@@ -292,7 +292,8 @@ impl SolandMemoryPersistenceStore {
         let now = chrono::Utc::now();
         store.accounts.seed(AccountRecord {
             id: "ak:account:0196419b-0000-7000-8000-000000000001".to_owned(),
-            did: "ak:did_core:web:alice.example".to_owned(),
+            principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
+                .expect("demo principal id is canonical"),
             localpart: "alice".to_owned(),
             display_name: Some("Alice Example".to_owned()),
             bio: None,

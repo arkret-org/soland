@@ -10,7 +10,7 @@ pub(super) fn sign_history_request_replica_outcome(
 ) -> Result<HistoryKeyRequestReplicaOutcome, AppError> {
     let verification_method = arkret_wire::DidUrl::new(format!(
         "{}#notary-key",
-        state.service_resolution_commitment().full_id
+        state.service_resolution_commitment().did
     ))
     .map_err(|error| AppError::internal(error.to_string()))?;
     let outcome = HistoryKeyRequestReplicaOutcome::build_signed_proof(

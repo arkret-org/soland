@@ -139,7 +139,7 @@ fn sign_contact_draft(
     device_id: &str,
     signing_key: SigningKey,
 ) -> arkret_wire::Event {
-    let actor = DidFullId::new(actor).unwrap();
+    let actor = Did::new(actor).unwrap();
     let verification_method = arkret_wire::DidUrl::new(format!("{actor}#{device_id}")).unwrap();
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         signing_key.clone(),
@@ -509,7 +509,7 @@ async fn repeated_account_projection_is_idempotent_and_me_reads_state_body() {
     let mut duplicate = TestClient::post("http://server/_soland/gate/account/project")
         .json(&serde_json::json!({
             "principal_id": bob_core,
-            "full_id": "did:web:bob.example",
+            "did": "did:web:bob.example",
             "display_name": "bob",
             "device_id": "ak:device:01904100-0000-7000-8000-b0b0b0000022"
         }))
@@ -531,7 +531,7 @@ async fn repeated_account_projection_is_idempotent_and_me_reads_state_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(me["did"], bob_core.as_str());
+    assert_eq!(me["principal_id"], bob_core.as_str());
     assert_eq!(me["state"], "active");
 }
 
@@ -742,8 +742,8 @@ async fn account_viewer_authorizes_founding_device_registered_with_account_body(
     // placeholder until that possession-bound authorization is accepted.
     let state = soland_test_support::app_state(test_config());
     let founding_device = "ak:device:01904100-0000-7000-8000-b0b0b0000001";
-    let full_id = "did:web:bob.example";
-    let did = fixture_actor_core_id(full_id);
+    let did = "did:web:bob.example";
+    let did = fixture_actor_core_id(did);
     let registered: Value = TestClient::post("http://server/_soland/gate/account/project")
         .add_header(
             "authorization",
@@ -752,7 +752,7 @@ async fn account_viewer_authorizes_founding_device_registered_with_account_body(
         )
         .json(&serde_json::json!({
             "principal_id": did,
-            "full_id": full_id,
+            "did": did,
             "display_name": "bob",
             "device_id": founding_device,
         }))
@@ -766,7 +766,7 @@ async fn account_viewer_authorizes_founding_device_registered_with_account_body(
         did.as_str(),
         "register response: {registered}"
     );
-    let token = dev_token_for_device(state.clone(), full_id, founding_device, "bob").await;
+    let token = dev_token_for_device(state.clone(), did, founding_device, "bob").await;
 
     let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -797,8 +797,8 @@ fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device() {
 async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device_body() {
     let state = soland_test_support::app_state(test_config());
     let device_id = "ak:device:01904100-0000-7000-8000-b0b0b0000002";
-    let full_id = "did:web:bob-pcr-first.example";
-    let did = fixture_actor_core_id(full_id);
+    let did = "did:web:bob-pcr-first.example";
+    let did = fixture_actor_core_id(did);
     let authorized_at = chrono::Utc::now();
     state
         .test_persistence()
@@ -829,7 +829,7 @@ async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device_body
         )
         .json(&serde_json::json!({
             "principal_id": did.as_str(),
-            "full_id": full_id,
+            "did": did,
             "display_name": "bob",
             "device_id": device_id,
         }))
@@ -872,8 +872,8 @@ fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
 async fn repeated_gate_registration_does_not_downgrade_an_authorized_device_body() {
     let state = soland_test_support::app_state(test_config());
     let device_id = "ak:device:01904100-0000-7000-8000-b0b0b0000003";
-    let full_id = "did:web:bob-repeat.example";
-    let did = fixture_actor_core_id(full_id);
+    let did = "did:web:bob-repeat.example";
+    let did = fixture_actor_core_id(did);
     let first = TestClient::post("http://server/_soland/gate/account/project")
         .add_header(
             "authorization",
@@ -882,7 +882,7 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device_body
         )
         .json(&serde_json::json!({
             "principal_id": did.as_str(),
-            "full_id": full_id,
+            "did": did,
             "display_name": "bob",
             "device_id": device_id,
         }))
@@ -923,7 +923,7 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device_body
         )
         .json(&serde_json::json!({
             "principal_id": did.as_str(),
-            "full_id": full_id,
+            "did": did,
             "display_name": "bob",
             "device_id": device_id,
         }))
@@ -986,7 +986,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
     let mut duplicate = TestClient::post("http://server/_soland/gate/account/project")
         .json(&serde_json::json!({
             "principal_id": bob_core,
-            "full_id": "did:web:bob.example",
+            "did": "did:web:bob.example",
             "display_name": "bob",
             "device_id": "ak:device:01904100-0000-7000-8000-b0b0b0000022"
         }))
@@ -1017,7 +1017,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(me["did"], bob_core.as_str());
+    assert_eq!(me["principal_id"], bob_core.as_str());
 
     let (request_receipt, request_commit) = create_contact_request(&state, &alice).await;
     let duplicate_request =

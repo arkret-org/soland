@@ -464,10 +464,10 @@ fn runtime_service_id_is_used_across_public_metadata() {
 }
 
 async fn runtime_service_id_is_used_across_public_metadata_body() {
-    let service_full_id =
+    let service_did =
         "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:configured.example";
-    let service_id = fixture_actor_core_id(service_full_id);
-    let state = test_state_with_service_id(service_full_id);
+    let service_id = fixture_actor_core_id(service_did);
+    let state = test_state_with_service_id(service_did);
     let resolved_realm = seed_test_realm(
         &state,
         "did:web:alice.example",
@@ -493,7 +493,7 @@ async fn runtime_service_id_is_used_across_public_metadata_body() {
         service_id.as_str(),
         "server describe: {server}"
     );
-    assert_eq!(server["service_resolution"]["full_id"], service_full_id);
+    assert_eq!(server["service_resolution"]["did"], service_did);
 
     let identity: Value = TestClient::get("http://server/_arkret/root/identity/describe")
         .send(&service)
@@ -560,10 +560,7 @@ async fn runtime_service_id_is_used_across_public_metadata_body() {
         .unwrap();
     // The SDK model owns the only canonical signature transcript. The wire
     // container carries only the signer, algorithm and detached signature.
-    assert_eq!(
-        ice["signature"]["kid"],
-        format!("{service_full_id}#notary-key")
-    );
+    assert_eq!(ice["signature"]["kid"], format!("{service_did}#notary-key"));
     assert_eq!(ice["signature"]["signature_algorithm"], "Ed25519");
     assert_ne!(ice["signature"]["sig"], "placeholder");
     let typed: arkret_models_collaboration::objects::media::MediaIceConfigOutcome =

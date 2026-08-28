@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use arkret_event_draft::EventPayloadExt as _;
-use arkret_identifiers::{DidFullId, RealmId, SealId};
+use arkret_identifiers::{Did, RealmId, SealId};
 use arkret_models_collaboration::governance::realm_governance::{
     RealmLinkCreateRequestBody, RealmPolicyServerDeleteRequestBody,
     RealmPolicyServerReplaceRequestBody,
@@ -62,8 +62,8 @@ fn app_from_state(state: AppState) -> salvo::Service {
 }
 
 async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str) -> String {
-    let actor_core = arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    let actor_core = arkret_wire::project_did_to_core_id(
+        &Did::new(actor.to_owned()).expect("fixture actor DID"),
     )
     .expect("fixture actor core id");
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
@@ -515,8 +515,8 @@ fn accepted_control_event_digest<'a>(
 }
 
 async fn actor_frontier(state: &AppState, token: &str, realm_id: &str) -> (u64, Vec<String>) {
-    let actor_core = arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(ALICE.to_owned()).expect("fixture frontier actor full DID"),
+    let actor_core = arkret_wire::project_did_to_core_id(
+        &Did::new(ALICE.to_owned()).expect("fixture frontier actor DID"),
     )
     .expect("fixture frontier actor core DID");
     let frontier_value: Value = TestClient::query("http://server/_arkret/self/events/frontier")
@@ -655,7 +655,7 @@ async fn postgres_release_state() -> AppState {
     let signing_seed = soland_test_support::fixture_signing_seed(&config, &identity);
     let fixture_identity = identity.identity().expect("fixture serving identity");
     let resolution_commitment = arkret_models_identity::ResolutionCommitment {
-        full_id: fixture_identity.full_id.clone(),
+        did: fixture_identity.did.clone(),
         method_history_head: format!("sha256:{}", "0".repeat(64)),
         version_id: "fixture-v1".to_owned(),
     };
@@ -814,8 +814,8 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback_scenario(
         declared[0]["payload"]["policy_server_service_id"],
         "ak:did_core:web:org-policy.example"
     );
-    let alice_core = arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(ALICE.to_owned()).expect("fixture actor full DID"),
+    let alice_core = arkret_wire::project_did_to_core_id(
+        &Did::new(ALICE.to_owned()).expect("fixture actor DID"),
     )
     .expect("fixture actor core DID");
     assert_eq!(declared[0]["actor_id"], alice_core.as_str());

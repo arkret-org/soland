@@ -277,7 +277,7 @@ pub(super) fn validate_signature_input(
         })?;
     let expected_controller = arkret_identifiers::DidCoreId::new(expected_service_id.to_owned())
         .map_err(|_| signature_error(format!("{label} source service DID is invalid")))?;
-    let controller_core = arkret_wire::project_full_id_to_core_id(&controller)
+    let controller_core = arkret_wire::project_did_to_core_id(&controller)
         .map_err(|_| signature_error(format!("{label} keyid controller cannot project")))?;
     if controller_core != expected_controller {
         return Err(signature_error(format!(
@@ -321,7 +321,7 @@ async fn verifying_key_for_service_id(
 ) -> Result<VerifyingKey, AppError> {
     if service_id == state.service_id() {
         let expected_method = crate::routing::federation::federation_service_signature_key_id(
-            state.service_full_id().as_str(),
+            state.service_did().as_str(),
         );
         if verification_method != expected_method {
             return Err(signature_error(

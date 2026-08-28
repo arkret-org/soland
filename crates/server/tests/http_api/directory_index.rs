@@ -227,7 +227,10 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id_body() {
         .await
         .unwrap();
     assert_eq!(registered["handle"], "@registered-handle");
-    assert_eq!(registered["did"], fixture_actor_core_id(did).as_str());
+    assert_eq!(
+        registered["principal_id"],
+        fixture_actor_core_id(did).as_str()
+    );
 
     let token = dev_token_for_device(state.clone(), did, device, "Alice").await;
     let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
@@ -966,11 +969,12 @@ async fn admin_collection_surfaces_return_sodmin_shapes_body() {
             .as_array()
             .unwrap()
             .iter()
-            // AdminActor's typed DTO identifies the row with `id` + `did`;
+            // AdminActor's typed DTO identifies the row with `id` + `principal_id`;
             // it does not invent a collection-only `kind` discriminator.
             .any(|actor| {
                 actor["id"] == fixture_actor_core_id("did:web:alice.example").as_str()
-                    && actor["did"] == fixture_actor_core_id("did:web:alice.example").as_str()
+                    && actor["principal_id"]
+                        == fixture_actor_core_id("did:web:alice.example").as_str()
             }));
 
     let devices: Value = TestClient::get("http://server/_soland/admin/devices")

@@ -196,7 +196,7 @@ async fn install_preview_endpoint(
     .await?;
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         state.notary_signing_key().as_ref().clone(),
-        state.service_full_id(),
+        state.service_did(),
         state
             .service_verification_method("notary-key")
             .map_err(AppError::internal)?,
@@ -339,7 +339,7 @@ async fn install_endpoint(
                 })?,
             &managed_actor_bundle.proof.jws,
             managed_actor_bundle.proof.verification_method.as_str(),
-            registration_epoch_evidence.full_id.as_str(),
+            registration_epoch_evidence.did.as_str(),
             state,
         )
         .await
@@ -1234,7 +1234,7 @@ async fn preview_ghost_actor_endpoint(
     let issued_at = arkret_canonical::canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         state.notary_signing_key().as_ref().clone(),
-        state.service_full_id(),
+        state.service_did(),
         state
             .service_verification_method("notary-key")
             .map_err(AppError::internal)?,
@@ -1386,7 +1386,7 @@ async fn provision_ghost_actor_endpoint(
             .proof
             .verification_method
             .as_str(),
-        authoring_basis.registration_epoch_evidence.full_id.as_str(),
+        authoring_basis.registration_epoch_evidence.did.as_str(),
         state,
     )
     .await
@@ -1406,11 +1406,11 @@ async fn provision_ghost_actor_endpoint(
         )
         .with_wire_code("applet_registration_unauthorized"));
     }
-    // Wire ids are validated at deserialization (typed AppletId/DidFullId/RealmId).
+    // Wire ids are validated at deserialization (typed AppletId/Did/RealmId).
     let service_id = authoring_basis.service_id.clone();
     let ghost_actor_id = submitted_provision.actor_id.clone();
     // G3.S9 — ghost actor DID recorded against the applet MUST be a
-    // well-formed bare DID scalar (no DID URL fragment).
+    // well-formed DID scalar without DID URL components.
     let realm_id = authoring_basis.realm_id.clone();
 
     let mut record = applet_record_for_realm(state, &path_applet_id, &realm_id)

@@ -1015,8 +1015,8 @@ fn verification_method_binds_core_device(
     if fragment != device_id.as_str() {
         return false;
     }
-    arkret_wire::DidFullId::new(controller.to_owned())
-        .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+    arkret_wire::Did::new(controller.to_owned())
+        .and_then(|did| arkret_wire::project_did_to_core_id(&did))
         .is_ok_and(|core| core == *principal_id)
 }
 
@@ -1340,8 +1340,8 @@ async fn build_peer_claim_outcome(
         .map_err(|error| AppError::internal(format!("peer claim records serialize: {error}")))?;
     let claims_digest = arkret_canonical::canonical_sha256(&claims_value)
         .map_err(|error| AppError::internal(format!("peer claims digest: {error}")))?;
-    let service_full_id = state.service_resolution_commitment().full_id.clone();
-    let verification_method = format!("{service_full_id}#notary-key");
+    let service_did = state.service_resolution_commitment().did.clone();
+    let verification_method = format!("{service_did}#notary-key");
     let mut receipt = PeerKeyPackageClaimReceipt {
         claim_request_id: body.claim_request_id.clone(),
         request_digest: Hash::new(request_digest.to_owned())
@@ -1525,10 +1525,7 @@ async fn validate_welcome_peer_claim_ledger(
     let signing_bytes = peer_keypackage_claim_receipt_signing_bytes(receipt)
         .map_err(|_| "peer_claim_welcome_invalid")?;
     let verification_key = if receipt.destination_service_id.as_str() == state.service_id() {
-        let expected_method = format!(
-            "{}#notary-key",
-            state.service_resolution_commitment().full_id
-        );
+        let expected_method = format!("{}#notary-key", state.service_resolution_commitment().did);
         if receipt.signature.kid.as_str() != expected_method {
             return Err("peer_claim_welcome_invalid");
         }
@@ -1726,10 +1723,7 @@ fn build_peer_claim_terminal_receipt(
     source_service_id: arkret_wire::DidCoreId,
     terminal_at: DateTime<Utc>,
 ) -> Result<KeyPackageClaimTerminalReceipt, AppError> {
-    let verification_method = format!(
-        "{}#notary-key",
-        state.service_resolution_commitment().full_id
-    );
+    let verification_method = format!("{}#notary-key", state.service_resolution_commitment().did);
     let mut receipt = KeyPackageClaimTerminalReceipt {
         domain: arkret_wire::NonEmptyString::new(
             arkret_wire::DomainSeparationId::KEYPACKAGE_CLAIM_TERMINAL_RECEIPT_V1,
@@ -2969,10 +2963,7 @@ fn build_keypackage_consume_receipt(
     body: &KeyPackagesConsumeRequestBody,
     consumed_at: DateTime<Utc>,
 ) -> Result<KeyPackageConsumeReceipt, AppError> {
-    let verification_method = format!(
-        "{}#notary-key",
-        state.service_resolution_commitment().full_id
-    );
+    let verification_method = format!("{}#notary-key", state.service_resolution_commitment().did);
     let mut receipt = KeyPackageConsumeReceipt {
         domain: arkret_wire::NonEmptyString::new(
             arkret_wire::DomainSeparationId::KEYPACKAGE_CONSUME_RECEIPT_V1,
@@ -3038,10 +3029,7 @@ fn validate_consume_receipt_replay(
             "consume replay differs from the durably accepted request",
         ));
     }
-    let expected_method = format!(
-        "{}#notary-key",
-        state.service_resolution_commitment().full_id
-    );
+    let expected_method = format!("{}#notary-key", state.service_resolution_commitment().did);
     if receipt.signature.kid.as_str() != expected_method
         || receipt
             .signature
@@ -4799,9 +4787,8 @@ mod trust_binding_tests {
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
         );
-        let principal =
-            arkret_identifiers::DidFullId::new("did:web:agent.example".to_owned()).unwrap();
-        let principal_core = arkret_wire::project_full_id_to_core_id(&principal).unwrap();
+        let principal = arkret_identifiers::Did::new("did:web:agent.example".to_owned()).unwrap();
+        let principal_core = arkret_wire::project_did_to_core_id(&principal).unwrap();
         let verification_method = "did:web:agent.example#runtime-1";
         let signing_seed = [17_u8; 32];
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&signing_seed);
@@ -4824,7 +4811,7 @@ mod trust_binding_tests {
                 "key_id": "ak:agent_key:01904100-0000-7000-8000-00000000000f",
                 "verification_method": verification_method,
                 "public_key_digest": public_key_digest.as_str(),
-                "accountable_principal_id": "did:web:alice.example",
+                "accountable_principal_id": "ak:did_core:web:alice.example",
                 "agent_key_scope": {"actions": ["ak.message.create"]},
                 "audience": [state.service_id().as_str()],
                 "issued_at": "2026-01-01T00:00:00.000Z",

@@ -198,7 +198,7 @@ async fn issue_ice_config(
         constraints: None,
         next_retry_at: None,
         signature: MediaIceConfigSignature {
-            kid: format!("{}#notary-key", state.service_full_id()),
+            kid: format!("{}#notary-key", state.service_did()),
             signature_algorithm: MediaIceSignatureAlgorithm::Ed25519,
             sig: String::new(),
         },
@@ -1040,7 +1040,7 @@ fn configured_media_issuer_kid(state: &AppState) -> String {
     if !configured.is_empty() {
         return configured.to_owned();
     }
-    format!("{}#media-1", state.service_full_id())
+    format!("{}#media-1", state.service_did())
 }
 
 fn token_endpoint_is_local(token_endpoint: &str, state: &AppState) -> bool {
@@ -1219,7 +1219,7 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
 /// Whether `issuer_kid` names a key of `service_id`.
 ///
 /// `media-service-binding.md` §3: strip the verification-method fragment, then
-/// project the bare DID through the registered adapter and require the result to
+/// project the DID through the registered adapter and require the result to
 /// equal the current-epoch `service_id`. The cell carries a `did_core_id` while
 /// the kid is a DID URL, so a textual prefix comparison would never match — and
 /// a comparison that silently never matches is a gate that never fires.
@@ -1230,8 +1230,8 @@ fn issuer_kid_belongs_to_service(issuer_kid: &str, service_id: &str) -> bool {
     if fragment.is_empty() {
         return false;
     }
-    arkret_wire::DidFullId::new(bare.to_owned())
-        .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+    arkret_wire::Did::new(bare.to_owned())
+        .and_then(|did| arkret_wire::project_did_to_core_id(&did))
         .is_ok_and(|core| core.as_str() == service_id)
 }
 

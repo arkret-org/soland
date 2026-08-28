@@ -15,7 +15,7 @@ pub struct PrincipalResolutionRecord {
 pub fn validate_principal_resolution_record(
     record: &PrincipalResolutionRecord,
 ) -> PersistenceResult<()> {
-    let projected = arkret_wire::project_full_id_to_core_id(&record.projection.full_id)
+    let projected = arkret_wire::project_did_to_core_id(&record.projection.did)
         .map_err(|error| super::PersistenceError::SchemaViolation(error.to_string()))?;
     let current_is_genesis = record.current_event.event_id == record.genesis_event.event_id;
     if projected != record.authority_key.principal_id
@@ -34,7 +34,7 @@ pub fn validate_principal_resolution_record(
             && record.current_event.kind != arkret_wire::EventKind::IdentityResolutionUpdate)
     {
         return Err(super::PersistenceError::SchemaViolation(
-            "principal resolution record does not bind its account authority key, PCR Realm, Event head and full-id projection"
+            "principal resolution record does not bind its account authority key, PCR Realm, Event head and DID projection"
                 .to_owned(),
         ));
     }

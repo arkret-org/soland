@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct DeviceSigningKeyDirectoryQueryRequestBody {
     /// Stable principal identity used by Soland's account/device projection.
-    /// Resolution-bearing full DIDs are deliberately rejected at this
+    /// Resolution-bearing DIDs are deliberately rejected at this
     /// deployment-local boundary.
     pub principal_id: DidCoreId,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

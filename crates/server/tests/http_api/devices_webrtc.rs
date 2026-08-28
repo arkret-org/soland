@@ -1441,7 +1441,7 @@ fn install_media_service_epoch(state: &AppState, media_service: Value) {
 /// Default media signing key: `<service DID>#media-1`
 /// (`SOLAND_MEDIA_ISSUER_KID` overrides it).
 fn test_media_issuer_kid(state: &AppState) -> String {
-    format!("{}#media-1", state.service_full_id())
+    format!("{}#media-1", state.service_did())
 }
 
 /// A spec-shaped `ak.realm.media_service` cell

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{DidFullId, Hash, RealmId};
+use arkret_identifiers::{Did, Hash, RealmId};
 use arkret_identity::DidResolver;
 use salvo::http::StatusCode;
 use serde_json::{Value, json};
@@ -61,14 +61,11 @@ struct SharedDidResolver {
 }
 
 impl DidResolver for SharedDidResolver {
-    fn supports(&self, did: &DidFullId) -> bool {
+    fn supports(&self, did: &Did) -> bool {
         self.inner.supports(did)
     }
 
-    fn resolve_did(
-        &self,
-        did: &DidFullId,
-    ) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
+    fn resolve_did(&self, did: &Did) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
         self.inner.resolve_did(did)
     }
 }

@@ -28,17 +28,17 @@ fn canonical_digest(value: &impl serde::Serialize) -> Result<Hash, AppError> {
         .map_err(|error| AppError::internal(format!("canonical digest is invalid: {error}")))
 }
 
-pub(crate) fn service_ids(
+pub(crate) fn service_id_and_did(
     state: &AppState,
-) -> Result<(DidCoreId, arkret_wire::DidFullId), AppError> {
+) -> Result<(DidCoreId, arkret_wire::Did), AppError> {
     let commitment = state.service_resolution_commitment();
-    let core = arkret_wire::project_full_id_to_core_id(&commitment.full_id).map_err(|error| {
+    let core = arkret_wire::project_did_to_core_id(&commitment.did).map_err(|error| {
         AppError::new(
             ErrorCode::ServiceIdentityUnavailable,
-            format!("service DidFullId cannot be projected: {error}"),
+            format!("service DID cannot be projected: {error}"),
         )
     })?;
-    Ok((core, commitment.full_id.clone()))
+    Ok((core, commitment.did.clone()))
 }
 
 fn current_record_url(state: &AppState, service_id: &DidCoreId) -> Result<String, AppError> {
@@ -151,7 +151,7 @@ pub(crate) async fn ensure_current_record(
     state: &AppState,
     description: &ServiceDescribe,
 ) -> Result<ServiceResolutionRecord, AppError> {
-    let (service_id, full_id) = service_ids(state)?;
+    let (service_id, did) = service_id_and_did(state)?;
     let commitment = state.service_resolution_commitment();
     if description.service_id != service_id || description.service_resolution != *commitment {
         return Err(AppError::new(
@@ -164,7 +164,7 @@ pub(crate) async fn ensure_current_record(
         .await
         .map_err(|error| AppError::new(ErrorCode::ServiceIdentityUnavailable, error))?;
     if stored.identity.service_id != service_id
-        || stored.identity.full_id != full_id
+        || stored.identity.did != did
         || stored.identity.version_id != commitment.version_id
         || stored.registration_receipt.log_head_digest != commitment.method_history_head
     {
@@ -188,7 +188,7 @@ pub(crate) async fn ensure_current_record(
             })?;
         if let Some(record) = current.as_ref()
             && record.record.service_id == service_id
-            && record.record.full_id == full_id
+            && record.record.did == did
             && record.record.method_history_head == commitment.method_history_head
             && record.record.version_id == commitment.version_id
             && record.record.current_record_url == record_url
@@ -200,7 +200,7 @@ pub(crate) async fn ensure_current_record(
             return Ok(record.clone());
         }
         if current.as_ref().is_some_and(|record| {
-            record.record.service_id != service_id || record.record.full_id != full_id
+            record.record.service_id != service_id || record.record.did != did
         }) {
             return Err(AppError::new(
                 ErrorCode::ServiceIdentityConflict,
@@ -216,7 +216,7 @@ pub(crate) async fn ensure_current_record(
             service_kind: arkret_wire::ServiceKind::PrincipalServer
                 .as_str()
                 .to_owned(),
-            full_id: full_id.clone(),
+            did: did.clone(),
             method_history_head: commitment.method_history_head.clone(),
             version_id: commitment.version_id.clone(),
             resolution_event_ref: webvh_resolution_event_ref(
@@ -264,7 +264,7 @@ async fn open_service_resolution(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let requested = DidCoreId::new(service_id.into_inner())
         .map_err(|_| AppError::not_found("service resolution not found"))?;
-    let (current, _) = service_ids(state)?;
+    let (current, _) = service_id_and_did(state)?;
     if requested != current {
         return Err(AppError::not_found("service resolution not found"));
     }
@@ -300,7 +300,7 @@ async fn authenticated_current_resolution(
         .stored_service_identity()
         .await
         .map_err(|error| AppError::new(ErrorCode::ServiceIdentityUnavailable, error))?;
-    if stored.identity.full_id != record.record.full_id {
+    if stored.identity.did != record.record.did {
         return Err(AppError::new(
             ErrorCode::ServiceIdentityConflict,
             "durable service identity does not match the resolution record",
@@ -318,7 +318,7 @@ async fn authenticated_current_resolution(
         })?;
     let mut events = state
         .dids()
-        .log_events(record.record.full_id.as_str())
+        .log_events(record.record.did.as_str())
         .await
         .map_err(|error| {
             AppError::new(

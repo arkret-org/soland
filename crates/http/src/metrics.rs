@@ -500,7 +500,7 @@ async fn sample_federation_outbox_gauges(state: &AppState) {
         gauge!(
             FEDERATION_OUTBOX_STATE_DEPTH,
             "state" => bucket.state.as_str(),
-            "peer" => normalize_label(&bucket.peer_did),
+            "peer" => normalize_label(&bucket.peer_service_id),
         )
         .set(bucket.depth as f64);
         if bucket.state.is_terminal() {

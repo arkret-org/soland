@@ -41,8 +41,7 @@ struct AdminAccountStateActionRequestBody {
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct AdminAccountLifecycleOutcome {
-    account_id: String,
-    did: String,
+    account_id: arkret_wire::DidCoreId,
     previous_state: String,
     protocol_state: String,
     state: String,
@@ -172,7 +171,7 @@ async fn get_server_stats(
     let actor_count = accounts.len() as u64;
     let active_actor_count = accounts
         .iter()
-        .filter(|account| state.account_lifecycle_state(&account.did) == "active")
+        .filter(|account| state.account_lifecycle_state(account.principal_id.as_str()) == "active")
         .count() as u64;
     let realm_count = state
         .realm_directory()
@@ -420,13 +419,12 @@ fn account_lifecycle_change_response(
     change: AccountLifecycleChange,
     management_status: String,
 ) -> AdminAccountLifecycleOutcome {
-    let did = change.did;
+    let principal_id = change.principal_id;
     let state = change.state;
     let changed_by = change.changed_by;
     let changed_at = arkret_canonical::format_timestamp_canonical(change.changed_at);
     AdminAccountLifecycleOutcome {
-        account_id: did.clone(),
-        did,
+        account_id: principal_id,
         previous_state: change.previous_state,
         protocol_state: state.clone(),
         state: state.clone(),

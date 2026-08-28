@@ -1,4 +1,4 @@
-use arkret_identifiers::{DidFullId, Hash, RealmId};
+use arkret_identifiers::{Did, Hash, RealmId};
 use arkret_models_collaboration::agent_operations::{
     AgentLifecycleState, agent_requested_scope_digest,
 };
@@ -17,18 +17,18 @@ use crate::state::AppState;
 fn managed_controller_core_id(controller_id: &str) -> Result<DidCoreId, AppError> {
     DidCoreId::new(controller_id.to_owned())
         .or_else(|_| {
-            DidFullId::new(controller_id.to_owned())
-                .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+            Did::new(controller_id.to_owned())
+                .and_then(|did| arkret_wire::project_did_to_core_id(&did))
         })
         .map_err(|error| schema_error(format!("managed Agent controller DID is invalid: {error}")))
 }
 
 const CONTROLLER_DELEGATION_FRAGMENT: &str = "managed-controller";
 
-pub(crate) fn controller_authorization_ref(agent_full_id: &DidFullId) -> Result<DidUrl, AppError> {
+pub(crate) fn controller_authorization_ref(agent_did: &Did) -> Result<DidUrl, AppError> {
     DidUrl::new(format!(
         "{}#{CONTROLLER_DELEGATION_FRAGMENT}",
-        agent_full_id.as_str()
+        agent_did.as_str()
     ))
     .map_err(|error| {
         AppError::internal(format!(
@@ -39,12 +39,12 @@ pub(crate) fn controller_authorization_ref(agent_full_id: &DidFullId) -> Result<
 
 pub(crate) async fn accepted_managed_agent_initial_resolution(
     state: &AppState,
-    agent_full_id: &DidFullId,
+    agent_did: &Did,
     controller_id: &arkret_identifiers::DidCoreId,
 ) -> Result<arkret_models_identity::ResolutionCommitment, AppError> {
     let pinned = state
         .dids()
-        .resolve_current_webvh_state(agent_full_id)
+        .resolve_current_webvh_state(agent_did)
         .await
         .map_err(|error| {
             failed_precondition(
@@ -60,12 +60,12 @@ pub(crate) async fn accepted_managed_agent_initial_resolution(
     }
     validate_managed_agent_inception_document(
         &pinned.document,
-        agent_full_id,
+        agent_did,
         controller_id.as_str(),
         false,
     )?;
     Ok(arkret_models_identity::ResolutionCommitment {
-        full_id: agent_full_id.clone(),
+        did: agent_did.clone(),
         method_history_head: pinned.log_head_digest.to_string(),
         version_id: pinned.version_id,
     })
@@ -73,12 +73,12 @@ pub(crate) async fn accepted_managed_agent_initial_resolution(
 
 fn validate_managed_agent_inception_document(
     document: &Value,
-    agent_full_id: &DidFullId,
+    agent_did: &Did,
     controller_id: &str,
     allow_pcr_binding: bool,
 ) -> Result<(), AppError> {
     arkret_signatures::webvh::validate_managed_agent_did_document_profile(
-        agent_full_id.as_str(),
+        agent_did.as_str(),
         document,
         &[],
     )
@@ -93,10 +93,7 @@ fn validate_managed_agent_inception_document(
             "managed Agent DID service set does not match its lifecycle phase",
         ));
     }
-    let expected_id = format!(
-        "{}#{CONTROLLER_DELEGATION_FRAGMENT}",
-        agent_full_id.as_str()
-    );
+    let expected_id = format!("{}#{CONTROLLER_DELEGATION_FRAGMENT}", agent_did.as_str());
     let controller = &services[1];
     if controller.get("id").and_then(Value::as_str) != Some(expected_id.as_str())
         || controller
@@ -128,7 +125,7 @@ pub(crate) async fn managed_agent_binding_is_accepted(
     state
         .dids()
         .resolve_pinned_webvh_state(
-            &initial_resolution.full_id,
+            &initial_resolution.did,
             &initial_resolution.version_id,
             &initial_head,
         )
@@ -141,7 +138,7 @@ pub(crate) async fn managed_agent_binding_is_accepted(
         })?;
     let current = state
         .dids()
-        .resolve_current_webvh_state(&initial_resolution.full_id)
+        .resolve_current_webvh_state(&initial_resolution.did)
         .await
         .map_err(|error| {
             failed_precondition(
@@ -160,7 +157,7 @@ pub(crate) async fn managed_agent_binding_is_accepted(
     }
     validate_managed_agent_inception_document(
         &current.document,
-        &initial_resolution.full_id,
+        &initial_resolution.did,
         controller_core_id.as_str(),
         true,
     )?;
@@ -171,7 +168,7 @@ pub(crate) async fn managed_agent_binding_is_accepted(
         .ok_or_else(|| schema_error("managed Agent DID service set is missing"))?;
     let expected_id = format!(
         "{}#arkret-principal-control-realm",
-        initial_resolution.full_id.as_str()
+        initial_resolution.did.as_str()
     );
     let mut bindings = services.iter().filter(|service| {
         service.get("type").and_then(Value::as_str) == Some("ArkretPrincipalControlRealm")
@@ -412,9 +409,9 @@ pub(crate) async fn validate_agent_controller_binding(
     accepted_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
     requested_scope_digest_for_record(agent_record)?;
-    let agent_full_id = managed_agent_full_id(agent_record)?;
-    let document = agent_did_document_at(state, &agent_full_id, accepted_at).await?;
-    validate_agent_did_identity_anchor(&document, &agent_full_id)?;
+    let agent_did = managed_agent_did(agent_record)?;
+    let document = agent_did_document_at(state, &agent_did, accepted_at).await?;
+    validate_agent_did_identity_anchor(&document, &agent_did)?;
     validate_agent_runtime_authority(agent_record)?;
     validate_active_agent_accountability(state, agent_record, accepted_at).await
 }
@@ -752,12 +749,12 @@ async fn managed_agent_record(
 
 async fn agent_did_document_at(
     state: &AppState,
-    agent_full_id: &DidFullId,
+    agent_did: &Did,
     accepted_at: DateTime<Utc>,
 ) -> Result<Value, AppError> {
     let mut history = state
         .dids()
-        .log_events(agent_full_id.as_str())
+        .log_events(agent_did.as_str())
         .await
         .map_err(|error| AppError::internal(format!("Agent DID history lookup failed: {error}")))?;
     history.sort_by_key(|entry| (entry.created_at, entry.seq));
@@ -773,7 +770,7 @@ async fn agent_did_document_at(
     ))
 }
 
-fn managed_agent_full_id(record: &AgentPrincipalRecord) -> Result<DidFullId, AppError> {
+fn managed_agent_did(record: &AgentPrincipalRecord) -> Result<Did, AppError> {
     let (controller, _) = record
         .controller_authorization_ref
         .as_str()
@@ -781,30 +778,27 @@ fn managed_agent_full_id(record: &AgentPrincipalRecord) -> Result<DidFullId, App
         .ok_or_else(|| {
             schema_error("managed Agent controller authorization ref has no fragment")
         })?;
-    let full_id = DidFullId::new(controller.to_owned())
-        .map_err(|error| schema_error(format!("managed Agent full DID is invalid: {error}")))?;
-    let projected = arkret_wire::project_full_id_to_core_id(&full_id)
+    let did = Did::new(controller.to_owned())
+        .map_err(|error| schema_error(format!("managed Agent DID is invalid: {error}")))?;
+    let projected = arkret_wire::project_did_to_core_id(&did)
         .map_err(|error| schema_error(format!("managed Agent DID projection failed: {error}")))?;
     if projected.as_str() != record.id.as_str() {
         return Err(schema_error(
-            "managed Agent full DID does not project to the stored core id",
+            "managed Agent DID does not project to the stored core id",
         ));
     }
-    let expected_authorization_ref = controller_authorization_ref(&full_id)?;
+    let expected_authorization_ref = controller_authorization_ref(&did)?;
     if expected_authorization_ref != record.controller_authorization_ref {
         return Err(schema_error(
-            "managed Agent controller authorization ref does not match its full DID",
+            "managed Agent controller authorization ref does not match its DID",
         ));
     }
-    Ok(full_id)
+    Ok(did)
 }
 
-fn validate_agent_did_identity_anchor(
-    document: &Value,
-    agent_full_id: &DidFullId,
-) -> Result<(), AppError> {
+fn validate_agent_did_identity_anchor(document: &Value, agent_did: &Did) -> Result<(), AppError> {
     arkret_signatures::webvh::validate_managed_agent_did_document_profile(
-        agent_full_id.as_str(),
+        agent_did.as_str(),
         document,
         &[],
     )
@@ -858,9 +852,9 @@ mod tests {
     use super::*;
 
     const AGENT: &str = "ak:did_core:webvh:z6mkfixtureagent";
-    const AGENT_FULL: &str = "did:webvh:z6mkfixtureagent:agent.example";
+    const AGENT_DID: &str = "did:webvh:z6mkfixtureagent:agent.example";
     const CONTROLLER: &str = "ak:did_core:web:controller.example";
-    const CONTROLLER_FULL: &str = "did:web:controller.example";
+    const CONTROLLER_DID: &str = "did:web:controller.example";
     const PCR: &str = "ak:realm:AZbOMvW-csKhom4LhjgFr2cuYB-cQ9oR21-cRX94cL9M";
     const TRUST_DOMAIN: &str = "ak:trust_domain:managed-agent-pcr";
 
@@ -877,16 +871,16 @@ mod tests {
     fn did_document() -> Value {
         json!({
             "@context": ["https://www.w3.org/ns/did/v1"],
-            "id": AGENT_FULL,
+            "id": AGENT_DID,
             "alsoKnownAs": [],
             "service": [
                 {
-                    "id": format!("{AGENT_FULL}#soland"),
+                    "id": format!("{AGENT_DID}#soland"),
                     "type": "ArkretPrincipalServer",
                     "serviceEndpoint": "https://agent.example"
                 },
                 {
-                    "id": format!("{AGENT_FULL}#managed-controller"),
+                    "id": format!("{AGENT_DID}#managed-controller"),
                     "type": "ArkretManagedPrincipalController",
                     "serviceEndpoint": {
                         "controller_did": CONTROLLER,
@@ -905,9 +899,9 @@ mod tests {
         let payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
             arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
                 agent_id: arkret_identifiers::DidCoreId::new(AGENT).unwrap(),
-                notary: crate::test_single_signer_notary(AGENT_FULL, 42),
+                notary: crate::test_single_signer_notary(AGENT_DID, 42),
                 initial_resolution: arkret_models_identity::ResolutionCommitment {
-                    full_id: arkret_identifiers::DidFullId::new(AGENT_FULL).unwrap(),
+                    did: arkret_identifiers::Did::new(AGENT_DID).unwrap(),
                     method_history_head: format!("sha256:{}", "8".repeat(64)),
                     version_id: "1-Qmfixture".to_owned(),
                 },
@@ -930,24 +924,24 @@ mod tests {
 
     #[test]
     fn did_identity_anchor_rejects_business_authority_fields() {
-        let agent_full_id = DidFullId::new(AGENT_FULL).unwrap();
-        validate_agent_did_identity_anchor(&did_document(), &agent_full_id)
+        let agent_did = Did::new(AGENT_DID).unwrap();
+        validate_agent_did_identity_anchor(&did_document(), &agent_did)
             .expect("identity-only managed Agent DID document must pass");
 
         let mut wrong_id = did_document();
-        wrong_id["id"] = json!(CONTROLLER_FULL);
-        assert!(validate_agent_did_identity_anchor(&wrong_id, &agent_full_id).is_err());
+        wrong_id["id"] = json!(CONTROLLER_DID);
+        assert!(validate_agent_did_identity_anchor(&wrong_id, &agent_did).is_err());
 
         let mut authority_bearing = did_document();
         authority_bearing["service"] = json!([{
             "id": format!("{AGENT}#business-authority"),
             "type": "ArkretBusinessAuthority",
         }]);
-        assert!(validate_agent_did_identity_anchor(&authority_bearing, &agent_full_id).is_err());
+        assert!(validate_agent_did_identity_anchor(&authority_bearing, &agent_did).is_err());
 
         let mut embedded_scope = did_document();
         embedded_scope["requested_scope"] = requested_scope();
-        assert!(validate_agent_did_identity_anchor(&embedded_scope, &agent_full_id).is_err());
+        assert!(validate_agent_did_identity_anchor(&embedded_scope, &agent_did).is_err());
     }
 
     #[test]
@@ -1004,7 +998,7 @@ mod tests {
         let mut event = crate::test_event::raw_event(
             arkret_wire::EventKind::RealmCreate.as_str(),
             arkret_wire::ScopeRef::RealmGenesis,
-            crate::test_actor_id_str(AGENT_FULL),
+            crate::test_actor_id_str(AGENT_DID),
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1".to_owned()).unwrap(),
             json!({"object": pcr_genesis()}),

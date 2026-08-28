@@ -183,9 +183,9 @@ pub(crate) async fn trusted_account_authority_service_id(
                 "Account Authority service identity registration is invalid: {error}"
             ))
         })?;
-    arkret_wire::project_full_id_to_core_id(registration.full_id()).map_err(|error| {
+    arkret_wire::project_did_to_core_id(registration.did()).map_err(|error| {
         AppError::internal(format!(
-            "registered Account Authority full-id cannot be projected: {error}"
+            "registered Account Authority DID cannot be projected: {error}"
         ))
     })
 }
@@ -373,7 +373,7 @@ async fn enqueue_account_status_fanout(
     }
     let configured = crate::routing::federation::federation::configured_peer_targets(state)
         .into_iter()
-        .map(|peer| (peer.did.clone(), peer))
+        .map(|peer| (peer.service_id.clone(), peer))
         .collect::<BTreeMap<_, _>>();
     let body = AccountStatusPublicationRequestBody {
         publication: AccountStatusPublication::Receipted(AccountStatusReceiptedPublication {
@@ -390,20 +390,24 @@ async fn enqueue_account_status_fanout(
                 "account-status affected-service projection has no service_id",
             ));
         };
-        let Some(peer) = configured.get(service_id) else {
+        let Some(peer) =
+            configured.get(&arkret_wire::DidCoreId::new(service_id.to_owned()).map_err(
+                |error| AppError::internal(format!("affected service id is invalid: {error}")),
+            )?)
+        else {
             unresolved = true;
             continue;
         };
         crate::routing::federation::outbox::enqueue_coalesced_outbound(
             state,
             &peer.url,
-            &peer.did,
+            peer.service_id.as_str(),
             "/_arkret/peer/account-status",
             &format!(
                 "account-status:{}:{}:{}:{}",
                 record.account_authority_id,
                 record.account_id,
-                peer.did,
+                peer.service_id,
                 record.account_status_record_id,
             ),
             &payload,
@@ -1082,10 +1086,11 @@ async fn peer_events_frontier(
         };
     let service_id = DidCoreId::new(state.service_id().clone())
         .map_err(|_| AppError::internal("service_id is invalid"))?;
-    let service_full_id = state.service_resolution_commitment().full_id.clone();
+    let service_did = state.service_resolution_commitment().did.clone();
     let observed_at = now();
     let signature = super::frontier::sign_frontier_root(
-        &service_full_id,
+        &service_id,
+        &service_did,
         Some(&realm_id),
         observed_at,
         &frontier_root,
@@ -2082,9 +2087,9 @@ pub(in crate::routing) async fn validate_peer_request(
         ));
     }
     let local_core =
-        arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
+        arkret_wire::project_did_to_core_id(&state.service_resolution_commitment().did)
             .map(|core| core.into_string())
-            .map_err(|_| AppError::internal("local service full_id cannot be projected"))?;
+            .map_err(|_| AppError::internal("local service did cannot be projected"))?;
     if destination_service_id != *state.service_id() && destination_service_id != local_core {
         return Err(cross_domain_replay(
             "destination-service-id header does not match this service",

@@ -46,8 +46,8 @@ pub(super) async fn persist_mimi_canonical_message_event(
         })
         .transpose()?
         .unwrap_or(0);
-    let service_did = state.service_resolution_commitment().full_id.clone();
-    let service_actor_id = arkret_wire::project_full_id_to_core_id(&service_did)
+    let service_did = state.service_resolution_commitment().did.clone();
+    let service_actor_id = arkret_wire::project_did_to_core_id(&service_did)
         .map_err(|error| AppError::internal(format!("service DID cannot be projected: {error}")))?;
     let hlc = arkret_identifiers::Hlc::new(state.hlc().now())
         .map_err(|error| AppError::internal(format!("MIMI HLC invalid: {error}")))?;
@@ -284,13 +284,11 @@ pub(super) fn mimi_provider_directory_value(
     // service's stable core id is used in transport headers; obtain the full
     // controller from the verified local resolution commitment instead of
     // trying to reconstruct a DID from the core id.
-    let service_full_id = state.service_resolution_commitment().full_id.clone();
+    let service_did = state.service_resolution_commitment().did.clone();
     let service_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service core id invalid: {error}")))?;
-    let verification_method = arkret_wire::DidUrl::new(format!("{}#notary-key", service_full_id))
-        .map_err(|error| {
-        AppError::internal(format!("service notary key id invalid: {error}"))
-    })?;
+    let verification_method = arkret_wire::DidUrl::new(format!("{}#notary-key", service_did))
+        .map_err(|error| AppError::internal(format!("service notary key id invalid: {error}")))?;
     let placeholder = arkret_wire::PayloadProof {
         kind: "detached_jws".to_owned(),
         verification_method: verification_method.clone(),
@@ -380,7 +378,7 @@ pub(super) fn mimi_provider_directory_value(
     })?;
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         state.notary_signing_key().as_ref().clone(),
-        service_full_id,
+        service_did,
         verification_method,
     );
     let signature = signer.sign_payload(&projection).map_err(|error| {
@@ -407,7 +405,7 @@ pub(super) fn mimi_base_url(state: &AppState) -> String {
 }
 
 pub(super) fn mimi_provider_id(state: &AppState) -> String {
-    service_id_mimi_provider_id(state.service_full_id().as_str())
+    service_did_mimi_provider_id(state.service_did().as_str())
 }
 
 /// A `did:web` / `did:webvh` service id projected onto the MIMI provider id.
@@ -418,11 +416,11 @@ pub(super) fn mimi_provider_id(state: &AppState) -> String {
 /// `zh/extensions/mimi-interop.md` §4; every room URI built on top of it is the
 /// `ak.component.mimi.room_binding.v1` cell subject, where two spellings would
 /// address two cells.
-pub(super) fn service_id_mimi_provider_id(service_id: &str) -> String {
-    if let Some(domain) = service_id.strip_prefix("did:web:") {
+pub(super) fn service_did_mimi_provider_id(service_did: &str) -> String {
+    if let Some(domain) = service_did.strip_prefix("did:web:") {
         return format!("mimi://{}", canonical_mimi_authority(domain));
     }
-    if let Some(rest) = service_id.strip_prefix("did:webvh:") {
+    if let Some(rest) = service_did.strip_prefix("did:webvh:") {
         let mut parts = rest.splitn(2, ':');
         if parts.next().is_some_and(|scid| !scid.is_empty())
             && let Some(authority_and_path) = parts.next()
@@ -431,7 +429,7 @@ pub(super) fn service_id_mimi_provider_id(service_id: &str) -> String {
             return format!("mimi://{}", canonical_mimi_authority(authority_and_path));
         }
     }
-    format!("mimi://{}", service_id.replace(':', ".").to_lowercase())
+    format!("mimi://{}", service_did.replace(':', ".").to_lowercase())
 }
 
 /// DID authority (`host%3Aport:path:segments`) -> canonical `host[:port]/path`.

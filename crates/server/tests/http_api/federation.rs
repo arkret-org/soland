@@ -134,7 +134,7 @@ fn resign_federation_event(event: Value) -> Value {
     resign_federation_event_as(event, "did:web:alice.example")
 }
 
-fn resign_federation_event_as(event: Value, actor_full_id: &str) -> Value {
+fn resign_federation_event_as(event: Value, actor_did: &str) -> Value {
     let mut event: arkret_wire::Event =
         serde_json::from_value(event).expect("federation fixture is a typed Event");
     event.principal_server_id = arkret_wire::DidCoreId::new(PEER_SOURCE_ID.to_owned())
@@ -144,7 +144,7 @@ fn resign_federation_event_as(event: Value, actor_full_id: &str) -> Value {
             test_realm_basis_for_principal_server(
                 &soland_test_support::app_state(super::common::test_config()),
                 event.realm_id.as_str(),
-                actor_full_id,
+                actor_did,
                 PEER_SOURCE_ID,
             )
             .seal
@@ -152,7 +152,7 @@ fn resign_federation_event_as(event: Value, actor_full_id: &str) -> Value {
         );
     }
     let verification_method = soland_test_support::signed_event::fixture_verification_method(
-        actor_full_id,
+        actor_did,
         "01904100-0000-7000-8000-a11ce0000001",
     );
     let producer_seed = arkret_signatures::development_signing_key_seed(&verification_method);
@@ -1215,8 +1215,7 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
         )
         .unwrap(),
         event_digest: event_digest.clone(),
-        qualified_ingress_id: arkret_identifiers::DidFullId::new(PEER_SOURCE_DID.to_owned())
-            .unwrap(),
+        qualified_ingress_did: arkret_identifiers::Did::new(PEER_SOURCE_DID.to_owned()).unwrap(),
         received_at: issued_at,
         ingress_frontier: vec![event.event_id.clone()],
         proofs: Vec::new(),

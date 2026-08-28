@@ -1097,17 +1097,17 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 })?;
                 let inserted = sql_query(
                     "INSERT INTO federation_outbox \
-                     (id, peer_id, peer_url, endpoint, idempotency_key, payload_json, state, \
+                     (id, peer_service_id, peer_url, endpoint, idempotency_key, payload_json, state, \
                      leased_from_state, realm_fanout, attempts, semantic_attempts, next_attempt_at, last_http_status, \
                      last_error_code, last_response_excerpt, lease_owner, lease_token, \
                      lease_expires_at, policy_version, supersedes_outbox_id, created_at, \
                       completed_at) \
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
                       $16, $17, $18, $19, $20, $21, $22) \
-                     ON CONFLICT (peer_id, idempotency_key) DO NOTHING",
+                     ON CONFLICT (peer_service_id, idempotency_key) DO NOTHING",
                 )
                 .bind::<Text, _>(&record.id)
-                .bind::<Text, _>(&record.peer_did)
+                .bind::<Text, _>(&record.peer_service_id)
                 .bind::<Nullable<Text>, _>(record.peer_url.as_deref())
                 .bind::<Text, _>(&record.endpoint)
                 .bind::<Text, _>(&record.idempotency_key)

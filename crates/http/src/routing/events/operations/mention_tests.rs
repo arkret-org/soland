@@ -77,7 +77,7 @@ mod direct_mention_tests {
     }
 
     #[test]
-    fn canonical_mention_rejects_full_did_subject() {
+    fn canonical_mention_rejects_did_subject() {
         let content = json!({
             "kind": "ak.content.text",
             "body": "hello @bob",

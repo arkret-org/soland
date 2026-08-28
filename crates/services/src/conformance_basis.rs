@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{CellRef, DidCoreId, DidFullId, Hash, Hlc, RealmId};
+use arkret_identifiers::{CellRef, Did, DidCoreId, Hash, Hlc, RealmId};
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::compute_state_root;
 use arkret_wire::{NotarySignerDescriptor, Seal};
@@ -51,18 +51,18 @@ pub struct RealmBasisFixtureOptions<'a> {
 /// fixture from declaring one notary while signing its Seal with another.
 pub struct ConformanceNotarySigner {
     pub descriptor: NotarySignerDescriptor,
-    pub signer_did: DidFullId,
+    pub signer_did: Did,
     pub signing_seed: [u8; 32],
 }
 
 impl ConformanceNotarySigner {
     pub fn ed25519(
-        signer_did: DidFullId,
+        signer_did: Did,
         verification_method: arkret_wire::DidUrl,
         signing_seed: [u8; 32],
     ) -> Result<Self, String> {
-        let actor_id = arkret_wire::project_full_id_to_core_id(&signer_did)
-            .map_err(|error| error.to_string())?;
+        let actor_id =
+            arkret_wire::project_did_to_core_id(&signer_did).map_err(|error| error.to_string())?;
         let verifying_key = ed25519_dalek::SigningKey::from_bytes(&signing_seed).verifying_key();
         let descriptor = crate::identity::ed25519_notary_signer_descriptor(
             actor_id,
@@ -603,7 +603,7 @@ mod tests {
 
     fn test_notary() -> ConformanceNotarySigner {
         ConformanceNotarySigner::ed25519(
-            arkret_identifiers::DidFullId::new("did:web:notary.example".to_owned()).unwrap(),
+            arkret_identifiers::Did::new("did:web:notary.example".to_owned()).unwrap(),
             arkret_wire::DidUrl::new("did:web:notary.example#notary-key").unwrap(),
             [42; 32],
         )
@@ -655,7 +655,7 @@ mod tests {
         );
         assert!(
             ConformanceNotarySigner::ed25519(
-                arkret_identifiers::DidFullId::new("did:web:notary.example".to_owned()).unwrap(),
+                arkret_identifiers::Did::new("did:web:notary.example".to_owned()).unwrap(),
                 arkret_wire::DidUrl::new("did:web:other.example#notary-key").unwrap(),
                 [42; 32],
             )

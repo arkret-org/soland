@@ -953,14 +953,12 @@ pub(super) async fn verify_did_root_proof(
     let (method_did, device_fragment) = verification_method.rsplit_once('#').ok_or_else(|| {
         recovery_signature_error("did-root verification_method has no device fragment")
     })?;
-    let method_did =
-        arkret_identifiers::DidFullId::new(method_did.to_owned()).map_err(|error| {
-            recovery_signature_error(format!("did-root method DID is invalid: {error}"))
-        })?;
-    let method_principal =
-        arkret_wire::project_full_id_to_core_id(&method_did).map_err(|error| {
-            recovery_signature_error(format!("did-root method DID cannot be projected: {error}"))
-        })?;
+    let method_did = arkret_identifiers::Did::new(method_did.to_owned()).map_err(|error| {
+        recovery_signature_error(format!("did-root method DID is invalid: {error}"))
+    })?;
+    let method_principal = arkret_wire::project_did_to_core_id(&method_did).map_err(|error| {
+        recovery_signature_error(format!("did-root method DID cannot be projected: {error}"))
+    })?;
     if method_principal.as_str() != record.principal_id {
         return Err(recovery_signature_error(
             "did-root method does not belong to the recovery session authority pair",

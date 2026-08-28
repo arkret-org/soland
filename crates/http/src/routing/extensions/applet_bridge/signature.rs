@@ -326,8 +326,8 @@ pub(super) fn applet_registration_verification_method(
         .split_once('#')
         .map(|(controller, _)| controller)
         .unwrap_or(key_ref);
-    let key_controller = arkret_identifiers::DidFullId::new(key_controller.to_owned())
-        .and_then(|full_id| arkret_identifiers::project_full_id_to_core_id(&full_id))
+    let key_controller = arkret_identifiers::Did::new(key_controller.to_owned())
+        .and_then(|did| arkret_identifiers::project_did_to_core_id(&did))
         .map_err(|_| {
             applet_signature_error_invalid(
                 "Applet webhook_auth.key_ref must name a resolvable DID verification method",

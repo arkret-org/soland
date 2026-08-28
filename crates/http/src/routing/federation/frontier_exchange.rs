@@ -71,22 +71,22 @@ impl FrontierExchangeWorker {
                 }
             };
             for peer in &peers {
-                if peer.did == *self.state.service_id() {
+                if peer.service_id.as_str() == self.state.service_id() {
                     continue;
                 }
-                let result = self.probe_peer(&peer.did, &realm_id).await;
+                let result = self.probe_peer(&peer.service_id, &realm_id).await;
                 let now = chrono::Utc::now().timestamp();
                 match result {
                     Ok(remote_root) if remote_root == local_root => {
                         let record = self
                             .state
                             .federation()
-                            .record_frontier_success(&realm_id, &peer.did, &remote_root, now)
+                            .record_frontier_success(&realm_id, &peer.service_id, &remote_root, now)
                             .await
                             .map_err(|error| error.to_string())?;
                         tracing::debug!(
                             realm_id,
-                            peer_service_id = %peer.did,
+                            peer_service_id = %peer.service_id,
                             status = %record.status,
                             worker = "federation_frontier_exchange",
                             "frontier exchange succeeded"
@@ -95,7 +95,7 @@ impl FrontierExchangeWorker {
                     Ok(remote_root) => {
                         self.record_failure(
                             &realm_id,
-                            &peer.did,
+                            &peer.service_id,
                             "frontier_root_mismatch",
                             now,
                             Some(&remote_root),
@@ -103,7 +103,7 @@ impl FrontierExchangeWorker {
                         .await?;
                     }
                     Err(error) => {
-                        self.record_failure(&realm_id, &peer.did, &error, now, None)
+                        self.record_failure(&realm_id, &peer.service_id, &error, now, None)
                             .await?;
                     }
                 }
@@ -112,17 +112,21 @@ impl FrontierExchangeWorker {
         Ok(())
     }
 
-    async fn probe_peer(&self, peer_did: &str, realm_id: &str) -> Result<String, String> {
+    async fn probe_peer(
+        &self,
+        peer_service_id: &arkret_wire::DidCoreId,
+        realm_id: &str,
+    ) -> Result<String, String> {
         let route = super::federation::resolved_peer_route(
             &self.state,
-            peer_did,
+            peer_service_id.as_str(),
             "principal_server",
             false,
         )
         .await
         .map_err(|error| format!("service_route_unavailable:{error}"))?;
         if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
-            peer_did,
+            peer_service_id.as_str(),
             Some(route.trust_domain.as_str()),
         ) {
             return Err(format!("trust_domain_policy_denied:{reason}"));
@@ -146,7 +150,7 @@ impl FrontierExchangeWorker {
             .map_err(|error| format!("egress_policy_denied:{error}"))?;
         let headers = signed_query_headers(
             &self.state,
-            peer_did,
+            peer_service_id.as_str(),
             route.trust_domain.as_str(),
             &canonical_target,
             &body,
@@ -167,13 +171,13 @@ impl FrontierExchangeWorker {
         }
         let state: arkret_models_collaboration::event_sync::EventsFrontierFederationPeerState =
             serde_json::from_str(&body).map_err(|_| "json_invalid".to_owned())?;
-        validate_frontier_response(&state, peer_did, realm_id)
+        validate_frontier_response(&state, peer_service_id.as_str(), realm_id)
     }
 
     async fn record_failure(
         &self,
         realm_id: &str,
-        peer_did: &str,
+        peer_service_id: &arkret_wire::DidCoreId,
         reason: &str,
         observed_at: i64,
         remote_root: Option<&str>,
@@ -181,13 +185,13 @@ impl FrontierExchangeWorker {
         let record = self
             .state
             .federation()
-            .record_frontier_failure(realm_id, peer_did, reason, observed_at)
+            .record_frontier_failure(realm_id, peer_service_id, reason, observed_at)
             .await
             .map_err(|error| error.to_string())?;
         if record.status == FEDERATION_FRONTIER_STATUS_STALE_PEER {
             tracing::error!(
                 realm_id,
-                peer_service_id = %peer_did,
+                peer_service_id = %peer_service_id,
                 consecutive_failures = record.consecutive_failures,
                 reason,
                 remote_frontier_root = remote_root.unwrap_or(""),
@@ -197,7 +201,7 @@ impl FrontierExchangeWorker {
         } else {
             tracing::warn!(
                 realm_id,
-                peer_service_id = %peer_did,
+                peer_service_id = %peer_service_id,
                 consecutive_failures = record.consecutive_failures,
                 reason,
                 worker = "federation_frontier_exchange",
@@ -210,7 +214,7 @@ impl FrontierExchangeWorker {
 
 pub(crate) fn signed_query_headers(
     state: &AppState,
-    peer_did: &str,
+    peer_service_id: &str,
     peer_trust_domain: &str,
     target_url: &str,
     body: &[u8],
@@ -223,7 +227,7 @@ pub(crate) fn signed_query_headers(
         &super::outbox::content_digest_header_value(body),
     );
     super::outbox::insert_header_if_valid(&mut headers, "source-service-id", state.service_id());
-    insert_destination_binding(&mut headers, peer_did, peer_trust_domain);
+    insert_destination_binding(&mut headers, peer_service_id, peer_trust_domain);
     super::outbox::insert_header_if_valid(
         &mut headers,
         "source-trust-domain",
@@ -297,13 +301,13 @@ fn local_frontier_root(records: &[AcceptedEvent], realm_id: &str) -> Result<Stri
 
 fn validate_frontier_response(
     state: &arkret_models_collaboration::event_sync::EventsFrontierFederationPeerState,
-    peer_did: &str,
+    peer_service_id: &str,
     realm_id: &str,
 ) -> Result<String, String> {
     if state.realm_id.as_str() != realm_id {
         return Err("realm_id_mismatch".to_owned());
     }
-    if state.issuer.as_str() != peer_did {
+    if state.issuer.as_str() != peer_service_id {
         return Err("issuer_mismatch".to_owned());
     }
     if state.signature.is_empty() {
@@ -317,9 +321,11 @@ pub async fn inbound_peer_is_stale(
     realm_id: &str,
     peer_service_id: &str,
 ) -> Result<bool, String> {
+    let peer_service_id = arkret_wire::DidCoreId::new(peer_service_id.to_owned())
+        .map_err(|error| format!("invalid_peer_service_id:{error}"))?;
     state
         .federation()
-        .frontier_exchange(realm_id, peer_service_id)
+        .frontier_exchange(realm_id, &peer_service_id)
         .await
         .map(|record| {
             record.is_some_and(|record| record.status == FEDERATION_FRONTIER_STATUS_STALE_PEER)

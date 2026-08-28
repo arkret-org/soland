@@ -212,7 +212,7 @@ async fn media_by_actor_rows(state: &AppState, blobs: &[BlobRecord]) -> Vec<Admi
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|account| (account.did.clone(), account))
+        .map(|account| (account.principal_id.to_string(), account))
         .collect();
     let mut rows: BTreeMap<String, (u64, u64)> = BTreeMap::new();
     for blob in blobs {

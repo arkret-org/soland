@@ -2557,7 +2557,7 @@ mod tests {
                 idempotency: None,
                 deliveries: vec![FederationDeliveryRecord {
                     id: "delivery:test".to_owned(),
-                    peer_did: "did:web:peer.example".to_owned(),
+                    peer_service_id: "did:web:peer.example".to_owned(),
                     peer_url: Some("https://peer.example".to_owned()),
                     endpoint: "/_arkret/peer/events".to_owned(),
                     idempotency_key: "event:test".to_owned(),

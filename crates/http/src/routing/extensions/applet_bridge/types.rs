@@ -31,7 +31,7 @@ fn event_payload_value(event: &Event) -> Value {
 #[serde(deny_unknown_fields)]
 pub struct AppletIdentityRecord {
     pub applet_id: AppletId,
-    pub registry_did: DidCoreId,
+    pub registry_id: DidCoreId,
     pub bot_actor_id: DidCoreId,
     pub bot_actor_principal_server_id: DidCoreId,
     pub bot_actor_provision_ref: EventId,
@@ -387,7 +387,7 @@ impl AppletRecord {
         if self.applet_id != self.package.applet_id
             || self.applet_id != self.identity.initial_package.applet_id
             || self.applet_id != self.install_response.applet_id
-            || self.registry_did != self.package.controller_id
+            || self.registry_id != self.package.controller_id
             || self.package.controller_id != self.identity.initial_package.controller_id
             || self.package.service_id != self.identity.initial_package.service_id
             || self.package.bot_actor_id != self.identity.initial_package.bot_actor_id

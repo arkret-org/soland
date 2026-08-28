@@ -264,16 +264,16 @@ pub(crate) fn agent_grant_within_requested_scope(
     })
 }
 
-/// Project the bare full DID of a verification method DID URL onto its Core
+/// Project the DID of a verification method DID URL onto its Core
 /// identity (`key-management.md` §7.4.1): the controller equals an `actor_id`
-/// only after method-adapter projection. A controller that is not a full DID —
+/// only after method-adapter projection. A controller that is not a DID —
 /// including a core `ak:did_core:` id concatenated with a fragment — projects
 /// to `None` and can never match.
 pub(super) fn verification_method_principal(
     verification_method: &str,
 ) -> Option<arkret_identifiers::DidCoreId> {
-    let full_id = arkret_identity::verification_method_did(verification_method).ok()?;
-    arkret_wire::project_full_id_to_core_id(&full_id).ok()
+    let did = arkret_identity::verification_method_did(verification_method).ok()?;
+    arkret_wire::project_did_to_core_id(&did).ok()
 }
 
 pub(super) fn verification_method_agent_endpoint(

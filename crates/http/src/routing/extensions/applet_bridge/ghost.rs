@@ -436,12 +436,12 @@ async fn validate_ghost_managed_actor_unit(
             namespace_pattern_matches(
                 AppletNamespaceDomain::Actors,
                 &entry.pattern,
-                payload.initial_resolution.full_id.as_str(),
+                payload.initial_resolution.did.as_str(),
             )
         })
     {
         return Err(AppError::capability_denied(
-            "Ghost full_id is outside the installed Applet actor namespace",
+            "Ghost did is outside the installed Applet actor namespace",
         )
         .with_wire_code("applet_namespace_mismatch"));
     }
@@ -516,7 +516,7 @@ fn verify_registration_epoch_payload_jws(
     if !evidence.contains_signing_key(verification_method) {
         return Err("payload proof key is outside the installed registration epoch".to_owned());
     }
-    let document = crate::jws_verify::resolve_did_document(state, &evidence.full_id)?;
+    let document = crate::jws_verify::resolve_did_document(state, &evidence.did)?;
     evidence
         .validate_against_did_document(&document)
         .map_err(|error| format!("registration-epoch DID evidence mismatch: {error}"))?;
@@ -526,7 +526,7 @@ fn verify_registration_epoch_payload_jws(
         canonical_bytes,
         jws,
         &verification_method,
-        &evidence.full_id,
+        &evidence.did,
         &document,
     )
     .map_err(|error| error.to_string())

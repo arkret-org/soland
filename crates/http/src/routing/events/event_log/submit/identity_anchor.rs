@@ -2141,23 +2141,22 @@ mod tests {
     }
 
     fn sdk_canonical_self_principal_bootstrap_unit() -> Vec<Value> {
-        let principal_full_id = arkret_identifiers::DidFullId::new(
-            "did:webvh:z6mkfixture:users.example:alice".to_owned(),
-        )
-        .unwrap();
-        let principal = arkret_identifiers::project_full_id_to_core_id(&principal_full_id).unwrap();
+        let principal_did =
+            arkret_identifiers::Did::new("did:webvh:z6mkfixture:users.example:alice".to_owned())
+                .unwrap();
+        let principal = arkret_identifiers::project_did_to_core_id(&principal_did).unwrap();
         let created_at = "2026-07-15T00:00:00.000Z".parse().unwrap();
         let mut create = arkret_bootstrap::build_self_principal_pcr_create(
             arkret_bootstrap::SelfPrincipalPcrCreateInput {
                 principal_id: principal.clone(),
-                principal_full_id: principal_full_id.clone(),
+                principal_did: principal_did.clone(),
                 principal_server_id: arkret_identifiers::DidCoreId::new(
                     "ak:did_core:webvh:z6mkfixture".to_owned(),
                 )
                 .unwrap(),
-                notary: crate::test_single_signer_notary(principal_full_id.as_str(), 43),
+                notary: crate::test_single_signer_notary(principal_did.as_str(), 43),
                 initial_resolution: arkret_models_identity::ResolutionCommitment {
-                    full_id: principal_full_id.clone(),
+                    did: principal_did.clone(),
                     method_history_head: format!("sha256:{}", "8".repeat(64)),
                     version_id: "1-Qmfixture".to_owned(),
                 },
@@ -2190,7 +2189,7 @@ mod tests {
         let realm_id = arkret_identifiers::RealmId::from_event_id(&create.event_id);
 
         let payload = fixture_founding_authorize_payload(&principal, create.created_at);
-        let authorize_verification_method = format!("{}#{}", principal_full_id, payload.device_id);
+        let authorize_verification_method = format!("{}#{}", principal_did, payload.device_id);
         let mut authorize = crate::test_event::raw_event(
             arkret_wire::EventKind::DeviceAuthorize.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
@@ -2251,8 +2250,7 @@ mod tests {
     }
 
     fn sdk_test_envelope(envelope: &Value, actor_seq: u64) -> Value {
-        let actor =
-            arkret_identifiers::DidFullId::new("did:webvh:z6mkfixture:alice.example").unwrap();
+        let actor = arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example").unwrap();
         let mut event = crate::test_event::raw_event(
             envelope["kind"].as_str().unwrap(),
             arkret_wire::ScopeRef::Realm {

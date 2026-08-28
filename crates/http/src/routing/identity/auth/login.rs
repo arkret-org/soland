@@ -136,7 +136,7 @@ pub(super) async fn dev_login(
         let localpart = normalize_localpart(&synthetic_handle);
         let record = RegisterAccountCommand {
             account_id: crate::ids::generate_account_id(),
-            actor_id: actor_str.to_owned(),
+            principal_id: actor.clone(),
             localpart: localpart.clone(),
             display_name: Some(synthetic_display),
             created_at: now(),

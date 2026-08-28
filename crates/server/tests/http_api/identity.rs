@@ -8,23 +8,23 @@ fn canonical_request_body<T: serde::Serialize>(value: &T) -> Vec<u8> {
     arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
 }
 
-async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &str) {
+async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
     use arkret_models_collaboration::events_payloads::device_identity::{
         DeviceAuthorizationBindingKind, DeviceAuthorizePayload, DeviceOrPrincipalRef,
     };
     use arkret_models_collaboration::events_payloads::{RealmCreatePayload, SignatureMaterial};
 
-    let principal_full = DidFullId::new(principal_full_id.to_owned()).unwrap();
-    let principal_id = arkret_wire::project_full_id_to_core_id(&principal_full).unwrap();
+    let principal_did = Did::new(principal_did.to_owned()).unwrap();
+    let principal_id = arkret_wire::project_did_to_core_id(&principal_did).unwrap();
     let principal_server_id = DidCoreId::new(state.service_id().clone()).unwrap();
     let pcr_realm_id = RealmId::new(soland_test_support::fixture_principal_control_realm(
-        principal_full_id,
+        principal_did,
     ))
     .unwrap();
     let basis_seal_id = soland_test_support::cba_basis::seed_realm_basis(
         state,
         pcr_realm_id.as_str(),
-        principal_full_id,
+        principal_did,
         soland_test_support::cba_basis::FixtureBasis::shared(&[]),
     )
     .await;
@@ -80,10 +80,10 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
     .unwrap();
     authorize.prev_refs = vec![genesis.event_id.clone()];
     let verification_method =
-        arkret_wire::DidUrl::new(format!("{principal_full_id}#{}", descriptor.device_id)).unwrap();
+        arkret_wire::DidUrl::new(format!("{principal_did}#{}", descriptor.device_id)).unwrap();
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         SigningKey::from_bytes(&[21_u8; 32]),
-        principal_full.clone(),
+        principal_did.clone(),
         verification_method.clone(),
     );
     let mut signed = Vec::new();
@@ -129,7 +129,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
                 genesis_event: genesis.clone(),
                 current_event: genesis.clone(),
                 projection: arkret_models_identity::PrincipalResolutionProjection {
-                    full_id: principal_full.clone(),
+                    did: principal_did.clone(),
                     method_history_head: format!("sha256:{}", "1".repeat(64)),
                     version_id: "1-fixture".to_owned(),
                     resolution_event_ref: genesis.event_id.to_string(),
@@ -154,7 +154,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_full_id: &st
     audit_delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
     let audit_signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
         state.notary_signing_key().to_bytes(),
-        state.service_full_id(),
+        state.service_did(),
         state.service_verification_method("notary-key").unwrap(),
     );
     let audit_seal = arkret_wire::Seal::sign_single(
@@ -408,8 +408,8 @@ fn identity_surface_works() {
 async fn identity_surface_works_body() {
     let state = soland_test_support::app_state(test_config());
     let expected_service_id =
-        arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
-            .expect("service full id projects to a core id");
+        arkret_wire::project_did_to_core_id(&state.service_resolution_commitment().did)
+            .expect("service DID projects to a core id");
     let describe: Value = TestClient::get("http://server/_arkret/root/identity/describe")
         .send(&app_from_state(state.clone()))
         .await
@@ -694,7 +694,7 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks_body() {
     assert!(created.created);
     assert_eq!(
         created.service_id(),
-        &arkret_wire::project_full_id_to_core_id(&request.inception_operation.state.id).unwrap()
+        &arkret_wire::project_did_to_core_id(&request.inception_operation.state.id).unwrap()
     );
     created.validate_for(&key).unwrap();
 

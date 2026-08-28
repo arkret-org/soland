@@ -971,7 +971,7 @@ async fn produce_current_agent_signer_evidence(
     seal_lineage.sort_by_key(|seal| seal.notary_seq);
 
     let service_id =
-        arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
+        arkret_wire::project_did_to_core_id(&state.service_resolution_commitment().did)
             .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let (_, authority_method) = state
         .current_service_receipt_binding()

@@ -115,7 +115,7 @@ fn key_backup_verification_method_matches_device_key(
     verification_method: &str,
 ) -> bool {
     // `did-usage-and-verification.md` §2.2: a proof `verification_method` MUST
-    // be a DID URL with a `#fragment`; a bare DID never names a concrete
+    // be a DID URL with a `#fragment`; a DID without URL components never names a concrete
     // verification method.
     let did_key = device_public_key
         .strip_prefix("did:key:")
@@ -343,7 +343,7 @@ mod tests {
     // be a DID URL with a `#fragment`. A bare `did:key:<mb>` names no concrete
     // verification method and must not satisfy the key-backup device binding.
     #[test]
-    fn key_backup_verification_method_rejects_bare_did_key() {
+    fn key_backup_verification_method_rejects_did_without_fragment() {
         let principal = "did:webvh:z6mkfixture:alice.example";
         let device = "ak:device:primary";
         let key = "z6MkBackup";

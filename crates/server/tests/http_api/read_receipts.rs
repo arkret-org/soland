@@ -126,8 +126,7 @@ const TARGET_STRAND_ID: &str = "ak:strand:AcbFC8Nil95DfV11kMMMvRtzRdEC3g-tFtBE8_
 fn read_receipt_plaintext(actor: &str, event_id: &str, payload_sequence: u64) -> String {
     let receipt = ReadReceipt::new(
         payload_sequence,
-        arkret_wire::project_full_id_to_core_id(&DidFullId::new(actor.to_owned()).unwrap())
-            .unwrap(),
+        arkret_wire::project_did_to_core_id(&Did::new(actor.to_owned()).unwrap()).unwrap(),
         arkret_wire::EventId::new(event_id.to_owned()).unwrap(),
         arkret_wire::ReadReceiptScope::strand(TARGET_STRAND_ID, Some("discussion")),
     )

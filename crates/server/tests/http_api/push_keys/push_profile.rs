@@ -15,7 +15,7 @@ fn canonical_body(value: &impl serde::Serialize) -> Vec<u8> {
 
 fn push_gateway_description() -> serde_json::Value {
     let description = arkret_models_discovery::ServiceDescribe::development(
-        arkret_wire::DidFullId::new("did:webvh:z6mkfixture:push.example").unwrap(),
+        arkret_wire::Did::new("did:webvh:z6mkfixture:push.example").unwrap(),
         arkret_wire::TrustDomainId::new("ak:trust_domain:push.example").unwrap(),
         arkret_wire::ServiceKind::PushGateway,
         vec![

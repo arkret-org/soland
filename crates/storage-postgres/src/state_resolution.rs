@@ -2483,9 +2483,8 @@ mod event_seal_commit_tests {
     /// fsm cells, where the issuer travels but is not part of the slot key.
     fn test_issued(op: super::SealedOp) -> super::IssuedOp {
         super::IssuedOp {
-            issuer: arkret_wire::project_full_id_to_core_id(
-                &arkret_wire::DidFullId::new("did:webvh:z6mkfixture:alice.example".to_owned())
-                    .unwrap(),
+            issuer: arkret_wire::project_did_to_core_id(
+                &arkret_wire::Did::new("did:webvh:z6mkfixture:alice.example".to_owned()).unwrap(),
             )
             .unwrap(),
             op,
@@ -2558,12 +2557,12 @@ mod event_seal_commit_tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm.clone(),
             },
-            arkret_wire::project_full_id_to_core_id(
-                &arkret_wire::DidFullId::new("did:web:alice.example".to_owned()).unwrap(),
+            arkret_wire::project_did_to_core_id(
+                &arkret_wire::Did::new("did:web:alice.example".to_owned()).unwrap(),
             )
             .unwrap(),
-            arkret_wire::project_full_id_to_core_id(
-                &arkret_wire::DidFullId::new("did:web:alice.example".to_owned()).unwrap(),
+            arkret_wire::project_did_to_core_id(
+                &arkret_wire::Did::new("did:web:alice.example".to_owned()).unwrap(),
             )
             .unwrap(),
             increment as u64,

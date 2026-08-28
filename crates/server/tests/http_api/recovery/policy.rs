@@ -130,11 +130,11 @@ async fn recovery_policy_accepts_genesis_session_device_signature_body() {
         &test_ed25519_multibase_public(&device_signing),
     )
     .await;
-    let principal_full_id = principal_vm
+    let principal_did = principal_vm
         .split_once('#')
         .map(|(controller, _)| controller)
-        .expect("principal verification method has a Full DID controller");
-    let verification_method = format!("{principal_full_id}#{RECOVERY_TEST_DEVICE}");
+        .expect("principal verification method has a DID controller");
+    let verification_method = format!("{principal_did}#{RECOVERY_TEST_DEVICE}");
     let policy = signed_recovery_policy(
         &device_signing,
         &principal_id,

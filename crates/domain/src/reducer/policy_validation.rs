@@ -355,7 +355,7 @@ pub(crate) fn validate_challenge_response_gate(
     let Some(provider_did) = gate.get("provider_did").and_then(Value::as_str) else {
         return Err("challenge_response_provider_invalid");
     };
-    if arkret_identifiers::DidFullId::new(provider_did.to_owned()).is_err() {
+    if arkret_identifiers::Did::new(provider_did.to_owned()).is_err() {
         return Err("challenge_response_provider_invalid");
     }
     let Some(kinds) = gate.get("challenge_kinds").and_then(Value::as_array) else {
@@ -513,7 +513,7 @@ pub(crate) fn normalize_policy_did_method(value: &str) -> Option<&str> {
 pub(crate) fn principal_admission_gate_allows(
     gate: &serde_json::Map<String, Value>,
     member: &str,
-    resolved_full_id: Option<&arkret_identifiers::DidFullId>,
+    resolved_did: Option<&arkret_identifiers::Did>,
 ) -> bool {
     if !principal_admission_gate_has_selector(gate) {
         return false;
@@ -532,8 +532,8 @@ pub(crate) fn principal_admission_gate_allows(
     if let Some(methods) = gate.get("allowed_did_methods").and_then(Value::as_array)
         && !methods.is_empty()
     {
-        let Some(full_id) = resolved_full_id.filter(|full_id| {
-            arkret_wire::project_full_id_to_core_id(full_id)
+        let Some(did) = resolved_did.filter(|did| {
+            arkret_wire::project_did_to_core_id(did)
                 .is_ok_and(|projected| projected.as_str() == member_id.as_str())
         }) else {
             return false;
@@ -542,7 +542,7 @@ pub(crate) fn principal_admission_gate_allows(
             value
                 .as_str()
                 .and_then(normalize_policy_did_method)
-                .is_some_and(|allowed| allowed == full_id.method())
+                .is_some_and(|allowed| allowed == did.method())
         }) {
             return false;
         }
@@ -894,7 +894,7 @@ mod policy_bundle_component_tests {
     use super::*;
 
     #[test]
-    fn challenge_provider_is_a_resolvable_full_did_not_a_typed_core_id() {
+    fn challenge_provider_is_a_resolvable_did_not_a_typed_core_id() {
         let valid = json!({
             "auto_resolve": true,
             "provider_did": "did:webvh:z6mkfixture:captcha.example",

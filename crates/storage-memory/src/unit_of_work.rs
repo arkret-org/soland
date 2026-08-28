@@ -728,7 +728,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 PersistenceError::Conflict(format!("schema_violation: {error}"))
             })?;
             let existing_id = staged_outbox.values().find_map(|existing| {
-                (existing.peer_did == record.peer_did
+                (existing.peer_service_id == record.peer_service_id
                     && existing.idempotency_key == record.idempotency_key)
                     .then(|| existing.id.clone())
             });
@@ -981,7 +981,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                     PersistenceError::Conflict(format!("schema_violation: {error}"))
                 })?;
                 let existing_id = staged_outbox.values().find_map(|existing| {
-                    (existing.peer_did == record.peer_did
+                    (existing.peer_service_id == record.peer_service_id
                         && existing.idempotency_key == record.idempotency_key)
                         .then(|| existing.id.clone())
                 });
@@ -1244,12 +1244,12 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
             },
-            arkret_wire::project_full_id_to_core_id(
-                &arkret_wire::DidFullId::new(actor_id.to_owned()).unwrap(),
+            arkret_wire::project_did_to_core_id(
+                &arkret_wire::Did::new(actor_id.to_owned()).unwrap(),
             )
             .unwrap(),
-            arkret_wire::project_full_id_to_core_id(
-                &arkret_wire::DidFullId::new(actor_id.to_owned()).unwrap(),
+            arkret_wire::project_did_to_core_id(
+                &arkret_wire::Did::new(actor_id.to_owned()).unwrap(),
             )
             .unwrap(),
             0,
@@ -1292,12 +1292,8 @@ mod tests {
         }
     }
 
-    fn cascade_event_request(
-        seed: &str,
-        realm_id: &str,
-        actor_full_id: &str,
-    ) -> EventCommitRequest {
-        let mut request = event_request(seed.to_owned(), realm_id.to_owned(), actor_full_id, None);
+    fn cascade_event_request(seed: &str, realm_id: &str, actor_did: &str) -> EventCommitRequest {
+        let mut request = event_request(seed.to_owned(), realm_id.to_owned(), actor_did, None);
         let event: arkret_wire::Event =
             serde_json::from_value(request.event.envelope.clone()).unwrap();
         request.event.actor_id = event.actor_id.to_string();
@@ -1392,12 +1388,12 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
             },
-            arkret_wire::project_full_id_to_core_id(
-                &arkret_wire::DidFullId::new(actor_id.to_owned()).unwrap(),
+            arkret_wire::project_did_to_core_id(
+                &arkret_wire::Did::new(actor_id.to_owned()).unwrap(),
             )
             .unwrap(),
-            arkret_wire::project_full_id_to_core_id(
-                &arkret_wire::DidFullId::new(actor_id.to_owned()).unwrap(),
+            arkret_wire::project_did_to_core_id(
+                &arkret_wire::Did::new(actor_id.to_owned()).unwrap(),
             )
             .unwrap(),
             0,
@@ -1633,8 +1629,8 @@ mod tests {
         let mut event: arkret_wire::Event =
             serde_json::from_value(delegated.event.envelope.clone()).unwrap();
         event.executed_by = Some(
-            arkret_wire::project_full_id_to_core_id(
-                &arkret_wire::DidFullId::new("did:web:controller.example").unwrap(),
+            arkret_wire::project_did_to_core_id(
+                &arkret_wire::Did::new("did:web:controller.example").unwrap(),
             )
             .unwrap(),
         );
@@ -2159,7 +2155,7 @@ mod tests {
             test_applet_key(&applet_id, &applet_scope),
             original_record.clone(),
         );
-        let principal_id = "did:web:bridge.example";
+        let principal_id = "ak:did_core:web:bridge.example";
         let idempotency_key = "ghost-batch-conflict";
         let now = Utc::now();
         store.idempotency_keys.data.lock().insert(
@@ -2167,7 +2163,7 @@ mod tests {
             IdempotencyRecord {
                 principal_id: principal_id.to_owned(),
                 idempotency_key: idempotency_key.to_owned(),
-                service_id: "did:web:soland.example".to_owned(),
+                service_id: "ak:did_core:web:soland.example".to_owned(),
                 request_hash: "sha256:first".to_owned(),
                 response_status: 201,
                 response_body: serde_json::json!({"first": true}),

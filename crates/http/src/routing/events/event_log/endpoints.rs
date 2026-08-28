@@ -1121,11 +1121,11 @@ async fn event_delivery_status(
             state,
             &session,
             binding,
-            &delivery.delivery.peer_did,
+            &delivery.delivery.peer_service_id,
         )
         .await;
         let service_id = can_read_service_id
-            .then(|| DidCoreId::new(delivery.delivery.peer_did.clone()))
+            .then(|| DidCoreId::new(delivery.delivery.peer_service_id.clone()))
             .transpose()
             .map_err(|error| {
                 AppError::internal(format!("stored delivery service id is invalid: {error}"))

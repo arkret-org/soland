@@ -1530,7 +1530,7 @@ async fn continue_issue_terminal_receipt(
         completion_attestation_body,
         arkret_wire::DidUrl::new(
             crate::routing::federation::federation_service_signature_key_id(
-                state.service_full_id().as_str(),
+                state.service_did().as_str(),
             ),
         )
         .map_err(|error| {

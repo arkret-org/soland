@@ -476,13 +476,13 @@ mod tests {
 
     use super::*;
 
-    const RECOVERY_CONTROLLER_FULL: &str = "did:webvh:z6mkcontroller:controller.example";
+    const RECOVERY_CONTROLLER_DID: &str = "did:webvh:z6mkcontroller:controller.example";
     #[test]
     fn a_recovery_signing_key_is_not_a_backup_hpke_recipient() {
         let now: DateTime<Utc> = "2026-07-15T00:00:00.000Z".parse().unwrap();
         let agreement = RecoveryKeyAgreementEntry {
             key_agreement_ref: arkret_wire::DidUrl::new(format!(
-                "{RECOVERY_CONTROLLER_FULL}#backup-hpke-1"
+                "{RECOVERY_CONTROLLER_DID}#backup-hpke-1"
             ))
             .unwrap(),
             key_agreement_algorithm:
@@ -505,7 +505,7 @@ mod tests {
         ));
         assert!(!current_backup_hpke_agreement(
             &agreement,
-            &format!("{RECOVERY_CONTROLLER_FULL}#recovery-proof-1"),
+            &format!("{RECOVERY_CONTROLLER_DID}#recovery-proof-1"),
             now
         ));
     }

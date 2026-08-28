@@ -417,7 +417,7 @@ fn keys_query_actor_visible_to_requester(state: &AppState, requester: &str, acto
     let Ok(requester_actor_id) = arkret_identifiers::DidCoreId::new(requester.to_owned()) else {
         return false;
     };
-    let Ok(actor_did) = arkret_identifiers::DidCoreId::new(actor.to_owned()) else {
+    let Ok(actor_id) = arkret_identifiers::DidCoreId::new(actor.to_owned()) else {
         return false;
     };
     let realms = state.realm_directory().snapshot();
@@ -426,7 +426,7 @@ fn keys_query_actor_visible_to_requester(state: &AppState, requester: &str, acto
         if !entry.members.contains(&requester_actor_id) {
             return false;
         }
-        if entry.members.contains(&actor_did) {
+        if entry.members.contains(&actor_id) {
             return true;
         }
         projection
@@ -459,8 +459,8 @@ pub(crate) fn device_signature_kid_points_to_device_key(
             .strip_prefix(&expected_principal_id_key)
             .is_some_and(|rest| rest.starts_with('#') || rest.starts_with('?'))
         || verification_method_controller(kid) == actor
-        || arkret_wire::DidFullId::new(verification_method_controller(kid).to_owned())
-            .and_then(|controller| arkret_wire::project_full_id_to_core_id(&controller))
+        || arkret_wire::Did::new(verification_method_controller(kid).to_owned())
+            .and_then(|controller| arkret_wire::project_did_to_core_id(&controller))
             .is_ok_and(|controller| controller.as_str() == actor)
 }
 
@@ -535,7 +535,7 @@ async fn keys_claim(
     let body = body.into_inner();
     let mut claimed = BTreeMap::new();
     for (actor, devices) in body.one_time_keys {
-        let actor_core = arkret_wire::project_full_id_to_core_id(&actor).map_err(|error| {
+        let actor_core = arkret_wire::project_did_to_core_id(&actor).map_err(|error| {
             AppError::param_invalid(format!("claim actor cannot project: {error}"))
         })?;
         let mut device_map = BTreeMap::new();
@@ -686,7 +686,7 @@ mod tests {
     use super::device_signature_kid_points_to_device_key;
 
     #[test]
-    fn device_signature_kid_projects_full_controller_to_core_actor() {
+    fn device_signature_kid_projects_did_controller_to_core_actor() {
         assert!(device_signature_kid_points_to_device_key(
             "did:web:alice.example#ak:device:primary",
             "ak:did_core:web:alice.example",

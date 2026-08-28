@@ -462,14 +462,15 @@ pub(crate) async fn bind_event_outbox_rows(
     event_pks: &[i64],
     delivery: &FederationOutboxRecord,
 ) -> PersistenceResult<()> {
-    let outbox_id =
-        sql_query("SELECT id FROM federation_outbox WHERE peer_id = $1 AND idempotency_key = $2")
-            .bind::<Text, _>(&delivery.peer_did)
-            .bind::<Text, _>(&delivery.idempotency_key)
-            .get_result::<TextIdRow>(&mut *conn)
-            .await
-            .map_err(PersistenceError::database)?
-            .id;
+    let outbox_id = sql_query(
+        "SELECT id FROM federation_outbox WHERE peer_service_id = $1 AND idempotency_key = $2",
+    )
+    .bind::<Text, _>(&delivery.peer_service_id)
+    .bind::<Text, _>(&delivery.idempotency_key)
+    .get_result::<TextIdRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?
+    .id;
     let mut bound_event_pks = event_pks.iter().copied().collect::<BTreeSet<_>>();
     if let Some(binding) = delivery.realm_fanout.as_ref() {
         if binding.source_event_ids.is_empty() || binding.authority_witnesses.is_empty() {

@@ -35,7 +35,7 @@ fn verify_actor_headers_reject_destination_mismatch() {
     assert_auth_rejection_is_minimal(error);
 }
 
-const SIG_TEST_FULL_ID: &str = "did:webvh:z6mkfixture:test.local";
+const SIG_TEST_DID: &str = "did:webvh:z6mkfixture:test.local";
 const SIG_TEST_CORE_ID: &str = "ak:did_core:webvh:z6mkfixture";
 
 fn signature_input(
@@ -53,7 +53,7 @@ fn signature_input(
 #[test]
 fn signature_input_accepts_expected_federation_key() {
     validate_signature_input(
-        &signature_input(SIG_TEST_FULL_ID, "federation-fanout-key"),
+        &signature_input(SIG_TEST_DID, "federation-fanout-key"),
         SIG_TEST_CORE_ID,
         "test",
     )
@@ -63,7 +63,7 @@ fn signature_input_accepts_expected_federation_key() {
 #[test]
 fn signature_input_accepts_other_controller_owned_service_key() {
     validate_signature_input(
-        &signature_input(SIG_TEST_FULL_ID, "service-key"),
+        &signature_input(SIG_TEST_DID, "service-key"),
         SIG_TEST_CORE_ID,
         "test",
     )

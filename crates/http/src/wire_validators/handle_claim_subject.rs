@@ -1,7 +1,7 @@
 //! Handle-claim subject validation.
 //!
 //! The claim `subject` MUST be a holder/principal `DidCoreId`, not a
-//! server-local `account_id` (`ak:account:`), a full DID, or a generic
+//! server-local `account_id` (`ak:account:`), a DID, or a generic
 //!   resource id. We delegate to the SDK `validate_handle_claim_subject` so soland / coauth /
 //!   cotest agree on the exact rejection surface.
 
@@ -17,12 +17,12 @@ pub fn validate_subject(claim: &Value) -> Result<(), WireRejection> {
         // violation (other schema layers enforce presence where required).
         return Ok(());
     };
-    let did = arkret_identifiers::DidCoreId::new(subject.to_owned()).map_err(|_| {
+    let principal_id = arkret_identifiers::DidCoreId::new(subject.to_owned()).map_err(|_| {
         WireRejection::new(format!(
             "handle claim subject must be a holder/principal core id ({subject})"
         ))
     })?;
-    arkret_models_identity::handle::validate_handle_claim_subject(&did)
+    arkret_models_identity::handle::validate_handle_claim_subject(&principal_id)
         .map_err(|err| WireRejection::new(err.to_string()))
 }
 

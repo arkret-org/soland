@@ -9,7 +9,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-use arkret_identifiers::{CellRef, DidFullId, Hash, RealmId, SealId};
+use arkret_identifiers::{CellRef, Did, Hash, RealmId, SealId};
 use arkret_identity::service_identity::{
     DidCoreIdentityKeyRef, DidCoreIdentityState, LocalDidCoreIdentity, StoredDidCoreIdentity,
 };
@@ -23,7 +23,7 @@ use arkret_state::state::{
     CellRegistry, CellStore, ControlEventStore, MemoryCellStore, MemoryControlEventStore,
     MemorySealStore, SealStore, StoreError, StoreResult, compute_state_root,
 };
-use arkret_wire::{DidCoreId, Seal, ServiceKind, project_full_id_to_core_id};
+use arkret_wire::{DidCoreId, Seal, ServiceKind, project_did_to_core_id};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::{self, BoxStream, StreamExt};
@@ -67,8 +67,8 @@ pub fn app_state(config: AppConfig) -> AppState {
     app_state_with_identity(config, Arc::new(persistence), identity, signing_seed)
 }
 
-pub fn app_state_with_service_full_id(config: AppConfig, full_id: DidFullId) -> AppState {
-    let identity = fixture_service_identity_for_full_id(&config, full_id);
+pub fn app_state_with_service_did(config: AppConfig, did: Did) -> AppState {
+    let identity = fixture_service_identity_for_did(&config, did);
     let signing_seed = fixture_signing_seed(&config, &identity);
     let persistence = if config.seed_demo_data {
         SolandMemoryPersistenceStore::new_with_demo_data()
@@ -111,7 +111,7 @@ pub async fn app_state_with_persistence(
             identity
                 .identity()
                 .expect("fixture has a serving identity")
-                .full_id
+                .did
                 .as_str(),
         )
         .await
@@ -238,14 +238,14 @@ pub fn app_state_with_identity(
             .identity()
             .expect("fixture has a serving identity");
         let prepared = fixture_prepared_service_inception(&config, resolved_signing_seed);
-        let method_history_head = if prepared.did == identity.full_id.as_str() {
+        let method_history_head = if prepared.did == identity.did.as_str() {
             arkret_canonical::canonical_sha256(&prepared.log_entry)
                 .expect("fixture service WebVH history digest")
         } else {
             format!("sha256:{}", "0".repeat(64))
         };
         arkret_models_identity::ResolutionCommitment {
-            full_id: identity.full_id.clone(),
+            did: identity.did.clone(),
             method_history_head,
             version_id: identity.version_id.clone(),
         }
@@ -261,7 +261,7 @@ pub fn app_state_with_identity(
     let projection = Box::leak(Box::new(projections.test_state().clone()));
     let realm_directory = soland_http::state::build_realm_directory(
         &config,
-        &serving_identity.full_id,
+        &serving_identity.did,
         &serving_identity.service_id,
         resolved_signing_seed,
     );
@@ -436,23 +436,20 @@ pub fn fixture_principal_server_id() -> DidCoreId {
 pub fn fixture_service_identity(config: &AppConfig) -> DidCoreIdentityState {
     let signing_seed = fixture_service_signing_seed(config);
     let prepared = fixture_prepared_service_inception(config, signing_seed);
-    fixture_service_identity_for_full_id_and_version(
+    fixture_service_identity_for_did_and_version(
         config,
-        DidFullId::new(prepared.did.clone()).expect("prepared fixture service DID"),
+        Did::new(prepared.did.clone()).expect("prepared fixture service DID"),
         prepared.version_id.clone(),
     )
 }
 
-fn fixture_service_identity_for_full_id(
-    config: &AppConfig,
-    full_id: DidFullId,
-) -> DidCoreIdentityState {
-    fixture_service_identity_for_full_id_and_version(config, full_id, "fixture-v1".to_owned())
+fn fixture_service_identity_for_did(config: &AppConfig, did: Did) -> DidCoreIdentityState {
+    fixture_service_identity_for_did_and_version(config, did, "fixture-v1".to_owned())
 }
 
-fn fixture_service_identity_for_full_id_and_version(
+fn fixture_service_identity_for_did_and_version(
     config: &AppConfig,
-    full_id: DidFullId,
+    did: Did,
     version_id: String,
 ) -> DidCoreIdentityState {
     let registration_key = ServiceRegistrationKey::new(
@@ -464,11 +461,11 @@ fn fixture_service_identity_for_full_id_and_version(
     let signing_key_ref =
         DidCoreIdentityKeyRef::new("fixture:soland:service-signing-key").expect("fixture key ref");
     let service_id =
-        project_full_id_to_core_id(&full_id).expect("fixture service DID projects to a core id");
+        project_did_to_core_id(&did).expect("fixture service DID projects to a core id");
     DidCoreIdentityState::Ready {
         identity: LocalDidCoreIdentity {
             service_id,
-            full_id,
+            did,
             registration_key,
             provider: None,
             signing_key_refs: vec![signing_key_ref.clone()],
@@ -490,9 +487,9 @@ fn fixture_stored_service_identity(
         .identity()
         .expect("fixture has a serving identity")
         .clone();
-    let verification_method = format!("{}#notary-key", identity.full_id);
+    let verification_method = format!("{}#notary-key", identity.did);
     let prepared = fixture_prepared_service_inception(config, signing_seed);
-    let prepared_matches_identity = prepared.did == identity.full_id.as_str();
+    let prepared_matches_identity = prepared.did == identity.did.as_str();
     let did_document = if prepared_matches_identity {
         serde_json::from_value(
             prepared
@@ -505,12 +502,12 @@ fn fixture_stored_service_identity(
     } else {
         ServiceDidDocument {
             context: vec!["https://www.w3.org/ns/did/v1".to_owned()],
-            id: identity.full_id.clone(),
+            id: identity.did.clone(),
             also_known_as: Vec::new(),
             verification_method: vec![ServiceDidVerificationMethod {
                 id: verification_method.clone(),
                 method_type: "Multikey".to_owned(),
-                controller: identity.full_id.clone(),
+                controller: identity.did.clone(),
                 public_key_multibase: arkret_canonical::ed25519_pubkey_to_did_key_multibase(
                     ed25519_dalek::SigningKey::from_bytes(&signing_seed)
                         .verifying_key()
@@ -520,7 +517,7 @@ fn fixture_stored_service_identity(
             authentication: vec![verification_method.clone()],
             assertion_method: vec![verification_method],
             service: vec![ServiceDidEndpoint {
-                id: format!("{}#service", identity.full_id),
+                id: format!("{}#service", identity.did),
                 endpoint_type: "ArkretService".to_owned(),
                 service_kind: ServiceKind::PrincipalServer,
                 service_endpoint: identity.registration_key.public_base().clone(),
@@ -534,9 +531,8 @@ fn fixture_stored_service_identity(
         format!("sha256:{}", "0".repeat(64))
     };
     let issued_at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
-    let provider_full_id =
-        DidFullId::new("did:webvh:z6mkfixture:provider.example:webvh:service".to_owned())
-            .expect("fixture provider DID");
+    let provider_did = Did::new("did:webvh:z6mkfixture:provider.example:webvh:service".to_owned())
+        .expect("fixture provider DID");
     let mut receipt = ServiceRegistrationReceipt {
         registration_receipt_id: arkret_wire::ServiceRegistrationReceiptId::new(format!(
             "ak:service_registration_receipt:{}",
@@ -545,19 +541,17 @@ fn fixture_stored_service_identity(
         .expect("fixture receipt id"),
         registration_key: identity.registration_key.clone(),
         service_id: identity.service_id.clone(),
-        full_id: identity.full_id.clone(),
+        did: identity.did.clone(),
         version_id: identity.version_id.clone(),
         log_head_digest,
         control_key_digest: format!("sha256:{}", "1".repeat(64)),
         issued_at,
-        provider_service_id: project_full_id_to_core_id(&provider_full_id)
+        provider_service_id: project_did_to_core_id(&provider_did)
             .expect("fixture provider projection"),
         proof: arkret_wire::PayloadProof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-            verification_method: arkret_wire::DidUrl::new(format!(
-                "{provider_full_id}#service-key"
-            ))
-            .expect("fixture provider method"),
+            verification_method: arkret_wire::DidUrl::new(format!("{provider_did}#service-key"))
+                .expect("fixture provider method"),
             payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .expect("fixture receipt digest"),
             created_at: issued_at,
@@ -814,19 +808,19 @@ pub fn fixture_principal_control_realm(principal_id: &str) -> String {
 /// authority/PCR coordinate required by strict principal-device proof gates.
 pub async fn project_authorized_principal_device(
     state: &AppState,
-    principal_full_id: &str,
+    principal_did: &str,
     device_id: &str,
     signing_key: &ed25519_dalek::SigningKey,
 ) -> String {
-    let principal_full = DidFullId::new(principal_full_id.to_owned()).unwrap();
-    let principal_id = arkret_wire::project_full_id_to_core_id(&principal_full).unwrap();
+    let principal_did = Did::new(principal_did.to_owned()).unwrap();
+    let principal_id = arkret_wire::project_did_to_core_id(&principal_did).unwrap();
     let pcr_create = cba_basis::fixture_principal_control_realm_create_for_server(
-        principal_full_id,
+        principal_did,
         arkret_identifiers::DidCoreId::new(state.service_id().clone())
             .expect("fixture service core DID"),
     );
     let pcr_realm_id = pcr_create.realm_id.clone();
-    cba_basis::seed_realm_genesis_event(state, pcr_realm_id.as_str(), principal_full_id).await;
+    cba_basis::seed_realm_genesis_event(state, pcr_realm_id.as_str(), principal_did).await;
     let genesis_record = state
         .test_persistence()
         .events()
@@ -912,7 +906,7 @@ pub async fn project_authorized_principal_device(
                     genesis_event: genesis.clone(),
                     current_event: genesis.clone(),
                     projection: arkret_models_identity::PrincipalResolutionProjection {
-                        full_id: principal_full,
+                        did: principal_did,
                         method_history_head: format!("sha256:{}", "1".repeat(64)),
                         version_id: "1-QmTestAuthority".to_owned(),
                         resolution_event_ref: genesis.event_id.to_string(),

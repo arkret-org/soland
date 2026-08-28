@@ -582,7 +582,8 @@ impl PersistenceHandle {
         let now = chrono::Utc::now();
         let account = soland_storage::AccountRecord {
             id: "ak:account:0196419b-0000-7000-8000-000000000001".to_owned(),
-            did: "ak:did_core:web:alice.example".to_owned(),
+            principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
+                .expect("demo principal id is canonical"),
             localpart: "alice".to_owned(),
             display_name: Some("Alice Example".to_owned()),
             bio: None,
@@ -592,14 +593,14 @@ impl PersistenceHandle {
         self.persistence.accounts().put(&account).await?;
         self.persistence
             .account_localparts()
-            .add(&account.did, &account.localpart, true)
+            .add(account.principal_id.as_str(), &account.localpart, true)
             .await?;
         self.persistence
             .realm_meta()
             .put(
                 "ak:realm:AezgkQb6OtCT0VrUyihcuY6ih8wmyafofZG6EmHBpM7e",
                 &soland_storage::RealmMetaRecord {
-                    owner: account.did,
+                    owner: account.principal_id.into_string(),
                     deleted: false,
                     discoverability: "public".to_owned(),
                     history_access: "all_history_for_current_members".to_owned(),

@@ -16,10 +16,8 @@ fn canonical_request_body<T: serde::Serialize>(value: &T) -> Vec<u8> {
 }
 
 fn core_id(value: &str) -> arkret_wire::DidCoreId {
-    arkret_wire::project_full_id_to_core_id(
-        &arkret_wire::DidFullId::new(value).expect("fixture full DID"),
-    )
-    .expect("fixture core DID")
+    arkret_wire::project_did_to_core_id(&arkret_wire::Did::new(value).expect("fixture DID"))
+        .expect("fixture core DID")
 }
 
 fn fixture_hash(byte: char) -> arkret_wire::Hash {
@@ -86,17 +84,17 @@ fn normal_contact_evidence(
     let contact_round_id =
         arkret_wire::Hash::new(arkret_canonical::sha256_digest(round_material)).unwrap();
     let current_proof =
-        |issuer: arkret_wire::DidCoreId,
-         issuer_full: &str,
-         head_event_ref: arkret_wire::EventId| ContactCurrentProof {
-            contact_round_id: contact_round_id.clone(),
-            issuer,
-            terminal: false,
-            accepted_frontier: vec![head_event_ref.clone()],
-            head_event_ref,
-            complete_through: 1,
-            fresh_until: now + chrono::Duration::hours(1),
-            signature: fixture_protocol_signature(issuer_full, now),
+        |issuer: arkret_wire::DidCoreId, issuer_did: &str, head_event_ref: arkret_wire::EventId| {
+            ContactCurrentProof {
+                contact_round_id: contact_round_id.clone(),
+                issuer,
+                terminal: false,
+                accepted_frontier: vec![head_event_ref.clone()],
+                head_event_ref,
+                complete_through: 1,
+                fresh_until: now + chrono::Duration::hours(1),
+                signature: fixture_protocol_signature(issuer_did, now),
+            }
         };
     ContactRoundEvidenceBundle {
         contact_round_id: contact_round_id.clone(),
@@ -140,8 +138,8 @@ fn human_direct_resolve_request(
 ) -> arkret_models_collaboration::direct_conversation_ops::DirectConversationResolveRequestBody {
     arkret_models_collaboration::direct_conversation_ops::DirectConversationResolveRequestBody {
         peer: arkret_models_collaboration::contact_operations::ContactPeer::Human {
-            principal_id: arkret_wire::project_full_id_to_core_id(
-                &arkret_wire::DidFullId::new(peer).expect("valid human contact DID"),
+            principal_id: arkret_wire::project_did_to_core_id(
+                &arkret_wire::Did::new(peer).expect("valid human contact DID"),
             )
             .unwrap(),
         },
@@ -212,10 +210,9 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, _suffix:
     let signing_key = test_ephemeral_device_signing_key(BOB_DID, BOB_DEVICE);
     let _authorize_event_id =
         project_authorized_device(&state, BOB_DID, BOB_DEVICE, &signing_key).await;
-    let bob_core = arkret_wire::project_full_id_to_core_id(
-        &arkret_wire::DidFullId::new(BOB_DID.to_owned()).unwrap(),
-    )
-    .unwrap();
+    let bob_core =
+        arkret_wire::project_did_to_core_id(&arkret_wire::Did::new(BOB_DID.to_owned()).unwrap())
+            .unwrap();
     let mls_identity = arkret_mls::ArkretMlsIdentity::new_human_device(
         bob_core.clone(),
         arkret_wire::DeviceId::new(BOB_DEVICE.to_owned()).unwrap(),
@@ -316,8 +313,8 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
     let _alice = dev_token(state.clone()).await;
     let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
     upload_bob_direct_keypackage(state.clone(), &bob, "peer-http").await;
-    let source_service_full_id = "did:web:peer-claim-source.example";
-    let source_service_id = core_id(source_service_full_id);
+    let source_service_did = "did:web:peer-claim-source.example";
+    let source_service_id = core_id(source_service_did);
     let destination_service_id = state.service_id().to_owned();
     let (signing_key, authorize_event_id) =
         seed_remote_claim_prerequisites(&state, source_service_id.as_str()).await;
@@ -414,7 +411,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
         state.config().public_base_url.trim_end_matches('/')
     );
     let headers = signed_federation_push_headers_with_idempotency(
-        source_service_full_id,
+        source_service_did,
         &destination_service_id,
         state.config().trust_domain.as_str(),
         &target_uri,
@@ -446,7 +443,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
     assert_eq!(outcome.claim_receipt.request, request.unsigned_request());
 
     let replay_headers = signed_federation_push_headers_with_idempotency(
-        source_service_full_id,
+        source_service_did,
         &destination_service_id,
         state.config().trust_domain.as_str(),
         &target_uri,
@@ -488,7 +485,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
     .unwrap();
     let conflicting_value = serde_json::to_value(&conflicting_request).unwrap();
     let conflict_headers = signed_federation_push_headers_with_idempotency(
-        source_service_full_id,
+        source_service_did,
         &destination_service_id,
         state.config().trust_domain.as_str(),
         &target_uri,
@@ -516,7 +513,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
         state.config().public_base_url.trim_end_matches('/')
     );
     let query_headers = signed_federation_push_headers_same_trust(
-        source_service_full_id,
+        source_service_did,
         &destination_service_id,
         state.config().trust_domain.as_str(),
         &query_uri,

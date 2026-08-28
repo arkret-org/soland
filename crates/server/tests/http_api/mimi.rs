@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::common::*;
 
-const MIMI_SOURCE_SERVICE_FULL_ID: &str = "did:web:remote-mimi.example";
+const MIMI_SOURCE_SERVICE_DID: &str = "did:web:remote-mimi.example";
 const MIMI_SOURCE_SERVICE_ID: &str = "ak:did_core:web:remote-mimi.example";
 const MIMI_PROVIDER_ID: &str = "mimi://remote-mimi.example/provider";
 const MIMI_TEST_DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -37,7 +37,7 @@ fn signed_mimi_headers(
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
     let created = chrono::Utc::now().timestamp();
     let expires = created + 300;
-    let verification_method = format!("{MIMI_SOURCE_SERVICE_FULL_ID}#mimi-provider-test-key");
+    let verification_method = format!("{MIMI_SOURCE_SERVICE_DID}#mimi-provider-test-key");
     let destination_service_id = state.service_id().as_str();
     let mut covered_components = vec![
         arkret_signatures::http_signature::Component::Method,
@@ -126,11 +126,11 @@ fn mimi_provider_signing_key(verification_method: &str) -> SigningKey {
 }
 
 fn mimi_room_uri(state: &AppState, room_id: &str) -> String {
-    let service_full_id = state.service_full_id();
-    let service_full_id = service_full_id.as_str();
-    let provider_id = if let Some(domain) = service_full_id.strip_prefix("did:web:") {
+    let service_did = state.service_did();
+    let service_did = service_did.as_str();
+    let provider_id = if let Some(domain) = service_did.strip_prefix("did:web:") {
         format!("mimi://{}", canonical_mimi_authority(domain))
-    } else if let Some(rest) = service_full_id.strip_prefix("did:webvh:") {
+    } else if let Some(rest) = service_did.strip_prefix("did:webvh:") {
         let (scid, authority_and_path) = rest
             .split_once(':')
             .expect("fixture WebVH service identity must carry an authority");
@@ -138,10 +138,7 @@ fn mimi_room_uri(state: &AppState, room_id: &str) -> String {
         assert!(!authority_and_path.is_empty());
         format!("mimi://{}", canonical_mimi_authority(authority_and_path))
     } else {
-        format!(
-            "mimi://{}",
-            service_full_id.replace(':', ".").to_lowercase()
-        )
+        format!("mimi://{}", service_did.replace(':', ".").to_lowercase())
     };
     arkret_wire::MimiRoomUri::new(format!("{provider_id}/rooms/{room_id}"))
         .expect("fixture service identity and room id must form a canonical MIMI room URI")
@@ -205,21 +202,15 @@ async fn mimi_room_update_body(
     let mut event = signed_canonical_event(
         "mimi-room-binding-event",
         arkret_wire::EventKind::MimiRoomBinding.as_str(),
-        MIMI_SOURCE_SERVICE_FULL_ID,
+        MIMI_SOURCE_SERVICE_DID,
         MIMI_TEST_DEVICE_ID,
         realm_id,
         0,
         vec![],
         binding["payload"].clone(),
     );
-    move_event_to_actor_realm_frontier(
-        state,
-        token,
-        MIMI_SOURCE_SERVICE_FULL_ID,
-        realm_id,
-        &mut event,
-    )
-    .await;
+    move_event_to_actor_realm_frontier(state, token, MIMI_SOURCE_SERVICE_DID, realm_id, &mut event)
+        .await;
     let submission = arkret_wire::EventInitialSubmission {
         event: serde_json::from_value(event).unwrap(),
         authorization_lease: None,
@@ -322,8 +313,8 @@ fn mimi_provider_facade_contracts_work() {
 async fn mimi_provider_facade_contracts_work_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    seed_test_realm_basis_seal(&state, demo_realm_id(), state.service_full_id().as_str()).await;
-    add_test_realm_member(&state, demo_realm_id(), MIMI_SOURCE_SERVICE_FULL_ID);
+    seed_test_realm_basis_seal(&state, demo_realm_id(), state.service_did().as_str()).await;
+    add_test_realm_member(&state, demo_realm_id(), MIMI_SOURCE_SERVICE_DID);
     let service = app_from_state(state.clone());
 
     let well_known: Value = TestClient::get("http://server/.well-known/mimi-protocol-directory")
@@ -396,7 +387,7 @@ async fn mimi_provider_facade_contracts_work_body() {
     let room_uri = mimi_room_uri(&state, room_id);
     project_test_authorized_device(
         &state,
-        MIMI_SOURCE_SERVICE_FULL_ID,
+        MIMI_SOURCE_SERVICE_DID,
         MIMI_TEST_DEVICE_ID,
         &SigningKey::from_bytes(&[21_u8; 32]),
     )
@@ -586,22 +577,22 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     let demo_realm = demo_realm_id();
     let custom_realm_id = soland_test_support::cba_basis::seed_event_derived_realm_genesis_event(
         &state,
-        state.service_full_id().as_str(),
+        state.service_did().as_str(),
         "MIMI migration target",
     )
     .await;
     let custom_realm = custom_realm_id.as_str();
-    seed_test_realm_basis_seal(&state, demo_realm, state.service_full_id().as_str()).await;
-    seed_test_realm_basis_seal(&state, custom_realm, state.service_full_id().as_str()).await;
-    add_test_realm_member(&state, demo_realm, MIMI_SOURCE_SERVICE_FULL_ID);
-    add_test_realm_member(&state, custom_realm, MIMI_SOURCE_SERVICE_FULL_ID);
+    seed_test_realm_basis_seal(&state, demo_realm, state.service_did().as_str()).await;
+    seed_test_realm_basis_seal(&state, custom_realm, state.service_did().as_str()).await;
+    add_test_realm_member(&state, demo_realm, MIMI_SOURCE_SERVICE_DID);
+    add_test_realm_member(&state, custom_realm, MIMI_SOURCE_SERVICE_DID);
     let room_id = "01JSMIMI-P4-E2E";
     let group_id = "mimi-group-p4-001";
     let room_uri = mimi_room_uri(&state, room_id);
 
     project_test_authorized_device(
         &state,
-        MIMI_SOURCE_SERVICE_FULL_ID,
+        MIMI_SOURCE_SERVICE_DID,
         MIMI_TEST_DEVICE_ID,
         &SigningKey::from_bytes(&[21_u8; 32]),
     )
@@ -901,15 +892,15 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
     let realm_id = demo_realm_id();
-    seed_test_realm_basis_seal(&state, realm_id, state.service_full_id().as_str()).await;
-    add_test_realm_member(&state, realm_id, MIMI_SOURCE_SERVICE_FULL_ID);
+    seed_test_realm_basis_seal(&state, realm_id, state.service_did().as_str()).await;
+    add_test_realm_member(&state, realm_id, MIMI_SOURCE_SERVICE_DID);
     let room_id = "01JSMIMI-P75-POLICY";
     let group_id = "mimi-group-policy-001";
     let room_uri = mimi_room_uri(&state, room_id);
 
     project_test_authorized_device(
         &state,
-        MIMI_SOURCE_SERVICE_FULL_ID,
+        MIMI_SOURCE_SERVICE_DID,
         MIMI_TEST_DEVICE_ID,
         &SigningKey::from_bytes(&[21_u8; 32]),
     )

@@ -261,7 +261,7 @@ mod tests {
 
     use super::*;
 
-    const ACTOR_FULL_ID: &str = "did:webvh:z6mkalice:alice.example";
+    const ACTOR_DID: &str = "did:webvh:z6mkalice:alice.example";
     const ACTOR_ID: &str = "ak:did_core:webvh:z6mkalice";
     const DEVICE_ID: &str = "ak:device:01964137-0000-7000-8000-000000000001";
     const REALM_ID: &str = "ak:realm:ATp5qI_DaGqeL1spvchnU-p10lfIfsboDfYyWaObd1Y6";
@@ -273,7 +273,7 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_identifiers::RealmId::new(REALM_ID).expect("realm"),
             },
-            crate::test_actor_id_str(ACTOR_FULL_ID),
+            crate::test_actor_id_str(ACTOR_DID),
             1,
             "019641370000-0000-00000001".parse().expect("hlc"),
             json!({

@@ -26,8 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_canonical as canonical;
 use arkret_identifiers::{
-    BlobRef, DidCoreId, DidFullId, MessageId, RealmId, StrandId, SubscriptionId,
-    project_full_id_to_core_id,
+    BlobRef, Did, DidCoreId, MessageId, RealmId, StrandId, SubscriptionId, project_did_to_core_id,
 };
 use arkret_models_collaboration::governance::realm_governance::RealmAliasPayload;
 use arkret_models_collaboration::objects::realm_alias::RealmAlias;
@@ -89,9 +88,9 @@ fn directory_actor_core_id(value: &str) -> Result<DidCoreId, AppError> {
     if let Ok(core_id) = DidCoreId::new(value.to_owned()) {
         return Ok(core_id);
     }
-    let full_id = DidFullId::new(value.to_owned())
+    let did = Did::new(value.to_owned())
         .map_err(|error| AppError::internal(format!("directory actor DID is invalid: {error}")))?;
-    project_full_id_to_core_id(&full_id).map_err(|error| {
+    project_did_to_core_id(&did).map_err(|error| {
         AppError::internal(format!("directory actor DID projection failed: {error}"))
     })
 }
@@ -165,7 +164,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let service_resolution = state.service_resolution_commitment();
     let service_id =
-        arkret_wire::project_full_id_to_core_id(&service_resolution.full_id).map_err(|error| {
+        arkret_wire::project_did_to_core_id(&service_resolution.did).map_err(|error| {
             AppError::internal(format!("service resolution projection failed: {error}"))
         })?;
     let trust_domain = state.config().trust_domain.clone();

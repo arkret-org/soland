@@ -733,7 +733,7 @@ async fn enqueue_member_history_request_replicas(
         | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
     };
     let local_service_id =
-        arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
+        arkret_wire::project_did_to_core_id(&state.service_resolution_commitment().did)
             .map_err(|error| AppError::internal(error.to_string()))?;
     let targets = {
         let snapshot = state.projections().snapshot();
@@ -824,7 +824,7 @@ async fn enqueue_member_history_request_replicas(
         );
         let delivery = soland_services::federation::FederationDeliveryRecord {
             id: outbox_id.clone(),
-            peer_did: destination_service_id.to_string(),
+            peer_service_id: destination_service_id.to_string(),
             peer_url: Some(route.base_url),
             endpoint: "/_arkret/peer/history-key-requests/replicate".to_owned(),
             idempotency_key: format!(
@@ -848,7 +848,7 @@ async fn enqueue_member_history_request_replicas(
             .await
             .map_err(map_service_error)?;
         if stored.id != outbox_id
-            || stored.peer_did != delivery.peer_did
+            || stored.peer_service_id != delivery.peer_service_id
             || stored.endpoint != delivery.endpoint
             || stored.idempotency_key != delivery.idempotency_key
             || stored.payload_json != delivery.payload_json
@@ -889,7 +889,7 @@ async fn validate_local_history_release_binding(
         | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
     };
     let local_service_id =
-        arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
+        arkret_wire::project_did_to_core_id(&state.service_resolution_commitment().did)
             .map_err(|error| AppError::internal(error.to_string()))?;
     let binding_ref = {
         let snapshot = state.projections().snapshot();
@@ -1049,11 +1049,10 @@ async fn relay_history_key_response(
             "history response relay transport binding mismatch",
         ));
     }
-    let local_service_id =
-        arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
-            .map_err(|error| {
-                AppError::internal(format!("local service DID is invalid: {error}"))
-            })?;
+    let local_service_id = arkret_wire::project_did_to_core_id(
+        &state.service_resolution_commitment().did,
+    )
+    .map_err(|error| AppError::internal(format!("local service DID is invalid: {error}")))?;
     if relay
         .source_relay_attestation
         .destination_release_service_id
@@ -1545,7 +1544,7 @@ async fn enqueue_remote_history_response(
     let outbox_id = history_response_relay_outbox_id(response);
     let delivery = soland_services::federation::FederationDeliveryRecord {
         id: outbox_id.clone(),
-        peer_did: destination.to_string(),
+        peer_service_id: destination.to_string(),
         peer_url: Some(route.base_url),
         endpoint: HISTORY_RESPONSE_RELAY_ENDPOINT.to_owned(),
         idempotency_key: response.response_id.to_string(),
@@ -1565,7 +1564,7 @@ async fn enqueue_remote_history_response(
         .await
         .map_err(map_service_error)?;
     if stored.id != outbox_id
-        || stored.peer_did != delivery.peer_did
+        || stored.peer_service_id != delivery.peer_service_id
         || stored.endpoint != delivery.endpoint
         || stored.idempotency_key != delivery.idempotency_key
         || stored.payload_json != delivery.payload_json
@@ -1769,7 +1768,7 @@ async fn build_local_history_source_relay(
             .validate_for_archive_tuple(&archive_tuple)
             .map_err(|error| AppError::capability_denied(error.to_string()))?;
         let local_service_id =
-            arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
+            arkret_wire::project_did_to_core_id(&state.service_resolution_commitment().did)
                 .map_err(|error| AppError::internal(error.to_string()))?;
         let source_record_digest = response
             .source_record_digest()
@@ -1864,7 +1863,7 @@ async fn build_local_history_source_relay(
         .map_err(map_service_error)?
         .ok_or_else(|| AppError::capability_denied("source delivery binding is unavailable"))?;
     let local_service_id =
-        arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
+        arkret_wire::project_did_to_core_id(&state.service_resolution_commitment().did)
             .map_err(|error| AppError::internal(error.to_string()))?;
     let recipient_service = binding
         .envelope
@@ -1940,7 +1939,7 @@ async fn local_rrk_source_authority(
     AppError,
 > {
     let local_service_id =
-        arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
+        arkret_wire::project_did_to_core_id(&state.service_resolution_commitment().did)
             .map_err(|error| AppError::internal(error.to_string()))?;
     if state
         .projections()
@@ -4388,7 +4387,7 @@ async fn list_history_key_requests(
         (records, page.next_sequence)
     } else {
         let local_service_id =
-            arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
+            arkret_wire::project_did_to_core_id(&state.service_resolution_commitment().did)
                 .map_err(|error| AppError::internal(error.to_string()))?;
         let mut scan_after = after_sequence;
         let mut authorized = Vec::new();
@@ -4622,11 +4621,10 @@ async fn replicate_history_key_request(
         "history request relay",
     )
     .await?;
-    let local_service_id =
-        arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
-            .map_err(|error| {
-                AppError::internal(format!("local service DID is invalid: {error}"))
-            })?;
+    let local_service_id = arkret_wire::project_did_to_core_id(
+        &state.service_resolution_commitment().did,
+    )
+    .map_err(|error| AppError::internal(format!("local service DID is invalid: {error}")))?;
     if replica.destination_service_id != local_service_id {
         return Err(AppError::capability_denied(
             "history request replica destination service mismatch",
@@ -4812,13 +4810,14 @@ async fn replicate_organization_recovery_archive(
         .validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     verify_archive_replica_service_proof(state, &replica).await?;
-    let local_service_id =
-        arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
-            .map_err(|error| {
-                AppError::internal(format!(
-                    "local service DID cannot project to core_id: {error}"
-                ))
-            })?;
+    let local_service_id = arkret_wire::project_did_to_core_id(
+        &state.service_resolution_commitment().did,
+    )
+    .map_err(|error| {
+        AppError::internal(format!(
+            "local service DID cannot project to core_id: {error}"
+        ))
+    })?;
     if replica.source_service_id.as_str() != source_service_id
         || replica.holder_service_id != local_service_id
     {
@@ -4858,17 +4857,16 @@ async fn verify_archive_replica_service_proof(
                 "organization recovery archive proof method has no controller",
             )
         })?;
-    let controller = arkret_wire::DidFullId::new(controller.to_owned()).map_err(|error| {
+    let controller = arkret_wire::Did::new(controller.to_owned()).map_err(|error| {
         AppError::capability_denied(format!(
             "organization recovery archive proof controller is invalid: {error}"
         ))
     })?;
-    let controller_core =
-        arkret_wire::project_full_id_to_core_id(&controller).map_err(|error| {
-            AppError::capability_denied(format!(
-                "organization recovery archive proof controller cannot project: {error}"
-            ))
-        })?;
+    let controller_core = arkret_wire::project_did_to_core_id(&controller).map_err(|error| {
+        AppError::capability_denied(format!(
+            "organization recovery archive proof controller cannot project: {error}"
+        ))
+    })?;
     if controller_core != replica.source_service_id {
         return Err(AppError::capability_denied(
             "organization recovery archive proof controller does not match source service",
@@ -4904,13 +4902,12 @@ async fn verify_history_proof(
         .split_once('#')
         .map(|(controller, _)| controller)
         .ok_or_else(|| AppError::capability_denied(format!("{label} method has no controller")))?;
-    let controller = arkret_wire::DidFullId::new(controller.to_owned()).map_err(|error| {
+    let controller = arkret_wire::Did::new(controller.to_owned()).map_err(|error| {
         AppError::capability_denied(format!("{label} controller is invalid: {error}"))
     })?;
-    let controller_core =
-        arkret_wire::project_full_id_to_core_id(&controller).map_err(|error| {
-            AppError::capability_denied(format!("{label} controller cannot project: {error}"))
-        })?;
+    let controller_core = arkret_wire::project_did_to_core_id(&controller).map_err(|error| {
+        AppError::capability_denied(format!("{label} controller cannot project: {error}"))
+    })?;
     if &controller_core != expected_controller {
         return Err(AppError::capability_denied(format!(
             "{label} controller binding mismatch"

@@ -567,7 +567,7 @@ diesel::table! {
 diesel::table! {
     federation_outbox (id) {
         id -> Text,
-        peer_id -> Text,
+        peer_service_id -> Text,
         peer_url -> Nullable<Text>,
         endpoint -> Text,
         idempotency_key -> Text,
@@ -602,7 +602,7 @@ diesel::table! {
     federation_outbox_dead_letter (id) {
         id -> Text,
         outbox_id -> Text,
-        peer_id -> Text,
+        peer_service_id -> Text,
         endpoint -> Text,
         idempotency_key -> Text,
         last_http_status -> Nullable<Int4>,

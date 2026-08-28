@@ -32,7 +32,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use anyhow::Result;
-use arkret_identifiers::{CellRef, DidFullId, Hash, Hlc, RealmId, SealId};
+use arkret_identifiers::{CellRef, Did, Hash, Hlc, RealmId, SealId};
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencySelector,
 };
@@ -827,9 +827,8 @@ impl NotaryWorker {
             "00".repeat(32)
         ))
         .expect("zero SealId is well-formed");
-        let service_full_id = state.service_full_id();
-        let zero_sig =
-            zero_notary_sig_placeholder(&service_full_id, digest_suites.seal_digest_suite)?;
+        let service_did = state.service_did();
+        let zero_sig = zero_notary_sig_placeholder(&service_did, digest_suites.seal_digest_suite)?;
         let mut seal = Seal {
             id: zero_seal_id,
             realm_id: realm_id.clone(),
@@ -2046,7 +2045,7 @@ fn notary_cell_ref(_realm_id: &RealmId) -> Result<CellRef, arkret_identifiers::I
 }
 
 fn zero_notary_sig_placeholder(
-    service_full_id: &DidFullId,
+    service_did: &Did,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<SealSignature, NotaryError> {
     let payload_digest = Hash::new(format!("{}:{}", digest_suite.as_str(), "00".repeat(32)))
@@ -2055,7 +2054,7 @@ fn zero_notary_sig_placeholder(
     // the empty string any more. It carries the same method the real
     // signature will use; the whole value is still excluded from
     // `canonical_bytes_for_id` and overwritten before the Seal reaches the wire.
-    let verification_method = arkret_wire::DidUrl::new(format!("{service_full_id}#notary-key"))
+    let verification_method = arkret_wire::DidUrl::new(format!("{service_did}#notary-key"))
         .map_err(|e| {
             NotaryError::Construction(format!("service notary verification method: {e}"))
         })?;
@@ -2373,8 +2372,8 @@ mod tests {
     }
 
     fn test_signer_descriptor(did: &str, seed: u8) -> arkret_wire::NotarySignerDescriptor {
-        let full_id = DidFullId::new(did.to_owned()).unwrap();
-        let actor_id = arkret_wire::project_full_id_to_core_id(&full_id).unwrap();
+        let did = Did::new(did.to_owned()).unwrap();
+        let actor_id = arkret_wire::project_did_to_core_id(&did).unwrap();
         let method = arkret_wire::DidUrl::new(format!("{did}#notary-key")).unwrap();
         let verifying_key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]).verifying_key();
         soland_services::identity::ed25519_notary_signer_descriptor(

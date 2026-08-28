@@ -855,8 +855,8 @@ mod tests {
                     model_generation_ref: 1,
                 },
             ),
-            audience: arkret_wire::project_full_id_to_core_id(
-                    &arkret_wire::DidFullId::new("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service").unwrap(),
+            audience: arkret_wire::project_did_to_core_id(
+                    &arkret_wire::Did::new("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service").unwrap(),
                 )
                 .unwrap(),
             scopes: vec!["ak.self.events.read.scan.v1".to_owned()],

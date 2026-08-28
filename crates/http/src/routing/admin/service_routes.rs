@@ -162,7 +162,7 @@ async fn load_detail(
     let current_record = route_cache
         .as_ref()
         .map(|entry| AdminServiceRouteCurrentRecord {
-            full_id: entry.full_id.to_string(),
+            did: entry.did.to_string(),
             method_history_head: entry.method_history_head.clone(),
             version_id: entry.version_id.clone(),
             record_sequence: entry.record_sequence,

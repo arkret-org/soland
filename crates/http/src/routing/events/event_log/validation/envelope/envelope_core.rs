@@ -391,8 +391,8 @@ async fn validate_event_envelope_with_ingress(
         let vm_actor = vm
             .as_deref()
             .and_then(|raw| raw.rsplit_once('#').map(|(did, _)| did))
-            .and_then(|did| arkret_wire::DidFullId::new(did.to_owned()).ok())
-            .and_then(|did| arkret_wire::project_full_id_to_core_id(&did).ok());
+            .and_then(|did| arkret_wire::Did::new(did.to_owned()).ok())
+            .and_then(|did| arkret_wire::project_did_to_core_id(&did).ok());
         if vm_actor.as_ref() != Some(&executed_by) {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
@@ -419,8 +419,8 @@ async fn validate_event_envelope_with_ingress(
         .and_then(Value::as_object)
         .and_then(|proof| event_string_field(proof, &["verification_method"]))
         .and_then(|vm| vm.rsplit_once('#').map(|(did, _)| did.to_owned()))
-        .and_then(|did| arkret_wire::DidFullId::new(did).ok())
-        .and_then(|did| arkret_wire::project_full_id_to_core_id(&did).ok())
+        .and_then(|did| arkret_wire::Did::new(did).ok())
+        .and_then(|did| arkret_wire::project_did_to_core_id(&did).ok())
         .is_some_and(|signer| signer.as_str() == actor_id.as_str());
     // The closed applet provisioning adapter has already verified the installed
     // registration, ghost namespace and provision request before constructing
@@ -1065,8 +1065,8 @@ async fn event_uses_active_applet_registration_epoch(
     let Some(method_controller) = verification_method.split_once('#').map(|(root, _)| root) else {
         return Ok(false);
     };
-    let method_controller = arkret_wire::DidFullId::new(method_controller.to_owned())
-        .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id));
+    let method_controller = arkret_wire::Did::new(method_controller.to_owned())
+        .and_then(|did| arkret_wire::project_did_to_core_id(&did));
     if !matches!(method_controller, Ok(ref id) if id.as_str() == signer_id) {
         return Ok(false);
     }

@@ -9,11 +9,9 @@ use arkret_models_integration::models_push::{
 use super::helpers::*;
 use crate::common::*;
 
-fn core_principal(full_id: &str) -> arkret_identifiers::DidCoreId {
-    arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new(full_id.to_owned()).unwrap(),
-    )
-    .unwrap()
+fn core_principal(did: &str) -> arkret_identifiers::DidCoreId {
+    arkret_wire::project_did_to_core_id(&arkret_identifiers::Did::new(did.to_owned()).unwrap())
+        .unwrap()
 }
 
 fn accepted_device_authorize_operation(
@@ -893,7 +891,7 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban_body()
     add_test_realm_member(&state, demo_realm_id(), bob);
 
     let realm_id = RealmId::new(demo_realm_id().to_owned()).unwrap();
-    let bob_did = DidFullId::new(bob.to_owned()).unwrap();
+    let bob_did = Did::new(bob.to_owned()).unwrap();
     // Scoped rather than `drop`ed: the guard must be provably released before
     // the awaits further down, and a block says so to the reader and to
     // `clippy::await_holding_lock` alike.
@@ -902,7 +900,7 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban_body()
         let mut realm = realms.get(&realm_id).cloned().expect("demo realm exists");
         realm
             .members
-            .remove(&arkret_wire::project_full_id_to_core_id(&bob_did).unwrap());
+            .remove(&arkret_wire::project_did_to_core_id(&bob_did).unwrap());
         realms.upsert(realm);
     }
     state

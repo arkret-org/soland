@@ -374,11 +374,10 @@ mod tests {
     fn self_realm_owner_reconciles_without_implying_capability() {
         let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
         let realm_id = "ak:realm:AfnUfJvZuZpWOPXnnKIwf1dg2Dee77NZ0MxYh1uFxCLF";
-        let controller_full_id = arkret_wire::DidFullId::new(
-            "did:webvh:z6mkfixture:example.test:users:alice".to_owned(),
-        )
-        .unwrap();
-        let controller_id = arkret_wire::project_full_id_to_core_id(&controller_full_id).unwrap();
+        let controller_did =
+            arkret_wire::Did::new("did:webvh:z6mkfixture:example.test:users:alice".to_owned())
+                .unwrap();
+        let controller_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
 
         reconcile_self_realm_owner_projection(
             &state,
@@ -409,11 +408,10 @@ mod tests {
     #[test]
     fn self_realm_owner_reconciliation_fails_closed_on_mismatch() {
         let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
-        let controller_full_id = arkret_wire::DidFullId::new(
-            "did:webvh:z6mkfixture:example.test:users:alice".to_owned(),
-        )
-        .unwrap();
-        let controller_id = arkret_wire::project_full_id_to_core_id(&controller_full_id).unwrap();
+        let controller_did =
+            arkret_wire::Did::new("did:webvh:z6mkfixture:example.test:users:alice".to_owned())
+                .unwrap();
+        let controller_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
         let error = reconcile_self_realm_owner_projection(
             &state,
             "ak:realm:AfnUfJvZuZpWOPXnnKIwf1dg2Dee77NZ0MxYh1uFxCLF",

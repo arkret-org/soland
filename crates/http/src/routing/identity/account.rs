@@ -134,14 +134,14 @@ pub(crate) async fn account_primary_handle_claim_for(
     match crate::routing::spaces::directory::signed_handle_claim_value(
         state,
         &account.handle(),
-        &account.did,
+        account.principal_id.as_str(),
         audience,
     )
     .await
     {
         Ok(value) => Some(value),
         Err(error) => {
-            tracing::warn!(%error, did = %account.did, "failed to derive primary handle claim");
+            tracing::warn!(%error, principal_id = %account.principal_id, "failed to derive primary handle claim");
             None
         }
     }
@@ -218,7 +218,7 @@ pub(in crate::routing) fn local_router() -> Router {
 }
 
 pub(in crate::routing) fn local_service_router() -> Router {
-    Router::with_path("accounts/{account_did}/localparts")
+    Router::with_path("accounts/{account_principal_id}/localparts")
         .get(list_account_localparts)
         .post(add_account_localpart)
         .push(
@@ -307,10 +307,8 @@ fn normalize_account_localpart_for_request(localpart: &str) -> Result<String, Ap
         .map_err(|_| AppError::param_invalid("localpart is not a valid handle localpart"))
 }
 
-fn account_core_id_from_path(value: String) -> Result<String, AppError> {
-    DidCoreId::new(value)
-        .map(|account_id| account_id.to_string())
-        .map_err(|_| AppError::param_invalid("invalid account core id"))
+fn account_core_id_from_path(value: String) -> Result<DidCoreId, AppError> {
+    DidCoreId::new(value).map_err(|_| AppError::param_invalid("invalid account core id"))
 }
 
 fn localpart_persistence_error(error: soland_services::ServiceError) -> AppError {
@@ -326,10 +324,13 @@ fn localpart_persistence_error(error: soland_services::ServiceError) -> AppError
     }
 }
 
-async fn account_exists(state: &AppState, account_did: &str) -> Result<(), AppError> {
+async fn account_exists(
+    state: &AppState,
+    account_principal_id: &DidCoreId,
+) -> Result<(), AppError> {
     state
         .identities()
-        .account(account_did)
+        .account(account_principal_id.as_str())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .map(|_| ())
@@ -504,7 +505,7 @@ fn account_registration_retry_after_ms(
 async fn enforce_account_registration_policy(
     state: &AppState,
     principal_id: &str,
-    full_id: &str,
+    did: &str,
     handle: Option<&str>,
     evidence: Option<&AccountRegistrationPolicyEvidence>,
 ) -> Result<AccountRegistrationAudit, AppError> {
@@ -588,7 +589,7 @@ async fn enforce_account_registration_policy(
         )
         .await);
     }
-    if !organization_allowed(full_id, &policy, evidence) {
+    if !organization_allowed(did, &policy, evidence) {
         let audit = account_registration_audit(
             &policy,
             evidence,
@@ -735,20 +736,19 @@ async fn local_account_register(
 ) -> JsonResult<SolandAccountRegisterOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let full_id =
+    let did =
         validate_did(&body.did).map_err(|_| AppError::param_invalid("invalid account DID"))?;
     crate::routing::extensions::sovereign::validate_sovereign_did_registration(
         state,
-        full_id.as_str(),
+        did.as_str(),
     )?;
-    let did = arkret_wire::project_full_id_to_core_id(&full_id)
-        .map_err(|error| AppError::param_invalid(format!("invalid account DID: {error}")))?
-        .to_string();
+    let principal_id = arkret_wire::project_did_to_core_id(&did)
+        .map_err(|error| AppError::param_invalid(format!("invalid account DID: {error}")))?;
 
     let localpart = normalize_account_localpart_for_request(&body.handle)?;
     let account_exists = state
         .identities()
-        .account(&did)
+        .account(principal_id.as_str())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
@@ -767,7 +767,7 @@ async fn local_account_register(
 
     let account = AccountRecord {
         id: crate::ids::generate_account_id(),
-        did: did.clone(),
+        principal_id: principal_id.clone(),
         localpart,
         display_name: body
             .display_name
@@ -781,7 +781,7 @@ async fn local_account_register(
         .identities()
         .register_account(soland_services::identity::RegisterAccountCommand {
             account_id: account.id.clone(),
-            actor_id: did.clone(),
+            principal_id: principal_id.clone(),
             localpart: account.localpart.clone(),
             display_name: account.display_name.clone(),
             created_at: account.created_at,
@@ -793,7 +793,7 @@ async fn local_account_register(
             .map_err(|_| AppError::param_invalid("invalid device_id"))?;
         put_account_device_placeholder(
             state,
-            &did,
+            principal_id.as_str(),
             account.display_name.clone(),
             device_id.as_str(),
         )
@@ -801,7 +801,7 @@ async fn local_account_register(
     }
     append_audit_log(
         state,
-        Some(&did),
+        Some(principal_id.as_str()),
         "account.register",
         json!({"handle": account.handle(), "via": "local"}),
         "accepted",
@@ -836,17 +836,17 @@ async fn local_account_me(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.list"))]
 async fn list_account_localparts(
-    account_did: PathParam<String>,
+    account_principal_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AccountLocalpartListOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_account_localparts_bearer(state, req)?;
-    let account_did = account_core_id_from_path(account_did.into_inner())?;
-    account_exists(state, &account_did).await?;
+    let account_principal_id = account_core_id_from_path(account_principal_id.into_inner())?;
+    account_exists(state, &account_principal_id).await?;
     let records = state
         .identities()
-        .account_localparts(&account_did)
+        .account_localparts(account_principal_id.as_str())
         .await
         .map_err(localpart_persistence_error)?;
     let primary_localpart = records
@@ -854,7 +854,7 @@ async fn list_account_localparts(
         .find(|record| record.is_primary)
         .map(|record| record.localpart.clone());
     json_ok(AccountLocalpartListOutcome {
-        account_did,
+        account_principal_id,
         primary_localpart,
         localparts: records.into_iter().map(account_localpart_view).collect(),
     })
@@ -866,34 +866,34 @@ async fn list_account_localparts(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.add"))]
 async fn add_account_localpart(
-    account_did: PathParam<String>,
+    account_principal_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
     body: JsonBody<AccountLocalpartAddRequestBody>,
 ) -> JsonResult<AccountLocalpartMutationOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_account_localparts_bearer(state, req)?;
-    let account_did = account_core_id_from_path(account_did.into_inner())?;
-    account_exists(state, &account_did).await?;
+    let account_principal_id = account_core_id_from_path(account_principal_id.into_inner())?;
+    account_exists(state, &account_principal_id).await?;
     let body = body.into_inner();
     let localpart = normalize_account_localpart_for_request(&body.localpart)?;
     let existing = state
         .identities()
-        .account_localparts(&account_did)
+        .account_localparts(account_principal_id.as_str())
         .await
         .map_err(localpart_persistence_error)?;
     let primary = body.is_primary.unwrap_or(existing.is_empty()) || existing.is_empty();
     let record = state
         .identities()
-        .add_localpart(&account_did, &localpart, primary)
+        .add_localpart(account_principal_id.as_str(), &localpart, primary)
         .await
         .map_err(localpart_persistence_error)?;
     append_audit_log(
         state,
-        Some(&account_did),
+        Some(account_principal_id.as_str()),
         "account.localpart.add",
         json!({
-            "account_did": account_did,
+            "account_principal_id": account_principal_id,
             "localpart": localpart,
             "is_primary": record.is_primary,
         }),
@@ -911,7 +911,7 @@ async fn add_account_localpart(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.update"))]
 async fn update_account_localpart(
-    account_did: PathParam<String>,
+    account_principal_id: PathParam<String>,
     localpart: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
@@ -919,8 +919,8 @@ async fn update_account_localpart(
 ) -> JsonResult<AccountLocalpartMutationOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_account_localparts_bearer(state, req)?;
-    let account_did = account_core_id_from_path(account_did.into_inner())?;
-    account_exists(state, &account_did).await?;
+    let account_principal_id = account_core_id_from_path(account_principal_id.into_inner())?;
+    account_exists(state, &account_principal_id).await?;
     let localpart = normalize_account_localpart_for_request(&localpart.into_inner())?;
     let body = body.into_inner();
     if body.is_primary != Some(true) {
@@ -930,15 +930,15 @@ async fn update_account_localpart(
     }
     let record = state
         .identities()
-        .set_primary_localpart(&account_did, &localpart)
+        .set_primary_localpart(account_principal_id.as_str(), &localpart)
         .await
         .map_err(localpart_persistence_error)?;
     append_audit_log(
         state,
-        Some(&account_did),
+        Some(account_principal_id.as_str()),
         "account.localpart.primary",
         json!({
-            "account_did": account_did,
+            "account_principal_id": account_principal_id,
             "localpart": localpart,
         }),
         "accepted",
@@ -955,19 +955,19 @@ async fn update_account_localpart(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.delete"))]
 async fn delete_account_localpart(
-    account_did: PathParam<String>,
+    account_principal_id: PathParam<String>,
     localpart: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AccountLocalpartDeleteOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_account_localparts_bearer(state, req)?;
-    let account_did = account_core_id_from_path(account_did.into_inner())?;
-    account_exists(state, &account_did).await?;
+    let account_principal_id = account_core_id_from_path(account_principal_id.into_inner())?;
+    account_exists(state, &account_principal_id).await?;
     let localpart = normalize_account_localpart_for_request(&localpart.into_inner())?;
     let before = state
         .identities()
-        .account_localparts(&account_did)
+        .account_localparts(account_principal_id.as_str())
         .await
         .map_err(localpart_persistence_error)?;
     let removed_primary = before
@@ -975,13 +975,13 @@ async fn delete_account_localpart(
         .any(|record| record.localpart == localpart && record.is_primary);
     state
         .identities()
-        .remove_localpart(&account_did, &localpart)
+        .remove_localpart(account_principal_id.as_str(), &localpart)
         .await
         .map_err(localpart_persistence_error)?;
     if removed_primary
         && let Some(replacement) = state
             .identities()
-            .account_localparts(&account_did)
+            .account_localparts(account_principal_id.as_str())
             .await
             .map_err(localpart_persistence_error)?
             .into_iter()
@@ -989,7 +989,7 @@ async fn delete_account_localpart(
     {
         state
             .identities()
-            .set_primary_localpart(&account_did, &replacement.localpart)
+            .set_primary_localpart(account_principal_id.as_str(), &replacement.localpart)
             .await
             .map_err(localpart_persistence_error)?;
     }
@@ -998,10 +998,10 @@ async fn delete_account_localpart(
         .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
         state,
-        Some(&account_did),
+        Some(account_principal_id.as_str()),
         "account.localpart.delete",
         json!({
-            "account_did": account_did,
+            "account_principal_id": account_principal_id,
             "localpart": localpart,
         }),
         "accepted",
@@ -1047,18 +1047,14 @@ async fn account_viewer_impl(
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
     let devices = account_device_summaries(state, &session.actor).await?;
-    let principal_id = DidCoreId::new(account.did.clone()).map_err(|error| {
-        AppError::internal(format!("stored account core id is invalid: {error}"))
-    })?;
-
     let primary_handle_claim = account_primary_handle_claim(state, &account)
         .await
         .and_then(|value| serde_json::from_value(value).ok());
     let profile = accepted_account_profile(state, &session.actor).await?;
     let is_server_admin = state.is_admin_principal(&session.actor);
     json_ok(AccountView {
-        principal_id,
-        state: state.account_lifecycle_status(&account.did),
+        principal_id: account.principal_id.clone(),
+        state: state.account_lifecycle_status(account.principal_id.as_str()),
         devices,
         primary_handle_claim,
         primary_handle_claim_ref: None,
@@ -1094,23 +1090,29 @@ async fn project_account(
     require_embedded_webvh_registration_bearer(state, req)?;
     let body = body.into_inner();
     body.validate().map_err(AppError::param_invalid)?;
-    let did = body.principal_id.as_str().to_owned();
+    let principal_id = body.principal_id.clone();
     crate::routing::extensions::sovereign::validate_sovereign_did_registration(
         state,
-        body.full_id.as_str(),
+        body.did.as_str(),
     )?;
-    let registration_audit =
-        enforce_account_registration_policy(state, &did, body.full_id.as_str(), None, None).await?;
+    let registration_audit = enforce_account_registration_policy(
+        state,
+        principal_id.as_str(),
+        body.did.as_str(),
+        None,
+        None,
+    )
+    .await?;
     let existing = state
         .identities()
-        .account(&did)
+        .account(principal_id.as_str())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if let Some(existing_account) = existing {
         if let Some(device_id) = body.device_id.as_ref() {
             put_account_device_placeholder(
                 state,
-                &did,
+                principal_id.as_str(),
                 existing_account
                     .display_name
                     .clone()
@@ -1123,12 +1125,12 @@ async fn project_account(
             (!existing_account.localpart.is_empty()).then(|| existing_account.handle());
         append_account_registration_audit(
             state,
-            &did,
+            principal_id.as_str(),
             audit_handle.as_deref(),
             &registration_audit,
         )
         .await;
-        let devices = account_device_summaries(state, &did).await?;
+        let devices = account_device_summaries(state, principal_id.as_str()).await?;
         let primary_handle_claim = account_primary_handle_claim(state, &existing_account)
             .await
             .and_then(|value| serde_json::from_value(value).ok());
@@ -1143,7 +1145,7 @@ async fn project_account(
     }
     let account = AccountRecord {
         id: crate::ids::generate_account_id(),
-        did: did.clone(),
+        principal_id,
         localpart: String::new(),
         display_name: body.display_name.clone(),
         bio: None,
@@ -1158,7 +1160,7 @@ async fn project_account(
     if !account.localpart.is_empty() {
         state
             .identities()
-            .add_localpart(&did, &account.localpart, true)
+            .add_localpart(account.principal_id.as_str(), &account.localpart, true)
             .await
             .map_err(localpart_persistence_error)?;
     }
@@ -1177,16 +1179,21 @@ async fn project_account(
         // Event state and must never be downgraded by account creation.
         put_account_device_placeholder(
             state,
-            &did,
+            account.principal_id.as_str(),
             account.display_name.clone(),
             device_id.as_str(),
         )
         .await?;
     }
     let audit_handle = (!account.localpart.is_empty()).then(|| account.handle());
-    append_account_registration_audit(state, &did, audit_handle.as_deref(), &registration_audit)
-        .await;
-    let devices = account_device_summaries(state, &did).await?;
+    append_account_registration_audit(
+        state,
+        account.principal_id.as_str(),
+        audit_handle.as_deref(),
+        &registration_audit,
+    )
+    .await;
+    let devices = account_device_summaries(state, account.principal_id.as_str()).await?;
     let primary_handle_claim = account_primary_handle_claim(state, &account)
         .await
         .and_then(|value| serde_json::from_value(value).ok());
@@ -2055,10 +2062,10 @@ fn direct_slot_coordinates(
 }
 
 fn account_response(account: AccountRecord, state: &AppState) -> SolandAccountRegisterOutcome {
-    let lifecycle_state = state.account_lifecycle_state(&account.did);
+    let lifecycle_state = state.account_lifecycle_state(account.principal_id.as_str());
     SolandAccountRegisterOutcome {
         handle: account.handle(),
-        did: account.did,
+        principal_id: account.principal_id,
         display_name: account.display_name,
         state: lifecycle_state,
         created_at: account.created_at,
@@ -2367,14 +2374,14 @@ mod tests {
     fn projection_body_json() -> Value {
         json!({
             "principal_id": "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x",
-            "full_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:alice.example:webvh:alice",
+            "did": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:alice.example:webvh:alice",
             "display_name": "Alice",
             "device_id": "ak:device:01904100-0000-7000-8000-000000000001"
         })
     }
 
     #[test]
-    fn account_projection_body_accepts_only_matching_verified_full_id() {
+    fn account_projection_body_accepts_only_matching_verified_did() {
         let body: AccountProjectionRequestBody =
             serde_json::from_value(projection_body_json()).unwrap();
         body.validate().unwrap();
@@ -2397,12 +2404,12 @@ mod tests {
         }
 
         let mut did_url = projection_body_json();
-        did_url["full_id"] = json!(
+        did_url["did"] = json!(
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:alice.example#device-1"
         );
         assert!(
             serde_json::from_value::<AccountProjectionRequestBody>(did_url).is_err(),
-            "full_id must be a bare DID, not a DID URL"
+            "did must not contain DID URL path, query, or fragment components"
         );
     }
 

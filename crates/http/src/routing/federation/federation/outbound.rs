@@ -3,7 +3,7 @@ use crate::state::AppState;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FederationPeerTarget {
     pub(crate) url: String,
-    pub(crate) did: String,
+    pub(crate) service_id: arkret_wire::DidCoreId,
     pub(crate) trust_domain: Option<String>,
 }
 
@@ -29,11 +29,12 @@ pub(crate) fn configured_peer_targets(state: &AppState) -> Vec<FederationPeerTar
         .into_iter()
         .filter_map(|entry| parse_peer_target(&entry))
         .filter(|peer| {
-            let denied = crate::security::federation_peer_denied(&peer.url, &peer.did);
+            let denied =
+                crate::security::federation_peer_denied(&peer.url, peer.service_id.as_str());
             if denied {
                 tracing::warn!(
                     peer_url = %peer.url,
-                    peer_did = %peer.did,
+                    peer_service_id = %peer.service_id,
                     "configured federation peer denied by deployment peer policy"
                 );
                 return false;
@@ -44,12 +45,12 @@ pub(crate) fn configured_peer_targets(state: &AppState) -> Vec<FederationPeerTar
             // the receiver to refuse. The denylist above cannot express this:
             // it fails open on anything it was not told about.
             if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
-                &peer.did,
+                peer.service_id.as_str(),
                 peer.trust_domain.as_deref(),
             ) {
                 tracing::warn!(
                     peer_url = %peer.url,
-                    peer_did = %peer.did,
+                    peer_service_id = %peer.service_id,
                     %reason,
                     "configured federation peer denied by sovereign outbound trust_domain policy"
                 );
@@ -63,7 +64,7 @@ pub(crate) fn configured_peer_targets(state: &AppState) -> Vec<FederationPeerTar
 pub(crate) fn peer_url_for_service_id(state: &AppState, service_id: &str) -> Option<String> {
     configured_peer_targets(state)
         .into_iter()
-        .find(|peer| peer.did == service_id)
+        .find(|peer| peer.service_id.as_str() == service_id)
         .map(|peer| peer.url)
 }
 
@@ -130,7 +131,7 @@ pub(crate) fn peer_trust_domain_for_service_id(
         .federation_peers
         .iter()
         .filter_map(|entry| parse_peer_target(entry))
-        .find(|peer| peer.did == service_id)
+        .find(|peer| peer.service_id.as_str() == service_id)
         .and_then(|peer| peer.trust_domain)
 }
 
@@ -147,10 +148,10 @@ pub(super) fn parse_peer_target(entry: &str) -> Option<FederationPeerTarget> {
         .iter()
         .copied()
         .find(|part| part.starts_with("https://") || part.starts_with("http://"))?;
-    let did = parts
+    let service_id = parts
         .iter()
         .copied()
-        .find(|part| arkret_wire::DidCoreId::new((*part).to_owned()).is_ok())?;
+        .find_map(|part| arkret_wire::DidCoreId::new(part.to_owned()).ok())?;
     let trust_domain = parts
         .iter()
         .copied()
@@ -158,15 +159,12 @@ pub(super) fn parse_peer_target(entry: &str) -> Option<FederationPeerTarget> {
     if parts.len() == 3 && trust_domain.is_none() {
         return None;
     }
-    if arkret_wire::DidCoreId::new(did.to_owned()).is_err() {
-        return None;
-    }
     if let Some(trust_domain) = trust_domain {
         arkret_identifiers::TrustDomainId::new(trust_domain.to_owned()).ok()?;
     }
     Some(FederationPeerTarget {
         url: url.trim_end_matches('/').to_owned(),
-        did: did.to_owned(),
+        service_id,
         trust_domain: trust_domain.map(ToOwned::to_owned),
     })
 }
@@ -181,7 +179,7 @@ mod tests {
             "https://peer.example|ak:did_core:web:peer.example|ak:trust_domain:partner.example",
         )
         .expect("three-part peer target");
-        assert_eq!(target.did, "ak:did_core:web:peer.example");
+        assert_eq!(target.service_id.as_str(), "ak:did_core:web:peer.example");
         assert_eq!(
             target.trust_domain.as_deref(),
             Some("ak:trust_domain:partner.example")
@@ -196,6 +194,6 @@ mod tests {
             "https://peer.example|ak:did_core:webvh:z6mkpeer|ak:trust_domain:partner.example",
         )
         .expect("core service target");
-        assert_eq!(core.did, "ak:did_core:webvh:z6mkpeer");
+        assert_eq!(core.service_id.as_str(), "ak:did_core:webvh:z6mkpeer");
     }
 }

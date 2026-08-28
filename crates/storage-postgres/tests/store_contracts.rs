@@ -74,14 +74,14 @@ async fn postgres_agent_store_accepts_spec_managed_agent_binding_when_configured
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let scid = format!("zTest{suffix}");
     let agent_id = format!("ak:did_core:webvh:{scid}");
-    let full_id = format!("did:webvh:{scid}:agent.example");
+    let did = format!("did:webvh:{scid}:agent.example");
     let now = chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros())
         .expect("timestamp round-trip");
     let record = AgentPrincipalRecord::new(
         agent_id.clone(),
         "ak:did_core:web:controller.example".to_owned(),
         event_derived_realm_id(agent_id.as_bytes()),
-        arkret_wire::DidUrl::new(format!("{full_id}#managed-controller")).unwrap(),
+        arkret_wire::DidUrl::new(format!("{did}#managed-controller")).unwrap(),
         arkret_models_collaboration::agent_operations::AgentLifecycleState::Active,
         now,
     );
@@ -103,7 +103,7 @@ async fn postgres_agent_store_accepts_spec_managed_agent_binding_when_configured
 }
 
 #[tokio::test]
-async fn postgres_agent_table_rejects_mismatched_full_and_core_agent_ids_when_configured() {
+async fn postgres_agent_table_rejects_mismatched_did_and_core_agent_ids_when_configured() {
     let Some(pool) = test_pool().await else {
         return;
     };
@@ -131,7 +131,7 @@ async fn postgres_agent_table_rejects_mismatched_full_and_core_agent_ids_when_co
     .bind::<Timestamptz, _>(now)
     .execute(&mut *conn)
     .await
-    .expect_err("database must reject a full DID that projects to a different Agent core id");
+    .expect_err("database must reject a DID that projects to a different Agent core id");
     assert!(
         error
             .to_string()
@@ -411,8 +411,8 @@ fn seal_dependency_contract_event(
     realm_id: &arkret_identifiers::RealmId,
     marker: &str,
 ) -> (arkret_wire::Event, arkret_identifiers::Hash) {
-    let actor = arkret_wire::project_full_id_to_core_id(
-        &arkret_wire::DidFullId::new("did:web:seal-dependency-holder.example".to_owned()).unwrap(),
+    let actor = arkret_wire::project_did_to_core_id(
+        &arkret_wire::Did::new("did:web:seal-dependency-holder.example".to_owned()).unwrap(),
     )
     .unwrap();
     let event = arkret_wire::test_support::raw_event_at(
@@ -1345,20 +1345,20 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
     };
     let _db_guard = DB_GUARD.lock().await;
     let now = chrono::Utc::now();
-    let actor_full_id = arkret_identifiers::DidFullId::new(format!(
+    let actor_did = arkret_identifiers::Did::new(format!(
         "did:web:managed-anchor-{}.example",
         uuid::Uuid::now_v7()
     ))
     .unwrap();
-    let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id).unwrap();
+    let actor_id = arkret_wire::project_did_to_core_id(&actor_did).unwrap();
     // A genesis scope names no Realm; the Realm id is derived from this
     // Event's own id, so the fixture reads it back after construction.
     let event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
         actor_id,
-        arkret_wire::project_full_id_to_core_id(
-            &arkret_identifiers::DidFullId::new("did:web:service.example".to_owned()).unwrap(),
+        arkret_wire::project_did_to_core_id(
+            &arkret_identifiers::Did::new("did:web:service.example".to_owned()).unwrap(),
         )
         .unwrap(),
         0,
@@ -1567,7 +1567,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     let outbox_id = format!("collision-outbox:{}", uuid::Uuid::now_v7());
     sql_query(
         "INSERT INTO federation_outbox \
-         (id, peer_id, peer_url, endpoint, idempotency_key, payload_json, next_attempt_at, created_at) \
+         (id, peer_service_id, peer_url, endpoint, idempotency_key, payload_json, next_attempt_at, created_at) \
          VALUES ($1, 'did:web:peer.example', 'https://peer.example', '/events', $1, '{}', 0, 0)",
     )
     .bind::<Text, _>(&outbox_id)
@@ -1997,12 +1997,12 @@ mod control_move_ingress_negatives {
     /// positive anchor-commit case above does.
     fn control_anchor_fixture(seed: &str) -> ControlAnchorFixture {
         let now = chrono::Utc::now();
-        let actor_full_id = arkret_identifiers::DidFullId::new(format!(
+        let actor_did = arkret_identifiers::Did::new(format!(
             "did:web:ingress-negative-{seed}-{}.example",
             uuid::Uuid::now_v7()
         ))
         .unwrap();
-        let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id).unwrap();
+        let actor_id = arkret_wire::project_did_to_core_id(&actor_did).unwrap();
         // A genesis scope names no Realm; the Realm id is derived from this
         // Event's own id, so the fixture reads it back after construction.
         // Anything the commit path re-parses from the envelope resolves the
@@ -2011,8 +2011,8 @@ mod control_move_ingress_negatives {
             arkret_wire::EventKind::RealmCreate.as_str(),
             arkret_wire::ScopeRef::RealmGenesis,
             actor_id,
-            arkret_wire::project_full_id_to_core_id(
-                &arkret_identifiers::DidFullId::new("did:web:service.example".to_owned()).unwrap(),
+            arkret_wire::project_did_to_core_id(
+                &arkret_identifiers::Did::new("did:web:service.example".to_owned()).unwrap(),
             )
             .unwrap(),
             0,

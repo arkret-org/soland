@@ -39,7 +39,7 @@ pub(super) struct AgentProvisioningAbandonmentChallengeOutcome {
     allocation_handle: arkret_wire::ProtocolOpaqueId,
     consequence_disclosure: Vec<String>,
     dpop_jkt: String,
-    audience: DidFullId,
+    audience: Did,
     origin: String,
     trust_domain: String,
     #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
@@ -265,7 +265,7 @@ pub(super) async fn provision_agent(
         AgentProvisionRequestBody::Prepare {
             operation_id,
             idempotency_key,
-            full_id,
+            did,
             controller_principal_server_id,
             slug,
             requested_scope,
@@ -326,11 +326,11 @@ pub(super) async fn provision_agent(
             }
             validate_agent_slug(&slug)
                 .map_err(|error| AppError::param_invalid(format!("slug is invalid: {error}")))?;
-            let controller_did = DidCoreId::new(controller_id.clone()).map_err(|error| {
+            let controller_id = DidCoreId::new(controller_id.clone()).map_err(|error| {
                 AppError::internal(format!("authenticated controller id is invalid: {error}"))
             })?;
             let controller_authority = arkret_wire::PrincipalAuthorityKey::new(
-                controller_did.clone(),
+                controller_id.clone(),
                 controller_principal_server_id,
             );
             let active_recovery_policy = state
@@ -370,33 +370,31 @@ pub(super) async fn provision_agent(
                 ));
             }
 
-            let agent_id = arkret_wire::project_full_id_to_core_id(&full_id).map_err(|error| {
-                AppError::param_invalid(format!("Agent full_id projection failed: {error}"))
+            let agent_id = arkret_wire::project_did_to_core_id(&did).map_err(|error| {
+                AppError::param_invalid(format!("Agent did projection failed: {error}"))
             })?;
             let initial_resolution =
                 crate::routing::identity::managed_agent_pcr::accepted_managed_agent_initial_resolution(
                     state,
-                    &full_id,
-                    &controller_did,
+                    &did,
+                    &controller_id,
                 )
                 .await?;
             let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
                 &agent_id,
-                &controller_did,
+                &controller_id,
                 &requested_scope,
             )
             .map_err(|error| {
                 AppError::internal(format!("requested_scope digest failed: {error}"))
             })?;
             let controller_authorization_ref =
-                crate::routing::identity::managed_agent_pcr::controller_authorization_ref(
-                    &full_id,
-                )?;
+                crate::routing::identity::managed_agent_pcr::controller_authorization_ref(&did)?;
             let allocation_handle =
                 issue_allocation_handle(state, &controller_id, &operation_id, &idempotency_key)?;
             let outcome = AgentProvisionOutcome::AwaitingControllerEvent {
                 agent_id,
-                full_id,
+                did,
                 initial_resolution,
                 controller_realm_id: RealmId::new(controller_realm).map_err(|error| {
                     AppError::internal(format!("controller PCR id invalid: {error}"))
@@ -458,7 +456,7 @@ pub(super) async fn provision_agent(
             operation_id,
             idempotency_key,
             agent_id,
-            full_id,
+            did,
             principal_control_realm_id,
             allocation_handle,
             slug,
@@ -481,7 +479,7 @@ pub(super) async fn provision_agent(
                 })?;
             let AgentProvisionOutcome::AwaitingControllerEvent {
                 agent_id: allocated_agent_id,
-                full_id: allocated_full_id,
+                did: allocated_did,
                 initial_resolution,
                 controller_realm_id,
                 allocation_handle: allocated_handle,
@@ -497,7 +495,7 @@ pub(super) async fn provision_agent(
                 != agent_provision_request_hash(&AgentProvisionRequestBody::Prepare {
                     operation_id: operation_id.clone(),
                     idempotency_key: idempotency_key.clone(),
-                    full_id: full_id.clone(),
+                    did: did.clone(),
                     controller_principal_server_id: prepared
                         .controller_authority
                         .principal_server_id
@@ -507,7 +505,7 @@ pub(super) async fn provision_agent(
                     pairing_ttl_ms,
                 })?
                 || allocated_agent_id != agent_id
-                || allocated_full_id != full_id
+                || allocated_did != did
                 || allocated_handle != allocation_handle
                 || prepared.slug != slug
                 || prepared.requested_scope != requested_scope
@@ -655,7 +653,7 @@ pub(super) async fn provision_agent(
                     "idempotency_key": idempotency_key,
                     "allocation_handle": allocation_handle,
                     "commit_request_hash": request_hash,
-                    "full_id": full_id,
+                    "did": did,
                     "initial_resolution": initial_resolution,
                     "controller_authority": prepared.controller_authority,
                     "pcr_genesis_accepted": false,
@@ -683,7 +681,7 @@ pub(super) async fn provision_agent(
             else {
                 return json_ok(AgentProvisionOutcome::AwaitingPcrGenesis {
                     agent_id,
-                    full_id,
+                    did,
                     initial_resolution,
                     principal_control_realm_id,
                     allocation_handle,
@@ -708,7 +706,7 @@ pub(super) async fn provision_agent(
                     "idempotency_key": idempotency_key,
                     "allocation_handle": allocation_handle,
                     "commit_request_hash": request_hash,
-                    "full_id": full_id,
+                    "did": did,
                     "initial_resolution": initial_resolution,
                     "controller_authority": prepared.controller_authority,
                     "pcr_genesis_accepted": true,
@@ -725,7 +723,7 @@ pub(super) async fn provision_agent(
                     })?;
                 return json_ok(AgentProvisionOutcome::AwaitingDidBinding {
                     agent_id,
-                    full_id,
+                    did,
                     initial_resolution,
                     principal_control_realm_id,
                     allocation_handle,
@@ -764,7 +762,7 @@ pub(super) async fn provision_agent(
                 "idempotency_key": idempotency_key,
                 "allocation_handle": allocation_handle,
                 "commit_request_hash": request_hash,
-                "full_id": full_id,
+                "did": did,
                 "initial_resolution": initial_resolution,
                 "controller_authority": prepared.controller_authority,
                 "pcr_genesis_accepted": true,
@@ -782,7 +780,7 @@ pub(super) async fn provision_agent(
             let outcome = AgentProvisionOutcome::Complete {
                 outcome: arkret_models_collaboration::agent_operations::AgentProvisionComplete {
                     agent_id: agent_id.clone(),
-                    full_id: full_id.clone(),
+                    did: did.clone(),
                     initial_resolution: initial_resolution.clone(),
                     principal_control_realm_id: principal_control_realm_id.clone(),
                     controller_authorization_ref: controller_authorization_ref.clone(),
@@ -988,7 +986,7 @@ pub(super) async fn issue_provisioning_abandonment_challenge(
     let challenge =
         arkret_wire::Base64UrlString::new(URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>()))
             .map_err(|error| AppError::internal(format!("generated challenge invalid: {error}")))?;
-    let service_id = state.service_resolution_commitment().full_id.clone();
+    let service_id = state.service_resolution_commitment().did.clone();
     let origin = reqwest::Url::parse(&state.config().public_base_url)
         .map_err(|error| AppError::internal(format!("public base URL invalid: {error}")))?
         .origin()
@@ -1252,15 +1250,15 @@ pub(super) async fn renew_agent_pairing(
         "accepted",
     )
     .await;
-    let agent_principal_did = arkret_identifiers::DidCoreId::new(agent_id)
-        .map_err(|err| AppError::internal(format!("persisted agent DID invalid: {err}")))?;
+    let agent_id = arkret_identifiers::DidCoreId::new(agent_id)
+        .map_err(|err| AppError::internal(format!("persisted agent id invalid: {err}")))?;
     let principal_control_realm_id = RealmId::new(record.principal_control_realm_id.clone())
         .map_err(|error| AppError::internal(format!("persisted Agent PCR invalid: {error}")))?;
     let controller_authorization_ref = record.controller_authorization_ref.clone();
     let requested_scope_digest =
         crate::routing::identity::managed_agent_pcr::requested_scope_digest_for_record(&record)?;
     json_ok(AgentRenewPairingOutcome {
-        agent_id: agent_principal_did,
+        agent_id,
         principal_control_realm_id,
         controller_authorization_ref,
         requested_scope_digest,

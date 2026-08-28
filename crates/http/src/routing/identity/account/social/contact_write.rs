@@ -151,13 +151,13 @@ pub(crate) fn verify_contact_service_signature_bytes(
                 format!("{evidence_field}.signature.verification_method is not a DID URL"),
             )
         })?;
-    let controller = arkret_wire::DidFullId::new(controller.to_owned()).map_err(|_| {
+    let controller = arkret_wire::Did::new(controller.to_owned()).map_err(|_| {
         AppError::new(
             ErrorCode::FailedPrecondition,
             format!("{evidence_field}.signature.verification_method controller is invalid"),
         )
     })?;
-    let controller_core = arkret_wire::project_full_id_to_core_id(&controller).map_err(|_| {
+    let controller_core = arkret_wire::project_did_to_core_id(&controller).map_err(|_| {
         AppError::new(
             ErrorCode::FailedPrecondition,
             format!("{evidence_field}.signature.verification_method controller is invalid"),
@@ -248,7 +248,7 @@ fn service_signature<T: Serialize>(
     Ok(ProtocolSignature {
         verification_method: DidUrl::new(
             crate::routing::federation::federation_service_signature_key_id(
-                state.service_full_id().as_str(),
+                state.service_did().as_str(),
             ),
         )
         .map_err(|error| AppError::internal(format!("service verification method: {error}")))?,
@@ -946,15 +946,15 @@ fn signed_current_proof(
     event: &Event,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<ContactCurrentProof, AppError> {
-    let _issuer_full_id = event
+    let _issuer_did = event
         .proofs
         .iter()
         .find_map(|proof| {
             let proof = proof.as_producer()?;
             let (controller, _) = proof.verification_method.rsplit_once('#')?;
-            let full_id = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
-            (arkret_wire::project_full_id_to_core_id(&full_id).ok() == Some(event.actor_id.clone()))
-                .then_some(full_id)
+            let did = arkret_wire::Did::new(controller.to_owned()).ok()?;
+            (arkret_wire::project_did_to_core_id(&did).ok() == Some(event.actor_id.clone()))
+                .then_some(did)
         })
         .ok_or_else(|| {
             AppError::param_invalid("Contact Event has no actor-bound proof controller")
@@ -1338,7 +1338,7 @@ async fn plan_contact_commit(
             };
             // Same-service delivery is a fact about the target account's
             // current host, not about the requester's introduction-evidence
-            // trust tier. A bare DID legitimately uses `explicit_address`,
+            // trust tier. A DID without URL components legitimately uses `explicit_address`,
             // but its local recipient still needs the exact privately
             // resolvable request Event required to author a response.
             let verified_mirror = same_service_target

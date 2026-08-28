@@ -5,7 +5,7 @@
 //! self-service deactivate route: operation-registry has no
 //! `ak.self.account.*deactivate*` operation, and account-lifecycle.md §10
 //! assigns deactivation initiation to the admin/support surface
-//! (`/_soland/admin/accounts/{did}/deactivate`).
+//! (`/_soland/admin/accounts/{principal_id}/deactivate`).
 
 use arkret_models_collaboration::events_payloads::event_wire::ErasureTrigger;
 use arkret_models_collaboration::governance::erasure::{
@@ -21,7 +21,7 @@ use super::*;
 
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 pub(crate) struct AccountLifecycleChange {
-    pub did: String,
+    pub principal_id: arkret_wire::DidCoreId,
     pub previous_state: String,
     pub state: String,
     pub changed_by: String,
@@ -40,22 +40,22 @@ pub(crate) struct AccountLifecycleChange {
 
 pub(crate) async fn set_account_lifecycle_state(
     state: &AppState,
-    did: &str,
+    principal_id: &str,
     next_state: &str,
     changed_by: &str,
     reason: Option<String>,
 ) -> Result<AccountLifecycleChange, AppError> {
-    let did = arkret_wire::DidCoreId::new(did.to_owned())
+    let principal_id = arkret_wire::DidCoreId::new(principal_id.to_owned())
         .map_err(|_| AppError::param_invalid("invalid account identity core"))?;
     let changed_by = arkret_wire::DidCoreId::new(changed_by.to_owned())
         .map_err(|_| AppError::param_invalid("invalid state-change actor identity core"))?;
-    let did = did.as_str();
+    let principal_id_value = principal_id.as_str();
     let changed_by = changed_by.as_str();
     let next_status = parse_account_lifecycle_target_state(next_state)?;
     let next_state = next_status.as_str();
     if state
         .identities()
-        .account(did)
+        .account(principal_id_value)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_none()
@@ -63,7 +63,7 @@ pub(crate) async fn set_account_lifecycle_state(
         return Err(AppError::not_found("account not found"));
     }
 
-    let previous_state = state.account_lifecycle_state(did);
+    let previous_state = state.account_lifecycle_state(principal_id_value);
     if previous_state == "erasure_pending" {
         return Err(
             AppError::conflict("accounts pending erasure cannot transition state")
@@ -93,9 +93,9 @@ pub(crate) async fn set_account_lifecycle_state(
             changed_by: Some(changed_by.to_owned()),
             changed_at,
         };
-        persist_account_lifecycle_record(state, did, &record).await?;
+        persist_account_lifecycle_record(state, principal_id_value, &record).await?;
         if next_state == "deactivated" {
-            let fanout = run_account_deactivation_fanout(state, did).await?;
+            let fanout = run_account_deactivation_fanout(state, principal_id_value).await?;
             sessions_revoked = fanout.sessions_revoked;
             devices_revoked = fanout.devices_revoked;
             applet_delegated_sessions_revoked = fanout.applet_delegated_sessions_revoked;
@@ -105,16 +105,16 @@ pub(crate) async fn set_account_lifecycle_state(
             identity_link_cache_invalidated = fanout.identity_link_cache_invalidated;
             capability_cache_invalidated = fanout.capability_cache_invalidated;
         } else if next_state == "locked" {
-            sessions_revoked = revoke_sessions_for_actor(state, did)
+            sessions_revoked = revoke_sessions_for_actor(state, principal_id_value)
                 .await
                 .map_err(AppError::internal)?;
-            devices_revoked = revoke_devices_for_actor(state, did)
+            devices_revoked = revoke_devices_for_actor(state, principal_id_value)
                 .await
                 .map_err(AppError::internal)?;
         }
         append_account_state_change_audit(
             state,
-            did,
+            principal_id_value,
             changed_by,
             &previous_state,
             next_state,
@@ -133,7 +133,7 @@ pub(crate) async fn set_account_lifecycle_state(
         if next_state == "deactivated" {
             append_account_deactivation_propagation_state(
                 state,
-                did,
+                principal_id_value,
                 changed_by,
                 reason.clone(),
                 changed_at,
@@ -151,7 +151,7 @@ pub(crate) async fn set_account_lifecycle_state(
     }
 
     Ok(AccountLifecycleChange {
-        did: did.to_owned(),
+        principal_id,
         previous_state,
         state: next_state.to_owned(),
         changed_by: changed_by.to_owned(),
@@ -196,32 +196,34 @@ struct AccountDeactivationFanout {
 
 async fn run_account_deactivation_fanout(
     state: &AppState,
-    did: &str,
+    principal_id: &str,
 ) -> Result<AccountDeactivationFanout, AppError> {
-    let applet_delegated_sessions_revoked = active_delegated_sessions_for_actor(state, did)
+    let applet_delegated_sessions_revoked =
+        active_delegated_sessions_for_actor(state, principal_id)
+            .await
+            .map_err(AppError::internal)?;
+    let sessions_revoked = revoke_sessions_for_actor(state, principal_id)
         .await
         .map_err(AppError::internal)?;
-    let sessions_revoked = revoke_sessions_for_actor(state, did)
-        .await
-        .map_err(AppError::internal)?;
-    let devices_revoked = revoke_devices_for_actor(state, did)
+    let devices_revoked = revoke_devices_for_actor(state, principal_id)
         .await
         .map_err(AppError::internal)?;
     let (to_device_messages_dropped, push_routes_revoked) =
-        purge_delivery_state_for_actor(state, did).await?;
-    let keypackages_retired = retire_actor_keypackages(state, did).await?;
-    let identity_link_cache_invalidated =
-        state.invalidate_cached_handle_claims_for_subject(did).await;
+        purge_delivery_state_for_actor(state, principal_id).await?;
+    let keypackages_retired = retire_actor_keypackages(state, principal_id).await?;
+    let identity_link_cache_invalidated = state
+        .invalidate_cached_handle_claims_for_subject(principal_id)
+        .await;
     let capability_cache_invalidated = state
         .authorization()
-        .mark_projected_grants_revoked_for_subject(did, Some(state.service_id()));
+        .mark_projected_grants_revoked_for_subject(principal_id, Some(state.service_id()));
     // §7.1 Push-route completion criterion: when a push gateway independently
     // holds registration/delivery state, the local purge above does NOT
     // complete the Push-route row — the gateway must be notified over the
     // registered internal channel and report a processing result. A gateway
     // failure raises `deactivation_partial` (retried by the reconciliation
     // worker) instead of failing the deactivation.
-    crate::deactivation_push_fanout::ensure_fanout(state, did).await;
+    crate::deactivation_push_fanout::ensure_fanout(state, principal_id).await;
     Ok(AccountDeactivationFanout {
         sessions_revoked,
         devices_revoked,
@@ -236,27 +238,27 @@ async fn run_account_deactivation_fanout(
 
 async fn purge_delivery_state_for_actor(
     state: &AppState,
-    did: &str,
+    principal_id: &str,
 ) -> Result<(usize, usize), AppError> {
     let devices = state
         .identities()
-        .devices_for_actor(did)
+        .devices_for_actor(principal_id)
         .await
         .map_err(|error| AppError::internal(format!("device inventory lookup failed: {error}")))?;
     let mut to_device_messages_dropped = 0usize;
     let mut push_routes_revoked = 0usize;
     for device in devices {
-        let purge = purge_device_delivery_state(state, did, &device.device_id).await;
+        let purge = purge_device_delivery_state(state, principal_id, &device.device_id).await;
         to_device_messages_dropped += purge.to_device_messages_dropped;
         push_routes_revoked += purge.push_registrations_removed;
     }
     Ok((to_device_messages_dropped, push_routes_revoked))
 }
 
-async fn retire_actor_keypackages(state: &AppState, did: &str) -> Result<usize, AppError> {
+async fn retire_actor_keypackages(state: &AppState, principal_id: &str) -> Result<usize, AppError> {
     state
         .mls_key_packages()
-        .retire_actor_keypackages(did, now().timestamp())
+        .retire_actor_keypackages(principal_id, now().timestamp())
         .await
         .map_err(|error| AppError::internal(format!("mls keypackage retirement failed: {error}")))
 }
@@ -264,7 +266,7 @@ async fn retire_actor_keypackages(state: &AppState, did: &str) -> Result<usize, 
 #[allow(clippy::too_many_arguments)]
 async fn append_account_state_change_audit(
     state: &AppState,
-    did: &str,
+    principal_id: &str,
     changed_by: &str,
     previous_state: &str,
     next_state: &str,
@@ -283,7 +285,7 @@ async fn append_account_state_change_audit(
     let payload = json!({
         "schema": "org.arkret.soland.account.state_change.v1",
         "actor": changed_by,
-        "subject": did,
+        "subject": principal_id,
         "from": previous_state,
         "to": next_state,
         "changed_by": changed_by,
@@ -310,13 +312,13 @@ async fn append_account_state_change_audit(
     });
     append_audit_log(
         state,
-        Some(did),
+        Some(principal_id),
         "org.arkret.soland.account.state_change",
         payload.clone(),
         "accepted",
     )
     .await;
-    if changed_by != did {
+    if changed_by != principal_id {
         append_audit_log(
             state,
             Some(changed_by),
@@ -330,7 +332,7 @@ async fn append_account_state_change_audit(
 
 async fn append_account_deactivation_propagation_state(
     state: &AppState,
-    did: &str,
+    principal_id: &str,
     changed_by: &str,
     reason: Option<String>,
     changed_at: chrono::DateTime<chrono::Utc>,
@@ -343,7 +345,7 @@ async fn append_account_deactivation_propagation_state(
     identity_link_cache_invalidated: usize,
     capability_cache_invalidated: usize,
 ) {
-    let peer_targets = deactivation_peer_service_targets_for_actor(state, did);
+    let peer_targets = deactivation_peer_service_targets_for_actor(state, principal_id);
     let peer_service_ids = peer_targets
         .iter()
         .filter_map(|target| target.get("service_id").and_then(Value::as_str))
@@ -352,7 +354,7 @@ async fn append_account_deactivation_propagation_state(
     let federation_incomplete = !peer_targets.is_empty();
     let payload = json!({
         "schema": "org.arkret.soland.account.deactivation_propagation.v1",
-        "principal_id": did,
+        "principal_id": principal_id,
         "status": "deactivated",
         "reason_code": if federation_incomplete {
             Some("deactivation_federation_incomplete")
@@ -391,7 +393,7 @@ async fn append_account_deactivation_propagation_state(
     });
     append_audit_log(
         state,
-        Some(did),
+        Some(principal_id),
         "org.arkret.soland.account.deactivation_propagation",
         payload.clone(),
         if federation_incomplete {
@@ -401,7 +403,7 @@ async fn append_account_deactivation_propagation_state(
         },
     )
     .await;
-    if changed_by != did {
+    if changed_by != principal_id {
         append_audit_log(
             state,
             Some(changed_by),
@@ -630,7 +632,7 @@ async fn enqueue_erasure_receipt_fanout(
         .collect::<std::collections::BTreeSet<_>>();
     let peers = crate::routing::federation::federation::configured_peer_targets(state)
         .into_iter()
-        .filter(|peer| recipient_services.contains(&peer.did))
+        .filter(|peer| recipient_services.contains(peer.service_id.as_str()))
         .collect::<Vec<_>>();
     package
         .validate_bindings()
@@ -644,7 +646,7 @@ async fn enqueue_erasure_receipt_fanout(
         crate::routing::federation::outbox::enqueue_outbound(
             state,
             &peer.url,
-            &peer.did,
+            peer.service_id.as_str(),
             "/_arkret/peer/erasure-receipts",
             &format!(
                 "ak:outbox:erasure-receipt:{}",
@@ -665,7 +667,7 @@ async fn enqueue_erasure_receipt_fanout(
 /// + identity/account-lifecycle.md.
 fn remove_realm_memberships_for_actor(state: &AppState, actor: &str) -> usize {
     let actor_id = match arkret_identifiers::DidCoreId::new(actor.to_owned()) {
-        Ok(did) => did,
+        Ok(actor_id) => actor_id,
         Err(_) => return 0,
     };
     state.realm_directory().remove_member_from_all(&actor_id)
@@ -787,7 +789,7 @@ fn build_erasure_receipt_package(
         .canonical_proof_input()
         .map_err(|error| AppError::internal(format!("erasure receipt proof input: {error}")))?;
     let verification_method =
-        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_full_id())).map_err(
+        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_did())).map_err(
             |error| {
                 AppError::internal(format!(
                     "erasure receipt verification method is invalid: {error}"
@@ -844,19 +846,19 @@ fn erasure_retained_stub(
 
 async fn persist_account_lifecycle_record(
     state: &AppState,
-    did: &str,
+    principal_id: &str,
     record: &AccountLifecycleState,
 ) -> Result<(), AppError> {
     if record.state == "active" {
         state
             .identities()
-            .delete_account_lifecycle(did)
+            .delete_account_lifecycle(principal_id)
             .await
             .map_err(|error| AppError::internal(error.to_string()))
     } else {
         state
             .identities()
-            .save_account_lifecycle(did, record.clone())
+            .save_account_lifecycle(principal_id, record.clone())
             .await
             .map_err(|error| AppError::internal(error.to_string()))
     }

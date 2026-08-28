@@ -387,7 +387,7 @@ fn signal_envelope(
         proof: arkret_wire::SignalProof {
             kind: "detached_jws".to_owned(),
             verification_method: arkret_wire::DidUrl::new(format!(
-                "{ROSTER_ACTOR_FULL}#{sender_device}"
+                "{ROSTER_ACTOR_DID}#{sender_device}"
             ))
             .unwrap(),
             envelope_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
@@ -572,7 +572,7 @@ fn test_state() -> AppState {
 }
 
 const ROSTER_REALM: &str = "ak:realm:AQKdkfI-I4MXIS2hxLXbb_FK57j-jE497FF66I5NPGPE";
-const ROSTER_ACTOR_FULL: &str = "did:web:alice.example";
+const ROSTER_ACTOR_DID: &str = "did:web:alice.example";
 const ROSTER_ACTOR: &str = "ak:did_core:web:alice.example";
 const ROSTER_SUBJECT: &str = "ak:did_core:web:alice-principal.example";
 const ROSTER_CALLER: &str = "ak:did_core:web:bob.example";
@@ -822,7 +822,7 @@ async fn native_sidecar_events_are_visible_only_to_the_controller() {
                 "digest_algorithm": "sha256",
                 "security_class": "standard",
                 "encryption_profile": "mls_rfc9420",
-                "notary": crate::test_single_signer_notary(ROSTER_ACTOR_FULL, 9)
+                "notary": crate::test_single_signer_notary(ROSTER_ACTOR_DID, 9)
             }
         }),
     );
@@ -1197,7 +1197,7 @@ async fn member_identity_projection_stores_typed_event_id_and_matches_event_repl
     let first_op = accepted_sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000e1",
         first_event_id,
-        ROSTER_ACTOR_FULL,
+        ROSTER_ACTOR_DID,
         1,
         arkret_wire::EventKind::MemberIdentityUpdate,
         json!({
@@ -1226,7 +1226,7 @@ async fn member_identity_projection_stores_typed_event_id_and_matches_event_repl
     let second_op = accepted_sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000e2",
         second_event_id,
-        ROSTER_ACTOR_FULL,
+        ROSTER_ACTOR_DID,
         2,
         arkret_wire::EventKind::MemberIdentityUpdate,
         json!({
@@ -2496,7 +2496,7 @@ async fn revoked_cursor_returns_revoked_error() {
         .sync()
         .cache_cursor_revocation(soland_services::sync::CursorRevocationState {
             cursor_digest: sha256_hex(token.as_bytes()),
-            principal_id: "did:web:alice.example".to_owned(),
+            principal_id: "ak:did_core:web:alice.example".to_owned(),
             device_id: None,
             scope: "this_cursor".to_owned(),
             reason_code: "compromised".to_owned(),
@@ -2531,7 +2531,7 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
         .sync()
         .cache_cursor_revocation(soland_services::sync::CursorRevocationState {
             cursor_digest: sha256_hex(token.as_bytes()),
-            principal_id: "did:web:alice.example".to_owned(),
+            principal_id: "ak:did_core:web:alice.example".to_owned(),
             device_id: None,
             scope: "this_cursor".to_owned(),
             reason_code: "stale".to_owned(),

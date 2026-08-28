@@ -1,11 +1,11 @@
 use super::*;
 
 const AGENT_CORE: &str = "ak:did_core:web:agent.example";
-const AGENT_FULL: &str = "did:web:agent.example";
+const AGENT_DID: &str = "did:web:agent.example";
 const CONTROLLER_CORE: &str = "ak:did_core:web:controller.example";
 const SERVICE_CORE: &str = "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x";
 
-fn web_full_id(core_id: &str) -> String {
+fn web_did(core_id: &str) -> String {
     core_id
         .strip_prefix("ak:did_core:web:")
         .map(|authority| format!("did:web:{authority}"))
@@ -31,12 +31,12 @@ fn agent_record(agent_id: &str, controller_id: &str) -> AgentPrincipalRecord {
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-11T00:00:00.000Z")
         .expect("fixture timestamp")
         .with_timezone(&chrono::Utc);
-    let controller_full_id = web_full_id(controller_id);
+    let controller_did = web_did(controller_id);
     let mut record = AgentPrincipalRecord::new(
         agent_id.to_owned(),
         controller_id.to_owned(),
         "ak:realm:AZbOMvW-csKhom4LhjgFr2cuYB-cQ9oR21-cRX94cL9M".to_owned(),
-        arkret_wire::DidUrl::new(format!("{controller_full_id}#managed-controller")).unwrap(),
+        arkret_wire::DidUrl::new(format!("{controller_did}#managed-controller")).unwrap(),
         AgentLifecycleState::Active,
         created_at,
     );
@@ -166,7 +166,7 @@ fn key_authorize_envelope(
     scope: Value,
 ) -> Value {
     let runtime_request =
-        key_pair_request_body(&web_full_id(agent_id), verification_method, service_id);
+        key_pair_request_body(&web_did(agent_id), verification_method, service_id);
     record.runtime_key_binding_digest = Some(
         runtime_request
             .proof_of_possession
@@ -250,8 +250,8 @@ fn key_pair_request_body(
         key: arkret_wire::Base64UrlString::new(encoded_public_key).unwrap(),
         key_digest: None,
     };
-    let agent_full_id = DidFullId::new(agent.to_owned()).expect("agent DID");
-    let agent_id = arkret_wire::project_full_id_to_core_id(&agent_full_id).unwrap();
+    let agent_did = Did::new(agent.to_owned()).expect("agent DID");
+    let agent_id = arkret_wire::project_did_to_core_id(&agent_did).unwrap();
     let pairing_request_id = arkret_wire::OpaqueLocalId::new(
         "agent_pairing_request:01999999-0000-7000-8000-00000000feed",
     )
@@ -321,7 +321,7 @@ fn key_pair_request_body(
             )
             .unwrap(),
         },
-        crate::test_actor_id(&agent_full_id),
+        crate::test_actor_id(&agent_did),
         1,
         arkret_identifiers::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
         json!({}),
@@ -373,11 +373,11 @@ fn agent_id_is_core_did_not_agent_typed_id() {
     assert!(validate_agent_id("ak:agent_principal:01999999-0000-7000-8000-00000000a001").is_err());
 }
 
-/// `key-management.md` §7.4.1 — the bare full DID projects onto the Core
+/// `key-management.md` §7.4.1 — the DID projects onto the Core
 /// actor id through its method adapter; a core id concatenated with a
 /// fragment is not a DID URL and never matches.
 #[test]
-fn verification_method_principal_projects_full_did_to_core_id() {
+fn verification_method_principal_projects_did_to_core_id() {
     assert_eq!(
         verification_method_principal("did:web:agent.example?versionId=1#key-1")
             .as_ref()
@@ -394,15 +394,15 @@ fn verification_method_principal_projects_full_did_to_core_id() {
 fn verification_method_agent_endpoint_matches_projected_controller() {
     let device_id = "ak:device:01904100-0000-7000-8000-000000000042";
     assert_eq!(
-        verification_method_agent_endpoint(&format!("{AGENT_FULL}#{device_id}"), AGENT_CORE,)
+        verification_method_agent_endpoint(&format!("{AGENT_DID}#{device_id}"), AGENT_CORE,)
             .as_ref()
             .map(arkret_identifiers::DeviceId::as_str),
         Some(device_id)
     );
-    // The schema-valid full-DID form must not be compared against the raw
+    // The schema-valid DID form must not be compared against the raw
     // core id string, and a core-id controller must never match.
     assert_eq!(
-        verification_method_agent_endpoint(&format!("{AGENT_FULL}#{device_id}"), AGENT_FULL),
+        verification_method_agent_endpoint(&format!("{AGENT_DID}#{device_id}"), AGENT_DID),
         None
     );
     assert_eq!(
@@ -424,20 +424,17 @@ fn bind_pairing_request_to_controller_device(
         .as_str();
     let mut proof = body.requested_scope_disclosure.proofs[0].clone();
     proof.verification_method =
-        arkret_wire::DidUrl::new(format!("{}#{device_id}", web_full_id(controller_id))).unwrap();
+        arkret_wire::DidUrl::new(format!("{}#{device_id}", web_did(controller_id))).unwrap();
     body.authorize_event.event.executed_by =
-        Some(crate::test_actor_id_str(&web_full_id(controller_id)));
+        Some(crate::test_actor_id_str(&web_did(controller_id)));
     body.authorize_event.event.proofs = vec![proof.into()];
 }
 
 #[test]
 fn service_pairing_preserves_the_controller_device_bound_by_the_signed_submission() {
     let controller_id = CONTROLLER_CORE;
-    let mut body = key_pair_request_body(
-        AGENT_FULL,
-        "did:web:agent.example#runtime-key",
-        SERVICE_CORE,
-    );
+    let mut body =
+        key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-key", SERVICE_CORE);
     bind_pairing_request_to_controller_device(&mut body, controller_id);
 
     let device_id = service_pairing_controller_device_id(&body, controller_id)
@@ -457,18 +454,15 @@ fn service_pairing_preserves_the_controller_device_bound_by_the_signed_submissio
 #[test]
 fn service_pairing_rejects_a_proof_from_a_different_controller_device() {
     let controller_id = CONTROLLER_CORE;
-    let mut body = key_pair_request_body(
-        AGENT_FULL,
-        "did:web:agent.example#runtime-key",
-        SERVICE_CORE,
-    );
+    let mut body =
+        key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-key", SERVICE_CORE);
     bind_pairing_request_to_controller_device(&mut body, controller_id);
     let arkret_wire::EventProof::Producer(proof) = &mut body.authorize_event.event.proofs[0] else {
         panic!("fixture must carry a producer proof")
     };
     proof.verification_method = arkret_wire::DidUrl::new(format!(
         "{}#ak:device:01904100-0000-7000-8000-000000000099",
-        web_full_id(controller_id)
+        web_did(controller_id)
     ))
     .unwrap();
 
@@ -478,17 +472,14 @@ fn service_pairing_rejects_a_proof_from_a_different_controller_device() {
 #[test]
 fn service_pairing_rejects_a_non_device_controller_proof() {
     let controller_id = CONTROLLER_CORE;
-    let mut body = key_pair_request_body(
-        AGENT_FULL,
-        "did:web:agent.example#runtime-key",
-        SERVICE_CORE,
-    );
+    let mut body =
+        key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-key", SERVICE_CORE);
     bind_pairing_request_to_controller_device(&mut body, controller_id);
     let arkret_wire::EventProof::Producer(proof) = &mut body.authorize_event.event.proofs[0] else {
         panic!("fixture must carry a producer proof")
     };
     proof.verification_method =
-        arkret_wire::DidUrl::new(format!("{}#key-1", web_full_id(controller_id))).unwrap();
+        arkret_wire::DidUrl::new(format!("{}#key-1", web_did(controller_id))).unwrap();
 
     assert!(service_pairing_controller_device_id(&body, controller_id).is_err());
 }
@@ -644,7 +635,7 @@ fn key_pair_proof_of_possession_verifies_runtime_key() {
     let agent = AGENT_CORE;
     let verification_method = "did:web:agent.example#runtime-key-1";
     let service_id = SERVICE_CORE;
-    let body = key_pair_request_body(AGENT_FULL, verification_method, service_id);
+    let body = key_pair_request_body(AGENT_DID, verification_method, service_id);
     let record = pending_pairing_record(
         agent,
         CONTROLLER_CORE,
@@ -661,7 +652,7 @@ fn key_pair_proof_of_possession_verifies_runtime_key() {
 fn runtime_approval_request_for_controller_omits_pairing_code() {
     let verification_method = "did:web:agent.example#runtime-key-1";
     let service_id = SERVICE_CORE;
-    let key_pair = key_pair_request_body(AGENT_FULL, verification_method, service_id);
+    let key_pair = key_pair_request_body(AGENT_DID, verification_method, service_id);
     let request = AgentRuntimeApprovalRequestBody {
         pairing_code: arkret_wire::NonEmptyString::new("12345678").unwrap(),
         pairing_request_id: key_pair.pairing_request_id.clone(),
@@ -701,7 +692,7 @@ fn agent_key_state_projects_pending_runtime_approval() {
             .with_timezone(&chrono::Utc),
     );
     let runtime_request = key_pair_request_body(
-        AGENT_FULL,
+        AGENT_DID,
         "did:web:agent.example#runtime-key-1",
         SERVICE_CORE,
     );
@@ -801,7 +792,7 @@ fn runtime_approval_status_reports_authorized_key_binding_after_approval() {
     // paired_pairing_request_id), so runtime_state derives to ready.
     record.paired_pairing_request_id = record.pairing_request_id.clone();
     let signing_key_binding =
-        key_pair_request_body(AGENT_FULL, "did:web:agent.example#runtime-1", SERVICE_CORE)
+        key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-1", SERVICE_CORE)
             .signing_key_binding;
     record.authorized_event_ref =
         Some(signing_key_binding.agent_key_authorize_event_id.to_string());
@@ -855,7 +846,7 @@ fn runtime_approval_status_does_not_report_previous_binding_for_replacement() {
         .unwrap(),
     );
     let previous_binding =
-        key_pair_request_body(AGENT_FULL, "did:web:agent.example#runtime-1", SERVICE_CORE)
+        key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-1", SERVICE_CORE)
             .signing_key_binding;
     record.authorized_event_ref = Some(previous_binding.agent_key_authorize_event_id.to_string());
     record.authorized_verification_method = Some(previous_binding.verification_method.to_string());

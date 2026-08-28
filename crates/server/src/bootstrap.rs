@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use arkret_http_client::{Auth, Client, ClientBuilder};
-use arkret_identifiers::DidFullId;
+use arkret_identifiers::Did;
 use arkret_identity::service_identity::{
     DidCoreIdentityBundle, DidCoreIdentityDiagnostic, DidCoreIdentityKeyRef,
     DidCoreIdentityProviderRef, DidCoreIdentityState, FileIdentityBundleBackend,
@@ -20,7 +20,7 @@ use arkret_models_identity::service_identity::{
     CanonicalServiceUrl, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
     ServiceRegistrationOutcome, ServiceRegistrationReceipt,
 };
-use arkret_wire::{PayloadProof, ServiceKind, project_full_id_to_core_id, proof_kind};
+use arkret_wire::{PayloadProof, ServiceKind, project_did_to_core_id, proof_kind};
 use ed25519_dalek::SigningKey;
 use rand_chacha::rand_core::SeedableRng;
 use serde_json::{Value, json};
@@ -50,7 +50,7 @@ pub struct ServiceIdentityBootstrap {
     /// silently prepare a second control root.
     pub key_store: Option<Arc<dyn KeyStore>>,
     pub state: DidCoreIdentityState,
-    /// Stable DidFullId plus the exact current method-history coordinates that
+    /// Stable DID plus the exact current method-history coordinates that
     /// every ServiceDescribe and signed ServiceResolutionRecord must share.
     pub resolution_commitment: Option<arkret_models_identity::ResolutionCommitment>,
     /// Signing seed resolved through the verified identity's active KeyRef.
@@ -134,7 +134,7 @@ pub async fn retry_service_identity(
         .await
         .map_err(|error| anyhow::anyhow!("reading service resolution commitment failed: {error}"))?
         .map(|stored| arkret_models_identity::ResolutionCommitment {
-            full_id: stored.identity.full_id.clone(),
+            did: stored.identity.did.clone(),
             method_history_head: stored.registration_receipt.log_head_digest.clone(),
             version_id: stored.identity.version_id.clone(),
         });
@@ -497,7 +497,7 @@ fn stored_external_identity_from_outcome(
     let stored = StoredDidCoreIdentity {
         identity: LocalDidCoreIdentity {
             service_id: outcome.service_id().clone(),
-            full_id: outcome.full_id().clone(),
+            did: outcome.did().clone(),
             registration_key: registration_key.clone(),
             provider: Some(provider.clone()),
             signing_key_refs: vec![material.signing_key_ref.clone()],
@@ -655,7 +655,7 @@ async fn ensure_identity_bundle(
         anyhow::bail!("service identity bundle backend is unavailable: {error}");
     }
     let history = persistence
-        .webvh_history(stored.identity.full_id.as_str())
+        .webvh_history(stored.identity.did.as_str())
         .await
         .map_err(|error| anyhow::anyhow!("reading service WebVH history failed: {error}"))?;
     if history.len() != 1 {
@@ -732,7 +732,7 @@ async fn restore_identity_bundle(
     let now = chrono::Utc::now();
     let event_digest = outcome.registration_receipt.log_head_digest.clone();
     let document = WebvhDocumentRecord {
-        did: bundle.identity.identity.full_id.to_string(),
+        did: bundle.identity.identity.did.to_string(),
         did_document: serde_json::to_value(&outcome.did_document)?,
         key_log_head: Some(event_digest.clone()),
         seq: 1,
@@ -749,7 +749,7 @@ async fn restore_identity_bundle(
     };
     let event = WebvhLogRecord {
         event_digest,
-        did: bundle.identity.identity.full_id.to_string(),
+        did: bundle.identity.identity.did.to_string(),
         seq: 1,
         operation: serde_json::to_value(inception)?,
         created_at: now,
@@ -813,7 +813,7 @@ fn validate_registration_receipt_signature(stored: &StoredDidCoreIdentity) -> an
     if receipt.provider_service_id != stored.identity.service_id {
         anyhow::bail!("self-hosted identity bundle receipt was issued by a different service DID");
     }
-    let expected_method = format!("{}#notary-key", stored.identity.full_id);
+    let expected_method = format!("{}#notary-key", stored.identity.did);
     if receipt.proof.verification_method.as_str() != expected_method {
         anyhow::bail!("identity bundle receipt uses an unexpected verification method");
     }
@@ -854,12 +854,12 @@ fn stored_identity_from_outcome(
     outcome
         .validate_for(&registration_key)
         .map_err(|error| anyhow::anyhow!("stored service registration is invalid: {error}"))?;
-    let signing_key_ref = signing_key_ref(config, outcome.full_id(), key_store)?;
+    let signing_key_ref = signing_key_ref(config, outcome.did(), key_store)?;
     let generation = webvh_version_number(outcome.version_id())?;
     let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let identity = LocalDidCoreIdentity {
         service_id: outcome.service_id().clone(),
-        full_id: outcome.full_id().clone(),
+        did: outcome.did().clone(),
         registration_key,
         provider: None,
         signing_key_refs: vec![signing_key_ref.clone()],
@@ -889,10 +889,10 @@ async fn validate_stored_service_identity(
     stored
         .validate()
         .map_err(|error| anyhow::anyhow!("persisted service identity is invalid: {error}"))?;
-    if stored.identity.full_id.method() != "webvh" {
+    if stored.identity.did.method() != "webvh" {
         anyhow::bail!(
             "persisted service identity {} is not did:webvh",
-            stored.identity.full_id
+            stored.identity.did
         );
     }
 
@@ -901,7 +901,7 @@ async fn validate_stored_service_identity(
     validate_service_signing_binding(stored, &signing_seed)?;
 
     let log = persistence
-        .webvh_history(stored.identity.full_id.as_str())
+        .webvh_history(stored.identity.did.as_str())
         .await
         .map_err(|error| {
             anyhow::anyhow!("reading persisted service WebVH history failed: {error}")
@@ -909,7 +909,7 @@ async fn validate_stored_service_identity(
     let head = log.last().ok_or_else(|| {
         anyhow::anyhow!("persisted service identity has no authoritative WebVH history")
     })?;
-    validate_persisted_webvh_history(stored.identity.full_id.as_str(), &log)?;
+    validate_persisted_webvh_history(stored.identity.did.as_str(), &log)?;
     let head_version_id = head
         .operation
         .get("versionId")
@@ -1031,15 +1031,15 @@ async fn mint_local_service_identity(
             &service_signing_seed,
         )
         .map_err(|error| anyhow::anyhow!("service DID inception failed: {error}"))?;
-    let service_id = DidFullId::new(prepared.did.clone())
+    let service_did = Did::new(prepared.did.clone())
         .map_err(|error| anyhow::anyhow!("minted service DID is invalid: {error}"))?;
-    let signing_ref = signing_key_ref(config, &service_id, Some(key_store))?;
+    let signing_ref = signing_key_ref(config, &service_did, Some(key_store))?;
     if config.notary_signing_key_seed.is_none() {
         key_store
             .store(signing_ref.as_str(), &service_signing_seed)
             .map_err(|error| anyhow::anyhow!("persisting service signing key failed: {error}"))?;
     }
-    let current_control_ref = control_key_ref(&service_id, 1)?;
+    let current_control_ref = control_key_ref(&service_did, 1)?;
     let next_control_ref = next_control_key_ref(&current_control_ref)?;
     key_store
         .store(current_control_ref.as_str(), &prepared.update_key_seed)
@@ -1061,7 +1061,7 @@ async fn mint_local_service_identity(
     let receipt = sign_registration_receipt(
         &registration_key,
         &request,
-        &service_id,
+        &service_did,
         &service_signing_seed,
         issued_at,
     )?;
@@ -1075,7 +1075,7 @@ async fn mint_local_service_identity(
         .map_err(|error| anyhow::anyhow!("self-registration outcome is invalid: {error}"))?;
     let event_digest = outcome.registration_receipt.log_head_digest.clone();
     let document = WebvhDocumentRecord {
-        did: service_id.to_string(),
+        did: service_did.to_string(),
         did_document: serde_json::to_value(&outcome.did_document)?,
         key_log_head: Some(event_digest.clone()),
         seq: 1,
@@ -1093,7 +1093,7 @@ async fn mint_local_service_identity(
     };
     let event = WebvhLogRecord {
         event_digest,
-        did: service_id.to_string(),
+        did: service_did.to_string(),
         seq: 1,
         operation: serde_json::to_value(&request.inception_operation)?,
         created_at: issued_at,
@@ -1136,18 +1136,17 @@ async fn mint_local_service_identity(
 fn sign_registration_receipt(
     key: &ServiceRegistrationKey,
     request: &ServiceRegistrationEnsureRequestBody,
-    provider_service_id: &DidFullId,
+    provider_did: &Did,
     signing_seed: &[u8; 32],
     issued_at: chrono::DateTime<chrono::Utc>,
 ) -> anyhow::Result<ServiceRegistrationReceipt> {
     let issued_at = arkret_canonical::normalize_timestamp_canonical(issued_at);
     let log_head_digest = request.inception_operation.log_head_digest()?;
     let control_key_digest = request.inception_operation.control_key_digest()?;
-    let full_id = request.inception_operation.state.id.clone();
-    let service_id = project_full_id_to_core_id(&full_id)?;
-    let provider_full_id = provider_service_id;
-    let provider_service_id = project_full_id_to_core_id(provider_full_id)?;
-    let verification_method = arkret_wire::DidUrl::new(format!("{provider_full_id}#notary-key"))
+    let did = request.inception_operation.state.id.clone();
+    let service_id = project_did_to_core_id(&did)?;
+    let provider_service_id = project_did_to_core_id(provider_did)?;
+    let verification_method = arkret_wire::DidUrl::new(format!("{provider_did}#notary-key"))
         .map_err(|error| {
             anyhow::anyhow!("provider notary verification method is invalid: {error}")
         })?;
@@ -1158,7 +1157,7 @@ fn sign_registration_receipt(
         ))?,
         registration_key: key.clone(),
         service_id,
-        full_id,
+        did,
         version_id: request.inception_operation.version_id.clone(),
         log_head_digest,
         control_key_digest,
@@ -1181,13 +1180,13 @@ fn sign_registration_receipt(
         &receipt,
         &SigningKey::from_bytes(signing_seed),
     )?;
-    receipt.validate_for(key, &receipt.service_id, &receipt.full_id)?;
+    receipt.validate_for(key, &receipt.service_id, &receipt.did)?;
     Ok(receipt)
 }
 
 fn signing_key_ref(
     config: &AppConfig,
-    service_id: &DidFullId,
+    service_did: &Did,
     key_store: Option<&dyn KeyStore>,
 ) -> anyhow::Result<DidCoreIdentityKeyRef> {
     if config.notary_signing_key_seed.is_some() {
@@ -1195,16 +1194,13 @@ fn signing_key_ref(
             .map_err(|error| anyhow::anyhow!(error.to_string()));
     }
     required_key_store(key_store)?;
-    DidCoreIdentityKeyRef::new(format!("arkret:signer:soland-notary:{service_id}"))
+    DidCoreIdentityKeyRef::new(format!("arkret:signer:soland-notary:{service_did}"))
         .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
-fn control_key_ref(
-    service_id: &DidFullId,
-    generation: u64,
-) -> anyhow::Result<DidCoreIdentityKeyRef> {
+fn control_key_ref(service_did: &Did, generation: u64) -> anyhow::Result<DidCoreIdentityKeyRef> {
     DidCoreIdentityKeyRef::new(format!(
-        "arkret:control:soland-webvh:{service_id}:{generation}"
+        "arkret:control:soland-webvh:{service_did}:{generation}"
     ))
     .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
@@ -1303,7 +1299,7 @@ mod tests {
         state
             .identity()
             .expect("serving service identity")
-            .full_id
+            .did
             .to_string()
     }
 
@@ -1337,9 +1333,9 @@ mod tests {
             .await
             .expect("identity lookup")
             .expect("stored identity");
-        assert_eq!(stored.identity.full_id.method(), "webvh");
+        assert_eq!(stored.identity.did.method(), "webvh");
         assert_ne!(
-            stored.identity.full_id.as_str(),
+            stored.identity.did.as_str(),
             stored.identity.service_id.as_str(),
             "the WebVH store key is the complete DID, not its stable core projection"
         );
@@ -1365,7 +1361,7 @@ mod tests {
                 )
                 .is_ok()
         );
-        assert_eq!(state_did(&state), stored.identity.full_id.as_str());
+        assert_eq!(state_did(&state), stored.identity.did.as_str());
     }
 
     #[tokio::test]
@@ -1450,7 +1446,7 @@ mod tests {
         assert_eq!(restarted_seed, first_seed);
         assert_eq!(
             restarted_identity.active_signing_key_ref.as_str(),
-            format!("arkret:signer:soland-notary:{}", restarted_identity.full_id)
+            format!("arkret:signer:soland-notary:{}", restarted_identity.did)
         );
     }
 

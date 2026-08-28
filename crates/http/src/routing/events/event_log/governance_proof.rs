@@ -1337,8 +1337,8 @@ fn event_signer_device_id(record: &AcceptedEvent) -> Option<String> {
 
 fn verification_method_device_id(actor_id: &str, verification_method: &str) -> Option<String> {
     let (controller, fragment) = verification_method.rsplit_once('#')?;
-    let controller = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
-    if arkret_wire::project_full_id_to_core_id(&controller)
+    let controller = arkret_wire::Did::new(controller.to_owned()).ok()?;
+    if arkret_wire::project_did_to_core_id(&controller)
         .ok()?
         .as_str()
         != actor_id
@@ -1790,10 +1790,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn event_signer_device_projects_full_method_controller_to_actor_core() {
-        let full_id =
-            arkret_wire::DidFullId::new("did:webvh:z6Mkfull:alice.example".to_owned()).unwrap();
-        let core_id = arkret_wire::project_full_id_to_core_id(&full_id).unwrap();
+    fn event_signer_device_projects_did_method_controller_to_actor_core() {
+        let did = arkret_wire::Did::new("did:webvh:z6Mkfull:alice.example".to_owned()).unwrap();
+        let core_id = arkret_wire::project_did_to_core_id(&did).unwrap();
 
         assert_eq!(
             verification_method_device_id(
@@ -1917,7 +1916,7 @@ mod tests {
     fn managed_agent_pcr_create() -> Event {
         let realm_id =
             RealmId::new("ak:realm:AZiVojGkhKKjoBSA6eV96sZAm4u3Ze_3uMmkr30F6ZQZ").unwrap();
-        let actor_id = arkret_identifiers::DidFullId::new("did:web:agent.example").unwrap();
+        let actor_did = arkret_identifiers::Did::new("did:web:agent.example").unwrap();
         let genesis =
             arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
                 arkret_wire::GenesisSalt::new(
@@ -1925,7 +1924,7 @@ mod tests {
                 )
                 .unwrap(),
                 arkret_models_identity::ResolutionCommitment {
-                    full_id: actor_id.clone(),
+                    did: actor_did.clone(),
                     method_history_head: format!("sha256:{}", "8".repeat(64)),
                     version_id: "1-Qmfixture".to_owned(),
                 },
@@ -1950,7 +1949,7 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
-            crate::test_actor_id(&actor_id),
+            crate::test_actor_id(&actor_did),
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1").unwrap(),
             payload,
@@ -2028,13 +2027,13 @@ mod tests {
         let state = test_state();
         let realm_id =
             RealmId::new("ak:realm:AUNpwW417vtZcK0hWrtv9UDvU8aC0UKocKAIMZ8xszoU").unwrap();
-        let actor_id = arkret_identifiers::DidFullId::new("did:web:invitee.example").unwrap();
+        let actor_did = arkret_identifiers::Did::new("did:web:invitee.example").unwrap();
         let event = crate::test_event::raw_event(
             arkret_wire::EventKind::InviteAccept.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
-            crate::test_actor_id(&actor_id),
+            crate::test_actor_id(&actor_did),
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce2").unwrap(),
             serde_json::json!({
@@ -2077,7 +2076,7 @@ mod tests {
                 Vec::new()
             } else {
                 vec![IssuedOp {
-                    issuer: crate::test_actor_id(&actor_id),
+                    issuer: crate::test_actor_id(&actor_did),
                     op: SealedOp::new(
                         move_id.clone(),
                         LatticeOp {

@@ -30,7 +30,7 @@ const ALICE: &str = "did:web:alice.example";
 const ALICE_DEVICE: &str = "01904100-0000-7000-8000-a11ce0000001";
 const BOB: &str = "did:web:bob.example";
 const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b000000001";
-const REMOTE_SERVICE_FULL_ID: &str = "did:web:remote.example";
+const REMOTE_SERVICE_DID: &str = "did:web:remote.example";
 const REMOTE_SERVICE_ID: &str = "ak:did_core:web:remote.example";
 /// A syntactically valid Event id this service never accepted.
 const UNKNOWN_EVENT_ID: &str = "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E2";
@@ -80,10 +80,9 @@ impl ServiceRouteFetcher for RemoteCarrierFetcher {
 }
 
 fn remote_route_candidate() -> (DidCoreId, ServiceResolutionCarrier, VerifiedRouteCandidate) {
-    let full_id =
-        DidFullId::new(REMOTE_SERVICE_FULL_ID.to_owned()).expect("remote service full DID");
-    let service_id = arkret_wire::project_full_id_to_core_id(&full_id)
-        .expect("remote service core DID projection");
+    let did = Did::new(REMOTE_SERVICE_DID.to_owned()).expect("remote service DID");
+    let service_id =
+        arkret_wire::project_did_to_core_id(&did).expect("remote service core DID projection");
     assert_eq!(service_id.as_str(), REMOTE_SERVICE_ID);
     let service_kind = arkret_wire::ServiceKind::PrincipalServer;
     let base_url = "https://remote.example/";
@@ -91,7 +90,7 @@ fn remote_route_candidate() -> (DidCoreId, ServiceResolutionCarrier, VerifiedRou
     let method_history_head = format!("sha256:{}", "1".repeat(64));
     let version_id = "fixture-route-v1".to_owned();
     let resolution = ResolutionCommitment {
-        full_id: full_id.clone(),
+        did: did.clone(),
         method_history_head: method_history_head.clone(),
         version_id: version_id.clone(),
     };
@@ -113,7 +112,7 @@ fn remote_route_candidate() -> (DidCoreId, ServiceResolutionCarrier, VerifiedRou
             record: ServiceResolutionRecordCore {
                 service_id: service_id.clone(),
                 service_kind: service_kind.as_str().to_owned(),
-                full_id: full_id.clone(),
+                did: did.clone(),
                 method_history_head,
                 version_id,
                 resolution_event_ref: "fixture-verified-route".to_owned(),
@@ -127,7 +126,7 @@ fn remote_route_candidate() -> (DidCoreId, ServiceResolutionCarrier, VerifiedRou
                 expires_at: issued_at + chrono::Duration::hours(2),
             },
             proof: arkret_wire::ProtocolSignature {
-                verification_method: arkret_wire::DidUrl::new(format!("{full_id}#assertion-1"))
+                verification_method: arkret_wire::DidUrl::new(format!("{did}#assertion-1"))
                     .expect("remote verification method"),
                 created_at: issued_at,
                 jws: arkret_wire::Base64UrlString::new("AA").expect("fixture proof bytes"),

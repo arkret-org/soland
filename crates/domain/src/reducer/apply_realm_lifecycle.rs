@@ -25,14 +25,13 @@ fn principal_genesis_resolution_value(
         .get("initial_resolution")
         .cloned()
         .ok_or("identity_resolution_missing")?;
-    let full_id = commitment
-        .get("full_id")
+    let did = commitment
+        .get("did")
         .and_then(Value::as_str)
         .ok_or("identity_resolution_invalid")?;
-    let full_id = arkret_wire::DidFullId::new(full_id.to_owned())
-        .map_err(|_| "identity_resolution_invalid")?;
-    let projected = arkret_wire::project_full_id_to_core_id(&full_id)
-        .map_err(|_| "identity_resolution_invalid")?;
+    let did = arkret_wire::Did::new(did.to_owned()).map_err(|_| "identity_resolution_invalid")?;
+    let projected =
+        arkret_wire::project_did_to_core_id(&did).map_err(|_| "identity_resolution_invalid")?;
     if projected.as_str() != operation.context.sender.as_str()
         || commitment
             .get("method_history_head")

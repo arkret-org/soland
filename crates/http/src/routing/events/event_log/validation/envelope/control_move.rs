@@ -147,8 +147,8 @@ pub(super) fn actor_device_id_from_verification_method(
     actor_id: &str,
 ) -> Option<String> {
     let (method_controller, fragment) = verification_method.rsplit_once('#')?;
-    let method_controller = arkret_wire::DidFullId::new(method_controller.to_owned()).ok()?;
-    let method_actor_id = arkret_wire::project_full_id_to_core_id(&method_controller).ok()?;
+    let method_controller = arkret_wire::Did::new(method_controller.to_owned()).ok()?;
+    let method_actor_id = arkret_wire::project_did_to_core_id(&method_controller).ok()?;
     (method_actor_id.as_str() == actor_id)
         .then_some(fragment)
         .map(str::trim)

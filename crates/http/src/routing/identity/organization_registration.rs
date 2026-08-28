@@ -1,4 +1,4 @@
-use arkret_identifiers::{DidCoreId, DidFullId, project_full_id_to_core_id};
+use arkret_identifiers::{Did, DidCoreId, project_did_to_core_id};
 use arkret_models_identity::{
     OrganizationRegistrationChallenge, OrganizationRegistrationChallengeRequestBody,
     OrganizationRegistrationEnsureRequestBody, OrganizationRegistrationOutcome,
@@ -32,8 +32,8 @@ impl CurrentReceiptSigner {
     fn from_state(state: &AppState) -> Result<Self, AppError> {
         let issuer_service_id = DidCoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(format!("service core id is invalid: {error}")))?;
-        let issuer_full_id = state.service_resolution_commitment().full_id.clone();
-        let verification_method = arkret_wire::DidUrl::new(format!("{issuer_full_id}#notary-key"))
+        let issuer_did = state.service_resolution_commitment().did.clone();
+        let verification_method = arkret_wire::DidUrl::new(format!("{issuer_did}#notary-key"))
             .map_err(|error| {
                 AppError::internal(format!(
                     "service notary verification method is invalid: {error}"
@@ -224,8 +224,8 @@ async fn require_registration_manager(
 }
 
 fn authenticated_actor_core_id(actor: &str) -> Option<DidCoreId> {
-    let full_id = DidFullId::new(actor.to_owned()).ok()?;
-    project_full_id_to_core_id(&full_id).ok()
+    let did = Did::new(actor.to_owned()).ok()?;
+    project_did_to_core_id(&did).ok()
 }
 
 fn require_registry_admin(state: &AppState, actor: &str) -> Result<(), AppError> {
@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn authenticated_actor_is_projected_to_stable_core_id() {
         let core = authenticated_actor_core_id("did:webvh:z6mkactor:alice.example")
-            .expect("active full DID projects to a core id");
+            .expect("active DID projects to a core id");
         assert_eq!(core.as_str(), "ak:did_core:webvh:z6mkactor");
         assert!(authenticated_actor_core_id("ak:did_core:webvh:z6mkactor").is_none());
     }

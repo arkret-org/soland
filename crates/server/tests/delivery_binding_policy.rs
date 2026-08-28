@@ -93,8 +93,8 @@ fn join_op_for_realm(realm_id: &str, member: &str, binding: Value) -> Operation 
 }
 
 fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) -> String {
-    let creator = arkret_identifiers::DidFullId::new("did:web:alice.example").unwrap();
-    let creator_actor_id = arkret_wire::project_full_id_to_core_id(&creator).unwrap();
+    let creator = arkret_identifiers::Did::new("did:web:alice.example").unwrap();
+    let creator_actor_id = arkret_wire::project_did_to_core_id(&creator).unwrap();
     let payload = arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
         arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
         arkret_identifiers::TrustDomainId::new("ak:trust_domain:example.net").unwrap(),

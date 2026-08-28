@@ -654,7 +654,7 @@ pub(crate) async fn identity_resolve(
             method_evidence,
         ));
     }
-    if let Some(document) = super::document::federation_peer_did_document(state, did) {
+    if let Some(document) = super::document::federation_peer_service_id_document(state, did) {
         require_requested_webvh_evidence(requires_webvh_evidence, None)?;
         return json_ok(identity_resolve_outcome(
             body.did, document, None, None, None,
@@ -718,8 +718,7 @@ pub(crate) async fn identity_document(
     if validate_did(&did).is_err() {
         return Err(AppError::param_invalid("invalid did"));
     }
-    let typed_did =
-        DidFullId::new(did.clone()).map_err(|_| AppError::param_invalid("invalid did"))?;
+    let typed_did = Did::new(did.clone()).map_err(|_| AppError::param_invalid("invalid did"))?;
     let record = identity_document_record(state, &did).await;
     let head_event_digest = key_log_head_hash(record.key_log_head.clone())?;
     let mut did_document = serde_json::from_value::<BTreeMap<String, Value>>(record.did_document)
@@ -750,7 +749,7 @@ fn did_log_event_digest(operation: &Value) -> Result<String, AppError> {
 }
 
 fn identity_resolve_outcome(
-    did: DidFullId,
+    did: Did,
     document: Value,
     key_log_head: Option<Hash>,
     seq: Option<u64>,
@@ -834,7 +833,7 @@ pub(crate) async fn identity_log(
         }
     };
     json_ok(IdentityLogListOutcome {
-        did: DidFullId::new(did).map_err(|error| AppError::internal(error.to_string()))?,
+        did: Did::new(did).map_err(|error| AppError::internal(error.to_string()))?,
         method,
         native_history,
         entries,
@@ -856,7 +855,7 @@ mod identity_log_tests {
     use super::did_method_token;
 
     #[test]
-    fn identity_log_reports_the_full_registered_did_method_token() {
+    fn identity_log_reports_the_canonical_registered_did_method_token() {
         assert_eq!(
             did_method_token("did:webvh:scid:example.com:webvh:alice").expect("valid did:webvh"),
             "did:webvh"
@@ -1125,7 +1124,7 @@ pub(crate) async fn identity_submit_did_operation(
 
 fn did_operation_submit_outcome(
     status: arkret_models_identity::identity::DidOperationSubmitStatus,
-    did: DidFullId,
+    did: Did,
     seq: u64,
     version_id: &str,
     event_digest: &str,

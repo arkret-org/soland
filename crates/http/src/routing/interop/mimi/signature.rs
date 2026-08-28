@@ -100,9 +100,9 @@ pub(super) fn mimi_validate_signature_input(
         .map_or(verification_method.as_str(), |(head, _)| head)
         .split_once('#')
         .map_or(verification_method.as_str(), |(head, _)| head);
-    let controller_matches = arkret_wire::DidFullId::new(controller.to_owned())
+    let controller_matches = arkret_wire::Did::new(controller.to_owned())
         .ok()
-        .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id).ok())
+        .and_then(|did| arkret_wire::project_did_to_core_id(&did).ok())
         .as_ref()
         == Some(source_service_id);
     if !controller_matches {

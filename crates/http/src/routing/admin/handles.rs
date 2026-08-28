@@ -100,11 +100,11 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
     for account in accounts {
         let localparts = state
             .identities()
-            .account_localparts(&account.did)
+            .account_localparts(account.principal_id.as_str())
             .await
             .unwrap_or_default();
         for localpart in localparts {
-            let evidence = claims_by_subject.get(&account.did);
+            let evidence = claims_by_subject.get(account.principal_id.as_str());
             let primary_claim = evidence.and_then(|records| records.first());
             let status = match primary_claim {
                 Some(record) if record.revoked => "revoked".to_owned(),
@@ -119,7 +119,7 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
                 issuer_did: primary_claim
                     .and_then(|record| record.issuer_service_id.clone())
                     .or_else(|| Some(state.service_id().clone())),
-                subject_id: Some(account.did.clone()),
+                subject_id: Some(account.principal_id.to_string()),
                 assigned_at: Some(arkret_canonical::format_timestamp_canonical(
                     localpart.created_at,
                 )),
@@ -417,7 +417,7 @@ async fn reassign_handle(
 
     state
         .identities()
-        .add_localpart(&target.did, &localpart, true)
+        .add_localpart(target.principal_id.as_str(), &localpart, true)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
 

@@ -504,8 +504,8 @@ async fn operation_agent_write_context(
             .is_some_and(|record| {
                 arkret_wire::DidCoreId::new(record.controller_id.clone())
                     .or_else(|_| {
-                        arkret_wire::DidFullId::new(record.controller_id.clone())
-                            .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+                        arkret_wire::Did::new(record.controller_id.clone())
+                            .and_then(|did| arkret_wire::project_did_to_core_id(&did))
                     })
                     .is_ok_and(|controller_id| controller_id.as_str() == executed_by)
                     && record.principal_control_realm_id == operation.realm_id.as_str()

@@ -5,35 +5,35 @@ use super::{
 /// Trait for account storage operations.
 #[async_trait]
 pub trait AccountStore: Send + Sync {
-    async fn get(&self, did: &str) -> PersistenceResult<Option<AccountRecord>>;
+    async fn get(&self, principal_id: &str) -> PersistenceResult<Option<AccountRecord>>;
     async fn put(&self, record: &AccountRecord) -> PersistenceResult<()>;
     async fn list(&self) -> PersistenceResult<Vec<AccountRecord>>;
-    async fn delete(&self, did: &str) -> PersistenceResult<()>;
+    async fn delete(&self, principal_id: &str) -> PersistenceResult<()>;
 }
 #[async_trait]
 pub trait AccountLocalpartStore: Send + Sync {
     async fn list_for_account(
         &self,
-        account_did: &str,
+        account_principal_id: &str,
     ) -> PersistenceResult<Vec<AccountLocalpartRecord>>;
     async fn primary_for_account(
         &self,
-        account_did: &str,
+        account_principal_id: &str,
     ) -> PersistenceResult<Option<AccountLocalpartRecord>>;
     async fn owner_of(&self, localpart: &str) -> PersistenceResult<Option<AccountLocalpartRecord>>;
     async fn add(
         &self,
-        account_did: &str,
+        account_principal_id: &str,
         localpart: &str,
         primary: bool,
     ) -> PersistenceResult<AccountLocalpartRecord>;
     async fn set_primary(
         &self,
-        account_did: &str,
+        account_principal_id: &str,
         localpart: &str,
     ) -> PersistenceResult<AccountLocalpartRecord>;
-    async fn remove(&self, account_did: &str, localpart: &str) -> PersistenceResult<()>;
-    async fn clear_for_account(&self, account_did: &str) -> PersistenceResult<()>;
+    async fn remove(&self, account_principal_id: &str, localpart: &str) -> PersistenceResult<()>;
+    async fn clear_for_account(&self, account_principal_id: &str) -> PersistenceResult<()>;
 }
 #[async_trait]
 pub trait AccountLifecycleStore: Send + Sync {
@@ -69,7 +69,7 @@ pub trait AccountDataStore: Send + Sync {
 #[doc(hidden)]
 pub fn account_with_primary_localpart_select(where_clause: &str) -> String {
     format!(
-        "SELECT a.id, a.principal_id AS did, COALESCE(lp.localpart, '') AS localpart, \
+        "SELECT a.id, a.principal_id, COALESCE(lp.localpart, '') AS localpart, \
          a.display_name, a.payload, a.created_at \
          FROM accounts a \
          LEFT JOIN LATERAL ( \

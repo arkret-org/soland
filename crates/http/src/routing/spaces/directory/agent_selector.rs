@@ -65,7 +65,7 @@ pub(super) fn signed_agent_selector_claim(
     let service_id = DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("invalid service core id: {error}")))?;
     let issuer = service_id.clone();
-    let issuer_full_id = state.service_resolution_commitment().full_id.clone();
+    let issuer_did = state.service_resolution_commitment().did.clone();
     let controller_subject = DidCoreId::new(controller_subject.to_owned())
         .map_err(|err| AppError::internal(format!("invalid controller DID: {err}")))?;
     let subject = DidCoreId::new(subject.to_owned())
@@ -100,13 +100,14 @@ pub(super) fn signed_agent_selector_claim(
     })?;
     let signer = Ed25519PayloadSigner::new(
         (*state.notary_signing_key()).clone(),
-        issuer_full_id.clone(),
-        arkret_wire::DidUrl::new(format!("{issuer_full_id}#directory-agent-selector-claim"))
-            .map_err(|error| {
+        issuer_did.clone(),
+        arkret_wire::DidUrl::new(format!("{issuer_did}#directory-agent-selector-claim")).map_err(
+            |error| {
                 AppError::internal(format!(
                     "directory claim verification method is invalid: {error}"
                 ))
-            })?,
+            },
+        )?,
     );
     let signature = PayloadSigner::sign_payload(&signer, &canonical_bytes)
         .map_err(|err| AppError::internal(format!("agent selector claim signing failed: {err}")))?;

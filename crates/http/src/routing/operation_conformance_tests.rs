@@ -430,7 +430,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                     "delegation_policy": {"enabled": false},
                     "e2ee_policy": {"enabled": false},
                     "registration_epoch_evidence": {
-                        "full_id": "did:web:applet.example",
+                        "did": "did:web:applet.example",
                         "did_document_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                         "method_version_evidence": {
                             "method": "did:web",
@@ -490,7 +490,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                     "delegation_policy": {"enabled": false},
                     "e2ee_policy": {"enabled": false},
                     "registration_epoch_evidence": {
-                        "full_id": "did:web:applet.example",
+                        "did": "did:web:applet.example",
                         "did_document_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                         "method_version_evidence": {
                             "method": "did:web",

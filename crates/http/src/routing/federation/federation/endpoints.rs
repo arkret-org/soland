@@ -1,4 +1,4 @@
-use arkret_identifiers::{DidFullId, RealmId};
+use arkret_identifiers::{Did, RealmId};
 use chrono::Duration;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -32,7 +32,7 @@ pub(crate) async fn federation_actor_events(
     let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_read_rail_local(state)?;
     let actor = actor_id.into_inner();
-    if DidFullId::new(actor.clone()).is_err() {
+    if Did::new(actor.clone()).is_err() {
         return Err(AppError::param_invalid("invalid actor_id"));
     }
     const FEDERATION_ACTOR_EVENTS_SCAN_CAP: usize = 10_000;

@@ -30,7 +30,7 @@
 use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex};
 
-use arkret_identifiers::{DidFullId, Hlc, RealmId, SealId};
+use arkret_identifiers::{Did, Hlc, RealmId, SealId};
 use arkret_wire::{Seal, SealBasis};
 use soland_http::state::AppState;
 use soland_services::conformance_basis::ConformanceRealmBasis;
@@ -44,10 +44,10 @@ const FIXTURE_BASIS_ID_DOMAIN: &str = "soland:test-support:realm-basis:";
 pub const FIXTURE_MLS_GROUP_ID: &str = "fixtureMlsGroup01";
 /// Build a frozen single-signer fixture from a real deterministic Ed25519 key.
 #[must_use]
-pub fn test_single_signer_notary(full_did: &str) -> arkret_wire::NotaryValue {
+pub fn test_single_signer_notary(did: &str) -> arkret_wire::NotaryValue {
     let signer = soland_services::conformance_basis::ConformanceNotarySigner::ed25519(
-        DidFullId::new(full_did.to_owned()).expect("fixture notary full DID"),
-        arkret_wire::DidUrl::new(format!("{full_did}#notary-key"))
+        Did::new(did.to_owned()).expect("fixture notary DID"),
+        arkret_wire::DidUrl::new(format!("{did}#notary-key"))
             .expect("fixture notary verification method"),
         [0x53; 32],
     )
@@ -199,7 +199,7 @@ fn fixture_notary_signer(
     state: &AppState,
 ) -> soland_services::conformance_basis::ConformanceNotarySigner {
     soland_services::conformance_basis::ConformanceNotarySigner::ed25519(
-        state.service_full_id(),
+        state.service_did(),
         state
             .service_verification_method("notary-key")
             .expect("fixture notary verification method"),
@@ -295,16 +295,15 @@ pub fn fixture_principal_control_realm_create_for_server(
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .expect("fixture PCR genesis timestamp")
         .with_timezone(&chrono::Utc);
-    let principal_full_id =
-        DidFullId::new(principal_id.to_owned()).expect("fixture principal full DID");
-    let principal = arkret_wire::project_full_id_to_core_id(&principal_full_id)
-        .expect("fixture principal projection");
+    let principal_did = Did::new(principal_id.to_owned()).expect("fixture principal DID");
+    let principal =
+        arkret_wire::project_did_to_core_id(&principal_did).expect("fixture principal projection");
     arkret_bootstrap::build_self_principal_pcr_create(
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
             principal_id: principal.clone(),
-            principal_full_id: principal_full_id.clone(),
+            principal_did: principal_did.clone(),
             principal_server_id,
-            notary: test_single_signer_notary(principal_full_id.as_str()),
+            notary: test_single_signer_notary(principal_did.as_str()),
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             )
@@ -318,7 +317,7 @@ pub fn fixture_principal_control_realm_create_for_server(
                 arkret_bootstrap::DID_INCEPTION_REF_ROLE,
             ),
             initial_resolution: arkret_models_identity::ResolutionCommitment {
-                full_id: principal_full_id.clone(),
+                did: principal_did.clone(),
                 method_history_head: format!("sha256:{}", "1".repeat(64)),
                 version_id: "1-fixture".to_owned(),
             },
@@ -348,8 +347,8 @@ pub async fn seed_realm_basis(
     fixture_basis: FixtureBasis<'_>,
 ) -> SealId {
     let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
-    let subject_core = arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(subject.to_owned()).expect("fixture basis subject full DID"),
+    let subject_core = arkret_wire::project_did_to_core_id(
+        &Did::new(subject.to_owned()).expect("fixture basis subject DID"),
     )
     .expect("fixture basis subject projection");
     let basis = realm_basis(state, realm_id, &subject_core, fixture_basis);
@@ -464,7 +463,7 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
     }
     if realm == state.development_demo_realm_id() {
         let event = soland_http::state::development_demo_genesis_event(
-            &state.service_full_id(),
+            &state.service_did(),
             &arkret_identifiers::DidCoreId::new(state.service_id().clone())
                 .expect("fixture service core DID"),
             state.notary_signing_key().to_bytes(),
@@ -493,8 +492,8 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
     let event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
-        arkret_wire::project_full_id_to_core_id(
-            &DidFullId::new(subject.to_owned()).expect("fixture genesis actor DID"),
+        arkret_wire::project_did_to_core_id(
+            &Did::new(subject.to_owned()).expect("fixture genesis actor DID"),
         )
         .expect("fixture genesis actor projection"),
         arkret_identifiers::DidCoreId::new(state.service_id().clone())
@@ -606,8 +605,8 @@ pub async fn seed_event_derived_realm_genesis_event(
     let event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
-        arkret_wire::project_full_id_to_core_id(
-            &DidFullId::new(subject.to_owned()).expect("fixture genesis actor DID"),
+        arkret_wire::project_did_to_core_id(
+            &Did::new(subject.to_owned()).expect("fixture genesis actor DID"),
         )
         .expect("fixture genesis actor projection"),
         crate::fixture_principal_server_id(),

@@ -1248,7 +1248,7 @@ fn did_matches_trust_roots(did: &str, roots: &[String]) -> bool {
 fn did_matches_trust_root(did: &str, root: &str) -> bool {
     // A sovereign DID-policy trust root is a stable identity core, not a
     // resolver locator. Compare it to the registered adapter projection of a
-    // supplied bare DID; never try to resolve or reconstruct a DID from the
+    // supplied DID; never try to resolve or reconstruct a DID from the
     // core string itself.
     parse_sovereign_trust_root(root).is_some_and(|root_core| {
         project_sovereign_candidate(did).is_some_and(|candidate| candidate == root_core)
@@ -1259,7 +1259,7 @@ fn parse_sovereign_trust_root(value: &str) -> Option<arkret_wire::DidCoreId> {
     let core = arkret_wire::DidCoreId::new(value.to_owned()).ok()?;
     // DidCoreId is a generic carrier. Enforce the registered webvh adapter's
     // narrower core projection here: only the validated SCID follows the
-    // method token; hosting domain/path belongs exclusively to the full DID.
+    // method token; hosting domain/path belongs exclusively to the DID.
     if core
         .as_str()
         .strip_prefix("ak:did_core:webvh:")
@@ -1271,8 +1271,8 @@ fn parse_sovereign_trust_root(value: &str) -> Option<arkret_wire::DidCoreId> {
 }
 
 fn project_sovereign_candidate(value: &str) -> Option<arkret_wire::DidCoreId> {
-    let full_id = arkret_wire::DidFullId::new(value.to_owned()).ok()?;
-    arkret_wire::project_full_id_to_core_id(&full_id).ok()
+    let did = arkret_wire::Did::new(value.to_owned()).ok()?;
+    arkret_wire::project_did_to_core_id(&did).ok()
 }
 
 fn audit(
@@ -1363,7 +1363,7 @@ mod tests {
     }
 
     #[test]
-    fn webvh_core_trust_root_matches_full_did_by_scid_projection() {
+    fn webvh_core_trust_root_matches_did_by_scid_projection() {
         let root = "ak:did_core:webvh:zE2ucm2oH9PCib4kBzLEAkFqa";
         assert!(did_matches_trust_root(
             "did:webvh:zE2ucm2oH9PCib4kBzLEAkFqa:registry.defense.example",
@@ -1385,9 +1385,9 @@ mod tests {
     }
 
     #[test]
-    fn malformed_webvh_core_root_does_not_match_full_did() {
+    fn malformed_webvh_core_root_does_not_match_did() {
         // Deliberately invalid: a webvh core contains only the validated SCID;
-        // the hosting domain belongs to the full DID above, never to did_core.
+        // the hosting domain belongs to the DID above, never to did_core.
         let malformed_root = "ak:did_core:webvh:zE2ucm2oH9PCib4kBzLEAkFqa:registry.defense.example";
         assert!(!did_matches_trust_root(
             "did:webvh:zE2ucm2oH9PCib4kBzLEAkFqa:registry.defense.example",

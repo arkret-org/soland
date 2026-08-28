@@ -884,8 +884,8 @@ fn normalize_join_candidate_service_id(value: &str) -> Option<arkret_wire::DidCo
     arkret_wire::DidCoreId::new(value.to_owned())
         .ok()
         .or_else(|| {
-            let full_id = arkret_wire::DidFullId::new(value.to_owned()).ok()?;
-            arkret_wire::project_full_id_to_core_id(&full_id).ok()
+            let did = arkret_wire::Did::new(value.to_owned()).ok()?;
+            arkret_wire::project_did_to_core_id(&did).ok()
         })
 }
 use arkret_identifiers::DidCoreId;

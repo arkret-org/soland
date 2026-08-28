@@ -137,10 +137,10 @@ pub fn has_self_principal_pcr_device_authorized_shape(
     let Some((controller, fragment)) = producer.verification_method.as_str().split_once('#') else {
         return false;
     };
-    let Ok(controller) = arkret_wire::DidFullId::new(controller.to_owned()) else {
+    let Ok(controller) = arkret_wire::Did::new(controller.to_owned()) else {
         return false;
     };
-    arkret_wire::project_full_id_to_core_id(&controller).is_ok_and(|controller| {
+    arkret_wire::project_did_to_core_id(&controller).is_ok_and(|controller| {
         controller == event.actor_id
             && fragment
                 .strip_prefix("ak:device:")

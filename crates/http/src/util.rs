@@ -11,7 +11,7 @@
 //! land here only if they outgrow that scope.
 
 use arkret_hlc::{Cursor, CursorPurpose};
-use arkret_identifiers::{DeviceId, DidFullId, SpaceId};
+use arkret_identifiers::{DeviceId, Did, SpaceId};
 use salvo::http::header;
 use salvo::prelude::*;
 
@@ -244,8 +244,8 @@ pub fn is_valid_sha256_hex(value: &str) -> bool {
 // ── Identifier / handle validators ──────────────────────────────────────────
 
 /// Validate and parse a DID.
-pub fn validate_did(value: &str) -> arkret_identifiers::Result<DidFullId> {
-    DidFullId::new(value.to_owned())
+pub fn validate_did(value: &str) -> arkret_identifiers::Result<Did> {
+    Did::new(value.to_owned())
 }
 
 pub fn validate_device_id(value: &str) -> arkret_identifiers::Result<DeviceId> {
@@ -299,7 +299,7 @@ mod tests {
     use super::*;
 
     /// AKP-0008 / AKP-0009 (B-D, P2-G) — soland's inbound DID validator
-    /// MUST route through the SDK `DidFullId::new` parser. Regression guard so
+    /// MUST route through the SDK `Did::new` parser. Regression guard so
     /// the wire ingress points (event_log envelope, agents.rs handlers,
     /// account.register, etc.) stay aligned with the spec DID format.
     #[test]

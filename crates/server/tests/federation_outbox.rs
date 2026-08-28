@@ -23,7 +23,7 @@ use arkret_models_identity::{
     ResolutionCommitment, ServiceResolutionRecord, ServiceResolutionRecordCore,
 };
 use arkret_wire::{
-    Base64UrlString, DidCoreId, DidFullId, DidUrl, ProtocolSignature, ServiceKind, TrustDomainId,
+    Base64UrlString, Did, DidCoreId, DidUrl, ProtocolSignature, ServiceKind, TrustDomainId,
 };
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -41,9 +41,9 @@ use soland_services::service_route::{
 use soland_storage::FederationOutboxState;
 use soland_test_support::AppStateTestExt as _;
 
-const PEER_FULL_DID: &str = "did:web:peer.example";
+const PEER_DID: &str = "did:web:peer.example";
 const PEER_DID: &str = "ak:did_core:web:peer.example";
-const DENIED_PEER_FULL_DID: &str = "did:web:denied-peer.example";
+const DENIED_PEER_DID: &str = "did:web:denied-peer.example";
 const DENIED_PEER_DID: &str = "ak:did_core:web:denied-peer.example";
 const FEDERATION_ENDPOINT: &str = "/_arkret/peer/events";
 const IDEMPOTENCY_KEY: &str = "ak:outbox:test-idem-key-0001";
@@ -108,20 +108,20 @@ impl ServiceRouteFetcher for FixtureVerifiedRouteFetcher {
 }
 
 fn verified_peer_route(
-    full_id: &str,
+    did: &str,
     expected_core_id: &str,
     base_url: &str,
     trust_domain: &str,
 ) -> VerifiedPeerRoute {
-    let full_id = DidFullId::new(full_id.to_owned()).expect("fixture peer full DID");
+    let did = Did::new(did.to_owned()).expect("fixture peer DID");
     let service_id =
-        arkret_wire::project_full_id_to_core_id(&full_id).expect("fixture peer core projection");
+        arkret_wire::project_did_to_core_id(&did).expect("fixture peer core projection");
     assert_eq!(service_id.as_str(), expected_core_id);
     let base_url = format!("{}/", base_url.trim_end_matches('/'));
     let method_history_head = format!("sha256:{}", "1".repeat(64));
     let version_id = "fixture-route-v1".to_owned();
     let commitment = ResolutionCommitment {
-        full_id: full_id.clone(),
+        did: did.clone(),
         method_history_head: method_history_head.clone(),
         version_id: version_id.clone(),
     };
@@ -142,7 +142,7 @@ fn verified_peer_route(
         record: ServiceResolutionRecordCore {
             service_id: service_id.clone(),
             service_kind: ServiceKind::PrincipalServer.as_str().to_owned(),
-            full_id: full_id.clone(),
+            did: did.clone(),
             method_history_head: method_history_head.clone(),
             version_id: version_id.clone(),
             resolution_event_ref: "fixture-verified-route".to_owned(),
@@ -156,7 +156,7 @@ fn verified_peer_route(
             expires_at: issued_at + chrono::Duration::hours(2),
         },
         proof: ProtocolSignature {
-            verification_method: DidUrl::new(format!("{full_id}#assertion-1"))
+            verification_method: DidUrl::new(format!("{did}#assertion-1"))
                 .expect("fixture verification method"),
             created_at: issued_at,
             jws: Base64UrlString::new("AA").expect("fixture proof bytes"),
@@ -181,17 +181,12 @@ fn verified_peer_route(
 }
 
 fn standard_peer_route(base_url: &str) -> VerifiedPeerRoute {
-    verified_peer_route(
-        PEER_FULL_DID,
-        PEER_DID,
-        base_url,
-        "ak:trust_domain:peer.example",
-    )
+    verified_peer_route(PEER_DID, PEER_DID, base_url, "ak:trust_domain:peer.example")
 }
 
 fn denied_peer_route() -> VerifiedPeerRoute {
     verified_peer_route(
-        DENIED_PEER_FULL_DID,
+        DENIED_PEER_DID,
         DENIED_PEER_DID,
         "http://169.254.169.254",
         "ak:trust_domain:denied-peer.example",
@@ -200,9 +195,9 @@ fn denied_peer_route() -> VerifiedPeerRoute {
 
 fn unique_peer_route(prefix: &str, base_url: &str) -> VerifiedPeerRoute {
     let suffix = uuid::Uuid::now_v7().simple().to_string();
-    let full_id = format!("did:web:{prefix}-{suffix}.example");
+    let did = format!("did:web:{prefix}-{suffix}.example");
     let core_id = format!("ak:did_core:web:{prefix}-{suffix}.example");
-    verified_peer_route(&full_id, &core_id, base_url, "ak:trust_domain:peer.example")
+    verified_peer_route(&did, &core_id, base_url, "ak:trust_domain:peer.example")
 }
 
 fn install_verified_routes(state: &AppState, routes: &[VerifiedPeerRoute]) {
@@ -365,7 +360,7 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
                 "keyid=\"{}#federation-fanout-key\"",
                 captured
                     .state
-                    .service_full_id()
+                    .service_did()
                     .to_string()
                     .to_ascii_lowercase()
             )),
@@ -491,7 +486,7 @@ async fn permanent_4xx_routes_to_dead_letter() {
     );
     let dead = &dead_letters[0];
     assert_eq!(dead.outbox_id, row.id);
-    assert_eq!(dead.peer_did, PEER_DID);
+    assert_eq!(dead.peer_service_id, PEER_DID);
     assert_eq!(dead.last_http_status, Some(404));
     assert_eq!(dead.reason, "terminal_http_status");
     assert!(
@@ -987,7 +982,7 @@ async fn pg_restart(routes: &[VerifiedPeerRoute]) -> Option<AppState> {
     let signing_seed = soland_test_support::fixture_signing_seed(&config, &identity);
     let fixture_identity = identity.identity().expect("fixture serving identity");
     let resolution_commitment = arkret_models_identity::ResolutionCommitment {
-        full_id: fixture_identity.full_id.clone(),
+        did: fixture_identity.did.clone(),
         method_history_head: format!("sha256:{}", "0".repeat(64)),
         version_id: "fixture-v1".to_owned(),
     };

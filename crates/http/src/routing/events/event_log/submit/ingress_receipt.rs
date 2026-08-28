@@ -160,11 +160,11 @@ pub(super) async fn validate_ingress_receipt_proofs(
                         format!("ingress receipt issuer is invalid: {error}"),
                     )
                 })?;
-            if issuer != receipt.qualified_ingress_id {
+            if issuer != receipt.qualified_ingress_did {
                 return Err(SubmitOneError::new(
                     StatusCode::FORBIDDEN,
                     "invalid_proof",
-                    "ingress receipt signer does not match qualified_ingress_id",
+                    "ingress receipt signer does not match qualified_ingress_did",
                 ));
             }
             let binding = receipt.proof_binding_bytes(lease, proof).map_err(|error| {
@@ -310,7 +310,7 @@ fn sign_ingress_receipt(
         .map_err(|error| publication_reject(format!("minted receipt_id is invalid: {error}")))?;
     let verification_method = arkret_wire::DidUrl::new(format!(
         "{}#notary-key",
-        state.service_resolution_commitment().full_id
+        state.service_resolution_commitment().did
     ))
     .map_err(|error| {
         publication_reject(format!(
@@ -320,7 +320,7 @@ fn sign_ingress_receipt(
     let mut receipt = IngressReceipt {
         receipt_id,
         event_digest: event_digest.clone(),
-        qualified_ingress_id: state.service_resolution_commitment().full_id.clone(),
+        qualified_ingress_did: state.service_resolution_commitment().did.clone(),
         received_at,
         ingress_frontier: vec![event_id.clone()],
         proofs: Vec::new(),

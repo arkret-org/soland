@@ -3,7 +3,7 @@ use arkret_models_identity::{
     ServiceResolutionPublishRequest, ServiceResolutionResolveOutcome,
     ServiceResolutionResolveRequest, ServiceRouteHandoverState,
 };
-use arkret_wire::{DidCoreId, DidFullId, Hash};
+use arkret_wire::{Did, DidCoreId, Hash};
 use chrono::Utc;
 use ed25519_dalek::{Signature, Verifier as _};
 use salvo::http::StatusCode;
@@ -63,7 +63,7 @@ async fn peer_publish(
 
     let now = Utc::now();
     let request_digest = request.canonical_digest().map_err(protocol_violation)?;
-    let (receiver, _) = super::service_resolution::service_ids(state)?;
+    let (receiver, _) = super::service_resolution::service_id_and_did(state)?;
     let stored = state
         .stored_service_identity()
         .await
@@ -285,7 +285,7 @@ async fn verify_target_artifact(
     request: &ServiceResolutionPublishRequest,
     expected: &DidCoreId,
 ) -> Result<(), AppError> {
-    let (proof, bytes, full_id, method_history_head, issued_at, expires_at) =
+    let (proof, bytes, did, method_history_head, issued_at, expires_at) =
         if let Some(record) = request.service_resolution_record.as_ref() {
             if record.record.service_id != *expected
                 || record.record.issued_at > record.record.refresh_after
@@ -299,18 +299,18 @@ async fn verify_target_artifact(
             (
                 &record.proof,
                 record.proof_signing_bytes().map_err(protocol_violation)?,
-                record.record.full_id.clone(),
+                record.record.did.clone(),
                 Some(record.record.method_history_head.as_str()),
                 record.record.issued_at,
                 record.record.expires_at,
             )
         } else if let Some(notice) = request.service_route_handover_notice.as_ref() {
             validate_notice_candidate(notice)?;
-            let bare = proof_bare_full_id(&notice.proof.verification_method)?;
+            let proof_did = proof_controller_did(&notice.proof.verification_method)?;
             (
                 &notice.proof,
                 notice.proof_signing_bytes().map_err(protocol_violation)?,
-                bare,
+                proof_did,
                 None,
                 notice.notice.issued_at,
                 notice.notice.expires_at,
@@ -320,17 +320,16 @@ async fn verify_target_artifact(
         };
     if Utc::now() >= expires_at
         || proof.created_at != issued_at
-        || arkret_wire::project_full_id_to_core_id(&full_id).map_err(protocol_violation)?
-            != *expected
+        || arkret_wire::project_did_to_core_id(&did).map_err(protocol_violation)? != *expected
     {
         return Err(protocol_violation(
             "artifact proof target or freshness mismatch",
         ));
     }
-    let proof_full = proof_bare_full_id(&proof.verification_method)?;
-    if proof_full != full_id {
+    let proof_did = proof_controller_did(&proof.verification_method)?;
+    if proof_did != did {
         return Err(protocol_violation(
-            "proof verification method is not based on artifact full_id",
+            "proof verification method is not based on artifact did",
         ));
     }
 
@@ -339,7 +338,7 @@ async fn verify_target_artifact(
     // MUST resolve through the registered DID adapter and the exact method in
     // the target's verified document. Unsupported/stale history fails closed;
     // there is deliberately no transport-key fallback.
-    let did = DidFullId::new(full_id.as_str().to_owned()).map_err(protocol_violation)?;
+    let did = Did::new(did.as_str().to_owned()).map_err(protocol_violation)?;
     let resolved = crate::jws_verify::resolve_ed25519_verification_key_for_did_fresh(
         state,
         &did,
@@ -363,12 +362,12 @@ async fn verify_target_artifact(
         .map_err(|_| AppError::capability_denied("invalid target route proof"))
 }
 
-fn proof_bare_full_id(method: &arkret_wire::DidUrl) -> Result<DidFullId, AppError> {
-    let bare = method
+fn proof_controller_did(method: &arkret_wire::DidUrl) -> Result<Did, AppError> {
+    let did = method
         .as_str()
         .split_once('#')
-        .map_or(method.as_str(), |(bare, _)| bare);
-    DidFullId::new(bare.to_owned()).map_err(protocol_violation)
+        .map_or(method.as_str(), |(did, _)| did);
+    Did::new(did.to_owned()).map_err(protocol_violation)
 }
 
 fn artifact_service_id(key: &ServiceResolutionArtifactKey) -> &DidCoreId {

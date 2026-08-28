@@ -521,7 +521,7 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
 #[cfg(test)]
 mod tests {
     use arkret_models_identity::{ServiceResolutionPublishAckCore, ServiceResolutionRecordCore};
-    use arkret_wire::{Base64UrlString, DidFullId, DidUrl, Hash, ProtocolSignature, RequestId};
+    use arkret_wire::{Base64UrlString, Did, DidUrl, Hash, ProtocolSignature, RequestId};
     use chrono::{Duration, TimeZone as _, Utc};
 
     use super::*;
@@ -532,12 +532,12 @@ mod tests {
 
     fn record() -> ServiceResolutionRecord {
         let issued_at = Utc.with_ymd_and_hms(2026, 8, 10, 0, 0, 0).unwrap();
-        let full_id = DidFullId::new("did:web:route.example").unwrap();
+        let did = Did::new("did:web:route.example").unwrap();
         ServiceResolutionRecord {
             record: ServiceResolutionRecordCore {
-                service_id: arkret_wire::project_full_id_to_core_id(&full_id).unwrap(),
+                service_id: arkret_wire::project_did_to_core_id(&did).unwrap(),
                 service_kind: "principal_server".to_owned(),
-                full_id,
+                did,
                 method_history_head: "head-1".to_owned(),
                 version_id: "1-head-1".to_owned(),
                 resolution_event_ref: "did-web-entry-sha256:fixture".to_owned(),

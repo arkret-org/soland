@@ -204,10 +204,10 @@ fn load_service_identity(path: &str) -> anyhow::Result<ResolvedServiceIdentity> 
         .map_err(|error| anyhow::anyhow!("invalid identity bundle {path}: {error}"))?;
 
     let identity = &bundle.identity.identity;
-    if identity.full_id.method() != "webvh" {
+    if identity.did.method() != "webvh" {
         anyhow::bail!(
             "identity bundle service DID {} is not did:webvh",
-            identity.full_id
+            identity.did
         );
     }
     let signing_key_ref = identity.active_signing_key_ref.as_str();
@@ -223,7 +223,7 @@ fn load_service_identity(path: &str) -> anyhow::Result<ResolvedServiceIdentity> 
         .ok_or_else(|| anyhow::anyhow!("identity bundle DID document has no assertion key"))?;
 
     Ok(ResolvedServiceIdentity {
-        service_id: identity.full_id.to_string(),
+        service_id: identity.did.to_string(),
         signing_key_ref: signing_key_ref.to_owned(),
         signing_key_multibase: signing_key_multibase.to_owned(),
     })

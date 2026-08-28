@@ -15,7 +15,7 @@ pub(super) fn service_handle_domain(state: &AppState) -> String {
     // Authority's service-account handle is a separate unsigned UX hint and
     // must never select this namespace.
     handle_domain_from_url(&state.config().public_base_url)
-        .or_else(|| service_id_handle_domain(state.service_id()))
+        .or_else(|| service_did_handle_domain(state.service_did().as_str()))
         .unwrap_or_else(|| "soland.local".to_owned())
 }
 
@@ -24,15 +24,15 @@ fn handle_domain_from_url(base_url: &str) -> Option<String> {
     valid_handle_domain_candidate(url.host_str()?)
 }
 
-fn service_id_handle_domain(service_id: &str) -> Option<String> {
-    if let Some(value) = service_id.strip_prefix("did:web:") {
+fn service_did_handle_domain(service_did: &str) -> Option<String> {
+    if let Some(value) = service_did.strip_prefix("did:web:") {
         return value
             .split(':')
             .next()
             .map(did_method_host_without_encoded_port)
             .and_then(valid_handle_domain_candidate);
     }
-    if let Some(value) = service_id.strip_prefix("did:webvh:") {
+    if let Some(value) = service_did.strip_prefix("did:webvh:") {
         return did_webvh_method_authority(value)
             .map(did_method_host_without_encoded_port)
             .and_then(valid_handle_domain_candidate);
@@ -167,16 +167,16 @@ pub(super) async fn contact_request_resolve_allowed(
 }
 
 /// Issue a Principal-Server-signed, SDK-validated handle claim for
-/// `handle` → `did` as a JSON value. Used by the account viewer / register
+/// `handle` → `principal_id` as a JSON value. Used by the account viewer / register
 /// outcome to expose the primary handle claim re-derived on demand from the
 /// account's durable localpart (the claim itself is never persisted).
 pub(crate) async fn signed_handle_claim_value(
     state: &AppState,
     handle: &str,
-    did: &str,
+    principal_id: &str,
     audience: &str,
 ) -> Result<Value, AppError> {
-    let claim = signed_handle_claim(state, handle, did, audience, false).await?;
+    let claim = signed_handle_claim(state, handle, principal_id, audience, false).await?;
     claim
         .validate()
         .map_err(|err| AppError::internal(format!("handle claim validation failed: {err}")))?;
@@ -200,7 +200,7 @@ pub(super) fn resolve_handle_audience(
 }
 
 pub(super) fn local_handle_resolution_outcome(
-    did: String,
+    principal_id: String,
     canonical_handle: String,
     audience: String,
     handle_claim: SdkHandleClaim,
@@ -210,7 +210,7 @@ pub(super) fn local_handle_resolution_outcome(
         .validate()
         .map_err(|err| AppError::internal(format!("handle claim validation failed: {err}")))?;
     Ok(DirectoryHandleResolutionOutcome {
-        principal_id: DidCoreId::new(did.clone()).map_err(|err| {
+        principal_id: DidCoreId::new(principal_id).map_err(|err| {
             AppError::param_invalid(format!("invalid resolved actor principal id: {err}"))
         })?,
         handle: canonical_handle,
@@ -238,13 +238,13 @@ async fn resolve_handle_from_configured_peer(
         return Ok(None);
     }
     for peer in crate::routing::federation::federation::configured_peer_targets(state) {
-        if !peer_matches_handle_authority(peer.url.as_str(), peer.did.as_str(), &lookup.authority) {
+        if !peer_matches_handle_authority(peer.url.as_str(), &lookup.authority) {
             continue;
         }
         match fetch_remote_handle_from_peer(
             state,
             peer.url.as_str(),
-            peer.did.as_str(),
+            peer.service_id.as_str(),
             body,
             lookup,
         )
@@ -255,7 +255,7 @@ async fn resolve_handle_from_configured_peer(
             Err(error) => {
                 tracing::debug!(
                     peer_url = %peer.url,
-                    peer_did = %peer.did,
+                    peer_service_id = %peer.service_id,
                     authority = %lookup.authority,
                     error = %error,
                     "remote directory resolve-handle rejected or failed"
@@ -266,7 +266,7 @@ async fn resolve_handle_from_configured_peer(
     Ok(None)
 }
 
-fn peer_matches_handle_authority(peer_url: &str, peer_did: &str, authority: &str) -> bool {
+fn peer_matches_handle_authority(peer_url: &str, authority: &str) -> bool {
     let authority = authority.trim().trim_end_matches('.').to_ascii_lowercase();
     reqwest::Url::parse(peer_url)
         .ok()
@@ -280,13 +280,12 @@ fn peer_matches_handle_authority(peer_url: &str, peer_did: &str, authority: &str
             })
         })
         .is_some_and(|host| host == authority)
-        || service_id_handle_domain(peer_did).as_deref() == Some(authority.as_str())
 }
 
 async fn fetch_remote_handle_from_peer(
     state: &AppState,
     peer_url: &str,
-    peer_did: &str,
+    peer_service_id: &str,
     body: &DirectoryResolveHandleRequestBody,
     lookup: &HandleLookup,
 ) -> Result<Option<DirectoryHandleResolutionOutcome>, AppError> {
@@ -333,7 +332,7 @@ async fn fetch_remote_handle_from_peer(
     if !status.is_success() {
         tracing::debug!(
             status = %status,
-            peer_did = %peer_did,
+            peer_service_id = %peer_service_id,
             authority = %lookup.authority,
             "remote directory resolve-handle returned non-success"
         );
@@ -343,7 +342,7 @@ async fn fetch_remote_handle_from_peer(
         serde_json::from_str(&text).map_err(|error| {
             AppError::internal(format!("parse remote resolve-handle response: {error}"))
         })?;
-    validate_remote_handle_resolution(state, peer_did, &remote_body, lookup, &outcome)
+    validate_remote_handle_resolution(state, peer_service_id, &remote_body, lookup, &outcome)
         .await
         .map_err(|reason| {
             AppError::capability_denied(reason).with_wire_code("handle_unverified")
@@ -351,9 +350,9 @@ async fn fetch_remote_handle_from_peer(
     if !outcome
         .via_services
         .iter()
-        .any(|service| service == peer_did)
+        .any(|service| service == peer_service_id)
     {
-        outcome.via_services.push(peer_did.to_owned());
+        outcome.via_services.push(peer_service_id.to_owned());
     }
     if let Some(claim) = outcome.handle_claim.as_ref()
         && let Ok(envelope) = serde_json::to_value(claim)
@@ -365,7 +364,7 @@ async fn fetch_remote_handle_from_peer(
 
 async fn validate_remote_handle_resolution(
     state: &AppState,
-    peer_did: &str,
+    peer_service_id: &str,
     body: &DirectoryResolveHandleRequestBody,
     lookup: &HandleLookup,
     outcome: &DirectoryHandleResolutionOutcome,
@@ -376,7 +375,7 @@ async fn validate_remote_handle_resolution(
     if outcome.handle != lookup.canonical {
         return Err("remote handle resolution handle mismatch".to_owned());
     }
-    let audience = resolve_handle_audience(body, peer_did);
+    let audience = resolve_handle_audience(body, peer_service_id);
     if outcome.audience.as_deref() != Some(audience.as_str()) {
         return Err("remote handle resolution audience mismatch".to_owned());
     }
@@ -389,12 +388,12 @@ async fn validate_remote_handle_resolution(
         .handle_claim
         .as_ref()
         .ok_or_else(|| "remote handle resolution requires handle_claim".to_owned())?;
-    let expected_peer_did = DidCoreId::new(peer_did.to_owned())
-        .map_err(|error| format!("invalid peer DID: {error}"))?;
+    let expected_peer_id = DidCoreId::new(peer_service_id.to_owned())
+        .map_err(|error| format!("invalid peer principal id: {error}"))?;
     claim
-        .validate_remote_resolution(Some(audience.as_str()), Some(&expected_peer_did), now())
+        .validate_remote_resolution(Some(audience.as_str()), Some(&expected_peer_id), now())
         .map_err(|error| format!("remote handle claim invalid: {error}"))?;
-    verify_remote_handle_claim_proof(state, peer_did, audience.as_str(), claim).await?;
+    verify_remote_handle_claim_proof(state, peer_service_id, audience.as_str(), claim).await?;
     if claim.handle_canonical() != Some(lookup.canonical.as_str()) {
         return Err("remote handle claim handle mismatch".to_owned());
     }
@@ -406,7 +405,7 @@ async fn validate_remote_handle_resolution(
         .as_ref()
         .map(DidCoreId::as_str)
         .unwrap_or_default()
-        != peer_did
+        != peer_service_id
     {
         return Err("remote handle claim issuer service mismatch".to_owned());
     }
@@ -414,7 +413,7 @@ async fn validate_remote_handle_resolution(
         .member_delivery_binding
         .as_ref()
         .map(|binding| binding.recipient_service_id.as_str())
-        != Some(peer_did)
+        != Some(peer_service_id)
     {
         return Err("remote handle claim delivery binding service mismatch".to_owned());
     }
@@ -434,7 +433,7 @@ async fn validate_remote_handle_resolution(
 
 async fn verify_remote_handle_claim_proof(
     state: &AppState,
-    peer_did: &str,
+    peer_service_id: &str,
     expected_audience: &str,
     claim: &SdkHandleClaim,
 ) -> Result<(), String> {
@@ -458,7 +457,7 @@ async fn verify_remote_handle_claim_proof(
             continue;
         }
         if let Err(error) = crate::jws_verify::validate_verification_method_controller(
-            peer_did,
+            peer_service_id,
             &proof.verification_method,
         ) {
             last_error = Some(error);
@@ -469,14 +468,14 @@ async fn verify_remote_handle_claim_proof(
                 &canonical_bytes,
                 &proof.jws,
                 &proof.verification_method,
-                peer_did,
+                peer_service_id,
             )
         } else {
             crate::jws_verify::verify_did_controlled_jws_async(
                 &canonical_bytes,
                 &proof.jws,
                 &proof.verification_method,
-                peer_did,
+                peer_service_id,
                 state,
             )
             .await
@@ -596,11 +595,11 @@ pub(super) async fn resolve_handle(
 
 async fn require_local_handle_binding(
     state: &AppState,
-    did: &str,
+    principal_id: &str,
     canonical_handle: &str,
     localpart: &str,
 ) -> Result<(), AppError> {
-    if local_handle_binding_matches(state, did, localpart).await? {
+    if local_handle_binding_matches(state, principal_id, localpart).await? {
         Ok(())
     } else {
         Err(handle_unverified_error(canonical_handle))
@@ -609,7 +608,7 @@ async fn require_local_handle_binding(
 
 async fn local_handle_binding_matches(
     state: &AppState,
-    did: &str,
+    principal_id: &str,
     localpart: &str,
 ) -> Result<bool, AppError> {
     let owner = state
@@ -617,7 +616,7 @@ async fn local_handle_binding_matches(
         .localpart_owner(localpart)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    Ok(owner.is_some_and(|record| record.account_did == did))
+    Ok(owner.is_some_and(|record| record.account_principal_id.as_str() == principal_id))
 }
 
 fn handle_unverified_error(canonical_handle: &str) -> AppError {
@@ -630,12 +629,12 @@ fn handle_unverified_error(canonical_handle: &str) -> AppError {
 pub(super) async fn signed_handle_claim(
     state: &AppState,
     handle: &str,
-    did: &str,
+    principal_id: &str,
     audience: &str,
     cache: bool,
 ) -> Result<SdkHandleClaim, AppError> {
     if let Err(rejection) = soland_http::wire_validators::handle_claim_subject::validate_subject(
-        &json!({ "subject": did }),
+        &json!({ "subject": principal_id }),
     ) {
         return Err(AppError::new(
             soland_http::error::ErrorCode::SchemaViolation,
@@ -652,18 +651,17 @@ pub(super) async fn signed_handle_claim(
     if handle_domain != default_domain {
         return Err(handle_unverified_error(&canonical_handle));
     }
-    require_local_handle_binding(state, did, &canonical_handle, &localpart).await?;
+    require_local_handle_binding(state, principal_id, &canonical_handle, &localpart).await?;
     let handle = SdkHandle::parse(&canonical_handle).map_err(|err| {
         AppError::internal(format!("handle claim handle construction failed: {err}"))
     })?;
     let handle_alias = handle.to_acct();
-    let subject = DidCoreId::new(did.to_owned()).map_err(|err| {
-        AppError::internal(format!("invalid subject DID for handle claim: {err}"))
+    let subject = DidCoreId::new(principal_id.to_owned()).map_err(|err| {
+        AppError::internal(format!(
+            "invalid subject principal id for handle claim: {err}"
+        ))
     })?;
-    let signer_did = arkret_identifiers::DidCoreId::new(service_id.clone()).map_err(|err| {
-        AppError::internal(format!("invalid service DID for handle claim: {err}"))
-    })?;
-    let signer_full_id = state.service_resolution_commitment().full_id.clone();
+    let signer_did = state.service_resolution_commitment().did.clone();
     let created_at = now();
     let expires_at = created_at + chrono::Duration::hours(24);
     let member_delivery_binding = DeliveryBindingHint {
@@ -706,8 +704,8 @@ pub(super) async fn signed_handle_claim(
     })?;
     let signer = Ed25519PayloadSigner::new(
         (*state.notary_signing_key()).clone(),
-        signer_full_id.clone(),
-        arkret_wire::DidUrl::new(format!("{signer_full_id}#directory-handle-claim")).map_err(
+        signer_did.clone(),
+        arkret_wire::DidUrl::new(format!("{signer_did}#directory-handle-claim")).map_err(
             |error| {
                 AppError::internal(format!(
                     "directory claim verification method is invalid: {error}"
@@ -1164,31 +1162,26 @@ mod tests {
     }
 
     #[test]
-    fn service_id_handle_domain_uses_webvh_method_authority() {
-        let service_id = concat!(
+    fn service_did_handle_domain_uses_webvh_method_authority() {
+        let service_did = concat!(
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:",
             "Remote.Example:webvh:service"
         );
         assert_eq!(
-            service_id_handle_domain(service_id).as_deref(),
+            service_did_handle_domain(service_did).as_deref(),
             Some("remote.example")
         );
     }
 
     #[test]
-    fn service_id_handle_domain_rejects_webvh_without_host() {
-        assert!(service_id_handle_domain("did:webvh:zqmsolandlocal").is_none());
+    fn service_did_handle_domain_rejects_webvh_without_host() {
+        assert!(service_did_handle_domain("did:webvh:zqmsolandlocal").is_none());
     }
 
     #[test]
-    fn peer_authority_matches_webvh_service_host() {
-        let peer_did = concat!(
-            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:",
-            "remote.example:webvh:service"
-        );
+    fn peer_authority_matches_configured_url_host() {
         assert!(peer_matches_handle_authority(
-            "https://peer.internal",
-            peer_did,
+            "https://remote.example",
             "Remote.Example.",
         ));
     }

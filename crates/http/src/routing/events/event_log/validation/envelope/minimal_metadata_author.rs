@@ -345,7 +345,7 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
 #[cfg(test)]
 mod tests {
     use arkret_policy::{AuthorLeaf, AuthorLeafCredential};
-    use arkret_wire::{DidFullId, DidUrl, project_full_id_to_core_id};
+    use arkret_wire::{Did, DidUrl, project_did_to_core_id};
 
     use super::*;
 
@@ -380,8 +380,7 @@ mod tests {
             },
         };
         let pairwise =
-            project_full_id_to_core_id(&DidFullId::new("did:key:z6MkpairwiseAlice").unwrap())
-                .unwrap();
+            project_did_to_core_id(&Did::new("did:key:z6MkpairwiseAlice").unwrap()).unwrap();
         assert!(is_ephemeral_pairwise_author(
             pairwise.as_str(),
             Some(&context)
@@ -401,9 +400,9 @@ mod tests {
     // no resolver or directory parameter to call.
     #[test]
     fn admission_maps_every_failure_to_the_canonical_reason() {
-        let full_id = DidFullId::new("did:key:z6MkpairwiseAlice").unwrap();
-        let actor = project_full_id_to_core_id(&full_id).unwrap();
-        let proof_method = DidUrl::new(format!("{full_id}#z6MkpairwiseAlice")).unwrap();
+        let did = Did::new("did:key:z6MkpairwiseAlice").unwrap();
+        let actor = project_did_to_core_id(&did).unwrap();
+        let proof_method = DidUrl::new(format!("{did}#z6MkpairwiseAlice")).unwrap();
         let proof_key = vec![0xA1u8; 32];
         let base_claim = MinimalMetadataAuthorClaim {
             group_id: "Zml4dHVyZS1yZWFsbQ",

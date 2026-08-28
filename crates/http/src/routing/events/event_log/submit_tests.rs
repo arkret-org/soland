@@ -240,8 +240,8 @@ mod federated_producer_event_proof_tests {
     use super::verify_federated_producer_event_proof;
 
     fn fixture_event() -> arkret_wire::Event {
-        let actor = arkret_wire::DidFullId::new("did:web:alice.example".to_owned()).unwrap();
-        let actor_id = arkret_wire::project_full_id_to_core_id(&actor).unwrap();
+        let actor = arkret_wire::Did::new("did:web:alice.example".to_owned()).unwrap();
+        let actor_id = arkret_wire::project_did_to_core_id(&actor).unwrap();
         let principal_server_id =
             arkret_wire::DidCoreId::new("ak:did_core:web:remote.example".to_owned()).unwrap();
         let verification_method = arkret_wire::DidUrl::new(format!(
@@ -425,11 +425,10 @@ mod managed_agent_pcr_batch_tests {
         let realm_id =
             RealmId::new("ak:realm:AZiVojGkhKKjoBSA6eV96sZAm4u3Ze_3uMmkr30F6ZQZ".to_owned())
                 .unwrap();
-        let agent_id = arkret_identifiers::DidFullId::new(
-            "did:webvh:z6mkfixtureagent:agent.example".to_owned(),
-        )
-        .unwrap();
-        let agent_actor_id = arkret_wire::project_full_id_to_core_id(&agent_id).unwrap();
+        let agent_id =
+            arkret_identifiers::Did::new("did:webvh:z6mkfixtureagent:agent.example".to_owned())
+                .unwrap();
+        let agent_actor_id = arkret_wire::project_did_to_core_id(&agent_id).unwrap();
         let genesis =
             arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
                 arkret_wire::GenesisSalt::new(
@@ -437,7 +436,7 @@ mod managed_agent_pcr_batch_tests {
                 )
                 .unwrap(),
                 arkret_models_identity::ResolutionCommitment {
-                    full_id: agent_id.clone(),
+                    did: agent_id.clone(),
                     method_history_head: format!("sha256:{}", "8".repeat(64)),
                     version_id: "1-Qmfixture".to_owned(),
                 },

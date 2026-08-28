@@ -889,7 +889,7 @@ fn apply_delivery_summary_from_intents(
                     .any(|event_id| event_id == &response.event_id)
             })
         })
-        .map(|intent| intent.peer_did.as_str())
+        .map(|intent| intent.peer_service_id.as_str())
         .collect::<std::collections::BTreeSet<_>>()
         .len() as u32;
     response.outcome.pending_delivery_count = pending_targets;
@@ -1100,8 +1100,8 @@ fn self_principal_pcr_device_id(event: &Event) -> Option<String> {
         .verification_method
         .as_str()
         .rsplit_once('#')?;
-    let controller = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
-    let controller_id = arkret_wire::project_full_id_to_core_id(&controller).ok()?;
+    let controller = arkret_wire::Did::new(controller.to_owned()).ok()?;
+    let controller_id = arkret_wire::project_did_to_core_id(&controller).ok()?;
     (controller_id == event.actor_id)
         .then_some(fragment)
         .filter(|fragment| fragment.starts_with("ak:device:"))

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use arkret_identifiers::{DidCoreId, DidFullId, Hash, RealmId};
+use arkret_identifiers::{Did, DidCoreId, Hash, RealmId};
 use arkret_identity::{DidDocument, DidResolver, DidWebResolver};
 use arkret_models_collaboration::governance::policy_check::{
     PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody, PolicyCheckSignature,
@@ -87,7 +87,7 @@ fn policy_resolver(signing: &SigningKey) -> Arc<dyn DidResolver + Send + Sync> {
     let mut resolver = DidWebResolver::new();
     resolver
         .insert(DidDocument::new(
-            DidFullId::new(POLICY_SERVER_DID).unwrap(),
+            Did::new(POLICY_SERVER_DID).unwrap(),
             format!("{POLICY_SERVER_DID}#key-1"),
             ed25519_public_multibase(signing),
         ))
@@ -136,8 +136,8 @@ fn mock_allow_response(
             actor_id: request.actor_id.clone(),
             action: request.action.clone(),
             request_canonical_digest: request.request_canonical_digest.clone(),
-            policy_server_id: arkret_wire::project_full_id_to_core_id(
-                &DidFullId::new(POLICY_SERVER_DID).unwrap(),
+            policy_server_id: arkret_wire::project_did_to_core_id(
+                &Did::new(POLICY_SERVER_DID).unwrap(),
             )
             .unwrap(),
         },

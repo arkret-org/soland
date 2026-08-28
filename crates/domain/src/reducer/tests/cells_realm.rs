@@ -130,8 +130,8 @@ fn membership_join_writes_both_structured_cache_and_fsm_cell() {
     let (_, writes) =
         projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &payload);
     let mut operation = make_operation(arkret_wire::EventKind::MemberState, realm_id, payload);
-    operation.context.sender = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new("did:web:alice").unwrap(),
+    operation.context.sender = arkret_wire::project_did_to_core_id(
+        &arkret_identifiers::Did::new("did:web:alice").unwrap(),
     )
     .unwrap();
     state.apply_projected(&operation, &writes, &hlc);
@@ -196,8 +196,8 @@ fn validated_bootstrap_creator_join_bypasses_only_the_ordinary_join_gate() {
     );
 
     let mut mismatched = operation;
-    mismatched.context.sender = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new("did:web:mallory.example").unwrap(),
+    mismatched.context.sender = arkret_wire::project_did_to_core_id(
+        &arkret_identifiers::Did::new("did:web:mallory.example").unwrap(),
     )
     .unwrap();
     assert!(matches!(
@@ -1306,10 +1306,8 @@ fn apply_projected_create(
 /// build it through the constructor instead of patching the serialized payload.
 fn managed_agent_initial_resolution() -> arkret_models_identity::ResolutionCommitment {
     arkret_models_identity::ResolutionCommitment {
-        full_id: arkret_identifiers::DidFullId::new(
-            "did:webvh:z6mkreducertest:reducer-test.example",
-        )
-        .unwrap(),
+        did: arkret_identifiers::Did::new("did:webvh:z6mkreducertest:reducer-test.example")
+            .unwrap(),
         method_history_head: format!("sha256:{}", "8".repeat(64)),
         version_id: "1-Qmreducertest".to_owned(),
     }
@@ -1649,7 +1647,7 @@ fn the_bundle_projects_every_registered_component() {
             "applies_to": ["seal_include"]
         },
         "audit_policy": {
-            "range_completeness_witnesses": ["ak:did_core:web:witness.example"],
+            "range_completeness_witness_ids": ["ak:did_core:web:witness.example"],
             "witnessed_min_attestations": 1,
             "witness_independence": "distinct_did"
         },

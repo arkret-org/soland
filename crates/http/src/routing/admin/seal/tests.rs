@@ -8,8 +8,8 @@ use super::notary::notary_value_from_cell;
 use super::notary_cell_for;
 
 fn signer_descriptor(did: &str, seed: u8) -> arkret_wire::NotarySignerDescriptor {
-    let full_id = arkret_identifiers::DidFullId::new(did.to_owned()).unwrap();
-    let actor_id = arkret_wire::project_full_id_to_core_id(&full_id).unwrap();
+    let did = arkret_identifiers::Did::new(did.to_owned()).unwrap();
+    let actor_id = arkret_wire::project_did_to_core_id(&did).unwrap();
     let verification_method = arkret_wire::DidUrl::new(format!("{did}#notary-key")).unwrap();
     let verifying_key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]).verifying_key();
     soland_services::identity::ed25519_notary_signer_descriptor(

@@ -118,7 +118,7 @@ mod tests {
     }
 
     #[test]
-    fn did_deployment_authority_normalizes_full_and_core_web_ids() {
+    fn did_deployment_authority_normalizes_did_and_core_web_ids() {
         assert_eq!(
             did_deployment_authority("did:web:Remote.Example"),
             Some("remote.example".to_owned())

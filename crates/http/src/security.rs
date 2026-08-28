@@ -454,33 +454,33 @@ pub fn federation_origin_denied(origin_did: &str) -> bool {
     federation_target_denied(None, Some(origin_did), None)
 }
 
-pub fn federation_peer_denied(peer_url: &str, peer_did: &str) -> bool {
-    federation_target_denied(Some(peer_url), Some(peer_did), None)
+pub fn federation_peer_denied(peer_url: &str, peer_service_id: &str) -> bool {
+    federation_target_denied(Some(peer_url), Some(peer_service_id), None)
 }
 
 pub fn federation_target_denied(
     peer_url: Option<&str>,
-    peer_did: Option<&str>,
+    peer_service_id: Option<&str>,
     peer_trust_domain: Option<&str>,
 ) -> bool {
     let entries = federation_denylist_entries();
-    federation_target_denied_with_entries(&entries, peer_url, peer_did, peer_trust_domain)
+    federation_target_denied_with_entries(&entries, peer_url, peer_service_id, peer_trust_domain)
 }
 
 fn federation_target_denied_with_entries(
     entries: &[String],
     peer_url: Option<&str>,
-    peer_did: Option<&str>,
+    peer_service_id: Option<&str>,
     peer_trust_domain: Option<&str>,
 ) -> bool {
     if entries.is_empty() {
         return false;
     }
     let url_host = peer_url.and_then(url_host);
-    let did_domain = peer_did.and_then(did_web_domain);
+    let did_domain = peer_service_id.and_then(did_web_domain);
     entries.iter().any(|entry| {
         let entry = entry.as_str();
-        peer_did.is_some_and(|did| entry_matches(entry, did))
+        peer_service_id.is_some_and(|did| entry_matches(entry, did))
             || peer_trust_domain.is_some_and(|trust| entry_matches(entry, trust))
             || url_host
                 .as_deref()

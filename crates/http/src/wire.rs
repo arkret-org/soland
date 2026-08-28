@@ -160,7 +160,7 @@ pub use arkret_models_collaboration::governance::authorization::{
 };
 // Moderation report request/outcome are the SDK DTOs (`arkret-models-collaboration` carries
 // `service-operation-dtos.schema.json#/$defs/ModerationReportOutcome`:
-// `status` enum `submitted|resolved`, `routed_to` is an array of bare DIDs);
+// `status` enum `submitted|resolved`, `routed_to` is an array of DIDs);
 // no soland mirrors.
 pub use arkret_models_collaboration::governance::moderation::{
     ModerationReportOutcome, ModerationReportRequestBody,
@@ -188,7 +188,7 @@ pub struct DevLoginRequestBody {
 
 #[derive(salvo::oapi::ToSchema, Debug, Serialize)]
 pub struct SolandAccountRegisterOutcome {
-    pub did: String,
+    pub principal_id: arkret_wire::DidCoreId,
     pub handle: String,
     pub display_name: Option<String>,
     pub state: String,
@@ -493,8 +493,8 @@ pub fn describe(
     ];
     let verified_profiles = Vec::new();
     let interop_surfaces = Vec::new();
-    let service_id = arkret_wire::project_full_id_to_core_id(&service_resolution.full_id)
-        .expect("service resolution DidFullId must project to a stable service id");
+    let service_id = arkret_wire::project_did_to_core_id(&service_resolution.did)
+        .expect("service resolution DID must project to a stable service id");
     let plaintext_visibility = arkret_models_discovery::service_description::PlaintextVisibility {
         data_classes: vec![
             arkret_wire::PlaintextDataClassKind::MessageContent,
@@ -884,7 +884,7 @@ mod tests {
 
     fn fixture_service_resolution() -> arkret_models_identity::ResolutionCommitment {
         arkret_models_identity::ResolutionCommitment {
-            full_id: arkret_wire::DidFullId::new("did:web:soland.example").unwrap(),
+            did: arkret_wire::Did::new("did:web:soland.example").unwrap(),
             method_history_head: "fixture-history-head".to_owned(),
             version_id: "fixture-v1".to_owned(),
         }

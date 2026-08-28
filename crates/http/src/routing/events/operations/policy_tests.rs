@@ -11,7 +11,7 @@ use soland_storage_postgres::Db;
 
 use super::*;
 
-const ALICE_FULL_ID: &str = "did:webvh:z6mkalice:alice.example";
+const ALICE_DID: &str = "did:webvh:z6mkalice:alice.example";
 const ALICE_CORE_ID: &str = "ak:did_core:webvh:z6mkalice";
 const BOB_CORE_ID: &str = "ak:did_core:web:bob.example";
 const AGENT_CORE_ID: &str = "ak:did_core:webvh:z6mkfixtureagent";
@@ -51,8 +51,8 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
     )
     .unwrap();
     let now = chrono::Utc::now();
-    let alice_full = arkret_identifiers::DidFullId::new(ALICE_FULL_ID.to_owned()).unwrap();
-    let alice = crate::test_actor_id(&alice_full);
+    let alice_did = arkret_identifiers::Did::new(ALICE_DID.to_owned()).unwrap();
+    let alice = crate::test_actor_id(&alice_did);
     let bob = crate::test_actor_id_str("did:webvh:z6mkbob:bob.example");
     let mut realm_create = op(
         realm_id.clone(),
@@ -299,7 +299,7 @@ fn accountability_grant_payload(status: &str, expires_at: &str) -> serde_json::V
         "grant_status": status,
         "proof": {
             "kind": "detached_jws",
-            "verification_method": format!("{ALICE_FULL_ID}#key-1"),
+            "verification_method": format!("{ALICE_DID}#key-1"),
             "payload_digest": format!("sha256:{}", "3".repeat(64)),
             "created_at": "2026-01-01T00:00:00.000Z",
             "jws": "AAAA.BBBB.CCCC"
@@ -465,7 +465,7 @@ fn signed_device_authorize_payload(
             device_signer.verifying_key().as_bytes(),
         )
     );
-    let principal_id = crate::test_actor_id_str(ALICE_FULL_ID);
+    let principal_id = crate::test_actor_id_str(ALICE_DID);
     let unsigned = UnsignedDeviceAuthorizePayload::new(
         principal_id.clone(),
         arkret_identifiers::DeviceId::new("ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6")
@@ -963,7 +963,7 @@ async fn register_agent_selection(
         agent_id.to_owned(),
         ALICE_CORE_ID.to_owned(),
         "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
-        arkret_wire::DidUrl::new(format!("{ALICE_FULL_ID}#managed-controller")).unwrap(),
+        arkret_wire::DidUrl::new(format!("{ALICE_DID}#managed-controller")).unwrap(),
         AgentLifecycleState::Active,
         chrono::Utc::now(),
     );
@@ -1011,7 +1011,7 @@ async fn register_native_agent_membership_context(
         agent.to_owned(),
         controller.to_owned(),
         "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
-        arkret_wire::DidUrl::new(format!("{ALICE_FULL_ID}#managed-controller")).unwrap(),
+        arkret_wire::DidUrl::new(format!("{ALICE_DID}#managed-controller")).unwrap(),
         AgentLifecycleState::Active,
         now,
     );
@@ -1044,7 +1044,7 @@ async fn register_native_agent_membership_context(
         "expires_at": "2099-01-01T00:00:00.000Z",
         "proof": {
             "kind": "detached_jws",
-            "verification_method": format!("{ALICE_FULL_ID}#key-1"),
+            "verification_method": format!("{ALICE_DID}#key-1"),
             "payload_digest": format!("sha256:{}", "3".repeat(64)),
             "created_at": "2026-01-01T00:00:00.000Z",
             "jws": "test"
@@ -2110,9 +2110,9 @@ async fn profile_accountable_principal_requires_active_grant() {
         "0000000007a3",
         "ak.profile.create",
         json!({
-            "principal_id": "did:web:agent.example",
+            "principal_id": "ak:did_core:web:agent.example",
             "display_name": "Agent",
-            "accountable_principal_ids": ["did:web:alice.example"]
+            "accountable_principal_ids": ["ak:did_core:web:alice.example"]
         }),
     );
 
@@ -2137,9 +2137,9 @@ async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor
         "ak.profile.create",
         json!({
             "sender": "ak:did_core:web:agent.example",
-            "principal_id": "did:web:agent.example",
+            "principal_id": "ak:did_core:web:agent.example",
             "display_name": "Agent",
-            "accountable_principal_ids": ["did:web:alice.example"]
+            "accountable_principal_ids": ["ak:did_core:web:alice.example"]
         }),
     );
     let fake_grant = op(
@@ -2219,9 +2219,9 @@ async fn profile_accountable_principal_atomic_revoke_wins() {
         "ak.profile.update",
         json!({
             "sender": "ak:did_core:web:agent.example",
-            "principal_id": "did:web:agent.example",
+            "principal_id": "ak:did_core:web:agent.example",
             "display_name": "Agent",
-            "accountable_principal_ids": ["did:web:alice.example"]
+            "accountable_principal_ids": ["ak:did_core:web:alice.example"]
         }),
     );
 
@@ -2310,9 +2310,9 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
         "ak.profile.create",
         json!({
             "sender": "ak:did_core:web:agent.example",
-            "principal_id": "did:web:agent.example",
+            "principal_id": "ak:did_core:web:agent.example",
             "display_name": "Agent",
-            "accountable_principal_ids": ["did:web:alice.example"]
+            "accountable_principal_ids": ["ak:did_core:web:alice.example"]
         }),
     );
 

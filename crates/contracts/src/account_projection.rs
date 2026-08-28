@@ -6,7 +6,7 @@
 //! `ak.gate.account.command.register.v1`, which is owned by the Account
 //! Authority registration flow.
 
-use arkret_identifiers::{DeviceId, DidCoreId, DidFullId};
+use arkret_identifiers::{DeviceId, Did, DidCoreId};
 use serde::{Deserialize, Serialize};
 
 pub const ACCOUNT_PROJECTION_PATH: &str = "/_soland/gate/account/project";
@@ -16,7 +16,7 @@ pub const ACCOUNT_PROJECTION_PATH: &str = "/_soland/gate/account/project";
 #[serde(deny_unknown_fields)]
 pub struct AccountProjectionRequestBody {
     pub principal_id: DidCoreId,
-    pub full_id: DidFullId,
+    pub did: Did,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -25,10 +25,10 @@ pub struct AccountProjectionRequestBody {
 
 impl AccountProjectionRequestBody {
     pub fn validate(&self) -> Result<(), String> {
-        let projected = arkret_identifiers::project_full_id_to_core_id(&self.full_id)
-            .map_err(|error| format!("full_id cannot be projected: {error}"))?;
+        let projected = arkret_identifiers::project_did_to_core_id(&self.did)
+            .map_err(|error| format!("did cannot be projected: {error}"))?;
         if projected != self.principal_id {
-            return Err("full_id must project to principal_id".to_owned());
+            return Err("did must project to principal_id".to_owned());
         }
         Ok(())
     }

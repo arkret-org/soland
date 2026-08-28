@@ -58,26 +58,24 @@ pub(crate) fn canonical_value_digest(value: &serde_json::Value) -> Option<String
 }
 
 #[cfg(test)]
-pub(crate) fn test_actor_id(
-    full_id: &arkret_identifiers::DidFullId,
-) -> arkret_identifiers::DidCoreId {
-    arkret_identifiers::project_full_id_to_core_id(full_id)
-        .expect("test full_id must project to an Actor core_id")
+pub(crate) fn test_actor_id(did: &arkret_identifiers::Did) -> arkret_identifiers::DidCoreId {
+    arkret_identifiers::project_did_to_core_id(did)
+        .expect("test did must project to an Actor core_id")
 }
 
 #[cfg(test)]
-pub(crate) fn test_actor_id_str(full_id: &str) -> arkret_identifiers::DidCoreId {
-    let full_id = arkret_identifiers::DidFullId::new(full_id.to_owned())
-        .expect("test actor must be an explicit bare full_id");
-    test_actor_id(&full_id)
+pub(crate) fn test_actor_id_str(did: &str) -> arkret_identifiers::DidCoreId {
+    let did =
+        arkret_identifiers::Did::new(did.to_owned()).expect("test actor must be an explicit DID");
+    test_actor_id(&did)
 }
 
 #[cfg(test)]
-pub(crate) fn test_single_signer_notary(full_id: &str, seed: u8) -> arkret_wire::NotaryValue {
+pub(crate) fn test_single_signer_notary(did: &str, seed: u8) -> arkret_wire::NotaryValue {
     let verifying_key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]).verifying_key();
     let descriptor = soland_services::identity::ed25519_notary_signer_descriptor(
-        test_actor_id_str(full_id),
-        arkret_wire::DidUrl::new(format!("{full_id}#notary-key"))
+        test_actor_id_str(did),
+        arkret_wire::DidUrl::new(format!("{did}#notary-key"))
             .expect("test notary verification method"),
         verifying_key.as_bytes(),
     )

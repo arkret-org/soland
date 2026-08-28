@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use arc_swap::ArcSwap;
-use arkret_identifiers::{DidCoreId, DidFullId, Hash, RealmId};
+use arkret_identifiers::{Did, DidCoreId, Hash, RealmId};
 use arkret_identity::service_identity::DidCoreIdentityState;
 #[cfg(test)]
 use arkret_identity::service_identity::{DidCoreIdentityKeyRef, LocalDidCoreIdentity};
@@ -290,14 +290,14 @@ pub fn realm_genesis_payload(
 }
 
 fn demo_notary_signer_descriptor(
-    service_full_id: &DidFullId,
+    service_did: &Did,
     service_id: &DidCoreId,
     signing_seed: [u8; 32],
 ) -> arkret_wire::NotarySignerDescriptor {
     let verifying_key = ed25519_dalek::SigningKey::from_bytes(&signing_seed).verifying_key();
     soland_services::identity::ed25519_notary_signer_descriptor(
         service_id.clone(),
-        arkret_wire::DidUrl::new(format!("{service_full_id}#notary-key"))
+        arkret_wire::DidUrl::new(format!("{service_did}#notary-key"))
             .expect("development notary verification method"),
         verifying_key.as_bytes(),
     )
@@ -314,14 +314,14 @@ fn demo_notary_signer_descriptor(
 /// re-derive.
 #[must_use]
 pub fn development_demo_genesis_event(
-    service_full_id: &DidFullId,
+    service_did: &Did,
     service_id: &DidCoreId,
     signing_seed: [u8; 32],
 ) -> arkret_wire::AuthoredEvent {
     let created_at = chrono::DateTime::parse_from_rfc3339(DEVELOPMENT_DEMO_GENESIS_CREATED_AT)
         .expect("development demo genesis timestamp")
         .with_timezone(&chrono::Utc);
-    let notary_signer = demo_notary_signer_descriptor(service_full_id, service_id, signing_seed);
+    let notary_signer = demo_notary_signer_descriptor(service_did, service_id, signing_seed);
     let payload: arkret_models_collaboration::events_payloads::RealmCreatePayload =
         serde_json::from_value(realm_genesis_payload(
             DEVELOPMENT_DEMO_SUBJECT_DID,
@@ -331,8 +331,8 @@ pub fn development_demo_genesis_event(
         .expect("development demo genesis payload");
     arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::RealmCreate>::new(
         arkret_wire::ScopeRef::RealmGenesis,
-        arkret_wire::project_full_id_to_core_id(
-            &DidFullId::new(DEVELOPMENT_DEMO_SUBJECT_DID.to_owned())
+        arkret_wire::project_did_to_core_id(
+            &Did::new(DEVELOPMENT_DEMO_SUBJECT_DID.to_owned())
                 .expect("development demo subject DID"),
         )
         .expect("development demo subject projection"),
@@ -360,25 +360,25 @@ pub fn development_demo_genesis_event(
 /// recently as a service DID copied from one deployment into another.
 #[must_use]
 pub fn development_demo_realm_id(
-    service_full_id: &DidFullId,
+    service_did: &Did,
     service_id: &DidCoreId,
     signing_seed: [u8; 32],
 ) -> RealmId {
     RealmId::from_event_id(
-        development_demo_genesis_event(service_full_id, service_id, signing_seed).event_id(),
+        development_demo_genesis_event(service_did, service_id, signing_seed).event_id(),
     )
 }
 
 pub fn build_realm_directory(
     config: &AppConfig,
-    service_full_id: &DidFullId,
+    service_did: &Did,
     service_id: &DidCoreId,
     resolved_signing_seed: [u8; 32],
 ) -> RealmDirectoryService {
     let mut realms = RealmDirectoryIndex::new();
     if config.seed_demo_data {
         let mut demo = RealmDirectoryEntry::new(
-            development_demo_realm_id(service_full_id, service_id, resolved_signing_seed),
+            development_demo_realm_id(service_did, service_id, resolved_signing_seed),
             "Arkret Demo Realm",
             // Seeded locally, not projected from an Event.
             soland_services::events::DirectoryProvenance::LocalOnly,
@@ -406,12 +406,12 @@ fn development_fixture_service_identity(config: &AppConfig) -> DidCoreIdentitySt
         DidCoreIdentityKeyRef::new("fixture:soland:service-signing-key").expect("fixture key ref");
     DidCoreIdentityState::Ready {
         identity: LocalDidCoreIdentity {
-            full_id: DidFullId::new(
+            did: Did::new(
                 "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
             )
             .expect("fixture service DID"),
-            service_id: arkret_wire::project_full_id_to_core_id(
-                    &DidFullId::new(
+            service_id: arkret_wire::project_did_to_core_id(
+                    &Did::new(
                         "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
                     )
                     .expect("fixture service DID"),
@@ -434,14 +434,14 @@ fn development_fixture_resolution_commitment(
     identity: &DidCoreIdentityState,
 ) -> ResolutionCommitment {
     ResolutionCommitment {
-        full_id: arkret_wire::DidFullId::new(
+        did: arkret_wire::Did::new(
             identity
                 .identity()
                 .expect("fixture has a serving identity")
-                .full_id
+                .did
                 .to_string(),
         )
-        .expect("fixture service DidFullId"),
+        .expect("fixture service DID"),
         method_history_head: format!("sha256:{}", "0".repeat(64)),
         version_id: "fixture-v1".to_owned(),
     }
@@ -538,7 +538,7 @@ mod test_construction {
                 .expect("fixture has a serving identity");
             let realm_directory = build_realm_directory(
                 &config,
-                &identity.full_id,
+                &identity.did,
                 &identity.service_id,
                 resolved_signing_seed,
             );
@@ -716,17 +716,17 @@ impl AppState {
     /// Return the currently resolved, version-pinned service DID.
     ///
     /// `service_id` is the projected Arkret core identifier and must never be
-    /// used as the base of a DID URL. Signing surfaces use this full DID so a
-    /// core-id/full-id mismatch is rejected at this single typed boundary.
-    pub fn service_full_id(&self) -> DidFullId {
-        self.service_resolution_commitment().full_id.clone()
+    /// used as the base of a DID URL. Signing surfaces use this DID so a
+    /// core-id/DID mismatch is rejected at this single typed boundary.
+    pub fn service_did(&self) -> Did {
+        self.service_resolution_commitment().did.clone()
     }
 
     pub fn service_verification_method(
         &self,
         fragment: &str,
     ) -> Result<arkret_wire::DidUrl, String> {
-        arkret_wire::DidUrl::new(format!("{}#{fragment}", self.service_full_id()))
+        arkret_wire::DidUrl::new(format!("{}#{fragment}", self.service_did()))
             .map_err(|error| format!("service verification method is invalid: {error}"))
     }
 
@@ -744,7 +744,7 @@ impl AppState {
             .identity()
             .expect("AppState requires a serving service identity");
         development_demo_realm_id(
-            &identity.full_id,
+            &identity.did,
             &identity.service_id,
             self.notary_signing_key().to_bytes(),
         )
@@ -866,7 +866,7 @@ impl AppState {
     /// Atomically replace the endpoint-discovered signing keys for one peer.
     ///
     /// Exact verification-method entries from an older WebVH version must be
-    /// removed when the peer rotates its full DID. Leaving them cached would
+    /// removed when the peer rotates its DID. Leaving them cached would
     /// allow a transcript naming the retired key id to bypass the refreshed
     /// endpoint document.
     pub fn install_discovered_federation_peer_keys(
@@ -1334,7 +1334,7 @@ impl AppState {
     /// Called from the single place soland learns a DID document moved —
     /// [`Self::cache_resolved_did_document`] — so an ordinary Event can never
     /// keep verifying against a superseded key.
-    pub fn invalidate_did_bindings(&self, did: &arkret_identifiers::DidFullId) -> usize {
+    pub fn invalidate_did_bindings(&self, did: &arkret_identifiers::Did) -> usize {
         self.did_bindings
             .invalidate(&arkret_identity::BindingInvalidation::for_did(did.clone()))
     }
@@ -1893,7 +1893,7 @@ fn verification_key_belongs_to_service(candidate: &str, service_id: &str) -> boo
     let Ok(controller) = arkret_identity::verification_method_did(candidate) else {
         return false;
     };
-    arkret_wire::project_full_id_to_core_id(&controller)
+    arkret_wire::project_did_to_core_id(&controller)
         .is_ok_and(|controller| controller.as_str() == service_id)
 }
 

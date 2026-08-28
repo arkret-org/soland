@@ -681,7 +681,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
         },
         examples: AuthBridgeExamples {
             session_grant_issue_request: json!({
-                "principal_id": "did:web:alice.example",
+                "principal_id": "ak:did_core:web:alice.example",
                 "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
                 "proof": {
                     "proof_kind": "did_bound_signature",
@@ -692,14 +692,14 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
                 }
             }),
             register_device_request: json!({
-                "principal_id": "did:web:alice.example",
+                "principal_id": "ak:did_core:web:alice.example",
                 "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
                 "push_gateway": "https://floria.example/_arkret/edge/push/notify",
                 "push_key": "webpush:https://fcm.googleapis.com/wp/01js0000000000000000000000",
                 "platform": "web"
             }),
             unregister_device_request: json!({
-                "principal_id": "did:web:alice.example",
+                "principal_id": "ak:did_core:web:alice.example",
                 "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
                 "registration_id": "push:01904100-0000-7000-8000-000000000001.webpush"
             }),
@@ -819,14 +819,14 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
 #[cfg(test)]
 mod tests {
     use arkret_models_discovery::service_description::ServiceDescribe;
-    use arkret_wire::{DidFullId, ProfileId, ServiceKind, TrustDomainId};
+    use arkret_wire::{Did, ProfileId, ServiceKind, TrustDomainId};
 
     use super::apply_claim_level_partition;
 
     #[test]
     fn candidate_join_policy_claim_is_complete_and_flag_gated() {
         let mut description = ServiceDescribe::development(
-            DidFullId::new("did:web:soland.example".to_owned()).unwrap(),
+            Did::new("did:web:soland.example".to_owned()).unwrap(),
             TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
             ServiceKind::PrincipalServer,
             vec![
@@ -886,7 +886,7 @@ mod tests {
     #[test]
     fn conformance_discovery_tokens_are_not_wire_features() {
         let mut description = ServiceDescribe::development(
-            DidFullId::new("did:web:soland.example".to_owned()).unwrap(),
+            Did::new("did:web:soland.example".to_owned()).unwrap(),
             TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
             ServiceKind::PrincipalServer,
             vec![

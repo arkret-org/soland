@@ -780,7 +780,7 @@ async fn verify_mimi_consent_update_authority(
 
 fn mimi_consent_target_kind(kind: MimiConsentTargetKind) -> &'static str {
     match kind {
-        MimiConsentTargetKind::DidFullId => "did",
+        MimiConsentTargetKind::Did => "did",
         MimiConsentTargetKind::MimiUri => "mimi_uri",
         MimiConsentTargetKind::Handle => "handle",
         MimiConsentTargetKind::ProviderUser => "provider_user",
@@ -1162,7 +1162,7 @@ pub(super) async fn enforce_mimi_reporter_resolution(
     reporter: &str,
     body: &Value,
 ) -> Result<(), AppError> {
-    DidFullId::new(reporter.to_owned())
+    Did::new(reporter.to_owned())
         .map_err(|error| AppError::param_invalid(format!("invalid reporter DID: {error}")))?;
     if state
         .identities()
@@ -1303,9 +1303,7 @@ pub(super) fn mimi_proxy_download_egress_denied(error: impl Into<String>) -> App
 }
 #[cfg(test)]
 mod consent_proof_tests {
-    use arkret_identifiers::{
-        ConsentId, DeviceId, DidCoreId, DidFullId, Hash, Hlc, RealmId, StrandId,
-    };
+    use arkret_identifiers::{ConsentId, DeviceId, Did, DidCoreId, Hash, Hlc, RealmId, StrandId};
     use arkret_models_collaboration::http_bodies::MimiConsentDecision;
     use arkret_models_collaboration::objects::mimi::{
         MimiConsentTarget, MimiIdentifier, MimiIdentifierKind,
@@ -1326,10 +1324,10 @@ mod consent_proof_tests {
     }
 
     fn request(state: &AppState) -> MimiUpdateConsentRequestBody {
-        let actor_full_id = DidFullId::new("did:web:mimi-proof-test.invalid".to_owned()).unwrap();
-        let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id).unwrap();
+        let actor_did = Did::new("did:web:mimi-proof-test.invalid".to_owned()).unwrap();
+        let actor_id = arkret_wire::project_did_to_core_id(&actor_did).unwrap();
         let verification_method =
-            format!("{actor_full_id}#ak:device:01964137-0000-7000-8000-000000000777");
+            format!("{actor_did}#ak:device:01964137-0000-7000-8000-000000000777");
         let consent_id =
             ConsentId::new("ak:consent:01964137-0000-7000-8000-000000000777".to_owned()).unwrap();
         let realm_id =
@@ -1338,7 +1336,7 @@ mod consent_proof_tests {
         let consent_event = crate::test_event::raw_event_at(
             EventKind::ConsentGrant.as_str(),
             ScopeRef::Realm { realm_id },
-            crate::test_actor_id(&actor_full_id),
+            crate::test_actor_id(&actor_did),
             1,
             Hlc::new(state.hlc().now()).unwrap(),
             json!({
@@ -1403,13 +1401,13 @@ mod consent_proof_tests {
         state: &AppState,
         request: &MimiUpdateConsentRequestBody,
     ) {
-        let (actor_full_id, device_id) = request
+        let (actor_did, device_id) = request
             .signature
             .verification_method
             .as_str()
             .rsplit_once('#')
             .expect("device verification method");
-        let actor_full_id = DidFullId::new(actor_full_id.to_owned()).unwrap();
+        let actor_did = Did::new(actor_did.to_owned()).unwrap();
         let device_id = DeviceId::new(device_id.to_owned()).unwrap();
         let principal_server_id = request.consent_event.event.principal_server_id.clone();
         let created_at = now();
@@ -1491,7 +1489,7 @@ mod consent_proof_tests {
                     genesis_event: genesis.clone(),
                     current_event: genesis.clone(),
                     projection: arkret_models_identity::PrincipalResolutionProjection {
-                        full_id: actor_full_id,
+                        did: actor_did,
                         method_history_head: format!("sha256:{}", "1".repeat(64)),
                         version_id: "1-QmMimiConsentAuthority".to_owned(),
                         resolution_event_ref: genesis.event_id.to_string(),
@@ -1758,7 +1756,7 @@ mod consent_proof_tests {
         MimiRequestConsentRequestBody {
             requester_id: requester.clone(),
             target: MimiConsentTarget {
-                kind: MimiConsentTargetKind::DidFullId,
+                kind: MimiConsentTargetKind::Did,
                 id: arkret_wire::NonEmptyString::new("did:web:mimi-peer-test.invalid").unwrap(),
             },
             purpose: MimiConsentPurpose::DirectMessage,

@@ -42,7 +42,7 @@ pub const DEFAULT_LIST_LIMIT: usize = 50;
 pub struct OutboxSummary {
     pub id: String,
     pub state: String,
-    pub peer_did: String,
+    pub peer_service_id: arkret_wire::DidCoreId,
     pub endpoint: String,
     pub idempotency_key: String,
     pub attempts: i32,
@@ -63,7 +63,7 @@ impl From<PendingFederationDelivery> for OutboxSummary {
         Self {
             id: row.delivery.id,
             state: row.state.as_str().to_owned(),
-            peer_did: row.delivery.peer_did,
+            peer_service_id: row.delivery.peer_service_id,
             endpoint: row.delivery.endpoint,
             idempotency_key: row.delivery.idempotency_key,
             attempts: row.attempts,
@@ -98,7 +98,7 @@ pub struct OutboxDetail {
 pub struct DeadLetterDetail {
     pub id: String,
     pub outbox_id: String,
-    pub peer_did: String,
+    pub peer_service_id: arkret_wire::DidCoreId,
     pub endpoint: String,
     pub idempotency_key: String,
     pub reason: String,
@@ -118,7 +118,7 @@ impl From<FederationDeadLetter> for DeadLetterDetail {
         Self {
             id: record.id,
             outbox_id: record.outbox_id,
-            peer_did: record.peer_did,
+            peer_service_id: record.peer_service_id,
             endpoint: record.endpoint,
             idempotency_key: record.idempotency_key,
             reason: record.reason,
@@ -265,13 +265,13 @@ pub async fn requeue_dead_letter(
     // intentionally does not pin a handover-era route.
     let peer_target = super::federation::resolved_peer_target(
         state,
-        &original.delivery.peer_did,
+        &original.delivery.peer_service_id,
         "principal_server",
         true,
     )
     .await?;
     if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
-        &original.delivery.peer_did,
+        &original.delivery.peer_service_id,
         Some(&peer_target.trust_domain),
     ) {
         return Err(format!(
@@ -309,7 +309,7 @@ pub async fn requeue_dead_letter(
             dead_letter_id: dead_letter_id.to_owned(),
             delivery: FederationDeliveryRecord {
                 id: requeued_outbox_id.clone(),
-                peer_did: original.delivery.peer_did.clone(),
+                peer_service_id: original.delivery.peer_service_id.clone(),
                 peer_url: Some(peer_url),
                 endpoint: original.delivery.endpoint.clone(),
                 idempotency_key: idempotency_key.clone(),

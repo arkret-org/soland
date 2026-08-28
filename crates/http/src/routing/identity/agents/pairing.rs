@@ -117,7 +117,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         agent_id,
         state.service_id(),
     )?;
-    let agent_did = arkret_wire::DidCoreId::new(agent_id.to_owned())
+    let agent_id = arkret_wire::DidCoreId::new(agent_id.to_owned())
         .map_err(|error| AppError::param_invalid(format!("agent_id invalid: {error}")))?;
     let public_key_digest = arkret_signatures::agent::validate_agent_runtime_public_key(
         &body.public_key,
@@ -132,7 +132,7 @@ pub(super) async fn submit_agent_runtime_key_request(
                 AppError::param_invalid(format!("runtime_attestation invalid: {error}"))
             })?;
     let binding_digest = arkret_signatures::agent::agent_runtime_key_binding_digest_from_digests(
-        &agent_did,
+        &agent_id,
         &body.pairing_request_id,
         &body.verification_method,
         &public_key_digest,
@@ -860,8 +860,8 @@ pub(super) fn service_pairing_controller_device_id(
             )
         })?;
     let verification_method_controller =
-        arkret_wire::DidFullId::new(verification_method_principal.to_owned())
-            .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+        arkret_wire::Did::new(verification_method_principal.to_owned())
+            .and_then(|did| arkret_wire::project_did_to_core_id(&did))
             .map_err(|_| {
                 AppError::capability_denied(
                     "delegated pairing Event proof must use a controller verification method",

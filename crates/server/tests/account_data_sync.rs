@@ -1,4 +1,4 @@
-use arkret_identifiers::{DidCoreId, DidFullId, RealmId};
+use arkret_identifiers::{Did, DidCoreId, RealmId};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
@@ -17,10 +17,8 @@ fn test_event_signer_did() -> String {
 }
 
 fn actor_core_id(actor: &str) -> DidCoreId {
-    arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
-    )
-    .expect("fixture actor full DID projects to a core id")
+    arkret_wire::project_did_to_core_id(&Did::new(actor.to_owned()).expect("fixture actor DID"))
+        .expect("fixture actor DID projects to a core id")
 }
 
 fn test_config() -> AppConfig {
@@ -40,8 +38,8 @@ fn app_from_state(state: AppState) -> salvo::Service {
 }
 
 async fn dev_token(state: AppState, actor: &str, device_id: &str, display_name: &str) -> String {
-    let actor_core = arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    let actor_core = arkret_wire::project_did_to_core_id(
+        &Did::new(actor.to_owned()).expect("fixture actor DID"),
     )
     .expect("fixture actor core id");
     let mut response = TestClient::post("http://server/_soland/gate/auth/dev-login")
@@ -140,10 +138,10 @@ async fn signed_account_data_submission(
     tombstone: bool,
 ) -> arkret_wire::EventInitialSubmission {
     let realm_id = soland_test_support::fixture_principal_control_realm(actor);
-    let actor_core = arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    let actor_core = arkret_wire::project_did_to_core_id(
+        &Did::new(actor.to_owned()).expect("fixture actor DID"),
     )
-    .expect("fixture actor full DID projects to a core id");
+    .expect("fixture actor DID projects to a core id");
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
         TestClient::query("http://server/_arkret/self/events/frontier")
             .json(&serde_json::json!({"actor_id": actor_core, "realm_id": realm_id}))
@@ -207,7 +205,7 @@ async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> St
     )
     .await;
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
-    let owner = DidFullId::new(owner.to_owned()).unwrap();
+    let owner = Did::new(owner.to_owned()).unwrap();
     let now = chrono::Utc::now();
 
     let mut entry = RealmDirectoryEntry::new(
@@ -218,7 +216,7 @@ async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> St
     entry.description = Some("G3.S6 account-private sync fixture".to_owned());
     entry
         .members
-        .insert(arkret_wire::project_full_id_to_core_id(&owner).unwrap());
+        .insert(arkret_wire::project_did_to_core_id(&owner).unwrap());
     state.test_realms().lock().upsert(entry);
     state
         .test_persistence()
@@ -256,14 +254,14 @@ async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> St
 
 async fn add_realm_member(state: AppState, _token: &str, realm_id: &str, member: &str) {
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
-    let member_did = DidFullId::new(member.to_owned()).unwrap();
+    let member_did = Did::new(member.to_owned()).unwrap();
     let mut realms = state.test_realms().lock();
     let entry = realms
         .get(&typed_realm_id)
         .cloned()
         .expect("seeded test realm exists before member add");
     let mut updated = entry;
-    let member_core = arkret_wire::project_full_id_to_core_id(&member_did).unwrap();
+    let member_core = arkret_wire::project_did_to_core_id(&member_did).unwrap();
     updated.members.insert(member_core.clone());
     assert!(updated.members.contains(&member_core));
     realms.upsert(updated);
@@ -280,7 +278,7 @@ fn signed_actor_private_event_envelope(
 ) -> Value {
     let kind = kind.as_ref();
     let now = chrono::Utc::now();
-    let actor_id = arkret_identifiers::DidFullId::new(actor.to_owned()).expect("fixture actor DID");
+    let actor_did = arkret_identifiers::Did::new(actor.to_owned()).expect("fixture actor DID");
     let verification_method = arkret_wire::DidUrl::new(format!("{actor}#{device_id}"))
         .expect("fixture verification method is a DID URL");
     let mut event = arkret_wire::test_support::raw_event_at(
@@ -289,7 +287,7 @@ fn signed_actor_private_event_envelope(
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
                 .expect("fixture Realm id"),
         },
-        arkret_wire::project_full_id_to_core_id(&actor_id).unwrap(),
+        arkret_wire::project_did_to_core_id(&actor_did).unwrap(),
         soland_test_support::fixture_principal_server_id(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
@@ -304,7 +302,7 @@ fn signed_actor_private_event_envelope(
     event.prev_refs = prev_refs;
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         arkret_signatures::development_signing_key_seed(verification_method.as_str()),
-        actor_id,
+        actor_did,
         verification_method.clone(),
     );
     let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
@@ -345,10 +343,10 @@ async fn submit_actor_private_event(
     kind: &str,
     payload: Value,
 ) -> Value {
-    let actor_core = arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    let actor_core = arkret_wire::project_did_to_core_id(
+        &Did::new(actor.to_owned()).expect("fixture actor DID"),
     )
-    .expect("fixture actor full DID projects to a core id");
+    .expect("fixture actor DID projects to a core id");
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
         TestClient::query("http://server/_arkret/self/events/frontier")
             .json(&serde_json::json!({"actor_id": actor_core, "realm_id": realm_id}))

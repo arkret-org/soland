@@ -742,7 +742,7 @@ pub(crate) async fn post_recovery_policy(
             .expect("recovery policy verification method"),
     )
     .expect("fixture verification method is a DID URL");
-    let principal_full_id = verification_method
+    let principal_did = verification_method
         .as_str()
         .split_once('#')
         .map(|(did, _)| did)
@@ -750,18 +750,18 @@ pub(crate) async fn post_recovery_policy(
     // did-usage-and-verification.md §2.2 — the Event proof method MUST be a
     // `#fragment` DID URL under the principal. The non-`did:key:` fallback
     // reuses the policy's own method, so pin the invariant here instead of
-    // letting a bare DID reach the Event.
+    // letting a DID without a verification-method fragment reach the Event.
     let event_verification_method =
-        arkret_wire::DidUrl::new(format!("{principal_full_id}#{RECOVERY_TEST_DEVICE}"))
+        arkret_wire::DidUrl::new(format!("{principal_did}#{RECOVERY_TEST_DEVICE}"))
             .expect("fixture Event verification method is a DID URL");
-    let principal_core = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new(principal_full_id.to_owned())
-            .expect("fixture recovery principal full DID"),
+    let principal_core = arkret_wire::project_did_to_core_id(
+        &arkret_identifiers::Did::new(principal_did.to_owned())
+            .expect("fixture recovery principal DID"),
     )
     .expect("fixture recovery principal projection");
     project_test_authorized_device(
         &state,
-        principal_full_id,
+        principal_did,
         RECOVERY_TEST_DEVICE,
         event_signing_key,
     )
@@ -769,14 +769,14 @@ pub(crate) async fn post_recovery_policy(
     let policy_grant = recovery_policy_grant_for_bearer(&state, token).await;
     ingest_pinned_recovery_did_document(
         &state,
-        principal_full_id,
+        principal_did,
         event_verification_method.as_str(),
         event_signing_key,
     )
     .await;
 
     let realm = soland_test_support::cba_basis::fixture_principal_control_realm_create_for_server(
-        principal_full_id,
+        principal_did,
         arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap(),
     )
     .realm_id
@@ -786,7 +786,7 @@ pub(crate) async fn post_recovery_policy(
     soland_test_support::cba_basis::seed_realm_basis(
         &state,
         &realm_id,
-        principal_full_id,
+        principal_did,
         fixture_basis,
     )
     .await;
@@ -981,7 +981,7 @@ pub(crate) async fn post_recovery_policy(
                 .expect("recovery policy control root");
         let seal_signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
             state.notary_signing_key().to_bytes(),
-            state.service_full_id(),
+            state.service_did(),
             state.service_verification_method("notary-key").unwrap(),
         );
         let successor = arkret_wire::Seal::sign_single_kind_with_control_root(

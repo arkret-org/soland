@@ -49,7 +49,7 @@ pub fn build_app_state(
     );
     let realm_directory = soland_http::state::build_realm_directory(
         &config,
-        &serving_identity.full_id,
+        &serving_identity.did,
         &serving_identity.service_id,
         resolved_signing_seed,
     );

@@ -59,14 +59,14 @@ fn event_producer_device_id(event: &arkret_wire::Event) -> Result<String, Submit
                 "Agent membership producer proof method is not a DID URL",
             )
         })?;
-    let controller = arkret_wire::DidFullId::new(controller.to_owned()).map_err(|error| {
+    let controller = arkret_wire::Did::new(controller.to_owned()).map_err(|error| {
         cascade_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_proof",
             format!("Agent membership producer proof controller is invalid: {error}"),
         )
     })?;
-    let controller = arkret_wire::project_full_id_to_core_id(&controller).map_err(|error| {
+    let controller = arkret_wire::project_did_to_core_id(&controller).map_err(|error| {
         cascade_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_proof",

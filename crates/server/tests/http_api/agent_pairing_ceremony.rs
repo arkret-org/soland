@@ -88,7 +88,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     // ── 1/4 — the runtime submits its key request on the open surface. ───────
     //
     // Before the method-adapter projection fix, this schema-valid SDK request
-    // was rejected with 100% certainty: `verification_method` is a full DID
+    // was rejected with 100% certainty: `verification_method` is a DID
     // URL while `agent_id` is a Core id, and the handler compared the two as
     // bare strings.
     let runtime_seed: [u8; 32] =
@@ -106,7 +106,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
             pairing_code: pairing_code.clone(),
             pairing_expires_at: outcome.expires_at,
         },
-        &outcome.full_id,
+        &outcome.did,
         endpoint_device_id.clone(),
     );
     let approval_request = builder
@@ -251,7 +251,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         runtime_attestation: None,
     };
 
-    let controller_full_id = arkret_identifiers::DidFullId::new(controller.to_owned()).unwrap();
+    let controller_did = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
     let controller_verification_method = arkret_wire::DidUrl::new(format!(
         "{controller}#{}",
         super::agents::CONTROLLER_DEVICE_ID
@@ -261,7 +261,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         SigningKey::from_bytes(&super::agents::CONTROLLER_DEVICE_SIGNING_SEED);
     let controller_signer = arkret_signatures::Ed25519PayloadSigner::new(
         SigningKey::from_bytes(&super::agents::CONTROLLER_DEVICE_SIGNING_SEED),
-        controller_full_id.clone(),
+        controller_did.clone(),
         controller_verification_method.clone(),
     );
     let timestamp_hex = format!("{:012x}", created_at.timestamp_millis());

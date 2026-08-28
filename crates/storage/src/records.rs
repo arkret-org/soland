@@ -55,10 +55,13 @@ pub struct DeviceInventoryRecord {
 pub struct AccountRecord {
     /// Surrogate row primary key (`ak:account:<uuid7>`), minted by
     /// The composition root mints this identifier at account creation. Stable
-    /// internal handle decoupled from the `principal_id` DID (which may rotate).
+    /// internal handle decoupled from the protocol principal identifier.
     pub id: String,
-    /// The account's protocol identity DID (DB column `principal_id`).
-    pub did: String,
+    /// Stable protocol principal identifier (DB column `principal_id`).
+    ///
+    /// An ordinary account projection does not carry a W3C DID. Registration
+    /// and resolution surfaces carry that evidence separately when required.
+    pub principal_id: DidCoreId,
     /// Primary bare handle localpart (`alice` — never `@alice` or
     /// `alice:domain`). This is derived from `account_localparts`, not stored
     /// on the account row. Wire/display surfaces use [`AccountRecord::handle`]
@@ -90,7 +93,7 @@ impl AccountRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountLocalpartRecord {
     pub id: String,
-    pub account_did: String,
+    pub account_principal_id: DidCoreId,
     pub localpart: String,
     pub is_primary: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -596,11 +599,9 @@ pub struct RealmFanoutBinding {
 }
 
 impl RealmFanoutBinding {
-    pub fn validate_for_target(&self, recipient_service_id: &str) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), String> {
         RealmId::new(self.realm_id.clone())
             .map_err(|error| format!("invalid Realm fanout Realm id: {error}"))?;
-        DidCoreId::new(recipient_service_id.to_owned())
-            .map_err(|error| format!("invalid Realm fanout recipient service id: {error}"))?;
         if self.source_event_ids.is_empty() || self.authority_witnesses.is_empty() {
             return Err(
                 "Realm fanout binding requires source Events and authority witnesses".to_owned(),
@@ -650,8 +651,8 @@ impl RealmFanoutBinding {
 pub struct FederationOutboxRecord {
     /// ULID/UUID — primary key.
     pub id: String,
-    /// Peer service DID discovered from the configured federation endpoint.
-    pub peer_did: String,
+    /// Peer service identifier discovered from the configured federation endpoint.
+    pub peer_service_id: DidCoreId,
     /// Fully-qualified peer base URL (no trailing slash) the dispatcher
     /// concatenates with `endpoint` to form the POST target.
     pub peer_url: Option<String>,
@@ -665,7 +666,7 @@ pub struct FederationOutboxRecord {
     /// Canonical request body the dispatcher POSTs verbatim.
     pub payload_json: String,
     /// Optional stable lane used by monotonic state replication. At most one
-    /// unfinished row may exist for `(peer_did, coalescing_key)`; a higher
+    /// unfinished row may exist for `(peer_service_id, coalescing_key)`; a higher
     /// `coalescing_position` atomically supersedes the older unfinished row.
     pub coalescing_key: Option<String>,
     /// Monotonic position within `coalescing_key` (account-status `status_seq`).
@@ -719,7 +720,7 @@ pub struct FederationOutboxRecord {
 #[derive(Clone, Debug)]
 pub struct RealmFanoutOutboxInput {
     pub id: String,
-    pub peer_did: String,
+    pub peer_service_id: DidCoreId,
     pub peer_url: Option<String>,
     pub endpoint: String,
     pub idempotency_key: String,
@@ -746,7 +747,7 @@ impl FederationOutboxRecord {
         }
         match self.realm_fanout.as_ref() {
             Some(binding) => {
-                binding.validate_for_target(&self.peer_did)?;
+                binding.validate()?;
                 if matches!(
                     self.state,
                     FederationOutboxState::PolicySuppressed
@@ -792,7 +793,7 @@ impl FederationOutboxRecord {
     /// A freshly enqueued, never-attempted delivery intent.
     pub fn pending(
         id: String,
-        peer_did: String,
+        peer_service_id: DidCoreId,
         peer_url: String,
         endpoint: String,
         idempotency_key: String,
@@ -801,7 +802,7 @@ impl FederationOutboxRecord {
     ) -> Self {
         Self {
             id,
-            peer_did,
+            peer_service_id,
             peer_url: Some(peer_url),
             endpoint,
             idempotency_key,
@@ -830,7 +831,7 @@ impl FederationOutboxRecord {
     pub fn realm_fanout(input: RealmFanoutOutboxInput) -> Self {
         let RealmFanoutOutboxInput {
             id,
-            peer_did,
+            peer_service_id,
             peer_url,
             endpoint,
             idempotency_key,
@@ -840,7 +841,7 @@ impl FederationOutboxRecord {
         } = input;
         Self {
             id,
-            peer_did,
+            peer_service_id,
             state: if peer_url.is_some() {
                 FederationOutboxState::Pending
             } else {
@@ -882,7 +883,7 @@ impl FederationOutboxRecord {
 pub struct FederationOutboxDeadLetterRecord {
     pub id: String,
     pub outbox_id: String,
-    pub peer_did: String,
+    pub peer_service_id: DidCoreId,
     pub endpoint: String,
     pub idempotency_key: String,
     pub last_http_status: Option<i32>,
@@ -901,7 +902,7 @@ pub struct FederationOutboxDeadLetterRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FederationFrontierExchangeRecord {
     pub realm_id: String,
-    pub peer_service_id: String,
+    pub peer_service_id: DidCoreId,
     pub status: String,
     pub consecutive_failures: i32,
     pub last_success_at: Option<i64>,

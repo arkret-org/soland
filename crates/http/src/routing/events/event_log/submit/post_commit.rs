@@ -480,7 +480,7 @@ pub(super) async fn peer_event_batch_fanout_records(
             .ok_or_else(|| format!("failed to encode peer Event batch for {}", peer.service_id))?;
         records.push(soland_services::federation::FederationDeliveryRecord {
             id: uuid::Uuid::new_v4().to_string(),
-            peer_did: peer.service_id,
+            peer_service_id: peer.service_id,
             peer_url: peer
                 .url
                 .as_deref()
@@ -584,7 +584,7 @@ pub(super) async fn direct_conversation_founding_fanout_records(
             .ok_or_else(|| format!("failed to encode founding delivery for {}", peer.service_id))?;
         records.push(soland_services::federation::FederationDeliveryRecord {
             id: uuid::Uuid::new_v4().to_string(),
-            peer_did: peer.service_id.clone(),
+            peer_service_id: peer.service_id.clone(),
             peer_url: peer
                 .url
                 .as_deref()
@@ -786,7 +786,7 @@ pub(super) async fn peer_event_fanout_records(
             })?;
         records.push(soland_services::federation::FederationDeliveryRecord {
             id: uuid::Uuid::new_v4().to_string(),
-            peer_did: peer.service_id,
+            peer_service_id: peer.service_id,
             peer_url: peer
                 .url
                 .as_deref()
@@ -1031,7 +1031,7 @@ async fn realm_bootstrap_fanout_record(
     Ok(Some(
         soland_services::federation::FederationDeliveryRecord {
             id: uuid::Uuid::new_v4().to_string(),
-            peer_did: peer.service_id.clone(),
+            peer_service_id: peer.service_id.clone(),
             peer_url: peer
                 .url
                 .as_deref()

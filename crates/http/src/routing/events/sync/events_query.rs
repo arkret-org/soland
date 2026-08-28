@@ -1065,8 +1065,8 @@ async fn range_completeness_for_query(
         arkret_state::range_completeness_root_with_suite(&range_events, digest_suite)
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
 
-    let issuer = state.service_resolution_commitment().full_id.clone();
-    let issuer_actor = arkret_wire::project_full_id_to_core_id(&issuer)
+    let issuer = state.service_resolution_commitment().did.clone();
+    let issuer_actor = arkret_wire::project_did_to_core_id(&issuer)
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let verification_method =
         arkret_wire::DidUrl::new(format!("{issuer}#notary-key")).map_err(|error| {
@@ -1106,9 +1106,9 @@ async fn range_completeness_for_query(
         witness_attestation: RangeCompletenessAttestationWitnessAttestation {
             witnesses: vec![
                 RangeCompletenessAttestationWitnessAttestationWitnessesItem {
-                    issuer: issuer_actor.clone(),
+                    witness_id: issuer_actor.clone(),
                     verification_method: verification_method.clone(),
-                    controlling_organization: issuer_actor.clone(),
+                    controlling_organization_id: issuer_actor.clone(),
                     attested_at: Some(observed_at),
                     extra: BTreeMap::new(),
                 },
@@ -1657,13 +1657,13 @@ mod tests {
         let redacted_at = created_at + chrono::Duration::minutes(1);
         let strand_id = strand_id_from_realm_id(TEST_REALM).expect("canonical fixture RealmId");
         let realm_id = RealmId::new(TEST_REALM.to_owned()).unwrap();
-        let actor_id = arkret_identifiers::DidFullId::new(TEST_ACTOR.to_owned()).unwrap();
+        let actor_did = arkret_identifiers::Did::new(TEST_ACTOR.to_owned()).unwrap();
         let message_event = crate::test_event::raw_event_at(
             arkret_wire::EventKind::MessageCreate.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
-            crate::test_actor_id(&actor_id),
+            crate::test_actor_id(&actor_did),
             1,
             arkret_identifiers::Hlc::new("019041000000-0000-00000000").unwrap(),
             json!({
@@ -1681,7 +1681,7 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
-            crate::test_actor_id(&actor_id),
+            crate::test_actor_id(&actor_did),
             2,
             arkret_identifiers::Hlc::new("019041000000-0001-00000000").unwrap(),
             json!({
@@ -1697,7 +1697,7 @@ mod tests {
         let redaction_event = crate::test_event::raw_event_at(
             arkret_wire::EventKind::MessageRedact.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
-            crate::test_actor_id(&actor_id),
+            crate::test_actor_id(&actor_did),
             3,
             arkret_identifiers::Hlc::new("019041000000-0002-00000000").unwrap(),
             json!({

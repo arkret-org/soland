@@ -18,7 +18,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{DidFullId, Hash};
+use arkret_identifiers::{Did, Hash};
 use arkret_identity::{DidDocument, DidResolver as _};
 use arkret_signatures::{
     Ed25519DetachedJwsVerifier, PublicKeyMaterial, VerifierError, build_proof_envelope,
@@ -93,7 +93,7 @@ pub fn verify_jws_shape(
 
     let payload_digest = Hash::new(arkret_canonical::sha256_digest(canonical_bytes))
         .map_err(|error| error.to_string())?;
-    // §2.2 — even the development-mode shape verifier refuses a bare DID: a
+    // §2.2 — even the development-mode shape verifier refuses a DID without a fragment: a
     // proof key is always a `#fragment` DID URL.
     let verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
         .map_err(|error| format!("verification_method is not a DID URL: {error}"))?;
@@ -213,7 +213,7 @@ pub fn verify_ed25519_signature_with_public_key(
 
 fn document_for_verification_sync(
     state: &AppState,
-    did: &DidFullId,
+    did: &Did,
     verification_method: &str,
 ) -> Result<DidDocument, String> {
     if did.method() == "key" {
@@ -258,7 +258,7 @@ fn document_for_verification_sync(
 /// DID store and only then the resolver chain.
 async fn document_for_verification(
     state: &AppState,
-    did: &DidFullId,
+    did: &Did,
     verification_method: &str,
 ) -> Result<DidDocument, String> {
     if did.method() == "key" {
@@ -312,7 +312,7 @@ pub fn decode_pinned_did_document(
 /// Verify a detached JWS against an already-pinned historical DID document.
 ///
 /// Thin typed adapter over [`arkret_identity::verify_jws_with_document`]:
-/// it parses the wire strings into `DidUrl` / `DidFullId`, records the signature
+/// it parses the wire strings into `DidUrl` / `Did`, records the signature
 /// verification in metrics, and delegates every semantic check to the SDK.
 /// **Zero resolver calls by construction** — the SDK entry point has no
 /// resolver parameter.
@@ -327,9 +327,9 @@ pub fn verify_jws_with_pinned_document(
         .map_err(|error| format!("verification_method is not a DID URL: {error}"))?;
     // `issuer` may be the protocol's Core principal/service id while the
     // resolved DID document and verification method necessarily retain the
-    // versioned Full DID. Validate that pair first, then hand the Full
+    // versioned DID. Validate that pair first, then hand the Full
     // verification-method controller to the SDK verifier. Parsing `issuer`
-    // directly as `DidFullId` made every legitimate Core issuer fail before
+    // directly as `Did` made every legitimate Core issuer fail before
     // cryptographic verification.
     validate_verification_method_controller(issuer, verification_method.as_str())?;
     let issuer_did = arkret_identity::verification_method_did(verification_method.as_str())
@@ -384,10 +384,10 @@ async fn principal_verification_source(
     verification_method: &str,
     principal_id: &str,
     state: &AppState,
-) -> Result<(DidFullId, PrincipalVerificationSource), PrincipalAuthorizedJwsError> {
+) -> Result<(Did, PrincipalVerificationSource), PrincipalAuthorizedJwsError> {
     let method_did = arkret_identity::verification_method_did(verification_method)
         .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()))?;
-    let method_principal_id = arkret_wire::project_full_id_to_core_id(&method_did)
+    let method_principal_id = arkret_wire::project_did_to_core_id(&method_did)
         .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()))?;
     if method_principal_id.as_str() != principal_id {
         return Err(PrincipalAuthorizedJwsError::Verification(
@@ -442,17 +442,16 @@ async fn principal_authorized_device_binding_with_account_authority_async(
             "principal authorization is addressed to a different Principal Server".to_owned(),
         ));
     }
-    let (method_full_id, fragment) = verification_method
+    let (method_did, fragment) = verification_method
         .rsplit_once('#')
         .ok_or_else(|| fail("principal verification method has no device fragment".to_owned()))?;
-    let method_full_id =
-        arkret_wire::DidFullId::new(method_full_id.to_owned()).map_err(|error| {
-            fail(format!(
-                "principal verification method DID is invalid: {error}"
-            ))
-        })?;
+    let method_did = arkret_wire::Did::new(method_did.to_owned()).map_err(|error| {
+        fail(format!(
+            "principal verification method DID is invalid: {error}"
+        ))
+    })?;
     let method_principal_id =
-        arkret_wire::project_full_id_to_core_id(&method_full_id).map_err(|error| {
+        arkret_wire::project_did_to_core_id(&method_did).map_err(|error| {
             fail(format!(
                 "principal verification method DID cannot be projected: {error}"
             ))
@@ -544,7 +543,7 @@ async fn principal_authorized_device_binding_with_account_authority_async(
     }
 
     let document = DidDocument {
-        id: method_full_id.clone(),
+        id: method_did.clone(),
         verification_methods: BTreeMap::from([(
             verification_method.to_owned(),
             signing_key
@@ -556,11 +555,8 @@ async fn principal_authorized_device_binding_with_account_authority_async(
         updated_at: None,
         raw_properties: BTreeMap::new(),
     };
-    let accepted =
-        principal_binding_acceptance(state, &method_full_id, verification_method, &document)
-            .ok_or_else(|| {
-                fail("principal device key cannot form an accepted binding".to_owned())
-            })?;
+    let accepted = principal_binding_acceptance(state, &method_did, verification_method, &document)
+        .ok_or_else(|| fail("principal device key cannot form an accepted binding".to_owned()))?;
     let verification_method_id = arkret_wire::DidUrl::new(verification_method.to_owned())
         .map_err(|error| fail(format!("principal verification method is invalid: {error}")))?;
     let authorization_event_id = arkret_wire::EventId::new(authorize_event_id)
@@ -694,26 +690,24 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
 > {
     Box::pin(async move {
         let fail = |reason: String| PrincipalAuthorizedJwsError::Verification(reason);
-        let (method_full_id, device_id) =
-            verification_method.rsplit_once('#').ok_or_else(|| {
-                fail("principal Event verification method has no device fragment".to_owned())
-            })?;
-        let method_full_id =
-            arkret_wire::DidFullId::new(method_full_id.to_owned()).map_err(|error| {
-                fail(format!(
-                    "principal Event verification method DID is invalid: {error}"
-                ))
-            })?;
-        let method_principal_id = arkret_wire::project_full_id_to_core_id(&method_full_id)
-            .map_err(|error| {
+        let (method_did, device_id) = verification_method.rsplit_once('#').ok_or_else(|| {
+            fail("principal Event verification method has no device fragment".to_owned())
+        })?;
+        let method_did = arkret_wire::Did::new(method_did.to_owned()).map_err(|error| {
+            fail(format!(
+                "principal Event verification method DID is invalid: {error}"
+            ))
+        })?;
+        let method_principal_id =
+            arkret_wire::project_did_to_core_id(&method_did).map_err(|error| {
                 fail(format!(
                     "principal Event verification method DID cannot be projected: {error}"
                 ))
             })?;
         let expected_principal_id = arkret_wire::DidCoreId::new(principal_id.to_owned())
             .or_else(|_| {
-                arkret_wire::DidFullId::new(principal_id.to_owned())
-                    .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+                arkret_wire::Did::new(principal_id.to_owned())
+                    .and_then(|did| arkret_wire::project_did_to_core_id(&did))
             })
             .map_err(|error| {
                 fail(format!(
@@ -757,8 +751,8 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
                 })?;
             let agent_controller_id = arkret_wire::DidCoreId::new(agent.controller_id.clone())
                 .or_else(|_| {
-                    arkret_wire::DidFullId::new(agent.controller_id.clone())
-                        .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+                    arkret_wire::Did::new(agent.controller_id.clone())
+                        .and_then(|did| arkret_wire::project_did_to_core_id(&did))
                 })
                 .map_err(|error| fail(format!("managed Agent controller is invalid: {error}")))?;
             if agent_controller_id != expected_principal_id {
@@ -879,7 +873,7 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
         }
 
         let document = DidDocument {
-            id: method_full_id.clone(),
+            id: method_did.clone(),
             verification_methods: BTreeMap::from([(
                 verification_method.to_owned(),
                 signing_key.clone(),
@@ -889,7 +883,7 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
             raw_properties: BTreeMap::new(),
         };
         let accepted =
-            principal_binding_acceptance(state, &method_full_id, verification_method, &document)
+            principal_binding_acceptance(state, &method_did, verification_method, &document)
                 .ok_or_else(|| {
                     fail("principal device key cannot form an accepted binding".to_owned())
                 })?;
@@ -955,7 +949,7 @@ pub async fn verify_registered_identity_resolution_event_proof_async(
 /// verification methods.
 fn principal_binding_key(
     state: &AppState,
-    did: &DidFullId,
+    did: &Did,
     verification_method: &str,
 ) -> Option<arkret_identity::VerifiedDidBindingKey> {
     Some(arkret_identity::VerifiedDidBindingKey {
@@ -976,7 +970,7 @@ fn principal_binding_key(
 /// get the document-issuer check for free.
 fn principal_binding_acceptance(
     state: &AppState,
-    did: &DidFullId,
+    did: &Did,
     verification_method: &str,
     document: &DidDocument,
 ) -> Option<arkret_identity::AcceptedDidBinding> {
@@ -1025,11 +1019,11 @@ fn principal_binding_acceptance(
 
 pub fn is_local_service_notary_method(
     state: &AppState,
-    did: &DidFullId,
+    did: &Did,
     verification_method: &str,
 ) -> bool {
-    let service_full_id = state.service_full_id();
-    did == &service_full_id
+    let service_did = state.service_did();
+    did == &service_did
         && state
             .service_verification_method("notary-key")
             .is_ok_and(|method| method.as_str() == verification_method)
@@ -1099,7 +1093,7 @@ pub async fn resolve_ed25519_pubkey_at(
 /// membership checks before returning the public key.
 pub async fn resolve_ed25519_verification_key_for_did(
     state: &AppState,
-    did: &DidFullId,
+    did: &Did,
     verification_method: &str,
 ) -> Result<ResolvedVerificationKey, String> {
     validate_verification_method_controller(did.as_str(), verification_method)?;
@@ -1126,11 +1120,11 @@ pub fn validate_verification_method_controller(
         .map_err(|error| format!("verification method is not a DID URL: {error}"))?;
     let controller_matches =
         if let Ok(controller_core) = arkret_wire::DidCoreId::new(controller_id.to_owned()) {
-            arkret_wire::project_full_id_to_core_id(&method_controller)
+            arkret_wire::project_did_to_core_id(&method_controller)
                 .is_ok_and(|method_core| method_core == controller_core)
         } else {
-            DidFullId::new(controller_id.to_owned())
-                .is_ok_and(|controller_full| method_controller == controller_full)
+            Did::new(controller_id.to_owned())
+                .is_ok_and(|controller_did| method_controller == controller_did)
         };
     if !controller_matches {
         return Err("verification method controller does not match DID".to_owned());
@@ -1145,7 +1139,7 @@ pub fn validate_verification_method_controller(
     Ok(())
 }
 
-pub fn resolve_did_document(state: &AppState, did: &DidFullId) -> Result<DidDocument, String> {
+pub fn resolve_did_document(state: &AppState, did: &Did) -> Result<DidDocument, String> {
     let document = state
         .dids()
         .resolver()
@@ -1159,7 +1153,7 @@ pub fn resolve_did_document(state: &AppState, did: &DidFullId) -> Result<DidDocu
 
 pub async fn resolve_did_document_async(
     state: &AppState,
-    did: &DidFullId,
+    did: &Did,
 ) -> Result<DidDocument, String> {
     let document = state
         .dids()
@@ -1191,10 +1185,7 @@ pub async fn resolve_did_document_async(
 /// Because soland does not perform on-demand network fetches, "stale" means
 /// "unavailable" for high-risk writes; degraded read-only relaxation does not
 /// apply here.
-pub async fn enforce_high_risk_did_freshness(
-    state: &AppState,
-    did: &DidFullId,
-) -> Result<(), String> {
+pub async fn enforce_high_risk_did_freshness(state: &AppState, did: &Did) -> Result<(), String> {
     // `did:key` is locally resolvable but has neither a version id nor a
     // history head. `did-usage-and-verification.md` section 5.5 requires high
     // risk authority paths to reject every non-pinned binding, including the
@@ -1246,7 +1237,7 @@ pub async fn enforce_high_risk_did_freshness(
 }
 
 fn is_embedded_webvh_document(
-    did: &DidFullId,
+    did: &Did,
     record: &soland_services::identity::DidDocumentState,
 ) -> bool {
     did.as_str().starts_with("did:webvh:")
@@ -1259,7 +1250,7 @@ fn is_embedded_webvh_document(
 
 async fn refresh_embedded_webvh_document_for_high_risk(
     state: &AppState,
-    did: &DidFullId,
+    did: &Did,
     record: &soland_services::identity::DidDocumentState,
 ) -> Result<(), String> {
     if !is_embedded_webvh_document(did, record) {
@@ -1309,7 +1300,7 @@ async fn refresh_embedded_webvh_document_for_high_risk(
 /// do not need fail-closed semantics can still call the non-`_fresh` version.
 pub async fn resolve_ed25519_verification_key_for_did_fresh(
     state: &AppState,
-    did: &DidFullId,
+    did: &Did,
     verification_method: &str,
 ) -> Result<ResolvedVerificationKey, String> {
     // Enforce freshness first: stale or missing evidence rejects before key
@@ -1340,7 +1331,7 @@ pub fn require_verification_method_in_document(
 
 async fn did_document_key_log_head(
     state: &AppState,
-    did: &DidFullId,
+    did: &Did,
     document: &DidDocument,
 ) -> Result<Hash, String> {
     if let Ok(Some(record)) = state.dids().document(did.as_str()).await
@@ -1394,7 +1385,7 @@ mod did_binding_tests {
         assert_eq!(resolved, state.notary_verifying_key());
     }
 
-    fn document_for(did: &DidFullId, verification_method: &str, key: &SigningKey) -> DidDocument {
+    fn document_for(did: &Did, verification_method: &str, key: &SigningKey) -> DidDocument {
         DidDocument {
             id: did.clone(),
             verification_methods: BTreeMap::from([(
@@ -1409,10 +1400,10 @@ mod did_binding_tests {
         }
     }
 
-    fn did_key_authority(key: &SigningKey) -> (DidFullId, String) {
+    fn did_key_authority(key: &SigningKey) -> (Did, String) {
         let multibase =
             arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes());
-        let did = DidFullId::new(format!("did:key:{multibase}")).unwrap();
+        let did = Did::new(format!("did:key:{multibase}")).unwrap();
         let verification_method = format!("{did}#{multibase}");
         (did, verification_method)
     }
@@ -1426,7 +1417,7 @@ mod did_binding_tests {
     // current document refuses the same signature.
     #[test]
     fn historical_replay_uses_the_pinned_document_not_the_current_one() {
-        let did = DidFullId::new(PRINCIPAL.to_owned()).unwrap();
+        let did = Did::new(PRINCIPAL.to_owned()).unwrap();
         let verification_method = format!("{did}#control-1");
         let old_key = SigningKey::from_bytes(&[9u8; 32]);
         let new_key = SigningKey::from_bytes(&[10u8; 32]);
@@ -1449,8 +1440,8 @@ mod did_binding_tests {
 
     #[test]
     fn pinned_document_rejects_issuer_and_method_controller_mismatch() {
-        let issuer = DidFullId::new(PRINCIPAL.to_owned()).unwrap();
-        let other = DidFullId::new("did:web:other.example".to_owned()).unwrap();
+        let issuer = Did::new(PRINCIPAL.to_owned()).unwrap();
+        let other = Did::new("did:web:other.example".to_owned()).unwrap();
         let verification_method = format!("{issuer}#control-1");
         let key = SigningKey::from_bytes(&[11u8; 32]);
         let document = document_for(&issuer, &verification_method, &key);
@@ -1480,8 +1471,8 @@ mod did_binding_tests {
 
     #[test]
     fn pinned_document_accepts_exact_core_controller_but_rejects_another_core_controller() {
-        let issuer = DidFullId::new(PRINCIPAL.to_owned()).unwrap();
-        let issuer_core = arkret_wire::project_full_id_to_core_id(&issuer).unwrap();
+        let issuer = Did::new(PRINCIPAL.to_owned()).unwrap();
+        let issuer_core = arkret_wire::project_did_to_core_id(&issuer).unwrap();
         let other_core =
             arkret_wire::DidCoreId::new("ak:did_core:web:other.example".to_owned()).unwrap();
         let verification_method = format!("{issuer}#control-1");
@@ -1497,7 +1488,7 @@ mod did_binding_tests {
             issuer_core.as_str(),
             &document,
         )
-        .expect("the exact Core controller selects the Full DID method document");
+        .expect("the exact Core controller selects the DID method document");
         verify_jws_with_pinned_document(
             payload,
             &jws,
@@ -1563,7 +1554,7 @@ mod did_binding_tests {
     #[tokio::test]
     async fn identity_resolution_update_rejects_pcr_device_method() {
         let state = state_without_any_resolver();
-        let did = DidFullId::new(PRINCIPAL.to_owned()).unwrap();
+        let did = Did::new(PRINCIPAL.to_owned()).unwrap();
         let device_id = "ak:device:01904100-0000-7000-8000-000000000002";
         let verification_method = format!("{did}#{device_id}");
         let (envelope_bytes, proof) = event_proof_fixture(&verification_method);

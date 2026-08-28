@@ -32,7 +32,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{BlobRef, DidCoreId, DidFullId, EventId, GrantId, Hash, RealmId};
+use arkret_identifiers::{BlobRef, Did, DidCoreId, EventId, GrantId, Hash, RealmId};
 use arkret_models_collaboration::agent_operations::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentGrantDetachRequestBody, AgentKeyPairActivationState,

@@ -212,7 +212,7 @@ async fn seed_agent_grant_session(
             pairing_code: pairing_code.clone(),
             pairing_expires_at: outcome.expires_at,
         },
-        &outcome.full_id,
+        &outcome.did,
         endpoint_device_id.clone(),
     )
     .build_approval_request()

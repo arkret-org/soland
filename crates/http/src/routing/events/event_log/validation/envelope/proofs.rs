@@ -265,7 +265,7 @@ pub(crate) async fn validate_event_proofs(
                     )
                 })?
             };
-            if !arkret_wire::project_full_id_to_core_id(&resolution.full_id)
+            if !arkret_wire::project_did_to_core_id(&resolution.did)
                 .is_ok_and(|principal| principal.as_str() == actor_id)
             {
                 return Err(event_validation_error(
@@ -274,26 +274,26 @@ pub(crate) async fn validate_event_proofs(
                     "candidate device proof resolution does not project to actor_id",
                 ));
             }
-            let expected_method = format!("{}#{}", resolution.full_id, candidate.device_id);
+            let expected_method = format!("{}#{}", resolution.did, candidate.device_id);
             if verification_method_url.as_str() != expected_method {
                 return Err(event_validation_error(
                     StatusCode::FORBIDDEN,
                     "invalid_proof",
-                    "candidate device Event proof must use initial_resolution.full_id#device_id",
+                    "candidate device Event proof must use initial_resolution.did#device_id",
                 ));
             }
         }
         let signer_controller = if root_anchored_candidate.is_some() {
             // key-management.md §5.0.1: the founding/recovery device proof is
-            // rooted in the verified resolution FullId, not the stable CoreId.
-            // The exact FullId + device fragment was checked above and the
+            // rooted in the verified resolution DID, not the stable core ID.
+            // The exact DID + device fragment was checked above and the
             // candidate overlay below supplies its typed public key. Do not
             // run this proof through the ordinary actor CoreId rooting gate.
             method_root.to_owned()
         } else if minimal_metadata_context.is_some() {
             // Pairwise authorship deliberately does not compare a resolvable
             // did:key controller string with the stable Core DidCoreId here.
-            // The closed policy verifier below projects the DidFullId controller
+            // The closed policy verifier below projects the DID controller
             // and checks it against actor_id before accepting the Leaf key.
             method_root.to_owned()
         } else if let Some(expected_root_method) = root_anchor_method.as_deref() {
@@ -306,8 +306,8 @@ pub(crate) async fn validate_event_proofs(
             }
             method_root.to_owned()
         } else {
-            let method_root = arkret_wire::DidFullId::new(method_root.to_owned())
-                .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id));
+            let method_root = arkret_wire::Did::new(method_root.to_owned())
+                .and_then(|did| arkret_wire::project_did_to_core_id(&did));
             let ordinary_proof_root_id = arkret_wire::DidCoreId::new(ordinary_proof_root.clone());
             if method_root.as_ref().ok() != ordinary_proof_root_id.as_ref().ok()
                 || method_root.is_err()
@@ -788,7 +788,7 @@ async fn verify_with_installed_applet_registration_epoch(
         ));
     }
     let document =
-        crate::jws_verify::resolve_did_document(state, &evidence.full_id).map_err(|reason| {
+        crate::jws_verify::resolve_did_document(state, &evidence.did).map_err(|reason| {
             tracing::debug!(%reason, %applet_id, "Applet Event proof DID resolution failed");
             fail(
                 "applet_registration_epoch_evidence_mismatch",
@@ -1168,7 +1168,7 @@ mod tests {
         let realm_id = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned();
         let target_event_id = "ak:event:AQsHmGu_9sPOyJ4aG8VlWQBp8wGGhdC-BjfAaXqrIbk-".to_owned();
         let actor_id = arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap();
-        let service_full_id = state.service_resolution_commitment().full_id.clone();
+        let service_did = state.service_resolution_commitment().did.clone();
         let verification_method = state.service_verification_method("notary-key").unwrap();
         let created_at = chrono::Utc::now();
         let event = arkret_wire::test_support::raw_event_at(
@@ -1199,7 +1199,7 @@ mod tests {
         .unwrap();
         let signer = arkret_signatures::Ed25519PayloadSigner::new(
             state.notary_signing_key().as_ref().clone(),
-            service_full_id,
+            service_did,
             verification_method.clone(),
         );
         arkret_signatures::sign_event(
@@ -1265,7 +1265,7 @@ mod tests {
         let digest = format!("sha256:{}", "1".repeat(64));
 
         for verification_method in [
-            // bare DID — the exact form the old `!=` disjunct let through
+            // DID without a fragment — the exact form the old `!=` disjunct let through
             signer.to_owned(),
             // trailing marker but still no fragment
             format!("{signer}#"),

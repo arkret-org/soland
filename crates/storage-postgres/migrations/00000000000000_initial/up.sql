@@ -73,7 +73,7 @@ ALTER TABLE ONLY public.account_datas
 
 CREATE TABLE public.accounts (
     id uuid PRIMARY KEY,
-    principal_id text NOT NULL,
+    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     display_name text,
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
     disabled_at timestamp with time zone,
@@ -1442,7 +1442,7 @@ CREATE INDEX federation_operations_space_idx ON public.federation_operations USI
 
 CREATE TABLE public.federation_outbox (
     id text PRIMARY KEY,
-    peer_id text NOT NULL,
+    peer_service_id text NOT NULL CHECK (peer_service_id LIKE 'ak:did_core:%'),
     peer_url text,
     endpoint text NOT NULL,
     idempotency_key text NOT NULL,
@@ -1487,13 +1487,13 @@ CREATE TABLE public.federation_outbox (
     )
 );
 
-CREATE UNIQUE INDEX federation_outbox_peer_idem ON public.federation_outbox USING btree (peer_id, idempotency_key);
+CREATE UNIQUE INDEX federation_outbox_peer_idem ON public.federation_outbox USING btree (peer_service_id, idempotency_key);
 
 -- Account-status propagation uses one stable lane per account/destination. A
 -- leased or policy-suppressed row is still unfinished and therefore occupies
 -- the lane until it is atomically superseded or reaches a terminal outcome.
 CREATE UNIQUE INDEX federation_outbox_unfinished_coalescing_lane
-    ON public.federation_outbox (peer_id, coalescing_key)
+    ON public.federation_outbox (peer_service_id, coalescing_key)
     WHERE coalescing_key IS NOT NULL
       AND state IN ('pending', 'pending_route', 'leased', 'policy_suppressed');
 
@@ -1505,12 +1505,12 @@ CREATE INDEX federation_outbox_claim ON public.federation_outbox USING btree (st
 -- Policy-suppressed revalidation sweep (`federation.md` §4.4).
 CREATE INDEX federation_outbox_policy_suppressed ON public.federation_outbox USING btree (policy_version) WHERE (state = 'policy_suppressed'::text);
 
-CREATE INDEX federation_outbox_state_peer ON public.federation_outbox USING btree (state, peer_id, created_at);
+CREATE INDEX federation_outbox_state_peer ON public.federation_outbox USING btree (state, peer_service_id, created_at);
 
 CREATE TABLE public.federation_outbox_dead_letter (
     id text PRIMARY KEY,
     outbox_id text NOT NULL,
-    peer_id text NOT NULL,
+    peer_service_id text NOT NULL CHECK (peer_service_id LIKE 'ak:did_core:%'),
     endpoint text NOT NULL,
     idempotency_key text NOT NULL,
     last_http_status integer,
@@ -1535,7 +1535,7 @@ ALTER TABLE ONLY public.federation_outbox_dead_letter
 
 CREATE TABLE public.federation_frontier_exchange (
     realm_id text NOT NULL,
-    peer_service_id text NOT NULL,
+    peer_service_id text NOT NULL CHECK (peer_service_id LIKE 'ak:did_core:%'),
     status text NOT NULL,
     consecutive_failures integer DEFAULT 0 NOT NULL,
     last_success_at bigint,

@@ -79,8 +79,8 @@ done
 echo "[restore-drill] manifest checksums verified"
 
 BUNDLE_PATH="$WORKDIR/service-identity-bundle.json"
-SERVICE_ID="$(jq -er '.identity.identity.full_id | select(startswith("did:webvh:"))' "$BUNDLE_PATH")" || {
-    echo "[restore-drill] FATAL: identity bundle has no did:webvh full_id" >&2
+SERVICE_ID="$(jq -er '.identity.identity.did | select(startswith("did:webvh:"))' "$BUNDLE_PATH")" || {
+    echo "[restore-drill] FATAL: identity bundle has no did:webvh did" >&2
     exit 1
 }
 MANIFEST_SERVICE_ID="$(jq -er '.service_id' "$MANIFEST")"

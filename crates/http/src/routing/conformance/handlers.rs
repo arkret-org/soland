@@ -360,9 +360,9 @@ pub async fn realm_basis(
     let mut body = body.into_inner();
     let realm_id = arkret_identifiers::RealmId::new(body.realm_id.clone())
         .map_err(|_| AppError::param_invalid("realm_id must be a canonical Realm id"))?;
-    let subject = arkret_identifiers::DidFullId::new(body.subject.clone())
+    let subject = arkret_identifiers::Did::new(body.subject.clone())
         .map_err(|_| AppError::param_invalid("subject must be a canonical DID"))?;
-    let subject_actor_id = arkret_wire::project_full_id_to_core_id(&subject)
+    let subject_actor_id = arkret_wire::project_did_to_core_id(&subject)
         .map_err(|_| AppError::param_invalid("subject DID must project to a canonical core id"))?;
     if body.data_plane_actions.is_empty() || body.data_plane_actions.len() > 32 {
         return Err(AppError::param_invalid(
@@ -405,7 +405,7 @@ pub async fn realm_basis(
     // A synthetic Realm has no accepted create Event and therefore cannot be
     // classified as a PCR from its subject. Keep its notary service-owned.
     let local_notary_signer = soland_services::conformance_basis::ConformanceNotarySigner::ed25519(
-        state.service_full_id(),
+        state.service_did(),
         state
             .service_verification_method("notary-key")
             .map_err(|error| {
@@ -491,7 +491,7 @@ pub async fn device_signing_key(
         && arkret_identifiers::DidCoreId::new(body.actor_id.clone()).is_err()
     {
         return Err(AppError::param_invalid(
-            "actor_id must be a canonical full_id or core_id",
+            "actor_id must be a canonical did or core_id",
         ));
     }
     arkret_identifiers::DeviceId::new(body.device_id.clone())

@@ -120,7 +120,7 @@ pub async fn seal_accepted_capability_grant(
 
     let signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
         state.notary_signing_key().to_bytes(),
-        state.service_full_id(),
+        state.service_did(),
         state.service_verification_method("notary-key").unwrap(),
     );
     let seal = Seal::sign_single(

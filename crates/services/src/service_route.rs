@@ -22,7 +22,7 @@ pub enum RouteSource {
 pub struct VerifiedRouteCandidate {
     pub source: RouteSource,
     /// The fetcher MUST have independently verified the target proof, method
-    /// history and full-id projection before returning this value.
+    /// history and DID projection before returning this value.
     pub record: ServiceResolutionRecord,
     /// Dynamic endpoint metadata independently fetched from the authenticated
     /// record's base URL and reverse-bound to its stable describe projection.
@@ -245,7 +245,7 @@ impl ServiceRouteResolver {
         }
         let description = candidate.description;
         let record = candidate.record;
-        let projected = arkret_wire::project_full_id_to_core_id(&record.record.full_id)
+        let projected = arkret_wire::project_did_to_core_id(&record.record.did)
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         if &projected != service_id
             || &record.record.service_id != service_id
@@ -325,7 +325,7 @@ impl ServiceRouteResolver {
         let entry = ServiceRouteCacheEntry {
             service_id: service_id.clone(),
             service_kind: service_kind.to_owned(),
-            full_id: record.record.full_id,
+            did: record.record.did,
             method_history_head: record.record.method_history_head,
             version_id: record.record.version_id,
             record_sequence: record.record.record_sequence,
@@ -366,7 +366,7 @@ fn validate_describe_metadata(
 ) -> ServiceResult<()> {
     if &description.service_id != service_id
         || description.service_kind != service_kind
-        || description.service_resolution.full_id != record.record.full_id
+        || description.service_resolution.did != record.record.did
         || description.service_resolution.method_history_head != record.record.method_history_head
         || description.service_resolution.version_id != record.record.version_id
         || description.http_json_base_url != record.record.base_url
@@ -383,7 +383,7 @@ fn validate_describe_metadata(
 #[cfg(test)]
 mod tests {
     use arkret_models_identity::ServiceResolutionRecordCore;
-    use arkret_wire::{Base64UrlString, DidFullId, DidUrl, ProtocolSignature};
+    use arkret_wire::{Base64UrlString, Did, DidUrl, ProtocolSignature};
     use chrono::TimeZone as _;
     use parking_lot::Mutex;
     use soland_storage_memory::MemoryServiceRouteStore;
@@ -435,12 +435,12 @@ mod tests {
 
     fn record(full: &str, sequence: u64, previous: Option<Hash>) -> ServiceResolutionRecord {
         let issued_at = Utc.with_ymd_and_hms(2026, 8, 10, 0, 0, 0).unwrap();
-        let full_id = DidFullId::new(full).unwrap();
+        let did = Did::new(full).unwrap();
         ServiceResolutionRecord {
             record: ServiceResolutionRecordCore {
-                service_id: arkret_wire::project_full_id_to_core_id(&full_id).unwrap(),
+                service_id: arkret_wire::project_did_to_core_id(&did).unwrap(),
                 service_kind: "principal_server".to_owned(),
-                full_id,
+                did,
                 method_history_head: format!("head-{sequence}"),
                 version_id: format!("v-{sequence}"),
                 resolution_event_ref: format!("did-webvh-entry-{sequence}"),
@@ -471,7 +471,7 @@ mod tests {
             service_id: record.record.service_id.clone(),
             service_kind: record.record.service_kind.clone(),
             service_resolution: arkret_models_identity::ResolutionCommitment {
-                full_id: record.record.full_id.clone(),
+                did: record.record.did.clone(),
                 method_history_head: record.record.method_history_head.clone(),
                 version_id: record.record.version_id.clone(),
             },
@@ -523,7 +523,7 @@ mod tests {
             .unwrap();
         assert_eq!(entry.record_sequence, 1);
         assert_eq!(
-            arkret_wire::project_full_id_to_core_id(&entry.full_id).unwrap(),
+            arkret_wire::project_did_to_core_id(&entry.did).unwrap(),
             expected
         );
     }
@@ -648,7 +648,7 @@ mod tests {
             cache_entry: ServiceRouteCacheEntry {
                 service_id: record.record.service_id.clone(),
                 service_kind: record.record.service_kind.clone(),
-                full_id: record.record.full_id.clone(),
+                did: record.record.did.clone(),
                 method_history_head: record.record.method_history_head.clone(),
                 version_id: record.record.version_id.clone(),
                 record_sequence: 0,

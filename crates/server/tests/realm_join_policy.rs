@@ -124,7 +124,7 @@ fn challenge_proof(gate_id: &str, issued_at: chrono::DateTime<Utc>) -> Value {
 }
 
 #[test]
-fn principal_admission_did_method_fails_closed_without_full_id_evidence() {
+fn principal_admission_did_method_fails_closed_without_did_evidence() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     apply_join_rule(&mut state, "public");
@@ -197,7 +197,7 @@ fn sealed_policy_payload_wrapper_preserves_join_policy() {
     assert!(
         matches!(state.apply(&join_op(BOB), &hlc), ProjectionEffect::Rejected { reason }
             if reason == "gate_check_failed"),
-        "Seal-reloaded policy must retain the full-DID evidence requirement"
+        "Seal-reloaded policy must retain the DID evidence requirement"
     );
 }
 

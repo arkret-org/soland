@@ -193,12 +193,12 @@ pub(super) async fn resolve_event_root_anchor_method(
         ));
     }
     // Event actor_id and the notary cell are stable core state. did:webvh
-    // history lookup uses the full identity frozen in the PCR create's
+    // history lookup uses the DID frozen in the PCR create's
     // initial_resolution.  The Event proof is deliberately signed by the
     // cold did:key identity root selected by the referenced inception entry;
-    // it is not a did:webvh signer and MUST NOT be used as full-id resolution.
-    let principal_full_id = if role == DID_INCEPTION_REF_ROLE {
-        principal_control_genesis_resolution_full_id(object, &actor_core_id)?
+    // it is not a did:webvh signer and MUST NOT be used as DID resolution.
+    let principal_did = if role == DID_INCEPTION_REF_ROLE {
+        principal_control_genesis_resolution_did(object, &actor_core_id)?
     } else {
         let realm_id = object
             .get("realm_id")
@@ -214,18 +214,18 @@ pub(super) async fn resolve_event_root_anchor_method(
             .projections()
             .snapshot()
             .principal_resolution_for_realm(realm_id)
-            .and_then(|resolution| resolution.get("full_id"))
+            .and_then(|resolution| resolution.get("did"))
             .and_then(Value::as_str)
-            .and_then(|full_id| arkret_wire::DidFullId::new(full_id.to_owned()).ok())
+            .and_then(|did| arkret_wire::Did::new(did.to_owned()).ok())
             .ok_or_else(|| {
                 event_validation_error(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "stale_did_document",
-                    "selected PCR full-id resolution is unavailable",
+                    "selected PCR DID resolution is unavailable",
                 )
             })?
     };
-    if principal_full_id.method() != "webvh" {
+    if principal_did.method() != "webvh" {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "failed_precondition",
@@ -235,7 +235,7 @@ pub(super) async fn resolve_event_root_anchor_method(
 
     let mut records = state
         .dids()
-        .log_events(principal_full_id.as_str())
+        .log_events(principal_did.as_str())
         .await
         .map_err(|error| {
             event_validation_error(
@@ -259,7 +259,7 @@ pub(super) async fn resolve_event_root_anchor_method(
         )
     })?;
     crate::routing::identity::webvh_validation::verify_scid_against_did(
-        principal_full_id.as_str(),
+        principal_did.as_str(),
         &log[0],
     )
     .map_err(|error| {
@@ -269,17 +269,14 @@ pub(super) async fn resolve_event_root_anchor_method(
             format!("root-anchor DID SCID validation failed: {error}"),
         )
     })?;
-    crate::routing::identity::webvh_validation::verify_log_subject(
-        principal_full_id.as_str(),
-        &log,
-    )
-    .map_err(|error| {
-        event_validation_error(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            format!("root-anchor DID subject validation failed: {error}"),
-        )
-    })?;
+    crate::routing::identity::webvh_validation::verify_log_subject(principal_did.as_str(), &log)
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "invalid_proof",
+                format!("root-anchor DID subject validation failed: {error}"),
+            )
+        })?;
     crate::routing::identity::webvh_validation::validate_witness_policy_for_log(&log).map_err(
         |error| {
             event_validation_error(
@@ -347,37 +344,35 @@ pub(super) async fn resolve_event_root_anchor_method(
     Ok(methods.into_iter().next())
 }
 
-fn principal_control_genesis_resolution_full_id(
+fn principal_control_genesis_resolution_did(
     object: &serde_json::Map<String, Value>,
     actor_core_id: &arkret_wire::DidCoreId,
-) -> Result<arkret_wire::DidFullId, EventValidationError> {
-    let full_id = object
+) -> Result<arkret_wire::Did, EventValidationError> {
+    let did = object
         .get("payload")
         .and_then(Value::as_object)
         .and_then(|payload| payload.get("object"))
         .and_then(Value::as_object)
         .and_then(|payload_object| payload_object.get("initial_resolution"))
         .and_then(Value::as_object)
-        .and_then(|resolution| resolution.get("full_id"))
+        .and_then(|resolution| resolution.get("did"))
         .and_then(Value::as_str)
-        .and_then(|value| arkret_wire::DidFullId::new(value.to_owned()).ok())
+        .and_then(|value| arkret_wire::Did::new(value.to_owned()).ok())
         .ok_or_else(|| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "principal-control genesis must carry a valid initial_resolution.full_id",
+                "principal-control genesis must carry a valid initial_resolution.did",
             )
         })?;
-    if !arkret_wire::project_full_id_to_core_id(&full_id)
-        .is_ok_and(|core_id| core_id == *actor_core_id)
-    {
+    if !arkret_wire::project_did_to_core_id(&did).is_ok_and(|core_id| core_id == *actor_core_id) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "invalid_proof",
-            "principal-control genesis initial_resolution.full_id must project to actor_id",
+            "principal-control genesis initial_resolution.did must project to actor_id",
         ));
     }
-    Ok(full_id)
+    Ok(did)
 }
 
 #[cfg(test)]
@@ -426,16 +421,15 @@ mod tests {
     }
 
     #[test]
-    fn principal_control_genesis_resolves_full_id_from_initial_resolution() {
-        let full_id =
-            arkret_wire::DidFullId::new("did:webvh:zQ3shExampleScid:alice.example:webvh:user")
-                .expect("full id");
-        let actor_id = arkret_wire::project_full_id_to_core_id(&full_id).expect("core id");
+    fn principal_control_genesis_resolves_did_from_initial_resolution() {
+        let did = arkret_wire::Did::new("did:webvh:zQ3shExampleScid:alice.example:webvh:user")
+            .expect("DID");
+        let actor_id = arkret_wire::project_did_to_core_id(&did).expect("core id");
         let event = json!({
             "payload": {
                 "object": {
                     "initial_resolution": {
-                        "full_id": full_id,
+                        "did": did,
                         "method_history_head": "sha256:fixture",
                         "version_id": "version-1"
                     }
@@ -449,9 +443,9 @@ mod tests {
         .expect("event object")
         .clone();
 
-        let resolved = principal_control_genesis_resolution_full_id(&event, &actor_id)
-            .expect("resolution full id");
+        let resolved =
+            principal_control_genesis_resolution_did(&event, &actor_id).expect("resolution DID");
 
-        assert_eq!(resolved.as_str(), full_id.as_str());
+        assert_eq!(resolved.as_str(), did.as_str());
     }
 }

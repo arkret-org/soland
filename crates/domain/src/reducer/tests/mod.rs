@@ -20,11 +20,11 @@ mod security_genesis;
 mod space_container;
 mod strand_morph;
 
-pub(super) fn test_single_signer_notary(full_did: &str) -> arkret_wire::NotaryValue {
-    let full_id = arkret_identifiers::DidFullId::new(full_did.to_owned()).unwrap();
+pub(super) fn test_single_signer_notary(did: &str) -> arkret_wire::NotaryValue {
+    let did = arkret_identifiers::Did::new(did.to_owned()).unwrap();
     let descriptor = arkret_wire::NotarySignerDescriptor {
-        actor_id: arkret_wire::project_full_id_to_core_id(&full_id).unwrap(),
-        verification_method: arkret_wire::DidUrl::new(format!("{full_did}#notary-key")).unwrap(),
+        actor_id: arkret_wire::project_did_to_core_id(&did).unwrap(),
+        verification_method: arkret_wire::DidUrl::new(format!("{did}#notary-key")).unwrap(),
         key_kind: arkret_wire::NotaryKeyKind::Ed25519Raw32,
         jose_algorithm: arkret_wire::NotaryJoseAlgorithm::Ed25519,
         // RFC 8032 test-vector public key; the matching private fixture is
@@ -128,8 +128,8 @@ pub(super) fn projected_cell_writes_at_seq(
     arkret_identifiers::EventId,
     Vec<arkret_wire::cba::ProjectedCellWrite>,
 ) {
-    let actor_id = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new("did:web:reducer-test.example").unwrap(),
+    let actor_id = arkret_wire::project_did_to_core_id(
+        &arkret_identifiers::Did::new("did:web:reducer-test.example").unwrap(),
     )
     .unwrap();
     projected_cell_writes_for_actor(object_kind, realm_id, actor_seq, payload, actor_id)

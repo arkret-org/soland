@@ -92,7 +92,7 @@ fn persistence_outbox_row(
         Some(binding) => soland_storage::FederationOutboxRecord::realm_fanout(
             soland_storage::RealmFanoutOutboxInput {
                 id: delivery.id,
-                peer_did: delivery.peer_did,
+                peer_service_id: delivery.peer_service_id,
                 peer_url: delivery.peer_url,
                 endpoint: delivery.endpoint,
                 idempotency_key: delivery.idempotency_key,
@@ -103,7 +103,7 @@ fn persistence_outbox_row(
         ),
         None => soland_storage::FederationOutboxRecord::pending(
             delivery.id,
-            delivery.peer_did,
+            delivery.peer_service_id,
             delivery
                 .peer_url
                 .expect("generic federation delivery requires a route"),

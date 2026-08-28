@@ -13,9 +13,8 @@ use arkret_models_identity::{
 };
 use arkret_state::state::store::ControlProposalIngress;
 use arkret_wire::{
-    AccountStatusRecordId, DidCoreId, DidFullId, DidUrl, Hash, HistoryEffectiveScope,
-    NonEmptyString, PayloadProof, ProofContextId, RealmId, ReceiptId, SchemaId,
-    project_full_id_to_core_id,
+    AccountStatusRecordId, Did, DidCoreId, DidUrl, Hash, HistoryEffectiveScope, NonEmptyString,
+    PayloadProof, ProofContextId, RealmId, ReceiptId, SchemaId, project_did_to_core_id,
 };
 use chrono::{Duration, Utc};
 
@@ -395,17 +394,17 @@ pub async fn assert_organization_registration_store_contract(
     // millisecond wire format, so a sub-millisecond `now` would compare
     // unequal after a durable JSON round-trip.
     let now = arkret_canonical::normalize_timestamp_canonical(database_timestamp_now());
-    // `project_full_id_to_core_id` drops the domain — and the namespace hash
+    // `project_did_to_core_id` drops the domain — and the namespace hash
     // it carries — so the namespace must also reach the SCID slot, or a rerun
     // on the same database reads the previous run's state as its own.
-    let organization_full_id = test_full_id(
+    let organization_did = test_webvh_did(
         &format!("zOrg{}", &test_hash_hex(namespace)[..12]),
         namespace,
     );
-    let organization_id = project_full_id_to_core_id(&organization_full_id)
-        .expect("organization full DID projects through the registered adapter");
-    let first_admin = test_did("zAdmin", namespace);
-    let second_admin = test_did("zAdminNext", namespace);
+    let organization_id = project_did_to_core_id(&organization_did)
+        .expect("organization DID projects through the registered adapter");
+    let first_admin = test_did_core_id("zAdmin", namespace);
+    let second_admin = test_did_core_id("zAdminNext", namespace);
     let first_scopes = vec![OrganizationRegistrationScope::OrganizationProfileManage];
     let second_scopes = vec![
         OrganizationRegistrationScope::OrganizationProfileManage,
@@ -416,7 +415,7 @@ pub async fn assert_organization_registration_store_contract(
         namespace,
         "ensure-1",
         &organization_id,
-        &organization_full_id,
+        &organization_did,
         &first_admin,
         &first_scopes,
         now,
@@ -432,7 +431,7 @@ pub async fn assert_organization_registration_store_contract(
     let digest_1 = test_hash(&format!("{namespace}:request:ensure-1"));
     let first_outcome = registration_outcome(
         &organization_id,
-        &organization_full_id,
+        &organization_did,
         &first_admin,
         &first_scopes,
         1,
@@ -489,7 +488,7 @@ pub async fn assert_organization_registration_store_contract(
         namespace,
         "ensure-unchanged",
         &organization_id,
-        &organization_full_id,
+        &organization_did,
         &first_admin,
         &first_scopes,
         now + Duration::seconds(3),
@@ -518,7 +517,7 @@ pub async fn assert_organization_registration_store_contract(
         namespace,
         "ensure-2",
         &organization_id,
-        &organization_full_id,
+        &organization_did,
         &second_admin,
         &second_scopes,
         now + Duration::seconds(5),
@@ -529,7 +528,7 @@ pub async fn assert_organization_registration_store_contract(
         .expect("prepare replacement challenge");
     let second_outcome = registration_outcome(
         &organization_id,
-        &organization_full_id,
+        &organization_did,
         &second_admin,
         &second_scopes,
         2,
@@ -650,7 +649,7 @@ pub async fn assert_organization_registration_store_contract(
         namespace,
         "refresh-2",
         &organization_id,
-        &organization_full_id,
+        &organization_did,
         &second_admin,
         &second_scopes,
         now + Duration::seconds(9),
@@ -661,7 +660,7 @@ pub async fn assert_organization_registration_store_contract(
         .expect("prepare refresh challenge");
     let refreshed_outcome = registration_outcome(
         &organization_id,
-        &organization_full_id,
+        &organization_did,
         &second_admin,
         &second_scopes,
         2,
@@ -698,7 +697,7 @@ pub async fn assert_organization_registration_store_contract(
         .clone();
     let revoked_outcome = registration_outcome(
         &organization_id,
-        &organization_full_id,
+        &organization_did,
         &second_admin,
         &second_scopes,
         2,
@@ -736,7 +735,7 @@ pub async fn assert_organization_registration_store_contract(
         namespace,
         "refresh-revoked",
         &organization_id,
-        &organization_full_id,
+        &organization_did,
         &second_admin,
         &second_scopes,
         now + Duration::seconds(12),
@@ -747,7 +746,7 @@ pub async fn assert_organization_registration_store_contract(
         .expect("prepare terminal refresh challenge");
     let impossible_refresh = registration_outcome(
         &organization_id,
-        &organization_full_id,
+        &organization_did,
         &second_admin,
         &second_scopes,
         2,
@@ -789,7 +788,7 @@ pub async fn assert_organization_registration_store_contract(
         namespace,
         "ensure-3",
         &organization_id,
-        &organization_full_id,
+        &organization_did,
         &second_admin,
         &second_scopes,
         now + Duration::seconds(14),
@@ -800,7 +799,7 @@ pub async fn assert_organization_registration_store_contract(
         .expect("prepare post-revocation generation");
     let third_outcome = registration_outcome(
         &organization_id,
-        &organization_full_id,
+        &organization_did,
         &second_admin,
         &second_scopes,
         3,
@@ -821,7 +820,7 @@ pub async fn assert_organization_registration_store_contract(
         .expect("revocation opens the next generation");
     let deactivated_outcome = registration_outcome(
         &organization_id,
-        &organization_full_id,
+        &organization_did,
         &second_admin,
         &second_scopes,
         3,
@@ -898,24 +897,24 @@ fn test_hash_hex(seed: &str) -> String {
         .to_owned()
 }
 
-fn test_full_id(label: &str, namespace: &str) -> DidFullId {
-    DidFullId::new(format!(
+fn test_webvh_did(label: &str, namespace: &str) -> Did {
+    Did::new(format!(
         "did:webvh:{label}:{}.example",
         &test_hash_hex(namespace)[..20]
     ))
-    .expect("contract test full DID is valid")
+    .expect("contract test DID is valid")
 }
 
-fn test_did(label: &str, namespace: &str) -> DidCoreId {
-    project_full_id_to_core_id(&test_full_id(label, namespace))
-        .expect("contract test full DID projects to a core id")
+fn test_did_core_id(label: &str, namespace: &str) -> DidCoreId {
+    project_did_to_core_id(&test_webvh_did(label, namespace))
+        .expect("contract test DID projects to a core id")
 }
 
 fn registration_challenge(
     namespace: &str,
     label: &str,
     organization_id: &DidCoreId,
-    organization_full_id: &DidFullId,
+    organization_did: &Did,
     local_admin_subject: &DidCoreId,
     scopes: &[OrganizationRegistrationScope],
     created_at: chrono::DateTime<Utc>,
@@ -924,7 +923,7 @@ fn registration_challenge(
     OrganizationRegistrationChallenge {
         challenge_id: format!("ak:organization_registration_challenge:{challenge_hash}"),
         organization_id: organization_id.clone(),
-        full_id: organization_full_id.clone(),
+        did: organization_did.clone(),
         purpose: ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1.to_owned(),
         nonce: challenge_hash[..32].to_owned(),
         audience: DidCoreId::new("ak:did_core:webvh:zService").expect("valid service core id"),
@@ -941,7 +940,7 @@ fn registration_challenge(
 #[allow(clippy::too_many_arguments)]
 fn registration_outcome(
     organization_id: &DidCoreId,
-    organization_full_id: &DidFullId,
+    organization_did: &Did,
     local_admin_subject: &DidCoreId,
     scopes: &[OrganizationRegistrationScope],
     generation: u64,
@@ -951,12 +950,11 @@ fn registration_outcome(
     created: bool,
 ) -> OrganizationRegistrationOutcome {
     let issuer = DidCoreId::new("ak:did_core:webvh:zService").expect("valid service core id");
-    let issuer_full =
-        DidFullId::new("did:webvh:zService:service.example").expect("valid service DID");
+    let issuer_did = Did::new("did:webvh:zService:service.example").expect("valid service DID");
     let mut receipt = OrganizationRegistrationReceipt {
         registration_receipt_id: "ak:organization_registration_receipt:placeholder".to_owned(),
         organization_id: organization_id.clone(),
-        full_id: organization_full_id.clone(),
+        did: organization_did.clone(),
         registration_generation: generation,
         version_id: version_id.to_owned(),
         log_head_digest: test_hash(&format!(
@@ -976,7 +974,7 @@ fn registration_outcome(
         issuer_service_id: issuer.clone(),
         proof: PayloadProof {
             kind: "detached_jws".to_owned(),
-            verification_method: arkret_wire::DidUrl::new(format!("{issuer_full}#registry-key-1"))
+            verification_method: arkret_wire::DidUrl::new(format!("{issuer_did}#registry-key-1"))
                 .expect("registry verification method is a DID URL"),
             payload_digest: test_hash("placeholder-payload"),
             created_at: issued_at,
@@ -1002,7 +1000,7 @@ fn registration_outcome(
 
 pub async fn assert_idempotency_store_contract(store: &dyn IdempotencyStore, namespace: &str) {
     let now = database_timestamp_now();
-    let principal_id = format!("did:web:{namespace}.example");
+    let principal_id = format!("ak:did_core:web:{namespace}.example");
     let idempotency_key = format!("idempotency:{namespace}");
     let first = IdempotencyRecord {
         principal_id: principal_id.clone(),
@@ -1148,8 +1146,8 @@ fn canonical_wire_event_record(
     } else {
         event_kind
     };
-    let actor_id = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new(actor_id.to_owned()).expect("contract actor full id"),
+    let actor_id = arkret_wire::project_did_to_core_id(
+        &arkret_identifiers::Did::new(actor_id.to_owned()).expect("contract actor DID"),
     )
     .expect("contract actor core id");
     let event = arkret_wire::test_support::raw_event_at(
@@ -1717,7 +1715,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let now = database_timestamp_now();
     let event_uuid = uuid::Uuid::now_v7();
     let realm_id = contract_realm_id(&format!("event-commit:{namespace}:{event_uuid}"));
-    let principal_id = format!("did:web:{namespace}.example");
+    let principal_id = format!("ak:did_core:web:{namespace}.example");
     let idempotency_key = format!("event-commit:{namespace}:{event_uuid}");
     let outbox_id = format!("outbox:{namespace}:{event_uuid}");
     let event = canonical_wire_event_record("", &principal_id, &realm_id, 0, now);
@@ -1754,7 +1752,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
         }),
         outbox: vec![FederationOutboxRecord {
             id: outbox_id.clone(),
-            peer_did: format!("did:web:peer-{namespace}.example"),
+            peer_service_id: DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
+                .expect("peer service id"),
             peer_url: Some("https://peer.example".to_owned()),
             endpoint: "/_arkret/peer/events".to_owned(),
             idempotency_key: format!("peer:{event_uuid}"),
@@ -2089,7 +2088,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
         }),
         outbox: vec![FederationOutboxRecord::pending(
             contact_outbox_id.clone(),
-            contact_record.peer_service_id.clone().unwrap(),
+            DidCoreId::new(contact_record.peer_service_id.clone().unwrap())
+                .expect("contact peer service id"),
             "https://contact-peer.example".to_owned(),
             "/_arkret/peer/contacts".to_owned(),
             format!("peer-contact:{contact_event_id}"),
@@ -2171,7 +2171,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
             idempotency: None,
             outbox: vec![FederationOutboxRecord::pending(
                 failed_contact_outbox_id.clone(),
-                contact_record.peer_service_id.clone().unwrap(),
+                DidCoreId::new(contact_record.peer_service_id.clone().unwrap())
+                    .expect("contact peer service id"),
                 "https://contact-peer.example".to_owned(),
                 "/_arkret/peer/contacts".to_owned(),
                 format!("peer-contact:{failed_contact_event_id}"),
@@ -2235,7 +2236,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
         }),
         outbox: vec![FederationOutboxRecord {
             id: rollback_outbox_id.clone(),
-            peer_did: format!("did:web:peer-{namespace}.example"),
+            peer_service_id: DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
+                .expect("peer service id"),
             peer_url: Some("https://peer.example".to_owned()),
             endpoint: "/_arkret/peer/events".to_owned(),
             idempotency_key: format!("peer:{rollback_uuid}"),
@@ -2311,11 +2313,12 @@ pub async fn assert_federation_outbox_store_contract(
     store: &dyn FederationOutboxStore,
     namespace: &str,
 ) {
-    let peer_did = format!("did:web:peer-{namespace}.example");
+    let peer_service_id = DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
+        .expect("peer service id");
     let row = |suffix: &str, created_at: i64| {
         FederationOutboxRecord::pending(
             format!("outbox:{namespace}:{suffix}"),
-            peer_did.clone(),
+            peer_service_id.clone(),
             "https://peer.example".to_owned(),
             "/_arkret/peer/events".to_owned(),
             format!("ak:outbox:event:{namespace}:{suffix}"),
@@ -2446,7 +2449,7 @@ pub async fn assert_federation_outbox_store_contract(
                     FederationOutboxDeadLetterRecord {
                         id: dead_letter_id.clone(),
                         outbox_id: first.id.clone(),
-                        peer_did: peer_did.clone(),
+                        peer_service_id: peer_service_id.clone(),
                         endpoint: "/_arkret/peer/events".to_owned(),
                         idempotency_key: first.idempotency_key.clone(),
                         last_http_status: Some(404),
@@ -2700,7 +2703,7 @@ pub async fn assert_federation_outbox_store_contract(
     );
     let route_missing = FederationOutboxRecord::realm_fanout(RealmFanoutOutboxInput {
         id: format!("outbox:{namespace}:pending-route"),
-        peer_did: "ak:did_core:web:peer.example".to_owned(),
+        peer_service_id: DidCoreId::new("ak:did_core:web:peer.example").expect("peer service id"),
         peer_url: None,
         endpoint: "/_arkret/peer/events".to_owned(),
         idempotency_key: format!("ak:outbox:event:{namespace}:pending-route"),
@@ -2780,7 +2783,7 @@ pub async fn assert_federation_outbox_store_contract(
                 FederationOutboxDeadLetterRecord {
                     id: format!("dead-letter:{namespace}:realm"),
                     outbox_id: route_missing.id.clone(),
-                    peer_did: route_missing.peer_did.clone(),
+                    peer_service_id: route_missing.peer_service_id.clone(),
                     endpoint: route_missing.endpoint.clone(),
                     idempotency_key: route_missing.idempotency_key.clone(),
                     last_http_status: Some(404),
@@ -2843,7 +2846,7 @@ pub async fn assert_federation_outbox_store_contract(
     let lane_row = |suffix: &str, position: i64, created_at: i64| {
         FederationOutboxRecord::pending(
             format!("outbox:{namespace}:lane:{suffix}"),
-            peer_did.clone(),
+            peer_service_id.clone(),
             "https://peer.example".to_owned(),
             "/_arkret/peer/account-status".to_owned(),
             format!("ak:outbox:account-status:{namespace}:{suffix}"),
@@ -2884,7 +2887,7 @@ pub async fn assert_federation_outbox_store_contract(
         .expect("snapshot coalescing lane")
         .into_iter()
         .filter(|row| {
-            row.peer_did == peer_did
+            row.peer_service_id == peer_service_id
                 && row.coalescing_key.as_deref() == Some(lane_key.as_str())
                 && matches!(
                     row.state,
@@ -2907,7 +2910,7 @@ pub async fn assert_federation_outbox_store_contract(
         depth
             .iter()
             .any(|bucket| bucket.state == FederationOutboxState::DeadLettered
-                && bucket.peer_did == peer_did
+                && bucket.peer_service_id == peer_service_id
                 && bucket.depth >= 1)
     );
 }
@@ -2926,7 +2929,7 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
     namespace: &str,
 ) {
     let now = database_timestamp_now();
-    let principal_id = format!("did:web:{namespace}.example");
+    let principal_id = format!("ak:did_core:web:{namespace}.example");
     let realm_id = contract_realm_id(&format!("atomic-batch:{namespace}"));
     // The Realm genesis unit requires one Control Proposal Ack per Event. Supplying
     // them is what makes this test actually about the outbox: without them the
@@ -2941,7 +2944,8 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
         vec![
             FederationOutboxRecord::pending(
                 colliding_id.clone(),
-                format!("did:web:peer-{namespace}.example"),
+                DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
+                    .expect("peer service id"),
                 "https://peer.example".to_owned(),
                 "/_arkret/peer/events".to_owned(),
                 format!("ak:outbox:{namespace}:{suffix}:a"),
@@ -2950,7 +2954,8 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
             ),
             FederationOutboxRecord::pending(
                 colliding_id.clone(),
-                format!("did:web:peer-{namespace}.example"),
+                DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
+                    .expect("peer service id"),
                 "https://peer.example".to_owned(),
                 "/_arkret/peer/events".to_owned(),
                 format!("ak:outbox:{namespace}:{suffix}:b"),
@@ -3054,7 +3059,8 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
             Vec::new(),
             vec![FederationOutboxRecord::pending(
                 committed_outbox_id.clone(),
-                format!("did:web:peer-{namespace}.example"),
+                DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
+                    .expect("peer service id"),
                 "https://peer.example".to_owned(),
                 "/_arkret/peer/events".to_owned(),
                 format!("ak:outbox:{namespace}:committed"),
@@ -3085,7 +3091,7 @@ pub async fn assert_atomic_control_event_governance_dependency_contract(
     namespace: &str,
 ) {
     let now = database_timestamp_now();
-    let principal_id = format!("did:web:{namespace}.example");
+    let principal_id = format!("ak:did_core:web:{namespace}.example");
     let realm_id = contract_realm_id(&format!("governance-edge:{namespace}"));
     let record = canonical_wire_event_record(
         arkret_wire::EventKind::RealmCreate.as_str(),
@@ -3401,7 +3407,7 @@ pub async fn assert_last_resort_claim_ledger_contract(
             "keypackage_ref": keypackage.keypackage_ref,
             "keypackage_digest": keypackage.keypackage_digest,
             "claimant": format!("did:web:{namespace}.example"),
-            "recipient_principal_id": "did:web:bob.example",
+            "recipient_principal_id": "ak:did_core:web:bob.example",
             "recipient_device_id": "ak:device:01904100-0000-7000-8000-000000000002",
             "realm_id": realm_id,
             "mls_group_id": format!("group-{namespace}"),

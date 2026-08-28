@@ -1,4 +1,5 @@
 use serde_json::Value;
+use arkret_wire::DidCoreId;
 
 use super::{
     Arc, BTreeMap, BTreeSet, CanonicalEventRecord, DeviceInventoryRecord,
@@ -304,7 +305,7 @@ fn stage_federation_outbox(
             .validate_shape()
             .map_err(|error| PersistenceError::Conflict(format!("schema_violation: {error}")))?;
         let existing_id = staged.values().find_map(|existing| {
-            (existing.peer_did == record.peer_did
+            (existing.peer_service_id == record.peer_service_id
                 && existing.idempotency_key == record.idempotency_key)
                 .then(|| existing.id.clone())
         });
@@ -1106,7 +1107,7 @@ mod tests {
                 Vec::new(),
                 vec![FederationOutboxRecord::pending(
                     "outbox:rollback".to_owned(),
-                    "did:web:peer.example".to_owned(),
+                    DidCoreId::new("ak:did_core:web:peer.example").expect("peer service id"),
                     "https://peer.example".to_owned(),
                     "/_arkret/peer/events".to_owned(),
                     "ak:outbox:event:rollback".to_owned(),
@@ -1176,7 +1177,7 @@ mod tests {
             outbox_id.clone(),
             FederationOutboxRecord::pending(
                 outbox_id.clone(),
-                "did:web:peer.example".to_owned(),
+                DidCoreId::new("ak:did_core:web:peer.example").expect("peer service id"),
                 "https://peer.example".to_owned(),
                 "/_arkret/peer/events".to_owned(),
                 "collision".to_owned(),

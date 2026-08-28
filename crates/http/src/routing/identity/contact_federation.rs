@@ -68,8 +68,8 @@ fn core_id_matches_actor(
     core_id == actor_id
 }
 
-fn full_id_str_projects_to_actor(full_id: &str, actor_id: &arkret_wire::DidCoreId) -> bool {
-    arkret_wire::DidCoreId::new(full_id.to_owned()).is_ok_and(|core_id| core_id == *actor_id)
+fn did_str_projects_to_actor(did: &str, actor_id: &arkret_wire::DidCoreId) -> bool {
+    arkret_wire::DidCoreId::new(did.to_owned()).is_ok_and(|core_id| core_id == *actor_id)
 }
 
 use super::now;
@@ -148,7 +148,7 @@ pub(crate) async fn prepare_peer_contact_carrier(
     Ok(Some(
         soland_services::federation::FederationDeliveryRecord {
             id: Uuid::new_v4().to_string(),
-            peer_did: recipient_service_id.to_owned(),
+            peer_service_id: recipient_service_id.to_owned(),
             peer_url: Some(peer_url.trim_end_matches('/').to_owned()),
             endpoint: "/_arkret/peer/contacts".to_owned(),
             idempotency_key: idempotency_key.to_owned(),
@@ -1525,9 +1525,9 @@ async fn validate_proof_refresh_evidence(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let durable_match = contacts.iter().any(|record| {
         let remote_is_requester = record.requester == current_proof.issuer.as_str()
-            && full_id_str_projects_to_actor(&record.target, &contact_address.subject_id);
+            && did_str_projects_to_actor(&record.target, &contact_address.subject_id);
         let remote_is_target = record.target == current_proof.issuer.as_str()
-            && full_id_str_projects_to_actor(&record.requester, &contact_address.subject_id);
+            && did_str_projects_to_actor(&record.requester, &contact_address.subject_id);
         matches!(record.status.as_str(), "accepted" | "pending")
             && record.peer_service_id.as_deref() == Some(source_service_id)
             && record.contact_round_id.as_deref() == Some(current_proof.contact_round_id.as_str())
@@ -1567,12 +1567,9 @@ async fn finalize_contact_proof_refresh(
         .into_iter()
         .find(|record| {
             (record.requester == current_proof.issuer.as_str()
-                && full_id_str_projects_to_actor(&record.target, &contact_address.subject_id))
+                && did_str_projects_to_actor(&record.target, &contact_address.subject_id))
                 || (record.target == current_proof.issuer.as_str()
-                    && full_id_str_projects_to_actor(
-                        &record.requester,
-                        &contact_address.subject_id,
-                    ))
+                    && did_str_projects_to_actor(&record.requester, &contact_address.subject_id))
         })
         .ok_or_else(|| {
             AppError::new(
@@ -1726,7 +1723,7 @@ fn validate_glare_finalize_evidence(
     let [first, second] = ordered.as_slice() else {
         unreachable!("request_receipts is a fixed pair")
     };
-    let local_subject_full_id = request_receipts
+    let local_subject_did = request_receipts
         .iter()
         .find(|receipt| receipt.core.issuer.as_str() == state.service_id())
         .map(|receipt| receipt.core.holder.contact_actor_id().clone())
@@ -1735,12 +1732,12 @@ fn validate_glare_finalize_evidence(
                 "glare request receipts have no local-service subject",
             )
         })?;
-    if !core_id_matches_actor(&local_subject_full_id, &contact_address.subject_id) {
+    if !core_id_matches_actor(&local_subject_did, &contact_address.subject_id) {
         return Err(super::super::events::peer::cross_domain_replay(
             "glare contact_address.subject_id does not match the local receipt holder",
         ));
     }
-    let mut pair = [local_subject_full_id, attestation.issuer.clone()];
+    let mut pair = [local_subject_did, attestation.issuer.clone()];
     pair.sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
     let expected_contact_round = ContactRound::Glare {
         sorted_pair_members: pair,
@@ -2124,7 +2121,7 @@ fn placeholder_contact_signature(
     Ok(ProtocolSignature {
         verification_method: DidUrl::new(
             crate::routing::federation::federation_service_signature_key_id(
-                state.service_full_id().as_str(),
+                state.service_did().as_str(),
             ),
         )
         .map_err(|error| AppError::internal(format!("service key id invalid: {error}")))?,
@@ -2144,7 +2141,7 @@ fn sign_contact_evidence_bytes(
     Ok(ProtocolSignature {
         verification_method: DidUrl::new(
             crate::routing::federation::federation_service_signature_key_id(
-                state.service_full_id().as_str(),
+                state.service_did().as_str(),
             ),
         )
         .map_err(|error| AppError::internal(format!("service key id invalid: {error}")))?,
@@ -2310,7 +2307,7 @@ fn sign_contact_mirror_receipt(
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
     let verification_method = DidUrl::new(
         crate::routing::federation::federation_service_signature_key_id(
-            state.service_full_id().as_str(),
+            state.service_did().as_str(),
         ),
     )
     .map_err(|error| AppError::internal(format!("service verification method invalid: {error}")))?;
@@ -2934,7 +2931,7 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
     })?;
     if !core_id_matches_actor(&local_core_id, &signed_event.actor_id) {
         return Err(super::super::events::peer::cross_domain_replay(
-            "Contact Event outcome local full id does not match signed_event.actor_id",
+            "Contact Event outcome local DID does not match signed_event.actor_id",
         ));
     }
     let contacts = state.contacts();
@@ -3175,7 +3172,7 @@ fn sign_contact_control_receipt(
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
     let verification_method = DidUrl::new(
         crate::routing::federation::federation_service_signature_key_id(
-            state.service_full_id().as_str(),
+            state.service_did().as_str(),
         ),
     )
     .map_err(|error| AppError::internal(format!("service verification method invalid: {error}")))?;
@@ -3965,7 +3962,7 @@ mod tests {
     const ALICE_SERVICE: &str = "ak:did_core:web:alice-service.example";
     const BOB_SERVICE: &str = "ak:did_core:web:bob-service.example";
 
-    fn web_full_id(core_id: &str) -> String {
+    fn web_did(core_id: &str) -> String {
         core_id
             .strip_prefix("ak:did_core:web:")
             .map(|authority| format!("did:web:{authority}"))
@@ -4004,7 +4001,7 @@ mod tests {
             },
             "receipt_digest": format!("sha256:{}", "d".repeat(64)),
             "signature": {
-                "verification_method": format!("{}#federation-signing-key", web_full_id(issuer)),
+                "verification_method": format!("{}#federation-signing-key", web_did(issuer)),
                 "created_at": "2026-08-09T00:00:00.000Z",
                 "jws": "YWJj"
             }

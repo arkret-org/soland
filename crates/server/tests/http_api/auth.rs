@@ -46,7 +46,7 @@ async fn account_register_requires_account_authority_bearer_body() {
     let mut response = TestClient::post("http://server/_soland/gate/account/project")
         .json(&serde_json::json!({
             "principal_id": fixture_actor_core_id("did:web:unauthorized-register.example"),
-            "full_id": "did:web:unauthorized-register.example",
+            "did": "did:web:unauthorized-register.example",
         }))
         .send(&app_from_state(state))
         .await;
@@ -80,7 +80,7 @@ async fn account_registration_policy_rejects_closed_and_audits_body() {
         )
         .json(&serde_json::json!({
             "principal_id": fixture_actor_core_id("did:web:closed-register.example"),
-            "full_id": "did:web:closed-register.example",
+            "did": "did:web:closed-register.example",
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -141,7 +141,7 @@ async fn account_registration_policy_and_closed_projection_wire_are_enforced_bod
         )
         .json(&serde_json::json!({
             "principal_id": fixture_actor_core_id("did:web:alice.example.edu"),
-            "full_id": "did:web:alice.example.edu",
+            "did": "did:web:alice.example.edu",
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -158,7 +158,7 @@ async fn account_registration_policy_and_closed_projection_wire_are_enforced_bod
         )
         .json(&serde_json::json!({
             "principal_id": fixture_actor_core_id("did:web:bob.other.example"),
-            "full_id": "did:web:bob.other.example",
+            "did": "did:web:bob.other.example",
             "policy_evidence": {
                 "verification_code": "246810",
                 "organization": "other.example",
@@ -195,7 +195,7 @@ async fn account_registration_policy_and_closed_projection_wire_are_enforced_bod
         )
         .json(&serde_json::json!({
             "principal_id": fixture_actor_core_id("did:web:rate-register.example"),
-            "full_id": "did:web:rate-register.example",
+            "did": "did:web:rate-register.example",
         }))
         .send(&app_from_state(rate_limited_state.clone()))
         .await
@@ -210,7 +210,7 @@ async fn account_registration_policy_and_closed_projection_wire_are_enforced_bod
         )
         .json(&serde_json::json!({
             "principal_id": fixture_actor_core_id("did:web:rate-register.example"),
-            "full_id": "did:web:rate-register.example",
+            "did": "did:web:rate-register.example",
         }))
         .send(&app_from_state(rate_limited_state.clone()))
         .await;
@@ -383,13 +383,12 @@ fn hard_logout_removes_push_registration_and_to_device_queue_for_device() {
 
 async fn hard_logout_removes_push_registration_and_to_device_queue_for_device_body() {
     let state = soland_test_support::app_state(test_config());
-    let actor_full_id = "did:web:alice.example";
+    let actor_did = "did:web:alice.example";
     let actor = "ak:did_core:web:alice.example";
     let device_a = "ak:device:01904100-0000-7000-8000-a11ce00000aa";
     let device_b = "ak:device:01904100-0000-7000-8000-a11ce00000bb";
-    let token_a = dev_token_for_device(state.clone(), actor_full_id, device_a, "Alice Phone").await;
-    let _token_b =
-        dev_token_for_device(state.clone(), actor_full_id, device_b, "Alice Tablet").await;
+    let token_a = dev_token_for_device(state.clone(), actor_did, device_a, "Alice Phone").await;
+    let _token_b = dev_token_for_device(state.clone(), actor_did, device_b, "Alice Tablet").await;
 
     state
         .test_persistence()

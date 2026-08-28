@@ -47,7 +47,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
     ) -> crate::ServiceResult<()> {
         let account = soland_storage::AccountRecord {
             id: command.account_id,
-            did: command.actor_id.clone(),
+            principal_id: command.principal_id.clone(),
             localpart: command.localpart.clone(),
             display_name: command.display_name,
             bio: None,
@@ -57,7 +57,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         self.0.accounts().put(&account).await?;
         self.0
             .account_localparts()
-            .add(&command.actor_id, &command.localpart, true)
+            .add(command.principal_id.as_str(), &command.localpart, true)
             .await?;
         Ok(())
     }
@@ -233,7 +233,7 @@ fn application_account_profile(
 ) -> crate::identity::AccountProfileState {
     crate::identity::AccountProfileState {
         id: account.id,
-        did: account.did,
+        principal_id: account.principal_id,
         localpart: account.localpart,
         display_name: account.display_name,
         bio: account.bio,
@@ -247,7 +247,7 @@ fn persistence_account_profile(
 ) -> soland_storage::AccountRecord {
     soland_storage::AccountRecord {
         id: account.id,
-        did: account.did,
+        principal_id: account.principal_id,
         localpart: account.localpart,
         display_name: account.display_name,
         bio: account.bio,
@@ -261,7 +261,7 @@ fn application_account_localpart(
 ) -> crate::identity::AccountLocalpartState {
     crate::identity::AccountLocalpartState {
         id: record.id,
-        account_did: record.account_did,
+        account_principal_id: record.account_principal_id,
         localpart: record.localpart,
         is_primary: record.is_primary,
         created_at: record.created_at,

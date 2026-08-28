@@ -148,7 +148,7 @@ impl PrincipalResolutionStore for MemoryPrincipalResolutionStore {
 #[cfg(test)]
 mod tests {
     use arkret_models_identity::PrincipalResolutionProjection;
-    use arkret_wire::{DidCoreId, DidFullId, Hlc, PrincipalAuthorityKey, ScopeRef};
+    use arkret_wire::{Did, DidCoreId, Hlc, PrincipalAuthorityKey, ScopeRef};
     use chrono::{TimeZone, Utc};
     use soland_storage::{PrincipalResolutionCasResult, PrincipalResolutionRecord};
 
@@ -198,7 +198,7 @@ mod tests {
             pcr_realm_id: genesis.realm_id.clone(),
             genesis_event: genesis.clone(),
             projection: PrincipalResolutionProjection {
-                full_id: DidFullId::new("did:web:alice.example").unwrap(),
+                did: Did::new("did:web:alice.example").unwrap(),
                 method_history_head: format!("head-{}", current.actor_seq),
                 version_id: format!("version-{}", current.actor_seq),
                 resolution_event_ref: current.event_id.to_string(),

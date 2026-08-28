@@ -35,18 +35,18 @@ use serde_json::Value;
 /// One actor row in the admin actors projection.
 ///
 /// Sourced from the account store joined with the lifecycle registry and the
-/// admin-principal configuration. `id` is the canonical actor id (the DID
-/// string) and is always present.
+/// admin-principal configuration. `id` is the canonical actor identifier and
+/// is always present.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AdminActor {
-    /// Canonical actor id (the DID string).
+    /// Canonical actor identifier.
     pub id: String,
-    pub did: DidCoreId,
+    pub principal_id: DidCoreId,
     /// Durable surrogate account row id (`ak:account:<uuid7>`), stable across
-    /// DID rotation. Account-lifecycle admin endpoints address accounts by
-    /// DID, not by this id.
+    /// principal identifier changes. Account-lifecycle admin endpoints address
+    /// accounts by principal identifier, not by this id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -54,10 +54,10 @@ pub struct AdminActor {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     /// Account lifecycle status. `None` = the lifecycle registry could not
-    /// answer for this DID (never a defaulted `Active`).
+    /// answer for this principal (never a defaulted `Active`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<AccountStatus>,
-    /// Whether the DID is listed as an admin principal. `None` = the
+    /// Whether the principal is listed as an admin. `None` = the
     /// authorization source was unavailable (never a defaulted `false`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_admin: Option<bool>,
@@ -318,7 +318,7 @@ mod tests {
     fn admin_actor_unknown_field_fails_closed() {
         let wire = serde_json::json!({
             "id": "ak:did_core:web:alice.example",
-            "did": "ak:did_core:web:alice.example",
+            "principal_id": "ak:did_core:web:alice.example",
             "surprise": true,
         });
         assert!(serde_json::from_value::<AdminActor>(wire).is_err());
@@ -328,7 +328,7 @@ mod tests {
     fn admin_actor_security_fields_default_to_unknown_not_false() {
         let wire = serde_json::json!({
             "id": "ak:did_core:web:alice.example",
-            "did": "ak:did_core:web:alice.example",
+            "principal_id": "ak:did_core:web:alice.example",
         });
         let actor: AdminActor = serde_json::from_value(wire).expect("minimal row parses");
         assert_eq!(actor.status, None);
@@ -342,7 +342,7 @@ mod tests {
     fn admin_actor_status_is_closed_set() {
         let wire = serde_json::json!({
             "id": "ak:did_core:web:alice.example",
-            "did": "ak:did_core:web:alice.example",
+            "principal_id": "ak:did_core:web:alice.example",
             "status": "very_active",
         });
         assert!(serde_json::from_value::<AdminActor>(wire).is_err());

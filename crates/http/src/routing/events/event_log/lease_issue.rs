@@ -548,7 +548,7 @@ pub(crate) fn authority_for_scope(
     })?;
     let verification_method = arkret_wire::DidUrl::new(format!(
         "{}#notary-key",
-        state.service_resolution_commitment().full_id
+        state.service_resolution_commitment().did
     ))
     .map_err(|error| {
         AppError::new(
@@ -617,8 +617,8 @@ fn sign_lease(
         .find_map(|proof| {
             let proof = proof.as_producer()?;
             let (controller, _) = proof.verification_method.rsplit_once('#')?;
-            let full_id = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
-            (arkret_wire::project_full_id_to_core_id(&full_id).ok() == Some(event.actor_id.clone()))
+            let did = arkret_wire::Did::new(controller.to_owned()).ok()?;
+            (arkret_wire::project_did_to_core_id(&did).ok() == Some(event.actor_id.clone()))
                 .then_some(event.actor_id.clone())
         })
         .ok_or_else(|| {
@@ -693,14 +693,14 @@ fn sign_lease_fields(
         kind: proof_kind::DETACHED_JWS.to_owned(),
         verification_method: arkret_wire::DidUrl::new(format!(
             "{}#notary-key",
-            state.service_resolution_commitment().full_id
+            state.service_resolution_commitment().did
         ))
         .map_err(lease_internal_error)?,
         payload_digest: digest,
         created_at: issued_at,
         domain: None,
         audience: Some(Audience::Single(
-            state.service_resolution_commitment().full_id.to_string(),
+            state.service_resolution_commitment().did.to_string(),
         )),
         proof_purpose: None,
         jws: String::new(),
@@ -860,7 +860,7 @@ mod tests {
     }
 
     #[test]
-    fn lease_authority_and_proof_use_service_full_id_not_projected_core_id() {
+    fn lease_authority_and_proof_use_service_did_not_projected_core_id() {
         let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
         assert!(state.service_id().starts_with("ak:did_core:"));
 
@@ -877,13 +877,13 @@ mod tests {
             "ak.realm.create",
             "realm_admission",
         )
-        .expect("service FullId must form a legal authority verification method");
+        .expect("service DID must form a legal authority verification method");
 
         let expected_method = arkret_wire::DidUrl::new(format!(
             "{}#notary-key",
-            state.service_resolution_commitment().full_id
+            state.service_resolution_commitment().did
         ))
-        .expect("fixture service FullId method");
+        .expect("fixture service DID method");
         assert_eq!(
             authority_set_policy.authorization_rules[0].issuers[0].verification_method,
             expected_method
@@ -905,7 +905,7 @@ mod tests {
             issued_at,
             issued_at + chrono::Duration::minutes(5),
         )
-        .expect("service FullId must form a legal lease proof method");
+        .expect("service DID must form a legal lease proof method");
         assert_eq!(lease.proofs[0].verification_method, expected_method);
     }
 }

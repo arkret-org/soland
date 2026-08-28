@@ -597,7 +597,7 @@ fn invite_event_precondition(reason_code: &'static str, message: &'static str) -
 /// re-encoding of the typed model, so every retry under the same
 /// `idempotency_key` reproduces byte-identical wire bytes and the receiver
 /// computes the same request digest. Deduplication is the outbox's own
-/// `(peer_did, idempotency_key)` uniqueness.
+/// `(peer_service_id, idempotency_key)` uniqueness.
 async fn enqueue_remote_invite_delivery(
     state: &AppState,
     delivery: &InviteDeliveryRequestBody,
@@ -638,7 +638,7 @@ async fn enqueue_remote_invite_delivery(
         .enqueue_delivery(EnqueueFederationDeliveryCommand {
             delivery: FederationDeliveryRecord {
                 id: enqueued_id.clone(),
-                peer_did: recipient_service_id.as_str().to_owned(),
+                peer_service_id: recipient_service_id.as_str().to_owned(),
                 peer_url: Some(entry.base_url.trim_end_matches('/').to_owned()),
                 endpoint: PEER_INVITES_ENDPOINT.to_owned(),
                 idempotency_key: delivery.idempotency_key.clone(),
@@ -1058,7 +1058,7 @@ async fn resolve_invite_locator(
             kind: "detached_jws".to_owned(),
             verification_method: arkret_wire::DidUrl::new(format!(
                 "{}#notary-key",
-                state.service_resolution_commitment().full_id
+                state.service_resolution_commitment().did
             ))
             .map_err(|error| {
                 AppError::internal(format!(
@@ -2019,12 +2019,12 @@ fn member_delivery_candidate_valid(
     {
         return false;
     }
-    let Ok(subject_did) = DidCoreId::new(subject.to_owned()) else {
+    let Ok(subject_id) = DidCoreId::new(subject.to_owned()) else {
         return false;
     };
     let context = CandidateValidationContext::new(candidate.audience.clone())
         .with_now(now)
-        .with_expected_subject(subject_did);
+        .with_expected_subject(subject_id);
     candidate.validate(&context).is_ok()
 }
 
@@ -2157,7 +2157,7 @@ mod invite_locator_security_tests {
             .identities()
             .save_account(AccountProfileState {
                 id: PRODUCTION_HOLDER.to_owned(),
-                did: PRODUCTION_HOLDER.to_owned(),
+                principal_id: DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
                 localpart: "holder".to_owned(),
                 display_name: None,
                 bio: None,
@@ -2481,7 +2481,7 @@ mod invite_locator_security_tests {
         );
         assert_eq!(entry["source_peer_principal_id"], PRODUCTION_INVITER);
         assert!(entry.get("quarantine_id").is_none());
-        assert!(entry.get("source_peer_did").is_none());
+        assert!(entry.get("source_peer_service_id").is_none());
         assert!(entry.get("inviter").is_none());
         assert_service_account_data_fanout(
             &state,
@@ -2569,7 +2569,7 @@ mod invite_locator_security_tests {
             .unwrap(),
             // `ValidatedEventEnvelope::actor_id` is a `DidCoreId`, whose wire
             // form is `ak:did_core:<method>:<rest>`; a bare `did:web:` string
-            // is a full DID and belongs only where a complete DID is required
+            // is a DID and belongs only where a complete DID is required
             // (verification methods, proof controllers).
             actor_id: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
             device_id: Some(

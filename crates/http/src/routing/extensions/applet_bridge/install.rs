@@ -510,7 +510,7 @@ fn verify_install_registration_epoch_payload_jws(
         .with_wire_code("invalid_proof"));
     }
     let document =
-        crate::jws_verify::resolve_did_document(state, &evidence.full_id).map_err(|reason| {
+        crate::jws_verify::resolve_did_document(state, &evidence.did).map_err(|reason| {
             AppError::param_invalid("Applet service DID document could not be resolved")
                 .with_wire_code("applet_registration_epoch_evidence_mismatch")
                 .with_reason_detail(reason)
@@ -533,7 +533,7 @@ fn verify_install_registration_epoch_payload_jws(
         canonical_bytes,
         jws,
         &verification_method,
-        &evidence.full_id,
+        &evidence.did,
         &document,
     )
     .map_err(|error| {
@@ -560,7 +560,7 @@ pub(super) fn validate_managed_actor_method_evidence(
     let witness_bytes = serde_json::to_vec(witness_records)
         .map_err(|error| AppError::param_invalid(format!("witness evidence invalid: {error}")))?;
     let verified = arkret_identity::verify_did_webvh_v1_chain_and_witness_bytes(
-        &provision.initial_resolution.full_id,
+        &provision.initial_resolution.did,
         &log_bytes,
         Some(&witness_bytes),
     )
@@ -575,7 +575,7 @@ pub(super) fn validate_managed_actor_method_evidence(
         .ok_or_else(|| AppError::param_invalid("Applet-managed DID log is empty"))?;
     let terminal_head = arkret_canonical::canonical_sha256(terminal)
         .map_err(|error| AppError::param_invalid(format!("DID terminal invalid: {error}")))?;
-    if provision.initial_resolution.full_id.method() != "webvh"
+    if provision.initial_resolution.did.method() != "webvh"
         || verified.log.head_version_id != provision.initial_resolution.version_id
         || terminal_head != provision.initial_resolution.method_history_head
     {
@@ -591,8 +591,8 @@ pub(super) async fn validate_managed_actor_current_method_evidence(
     state: &AppState,
     provision: &AppletManagedActorProvisionPayload,
 ) -> Result<(), AppError> {
-    let full_id = &provision.initial_resolution.full_id;
-    crate::jws_verify::enforce_high_risk_did_freshness(state, full_id)
+    let did = &provision.initial_resolution.did;
+    crate::jws_verify::enforce_high_risk_did_freshness(state, did)
         .await
         .map_err(|error| {
             AppError::param_invalid(
@@ -610,11 +610,7 @@ pub(super) async fn validate_managed_actor_current_method_evidence(
         })?;
     let pinned = state
         .dids()
-        .resolve_pinned_webvh_state(
-            full_id,
-            &provision.initial_resolution.version_id,
-            &history_head,
-        )
+        .resolve_pinned_webvh_state(did, &provision.initial_resolution.version_id, &history_head)
         .await
         .map_err(|error| {
             AppError::param_invalid(format!(
@@ -624,7 +620,7 @@ pub(super) async fn validate_managed_actor_current_method_evidence(
         })?;
     if !managed_actor_pinned_resolution_is_current(
         &pinned,
-        full_id,
+        did,
         &provision.initial_resolution.version_id,
         &history_head,
     ) {
@@ -638,7 +634,7 @@ pub(super) async fn validate_managed_actor_current_method_evidence(
 
 fn managed_actor_pinned_resolution_is_current(
     pinned: &soland_services::identity::PinnedDidDocumentState,
-    expected_did: &arkret_identifiers::DidFullId,
+    expected_did: &arkret_identifiers::Did,
     expected_version_id: &str,
     expected_history_head: &Hash,
 ) -> bool {
@@ -725,7 +721,7 @@ pub(super) async fn register_package_install(
             (
                 AppletIdentityRecord {
                     applet_id: package.applet_id.clone(),
-                    registry_did: package.controller_id.clone(),
+                    registry_id: package.controller_id.clone(),
                     bot_actor_id: package.bot_actor_id.clone(),
                     bot_actor_principal_server_id: bot_provision.actor_principal_server_id.clone(),
                     bot_actor_provision_ref: bundle.managed_actor_provision_event.event_id.clone(),
@@ -1144,7 +1140,7 @@ pub(super) fn registration_epoch_producer_signing_key(
     evidence: &AppletRegistrationEpochEvidence,
 ) -> Result<arkret_wire::DidKey, AppError> {
     let document =
-        crate::jws_verify::resolve_did_document(state, &evidence.full_id).map_err(|reason| {
+        crate::jws_verify::resolve_did_document(state, &evidence.did).map_err(|reason| {
             AppError::param_invalid("applet service DID document could not be resolved")
                 .with_wire_code("applet_registration_epoch_evidence_mismatch")
                 .with_reason_detail(reason)
@@ -1250,7 +1246,7 @@ fn validated_registration_epoch_evidence(
     evidence: &AppletRegistrationEpochEvidence,
 ) -> Result<(), AppError> {
     let document =
-        crate::jws_verify::resolve_did_document(state, &evidence.full_id).map_err(|reason| {
+        crate::jws_verify::resolve_did_document(state, &evidence.did).map_err(|reason| {
             AppError::param_invalid("applet service DID document could not be resolved")
                 .with_wire_code("applet_registration_epoch_evidence_mismatch")
                 .with_reason_detail(reason)
@@ -1579,7 +1575,7 @@ pub(super) fn ghost_actors_allowed_for_install(
 
 #[cfg(test)]
 mod tests {
-    use arkret_identifiers::{DidFullId, Hash};
+    use arkret_identifiers::{Did, Hash};
     use arkret_models_integration::{
         AppletEndpointAuth, AppletEndpointEntry, AppletEndpointMethod, AppletNamespaceEntry,
     };
@@ -1613,8 +1609,8 @@ mod tests {
         );
         validate_hosted_applet_pcr_notary(&expected, &expected).unwrap();
 
-        let actor_full_id = DidFullId::new("did:web:actor.example".to_owned()).unwrap();
-        let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id).unwrap();
+        let actor_did = Did::new("did:web:actor.example".to_owned()).unwrap();
+        let actor_id = arkret_wire::project_did_to_core_id(&actor_did).unwrap();
         let actor_descriptor = soland_services::identity::ed25519_notary_signer_descriptor(
             actor_id,
             arkret_wire::DidUrl::new("did:web:actor.example#notary-key".to_owned()).unwrap(),
@@ -1649,13 +1645,13 @@ mod tests {
     /// Derive a `did:key` DID + its `#`-fragment verification method for an
     /// Ed25519 seed, using the SDK's canonical multibase encoder so the
     /// built-in `DidKeyResolver` resolves the embedded public key.
-    fn did_key_for_seed(seed: [u8; 32]) -> (DidFullId, String) {
+    fn did_key_for_seed(seed: [u8; 32]) -> (Did, String) {
         let verifying = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key();
         let multibase =
             arkret_canonical::ed25519_pubkey_to_did_key_multibase(&verifying.to_bytes());
         let did_str = format!("did:key:{multibase}");
         let vm = format!("{did_str}#{multibase}");
-        (DidFullId::new(did_str).unwrap(), vm)
+        (Did::new(did_str).unwrap(), vm)
     }
 
     /// Build a sealed package whose `controller_id` is a `did:key` and whose
@@ -1668,16 +1664,16 @@ mod tests {
         signer_seed: [u8; 32],
         verification_method: &str,
     ) -> AppletPackage {
-        let (controller_full_id, _) = did_key_for_seed(controller_seed);
-        let controller_id = arkret_wire::project_full_id_to_core_id(&controller_full_id).unwrap();
-        let service_full_id = DidFullId::new("did:web:test-applet.example".to_owned()).unwrap();
-        let service_id = arkret_wire::project_full_id_to_core_id(&service_full_id).unwrap();
+        let (controller_did, _) = did_key_for_seed(controller_seed);
+        let controller_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
+        let service_did = Did::new("did:web:test-applet.example".to_owned()).unwrap();
+        let service_id = arkret_wire::project_did_to_core_id(&service_did).unwrap();
         let mut package = AppletPackage::new(
             "package:ak:applet:test".to_owned(),
             arkret_identifiers::AppletId::new("ak:applet:01974100-0000-7000-8000-000000000001")
                 .unwrap(),
             service_id,
-            service_full_id.clone(),
+            service_did.clone(),
             controller_id.clone(),
             "https://test-applet.example".to_owned(),
             DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
@@ -1696,7 +1692,7 @@ mod tests {
             extra: Default::default(),
         }];
         let evidence = arkret_models_integration::applet::AppletRegistrationEpochEvidence::new(
-            service_full_id,
+            service_did,
             Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap(),
             arkret_models_integration::applet::AppletDidMethodVersionEvidence::unversioned(
                 "did:web",
@@ -1713,7 +1709,7 @@ mod tests {
         package.seal().unwrap();
         let signer = Ed25519PayloadSigner::from_did_key_seed(
             signer_seed,
-            controller_full_id,
+            controller_did,
             arkret_wire::DidUrl::new(verification_method).expect("fixture DID URL"),
         );
         package
@@ -1796,13 +1792,13 @@ mod tests {
     }
 
     fn sample_package() -> AppletPackage {
-        let service_full_id = DidFullId::new("did:web:test-applet.example".to_owned()).unwrap();
+        let service_did = Did::new("did:web:test-applet.example".to_owned()).unwrap();
         AppletPackage::new(
             "package:ak:applet:test".to_owned(),
             arkret_identifiers::AppletId::new("ak:applet:01974100-0000-7000-8000-000000000001")
                 .unwrap(),
-            arkret_wire::project_full_id_to_core_id(&service_full_id).unwrap(),
-            service_full_id,
+            arkret_wire::project_did_to_core_id(&service_did).unwrap(),
+            service_did,
             DidCoreId::new("ak:did_core:web:test-registry.example".to_owned()).unwrap(),
             "https://test-applet.example".to_owned(),
             DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
@@ -1849,7 +1845,7 @@ mod tests {
     fn registration_epoch_validation_refetches_unversioned_web_document() {
         let package = sample_package();
         let document = DidDocument::new(
-            DidFullId::new("did:web:test-applet.example".to_owned()).unwrap(),
+            Did::new("did:web:test-applet.example".to_owned()).unwrap(),
             package.webhook_auth.key_ref.to_string(),
             r#"{"crv":"Ed25519","kty":"OKP","x":"fixture"}"#,
         );
@@ -1868,7 +1864,7 @@ mod tests {
     fn registration_epoch_validation_rejects_rotation_until_new_snapshot_is_used() {
         let package = sample_package();
         let old_document = DidDocument::new(
-            DidFullId::new("did:web:test-applet.example".to_owned()).unwrap(),
+            Did::new("did:web:test-applet.example".to_owned()).unwrap(),
             package.webhook_auth.key_ref.to_string(),
             r#"{"crv":"Ed25519","kty":"OKP","x":"old"}"#,
         );
@@ -1882,7 +1878,7 @@ mod tests {
             .unwrap();
 
         let rotated_document = DidDocument::new(
-            DidFullId::new("did:web:test-applet.example".to_owned()).unwrap(),
+            Did::new("did:web:test-applet.example".to_owned()).unwrap(),
             package.webhook_auth.key_ref.to_string(),
             r#"{"crv":"Ed25519","kty":"OKP","x":"rotated"}"#,
         );
@@ -1917,7 +1913,7 @@ mod tests {
     fn registration_epoch_validation_rejects_deactivated_and_empty_key_documents() {
         let package = sample_package();
         let mut deactivated_document = DidDocument::new(
-            DidFullId::new("did:web:test-applet.example".to_owned()).unwrap(),
+            Did::new("did:web:test-applet.example".to_owned()).unwrap(),
             package.webhook_auth.key_ref.to_string(),
             r#"{"crv":"Ed25519","kty":"OKP","x":"fixture"}"#,
         );
@@ -1974,7 +1970,7 @@ mod tests {
     fn registration_epoch_validation_rejects_swapped_service_document() {
         let package = sample_package();
         let swapped_document = DidDocument::new(
-            DidFullId::new("did:web:other-applet.example".to_owned()).unwrap(),
+            Did::new("did:web:other-applet.example".to_owned()).unwrap(),
             "did:web:other-applet.example#controller".to_owned(),
             r#"{"crv":"Ed25519","kty":"OKP","x":"fixture"}"#,
         );
@@ -2007,7 +2003,7 @@ mod tests {
 
     #[test]
     fn managed_actor_rejects_a_self_consistent_historical_webvh_prefix() {
-        let did = DidFullId::new(
+        let did = Did::new(
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:actor.example".to_owned(),
         )
         .unwrap();

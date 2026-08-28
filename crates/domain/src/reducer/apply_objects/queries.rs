@@ -547,7 +547,7 @@ impl ProjectionState {
                     // DID-method admission must be evaluated from the frozen
                     // registration and origin-service admission evidence
                     // selected by the exact principal authority pair. A
-                    // projection's current full_id is not a substitute for
+                    // projection's current did is not a substitute for
                     // that accepted pair binding.
                     if !principal_admission_gate_allows(gate, member, None) {
                         return Err("gate_check_failed");

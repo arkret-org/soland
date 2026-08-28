@@ -123,8 +123,8 @@ mod tests {
     }
 
     fn requester() -> DidCoreId {
-        let full_id = DidFullId::new("did:web:directory-proof-test.invalid".to_owned()).unwrap();
-        project_full_id_to_core_id(&full_id).unwrap()
+        let did = Did::new("did:web:directory-proof-test.invalid".to_owned()).unwrap();
+        project_did_to_core_id(&did).unwrap()
     }
 
     fn proof(audience: &str, created_at: DateTime<Utc>, payload_digest: Hash) -> PayloadProof {

@@ -43,15 +43,15 @@ fn recovery_policy_verification_method_matches_session(
     principal_core_id: &str,
     device_id: &str,
 ) -> bool {
-    let Some((principal_full_id, fragment)) = verification_method.trim().rsplit_once('#') else {
+    let Some((principal_did, fragment)) = verification_method.trim().rsplit_once('#') else {
         return false;
     };
     if fragment != device_id {
         return false;
     }
-    arkret_wire::DidFullId::new(principal_full_id.to_owned())
+    arkret_wire::Did::new(principal_did.to_owned())
         .ok()
-        .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id).ok())
+        .and_then(|did| arkret_wire::project_did_to_core_id(&did).ok())
         .is_some_and(|core_id| core_id.as_str() == principal_core_id)
 }
 
@@ -85,7 +85,7 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
         &session.device_id,
     ) {
         return Err(recovery_signature_error(format!(
-            "genesis recovery policy device signature must use the session principal's full DID and device fragment `{}`",
+            "genesis recovery policy device signature must use the session principal's DID and device fragment `{}`",
             session.device_id
         )));
     }
@@ -170,16 +170,14 @@ pub(super) async fn verify_recovery_auth_signature(
     let (method_did, device_fragment) = verification_method.rsplit_once('#').ok_or_else(|| {
         recovery_signature_error("recovery authority method has no device fragment")
     })?;
-    let method_did =
-        arkret_identifiers::DidFullId::new(method_did.to_owned()).map_err(|error| {
-            recovery_signature_error(format!("recovery authority method DID is invalid: {error}"))
-        })?;
-    let method_principal =
-        arkret_wire::project_full_id_to_core_id(&method_did).map_err(|error| {
-            recovery_signature_error(format!(
-                "recovery authority method DID cannot be projected: {error}"
-            ))
-        })?;
+    let method_did = arkret_identifiers::Did::new(method_did.to_owned()).map_err(|error| {
+        recovery_signature_error(format!("recovery authority method DID is invalid: {error}"))
+    })?;
+    let method_principal = arkret_wire::project_did_to_core_id(&method_did).map_err(|error| {
+        recovery_signature_error(format!(
+            "recovery authority method DID cannot be projected: {error}"
+        ))
+    })?;
     if method_principal.as_str() != principal_id {
         return Err(recovery_signature_error(
             "recovery authority method does not belong to the policy principal",

@@ -23,7 +23,7 @@ pub(crate) fn genesis_projector(
 }
 
 fn controller_founding_authorize_payload(
-    actor: &arkret_identifiers::DidFullId,
+    actor: &arkret_identifiers::Did,
     created_at: chrono::DateTime<chrono::Utc>,
     signing_key: &SigningKey,
 ) -> arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload {
@@ -33,7 +33,7 @@ fn controller_founding_authorize_payload(
     };
 
     let mut payload = DeviceAuthorizePayload {
-        principal_id: arkret_wire::project_full_id_to_core_id(actor).unwrap(),
+        principal_id: arkret_wire::project_did_to_core_id(actor).unwrap(),
         device_id: arkret_identifiers::DeviceId::new(CONTROLLER_DEVICE_ID).unwrap(),
         device_public_key: arkret_wire::NonEmptyString::new(format!(
             "did:key:{}",
@@ -46,7 +46,7 @@ fn controller_founding_authorize_payload(
         ],
         device_key_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
         authorized_by: DeviceOrPrincipalRef::Principal(
-            arkret_wire::project_full_id_to_core_id(actor).unwrap(),
+            arkret_wire::project_did_to_core_id(actor).unwrap(),
         ),
         scopes: None,
         not_before: created_at,
@@ -159,8 +159,8 @@ fn attach_fixture_service_admission(
 
 pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor: &str) {
     let now = chrono::Utc::now();
-    let actor_id = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new(actor.to_owned()).unwrap(),
+    let actor_id = arkret_wire::project_did_to_core_id(
+        &arkret_identifiers::Did::new(actor.to_owned()).unwrap(),
     )
     .unwrap()
     .into_string();
@@ -170,7 +170,7 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
         accounts
             .put(&soland_storage::AccountRecord {
                 id: format!("ak:account:{}", uuid::Uuid::now_v7()),
-                did: actor_id.clone(),
+                principal_id: arkret_wire::DidCoreId::new(actor_id.clone()).unwrap(),
                 localpart: "alice".to_owned(),
                 display_name: Some("Alice".to_owned()),
                 bio: None,
@@ -260,19 +260,19 @@ pub(crate) async fn seed_active_controller_device_generation(
 
     let created_at = chrono::DateTime::<chrono::Utc>::from_timestamp(now.timestamp(), 0).unwrap();
     let timestamp_hex = format!("{:012x}", created_at.timestamp_millis());
-    let actor = arkret_identifiers::DidFullId::new(controller.to_owned()).unwrap();
-    let controller_id = arkret_wire::project_full_id_to_core_id(&actor).unwrap();
+    let actor = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
+    let controller_id = arkret_wire::project_did_to_core_id(&actor).unwrap();
     let authorize_payload = controller_founding_authorize_payload(&actor, created_at, &signing_key);
     let founding_device_descriptor = controller_founding_device_descriptor(&authorize_payload);
     let initial_resolution = arkret_models_identity::ResolutionCommitment {
-        full_id: actor.clone(),
+        did: actor.clone(),
         method_history_head: format!("sha256:{}", "1".repeat(64)),
         version_id: "1-Qmfixture".to_owned(),
     };
     let bootstrap = arkret_bootstrap::build_self_principal_pcr_create(
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
             principal_id: controller_id.clone(),
-            principal_full_id: actor.clone(),
+            principal_did: actor.clone(),
             principal_server_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
                 .unwrap(),
             notary: soland_test_support::cba_basis::test_single_signer_notary(actor.as_str()),
@@ -437,7 +437,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         genesis_event: bootstrap.clone(),
         current_event: bootstrap.clone(),
         projection: arkret_models_identity::PrincipalResolutionProjection {
-            full_id: initial_resolution.full_id,
+            did: initial_resolution.did,
             method_history_head: initial_resolution.method_history_head,
             version_id: initial_resolution.version_id,
             resolution_event_ref: bootstrap.event_id.to_string(),
@@ -516,8 +516,8 @@ pub(crate) async fn seed_active_controller_device_generation(
 
 pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, controller: &str) {
     let now = chrono::Utc::now();
-    let controller_id = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new(controller.to_owned()).unwrap(),
+    let controller_id = arkret_wire::project_did_to_core_id(
+        &arkret_identifiers::Did::new(controller.to_owned()).unwrap(),
     )
     .unwrap();
     let policy_id = new_prefixed_uuid7("ak:policy:");
@@ -597,8 +597,8 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
         soland_services::events::DirectoryProvenance::LocalOnly,
     );
     entry.members.insert(
-        arkret_wire::project_full_id_to_core_id(
-            &arkret_identifiers::DidFullId::new(controller.to_owned()).unwrap(),
+        arkret_wire::project_did_to_core_id(
+            &arkret_identifiers::Did::new(controller.to_owned()).unwrap(),
         )
         .unwrap(),
     );
@@ -730,8 +730,8 @@ async fn provision_agent_sdk_commit_attempt_inner(
         arkret_models_collaboration::events_payloads::agent::AgentKeyScope,
     >(requested_scope.clone())
     .unwrap();
-    let controller_full_id = arkret_identifiers::DidFullId::new(controller.to_owned()).unwrap();
-    let controller_id = arkret_wire::project_full_id_to_core_id(&controller_full_id).unwrap();
+    let controller_did = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
+    let controller_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
     let binding_signing_key = SigningKey::from_bytes(&[22_u8; 32]);
     let successor_signing_key = SigningKey::from_bytes(&[23_u8; 32]);
     let agent_inception = arkret_signatures::webvh::prepare_managed_agent_inception(
@@ -747,7 +747,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         },
     )
     .unwrap();
-    let full_id = arkret_identifiers::DidFullId::new(agent_inception.did.clone()).unwrap();
+    let did = arkret_identifiers::Did::new(agent_inception.did.clone()).unwrap();
     let mut inception_response =
         TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
             .json(&serde_json::to_value(&agent_inception.submit_body).unwrap())
@@ -764,7 +764,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         arkret_models_collaboration::agent_operations::AgentProvisionRequestBody::Prepare {
             operation_id: operation_id.clone(),
             idempotency_key: idempotency_key.clone(),
-            full_id: full_id.clone(),
+            did: did.clone(),
             controller_principal_server_id: controller_authority.principal_server_id.clone(),
             slug: slug.to_owned(),
             requested_scope: scope.clone(),
@@ -788,7 +788,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     .unwrap();
     let arkret_models_collaboration::agent_operations::AgentProvisionOutcome::AwaitingControllerEvent {
         agent_id,
-        full_id,
+        did,
         initial_resolution,
         controller_realm_id,
         allocation_handle,
@@ -797,10 +797,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     } = preparation else {
         panic!("prepare must await the controller-authored provision Event");
     };
-    assert_eq!(
-        arkret_wire::project_full_id_to_core_id(&full_id).unwrap(),
-        agent_id
-    );
+    assert_eq!(arkret_wire::project_did_to_core_id(&did).unwrap(), agent_id);
     let expected_scope_digest =
         arkret_signatures::agent::agent_requested_scope_digest(&agent_id, &controller_id, &scope)
             .unwrap();
@@ -834,13 +831,13 @@ async fn provision_agent_sdk_commit_attempt_inner(
             .expect("fixture verification method is a DID URL");
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         SigningKey::from_bytes(&CONTROLLER_DEVICE_SIGNING_SEED),
-        controller_full_id.clone(),
+        controller_did.clone(),
         verification_method.clone(),
     );
     let create_payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
         arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
             agent_id: agent_id.clone(),
-            notary: soland_test_support::cba_basis::test_single_signer_notary(full_id.as_str()),
+            notary: soland_test_support::cba_basis::test_single_signer_notary(did.as_str()),
             initial_resolution: initial_resolution.clone(),
             controller_id: controller_id.clone(),
             genesis_salt: arkret_wire::GenesisSalt::generate().unwrap(),
@@ -945,7 +942,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
             operation_id,
             idempotency_key,
             agent_id: agent_id.clone(),
-            full_id: full_id.clone(),
+            did: did.clone(),
             principal_control_realm_id: principal_control_realm_id.clone(),
             allocation_handle,
             slug: slug.to_owned(),
@@ -1062,7 +1059,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
             assert!(
                 availability_receipt.retention_expires_at
                     >= availability.sealed_at + chrono::Duration::hours(24),
-                "canonical-hash preparation must remain usable for the full idempotency window: sealed_at={}, expires_at={}",
+                "canonical-hash preparation must remain usable for the DIDempotency window: sealed_at={}, expires_at={}",
                 availability.sealed_at,
                 availability_receipt.retention_expires_at,
             );
@@ -1259,7 +1256,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
 
     let binding_update = arkret_signatures::webvh::prepare_managed_agent_binding_update(
         &arkret_signatures::webvh::ManagedAgentBindingUpdateInput {
-            did: full_id.as_str(),
+            did: did.as_str(),
             local_id: &agent_inception.local_id,
             previous_entries: std::slice::from_ref(&agent_inception.log_entry),
             version_time: now + chrono::Duration::seconds(1),
@@ -1356,10 +1353,9 @@ async fn production_agent_provision_admits_controller_signed_sdk_events_body() {
 
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert_eq!(body["status"], "complete");
-    let controller_id = arkret_wire::project_full_id_to_core_id(
-        &arkret_wire::DidFullId::new(controller.to_owned()).unwrap(),
-    )
-    .unwrap();
+    let controller_id =
+        arkret_wire::project_did_to_core_id(&arkret_wire::Did::new(controller.to_owned()).unwrap())
+            .unwrap();
     assert_eq!(
         state
             .test_persistence()
@@ -1533,10 +1529,10 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary_body() {
         assert_eq!(replayed.take_json::<Value>().await.unwrap(), recovered_body);
 
         let agent_id = commit_body["agent_id"].as_str().unwrap();
-        let agent_full_id = commit_body["full_id"].as_str().unwrap();
+        let agent_did = commit_body["did"].as_str().unwrap();
         assert_eq!(
-            arkret_wire::project_full_id_to_core_id(
-                &arkret_identifiers::DidFullId::new(agent_full_id.to_owned()).unwrap()
+            arkret_wire::project_did_to_core_id(
+                &arkret_identifiers::Did::new(agent_did.to_owned()).unwrap()
             )
             .unwrap()
             .as_str(),
@@ -1558,7 +1554,7 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary_body() {
         }
         let did_history = persistence
             .webvh()
-            .list_log_events(agent_full_id)
+            .list_log_events(agent_did)
             .await
             .unwrap();
         assert_eq!(
@@ -1568,18 +1564,18 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary_body() {
         );
         let did_document = persistence
             .webvh()
-            .get_document(agent_full_id)
+            .get_document(agent_did)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(did_document.did, agent_full_id);
-        assert_eq!(did_document.did_document["id"], agent_full_id);
+        assert_eq!(did_document.did, agent_did);
+        assert_eq!(did_document.did_document["id"], agent_did);
         assert_eq!(
             did_document.key_log_head.as_deref(),
             Some(did_history[1].event_digest.as_str())
         );
-        let controller_id = arkret_wire::project_full_id_to_core_id(
-            &arkret_wire::DidFullId::new(controller.to_owned()).unwrap(),
+        let controller_id = arkret_wire::project_did_to_core_id(
+            &arkret_wire::Did::new(controller.to_owned()).unwrap(),
         )
         .unwrap();
         assert_eq!(
@@ -1613,8 +1609,8 @@ async fn agent_provision_commit_requires_its_server_allocation_body() {
     seed_controller_session(&state, token, controller).await;
     seed_agent_provision_prerequisites(&state, controller).await;
 
-    let controller_full_id = arkret_identifiers::DidFullId::new(controller.to_owned()).unwrap();
-    let controller_id = arkret_wire::project_full_id_to_core_id(&controller_full_id).unwrap();
+    let controller_did = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
+    let controller_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
     let controller_realm_id = arkret_identifiers::RealmId::new(
         soland_test_support::fixture_principal_control_realm(controller),
     )
@@ -1660,8 +1656,7 @@ async fn agent_provision_commit_requires_its_server_allocation_body() {
                 "ak:did_core:web:unallocated-agent.example",
             )
             .unwrap(),
-            full_id: arkret_identifiers::DidFullId::new("did:web:unallocated-agent.example")
-                .unwrap(),
+            did: arkret_identifiers::Did::new("did:web:unallocated-agent.example").unwrap(),
             principal_control_realm_id: arkret_identifiers::RealmId::new(
                 "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             )
@@ -1851,10 +1846,10 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected_body() {
                 uuid::Uuid::now_v7().simple().to_string(),
             )
             .unwrap(),
-            full_id: arkret_identifiers::DidFullId::new(
-                created_body["full_id"]
+            did: arkret_identifiers::Did::new(
+                created_body["did"]
                     .as_str()
-                    .expect("created Agent full id")
+                    .expect("created Agent DID")
                     .to_owned(),
             )
             .unwrap(),

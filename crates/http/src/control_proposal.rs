@@ -186,8 +186,8 @@ pub(crate) async fn managed_agent_pcr_event_matches_accepted_delegation(
     };
     let controller_id = arkret_wire::DidCoreId::new(record.controller_id.clone())
         .or_else(|_| {
-            arkret_wire::DidFullId::new(record.controller_id.clone())
-                .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+            arkret_wire::Did::new(record.controller_id.clone())
+                .and_then(|did| arkret_wire::project_did_to_core_id(&did))
         })
         .map_err(|error| format!("accepted managed Agent controller is invalid: {error}"))?;
     Ok(record.principal_control_realm_id == event.realm_id.as_str()
@@ -259,8 +259,8 @@ pub(crate) async fn verify_managed_agent_pcr_ack(
         .ok_or_else(|| "managed Agent PCR has no accepted Agent delegation".to_owned())?;
     let record_controller_id = arkret_wire::DidCoreId::new(record.controller_id.clone())
         .or_else(|_| {
-            arkret_wire::DidFullId::new(record.controller_id.clone())
-                .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+            arkret_wire::Did::new(record.controller_id.clone())
+                .and_then(|did| arkret_wire::project_did_to_core_id(&did))
         })
         .map_err(|error| format!("accepted managed Agent controller is invalid: {error}"))?;
     if record.principal_control_realm_id != event.realm_id.as_str()
@@ -722,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn proposal_ack_signer_uses_resolved_service_full_did() {
+    fn proposal_ack_signer_uses_resolved_service_did() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
@@ -736,7 +736,7 @@ mod tests {
             chrono::Utc::now(),
             ControlProposalDecisionPolicy::default(),
         )
-        .expect("service full DID must produce a valid proposal Ack signer");
+        .expect("service DID must produce a valid proposal Ack signer");
 
         assert_eq!(
             ack.authority_acks[0].signature.verification_method,
