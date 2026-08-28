@@ -80,19 +80,21 @@ pub(super) async fn read_history_key_responses(
         .await
         .map_err(map_service_error)?
         .ok_or_else(|| AppError::not_found("history response stream is unavailable"))?;
-    let high_water_cursor = page
-        .entries
-        .last()
-        .map(history_response_entry_cursor)
-        .unwrap_or_else(|| query.after.clone().unwrap_or_default());
-    let (ack_token, ack_token_claims) = history_response_ack_token(
-        state,
-        request.write.request.request_id.as_str(),
-        &page.entries,
-        &high_water_cursor,
-        request.write.request.expires_at,
-    )?;
-    if !page.entries.is_empty() {
+    let ack_token = if page.entries.is_empty() {
+        None
+    } else {
+        let high_water_cursor = page
+            .entries
+            .last()
+            .map(history_response_entry_cursor)
+            .expect("non-empty response page has a high-water cursor");
+        let (ack_token, ack_token_claims) = history_response_ack_token(
+            state,
+            request.write.request.request_id.as_str(),
+            &page.entries,
+            &high_water_cursor,
+            request.write.request.expires_at,
+        )?;
         history
             .store_history_ack_token(
                 &capability_commitment,
@@ -104,7 +106,8 @@ pub(super) async fn read_history_key_responses(
             )
             .await
             .map_err(map_service_error)?;
-    }
+        Some(ack_token)
+    };
     let outcome = HistoryKeyResponseListOutcome {
         ack_entries: page.entries,
         ack_token,
