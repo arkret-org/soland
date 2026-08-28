@@ -539,7 +539,7 @@ pub fn describe(
         extra: Default::default(),
     };
 
-    let mut description = ServiceDescribe {
+    let description = ServiceDescribe {
         service_id: service_id.clone(),
         service_resolution: service_resolution.clone(),
         trust_domain: trust_domain
@@ -872,9 +872,6 @@ pub fn describe(
         last_materialized_at: None,
         extensions: Default::default(),
     };
-    description
-        .install_current_arkret_build_identity()
-        .expect("current Arkret SDK build identity must serialize");
     description
 }
 
