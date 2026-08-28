@@ -150,20 +150,17 @@ pub(super) fn mimi_resolve_verifying_key(
     ))
 }
 
+/// `mimi-interop.md` §5 shares the per-delivery signature failure codes with
+/// `applet-integration.md` §7.3.1: each failure carries its own registered
+/// top-level code, never a generic code plus a `reason` extension.
 pub(super) fn mimi_signature_error_required(message: impl Into<String>) -> AppError {
-    AppError::unauthenticated(message)
-        .with_status(StatusCode::UNAUTHORIZED)
-        .with_top_level_reason("http_signature_required")
+    AppError::new(ErrorCode::HttpSignatureRequired, message)
 }
 
 pub(super) fn mimi_signature_error_invalid(message: impl Into<String>) -> AppError {
-    AppError::unauthenticated(message)
-        .with_status(StatusCode::UNAUTHORIZED)
-        .with_top_level_reason("http_signature_invalid")
+    AppError::new(ErrorCode::HttpSignatureInvalid, message)
 }
 
 pub(super) fn mimi_signature_error_window(message: impl Into<String>) -> AppError {
-    AppError::unauthenticated(message)
-        .with_status(StatusCode::UNAUTHORIZED)
-        .with_top_level_reason("signature_window_invalid")
+    AppError::new(ErrorCode::SignatureWindowInvalid, message)
 }

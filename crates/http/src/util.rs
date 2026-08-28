@@ -15,7 +15,7 @@ use arkret_identifiers::{DeviceId, DidFullId, SpaceId};
 use salvo::http::header;
 use salvo::prelude::*;
 
-pub use crate::error::{render_error, render_error_with_top_level_reason};
+pub use crate::error::render_error;
 
 /// Pull a single query-string value, decoding `+` to space and any
 /// `%XX` percent-escapes back to their raw byte form. Required for

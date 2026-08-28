@@ -9,7 +9,7 @@ use arkret_signatures::http_signature::{
 };
 use salvo::http::StatusCode;
 use salvo::prelude::*;
-use soland_http::error::AppError;
+use soland_http::error::{AppError, ErrorCode};
 use soland_http::http_signature;
 
 use super::record::{applet_id_param, applet_records};
@@ -232,7 +232,6 @@ async fn verify_inbound_applet_service_signature(
             )
             .with_status(StatusCode::FORBIDDEN)
             .with_wire_code("applet_registration_unauthorized")
-            .with_top_level_reason("applet_registration_unauthorized")
         })?;
     let verification_method = applet_registration_verification_method(&install, &header_source)?;
 
@@ -447,26 +446,24 @@ pub(super) fn applet_resolve_verifying_key(
 }
 
 /// 401 `http_signature_required` — no per-delivery RFC 9421 signature present.
+///
+/// `applet-integration.md` §7.3.1 pins the RFC 9457 Problem `type` as the only
+/// machine discriminator, so each signature failure carries its own registered
+/// top-level code rather than a generic code plus a `reason` extension.
 pub(super) fn applet_signature_error_required(message: impl Into<String>) -> AppError {
-    AppError::unauthenticated(message)
-        .with_status(StatusCode::UNAUTHORIZED)
-        .with_top_level_reason("http_signature_required")
+    AppError::new(ErrorCode::HttpSignatureRequired, message)
 }
 
 /// 401 `http_signature_invalid` — signature present but verification, digest,
 /// or source binding failed.
 pub(super) fn applet_signature_error_invalid(message: impl Into<String>) -> AppError {
-    AppError::unauthenticated(message)
-        .with_status(StatusCode::UNAUTHORIZED)
-        .with_top_level_reason("http_signature_invalid")
+    AppError::new(ErrorCode::HttpSignatureInvalid, message)
 }
 
 /// 401 `signature_window_invalid` — `created` / `expires` outside the freshness
 /// window.
 pub(super) fn applet_signature_error_window(message: impl Into<String>) -> AppError {
-    AppError::unauthenticated(message)
-        .with_status(StatusCode::UNAUTHORIZED)
-        .with_top_level_reason("signature_window_invalid")
+    AppError::new(ErrorCode::SignatureWindowInvalid, message)
 }
 
 #[cfg(test)]

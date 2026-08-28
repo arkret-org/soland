@@ -683,13 +683,6 @@ fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
     {
         problem.extend(details.clone());
     }
-    if error.status == StatusCode::PRECONDITION_FAILED
-        && error.code == "failed_precondition"
-        && error.message != error.code
-        && let Some(object) = body.as_object_mut()
-    {
-        object.insert("reason".to_owned(), json!(error.message.clone()));
-    }
     (error.status, body)
 }
 

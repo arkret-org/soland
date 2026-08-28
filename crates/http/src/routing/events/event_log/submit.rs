@@ -1060,19 +1060,10 @@ pub(super) fn render_submit_one_error(res: &mut Response, error: SubmitOneError)
             }
         }
         crate::error::render_problem_envelope(res, error.status, envelope);
-    } else if error.status == StatusCode::PRECONDITION_FAILED
-        && error.code == "failed_precondition"
-        && error.message != error.code
-    {
-        soland_http::util::render_error_with_top_level_reason(
-            res,
-            error.status,
-            &error.code,
-            &error.message,
-            &error.message,
-            None,
-        );
     } else {
+        // api-conventions.md 5: the Problem `type` is the only machine
+        // discriminator. The human cause travels in `detail`; a duplicate
+        // free-form top-level `reason` would be a second dispatch track.
         render_error(res, error.status, &error.code, &error.message);
     }
 }

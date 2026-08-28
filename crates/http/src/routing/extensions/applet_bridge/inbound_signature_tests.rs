@@ -35,8 +35,8 @@ fn keyid_mismatch_is_invalid_signature() {
     let err = applet_validate_signature_input(&input, "did:web:other#applet-service-key")
         .expect_err("keyid mismatch must fail");
     assert_eq!(
-        err.top_level_reason.as_deref(),
-        Some("http_signature_invalid")
+        err.code,
+        soland_http::error::ErrorCode::HttpSignatureInvalid
     );
 }
 

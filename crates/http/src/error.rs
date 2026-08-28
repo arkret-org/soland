@@ -134,26 +134,6 @@ pub fn render_error_with_reason_code(
     render_problem_envelope(res, status, envelope);
 }
 
-pub fn render_error_with_top_level_reason(
-    res: &mut Response,
-    status: StatusCode,
-    code: &str,
-    message: &str,
-    reason: &str,
-    reason_detail: Option<&str>,
-) {
-    let mut envelope = arkret_wire::problem_details::ErrorEnvelope::new(code, message)
-        .with_request_id(request_id());
-    if let Some(reason_detail) = reason_detail {
-        envelope = envelope.with_detail(
-            "reason_detail",
-            serde_json::Value::String(reason_detail.to_owned()),
-        );
-    }
-    envelope = envelope.with_detail("reason", serde_json::Value::String(reason.to_owned()));
-    render_problem_envelope(res, status, envelope);
-}
-
 /// Render an SDK-owned error code through soland's standard error envelope.
 pub fn render_error_code(code: ErrorCode, res: &mut Response, message: &str) {
     render_error(res, error_http_status(code), code.as_str(), message);
@@ -232,17 +212,6 @@ pub struct AppError {
     /// error in production. When `SOLAND_DEVELOPMENT_MODE=true`, the writer
     /// exposes it as the unstable `error.details.reason_detail` diagnostic.
     pub private_detail: Option<Box<str>>,
-    /// When set, render a top-level `reason` field on the error envelope.
-    ///
-    /// Unlike [`Self::reason_detail`] (an opaque diagnostic at
-    /// `error.details.reason_detail`), this is a **stable, normative**
-    /// discriminator that the wire contract pins independently of the generic
-    /// `error.code`. COT-03-001 / `applet-integration.md` §7.3.1 uses it for the
-    /// inbound transaction-push signature failure codes
-    /// (`http_signature_required` / `http_signature_invalid` /
-    /// `signature_window_invalid`), where `error.code` stays the generic
-    /// `unauthenticated` and the discriminator travels in `reason`.
-    pub top_level_reason: Option<Box<str>>,
     /// Typed protocol details inserted into `error.details`.
     ///
     /// Boxed and optional because it is empty on the overwhelming majority of
@@ -262,7 +231,6 @@ impl AppError {
             reason_code: None,
             reason_detail: None,
             private_detail: None,
-            top_level_reason: None,
             wire_details: None,
         }
     }
@@ -299,15 +267,6 @@ impl AppError {
     #[must_use]
     pub fn with_private_detail(mut self, private_detail: impl Into<String>) -> Self {
         self.private_detail = Some(private_detail.into().into_boxed_str());
-        self
-    }
-
-    /// Attach a stable, normative top-level `reason` discriminator. See
-    /// [`AppError::top_level_reason`]. Used by the COT-03-001 inbound
-    /// transaction-push signature path so the `reason` carries the §7.3.1
-    /// failure code while `error.code` stays generic.
-    pub fn with_top_level_reason(mut self, reason: impl Into<String>) -> Self {
-        self.top_level_reason = Some(reason.into().into_boxed_str());
         self
     }
 
@@ -453,15 +412,6 @@ impl Writer for AppError {
                 );
             }
             render_problem_envelope(res, status, envelope);
-        } else if let Some(reason) = self.top_level_reason.as_deref() {
-            render_error_with_top_level_reason(
-                res,
-                status,
-                &wire,
-                public_message,
-                reason,
-                wire_reason_detail,
-            );
         } else if let Some(reason_code) = self.reason_code.as_deref() {
             render_error_with_reason_code(
                 res,
