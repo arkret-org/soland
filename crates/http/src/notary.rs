@@ -792,6 +792,7 @@ impl NotaryWorker {
             .build_availability_dependencies(
                 state,
                 realm_id,
+                &predecessor_refs,
                 &pre_state,
                 &view.covered_event_digests,
                 &accepted,
@@ -1461,15 +1462,17 @@ impl NotaryWorker {
         &self,
         state: &AppState,
         realm_id: &RealmId,
+        predecessor_refs: &[SealId],
         predecessor_state: &BTreeMap<CellRef, CellState>,
         predecessor_covered_events: &[Hash],
         accepted: &[AcceptedControlMove],
         event_digest_suite: arkret_canonical::DigestSuite,
         sealed_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<GovernanceDependency>, NotaryError> {
-        if predecessor_state.is_empty() {
+        if availability_authority_is_genesis(predecessor_refs) {
             // The genesis Seal is explicitly exempt and MUST NOT commit
-            // availability receipts.
+            // availability receipts. Genesis is a lineage property; an empty
+            // materialized state does not turn a successor into genesis.
             return Ok(Vec::new());
         }
 
@@ -1790,6 +1793,10 @@ fn availability_policy_from_predecessor(
         }
     }
     Ok(policy.unwrap_or_default())
+}
+
+fn availability_authority_is_genesis(predecessor_refs: &[SealId]) -> bool {
+    predecessor_refs.is_empty()
 }
 
 fn local_service_is_joined_member_principal_server(
@@ -2244,6 +2251,15 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn availability_genesis_is_defined_by_seal_lineage() {
+        assert!(availability_authority_is_genesis(&[]));
+
+        let predecessor =
+            SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap();
+        assert!(!availability_authority_is_genesis(&[predecessor]));
+    }
 
     fn test_signer_descriptor(did: &str, seed: u8) -> arkret_wire::NotarySignerDescriptor {
         let full_id = DidFullId::new(did.to_owned()).unwrap();
