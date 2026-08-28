@@ -480,6 +480,80 @@ fn sign_account_status_receipt(
     .map_err(|error| AppError::internal(format!("account-status receipt signing failed: {error}")))
 }
 
+async fn historical_account_status_service_key(
+    state: &AppState,
+    service_id: &DidCoreId,
+    service_kind: &str,
+    verification_method: &str,
+    at: chrono::DateTime<chrono::Utc>,
+    label: &str,
+) -> Result<ed25519_dalek::VerifyingKey, AppError> {
+    crate::jws_verify::validate_verification_method_controller(
+        service_id.as_str(),
+        verification_method,
+    )
+    .map_err(|error| {
+        AppError::capability_denied(format!(
+            "account-status {label} method controller mismatch: {error}"
+        ))
+    })?;
+    let method = arkret_wire::DidUrl::new(verification_method.to_owned()).map_err(|error| {
+        schema_violation(format!(
+            "account-status {label} verification method invalid: {error}"
+        ))
+    })?;
+    let base_url = crate::routing::federation::federation::resolved_peer_base_url(
+        state,
+        service_id.as_str(),
+        service_kind,
+        false,
+    )
+    .await
+    .map_err(|error| {
+        AppError::capability_denied(format!(
+            "account-status {label} authenticated route resolution failed: {error}"
+        ))
+    })?;
+    let evidence = crate::routing::identity::agents::evidence::fetch_service_signer_evidence(
+        state,
+        service_id,
+        Some(&base_url),
+        Some(&method),
+        at,
+    )
+    .await
+    .map_err(|error| {
+        AppError::capability_denied(format!(
+            "account-status {label} historical signer evidence unavailable: {error:?}"
+        ))
+    })?;
+    let arkret_models_identity::AuthenticatedSignerResolutionEvidence::Service {
+        authenticated_resolution,
+        ..
+    } = evidence
+    else {
+        return Err(AppError::capability_denied(format!(
+            "account-status {label} signer evidence is not service evidence"
+        )));
+    };
+    let document = arkret_identity::authenticated_service_document_at(
+        &authenticated_resolution,
+        service_id,
+        at,
+    )
+    .map_err(|error| {
+        AppError::capability_denied(format!(
+            "account-status {label} historical service document invalid: {error}"
+        ))
+    })?;
+    arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
+        .map_err(|error| {
+            AppError::capability_denied(format!(
+                "account-status {label} historical key unavailable: {error}"
+            ))
+        })
+}
+
 async fn validate_account_status_publication(
     state: &AppState,
     source_service_id: &str,
@@ -498,27 +572,15 @@ async fn validate_account_status_publication(
     let local_server = DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
     let method = record.proof.verification_method.as_str();
-    let controller = method
-        .rsplit_once('#')
-        .map(|(controller, _)| controller)
-        .ok_or_else(|| {
-            schema_violation("account-status authority proof method has no controller")
-        })?;
-    let controller = arkret_wire::DidFullId::new(controller.to_owned()).map_err(|error| {
-        schema_violation(format!("account-status authority DID invalid: {error}"))
-    })?;
-    let document =
-        crate::jws_verify::resolve_did_document(state, &controller).map_err(|error| {
-            AppError::capability_denied(format!(
-                "account-status Account Authority resolution failed: {error}"
-            ))
-        })?;
-    let public_key = arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, method)
-        .map_err(|error| {
-            AppError::capability_denied(format!(
-                "account-status authority key unavailable: {error}"
-            ))
-        })?;
+    let public_key = historical_account_status_service_key(
+        state,
+        &record.account_authority_id,
+        "auth_server",
+        method,
+        record.proof.created_at,
+        "Account Authority",
+    )
+    .await?;
     arkret_signatures::account_status::verify_account_status_record(
         record,
         &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
@@ -546,29 +608,15 @@ async fn validate_account_status_publication(
                 )
             })?;
         let receipt_method = source_receipt.proof.verification_method.as_str();
-        let receipt_controller = receipt_method
-            .rsplit_once('#')
-            .map(|(controller, _)| controller)
-            .ok_or_else(|| schema_violation("account-status receipt proof has no controller"))?;
-        let receipt_controller = arkret_wire::DidFullId::new(receipt_controller.to_owned())
-            .map_err(|error| {
-                schema_violation(format!("account-status receipt DID invalid: {error}"))
-            })?;
-        let receipt_document = crate::jws_verify::resolve_did_document(state, &receipt_controller)
-            .map_err(|error| {
-                AppError::capability_denied(format!(
-                    "account-status receipt issuer resolution failed: {error}"
-                ))
-            })?;
-        let receipt_key = arkret_identity::jws::resolve_ed25519_pubkey_from_document(
-            &receipt_document,
+        let receipt_key = historical_account_status_service_key(
+            state,
+            &source_receipt.receiver_service_id,
+            "principal_server",
             receipt_method,
+            source_receipt.accepted_at,
+            "receipt issuer",
         )
-        .map_err(|error| {
-            AppError::capability_denied(format!(
-                "account-status receipt issuer key unavailable: {error}"
-            ))
-        })?;
+        .await?;
         arkret_signatures::account_status::verify_account_status_receipt(
             source_receipt,
             &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
